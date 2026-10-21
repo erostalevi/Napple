@@ -1,0 +1,10 @@
+/target
+.venv/
+*.keys
+*.xci
+*.nsp
+*.nsz
+*.nca
+*.nso
+extracted/
+work/
