@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/erostalevi/Napple/knownSignatures/schema.json",
+  "title": "Napple known signatures, schema version 1",
+  "description": "One file per binary build id of a title: knownSignatures/<titleId>/<buildId>.json. The Rust validator (`napple sigs validate`) is authoritative and stricter (entropy, ASCII-run, hash-key and path checks); this schema documents the shape.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "title_id", "build_id", "signatures"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "title_id": { "type": "string", "pattern": "^[0-9A-F]{16}$" },
+    "build_id": { "type": "string", "pattern": "^([0-9a-f]{2}){8,32}$" },
+    "signatures": {
+      "type": "object",
+      "maxProperties": 5000,
+      "description": "Keyed by the pattern hash: lower hex of the first 16 bytes of sha256(\"napple-sig/1\\0\" || u32le(len) || pattern || mask).",
+      "propertyNames": { "pattern": "^[0-9a-f]{32}$" },
+      "additionalProperties": { "$ref": "#/$defs/signature" }
+    }
+  },
+  "$defs": {
+    "ident": { "type": "string", "pattern": "^[A-Za-z0-9_:.<>~$*&,\\-\\[\\]()]+$" },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "module", "offset_start", "offset_end", "pattern", "mask", "resolution", "provenance", "confidence"],
+      "properties": {
+        "kind": { "enum": ["function", "pointer", "struct", "patch-site", "service-hook"] },
+        "module": { "type": "string", "maxLength": 32, "pattern": "^[A-Za-z0-9_.\\-]+$", "description": "main, sdk, subsdk0, ..." },
+        "offset_start": { "type": "integer", "minimum": 0, "description": "Inclusive, relative to the module image base." },
+        "offset_end": { "type": "integer", "maximum": 4294967295, "description": "Exclusive; end - start <= 0x100000." },
+        "pattern": { "type": "string", "pattern": "^([0-9a-f]{2}){1,64}$", "description": "Masked bytes (bits under the mask are zero). Max 64 bytes; whole A64 words for code kinds." },
+        "mask": { "type": "string", "pattern": "^([0-9a-f]{2}){1,64}$", "description": "Same length as pattern; 1 bits are compared, 0 bits are wildcards (relocatable operands)." },
+        "name": { "$ref": "#/$defs/ident", "maxLength": 200 },
+        "layout": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["size", "fields"],
+          "properties": {
+            "size": { "type": "integer", "minimum": 1, "maximum": 1048576 },
+            "fields": {
+              "type": "array",
+              "maxItems": 256,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "offset", "size", "type"],
+                "properties": {
+                  "name": { "$ref": "#/$defs/ident", "maxLength": 64 },
+                  "offset": { "type": "integer", "minimum": 0 },
+                  "size": { "type": "integer", "minimum": 1 },
+                  "type": { "$ref": "#/$defs/ident", "maxLength": 16 }
+                }
+              }
+            }
+          }
+        },
+        "resolution": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["action"],
+          "properties": {
+            "action": { "enum": ["annotate", "hook", "stub", "rewrite", "skip"], "description": "hook needs params.target, stub needs params.value, rewrite needs params.recipe." },
+            "params": { "type": "object", "maxProperties": 8, "additionalProperties": { "$ref": "#/$defs/ident", "maxLength": 64 } }
+          }
+        },
+        "provenance": { "enum": ["local", "rea", "community"] },
+        "confidence": { "enum": ["low", "medium", "high"] }
+      },
+      "allOf": [{ "if": { "properties": { "kind": { "const": "struct" } } }, "then": { "required": ["layout"] } }]
+    }
+  }
+}

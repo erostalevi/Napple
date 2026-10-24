@@ -8,8 +8,8 @@ use std::path::PathBuf;
 
 const USAGE: &str = "usage:
   napple ingest <game> -k <prod.keys>
-  napple plan   <files...> -k <prod.keys> [--updates all|latest|none|<v,v>] [--dlc all|none|<id,id>]
-  napple decomp <files...> -k <prod.keys> [--updates ...] [--dlc ...] [-o <dir>]
+  napple plan   <files...> -k <prod.keys> [--updates all|latest|none|<v,v>] [--dlc all|none|<id,id>] [--json]
+  napple decomp <files...> -k <prod.keys> [--updates ...] [--dlc ...] [-o <dir>] [--json]
 files: base game, updates and DLC (XCI/NSP), any order, one or several files.";
 
 struct Args {
@@ -19,14 +19,16 @@ struct Args {
     updates: Choice,
     dlc: DlcChoice,
     out: Option<PathBuf>,
+    json: bool,
 }
 
 fn parse() -> Option<Args> {
     let mut it = std::env::args().skip(1);
-    let mut a = Args { cmd: it.next()?, files: vec![], keys: None, updates: Choice::Latest, dlc: DlcChoice::All, out: None };
+    let mut a = Args { cmd: it.next()?, files: vec![], keys: None, updates: Choice::Latest, dlc: DlcChoice::All, out: None, json: false };
     while let Some(x) = it.next() {
         match x.as_str() {
             "-k" => a.keys = Some(it.next()?.into()),
+            "--json" => a.json = true,
             "-o" => a.out = Some(it.next()?.into()),
             "--updates" => {
                 a.updates = match it.next()?.as_str() {
@@ -81,6 +83,37 @@ fn print_plan(plan: &BuildPlan, upd: &[usize], dlc: &[usize]) {
     let _ = TitleKind::Application;
 }
 
+fn jstr(s: &str) -> String {
+    let mut o = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+
+/// Machine-readable plan (additive `--json`); contains no game bytes.
+fn plan_json(plan: &BuildPlan, upd: &[usize], dlc: &[usize]) -> String {
+    let item = |i: usize, sel: bool| {
+        let p = &plan.packs[i];
+        format!(
+            "{{\"title_id\":\"{:016X}\",\"version\":{},\"version_label\":{},\"size\":{},\"selected\":{},\"path\":{}}}",
+            p.meta.title_id, p.meta.version, jstr(&version_label(p.meta.version)), p.size(), sel,
+            jstr(&p.path.to_string_lossy())
+        )
+    };
+    let base = plan.base.map(|b| item(b, true)).unwrap_or_else(|| "null".into());
+    let u: Vec<String> = plan.updates.iter().map(|&i| item(i, upd.contains(&i))).collect();
+    let d: Vec<String> = plan.dlcs.iter().map(|&i| item(i, dlc.contains(&i))).collect();
+    let w: Vec<String> = plan.warnings.iter().map(|x| jstr(x)).collect();
+    format!("{{\"base\":{base},\"updates\":[{}],\"dlc\":[{}],\"warnings\":[{}]}}", u.join(","), d.join(","), w.join(","))
+}
+
 fn run(a: Args) -> Result<()> {
     let keys = KeySet::load(a.keys.as_ref().unwrap())?;
     match a.cmd.as_str() {
@@ -96,16 +129,28 @@ fn run(a: Args) -> Result<()> {
         }
         "plan" => {
             let plan = build_plan(&a, &keys)?;
-            print_plan(&plan, &plan.pick_updates(&a.updates), &plan.pick_dlcs(&a.dlc));
+            let (upd, dlc) = (plan.pick_updates(&a.updates), plan.pick_dlcs(&a.dlc));
+            if a.json {
+                println!("{}", plan_json(&plan, &upd, &dlc));
+            } else {
+                print_plan(&plan, &upd, &dlc);
+            }
         }
         "decomp" => {
             let plan = build_plan(&a, &keys)?;
             let (upd, dlc) = (plan.pick_updates(&a.updates), plan.pick_dlcs(&a.dlc));
-            print_plan(&plan, &upd, &dlc);
+            if !a.json {
+                print_plan(&plan, &upd, &dlc);
+            }
             if plan.base.is_none() {
                 return Err(Error::Container("a base game is required".into()));
             }
             let reports = decomp::run(&plan, &upd, &keys)?;
+            if a.json {
+                let body: Vec<String> = reports.iter().map(|r| r.to_json()).collect();
+                println!("{{\"plan\":{},\"reports\":[{}]}}", plan_json(&plan, &upd, &dlc), body.join(","));
+                return Ok(());
+            }
             for r in &reports {
                 println!("\n== {:016X} {}", r.title_id, r.label);
                 for m in &r.modules {
@@ -134,6 +179,22 @@ fn run(a: Args) -> Result<()> {
 }
 
 fn main() {
+    // Subcommands owned by other crates take the raw args (each crate parses its own flags).
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let ext: Option<fn(&[String]) -> std::result::Result<(), String>> = match raw.first().map(|s| s.as_str()) {
+        Some("rewrite") => Some(napple_rewrite::run),
+        Some("compat") => Some(napple_compat::run),
+        Some("sigs") => Some(napple_sigs::run),
+        Some("build") => Some(napple_build::run),
+        _ => None,
+    };
+    if let Some(f) = ext {
+        if let Err(e) = f(&raw[1..]) {
+            eprintln!("error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
     let Some(a) = parse() else {
         eprintln!("{USAGE}");
         std::process::exit(2)

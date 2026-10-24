@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "title_id": "0100FFFF00000000",
+  "build_id": "00112233445566778899aabbccddeeff00112233",
+  "signatures": {
+    "34ac34fd182abdc54f7d10861ecce8ac": {
+      "kind": "struct",
+      "module": "main",
+      "offset_start": 12288,
+      "offset_end": 12316,
+      "pattern": "fd7bbfa9081040b9091440b90801090b081800b9fd7bc1a8c0035fd6",
+      "mask": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "name": "ExampleQueue",
+      "layout": {
+        "size": 24,
+        "fields": [
+          {
+            "name": "flags",
+            "offset": 0,
+            "size": 4,
+            "type": "u32"
+          },
+          {
+            "name": "count",
+            "offset": 4,
+            "size": 4,
+            "type": "u32"
+          },
+          {
+            "name": "next",
+            "offset": 8,
+            "size": 8,
+            "type": "ptr"
+          },
+          {
+            "name": "total",
+            "offset": 16,
+            "size": 4,
+            "type": "u32"
+          }
+        ]
+      },
+      "resolution": {
+        "action": "annotate"
+      },
+      "provenance": "local",
+      "confidence": "low"
+    },
+    "86c3e9ac44cab71b7d4f607423dfd78c": {
+      "kind": "service-hook",
+      "module": "main",
+      "offset_start": 4096,
+      "offset_end": 4124,
+      "pattern": "fd7bbfa9fd030091080840f9080140b900000094fd7bc1a8c0035fd6",
+      "mask": "ffffffffffffffffffffffffffffffff000000fcffffffffffffffff",
+      "name": "nn::os::GetSystemTick",
+      "resolution": {
+        "action": "hook",
+        "params": {
+          "target": "hle_nn_os_get_tick"
+        }
+      },
+      "provenance": "community",
+      "confidence": "high"
+    },
+    "dead815a38286b47b695ad1779ed64e1": {
+      "kind": "patch-site",
+      "module": "sdk",
+      "offset_start": 132096,
+      "offset_end": 132116,
+      "pattern": "40d03bd5090040b92a050011090000b9c0035fd6",
+      "mask": "ffffffffffffffffffffffffffffffffffffffff",
+      "name": "tls_slot_read",
+      "resolution": {
+        "action": "rewrite",
+        "params": {
+          "recipe": "tpidr-el0-to-host-tls"
+        }
+      },
+      "provenance": "rea",
+      "confidence": "medium"
+    }
+  }
+}

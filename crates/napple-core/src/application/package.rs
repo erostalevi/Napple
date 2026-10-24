@@ -5,7 +5,9 @@ use crate::domain::keys::KeySet;
 use crate::infrastructure::cnmt::{parse_cnmt, Cnmt, TitleKind};
 use crate::infrastructure::io::{FileSource, Src};
 use crate::infrastructure::nca::{self, ContentType, FsType, Nca, TitleKeys};
+use crate::infrastructure::nacp::{parse_nacp, Nacp};
 use crate::infrastructure::pfs::parse_pfs0;
+use crate::infrastructure::romfs::RomFs;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -31,6 +33,31 @@ impl Pack {
             .ok_or_else(|| Error::Container("pack has no Program content".into()))?;
         let src = self.ncas.get(&rec.nca_name()).ok_or_else(|| Error::Container("Program NCA missing from pack".into()))?;
         ingest_sources(vec![(rec.nca_name(), src.clone())], self.tks.clone(), keys)
+    }
+}
+
+impl Pack {
+    /// Reads `control.nacp` from this pack's Control NCA (None when the pack has no readable control data).
+    pub fn control(&self, keys: &KeySet) -> Result<Option<Nacp>> {
+        let Some(rec) = self.meta.contents.iter().find(|c| c.ctype == 3) else { return Ok(None) };
+        let Some(src) = self.ncas.get(&rec.nca_name()) else { return Ok(None) };
+        let n = match Nca::open(src.clone(), keys, &self.tks) {
+            Ok(n) => n,
+            Err(Error::Unsupported(_)) => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        for sec in n.sections.iter().filter(|s| s.fs_type == FsType::RomFs) {
+            let Ok(s) = n.section(sec.index) else { continue };
+            let fs = RomFs::parse(nca::romfs_data(&s, sec)?)?;
+            if let Some(f) = fs.files.iter().find(|f| f.path == "control.nacp") {
+                if f.size > 0x10000 {
+                    return Err(Error::Container("implausible control.nacp size".into()));
+                }
+                let b = crate::infrastructure::io::read_vec(&*fs.open(f)?, 0, f.size as usize)?;
+                return parse_nacp(&b).map(Some);
+            }
+        }
+        Ok(None)
     }
 }
 

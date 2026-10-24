@@ -8,3 +8,20 @@
 *.nso
 extracted/
 work/
+gfx/build/
+gfx/*.a
+.DS_Store
+
+# Copyrighted game data and firmware: never commit
+*.romfs
+Firmware*.zip
+
+# Build outputs (rebuilt by each component's Makefile / swift build)
+**/build/
+runtime/build*/
+gfx/build-*/
+*/lib*.a
+**/.build/
+studio/dist/
+*.o
+*.dSYM/

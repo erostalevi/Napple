@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/napple-core", "crates/napple-cli"]
+members = ["crates/napple-core", "crates/napple-cli", "crates/napple-rewrite", "crates/napple-compat", "crates/napple-sigs", "crates/napple-build"]
 
 [workspace.package]
 version = "0.0.1"

@@ -1,0 +1,140 @@
+/* api_state.c - NVN state objects (blend, color, channel mask, multisample, polygon, depth/stencil, vertex attrib/stream).
+ * They are small value types the game copies freely, so they are packed in place (obj.h) and bound by value. */
+#include "obj.h"
+
+void gfx_api_link_state(void) {}
+
+#define ST(T, x) ((T *)(x))
+#define CST(T, x) ((const T *)(x))
+
+/* ---- blend ---- */
+NVN(nvnBlendStateSetDefaults, void, NVNblendState *s) {
+    *ST(blend_st, s) = (blend_st){ 0, NVN_BLEND_FUNC_ONE, NVN_BLEND_FUNC_ZERO, NVN_BLEND_FUNC_ONE, NVN_BLEND_FUNC_ZERO, NVN_BLEND_EQUATION_ADD, NVN_BLEND_EQUATION_ADD };
+}
+NVN(nvnBlendStateSetBlendTarget, void, NVNblendState *s, int t) { ST(blend_st, s)->target = (uint64_t)t; }
+NVN(nvnBlendStateSetBlendFunc, void, NVNblendState *s, NVNblendFunc sr, NVNblendFunc dr, NVNblendFunc sa, NVNblendFunc da) {
+    blend_st *o = ST(blend_st, s); o->src_rgb = sr; o->dst_rgb = dr; o->src_a = sa; o->dst_a = da;
+}
+NVN(nvnBlendStateSetBlendEquation, void, NVNblendState *s, NVNblendEquation er, NVNblendEquation ea) { ST(blend_st, s)->eq_rgb = er; ST(blend_st, s)->eq_a = ea; }
+NVN_NOPROTO(nvnBlendStateSetAdvancedMode, void, NVNblendState *s, int m) { (void)s; (void)m; }
+NVN_NOPROTO(nvnBlendStateSetAdvancedOverlap, void, NVNblendState *s, int m) { (void)s; (void)m; }
+NVN_NOPROTO(nvnBlendStateSetAdvancedPremultipliedSrc, void, NVNblendState *s, uint32_t e) { (void)s; (void)e; }
+NVN_NOPROTO(nvnBlendStateSetAdvancedNormalizedDst, void, NVNblendState *s, uint32_t e) { (void)s; (void)e; }
+NVN_NOPROTO(nvnBlendStateGetBlendTarget, int, const NVNblendState *s) { return (int)CST(blend_st, s)->target; }
+NVN_NOPROTO(nvnBlendStateGetBlendFunc, void, const NVNblendState *s, int *sr, int *dr, int *sa, int *da) {
+    const blend_st *o = CST(blend_st, s); *sr = (int)o->src_rgb; *dr = (int)o->dst_rgb; *sa = (int)o->src_a; *da = (int)o->dst_a;
+}
+NVN_NOPROTO(nvnBlendStateGetBlendEquation, void, const NVNblendState *s, int *er, int *ea) { *er = (int)CST(blend_st, s)->eq_rgb; *ea = (int)CST(blend_st, s)->eq_a; }
+NVN_NOPROTO(nvnBlendStateGetAdvancedMode, int, const NVNblendState *s) { (void)s; return 0; }
+NVN_NOPROTO(nvnBlendStateGetAdvancedOverlap, int, const NVNblendState *s) { (void)s; return 0; }
+NVN_NOPROTO(nvnBlendStateGetAdvancedPremultipliedSrc, NVNboolean, const NVNblendState *s) { (void)s; return 0; }
+NVN_NOPROTO(nvnBlendStateGetAdvancedNormalizedDst, NVNboolean, const NVNblendState *s) { (void)s; return 0; }
+
+/* ---- color ---- */
+NVN(nvnColorStateSetDefaults, void, NVNcolorState *s) { *ST(color_st, s) = (color_st){ 0, NVN_LOGIC_OP_COPY, NVN_ALPHA_FUNC_ALWAYS }; }
+NVN(nvnColorStateSetBlendEnable, void, NVNcolorState *s, int i, uint32_t en) {
+    color_st *o = ST(color_st, s);
+    if (i < 0 || i > 7) return;
+    o->blend_en = B(en) ? (o->blend_en | 1u << i) : (o->blend_en & ~(1u << i));
+}
+NVN_NOPROTO(nvnColorStateSetLogicOp, void, NVNcolorState *s, int op) { ST(color_st, s)->logic_op = (uint32_t)op; }
+NVN_NOPROTO(nvnColorStateSetAlphaTest, void, NVNcolorState *s, int f) { ST(color_st, s)->alpha_func = (uint32_t)f; }
+NVN_NOPROTO(nvnColorStateGetBlendEnable, NVNboolean, const NVNcolorState *s, int i) { return (i >= 0 && i < 8) ? (CST(color_st, s)->blend_en >> i) & 1 : 0; }
+NVN_NOPROTO(nvnColorStateGetLogicOp, int, const NVNcolorState *s) { return (int)CST(color_st, s)->logic_op; }
+NVN_NOPROTO(nvnColorStateGetAlphaTest, int, const NVNcolorState *s) { return (int)CST(color_st, s)->alpha_func; }
+
+/* ---- channel mask ---- */
+NVN(nvnChannelMaskStateSetDefaults, void, NVNchannelMaskState *s) { ST(chmask_st, s)->mask = 0xffffffffu; }
+NVN(nvnChannelMaskStateSetChannelMask, void, NVNchannelMaskState *s, int i, uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
+    if (i < 0 || i > 7) return;
+    uint32_t m = (B(r) ? 1u : 0u) | (B(g) ? 2u : 0u) | (B(b) ? 4u : 0u) | (B(a) ? 8u : 0u);
+    chmask_st *o = ST(chmask_st, s);
+    o->mask = (o->mask & ~(0xfu << (4 * i))) | m << (4 * i);
+}
+NVN_NOPROTO(nvnChannelMaskStateGetChannelMask, void, const NVNchannelMaskState *s, int i, NVNboolean *r, NVNboolean *g, NVNboolean *b, NVNboolean *a) {
+    uint32_t m = (i >= 0 && i < 8) ? (CST(chmask_st, s)->mask >> (4 * i)) & 0xf : 0;
+    *r = m & 1; *g = (m >> 1) & 1; *b = (m >> 2) & 1; *a = (m >> 3) & 1;
+}
+
+/* ---- multisample ---- */
+NVN(nvnMultisampleStateSetDefaults, void, NVNmultisampleState *s) { memset(s, 0, sizeof(ms_st)); ST(ms_st, s)->enable = 1; }
+NVN(nvnMultisampleStateSetMultisampleEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->enable = B(e) != 0; }
+NVN(nvnMultisampleStateSetSamples, void, NVNmultisampleState *s, int n) { ST(ms_st, s)->samples = (uint8_t)n; }
+NVN(nvnMultisampleStateSetAlphaToCoverageEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->a2c = B(e) != 0; }
+NVN(nvnMultisampleStateSetAlphaToCoverageDither, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->a2c_dither = B(e) != 0; }
+NVN(nvnMultisampleStateSetRasterSamples, void, NVNmultisampleState *s, int n) { ST(ms_st, s)->raster_samples = (uint8_t)n; }
+NVN(nvnMultisampleStateSetCoverageModulationMode, void, NVNmultisampleState *s, NVNcoverageModulationMode m) { ST(ms_st, s)->cov_mod = (uint8_t)m; }
+NVN(nvnMultisampleStateSetCoverageToColorEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->cov2color_en = B(e) != 0; }
+NVN(nvnMultisampleStateSetCoverageToColorOutput, void, NVNmultisampleState *s, int o) { ST(ms_st, s)->cov2color_out = (uint8_t)o; }
+NVN(nvnMultisampleStateSetSampleLocationsEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->sl_en = B(e) != 0; }
+NVN(nvnMultisampleStateSetSampleLocationsGridEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->sl_grid = B(e) != 0; }
+NVN(nvnMultisampleStateSetSampleLocations, void, NVNmultisampleState *s, int start, int n, const float *v) { (void)s; (void)start; (void)n; (void)v; }
+NVN(nvnMultisampleStateGetMultisampleEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->enable; }
+NVN(nvnMultisampleStateGetSamples, int, const NVNmultisampleState *s) { return CST(ms_st, s)->samples; }
+NVN(nvnMultisampleStateGetAlphaToCoverageEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->a2c; }
+NVN(nvnMultisampleStateGetAlphaToCoverageDither, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->a2c_dither; }
+NVN(nvnMultisampleStateGetRasterSamples, int, NVNmultisampleState *s) { return CST(ms_st, s)->raster_samples; }
+NVN(nvnMultisampleStateGetCoverageModulationMode, NVNcoverageModulationMode, const NVNmultisampleState *s) { return (NVNcoverageModulationMode)CST(ms_st, s)->cov_mod; }
+NVN(nvnMultisampleStateGetCoverageToColorEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->cov2color_en; }
+NVN(nvnMultisampleStateGetCoverageToColorOutput, int, const NVNmultisampleState *s) { return CST(ms_st, s)->cov2color_out; }
+NVN(nvnMultisampleStateGetSampleLocationsEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->sl_en; }
+NVN(nvnMultisampleStateGetSampleLocationsGridEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->sl_grid; }
+NVN_NOPROTO(nvnMultisampleStateGetSampleLocationsGrid, void, const NVNmultisampleState *s, int *w, int *h) { (void)s; *w = 1; *h = 1; }
+
+/* ---- polygon ---- */
+NVN(nvnPolygonStateSetDefaults, void, NVNpolygonState *s) { *ST(poly_st, s) = (poly_st){ NVN_FACE_NONE, NVN_FRONT_FACE_CCW, NVN_POLYGON_MODE_FILL, 0 }; }
+NVN(nvnPolygonStateSetCullFace, void, NVNpolygonState *s, NVNface f) { ST(poly_st, s)->cull = (uint32_t)f; }
+NVN(nvnPolygonStateSetFrontFace, void, NVNpolygonState *s, NVNfrontFace f) { ST(poly_st, s)->front = (uint32_t)f; }
+NVN(nvnPolygonStateSetPolygonMode, void, NVNpolygonState *s, NVNpolygonMode m) { ST(poly_st, s)->mode = (uint32_t)m; }
+NVN(nvnPolygonStateSetPolygonOffsetEnables, void, NVNpolygonState *s, int e) { ST(poly_st, s)->offset_en = (uint32_t)e; }
+NVN(nvnPolygonStateGetCullFace, NVNface, const NVNpolygonState *s) { return (NVNface)CST(poly_st, s)->cull; }
+NVN(nvnPolygonStateGetFrontFace, NVNfrontFace, const NVNpolygonState *s) { return (NVNfrontFace)CST(poly_st, s)->front; }
+NVN(nvnPolygonStateGetPolygonMode, NVNpolygonMode, const NVNpolygonState *s) { return (NVNpolygonMode)CST(poly_st, s)->mode; }
+NVN(nvnPolygonStateGetPolygonOffsetEnables, NVNpolygonOffsetEnable, const NVNpolygonState *s) { return (NVNpolygonOffsetEnable)CST(poly_st, s)->offset_en; }
+
+/* ---- depth / stencil ---- */
+NVN(nvnDepthStencilStateSetDefaults, void, NVNdepthStencilState *s) {
+    *ST(ds_st, s) = (ds_st){ 0, 1, NVN_DEPTH_FUNC_LESS, 0, NVN_STENCIL_FUNC_ALWAYS, NVN_STENCIL_FUNC_ALWAYS,
+                             NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP };
+}
+NVN(nvnDepthStencilStateSetDepthTestEnable, void, NVNdepthStencilState *s, uint32_t e) { ST(ds_st, s)->dt = B(e) != 0; }
+NVN(nvnDepthStencilStateSetDepthWriteEnable, void, NVNdepthStencilState *s, uint32_t e) { ST(ds_st, s)->dw = B(e) != 0; }
+NVN(nvnDepthStencilStateSetDepthFunc, void, NVNdepthStencilState *s, NVNdepthFunc f) { ST(ds_st, s)->df = (uint64_t)f; }
+NVN(nvnDepthStencilStateSetStencilTestEnable, void, NVNdepthStencilState *s, uint32_t e) { ST(ds_st, s)->st = B(e) != 0; }
+NVN(nvnDepthStencilStateSetStencilFunc, void, NVNdepthStencilState *s, NVNface f, NVNstencilFunc fn) {
+    ds_st *o = ST(ds_st, s);
+    if (f & NVN_FACE_FRONT) o->sf_f = (uint64_t)fn;
+    if (f & NVN_FACE_BACK) o->sf_b = (uint64_t)fn;
+}
+NVN(nvnDepthStencilStateSetStencilOp, void, NVNdepthStencilState *s, NVNface f, NVNstencilOp fail, NVNstencilOp zfail, NVNstencilOp zpass) {
+    ds_st *o = ST(ds_st, s);
+    if (f & NVN_FACE_FRONT) { o->fail_f = (uint64_t)fail; o->zfail_f = (uint64_t)zfail; o->zpass_f = (uint64_t)zpass; }
+    if (f & NVN_FACE_BACK) { o->fail_b = (uint64_t)fail; o->zfail_b = (uint64_t)zfail; o->zpass_b = (uint64_t)zpass; }
+}
+NVN(nvnDepthStencilStateGetDepthTestEnable, NVNboolean, const NVNdepthStencilState *s) { return CST(ds_st, s)->dt; }
+NVN(nvnDepthStencilStateGetDepthWriteEnable, NVNboolean, const NVNdepthStencilState *s) { return CST(ds_st, s)->dw; }
+NVN(nvnDepthStencilStateGetDepthFunc, NVNdepthFunc, const NVNdepthStencilState *s) { return (NVNdepthFunc)CST(ds_st, s)->df; }
+NVN(nvnDepthStencilStateGetStencilTestEnable, NVNboolean, const NVNdepthStencilState *s) { return CST(ds_st, s)->st; }
+NVN(nvnDepthStencilStateGetStencilFunc, NVNstencilFunc, const NVNdepthStencilState *s, NVNface f) {
+    return (NVNstencilFunc)((f & NVN_FACE_FRONT) ? CST(ds_st, s)->sf_f : CST(ds_st, s)->sf_b);
+}
+NVN(nvnDepthStencilStateGetStencilOp, void, const NVNdepthStencilState *s, NVNface f, NVNstencilOp *fail, NVNstencilOp *zfail, NVNstencilOp *zpass) {
+    const ds_st *o = CST(ds_st, s);
+    if (f & NVN_FACE_FRONT) { *fail = (NVNstencilOp)o->fail_f; *zfail = (NVNstencilOp)o->zfail_f; *zpass = (NVNstencilOp)o->zpass_f; }
+    else { *fail = (NVNstencilOp)o->fail_b; *zfail = (NVNstencilOp)o->zfail_b; *zpass = (NVNstencilOp)o->zpass_b; }
+}
+
+/* ---- vertex attrib / stream ---- */
+NVN(nvnVertexAttribStateSetDefaults, void, NVNvertexAttribState *s) { *ST(va_st, s) = (va_st){ 0, 0, 0 }; }
+NVN(nvnVertexAttribStateSetFormat, void, NVNvertexAttribState *s, NVNformat f, ptrdiff_t off) {
+    if (off < 0 || off >= (1 << 19)) LOG_ONCE(NAPPLE_LOG_WARN, "vertex attribute offset %td exceeds the packed range", off);
+    ST(va_st, s)->fmt = (uint32_t)f; ST(va_st, s)->offset = (uint32_t)off;
+}
+NVN(nvnVertexAttribStateSetStreamIndex, void, NVNvertexAttribState *s, int i) { ST(va_st, s)->stream = (uint32_t)i; }
+NVN(nvnVertexAttribStateGetFormat, void, const NVNvertexAttribState *s, NVNformat *f, ptrdiff_t *off) { *f = (NVNformat)CST(va_st, s)->fmt; *off = (ptrdiff_t)CST(va_st, s)->offset; }
+NVN(nvnVertexAttribStateGetStreamIndex, int, const NVNvertexAttribState *s) { return (int)CST(va_st, s)->stream; }
+NVN(nvnVertexStreamStateSetDefaults, void, NVNvertexStreamState *s) { *ST(vs_st, s) = (vs_st){ 0, 0 }; }
+NVN(nvnVertexStreamStateSetStride, void, NVNvertexStreamState *s, ptrdiff_t st) { ST(vs_st, s)->stride = (uint32_t)st; }
+NVN(nvnVertexStreamStateSetDivisor, void, NVNvertexStreamState *s, int d) { ST(vs_st, s)->divisor = (uint32_t)d; }
+NVN(nvnVertexStreamStateGetStride, ptrdiff_t, const NVNvertexStreamState *s) { return (ptrdiff_t)CST(vs_st, s)->stride; }
+NVN(nvnVertexStreamStateGetDivisor, int, const NVNvertexStreamState *s) { return (int)CST(vs_st, s)->divisor; }

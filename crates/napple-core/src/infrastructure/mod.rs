@@ -1,5 +1,7 @@
 pub mod cnmt;
 pub mod io;
+pub mod nacp;
+pub mod npdm;
 pub mod nso;
 pub mod nca;
 pub mod pfs;

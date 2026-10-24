@@ -1,0 +1,14 @@
+[package]
+name = "napple-rewrite"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+napple-core = { path = "../napple-core" }
+yaxpeax-arm = "0.5.0"
+yaxpeax-arch = "0.3.3"
+rayon = "1"
+
+[dev-dependencies]
+unicorn-engine = { version = "2", default-features = false, features = ["dynamic_linkage", "arch_aarch64"] }

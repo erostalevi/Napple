@@ -10,3 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 napple-core = { path = "../napple-core" }
+napple-rewrite = { path = "../napple-rewrite" }
+napple-compat = { path = "../napple-compat" }
+napple-sigs = { path = "../napple-sigs" }
+napple-build = { path = "../napple-build" }
