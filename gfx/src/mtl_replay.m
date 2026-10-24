@@ -74,6 +74,7 @@ typedef struct {
     int clear_depth, clear_stencil; float depth_val; uint32_t stencil_val;
     int discard_color[8], discard_ds;
     int draws;
+    uint8_t sl_n, sl_pos[8];                 /* programmable sample positions the pass was begun with (sl_n 0 = the default positions) */
 } passinfo;
 static passinfo P;
 
@@ -256,7 +257,8 @@ static void pass_info_from_rt(void) {
     for (uint32_t i = 0; i < S.rt.n && i < 8; i++) {
         GfxTex *t = mtl_tex_get(&S.rt.color[i].s, 1);
         if (!t) continue;
-        P.color_fmt[i] = (uint32_t)t->pf;
+        uint32_t lv, sl;
+        P.color_fmt[i] = (uint32_t)mtl_tex_attach_view(t, &S.rt.color[i].view, S.rt.color[i].has_view, &lv, &sl).pixelFormat;   /* the view's format, if it has one */
         if (!P.w) { P.w = t->w; P.h = t->h; P.samples = t->samples; P.sx = t->rsx > 0 ? t->rsx : 1; P.sy = t->rsy > 0 ? t->rsy : 1; }
         P.ncolor = (int)i + 1;
     }
@@ -269,6 +271,13 @@ static void pass_info_from_rt(void) {
     }
 }
 
+/* Programmable sample positions the bound multisample state asks for in this pass (n = 0: the default positions). Metal sets them per pass. */
+static void sample_positions(uint8_t *n, uint8_t pos[8]) {
+    *n = 0; memset(pos, 0, 8);
+    if (!S.ms.sl_en || !S.ms.sl_n || P.samples < 2 || !g_mtl.dev.programmableSamplePositionsSupported) return;
+    *n = S.ms.sl_n < 8 ? S.ms.sl_n : 8;
+    memcpy(pos, S.ms.sl_pos, *n);
+}
 static int pass_begin(void) {
     if (P.open) return 1;
     if (!S.rt_valid) return 0;
@@ -319,6 +328,17 @@ static int pass_begin(void) {
             g_vis_n = 0;
         }
         rp.visibilityResultBuffer = g_vis;
+    }
+    sample_positions(&P.sl_n, P.sl_pos);
+    if (P.sl_n) {
+        MTLSamplePosition sp[16];
+        for (uint32_t i = 0; i < P.samples && i < 16; i++) {
+            uint8_t v = i < P.sl_n ? P.sl_pos[i] : 0x88;
+            float x = (float)(v & 15) / 16.0f, y = (float)(v >> 4) / 16.0f;
+            if (g_gfx.device_origin == 0 && !g_gfx.origin_flip) y = 15.0f / 16.0f - y;      /* lower-left window coordinates with top-down rows */
+            sp[i] = MTLSamplePositionMake(x, y);
+        }
+        [rp setSamplePositions:sp count:P.samples];
     }
     g_re = [g_cb renderCommandEncoderWithDescriptor:rp];
     if (!g_re) return 0;
@@ -639,7 +659,7 @@ static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     memcpy(k->color_fmt, P.color_fmt, sizeof k->color_fmt);
     k->depth_fmt = P.depth_fmt; k->stencil_fmt = P.stencil_fmt; k->samples = P.samples; k->topo = (uint32_t)topo_class(prim);
     for (int i = 0; i < 8; i++) {
-        k->blend[i] = S.blend[i];
+        k->blend[i] = mtl_blend_resolve(S.blend[i]);
         k->blend_en[i] = (S.color.blend_en >> i) & 1;
         k->wmask[i] = (S.chmask.mask >> (4 * i)) & 0xf;
         GfxTex *t = nil; (void)t;
@@ -831,6 +851,117 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
         else if (stage == ST_VS) { [(id<MTLRenderCommandEncoder>)enc setVertexTexture:tex atIndex:i]; if (i < 16) [(id<MTLRenderCommandEncoder>)enc setVertexSamplerState:smp atIndex:i]; }
         else { [(id<MTLRenderCommandEncoder>)enc setFragmentTexture:tex atIndex:i]; if (i < 16) [(id<MTLRenderCommandEncoder>)enc setFragmentSamplerState:smp atIndex:i]; }
     }
+}
+
+/* ---------------------------------------------------------------------------------------------------------------
+ * DrawTexture: a screen-aligned textured rectangle drawn in the current pass (GL NV_draw_texture). The texel goes to every float colour target
+ * through the bound blend state and channel masks; integer targets are left alone, depth and stencil are not tested or written.
+ * --------------------------------------------------------------------------------------------------------------- */
+static int pf_is_int(uint32_t pf) {
+    switch (pf) {
+    case MTLPixelFormatR8Sint: case MTLPixelFormatRG8Sint: case MTLPixelFormatRGBA8Sint: case MTLPixelFormatR16Sint: case MTLPixelFormatRG16Sint:
+    case MTLPixelFormatRGBA16Sint: case MTLPixelFormatR32Sint: case MTLPixelFormatRG32Sint: case MTLPixelFormatRGBA32Sint:
+    case MTLPixelFormatR8Uint: case MTLPixelFormatRG8Uint: case MTLPixelFormatRGBA8Uint: case MTLPixelFormatR16Uint: case MTLPixelFormatRG16Uint:
+    case MTLPixelFormatRGBA16Uint: case MTLPixelFormatR32Uint: case MTLPixelFormatRG32Uint: case MTLPixelFormatRGBA32Uint: case MTLPixelFormatRGB10A2Uint: return 1;
+    default: return 0;
+    }
+}
+static id<MTLRenderPipelineState> draw_tex_pipe(void) {
+    static NSMutableDictionary<NSNumber *, id> *libs, *pipes;
+    if (!pipes) { libs = [NSMutableDictionary dictionary]; pipes = [NSMutableDictionary dictionary]; }
+    uint32_t fmask = 0;
+    for (int i = 0; i < 8; i++) if (P.color_fmt[i] && !pf_is_int(P.color_fmt[i])) fmask |= 1u << i;
+    struct { uint32_t color_fmt[8], depth_fmt, stencil_fmt, samples, fmask; blend_st blend[8]; uint32_t blend_en, wmask; } key;
+    memset(&key, 0, sizeof key);
+    memcpy(key.color_fmt, P.color_fmt, sizeof key.color_fmt);
+    key.depth_fmt = P.depth_fmt; key.stencil_fmt = P.stencil_fmt; key.samples = P.samples; key.fmask = fmask;
+    for (int i = 0; i < 8; i++) if (fmask & (1u << i)) { key.blend[i] = mtl_blend_resolve(S.blend[i]); key.blend[i].target = 0; }
+    key.blend_en = S.color.blend_en & fmask; key.wmask = S.chmask.mask;
+    NSNumber *k = @(fnv1a(&key, sizeof key, FNV_INIT));
+    id p = pipes[k];
+    if (p) return p == (id)NSNull.null ? nil : p;
+    id<MTLLibrary> lib = libs[@(fmask)];
+    NSError *err = nil;
+    if (!lib) {
+        NSMutableString *src = [NSMutableString stringWithString:@"#include <metal_stdlib>\nusing namespace metal;\n"
+            "struct V { float4 pos [[position]]; float2 uv; };\n"
+            "vertex V dtv(uint vid [[vertex_id]], constant float4 *r [[buffer(0)]]) {\n"   /* r[0] = NDC x0 y0 x1 y1, r[1] = s0 t0 s1 t1 */
+            "  float2 f = float2(vid & 1, vid >> 1); V o; o.pos = float4(mix(r[0].xy, r[0].zw, f), 0, 1); o.uv = mix(r[1].xy, r[1].zw, f); return o; }\n"
+            "struct O {"];
+        for (int i = 0; i < 8; i++) if (fmask & (1u << i)) [src appendFormat:@" float4 c%d [[color(%d)]];", i, i];
+        [src appendString:@" };\nfragment O dtf(V in [[stage_in]], texture2d<float> tex [[texture(0)]], sampler s [[sampler(0)]]) { float4 c = tex.sample(s, in.uv); O o;"];
+        for (int i = 0; i < 8; i++) if (fmask & (1u << i)) [src appendFormat:@" o.c%d = c;", i];
+        [src appendString:@" return o; }\n"];
+        if (!fmask) src = [NSMutableString stringWithString:@"#include <metal_stdlib>\nusing namespace metal;\nstruct V { float4 pos [[position]]; float2 uv; };\n"
+            "vertex V dtv(uint vid [[vertex_id]], constant float4 *r [[buffer(0)]]) { float2 f = float2(vid & 1, vid >> 1); V o; o.pos = float4(mix(r[0].xy, r[0].zw, f), 0, 1); o.uv = f; return o; }\n"
+            "fragment void dtf(V in [[stage_in]]) { }\n"];
+        lib = [g_mtl.dev newLibraryWithSource:src options:nil error:&err];
+        if (!lib) { LOGE("DrawTexture shader: %s", err.localizedDescription.UTF8String); pipes[k] = NSNull.null; return nil; }
+        libs[@(fmask)] = lib;
+    }
+    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+    d.vertexFunction = [lib newFunctionWithName:@"dtv"]; d.fragmentFunction = [lib newFunctionWithName:@"dtf"];
+    d.rasterSampleCount = P.samples ? P.samples : 1;
+    for (int i = 0; i < 8; i++) {
+        if (!P.color_fmt[i]) continue;
+        MTLRenderPipelineColorAttachmentDescriptor *c = d.colorAttachments[i];
+        c.pixelFormat = (MTLPixelFormat)P.color_fmt[i];
+        uint32_t m = (fmask & (1u << i)) ? (S.chmask.mask >> (4 * i)) & 0xf : 0;
+        c.writeMask = (m & 1 ? MTLColorWriteMaskRed : 0) | (m & 2 ? MTLColorWriteMaskGreen : 0) | (m & 4 ? MTLColorWriteMaskBlue : 0) | (m & 8 ? MTLColorWriteMaskAlpha : 0);
+        if (key.blend_en & (1u << i)) {
+            const blend_st *b = &key.blend[i];
+            c.blendingEnabled = YES;
+            c.sourceRGBBlendFactor = mtl_blend_factor((unsigned)b->src_rgb); c.destinationRGBBlendFactor = mtl_blend_factor((unsigned)b->dst_rgb);
+            c.sourceAlphaBlendFactor = mtl_blend_factor((unsigned)b->src_a); c.destinationAlphaBlendFactor = mtl_blend_factor((unsigned)b->dst_a);
+            c.rgbBlendOperation = mtl_blend_op((unsigned)b->eq_rgb); c.alphaBlendOperation = mtl_blend_op((unsigned)b->eq_a);
+        }
+    }
+    d.depthAttachmentPixelFormat = (MTLPixelFormat)P.depth_fmt; d.stencilAttachmentPixelFormat = (MTLPixelFormat)P.stencil_fmt;
+    p = [g_mtl.dev newRenderPipelineStateWithDescriptor:d error:&err];
+    if (!p) LOGW("DrawTexture pipeline: %s", err.localizedDescription.UTF8String);
+    pipes[k] = p ?: (id)NSNull.null;
+    return p;
+}
+static void do_draw_texture(const p_draw_tex *dt) {
+    if (!S.render_enable || S.raster_discard) return;
+    if (!pass_begin()) return;
+    gdpool *tp = (gdpool *)htab_get(S.texpool), *sp = (gdpool *)htab_get(S.samppool);
+    uint32_t tic = (uint32_t)(dt->handle & 0xfffff), tsc = (uint32_t)(dt->handle >> 20) & 0xfff;
+    if (!tp || tic >= (uint32_t)tp->n || !tp->tex[tic].s.valid) { LOG_ONCE(NAPPLE_LOG_WARN, "DrawTexture with an unregistered texture handle %#llx ignored", (unsigned long long)dt->handle); return; }
+    dtex *e = &tp->tex[tic];
+    GfxTex *gt = mtl_tex_get(&e->s, 0);
+    if (!gt) return;
+    mtl_tex_prepare_sample(gt);
+    id<MTLTexture> tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, TEXTYPE_2D, 0);
+    id<MTLSamplerState> smp = (sp && tsc < (uint32_t)sp->n && sp->samp_used[tsc]) ? mtl_sampler_get(&sp->samp[tsc]) : nil;
+    if (!smp) { static samp_par def; static int init; if (!init) { def.minf = 1; def.magf = 1; def.lod_max = 1000; def.aniso = 1; init = 1; } smp = mtl_sampler_get(&def); }
+    id<MTLRenderPipelineState> ps = draw_tex_pipe();
+    if (!tex || !ps) return;
+    static id<MTLDepthStencilState> ds;
+    if (!ds) { MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new]; dd.depthCompareFunction = MTLCompareFunctionAlways; dd.depthWriteEnabled = NO; ds = [g_mtl.dev newDepthStencilStateWithDescriptor:dd]; }
+    /* window coordinates (y from the bottom in the lower-left origin mode) -> NDC (+y up, the top row is NDC +1) */
+    float W = (float)P.w, H = (float)P.h, r[8];
+    int lower_left = g_gfx.device_origin == 0 && !g_gfx.origin_flip;
+    for (int i = 0; i < 2; i++) {
+        float x = dt->dst[i * 2], y = dt->dst[i * 2 + 1];
+        r[i * 2] = 2.0f * x / W - 1.0f;
+        r[i * 2 + 1] = lower_left ? 2.0f * y / H - 1.0f : 1.0f - 2.0f * y / H;
+    }
+    memcpy(r + 4, dt->src, sizeof dt->src);
+    [g_re setRenderPipelineState:ps];
+    [g_re setDepthStencilState:ds];
+    [g_re setCullMode:MTLCullModeNone];
+    [g_re setTriangleFillMode:MTLTriangleFillModeFill];
+    [g_re setVertexBytes:r length:sizeof r atIndex:0];
+    [g_re setFragmentTexture:tex atIndex:0];
+    [g_re setFragmentSamplerState:smp atIndex:0];
+    MTLViewport vp = { 0, 0, (double)lroundf(W * P.sx), (double)lroundf(H * P.sy), 0, 1 };
+    [g_re setViewport:vp];
+    [g_re setScissorRect:scissor_rect()];
+    [g_re drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
+    P.draws++;
+    atomic_fetch_add(&g_gfx.draws, 1);
+    g_pk_dirty = 1; g_cur_pipe = nil;
 }
 
 /* Vertex rows the current draw reads (set by the draw before prepare_draw; used to repack streams whose stride is not a multiple of 4). */
@@ -1035,6 +1166,51 @@ static id<MTLComputeCommandEncoder> compute_encoder(void) {
     if (!g_ce) { flush_clears(); end_encoders(); g_ce = [g_cb computeCommandEncoder]; g_enc_serial++; }
     return g_ce;
 }
+/* MultiDraw*IndirectCount. Metal has no draw count read from a buffer: a compute pass copies the argument records of draws i < min(*count, max)
+ * into scratch memory, packed, and zeroes the rest (a zero vertex / index count draws nothing), then max indirect draws read the scratch copy.
+ * The count is written by the GPU in the usual use (culling compute), so it cannot be read at encode time. The compute pass ends the open
+ * render pass; the next one loads the attachments. */
+static NSString *const kIndCountMSL =
+    @"#include <metal_stdlib>\nusing namespace metal;\n"
+     "kernel void ic(device const uint *count [[buffer(0)]], device const uchar *src [[buffer(1)]], device uint *dst [[buffer(2)]], constant uint4 &p [[buffer(3)]],\n"
+     "               uint i [[thread_position_in_grid]]) {\n"     /* p = (max draws, stride, words per record, 0) */
+     "  if (i >= p.x) return; uint n = min(count[0], p.x); device const uint *s = (device const uint *)(src + i * p.y);\n"
+     "  for (uint w = 0; w < p.z; w++) dst[i * p.z + w] = i < n ? s[w] : 0; }\n";
+static void do_draw_indirect_count(const p_draw_ind_count *d) {
+    int native;
+    MTLPrimitiveType pt = prim_native(d->mode, &native);
+    if (!native) { LOG_ONCE(NAPPLE_LOG_WARN, "indirect draw with primitive %u skipped", d->mode); return; }
+    static id<MTLComputePipelineState> cps;
+    if (!cps) {
+        NSError *e = nil;
+        id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:kIndCountMSL options:nil error:&e];
+        cps = lib ? [g_mtl.dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"ic"] error:&e] : nil;
+        if (!cps) { LOGE("indirect count kernel: %s", e.localizedDescription.UTF8String); return; }
+    }
+    uint32_t words = d->indexed ? 5 : 4, max = d->max_draws;
+    if ((d->stride & 3) || (d->indirect & 3) || (d->count_addr & 3)) { LOG_ONCE(NAPPLE_LOG_WARN, "MultiDraw*IndirectCount with unaligned arguments skipped"); return; }
+    id<MTLBuffer> cb, ab, sb; uint64_t co, ao; uint32_t so;
+    if (!mtl_addr(d->count_addr, 4, &cb, &co) || !mtl_addr(d->indirect, (uint64_t)(max - 1) * d->stride + words * 4, &ab, &ao)) return;
+    ring_alloc(&g_ring, max * words * 4, 256, &sb, &so);
+    pass_end();
+    id<MTLComputeCommandEncoder> ce = compute_encoder();
+    [ce setComputePipelineState:cps];
+    [ce setBuffer:cb offset:co atIndex:0]; [ce setBuffer:ab offset:ao atIndex:1]; [ce setBuffer:sb offset:so atIndex:2];
+    uint32_t prm[4] = { max, (uint32_t)d->stride, words, 0 };
+    [ce setBytes:prm length:sizeof prm atIndex:3];
+    NSUInteger tg = cps.threadExecutionWidth;
+    [ce dispatchThreads:MTLSizeMake(max, 1, 1) threadsPerThreadgroup:MTLSizeMake(tg < max ? tg : max, 1, 1)];
+    end_encoders();
+    g_vr_valid = 0;
+    if (!prepare_draw(d->mode)) return;
+    id<MTLBuffer> ib = nil; uint64_t io = 0;
+    if (d->indexed && !mtl_addr(d->idx_addr, 4, &ib, &io)) return;
+    MTLIndexType it = d->idx_type == 1 ? MTLIndexTypeUInt16 : MTLIndexTypeUInt32;
+    for (uint32_t i = 0; i < max; i++) {
+        if (d->indexed) [g_re drawIndexedPrimitives:pt indexType:it indexBuffer:ib indexBufferOffset:io indirectBuffer:sb indirectBufferOffset:so + i * 20];
+        else [g_re drawPrimitives:pt indirectBuffer:sb indirectBufferOffset:so + i * 16];
+    }
+}
 static void do_dispatch(uint32_t x, uint32_t y, uint32_t z, uint64_t indirect) {
     if (!S.prog[ST_CS]) return;
     GfxShader *sh;
@@ -1202,17 +1378,36 @@ static void do_copy_t2t(const p_copy_t2t *c) {
     [blit() copyFromTexture:s->tex sourceSlice:s3 ? 0 : ssl + sz sourceLevel:slv sourceOrigin:MTLOriginMake(sx, sy, s3 ? sz : 0) sourceSize:MTLSizeMake(sw, sh, s3 ? sd : 1)
                   toTexture:d->tex destinationSlice:d3 ? 0 : dsl + dz destinationLevel:dlv destinationOrigin:MTLOriginMake(dx, dy, d3 ? dz : 0)];
 }
+/* Downsample (MSAA resolve): a pass that loads the multisampled source and resolves it into the destination's level / layer (texture views).
+ * The source keeps its samples (StoreAndMultisampleResolve): games resolve mid-frame and go on drawing into the multisampled target. Depth
+ * resolves take sample 0, as the console's 2D engine does; integer formats cannot be resolved by Metal and are skipped (reported once). */
 static void do_downsample(const p_copy_t2t *c) {
     GfxTex *s = mtl_tex_get(&c->src.s, 1), *d = mtl_tex_get(&c->dst.s, 1);
     if (!s || !d) return;
-    end_encoders();
+    if (s->tex.sampleCount < 2) { LOG_ONCE(NAPPLE_LOG_WARN, "Downsample from a single-sampled texture: copied instead"); p_copy_t2t cc = *c; memset(cc.sregion, 0, sizeof cc.sregion); memset(cc.dregion, 0, sizeof cc.dregion); end_encoders(); do_copy_t2t(&cc); return; }
+    if (pf_is_int((uint32_t)s->pf)) { LOG_ONCE(NAPPLE_LOG_WARN, "Downsample of an integer format (%lu) skipped: Metal cannot resolve it", (unsigned long)s->pf); return; }
+    uint32_t ssl = c->src.has_view && c->src.view.set_layers ? c->src.view.min_layer : 0;
+    uint32_t dlv = c->dst.has_view && c->dst.view.set_levels ? c->dst.view.base_level : 0, dsl = c->dst.has_view && c->dst.view.set_layers ? c->dst.view.min_layer : 0;
+    if (s->pf != d->pf || (d->tex.width >> dlv) != s->tex.width || (d->tex.height >> dlv) != s->tex.height) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "Downsample between different formats or sizes (%lu %lux%lu -> %lu %lux%lu) is not implemented", (unsigned long)s->pf, (unsigned long)s->tex.width,
+                 (unsigned long)s->tex.height, (unsigned long)d->pf, (unsigned long)(d->tex.width >> dlv), (unsigned long)(d->tex.height >> dlv));
+        return;
+    }
+    flush_clears(); end_encoders();
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
     if (s->is_depth) {
-        rp.depthAttachment.texture = s->tex; rp.depthAttachment.resolveTexture = d->tex;
-        rp.depthAttachment.loadAction = MTLLoadActionLoad; rp.depthAttachment.storeAction = MTLStoreActionMultisampleResolve;
+        if (s->pf != MTLPixelFormatStencil8) {
+            rp.depthAttachment.texture = s->tex; rp.depthAttachment.slice = ssl; rp.depthAttachment.resolveTexture = d->tex; rp.depthAttachment.resolveLevel = dlv; rp.depthAttachment.resolveSlice = dsl;
+            rp.depthAttachment.loadAction = MTLLoadActionLoad; rp.depthAttachment.storeAction = MTLStoreActionStoreAndMultisampleResolve;
+        }
+        if (s->has_stencil) {
+            rp.stencilAttachment.texture = s->tex; rp.stencilAttachment.slice = ssl; rp.stencilAttachment.resolveTexture = d->tex; rp.stencilAttachment.resolveLevel = dlv; rp.stencilAttachment.resolveSlice = dsl;
+            rp.stencilAttachment.loadAction = MTLLoadActionLoad; rp.stencilAttachment.storeAction = MTLStoreActionStoreAndMultisampleResolve;
+        }
     } else {
-        rp.colorAttachments[0].texture = s->tex; rp.colorAttachments[0].resolveTexture = d->tex;
-        rp.colorAttachments[0].loadAction = MTLLoadActionLoad; rp.colorAttachments[0].storeAction = MTLStoreActionMultisampleResolve;
+        MTLRenderPassColorAttachmentDescriptor *a = rp.colorAttachments[0];
+        a.texture = s->tex; a.slice = ssl; a.resolveTexture = d->tex; a.resolveLevel = dlv; a.resolveSlice = dsl;
+        a.loadAction = MTLLoadActionLoad; a.storeAction = MTLStoreActionStoreAndMultisampleResolve;
     }
     id<MTLRenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:rp];
     [e endEncoding];
@@ -1275,7 +1470,11 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
     case OP_BIND_BLEND: { blend_st b; memcpy(&b, pl, sizeof b); S.blend[b.target & 7] = b; g_pk_dirty = 1; break; }
     case OP_BIND_COLOR: memcpy(&S.color, pl, sizeof S.color); g_pk_dirty = 1; break;
     case OP_BIND_CHMASK: memcpy(&S.chmask, pl, sizeof S.chmask); g_pk_dirty = 1; break;
-    case OP_BIND_MS: memcpy(&S.ms, pl, sizeof S.ms); g_pk_dirty = 1; break;
+    case OP_BIND_MS: {
+        memcpy(&S.ms, pl, sizeof S.ms); g_pk_dirty = 1;
+        if (P.open) { uint8_t n, pos[8]; sample_positions(&n, pos); if (n != P.sl_n || memcmp(pos, P.sl_pos, 8)) pass_end(); }    /* new sample positions: new pass */
+        break;
+    }
     case OP_BIND_POLY: memcpy(&S.poly, pl, sizeof S.poly); break;
     case OP_BIND_DS: memcpy(&S.ds, pl, sizeof S.ds); break;
     case OP_BIND_VATTR: { const p_range *r = (const p_range *)pl; S.nattr = r->n; memcpy(S.vattr, r + 1, r->n * sizeof(va_st)); g_pk_dirty = 1; break; }
@@ -1326,6 +1525,7 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
     case OP_DRAW_ELEMENTS: do_draw_elements((const p_draw_elems *)pl); break;
     case OP_DRAW_ARRAYS_IND: do_draw_indirect((const p_draw_ind *)pl, 0); break;
     case OP_DRAW_ELEMENTS_IND: do_draw_indirect((const p_draw_ind *)pl, 1); break;
+    case OP_DRAW_IND_COUNT: do_draw_indirect_count((const p_draw_ind_count *)pl); break;
     case OP_DISPATCH: { const p_dispatch *d = (const p_dispatch *)pl; do_dispatch(d->x, d->y, d->z, 0); break; }
     case OP_DISPATCH_IND: do_dispatch(0, 0, 0, *(const uint64_t *)pl); break;
     case OP_COPY_B2B: pass_end(); do_copy_b2b((const p_copy_b2b *)pl); break;
@@ -1353,7 +1553,8 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
         if (t == NVN_COUNTER_TYPE_SAMPLES_PASSED) { if (!g_occl) { g_occl = 1; LOGI("occlusion queries in use: counting samples"); } vis_close(); post_add(5, 0, 0, 0); }
         break;
     }
-    case OP_BARRIER: case OP_DRAW_TEXTURE: break;
+    case OP_DRAW_TEXTURE: do_draw_texture((const p_draw_tex *)pl); break;
+    case OP_BARRIER: break;
     default: LOG_ONCE(NAPPLE_LOG_WARN, "unknown recorded op %u", h->op); break;
     }
 }

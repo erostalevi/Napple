@@ -3,6 +3,7 @@
 #include "../ipc.h"
 #include "napple_display.h"
 #include "host_info.h"
+#include "applet_core.h"
 #include "../frontend.h"
 #include "napple_frontend.h"
 #include <pthread.h>
@@ -44,6 +45,14 @@ static uint32_t plain_event(int signaled) {
     return readable;
 }
 
+
+/* Application-visible settings (applet_core.h): what the guest sets is what it reads back. A request too short for the argument it should carry is
+ * ignored rather than failing the runtime (the argument layouts are from the author's memory of the public documentation, unverified). */
+static AppletState astate; static int astate_ready;
+static AppletState *AS(void) { if (!astate_ready) { applet_state_init(&astate); astate_ready = 1; } return &astate; }
+#define IN_OK(c, off, T) ((c)->in_size >= (uint32_t)((off) + sizeof(T)))
+int applet_screenshot_permitted(void) { return applet_screenshot_allowed(AS()); }
+
 /* ---- ICommonStateGetter ------------------------------------------------------------------------------------------ */
 static void csg_get_event_handle(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, new_message_event()); }
 static void csg_receive_message(IpcObject *s, IpcCall *c) {
@@ -68,7 +77,11 @@ static void csg_get_resolution(IpcObject *s, IpcCall *c) {
 }
 static void csg_get_resolution_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_event(0)); }
 static void csg_get_sleep_lock_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_event(0)); }
-static void csg_is_vr_mode(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 0; IPC_OUT(c, v); }
+static void csg_is_vr_mode(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = (uint8_t)AS()->vr_mode; IPC_OUT(c, v); }
+static void csg_set_vr_mode(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->vr_mode = IPC_IN(c, uint8_t, 0) != 0; }
+static void csg_set_cpu_boost(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint32_t)) { AS()->cpu_boost_mode = IPC_IN(c, uint32_t, 0); AS()->cpu_boost_requests++; } }
+static void csg_cancel_cpu_boost(IpcObject *s, IpcCall *c) { (void)s; (void)c; AS()->cpu_boost_mode = 0; }
+static void csg_set_perf_notification(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->performance_mode_notification = IPC_IN(c, uint8_t, 0) != 0; }
 static void csg_get_current_perf_config(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = g_cfg.op_mode_handheld ? 0x00020001 : 0x00020003; IPC_OUT(c, v); }
 static void csg_get_builtin_display_type(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = 0; IPC_OUT(c, v); }
 static const IpcCmd csg_cmds[] = {
@@ -80,17 +93,35 @@ static const IpcCmd csg_cmds[] = {
     {9, "GetCurrentFocusState", csg_get_focus_state, IPC_IMPL},
     {10, "RequestToAcquireSleepLock", csg_noop, IPC_STUB}, {11, "ReleaseSleepLock", csg_noop, IPC_STUB}, {12, "ReleaseSleepLockTransiently", csg_noop, IPC_STUB},
     {13, "GetAcquiredSleepLockEvent", csg_get_sleep_lock_event, IPC_STUB},
-    {50, "IsVrModeEnabled", csg_is_vr_mode, IPC_STUB}, {51, "SetVrModeEnabled", csg_noop, IPC_STUB},
+    {50, "IsVrModeEnabled", csg_is_vr_mode, IPC_IMPL}, {51, "SetVrModeEnabled", csg_set_vr_mode, IPC_IMPL},
     {60, "GetDefaultDisplayResolution", csg_get_resolution, IPC_IMPL}, {61, "GetDefaultDisplayResolutionChangeEvent", csg_get_resolution_event, IPC_STUB},
-    {66, "SetCpuBoostMode", csg_noop, IPC_STUB}, {67, "CancelCpuBoostMode", csg_noop, IPC_STUB}, {68, "GetBuiltInDisplayType", csg_get_builtin_display_type, IPC_IMPL},
-    {90, "SetPerformanceConfigurationChangedNotification", csg_noop, IPC_STUB}, {91, "GetCurrentPerformanceConfiguration", csg_get_current_perf_config, IPC_IMPL},
+    {66, "SetCpuBoostMode", csg_set_cpu_boost, IPC_IMPL}, {67, "CancelCpuBoostMode", csg_cancel_cpu_boost, IPC_IMPL}, {68, "GetBuiltInDisplayType", csg_get_builtin_display_type, IPC_IMPL},
+    {90, "SetPerformanceConfigurationChangedNotification", csg_set_perf_notification, IPC_IMPL}, {91, "GetCurrentPerformanceConfiguration", csg_get_current_perf_config, IPC_IMPL},
 };
 
 /* ---- ISelfController ---------------------------------------------------------------------------------------------- */
 static void sc_launchable_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_event(1)); }   /* library applets can always be launched: signalled */
 static void sc_create_managed_layer(IpcObject *s, IpcCall *c) { (void)s; uint64_t id = 1; IPC_OUT(c, id); }
-static void sc_get_idle_ext(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = 0; IPC_OUT(c, v); }
-static void sc_is_auto_sleep_disabled(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 0; IPC_OUT(c, v); }
+static void sc_is_auto_sleep_disabled(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = (uint8_t)AS()->auto_sleep_disabled; IPC_OUT(c, v); }
+static void sc_set_auto_sleep_disabled(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->auto_sleep_disabled = IPC_IN(c, uint8_t, 0) != 0; }
+static void sc_set_screenshot_permission(IpcObject *s, IpcCall *c) {
+    (void)s; if (!IN_OK(c, 0, uint32_t)) return;
+    uint32_t v = IPC_IN(c, uint32_t, 0);
+    if (!applet_valid_screenshot_permission(v)) { c->result = 0x1d80; return; }
+    AS()->screenshot_permission = (int)v; LOGV("applet", "SetScreenShotPermission %u", v);
+}
+static void sc_set_restart_message(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->restart_message = IPC_IN(c, uint8_t, 0) != 0; }
+static void sc_set_fw_update_section(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->controller_firmware_update_section = IPC_IN(c, uint8_t, 0) != 0; }
+static void sc_set_capture_short_press(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->capture_short_press_message = IPC_IN(c, uint8_t, 0) != 0; }
+static void sc_set_orientation(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint32_t)) AS()->screenshot_orientation = IPC_IN(c, uint32_t, 0); }
+static void sc_set_keyboard_layout(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint32_t)) AS()->keyboard_layout = IPC_IN(c, uint32_t, 0); }
+static void sc_set_media_playback(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->media_playback_state = IPC_IN(c, uint8_t, 0); }
+static void sc_set_idle_ext(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint32_t)) AS()->idle_detection_extension = IPC_IN(c, uint32_t, 0); }
+static void sc_get_idle_ext(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = AS()->idle_detection_extension; IPC_OUT(c, v); }
+static void sc_set_input_sources(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint32_t)) AS()->input_detection_source_set = IPC_IN(c, uint32_t, 0); }
+static void sc_report_user_active(IpcObject *s, IpcCall *c) { (void)s; (void)c; AS()->user_active_reports++; }
+static void sc_set_wireless_priority(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint32_t)) AS()->wireless_priority_mode = IPC_IN(c, uint32_t, 0); }
+static void sc_set_album_notification(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->album_image_taken_notification = IPC_IN(c, uint8_t, 0) != 0; }
 static void sc_get_illuminance(IpcObject *s, IpcCall *c) { (void)s; float v = 100.0f; IPC_OUT(c, v); }
 static void sc_is_illuminance_available(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 0; IPC_OUT(c, v); }
 static void sc_suspended_tick_value(IpcObject *s, IpcCall *c) { (void)s; uint64_t v = 0; IPC_OUT(c, v); }
@@ -99,23 +130,23 @@ static const IpcCmd sc_cmds[] = {
     {0, "Exit", sc_exit, IPC_IMPL}, {1, "LockExit", csg_noop, IPC_IMPL}, {2, "UnlockExit", csg_noop, IPC_IMPL},
     {3, "EnterFatalSection", csg_noop, IPC_STUB}, {4, "LeaveFatalSection", csg_noop, IPC_STUB},
     {9, "GetLibraryAppletLaunchableEvent", sc_launchable_event, IPC_STUB},
-    {10, "SetScreenShotPermission", csg_noop, IPC_STUB}, {11, "SetOperationModeChangedNotification", csg_noop, IPC_IMPL},
+    {10, "SetScreenShotPermission", sc_set_screenshot_permission, IPC_IMPL}, {11, "SetOperationModeChangedNotification", csg_noop, IPC_IMPL},
     {12, "SetPerformanceModeChangedNotification", csg_noop, IPC_IMPL}, {13, "SetFocusHandlingMode", csg_noop, IPC_IMPL},
-    {14, "SetRestartMessageEnabled", csg_noop, IPC_STUB}, {15, "SetScreenShotAppletIdentityInfo", csg_noop, IPC_STUB},
-    {16, "SetOutOfFocusSuspendingEnabled", csg_noop, IPC_IMPL}, {17, "SetControllerFirmwareUpdateSection", csg_noop, IPC_STUB},
-    {18, "SetRequiresCaptureButtonShortPressedMessage", csg_noop, IPC_STUB}, {19, "SetScreenShotImageOrientation", csg_noop, IPC_STUB},
-    {20, "SetDesirableKeyboardLayout", csg_noop, IPC_STUB},
+    {14, "SetRestartMessageEnabled", sc_set_restart_message, IPC_IMPL}, {15, "SetScreenShotAppletIdentityInfo", csg_noop, IPC_STUB},
+    {16, "SetOutOfFocusSuspendingEnabled", csg_noop, IPC_IMPL}, {17, "SetControllerFirmwareUpdateSection", sc_set_fw_update_section, IPC_IMPL},
+    {18, "SetRequiresCaptureButtonShortPressedMessage", sc_set_capture_short_press, IPC_IMPL}, {19, "SetScreenShotImageOrientation", sc_set_orientation, IPC_IMPL},
+    {20, "SetDesirableKeyboardLayout", sc_set_keyboard_layout, IPC_IMPL},
     {40, "CreateManagedDisplayLayer", sc_create_managed_layer, IPC_IMPL},
     {50, "SetHandlesRequestToDisplay", csg_noop, IPC_STUB}, {51, "ApproveToDisplay", csg_noop, IPC_STUB},
-    {60, "OverrideAutoSleepTimeAndDimmingTime", csg_noop, IPC_STUB}, {61, "SetMediaPlaybackState", csg_noop, IPC_STUB},
-    {62, "SetIdleTimeDetectionExtension", csg_noop, IPC_STUB}, {63, "GetIdleTimeDetectionExtension", sc_get_idle_ext, IPC_STUB},
-    {64, "SetInputDetectionSourceSet", csg_noop, IPC_STUB}, {65, "ReportUserIsActive", csg_noop, IPC_STUB},
+    {60, "OverrideAutoSleepTimeAndDimmingTime", csg_noop, IPC_STUB}, {61, "SetMediaPlaybackState", sc_set_media_playback, IPC_IMPL},
+    {62, "SetIdleTimeDetectionExtension", sc_set_idle_ext, IPC_IMPL}, {63, "GetIdleTimeDetectionExtension", sc_get_idle_ext, IPC_IMPL},
+    {64, "SetInputDetectionSourceSet", sc_set_input_sources, IPC_IMPL}, {65, "ReportUserIsActive", sc_report_user_active, IPC_IMPL},
     {66, "GetCurrentIlluminance", sc_get_illuminance, IPC_STUB}, {67, "IsIlluminanceAvailable", sc_is_illuminance_available, IPC_STUB},
-    {68, "SetAutoSleepDisabled", csg_noop, IPC_STUB}, {69, "IsAutoSleepDisabled", sc_is_auto_sleep_disabled, IPC_STUB},
+    {68, "SetAutoSleepDisabled", sc_set_auto_sleep_disabled, IPC_IMPL}, {69, "IsAutoSleepDisabled", sc_is_auto_sleep_disabled, IPC_IMPL},
     {70, "ReportMultimediaError", csg_noop, IPC_STUB}, {71, "GetCurrentIlluminanceEx", sc_get_illuminance, IPC_STUB},
-    {80, "SetWirelessPriorityMode", csg_noop, IPC_STUB}, {90, "GetAccumulatedSuspendedTickValue", sc_suspended_tick_value, IPC_STUB},
+    {80, "SetWirelessPriorityMode", sc_set_wireless_priority, IPC_IMPL}, {90, "GetAccumulatedSuspendedTickValue", sc_suspended_tick_value, IPC_STUB},
     {91, "GetAccumulatedSuspendedTickChangedEvent", sc_launchable_event, IPC_STUB},
-    {100, "SetAlbumImageTakenNotificationEnabled", csg_noop, IPC_STUB}, {110, "SetApplicationAlbumUserData", csg_noop, IPC_STUB},
+    {100, "SetAlbumImageTakenNotificationEnabled", sc_set_album_notification, IPC_IMPL}, {110, "SetApplicationAlbumUserData", csg_noop, IPC_STUB},
 };
 
 /* ---- IWindowController / IAudioController / IDisplayController ------------------------------------------------------------ */
@@ -125,11 +156,18 @@ static const IpcCmd wc_cmds[] = {
     {11, "ReleaseForegroundRights", csg_noop, IPC_STUB}, {12, "RejectToChangeIntoBackground", csg_noop, IPC_STUB},
     {20, "SetAppletWindowVisibility", csg_noop, IPC_STUB}, {21, "SetAppletGpuTimeSlice", csg_noop, IPC_STUB},
 };
-static void ac_get_volume(IpcObject *s, IpcCall *c) { (void)s; float v = 1.0f; IPC_OUT(c, v); }
+static void ac_set_volumes(IpcObject *s, IpcCall *c) {
+    (void)s; if (!IN_OK(c, 4, float)) return;
+    AS()->main_volume = applet_clamp_volume(IPC_IN(c, float, 0), AS()->main_volume); AS()->library_volume = applet_clamp_volume(IPC_IN(c, float, 4), AS()->library_volume);
+}
+static void ac_get_main_volume(IpcObject *s, IpcCall *c) { (void)s; float v = AS()->main_volume; IPC_OUT(c, v); }
+static void ac_get_library_volume(IpcObject *s, IpcCall *c) { (void)s; float v = AS()->library_volume; IPC_OUT(c, v); }
+static void ac_change_main_volume(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, float)) AS()->main_volume = applet_clamp_volume(IPC_IN(c, float, 0), AS()->main_volume); }
+static void ac_set_transparent_rate(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, float)) AS()->transparent_volume_rate = applet_clamp_volume(IPC_IN(c, float, 0), AS()->transparent_volume_rate); }
 static const IpcCmd ac_cmds[] = {
-    {0, "SetExpectedMasterVolume", csg_noop, IPC_STUB}, {1, "GetMainAppletExpectedMasterVolume", ac_get_volume, IPC_STUB},
-    {2, "GetLibraryAppletExpectedMasterVolume", ac_get_volume, IPC_STUB}, {3, "ChangeMainAppletMasterVolume", csg_noop, IPC_STUB},
-    {4, "SetTransparentVolumeRate", csg_noop, IPC_STUB},
+    {0, "SetExpectedMasterVolume", ac_set_volumes, IPC_IMPL}, {1, "GetMainAppletExpectedMasterVolume", ac_get_main_volume, IPC_IMPL},
+    {2, "GetLibraryAppletExpectedMasterVolume", ac_get_library_volume, IPC_IMPL}, {3, "ChangeMainAppletMasterVolume", ac_change_main_volume, IPC_IMPL},
+    {4, "SetTransparentVolumeRate", ac_set_transparent_rate, IPC_IMPL},
 };
 static void dc_noop_result(IpcObject *s, IpcCall *c) { (void)s; c->result = 0x1680; }   /* no capture image available */
 static const IpcCmd dc_cmds[] = {
@@ -341,20 +379,27 @@ static void af_get_pseudo_device_id(IpcObject *s, IpcCall *c) { (void)s; uint8_t
 static void af_get_save_data_size(IpcObject *s, IpcCall *c) { (void)s; int64_t a = 0x2000000, b = 0x2000000; IPC_OUT(c, a); IPC_OUT(c, b); }
 static void af_is_recording_supported(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 0; IPC_OUT(c, v); }
 static void af_get_previous_program_index(IpcObject *s, IpcCall *c) { (void)s; int32_t v = -1; IPC_OUT(c, v); }
+static void af_begin_block_home_sl(IpcObject *s, IpcCall *c) { (void)s; (void)c; applet_block_begin(&AS()->home_button_short_long_block); }
+static void af_end_block_home_sl(IpcObject *s, IpcCall *c) { (void)s; (void)c; applet_block_end(&AS()->home_button_short_long_block); }
+static void af_begin_block_home(IpcObject *s, IpcCall *c) { (void)s; (void)c; applet_block_begin(&AS()->home_button_block); }
+static void af_end_block_home(IpcObject *s, IpcCall *c) { (void)s; (void)c; applet_block_end(&AS()->home_button_block); }
+static void af_set_recording_state(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint32_t)) AS()->game_play_recording_state = IPC_IN(c, uint32_t, 0); }
+static void af_enable_crash_report(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->crash_report_enabled = IPC_IN(c, uint8_t, 0) != 0; }
+static void af_set_copyright_visibility(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->copyright_visible = IPC_IN(c, uint8_t, 0) != 0; }
 static void af_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_event(0)); }
 static const IpcCmd af_cmds[] = {
     {1, "PopLaunchParameter", af_pop_launch_parameter, IPC_STUB},
     {20, "EnsureSaveData", af_ensure_save_data, IPC_STUB}, {21, "GetDesiredLanguage", af_get_desired_language, IPC_IMPL},
     {22, "SetTerminateResult", af_set_terminate_result, IPC_IMPL}, {23, "GetDisplayVersion", af_get_display_version, IPC_IMPL},
     {26, "GetSaveDataSize", af_get_save_data_size, IPC_STUB},
-    {30, "BeginBlockingHomeButtonShortAndLongPressed", csg_noop, IPC_STUB}, {31, "EndBlockingHomeButtonShortAndLongPressed", csg_noop, IPC_STUB},
-    {32, "BeginBlockingHomeButton", csg_noop, IPC_STUB}, {33, "EndBlockingHomeButton", csg_noop, IPC_STUB},
+    {30, "BeginBlockingHomeButtonShortAndLongPressed", af_begin_block_home_sl, IPC_IMPL}, {31, "EndBlockingHomeButtonShortAndLongPressed", af_end_block_home_sl, IPC_IMPL},
+    {32, "BeginBlockingHomeButton", af_begin_block_home, IPC_IMPL}, {33, "EndBlockingHomeButton", af_end_block_home, IPC_IMPL},
     {40, "NotifyRunning", af_notify_running, IPC_IMPL}, {50, "GetPseudoDeviceId", af_get_pseudo_device_id, IPC_STUB},
     {60, "SetMediaPlaybackStateForApplication", csg_noop, IPC_STUB}, {65, "IsGamePlayRecordingSupported", af_is_recording_supported, IPC_STUB},
-    {66, "InitializeGamePlayRecording", csg_noop, IPC_STUB}, {67, "SetGamePlayRecordingState", csg_noop, IPC_STUB},
+    {66, "InitializeGamePlayRecording", csg_noop, IPC_STUB}, {67, "SetGamePlayRecordingState", af_set_recording_state, IPC_IMPL},
     {68, "RequestFlushGamePlayingMovieForDebug", csg_noop, IPC_STUB},
-    {90, "EnableApplicationCrashReport", csg_noop, IPC_STUB}, {91, "InitializeApplicationCopyrightFrameBuffer", csg_noop, IPC_STUB},
-    {92, "SetApplicationCopyrightImage", csg_noop, IPC_STUB}, {93, "SetApplicationCopyrightVisibility", csg_noop, IPC_STUB},
+    {90, "EnableApplicationCrashReport", af_enable_crash_report, IPC_IMPL}, {91, "InitializeApplicationCopyrightFrameBuffer", csg_noop, IPC_STUB},
+    {92, "SetApplicationCopyrightImage", csg_noop, IPC_STUB}, {93, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
     {110, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_STUB},
     {120, "GetGpuErrorDetectedSystemEvent", af_event, IPC_STUB}, {130, "GetFriendInvitationStorageChannelEvent", af_event, IPC_STUB},
 };

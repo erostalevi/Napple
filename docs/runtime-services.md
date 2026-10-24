@@ -42,6 +42,7 @@ Everything else is unsupported and reported by number and name.
 
 | `pl:u` / `pl:s` | implemented | shared fonts from `<app-support>/system/fonts` (see "Shared fonts"); zero-size fonts when absent |
 | `audren:u`, `audout:u`, `hwopus` | implemented | over libnapple_audio; `GetReleasedAudioOutBuffer` zero-fills unused tags (the SDK returns the first tag without checking the count); hwopus calls `guest_write_prepare` on the PCM buffer |
+| `audin:u` | implemented (silent) | over libnapple_audio (`napple_audin_*`): one device "BuiltInHeadset", OpenAudioIn(Auto), IAudioIn 0-6, 8, 9, 11-14; buffers are filled in real time with silence because no capture source is installed (no microphone access, no `NSMicrophoneUsageDescription`). `OpenAudioInProtocolSpecified` (5) and the UAC appends (IAudioIn 7, 10) are not implemented |
 | `nvdrv`, `nvdrv:a/s/t` | partial | `/dev/nvmap` (create/alloc/free/param/get_id/from_id as bookkeeping on guest memory), `/dev/nvhost-ctrl` (syncpoints, events), host1x channels `nvhost-nvdec/vic/msenc/nvjpg` accept Submit and complete it instantly (syncpoints advance; nothing is decoded: video is decoded by `movie.c`, see below). Every other device/ioctl is refused and listed in `missing_ipc` as `nvdrv:ioctl <path> <cmd>` |
 | `mm:u` | stub | multimedia clock requests accepted |
 | `friend:u` (+v/m/s/a), `nifm:u` (+a/s), `bsd:u` (+s/a), `nsd:u` (+a), `ssl`, `prepo:u` (+a/m/s), `nfp:user`/`nfc:user` | stubs (offline) | friends: empty lists; nifm: requests never accepted, connection "disconnected"; bsd: RegisterClient/Close succeed, every network call answers {-1, ENETDOWN}; nsd: environment "lp1", names resolve to themselves; ssl: contexts/connections creatable, nothing can handshake; prepo: reports dropped; nfp: initialised, no devices |
@@ -106,3 +107,115 @@ inside the runtime.
 ## Debug aids
 `NAPPLE_INPUT_SCRIPT="10:A,12:PLUS:0.3,30:L+R:0.8"` scripted key presses (`+` joins a chord that is pressed atomically; the script uses the bindings of input.json); `NAPPLE_INPUT_LOG=1` logs every change of player 1's merged state; `kill -USR1 <pid>` dumps every guest thread (state, wait, backtrace) without stopping; `NAPPLE_OP_MODE=docked|handheld`; `NAPPLE_AUDIO_VOLUME=0.05` with `NAPPLE_AUDIO_DEVICE=1` for audible tests at low volume; `NAPPLE_FE_OVERLAY=<tab>` opens the overlay at start and `NAPPLE_FE_VIEWSHOT=<png>:<secs>` renders it to a PNG; `tools/synth_keys.m` posts real CGEvents (see docs/changes/2026-10-23-input-audio-runtime-round2.md); `NAPPLE_SCREENSHOT=<prefix>` + `NAPPLE_SCREENSHOT_FRAMES=1,60,...` PNG of presented frames;
 `NAPPLE_WATCH=main+0x24741f8` logs every guest write to a location; `NAPPLE_PEEK`, `NAPPLE_FS_TRACE=1`, `NAPPLE_WAIT_SECS`, `NAPPLE_MOVIE_HOST=0`, `NAPPLE_AUDIO_DEVICE=1`.
+
+## Kernel, loader, nvdrv and fs additions (2026-10-24)
+Untested on macOS (developed and unit tested on Linux, see docs/changes/2026-10-24-loader-kernel.md). Status per item: **implemented**
+(semantics of the public Horizon kernel / system modules), **partial** (limits listed).
+
+Kernel svcs:
+- 0x40 CreateSession, 0x41 AcceptSession, 0x43 ReplyAndReceive, 0x44 ReplyAndReceiveWithUserBuffer, 0x70 CreatePort, 0x71 ManageNamedPort,
+  0x72 ConnectToPort; SendSyncRequest(WithUserBuffer) and ConnectToNamedPort on guest objects (`ksession.c`, message copy `kmsg.c`):
+  **partial**. Guest-to-guest IPC between threads of the game. One address space and one handle table, so copy and move handles pass through
+  with the sender's handle values (a copy handle is shared, not duplicated), A/B/W descriptors keep their addresses, X data is copied into the
+  receiver's receive list for list modes 2 and above (modes 0/1 keep the sender's address), the pid field gets 0x80. A server session is
+  signaled while a request waits and none is being served, or once its client is closed.
+- 0x20 SendSyncRequestLight, 0x42 ReplyAndReceiveLight: **partial**. Seven words in w1..w7; ReplyAndReceiveLight replies first when bit 31 of
+  w1 is set (the flag position is taken from the public kernel sources, not checked on hardware).
+- 0x36 SynchronizePreemptionState: **partial**. Clears the TLR interrupt flag and takes a deferred switch. Preemption only happens at svc entry
+  (cooperative cores). A thread with a non-zero TLR disable count is pinned there: the kernel sets interrupt_flag, the switch waits for this svc.
+- 0x32 SetThreadActivity (pause / resume now real), 0x33 GetThreadContext3: **partial**. A paused thread stops at its next svc boundary,
+  without its core, until resumed; a thread blocked in an svc is stopped already. Pausing waits up to 50 ms for that. Because scheduling is
+  cooperative, a thread spinning in guest code without svcs keeps running, and GetThreadContext3 on it answers InvalidState. The context comes
+  from the gate's register area: x0..x28 (guest x18 from its slot), fp, lr, sp, pc = svc site + 4, nzcv, fpcr/fpsr, q0..q31, tpidr.
+  GetThreadContext3 on the calling thread answers Busy.
+- 0x2F GetLastThreadInfo: **partial**. The thread that held the caller's virtual core before it: {fp, sp, lr, pc}, its TLR, and flag 1 when it
+  is inside an svc (else the frame of its last svc). NoThread when none, or with `NAPPLE_FREE_CORES=1`.
+- 0x2E GetDebugFutureThreadInfo (InvalidHandle: an application has no debug objects), 0x3C KernelDebug, 0x3D ChangeKernelTraceState
+  (no-ops): **implemented**.
+- 0x4B CreateCodeMemory, 0x4C ControlCodeMemory (`kcode.c`, aliases in `memory.c`): **partial**. Argument, permission, size and state checks
+  as in KCodeMemory. Map (RW, state CodeOut 0x15) and MapToOwner (R/RX, GeneratedCode 0x14) share the source heap pages through mach_vm_remap.
+  Both addresses must be 16 KiB aligned (otherwise InvalidAddress), and alias addresses must lie in the free parts of the guest reservation.
+  Code generated at run time runs without the AOT rewrite, so it must not use svc, x18 or tpidr/tpidrro. The source heap stays accessible.
+  QueryMemory reports the aliases but does not trim the surrounding free range.
+- 0x50 CreateSharedMemory: **implemented**. Size and permission checks; zeroed host pages; the remote permission is not enforced.
+
+Loader:
+- `ldr:ro` / `ro:1` (`ro.c`, checks in `nro.c`): **partial**. RegisterProcessHandle, RegisterModuleInfo / RegisterProcessModuleInfo,
+  UnregisterModuleInfo, MapManualLoadModuleMemory, UnmapManualLoadModuleMemory, with the ro module's checks and results. NRR checks: magic,
+  size, program id and mask, kind (User for ldr:ro, JitPlugin for ro:1), hash list bounds; signatures are not verified. NRO checks: header,
+  sizes as passed, page-aligned contiguous sections, sha256 listed in a registered NRR, not already loaded. What gets mapped is the image
+  `napple build` rewrote ahead of time from every `*.nro` in the RomFS (`<data-dir>/nro/<module id>.{patched.bin,tables}`, manifest key
+  `nro`), found by module id. It is relocated like the static modules (host overrides first, then every loaded module, NROs included) and its
+  gates join the dispatch index. An NRO without such an image stops the runtime (`NAPPLE_IPC_LENIENT=1`: InvalidNro). Closing the session
+  unloads its modules. The guest's own nn::ro relocation pass then runs over the mapped image. RELA entries are idempotent, but an import the
+  runtime bound to a host override may be rebound by that pass to the guest's original function (the SDK's behaviour here is unchecked).
+  The guest's bss buffer is unused (bss is part of the image). Like the static modules, an NRO whose text end and data start share a 16 KiB
+  page fails to seal ("text overlaps data").
+- Multi-module: up to 128 modules (was 31), slots of unloaded NROs are reused, and the gate index is rebuilt and published atomically on
+  load/unload.
+
+nvdrv host1x channels (`/dev/nvhost-nvdec`, `-vic`, `-nvjpg`, `-msenc`, host1x classes 0xF0 / 0x5D / 0xC0 / 0x21): **partial**.
+'H' SET_NVMAP_FD, SET_TIMEOUT; SUBMIT (command buffers must lie in live nvmap handles; syncpoint increments land at once; fence thresholds
+returned); GET_SYNCPOINT (allocated per channel and index from id 32 up, released on close); GET_WAITBASE (0); SET_SUBMIT_TIMEOUT;
+MAP/UNMAP_CMD_BUFFER (one stable 32-bit device address per nvmap handle). Bad sizes, unknown handles and out-of-range indexes answer
+BadParameter; other ioctls stay NotImplemented and are listed in the summary. The SUBMIT layout changed to the documented one: syncpoint
+increments are 0x14 bytes and fences are u32 thresholds (earlier code used 0x10 and {id, value}). Nothing is decoded; video stays with movie.c.
+
+fsp-srv save data (`fs.c`): **partial**.
+- 21/25/28 Delete (by id, by space and id, by attribute), 22/23/35 CreateSaveDataFileSystem (plain / by system save id / with hash salt),
+  32 ExtendSaveDataFileSystem (sizes only grow), 33 DeleteCacheStorage, 34 GetCacheStorageSize, 52 OpenSaveDataFileSystemBySystemSaveDataId,
+  57/58 ReadSaveDataFileSystemExtraData(BySaveDataSpaceId), 59/66 WriteSaveDataFileSystemExtraData(WithMask), 60/61/62 OpenSaveDataInfoReader
+  (all / by space / cache only; ISaveDataInfoReader::ReadSaveDataInfo), 69/70/71 extra data by attribute (read, masked write, masked read).
+- Each save keeps its extra data (0x200 bytes) and id in `<root>.napple-meta`. Ids come from the root path, stable across runs but not the
+  console's. A save opened before it was created gets an implicit record, and a later Create fills it in and succeeds. Create on a real
+  record answers PathAlreadyExists.
+- IFileSystem GetTotalSpaceSize / GetFreeSpaceSize of a save created with a size: that size, and size minus 16 KiB blocks in use. Other
+  file systems still report 1 GiB. Quotas are reported, not enforced on writes.
+- Temporary storage is emptied at its first mount in a process. Bcat storage is a plain directory, as before. 53
+  OpenReadOnlySaveDataFileSystem is now read-only and answers TargetNotFound for a save that does not exist (it used to mount writable and
+  create it).
+- Argument order: commands taking (space, attribute) accept either order (space-first with zero padding, or attribute-first), since SDK
+  versions differ.
+- Journal review fixes: Commit clears the dirty flag before the snapshot under the journal lock, so a write racing with the commit is not
+  lost from the report, and a failed commit keeps it. A failed rename of the new snapshot also removes the temporary. CleanDirectoryRecursively
+  marks the root dirty. Deleting a save resets its journal, so a recreated root starts fresh. A 17th transactional root is logged (it is not
+  transactional).
+
+Tests: `make -C runtime test-host` (any POSIX host, e.g. Linux) builds the portable kernel, loader and service code with `tests/host`
+stand-ins: test_kernel_ipc, test_loader, test_nvdrv, test_fs_savedata, test_fs_journal.
+
+## Services added on branch `services-2026-10-24` (UNBUILT: never compiled or run on macOS)
+Everything in this section was written on Linux, where `runtime/` does not build. It was syntax-checked with stub headers and its portable logic was
+unit-tested against an IPC mock (`tools/linux-check/`), but **none of it has been built or run on macOS, and no command id, argument layout or result
+description was checked against a console or a title** (they are the author's recollection of the public documentation). The compatibility matrix and
+`%Analysis` must not count these as implemented until the verification in `docs/changes/2026-10-24-services-VERIFY.md` has been done.
+Status words: *real* = state or logic behind the answer, covered by a unit test; *partial* = some commands real, the data source or the rest default;
+*stub* = accepted with a safe offline default. Services are only reachable when the game's NPDM lists them.
+
+| Service | Status | Notes |
+|---|---|---|
+| `mii:u` | partial | read-only database: the local player's Mii plus six default Miis (CharInfo 0x58); GetCount, Get, Get1, UpdateLatest, BuildRandom (a default of the requested gender), BuildDefault, FindIndex, GetIndex; no editing, no StoreData variants |
+| `caps:su` | partial | every save call succeeds and returns an album entry without a file; refused after `SetScreenShotPermission(Disable)` |
+| `caps:u` | partial | album is always empty; load/size/delete report not found |
+| `psm` | partial | battery percentage, charger type, voltage state, enough-power, charging flags from a configured host situation (docked = AC; `NAPPLE_BATTERY="NN[,ac|battery]"`), not the Mac's battery |
+| `lbl` | real | brightness (clamped), applied brightness, switch, dimming, auto brightness, VR brightness; nothing reaches the display; no light sensor |
+| `ncm` | stub | empty content-meta databases and storages |
+| `ns:am2`, `ns:ec` | partial | language conversion/selection with regional fallbacks and free/total space (statvfs of the save volume) are real; no application records; control data not found; e-commerce fails offline |
+| `ns:vm` | stub | never needs a vulnerability update |
+| `sfdnsres` | partial | error strings real; every lookup fails like a resolver with no server |
+| `spsm` | stub | always awake |
+| `bcat:u` | partial | name validation and progress record real; the delivery cache is always empty, sync finishes at once with the offline result |
+| `ldn:u` | partial | initialize/open/create/station state machine with legal-transition checks and a state-change event; no radio: scans empty, connect fails |
+| `irs` | stub | camera handles and a zeroed shared memory; processors report sensor not connected |
+| `audin:u` | partial | one input device, parameter negotiation, buffer queue; appended buffers are zero-filled (silence) and complete at once |
+| `hidbus` | stub | no device is ever found |
+| `pdm:qry` | partial | play statistics of the running title (one launch, minutes since start); other titles and events empty |
+| `set:fd` | real | in-memory settings items with key iterator; not persisted and not read back by `set:sys` |
+| `olsc:u`, `ectx:aw`, `fgm`, `btm:u`, `ovln:snd` | stub | command ids are guesses; unlisted ids fail loudly |
+
+Depth changes to existing services (IPC_STUB rows before → after, from the command tables): `appletOE` 87 → 55 (the guest's settings are stored and read
+back: master volumes, VR mode, auto sleep, idle detection, screenshot permission, cpu boost, home-button blocking, ...); `hid` 30 → 21 (six-axis fusion and
+zero drift per handle, player LED pattern, joy hold type, handheld mode, home-button protection, vibration permission now silences rumble, communication
+mode, styles read back); `time:*` 12 → 8 (LoadTimeZoneRule and rule-aware ToCalendarTime/ToPosixTime, ClockSnapshot 400/401, 500/501, automatic
+correction, device location = host IANA zone); `offline.c` stays 146 stub rows but `bsd:u` has a descriptor table with per-call errno, `nifm` requests
+finish rejected with a result, `ssl` handshakes fail, `friend` notification Pop on an empty queue fails; `misc.c` (aoc, pctl) unchanged.

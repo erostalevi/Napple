@@ -155,6 +155,7 @@ fn rewrite_version(exefs: &[(String, Vec<u8>)], dir: &Path, label: &str, lo: f64
                 layout: Layout { text_end: l.text_end as u64, ro_off: l.ro_off as u64, data_off: l.data_off as u64, patch_off: l.patch_off as u64, key_page_off: l.key_page_off as u64 },
                 gates,
                 nso: Some(bytes),
+                nro: None,
             })?;
             std::fs::write(mdir.join(format!("{name}.patched.bin")), &out.image).map_err(|e| BuildError::io("write module", e))?;
             std::fs::write(mdir.join(format!("{name}.tables")), &tables).map_err(|e| BuildError::io("write tables", e))?;
@@ -507,6 +508,32 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         mods_by_version.push(mods);
     }
 
+    // NROs the RomFS ships (loaded at run time through ldr:ro): rewritten per version, since an update may replace them
+    let mut nros_by_version: Vec<Vec<crate::nro::NroOut>> = Vec::new();
+    for v in &versions {
+        let src = match &v.romfs {
+            RomfsPlan::Full { src, .. } => Some(src.clone()),
+            RomfsPlan::Delta { patched, .. } => Some(patched.data.clone()),
+            RomfsPlan::SameAsBase => base_rom.as_ref().map(|(d, _, _)| d.clone()),
+        };
+        let found = match src.map(RomFs::parse) {
+            Some(Ok(rom)) => {
+                let (outs, bad) = crate::nro::rewrite_romfs_nros(&rom, &game.join(&v.dir), &v.label)?;
+                notes.extend(bad);
+                outs
+            }
+            Some(Err(e)) => {
+                notes.push(format!("{}: RomFS tables unreadable, NROs not rewritten: {e}", v.label));
+                Vec::new()
+            }
+            None => Vec::new(),
+        };
+        if !found.is_empty() {
+            progress("rewrite", P_REWRITE.1, &format!("{}: {} NRO module(s) rewritten for ldr:ro", v.label, found.len()));
+        }
+        nros_by_version.push(found);
+    }
+
     // RomFS streaming
     let mut romfs_out: Vec<RomfsOut> = Vec::new();
     let mut dlc_out: Vec<(Streamed, String)> = Vec::new();
@@ -618,7 +645,7 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         })
         .collect();
     let mut ver_json = Vec::new();
-    for ((v, mods), ro) in versions.iter().zip(&mods_by_version).zip(&romfs_out) {
+    for (((v, mods), ro), nros) in versions.iter().zip(&mods_by_version).zip(&romfs_out).zip(&nros_by_version) {
         let order = load_order(&mods.iter().map(|m| m.name.clone()).collect::<Vec<_>>());
         let mod_json: Vec<String> = mods
             .iter()
@@ -651,6 +678,7 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
                 ("label", jstr(&v.label)),
                 ("load_order", arr(&order.iter().map(|n| jstr(n)).collect::<Vec<_>>())),
                 ("modules", arr(&mod_json)),
+                ("nro", arr(&nros.iter().map(|n| n.json()).collect::<Vec<_>>())),
                 ("romfs", rom_desc),
                 ("system_dir", jstr("../system")),
                 ("dlc", arr(&dlc_json.iter().map(|d| d.replace("\"dir\":\"dlc/", "\"dir\":\"../dlc/")).collect::<Vec<_>>())),

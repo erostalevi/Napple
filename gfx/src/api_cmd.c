@@ -137,7 +137,8 @@ NVN(nvnCommandBufferSetDebugLabel, void, NVNcommandBuffer *c, const char *l) { (
 NVN(nvnCommandBufferSetMemoryCallback, void, NVNcommandBuffer *c, PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb) { CBH(c)->cb = cb; }
 NVN(nvnCommandBufferSetMemoryCallbackData, void, NVNcommandBuffer *c, void *d) { CBH(c)->cb_data = d; }
 NVN(nvnCommandBufferGetMemoryCallback, PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC, const NVNcommandBuffer *c) { return CBH(c)->cb; }
-NVN(nvnCommandBufferGetMemoryCallbackData, void, const NVNcommandBuffer *c) { (void)c; }
+NVN(nvnCommandBufferGetMemoryCallbackData, void *, const NVNcommandBuffer *c) { return CBH(c)->cb_data; }
+/* Recordings live in host memory, so command memory never runs out and the out-of-memory callback is never due: enabling it changes nothing. */
 NVN_NOPROTO(nvnCommandBufferSetCommandMemoryCallbackEnabled, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
 
 /* Command and control memory belong to the game; recordings live in host memory, so the memory is only accounted. Handing a chunk back
@@ -155,6 +156,7 @@ NVN(nvnCommandBufferGetCommandMemorySize, size_t, const NVNcommandBuffer *c) { r
 NVN(nvnCommandBufferGetCommandMemoryUsed, size_t, const NVNcommandBuffer *c) { return CBH(c)->used_est; }
 NVN(nvnCommandBufferGetCommandMemoryFree, size_t, const NVNcommandBuffer *c) { const cmdbuf_host *h = CBH(c); return h->cmd_size > h->used_est ? h->cmd_size - h->used_est : 0; }
 NVN(nvnCommandBufferGetControlMemorySize, size_t, const NVNcommandBuffer *c) { return CBH(c)->ctl_size; }
+/* Control memory is not consumed (recordings are host-side), so none is in use and all of it is free. */
 NVN(nvnCommandBufferGetControlMemoryUsed, size_t, const NVNcommandBuffer *c) { (void)c; return 0; }
 NVN(nvnCommandBufferGetControlMemoryFree, size_t, const NVNcommandBuffer *c) { return CBH(c)->ctl_size; }
 NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return ((const cmd_t *)c)->recording; }
@@ -484,6 +486,15 @@ NVN(nvnCommandBufferDrawElementsIndirect, void, NVNcommandBuffer *c, NVNdrawPrim
     p_draw_ind *p = REC(c, p_draw_ind, OP_DRAW_ELEMENTS_IND);
     *p = (p_draw_ind){ (uint32_t)m, (uint32_t)t, ind, idx };
 }
+/* draw i < min(*count, max) reads its arguments at ind + i * stride (the 32-bit count is read by the GPU when the draws execute) */
+NVN(nvnCommandBufferMultiDrawArraysIndirectCount, void, NVNcommandBuffer *c, NVNdrawPrimitive m, NVNbufferAddress ind, NVNbufferAddress count, int max, ptrdiff_t stride) {
+    if (max <= 0) return;
+    *REC(c, p_draw_ind_count, OP_DRAW_IND_COUNT) = (p_draw_ind_count){ (uint32_t)m, 0, 0, (uint32_t)max, ind, 0, count, (uint64_t)(stride ? stride : 16) };
+}
+NVN(nvnCommandBufferMultiDrawElementsIndirectCount, void, NVNcommandBuffer *c, NVNdrawPrimitive m, NVNindexType t, NVNbufferAddress idx, NVNbufferAddress ind, NVNbufferAddress count, int max, ptrdiff_t stride) {
+    if (max <= 0) return;
+    *REC(c, p_draw_ind_count, OP_DRAW_IND_COUNT) = (p_draw_ind_count){ (uint32_t)m, (uint32_t)t, 1, (uint32_t)max, ind, idx, count, (uint64_t)(stride ? stride : 20) };
+}
 NVN(nvnCommandBufferDispatchCompute, void, NVNcommandBuffer *c, int x, int y, int z) { *REC(c, p_dispatch, OP_DISPATCH) = (p_dispatch){ (uint32_t)x, (uint32_t)y, (uint32_t)z, 0 }; }
 NVN(nvnCommandBufferDispatchComputeIndirect, void, NVNcommandBuffer *c, NVNbufferAddress a) { *(uint64_t *)rec_op(c, OP_DISPATCH_IND, 8) = a; }
 
@@ -548,7 +559,16 @@ NVN(nvnCommandBufferDownsample, void, NVNcommandBuffer *c, const NVNtexture *s, 
 NVN(nvnCommandBufferTiledDownsample, void, NVNcommandBuffer *c, const NVNtexture *s, const NVNtexture *d) { downsample(c, s, NULL, d, NULL); }
 NVN(nvnCommandBufferDownsampleTextureView, void, NVNcommandBuffer *c, const NVNtexture *s, const NVNtextureView *sv, const NVNtexture *d, const NVNtextureView *dv) { downsample(c, s, sv, d, dv); }
 NVN(nvnCommandBufferTiledDownsampleTextureView, void, NVNcommandBuffer *c, const NVNtexture *s, const NVNtextureView *sv, const NVNtexture *d, const NVNtextureView *dv) { downsample(c, s, sv, d, dv); }
+/* Decompresses the bound depth target on the console (needed before sampling it after programmable sample locations); Metal depth targets are
+ * always readable, so there is nothing to do. */
 NVN(nvnCommandBufferResolveDepthBuffer, void, NVNcommandBuffer *c) { (void)c; }
+NVN(nvnCommandBufferDrawTexture, void, NVNcommandBuffer *c, NVNtextureHandle h, const NVNdrawTextureRegion *dst, const NVNdrawTextureRegion *src) {
+    if (!dst) return;
+    p_draw_tex *p = REC(c, p_draw_tex, OP_DRAW_TEXTURE);
+    p->handle = h;
+    memcpy(p->dst, dst, sizeof p->dst);
+    if (src) memcpy(p->src, src, sizeof p->src); else { p->src[0] = p->src[1] = 0; p->src[2] = p->src[3] = 1; }
+}
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Synchronization, counters, debug

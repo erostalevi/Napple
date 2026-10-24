@@ -132,6 +132,8 @@ pub struct TableInput<'a> {
     pub gates: Vec<GateRow>,
     /// The original NSO file (build id at 0x40; dynsym extent at 0x98/0x9C when the module has no DT_HASH).
     pub nso: Option<&'a [u8]>,
+    /// The original NRO file instead, for modules loaded at run time (module id at 0x40; dynsym extent at 0x78/0x7C).
+    pub nro: Option<&'a [u8]>,
 }
 
 /// Counts for the manifest.
@@ -149,8 +151,12 @@ pub fn build_tables(inp: &TableInput) -> Result<(Vec<u8>, TableStats)> {
     let nsym = if let Some(h) = tag(4) {
         u32_at(image, h as usize + 4).ok_or_else(|| err(name, "DT_HASH outside the image"))? as usize
     } else {
-        let nso = inp.nso.ok_or_else(|| err(name, "GNU-hash module needs the original NSO"))?;
-        let (off, size) = (u32_at(nso, 0x98), u32_at(nso, 0x9C));
+        let (hdr, at) = match (inp.nro, inp.nso) {
+            (Some(n), _) => (n, 0x78),
+            (None, Some(n)) => (n, 0x98),
+            _ => return Err(err(name, "GNU-hash module needs the original NSO")),
+        };
+        let (off, size) = (u32_at(hdr, at), u32_at(hdr, at + 4));
         let (Some(off), Some(size)) = (off, size) else { return Err(err(name, "NSO header truncated")) };
         if Some(l.ro_off + off as u64) != tag(6) || size % 24 != 0 {
             return Err(err(name, "dynsym extent disagrees with the NSO header"));
@@ -215,7 +221,7 @@ pub fn build_tables(inp: &TableInput) -> Result<(Vec<u8>, TableStats)> {
             rels.push((wh, addend as i64, kind, si));
         }
     }
-    let build_id: [u8; 32] = inp.nso.and_then(|n| rd::<32>(n, 0x40)).unwrap_or([0; 32]);
+    let build_id: [u8; 32] = inp.nro.or(inp.nso).and_then(|n| rd::<32>(n, 0x40)).unwrap_or([0; 32]);
     let mut out = Vec::with_capacity(0x100 + syms.len() * 24 + rels.len() * 24 + inp.gates.len() * 24 + strtab.len());
     out.extend(b"NTB1");
     for v in [1u32, syms.len() as u32, rels.len() as u32, inp.gates.len() as u32, strtab.len() as u32] {
@@ -373,7 +379,7 @@ mod tests {
     use super::*;
 
     fn input<'a>(img: &'a [u8], nso: &'a [u8]) -> TableInput<'a> {
-        TableInput { name: "main", image: img, layout: fixture::layout(), gates: fixture::gates(), nso: Some(nso) }
+        TableInput { name: "main", image: img, layout: fixture::layout(), gates: fixture::gates(), nso: Some(nso), nro: None }
     }
 
     /// Golden produced by `tools/prepare_tables.py` on the same synthetic module (see tests/golden/README).

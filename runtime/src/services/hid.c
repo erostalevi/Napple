@@ -3,6 +3,7 @@
  * configures it (supported styles, player count, vibration, six-axis) and hands out the shared memory handle. */
 #include "../ipc.h"
 #include "../frontend.h"
+#include "hid_core.h"
 #include "napple_input.h"
 #include <stdio.h>
 #include <string.h>
@@ -20,6 +21,9 @@ static int trace_on;
 static void *trace_rearm(void *arg);
 static IpcSharedMemory *g_shmem;
 static uint32_t npad_events;
+static HidCore hidc; static int hidc_ready;
+static HidCore *HC(void) { if (!hidc_ready) { hidc_init(&hidc); hidc_ready = 1; } return &hidc; }
+#define IN_OK(c, off, T) ((c)->in_size >= (uint32_t)((off) + sizeof(T)))   /* argument layouts below are from memory: a short request is ignored, not fatal */
 
 static void ensure_input(void) {
     if (g_input) return;
@@ -157,8 +161,8 @@ static void resource_get_shmem(IpcObject *s, IpcCall *c) { (void)s; ensure_input
 static const IpcCmd resource_cmds[] = {{0, "GetSharedMemoryHandle", resource_get_shmem, IPC_IMPL}};
 static void hid_create_applet_resource(IpcObject *s, IpcCall *c) { (void)s; ensure_input(); ipc_out_object(c, IPC_OBJECT("IAppletResource", resource_cmds, NULL, NULL)); }
 
-static void hid_set_styles(IpcObject *s, IpcCall *c) { (void)s; ensure_input(); LOG("hid", "SetSupportedNpadStyleSet %#x", IPC_IN(c, uint32_t, 0)); napple_input_set_supported_styles(g_input, IPC_IN(c, uint32_t, 0)); }
-static void hid_get_styles(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = 0x1f; IPC_OUT(c, v); }
+static void hid_set_styles(IpcObject *s, IpcCall *c) { (void)s; ensure_input(); HC()->styles = IPC_IN(c, uint32_t, 0); HC()->styles_set = 1; LOG("hid", "SetSupportedNpadStyleSet %#x", IPC_IN(c, uint32_t, 0)); napple_input_set_supported_styles(g_input, IPC_IN(c, uint32_t, 0)); }
+static void hid_get_styles(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = HC()->styles_set ? HC()->styles : 0x1f; IPC_OUT(c, v); }
 static void hid_set_id_types(IpcObject *s, IpcCall *c) {
     (void)s; ensure_input();
     const IpcBuf *b = ipc_in_buf(c, 0);
@@ -172,6 +176,7 @@ static void hid_six_axis_off(IpcObject *s, IpcCall *c) { (void)s; ensure_input()
 /* Vibration. HidVibrationDeviceHandle (u32) = bytes {type, npad style index, player number (npad id), device index 0 left / 1 right}; the value is
  * {amp_low, freq_low, amp_high, freq_high} floats. Rumble reaches the physical pad through the input backend (CoreHaptics, input/src/gamepad.m). */
 static void vib_apply(uint32_t handle, const napple_vibration *v) {
+    if (!HC()->vibration_permitted) return;                 /* PermitVibration(false): the title muted rumble */
     uint32_t npad_id = (handle >> 16) & 0xff, side = (handle >> 24) & 0xff, style = (handle >> 8) & 0xff;
     if (style == 1 || npad_id == 0x20) npad_id = 0x20;       /* handheld */
     if (side > 1) return;
@@ -200,7 +205,53 @@ static void hid_get_actual_vibration(IpcObject *s, IpcCall *c) {   /* 202 GetAct
 static void hid_active_vibration_list(IpcObject *s, IpcCall *c) { (void)s; static const IpcCmd cmds[] = {{0, "ActivateVibrationDevice", noop, IPC_STUB}}; ipc_out_object(c, IPC_OBJECT("IActiveVibrationDeviceList", cmds, NULL, NULL)); }
 /* GetVibrationDeviceInfo(handle) -> {device type (1 left LRA, 2 right LRA), position (0 left, 1 right)} */
 static void hid_vibration_device_info(IpcObject *s, IpcCall *c) { (void)s; uint32_t h = IPC_IN(c, uint32_t, 0), side = (h >> 24) & 1; uint32_t v[2] = {side ? 2u : 1u, side}; ipc_out(c, v, 8); }
-static void hid_get_player_led(IpcObject *s, IpcCall *c) { (void)s; uint64_t v = 1; IPC_OUT(c, v); }
+
+/* ---- state-backed commands (hid_core.h) ------------------------------------------------------------------------------------- */
+static void hid_fusion_enabled(IpcObject *s, IpcCall *c) {   /* 68(handle u32, aruid u64) -> bool */
+    (void)s; HidcSensor *x = IN_OK(c, 0, uint32_t) ? hidc_sensor(HC(), IPC_IN(c, uint32_t, 0)) : NULL; uint8_t v = x ? (uint8_t)x->fusion_enabled : 1; IPC_OUT(c, v);
+}
+static void hid_enable_fusion(IpcObject *s, IpcCall *c) {    /* 69(bool, handle u32 at 4, aruid u64 at 8) */
+    (void)s; if (!IN_OK(c, 4, uint32_t)) return;
+    HidcSensor *x = hidc_sensor(HC(), IPC_IN(c, uint32_t, 4)); if (x) x->fusion_enabled = IPC_IN(c, uint8_t, 0) != 0;
+}
+static void hid_set_fusion_params(IpcObject *s, IpcCall *c) { /* 70(handle u32, f32 gain at 4, f32 reduction at 8, aruid) */
+    (void)s; if (!IN_OK(c, 8, float)) return;
+    HidcSensor *x = hidc_sensor(HC(), IPC_IN(c, uint32_t, 0)); if (x) { x->gain = IPC_IN(c, float, 4); x->reduction = IPC_IN(c, float, 8); }
+}
+static void hid_reset_fusion_params(IpcObject *s, IpcCall *c) { /* 72(handle, aruid) */
+    (void)s; if (!IN_OK(c, 0, uint32_t)) return;
+    HidcSensor *x = hidc_sensor(HC(), IPC_IN(c, uint32_t, 0)); if (x) hidc_reset_fusion(x);
+}
+static void hid_set_zero_drift(IpcObject *s, IpcCall *c) {    /* 79(handle u32, mode u32 at 4, aruid u64 at 8) */
+    (void)s; if (!IN_OK(c, 4, uint32_t)) return;
+    HidcSensor *x = hidc_sensor(HC(), IPC_IN(c, uint32_t, 0)); if (x && hidc_set_zero_drift(x, IPC_IN(c, uint32_t, 4))) c->result = 0x1d80;
+}
+static void hid_get_zero_drift(IpcObject *s, IpcCall *c) {    /* 80(handle, aruid) -> u32 */
+    (void)s; HidcSensor *x = IN_OK(c, 0, uint32_t) ? hidc_sensor(HC(), IPC_IN(c, uint32_t, 0)) : NULL; uint32_t v = x ? x->zero_drift : HIDC_ZERO_DRIFT_STANDARD; IPC_OUT(c, v);
+}
+static void hid_reset_zero_drift(IpcObject *s, IpcCall *c) {  /* 81(handle, aruid) */
+    (void)s; if (!IN_OK(c, 0, uint32_t)) return;
+    HidcSensor *x = hidc_sensor(HC(), IPC_IN(c, uint32_t, 0)); if (x) x->zero_drift = HIDC_ZERO_DRIFT_STANDARD;
+}
+static void hid_get_player_led_pattern(IpcObject *s, IpcCall *c) { (void)s; uint64_t v = IN_OK(c, 0, uint32_t) ? hidc_led_pattern(IPC_IN(c, uint32_t, 0)) : 0; IPC_OUT(c, v); }
+/* The 8-byte fields of 120/128 are {aruid, value} or {value, aruid} depending on the SDK; our aruid (applet.c IWindowController) is 0x1000, so the field
+ * that is not it is the value. */
+static int64_t pick_value(IpcCall *c) {
+    if (!IN_OK(c, 8, int64_t)) return IN_OK(c, 0, int64_t) ? IPC_IN(c, int64_t, 0) : 0;
+    int64_t a = IPC_IN(c, int64_t, 0), b = IPC_IN(c, int64_t, 8);
+    return a == 0x1000 ? b : a;
+}
+static void hid_set_joy_hold(IpcObject *s, IpcCall *c) { (void)s; HC()->joy_hold_type = pick_value(c); }
+static void hid_get_joy_hold(IpcObject *s, IpcCall *c) { (void)s; int64_t v = HC()->joy_hold_type; IPC_OUT(c, v); }
+static void hid_set_handheld_mode(IpcObject *s, IpcCall *c) { (void)s; HC()->handheld_mode = pick_value(c); }
+static void hid_get_handheld_mode(IpcObject *s, IpcCall *c) { (void)s; int64_t v = HC()->handheld_mode; IPC_OUT(c, v); }
+static void hid_home_protect_get(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = IN_OK(c, 0, uint32_t) ? (uint8_t)hidc_home_protection_get(HC(), IPC_IN(c, uint32_t, 0)) : 0; IPC_OUT(c, v); }
+static void hid_home_protect_set(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 4, uint32_t)) hidc_home_protection_set(HC(), IPC_IN(c, uint32_t, 4), IPC_IN(c, uint8_t, 0) != 0); }
+static void hid_permit_vibration(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) HC()->vibration_permitted = IPC_IN(c, uint8_t, 0) != 0; }
+static void hid_is_vibration_permitted(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = (uint8_t)HC()->vibration_permitted; IPC_OUT(c, v); }
+static void hid_set_comm_mode(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint64_t)) HC()->comm_mode = IPC_IN(c, uint64_t, 0); else if (IN_OK(c, 0, uint32_t)) HC()->comm_mode = IPC_IN(c, uint32_t, 0); }
+static void hid_get_comm_mode(IpcObject *s, IpcCall *c) { (void)s; uint64_t v = HC()->comm_mode; IPC_OUT(c, v); }
+static void hid_device_mounted(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 1; IPC_OUT(c, v); }   /* a vibration device handle the SDK produced is always attached (one virtual pad per slot) */
 
 static const IpcCmd hid_cmds[] = {
     {0, "CreateAppletResource", hid_create_applet_resource, IPC_IMPL},
@@ -209,24 +260,28 @@ static const IpcCmd hid_cmds[] = {
     {40, "AcquireXpadIdEventHandle", event_handle, IPC_STUB}, {41, "ReleaseXpadIdEventHandle", noop, IPC_STUB},
     {51, "ActivateXpad", noop, IPC_STUB}, {55, "GetXpadIds", ret_i64_0, IPC_STUB},
     {66, "StartSixAxisSensor", hid_six_axis, IPC_IMPL}, {67, "StopSixAxisSensor", hid_six_axis_off, IPC_IMPL},
-    {68, "IsSixAxisSensorFusionEnabled", ret_u8_0, IPC_STUB}, {69, "EnableSixAxisSensorFusion", noop, IPC_STUB},
-    {70, "SetSixAxisSensorFusionParameters", noop, IPC_STUB}, {72, "ResetSixAxisSensorFusionParameters", noop, IPC_STUB},
-    {79, "SetGyroscopeZeroDriftMode", noop, IPC_STUB}, {80, "GetGyroscopeZeroDriftMode", ret_u32_0, IPC_STUB},
-    {81, "ResetGyroscopeZeroDriftMode", noop, IPC_STUB}, {82, "IsSixAxisSensorAtRest", ret_u8_1, IPC_STUB},
+    {68, "IsSixAxisSensorFusionEnabled", hid_fusion_enabled, IPC_IMPL}, {69, "EnableSixAxisSensorFusion", hid_enable_fusion, IPC_IMPL},
+    {70, "SetSixAxisSensorFusionParameters", hid_set_fusion_params, IPC_IMPL}, {72, "ResetSixAxisSensorFusionParameters", hid_reset_fusion_params, IPC_IMPL},
+    {79, "SetGyroscopeZeroDriftMode", hid_set_zero_drift, IPC_IMPL}, {80, "GetGyroscopeZeroDriftMode", hid_get_zero_drift, IPC_IMPL},
+    {81, "ResetGyroscopeZeroDriftMode", hid_reset_zero_drift, IPC_IMPL}, {82, "IsSixAxisSensorAtRest", ret_u8_1, IPC_STUB},
     {91, "ActivateGesture", noop, IPC_STUB},
     {100, "SetSupportedNpadStyleSet", hid_set_styles, IPC_IMPL}, {101, "GetSupportedNpadStyleSet", hid_get_styles, IPC_IMPL},
     {102, "SetSupportedNpadIdType", hid_set_id_types, IPC_IMPL}, {103, "ActivateNpad", noop, IPC_IMPL}, {104, "DeactivateNpad", noop, IPC_STUB},
     {106, "AcquireNpadStyleSetUpdateEventHandle", hid_style_update_event, IPC_IMPL}, {107, "DisconnectNpad", noop, IPC_STUB},
-    {108, "GetPlayerLedPattern", hid_get_player_led, IPC_STUB}, {109, "ActivateNpadWithRevision", noop, IPC_IMPL},
-    {120, "SetNpadJoyHoldType", noop, IPC_STUB}, {121, "GetNpadJoyHoldType", ret_i64_0, IPC_STUB},
+    {108, "GetPlayerLedPattern", hid_get_player_led_pattern, IPC_IMPL}, {109, "ActivateNpadWithRevision", noop, IPC_IMPL},
+    {120, "SetNpadJoyHoldType", hid_set_joy_hold, IPC_IMPL}, {121, "GetNpadJoyHoldType", hid_get_joy_hold, IPC_IMPL},
     {122, "SetNpadJoyAssignmentModeSingleByDefault", hid_assign_single, IPC_IMPL}, {123, "SetNpadJoyAssignmentModeSingle", hid_assign_single, IPC_IMPL},
     {124, "SetNpadJoyAssignmentModeDual", hid_assign_dual, IPC_IMPL}, {125, "MergeSingleJoyAsDualJoy", noop, IPC_STUB},
-    {128, "SetNpadHandheldActivationMode", noop, IPC_STUB}, {129, "GetNpadHandheldActivationMode", ret_i64_0, IPC_STUB},
-    {131, "IsUnintendedHomeButtonInputProtectionEnabled", ret_u8_0, IPC_STUB}, {132, "EnableUnintendedHomeButtonInputProtection", noop, IPC_STUB},
+    {126, "StartLrAssignmentMode", noop, IPC_STUB}, {127, "StopLrAssignmentMode", noop, IPC_STUB},
+    {128, "SetNpadHandheldActivationMode", hid_set_handheld_mode, IPC_IMPL}, {129, "GetNpadHandheldActivationMode", hid_get_handheld_mode, IPC_IMPL}, {130, "SwapNpadAssignment", noop, IPC_STUB},
+    {131, "IsUnintendedHomeButtonInputProtectionEnabled", hid_home_protect_get, IPC_IMPL}, {132, "EnableUnintendedHomeButtonInputProtection", hid_home_protect_set, IPC_IMPL},
+    {133, "SetNpadAnalogStickUseCenterClamp", noop, IPC_STUB}, {134, "SetNpadCaptureButtonAssignment", noop, IPC_STUB}, {135, "ClearNpadCaptureButtonAssignment", noop, IPC_STUB},
     {200, "GetVibrationDeviceInfo", hid_vibration_device_info, IPC_IMPL}, {201, "SendVibrationValue", hid_send_vibration, IPC_IMPL}, {202, "GetActualVibrationValue", hid_get_actual_vibration, IPC_IMPL},
-    {203, "CreateActiveVibrationDeviceList", hid_active_vibration_list, IPC_IMPL}, {204, "PermitVibration", noop, IPC_STUB},
-    {205, "IsVibrationPermitted", ret_u8_1, IPC_STUB}, {206, "SendVibrationValues", hid_send_vibrations, IPC_IMPL},
+    {203, "CreateActiveVibrationDeviceList", hid_active_vibration_list, IPC_IMPL}, {204, "PermitVibration", hid_permit_vibration, IPC_IMPL},
+    {205, "IsVibrationPermitted", hid_is_vibration_permitted, IPC_IMPL}, {206, "SendVibrationValues", hid_send_vibrations, IPC_IMPL},
+    {211, "IsVibrationDeviceMounted", hid_device_mounted, IPC_STUB},
     {300, "ActivateConsoleSixAxisSensor", noop, IPC_STUB}, {301, "StartConsoleSixAxisSensor", noop, IPC_STUB}, {302, "StopConsoleSixAxisSensor", noop, IPC_STUB},
+    {1000, "SetNpadCommunicationMode", hid_set_comm_mode, IPC_IMPL}, {1001, "GetNpadCommunicationMode", hid_get_comm_mode, IPC_IMPL},
 };
 static IpcObject *hid_open(void) { return IPC_OBJECT("hid", hid_cmds, NULL, NULL); }
 void service_register_hid(void) { ipc_register_service("hid", hid_open); }

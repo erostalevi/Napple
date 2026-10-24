@@ -58,9 +58,9 @@ typedef struct {
     char dummy[1];
 } NVNtextureSparseTileLayout;
 
+/* DrawTexture rectangle (as in GL NV_draw_texture): destination in window coordinates, source in normalized texture coordinates. */
 typedef struct {
-    // TODO: reverse and define this as it looks like it's not an opaque type.
-    char dummy[1];
+    float xmin, ymin, xmax, ymax;
 } NVNdrawTextureRegion;
 
 typedef struct {
@@ -1736,7 +1736,7 @@ typedef void (*PFNNVNCOMMANDBUFFERINSERTDEBUGMARKERDYNAMICPROC)(NVNcommandBuffer
 typedef void (*PFNNVNCOMMANDBUFFERINSERTDEBUGMARKERPROC)(NVNcommandBuffer*, const char*);
 typedef PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC (*PFNNVNCOMMANDBUFFERGETMEMORYCALLBACKPROC)(
     const NVNcommandBuffer*);
-typedef void (*PFNNVNCOMMANDBUFFERGETMEMORYCALLBACKDATAPROC)(const NVNcommandBuffer*);
+typedef void *(*PFNNVNCOMMANDBUFFERGETMEMORYCALLBACKDATAPROC)(const NVNcommandBuffer*);
 typedef NVNboolean (*PFNNVNCOMMANDBUFFERISRECORDINGPROC)(const NVNcommandBuffer*);
 typedef NVNboolean (*PFNNVNSYNCINITIALIZEPROC)(NVNsync*, NVNdevice*);
 typedef void (*PFNNVNSYNCFINALIZEPROC)(NVNsync*);

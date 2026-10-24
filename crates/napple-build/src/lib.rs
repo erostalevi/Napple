@@ -12,6 +12,7 @@ pub mod error;
 pub mod firmware;
 pub mod json;
 pub mod legacy;
+pub mod nro;
 pub mod pipeline;
 pub mod stream;
 pub mod sysdata;

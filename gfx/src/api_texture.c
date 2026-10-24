@@ -78,7 +78,8 @@ NVN_NOPROTO(nvnTextureBuilderGetPackagedTextureLayout, const NVNpackagedTextureL
 /* Storage classes are opaque compatibility identifiers: encoded storage always lives in guest memory and is decoded per descriptor. */
 static NVNstorageClass storage_class(const napple_texdesc *d) { return d->target == NVN_TEXTURE_TARGET_BUFFER ? 0 : 1; }
 NVN(nvnTextureBuilderGetStorageClass, NVNstorageClass, const NVNtextureBuilder *b) { return storage_class(&CTB(b)->d); }
-NVN_NOPROTO(nvnTextureBuilderGetRawStorageClass, int, const NVNtextureBuilder *b) { (void)b; return 1; }
+/* The raw class is the hardware memory kind behind the storage class; this driver has one kind per storage class (no compression), so they agree. */
+NVN_NOPROTO(nvnTextureBuilderGetRawStorageClass, int, const NVNtextureBuilder *b) { return (int)storage_class(&CTB(b)->d); }
 
 NVN(nvnTextureBuilderGetStorageSize, size_t, const NVNtextureBuilder *b) {
     napple_texlayout L;
@@ -116,6 +117,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     o->s.swz[0] = (uint8_t)s->d.swizzle_r; o->s.swz[1] = (uint8_t)s->d.swizzle_g; o->s.swz[2] = (uint8_t)s->d.swizzle_b; o->s.swz[3] = (uint8_t)s->d.swizzle_a;
     o->s.ds_mode = s->ds_mode;
     o->s.valid = 1;
+    o->pool = s->pool; o->off = s->off;
     if (s->pkg_data) {
         napple_gfx_guest_write_prepare(o->s.mem, (size_t)L.size);
         memcpy(o->s.mem, s->pkg_data, (size_t)L.size);
@@ -126,7 +128,7 @@ NVN(nvnTextureFinalize, void, NVNtexture *t) { memset(t, 0, sizeof(tex_t)); }
 NVN(nvnTextureSetDebugLabel, void, NVNtexture *t, const char *l) { (void)t; (void)l; }
 NVN(nvnTextureGetZCullStorageSize, size_t, const NVNtexture *t) { (void)t; return 0; }
 NVN(nvnTextureGetStorageClass, NVNstorageClass, const NVNtexture *t) { return storage_class(&CTX(t)->s.d); }
-NVN_NOPROTO(nvnTextureGetRawStorageClass, int, const NVNtexture *t) { (void)t; return 1; }
+NVN_NOPROTO(nvnTextureGetRawStorageClass, int, const NVNtexture *t) { return (int)storage_class(&CTX(t)->s.d); }
 NVN(nvnTextureGetFlags, NVNtextureFlags, const NVNtexture *t) { return (NVNtextureFlags)CTX(t)->s.d.flags; }
 NVN(nvnTextureGetTarget, NVNtextureTarget, const NVNtexture *t) { return (NVNtextureTarget)CTX(t)->s.d.target; }
 NVN(nvnTextureGetWidth, int, const NVNtexture *t) { return (int)CTX(t)->s.d.width; }
@@ -149,8 +151,8 @@ NVN(nvnTextureCompare, NVNboolean, const NVNtexture *a, const NVNtexture *b) {
     const tex_t *x = CTX(a), *y = CTX(b);
     return x->s.mem == y->s.mem && !memcmp(&x->s.d, &y->s.d, sizeof x->s.d);
 }
-NVN_NOPROTO(nvnTextureGetMemoryPool, const NVNmemoryPool *, const NVNtexture *t) { (void)t; return NULL; }
-NVN_NOPROTO(nvnTextureGetMemoryOffset, ptrdiff_t, const NVNtexture *t) { (void)t; return 0; }
+NVN_NOPROTO(nvnTextureGetMemoryPool, const NVNmemoryPool *, const NVNtexture *t) { return (const NVNmemoryPool *)CTX(t)->pool; }
+NVN_NOPROTO(nvnTextureGetMemoryOffset, ptrdiff_t, const NVNtexture *t) { return (ptrdiff_t)CTX(t)->off; }
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Texture views

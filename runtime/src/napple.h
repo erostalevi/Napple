@@ -54,7 +54,9 @@ typedef struct Module {
     unsigned *hash, hash_mask;
     unsigned relative, symbolic, cross, weak;
     void *tables_blob;
+    int dynamic, gone;               /* loaded at run time (NRO through ldr:ro); unloaded again (slot reusable) */
 } Module;
+#define MAX_MODULES 128              /* static modules plus NROs loaded at run time; g_modules never moves */
 extern Module *g_modules; extern unsigned g_nmodules;
 /* Loads every module of the data directory's manifest, relocates, seals and checks them. */
 void modules_load(const char *dir);
@@ -65,6 +67,10 @@ const Module *module_for_address(uint64_t a);
 void module_describe(uint64_t a, char *out, size_t n);   /* "main+0x1234" or the nearest exported symbol */
 int module_pc_is_guest_code(uint64_t pc);                /* original text, not the patch area (signal handlers) */
 uint64_t module_image_bytes(void);
+/* Run-time modules (ro.c): maps the ahead-of-time rewritten NRO `<data-dir>/nro/<module id hex>.{patched.bin,tables}`, relocates it against
+ * every loaded module (and the host overrides), seals it and adds its gates to the dispatch index. NULL with *why set when unavailable. */
+Module *module_load_nro(const char *data_dir, const uint8_t module_id[32], const char **why);
+void module_unload(Module *m);
 /* Guest permission calls over module data pages (svc 0x02 / 0x03 / 0x06). */
 uint64_t module_set_permission(uint64_t address, uint64_t size, unsigned permission);
 uint64_t module_set_attribute(uint64_t address, uint64_t size, unsigned mask, unsigned attribute);
@@ -112,8 +118,20 @@ typedef uint32_t KResult;
 #define R_SESSION_CLOSED 0xF601u
 #define R_INVALID_THREAD_PRIORITY 0xE001u
 #define R_INVALID_PROCESSOR_ID 0xE201u
+#define R_OUT_OF_SESSIONS 0x0E01u
+#define R_INVALID_MEMORY_REGION 0xDC01u
+#define R_OUT_OF_RANGE 0xEE01u
+#define R_NOT_FOUND 0xF201u
+#define R_BUSY 0xF401u
+#define R_NO_THREAD 0x10201u
+#define R_UNKNOWN_THREAD 0x10401u
+#define R_PORT_CLOSED 0x10601u
+#define R_RECEIVE_LIST_BROKEN 0x20401u
+#define R_MESSAGE_TOO_LARGE 0x20801u
 
-typedef enum { OBJ_FREE, OBJ_THREAD, OBJ_EVENT_R, OBJ_EVENT_W, OBJ_SESSION, OBJ_TMEM, OBJ_SHMEM, OBJ_PROCESS, OBJ_CODEMEM, OBJ_PORT, OBJ_MISC } ObjType;
+typedef enum { OBJ_FREE, OBJ_THREAD, OBJ_EVENT_R, OBJ_EVENT_W, OBJ_SESSION, OBJ_TMEM, OBJ_SHMEM, OBJ_PROCESS, OBJ_CODEMEM, OBJ_PORT, OBJ_MISC,
+              /* guest-to-guest IPC (ksession.c): CreateSession / CreatePort / ManageNamedPort objects */
+              OBJ_KSERVER_SESSION, OBJ_KCLIENT_SESSION, OBJ_KSERVER_PORT, OBJ_KCLIENT_PORT } ObjType;
 uint32_t handle_new(ObjType type, void *obj);
 void *handle_get(uint32_t h, ObjType type);          /* NULL when not that type */
 ObjType handle_type(uint32_t h);

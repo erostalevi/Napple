@@ -178,6 +178,7 @@ int main(int argc, char **argv) {
     if (!g_cfg.nvn_major) detect_nvn_version();
     dispatch_build_index();
     services_init();
+    { extern void service_register_ro(void); service_register_ro(); }   /* ldr:ro / ro:1 belong to the loader (ro.c) */
     if (getenv("NAPPLE_WAIT_SECS")) { LOG("main", "waiting %s s for a debugger (pid %d)", getenv("NAPPLE_WAIT_SECS"), getpid()); sleep((unsigned)atoi(getenv("NAPPLE_WAIT_SECS"))); }
 
     gc.title_id = g_cfg.title_id; gc.build_id = g_cfg.build_id; gc.headless = g_cfg.headless;

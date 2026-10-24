@@ -44,7 +44,7 @@ int napple_audren_work_buffer_size(const void *param, size_t n, uint64_t *out) {
 /* ---------- voices ---------- */
 static void voice_reset(ServerVoice *v) {
     memset(v->valid, 0, sizeof v->valid); memset(v->pending, 0, sizeof v->pending);
-    v->state = SV_STOPPED; v->flush = 0; v->flush_from = 0;
+    v->state = SV_STOPPED; v->dropped = 0; v->flush = 0; v->flush_from = 0;
     v->index = 0; v->offset = 0; v->fraction = 0; v->played = 0; v->consumed = 0; v->loops_done = 0;
     memset(&v->adpcm, 0, sizeof v->adpcm); v->adpcm.buffer = -1;
     memset(v->biquad_state, 0, sizeof v->biquad_state);
@@ -116,6 +116,56 @@ void audren_voices_prepare(AudioRenderer *r) {
             skip_empty(r, v);
         }
     }
+}
+
+/* ---------- voice drop and render metrics ---------- */
+static uint64_t default_clock(void *user) { (void)user; struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return (uint64_t)t.tv_sec * 1000000000ull + (uint64_t)t.tv_nsec; }
+static uint64_t now_ns(const AudioRenderer *r) { return r->clock ? r->clock(r->clock_user) : default_clock(NULL); }
+static int drop_order(const AudioRenderer *r, int a, int b) {   /* > 0: a is dropped before b */
+    const AudrenVoiceIn *x = &r->voices[a].in, *y = &r->voices[b].in;
+    if (x->priority != y->priority) return x->priority > y->priority ? 1 : -1;
+    if (x->sort_order != y->sort_order) return x->sort_order > y->sort_order ? 1 : -1;
+    return a > b ? 1 : a < b ? -1 : 0;
+}
+static int voice_playing(const ServerVoice *v) { return v->in.in_use && v->state == SV_STARTED && v->in.sample_rate && v->valid[v->index]; }
+/* Per frame, before mixing: mark the r->drop_target lowest-priority playing voices as dropped. */
+static void select_drops(AudioRenderer *r) {
+    int playing[1024], n = 0;
+    for (int i = 0; i < r->param.voice_count; i++) { r->voices[i].dropped = 0; if (voice_playing(&r->voices[i]) && n < 1024) playing[n++] = i; }
+    if (!r->param.voice_drop_enabled) { r->drop_target = 0; r->stats.voices_dropped_now = 0; return; }
+    uint32_t drop = r->drop_target < (uint32_t)n ? r->drop_target : (uint32_t)n;
+    for (uint32_t d = 0; d < drop; d++) {   /* selection by repeated maximum: drop counts are tiny */
+        int best = -1;
+        for (int k = 0; k < n; k++) if (!r->voices[playing[k]].dropped && (best < 0 || drop_order(r, playing[k], best) > 0)) best = playing[k];
+        r->voices[best].dropped = 1; r->voices[best].drops++; r->stats.dropped_voice_frames++;
+    }
+    r->stats.voices_dropped_now = drop;
+}
+/* NAPPLE_AUDIO_STATS=1: the render health line, every 15 s of frames and at close. */
+static void log_stats(AudioRenderer *r, const char *when) {
+    const napple_audren_stats *s = &r->stats;
+    napple_audio_log(&r->host, "renderer stats (%s): %llu frames, render avg %.0f us max %.0f us, over budget %llu, late %llu, late ticks %llu, resyncs %llu, "
+                     "dropped voice-frames %llu (now %u), voice drop %s, time limit %u%%", when, (unsigned long long)s->frames,
+                     s->frames ? (double)s->render_ns_total / (double)s->frames / 1e3 : 0.0, (double)s->render_ns_max / 1e3,
+                     (unsigned long long)s->over_budget_frames, (unsigned long long)s->late_frames, (unsigned long long)s->late_ticks,
+                     (unsigned long long)s->resyncs, (unsigned long long)s->dropped_voice_frames, s->voices_dropped_now,
+                     r->param.voice_drop_enabled ? "on" : "off", r->time_limit ? r->time_limit : 100);
+}
+/* After a frame: account the render time and decide how many voices to drop in the next one. */
+static void account_frame(AudioRenderer *r, uint64_t ns, double frame_seconds) {
+    napple_audren_stats *s = &r->stats;
+    const uint64_t period = (uint64_t)(frame_seconds * 1e9), limit = __atomic_load_n(&r->time_limit, __ATOMIC_RELAXED);
+    const uint64_t budget = period * (limit ? (limit > 100 ? 100 : limit) : 100) / 100;
+    s->frames++; s->render_ns_total += ns; s->render_ns_last = ns; if (ns > s->render_ns_max) s->render_ns_max = ns;
+    if (ns > budget) s->over_budget_frames++;
+    if (ns > period) s->late_frames++;
+    if (!r->param.voice_drop_enabled) return;
+    int playing = 0; for (int i = 0; i < r->param.voice_count; i++) playing += voice_playing(&r->voices[i]);
+    if (ns > budget) {
+        uint32_t more = (uint32_t)(((uint64_t)(playing ? playing : 1) * (ns - budget) + ns - 1) / ns);
+        if (more < 1) more = 1;
+        r->drop_target += more; if (r->drop_target > (uint32_t)playing) r->drop_target = (uint32_t)playing;   /* playing includes the voices dropped now */
+    } else if (ns * 4 < budget * 3 && r->drop_target) r->drop_target--;
 }
 
 /* Moves the voice's clock by one frame (the mixer decoded exactly this sample path). */
@@ -271,10 +321,14 @@ static void render_one(AudioRenderer *r, double frame) {
     if (r->state != 0 || r->faulted) return;
     jmp_buf jb;
     if (NAPPLE_TRAP_BEGIN(jb) == 0) {
+        const uint64_t t0 = now_ns(r);
         audren_voices_prepare(r);
+        select_drops(r);
         mixer_render(r);
         for (int i = 0; i < r->param.voice_count; i++) audren_advance_voice(r, &r->voices[i], frame);
         r->elapsed_frames++;
+        account_frame(r, now_ns(r) - t0, frame);
+        if (r->stats_every && r->stats.frames % r->stats_every == 0) log_stats(r, "periodic");
     } else {
         r->faulted = 1;
         napple_audio_log(&r->host, "renderer stopped after a protocol error in the render path (output muted)");
@@ -305,7 +359,11 @@ static void *render_thread(void *p) {
         struct timespec now; clock_gettime(CLOCK_MONOTONIC, &now);
         int64_t wait = (int64_t)(next.tv_sec - now.tv_sec) * 1000000000LL + (next.tv_nsec - now.tv_nsec);
         if (wait > 0) { struct timespec d = {wait / 1000000000LL, wait % 1000000000LL}; nanosleep(&d, NULL); }
-        else if (wait < -100000000LL) next = now;   /* fell far behind (debugger, sleep): resynchronise */
+        else {
+            pthread_mutex_lock(&r->lock); r->stats.late_ticks++;
+            if (wait < -100000000LL) { r->stats.resyncs++; next = now; }   /* fell far behind (debugger, sleep): resynchronise */
+            pthread_mutex_unlock(&r->lock);
+        }
     }
     return NULL;
 }
@@ -331,6 +389,7 @@ int napple_audren_open(const void *param, size_t n, const napple_audio_host *hos
     pthread_mutex_init(&r->lock, NULL);
     r->state = 1;   /* stopped */
     r->manual = (flags & NAPPLE_AUDREN_MANUAL) != 0;
+    { const char *e = getenv("NAPPLE_AUDIO_STATS"); if (e && *e && *e != '0') r->stats_every = (uint32_t)(15 * p.sample_rate / (p.sample_count ? p.sample_count : 240)); }
     if (mixer_open(r)) { napple_audren_close(r); return NAPPLE_AUDIO_E_NOMEM; }
     if (!r->manual) {
         atomic_store(&r->running, 1);
@@ -347,6 +406,7 @@ int napple_audren_open(const void *param, size_t n, const napple_audio_host *hos
 void napple_audren_close(napple_audren *r) {
     if (!r) return;
     if (r->thread_started) { atomic_store(&r->running, 0); pthread_join(r->thread, NULL); }
+    if (r->stats_every) log_stats(r, "close");
     mixer_close(r);
     pthread_mutex_destroy(&r->lock);
     free(r->voices); free(r->pools); free(r->mixes); free(r->sinks); free(r->effects); free(r->channels); free(r);
@@ -371,6 +431,14 @@ int32_t napple_audren_mix_buffer_count(const napple_audren *r) { return r->param
 uint32_t napple_audren_revision(const napple_audren *r) { return r->revision; }
 void napple_audren_set_time_limit(napple_audren *r, uint32_t pct) { __atomic_store_n(&r->time_limit, pct, __ATOMIC_RELAXED); }
 uint32_t napple_audren_get_time_limit(const napple_audren *r) { uint32_t v = __atomic_load_n(&r->time_limit, __ATOMIC_RELAXED); return v ? v : 100; }
+void napple_audren_get_stats(napple_audren *r, napple_audren_stats *out) {
+    if (!r || !out) return;
+    pthread_mutex_lock(&r->lock); *out = r->stats; pthread_mutex_unlock(&r->lock);
+}
+void napple_audren_set_clock(napple_audren *r, uint64_t (*now)(void *user), void *user) {
+    if (!r) return;
+    pthread_mutex_lock(&r->lock); r->clock = now; r->clock_user = user; pthread_mutex_unlock(&r->lock);
+}
 uint64_t napple_audren_elapsed_frames(const napple_audren *r) {
     napple_audren *m = (napple_audren *)(uintptr_t)r; pthread_mutex_lock(&m->lock); uint64_t v = r->elapsed_frames; pthread_mutex_unlock(&m->lock); return v;
 }

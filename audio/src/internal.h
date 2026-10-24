@@ -127,6 +127,7 @@ typedef struct {
     AudrenWaveBuffer buffers[4]; uint8_t valid[4];
     uint8_t pending[4];            /* sent while the voice was not playing: valid once it plays */
     uint8_t state;                 /* SV_*: the client's Start/Stop/Pause, plus Stopping until the next render frame */
+    uint8_t dropped;               /* voice drop: not mixed in the current frame (see napple_audren_stats) */
     uint32_t flush, flush_from;    /* FlushWaveBuffers requested since the last render frame */
     unsigned index; uint64_t offset; double fraction; int32_t loops_done;
     uint64_t played; uint32_t consumed, drops;
@@ -146,6 +147,9 @@ struct napple_audren {
     AudrenChannelIn *channels;
     struct Mixer *mixer;
     int faulted;                   /* a protocol violation was trapped in the render path: output is muted */
+    napple_audren_stats stats; uint32_t drop_target;   /* voices to drop in the next frame */
+    uint32_t stats_every;          /* NAPPLE_AUDIO_STATS: log the render stats every this many frames (0 = off) */
+    uint64_t (*clock)(void *); void *clock_user;
 };
 typedef struct napple_audren AudioRenderer;
 

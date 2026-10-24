@@ -54,7 +54,38 @@ $(BUILD)/tests/test_timescale: tests/test_timescale.c src/timescale.c src/timesc
 test: $(BUILD)/tests/test_ipc $(BUILD)/tests/test_fs_journal $(BUILD)/tests/test_hid_service $(BUILD)/tests/test_timescale
 	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
 
+# Host unit tests (any POSIX host, e.g. Linux): the portable kernel, loader and service code with tests/host stand-ins for the macOS-only
+# parts (memory reservation, gate, modules). `make test-host`; HOST_CC picks the compiler.
+HOST_CC ?= cc
+HOST_BUILD := $(BUILD)/host
+HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation -Wno-unused-result -Isrc -Isrc/services -Itests/host -pthread
+HOST_KERNEL := src/kernel.c src/threads.c src/ksession.c src/kmsg.c src/kcode.c src/timescale.c tests/host/host_stubs.c
+HOST_LOADER := src/module.c src/dispatch.c src/json.c src/nro.c src/sha256.c src/ipc.c
+HOST_HDRS := $(wildcard src/*.h) $(wildcard tests/host/*.h) tests/check.h
+HOST_TESTS := $(HOST_BUILD)/test_kernel_ipc $(HOST_BUILD)/test_loader $(HOST_BUILD)/test_nvdrv $(HOST_BUILD)/test_fs_savedata $(HOST_BUILD)/test_fs_journal
+HOST_FS := src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c tests/host/host_save_dir.c
+$(HOST_BUILD)/test_kernel_ipc: tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
+$(HOST_BUILD)/test_loader: tests/host/test_loader.c src/ro.c $(HOST_KERNEL) $(HOST_LOADER) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_loader.c $(HOST_KERNEL) $(HOST_LOADER) -o $@
+$(HOST_BUILD)/test_nvdrv: tests/host/test_nvdrv.c src/services/nvdrv.c src/ipc.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_nvdrv.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
+$(HOST_BUILD)/test_fs_savedata: tests/host/test_fs_savedata.c src/services/fs.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_fs_savedata.c $(HOST_FS) -o $@
+$(HOST_BUILD)/test_fs_journal: tests/test_fs_journal.c src/services/fs.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/test_fs_journal.c $(HOST_FS) -o $@
+test-host: $(HOST_TESTS)
+	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
+
 clean:
 	rm -rf $(BUILD)
 
-.PHONY: all clean test
+.PHONY: all clean test test-host
+
+# Service unit tests (services-2026-10-24): `make test-services`
+-include tests/services.mk

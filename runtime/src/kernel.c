@@ -11,7 +11,10 @@
 
 int threads_close_object(ObjType type, void *obj);
 int ipc_close_object(ObjType type, void *obj);
-void threads_note_svc(unsigned num, uint64_t *regs);
+int ksession_close_object(ObjType type, void *obj);
+int kcode_close_object(ObjType type, void *obj);
+void threads_svc_enter(unsigned num, uint64_t *regs, const char *module, uint64_t offset);
+void threads_svc_exit(void);
 void threads_checkpoint(void);
 
 /* ---- handle table ---------------------------------------------------------------------------------------------
@@ -94,12 +97,13 @@ static const char *known_names[256] = {
 const char *svc_name(unsigned num) { return num < 256 ? (names[num] ? names[num] : known_names[num]) : NULL; }
 
 void svc_dispatch(unsigned num, uint64_t *regs, const char *module, uint64_t offset) {
-    threads_note_svc(num, regs);
+    threads_svc_enter(num, regs, module, offset);
     threads_checkpoint();
     if (svc_trace_all) LOG("svc", "0x%02x %s from %s+0x%llx x0=%#llx x1=%#llx x2=%#llx x3=%#llx", num, svc_name(num) ? svc_name(num) : "?", module,
                            (unsigned long long)offset, (unsigned long long)regs[0], (unsigned long long)regs[1], (unsigned long long)regs[2], (unsigned long long)regs[3]);
     if (num < 256 && handlers[num]) {
         handlers[num](regs);
+        threads_svc_exit();
         if (svc_trace_all) LOG("svc", "   -> 0x%02x result=%#llx x1=%#llx", num, (unsigned long long)regs[0], (unsigned long long)regs[1]);
         return;
     }
@@ -115,7 +119,7 @@ static void svc_close_handle(uint64_t *r) {
     uint32_t h = (uint32_t)r[0]; ObjType type = OBJ_FREE;
     void *o = handle_close(h, &type);
     if (!o) { r[0] = R_INVALID_HANDLE; return; }
-    if (o != (void *)1) { if (!threads_close_object(type, o)) ipc_close_object(type, o); }
+    if (o != (void *)1 && !threads_close_object(type, o) && !ksession_close_object(type, o) && !kcode_close_object(type, o)) ipc_close_object(type, o);
     r[0] = 0;
 }
 static void svc_get_system_tick(uint64_t *r) { r[0] = runtime_guest_ticks(); }
@@ -150,6 +154,11 @@ static void svc_break(uint64_t *r) {
     summary_note("guest Break reason=%#llx result=%#x at %s", (unsigned long long)r[0], result, where);
     runtime_fail("guest Break (reason %#llx, result %#x) from %s", (unsigned long long)r[0], result, where);
 }
+/* Debug svcs. An application has no debug objects, so GetDebugFutureThreadInfo always answers InvalidHandle; KernelDebug and
+ * ChangeKernelTraceState return nothing and do nothing on a retail kernel either. */
+static void svc_get_debug_future_thread_info(uint64_t *r) { r[0] = R_INVALID_HANDLE; }
+static void svc_kernel_debug(uint64_t *r) { LOGV("kernel", "KernelDebug(%llu, %#llx, %#llx, %#llx) ignored", (unsigned long long)r[0], (unsigned long long)r[1], (unsigned long long)r[2], (unsigned long long)r[3]); }
+static void svc_change_kernel_trace_state(uint64_t *r) { (void)r; }
 static void svc_return_from_exception(uint64_t *r) { (void)r; runtime_fail("ReturnFromException without an exception"); }
 
 /* GetInfo(out x1, id x1, handle x2, subid x3). Process-scoped ids answer for this single process. */
@@ -219,4 +228,7 @@ void svc_kernel_register(void) {
     svc_register(0x30, "GetResourceLimitLimitValue", svc_get_resource_limit_value);
     svc_register(0x31, "GetResourceLimitCurrentValue", svc_get_resource_limit_current);
     svc_register(0x37, "GetResourceLimitPeakValue", svc_get_resource_limit_current);
+    svc_register(0x2E, "GetDebugFutureThreadInfo", svc_get_debug_future_thread_info);
+    svc_register(0x3C, "KernelDebug", svc_kernel_debug);
+    svc_register(0x3D, "ChangeKernelTraceState", svc_change_kernel_trace_state);
 }

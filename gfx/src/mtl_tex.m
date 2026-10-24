@@ -387,14 +387,29 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
     return nv;
 }
 
-/* Render target attachment: the base texture with level / slice chosen by the view. */
+/* Render target attachment: the base texture with level / slice chosen by the view. A view with another format (an sRGB view of a UNORM target,
+ * a UINT view of a float one of the same size) renders through a format view of the whole texture; the attachment level / slice still pick the
+ * image. The format must be view-compatible (same size per pixel); otherwise the base format is used and that is reported once. */
 id<MTLTexture> mtl_tex_attach_view(GfxTex *t, const view_t *v, int has_view, uint32_t *level, uint32_t *slice) {
     *level = 0; *slice = 0;
-    if (has_view) {
-        if (v->set_levels) *level = v->base_level;
-        if (v->set_layers) *slice = v->min_layer;
+    if (!has_view) return t->tex;
+    if (v->set_levels) *level = v->base_level;
+    if (v->set_layers) *slice = v->min_layer;
+    uint32_t m = 0;
+    if (!v->set_format || t->is_depth || !napple_fmt_to_mtl(v->format, &m, NULL) || !m || (MTLPixelFormat)m == t->pf) return t->tex;
+    MTLPixelFormat pf = (MTLPixelFormat)m;
+    NSNumber *k = @((uint64_t)pf | 1ull << 63);                     /* not a sampled-view key (those keep bit 63 clear) */
+    id<MTLTexture> cached = t->views[k];
+    if (cached) return cached;
+    int bw, bh, bv = napple_fmt_bpb(v->format, &bw, &bh), bt = napple_fmt_bpb(t->key.d.format, &bw, &bh);
+    id<MTLTexture> nv = nil;
+    if (bv && bv == bt && (t->tex.usage & MTLTextureUsagePixelFormatView)) nv = [t->tex newTextureViewWithPixelFormat:pf];
+    if (!nv) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "render target view format %#x is not view-compatible with the texture (format %#x): drawn in the texture's format", v->format, t->key.d.format);
+        nv = t->tex;
     }
-    return t->tex;
+    t->views[k] = nv;
+    return nv;
 }
 
 /* ---------------------------------------------------------------------------------------------------------------

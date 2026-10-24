@@ -8,6 +8,8 @@
  *  - vertex inputs `[[attribute(i)]] float4|int4|uint4 a<i>`; varyings `[[user(locn<i>)]] float4 v<i>`.
  *    Fragment outputs `[[color(rt)]]`, optional `[[depth(any)]]`.
  *  - global memory (LDG/STG) -> `device uchar *gmem [[buffer(GMEM_BUFFER_INDEX)]]`, addressed relative to maxwell_gmem_base.
+ *  - shared memory (LDS/STS/ATOMS, compute only) -> a `threadgroup uint smem_w[]` declared inside the kernel (ShaderInfo.shared_mem bytes, no argument to bind);
+ *    BAR is threadgroup_barrier(mem_threadgroup).
  *  - rscale table (resolution scale) -> `constant float4 *rscale [[buffer(18)]]` when ShaderInfo.uses_rscale.
  *  - clip space: ShaderKey.flip_y / depth_minus_one epilogues convert NVN clip space to Metal's.
  */
@@ -30,6 +32,7 @@ typedef struct {
     uint32_t probe_pc;      /* diagnostics (NAPPLE_SHADER_PROBE): fragment shader writes registers probe_reg[] (x probe_scale) as its colour after the instruction at this pc, then exits; 0 = off */
     uint8_t probe_reg[3];
     float probe_scale;
+    uint32_t shared_size;   /* compute: shared (threadgroup) memory bytes the program declares; 0 = infer from static LDS/STS offsets, 32 KB if addressed dynamically. Above 32 KB the shader is refused */
 } ShaderKey;
 
 typedef struct {
@@ -54,6 +57,7 @@ typedef struct {
     bool bindless_approx;       // a bindless handle indexed at run time was resolved to the first entry of its table (approximation)
     bool uses_rscale;
     uint32_t local_mem;
+    uint32_t shared_mem;    /* compute: bytes of `threadgroup` storage the generated kernel declares (LDS/STS/ATOMS); 0 = none */
     uint32_t num_insts;
     char error[256];
 } ShaderInfo;

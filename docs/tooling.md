@@ -51,3 +51,8 @@ Cannot / limits:
   function begins from the middle, and does not discover HLE service names; names must come from humans or from other builds' signatures.
 - Cold start costs several seconds per call (JVM + Ghidra import); fine for per-item resolution, not for whole-module sweeps.
 - Hopper/IDA providers are not installed (licensed products).
+
+## Parallel sessions and `integrators/`
+Work split across concurrent sessions is handed off through `integrators/` at the git root (outside `Napple/`). Files in that folder are used for
+cross-session work integration: each session leaves `integrators/<branch>.md` describing its branch, and one integrator session (`/napple-integrate`)
+uses them to land every branch on `main`, then moves each file to `integrators/done/` with the result. See `integrators/README.md`.

@@ -1,4 +1,4 @@
-/* audren:u, audout:u, hwopus: the IPC surface over libnapple_audio (audio/include/napple_audio.h, docs/audio-input-frontend-interface.md).
+/* audren:u, audout:u, audin:u, hwopus: the IPC surface over libnapple_audio (audio/include/napple_audio.h, docs/audio-input-frontend-interface.md).
  * The library keeps its own state (the transfer memory work buffers the guest hands over are not used), mixes on its own threads and
  * pushes to one Core Audio unit; this file only parses requests, owns the Horizon events the library signals and maps errors. */
 #include "../ipc.h"
@@ -218,6 +218,76 @@ static const IpcCmd audout_cmds[] = {
 };
 static IpcObject *audout_open(void) { return IPC_OBJECT("audout:u", audout_cmds, NULL, NULL); }
 
+/* ---- IAudioIn / audin:u ----------------------------------------------------------------------------------------------------------------
+ * Capture (microphone). The library fills the guest's buffers from the capture source it was given; with none installed (the runtime installs
+ * none: no microphone permission, no capture device code) every buffer is silence, so the device exists and works like a console with no headset. */
+typedef struct { napple_audin *i; EventPair *ev; } AudIn;
+static void in_destroy(IpcObject *o) { AudIn *a = o->state; napple_audin_close(a->i); free(a); }
+static void in_get_state(IpcObject *s, IpcCall *c) { AudIn *a = s->state; uint32_t v = napple_audin_state(a->i); IPC_OUT(c, v); }
+static void in_start(IpcObject *s, IpcCall *c) { AudIn *a = s->state; c->result = map_err(napple_audin_start(a->i)); }
+static void in_stop(IpcObject *s, IpcCall *c) { AudIn *a = s->state; c->result = map_err(napple_audin_stop(a->i)); }
+static void in_append(IpcObject *s, IpcCall *c) {
+    AudIn *a = s->state;
+    uint64_t tag = IPC_IN(c, uint64_t, 0);
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    if (!b || b->size < 0x28) { c->result = 153u | (2u << 9); return; }
+    const uint64_t *w = ipc_buf_ptr(b);                 /* {next, sample buffer, capacity, data size, data offset} */
+    if (!w) { c->result = 153u | (2u << 9); return; }
+    uint64_t size = w[3] ? w[3] : w[2];                 /* bytes to record: the data size, or the whole capacity when the client left it 0 */
+    LOGV("audio", "audin append tag %#llx buffer %#llx capacity %#llx size %#llx offset %#llx", (unsigned long long)tag, (unsigned long long)w[1], (unsigned long long)w[2], (unsigned long long)w[3], (unsigned long long)w[4]);
+    int rc = napple_audin_append(a->i, tag, w[1], size, w[4]);
+    c->result = rc == NAPPLE_AUDIO_E_STATE ? (153u | (8u << 9)) : map_err(rc);
+}
+static void in_event(IpcObject *s, IpcCall *c) { AudIn *a = s->state; ipc_out_copy_handle(c, a->ev->ev_r); }
+static void in_released(IpcObject *s, IpcCall *c) {
+    AudIn *a = s->state;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint64_t tags[32] = {0}; uint32_t max = b ? (uint32_t)(b->size / 8) : 0; if (max > 32) max = 32;
+    uint32_t n = max ? napple_audin_get_released(a->i, tags, max) : 0;
+    if (b) ipc_write_buf(c, b, tags, b->size < sizeof tags ? b->size : sizeof tags);   /* unused entries read as a null tag, as for audout */
+    LOGV("audio", "audin released %u buffers", n);
+    IPC_OUT(c, n);
+}
+static void in_contains(IpcObject *s, IpcCall *c) { AudIn *a = s->state; uint8_t v = (uint8_t)napple_audin_contains(a->i, IPC_IN(c, uint64_t, 0)); IPC_OUT(c, v); }
+static void in_count(IpcObject *s, IpcCall *c) { AudIn *a = s->state; uint32_t v = napple_audin_buffer_count(a->i); IPC_OUT(c, v); }
+static void in_set_gain(IpcObject *s, IpcCall *c) { AudIn *a = s->state; napple_audin_set_gain(a->i, IPC_IN(c, float, 0)); }
+static void in_get_gain(IpcObject *s, IpcCall *c) { AudIn *a = s->state; float v = napple_audin_get_gain(a->i); IPC_OUT(c, v); }
+static void in_flush(IpcObject *s, IpcCall *c) { AudIn *a = s->state; uint8_t v = (uint8_t)napple_audin_flush(a->i); IPC_OUT(c, v); }
+static const IpcCmd in_cmds[] = {
+    {0, "GetAudioInState", in_get_state, IPC_IMPL}, {1, "StartAudioIn", in_start, IPC_IMPL}, {2, "StopAudioIn", in_stop, IPC_IMPL},
+    {3, "AppendAudioInBuffer", in_append, IPC_IMPL}, {4, "RegisterBufferEvent", in_event, IPC_IMPL}, {5, "GetReleasedAudioInBuffer", in_released, IPC_IMPL},
+    {6, "ContainsAudioInBuffer", in_contains, IPC_IMPL}, {8, "AppendAudioInBufferAuto", in_append, IPC_IMPL}, {9, "GetReleasedAudioInBuffersAuto", in_released, IPC_IMPL},
+    {11, "GetAudioInBufferCount", in_count, IPC_IMPL}, {12, "SetAudioInDeviceGain", in_set_gain, IPC_IMPL}, {13, "GetAudioInDeviceGain", in_get_gain, IPC_IMPL},
+    {14, "FlushAudioInBuffers", in_flush, IPC_IMPL},
+};
+static void ain_list(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0); int32_t n = 0;
+    if (b && b->size >= 0x100) { uint8_t name[0x100] = {0}; napple_audin_device_name((char *)name, sizeof name); ipc_write_buf(c, b, name, sizeof name); n = 1; } else if (b) ipc_write_buf(c, b, name_none, 0);
+    IPC_OUT(c, n);
+}
+static void ain_open(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t rate = IPC_IN(c, uint32_t, 0); uint16_t ch = IPC_IN(c, uint16_t, 4);
+    AudIn *a = calloc(1, sizeof *a);
+    a->ev = new_event_pair();
+    napple_audio_host h = make_host(a->ev, 0);
+    uint32_t grate = 0, gch = 0;
+    int rc = napple_audin_open(rate, ch, &h, &a->i, &grate, &gch);
+    if (rc) { free(a); c->result = map_err(rc); return; }
+    const IpcBuf *nb = ipc_out_buf(c, 0);
+    if (nb && nb->size >= 0x100) { uint8_t name[0x100] = {0}; napple_audin_device_name((char *)name, sizeof name); ipc_write_buf(c, nb, name, sizeof name); }
+    uint32_t out[4] = {grate, gch, 2 /* PCM16 */, napple_audin_state(a->i)};
+    ipc_out(c, out, sizeof out);
+    LOG("audio", "audin opened: %u Hz, %u channels (%s)", grate, gch, napple_audin_has_source() ? "capture source" : "silence");
+    ipc_out_object(c, IPC_OBJECT("IAudioIn", in_cmds, a, in_destroy));
+}
+static const IpcCmd audin_cmds[] = {
+    {0, "ListAudioIns", ain_list, IPC_IMPL}, {1, "OpenAudioIn", ain_open, IPC_IMPL}, {2, "ListAudioInsAuto", ain_list, IPC_IMPL}, {3, "OpenAudioInAuto", ain_open, IPC_IMPL},
+    {4, "ListAudioInsAutoFiltered", ain_list, IPC_IMPL},
+};
+static IpcObject *audin_open(void) { return IPC_OBJECT("audin:u", audin_cmds, NULL, NULL); }
+
 /* ---- hwopus -------------------------------------------------------------------------------------------------------------------------------- */
 typedef struct { napple_hwopus *d; int multistream; } Opus;
 static void opus_destroy(IpcObject *o) { Opus *p = o->state; napple_hwopus_close(p->d); free(p); }
@@ -288,5 +358,6 @@ static IpcObject *hwopus_open(void) { return IPC_OBJECT("hwopus", hwopus_cmds, N
 void service_register_audio(void) {
     ipc_register_service("audren:u", audren_open);
     ipc_register_service("audout:u", audout_open);
+    ipc_register_service("audin:u", audin_open);
     ipc_register_service("hwopus", hwopus_open);
 }

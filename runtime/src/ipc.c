@@ -4,8 +4,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef __APPLE__
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
+#endif
 #include <sys/mman.h>
 
 #define CMIF_IN_MAGIC 0x49434653u    /* "SFCI" */
@@ -13,6 +15,11 @@
 #define MSG_BYTES 0x100
 #define POINTER_BUFFER_SIZE 0x8000
 #define DOMAIN_MAX 512
+
+int ksession_connect_named(const char *name, uint64_t *r);    /* ksession.c */
+int ksession_is_client(uint32_t h);
+uint32_t ksession_send_request(uint32_t h, uint32_t *msg, uint32_t size);
+void svc_ksession_register(void);
 
 enum { T_CLOSE = 2, T_REQUEST = 4, T_CONTROL = 5, T_REQUEST_CTX = 6, T_CONTROL_CTX = 7, T_TIPC_CLOSE = 15, T_TIPC_BASE = 16 };
 
@@ -29,7 +36,7 @@ typedef struct IpcSession {
 } IpcSession;
 
 typedef struct { char name[12]; IpcOpen open; } Service;
-static Service services[64];
+static Service services[128];   /* 64 overflowed once the 2026-10-24 services landed */
 static unsigned nservices;
 static pthread_mutex_t registry_lock = PTHREAD_MUTEX_INITIALIZER;
 static __thread uint64_t trace_fp, trace_lr;     /* guest frame of the current request, for failure reports */
@@ -157,12 +164,14 @@ static void svc_map_shared_memory(uint64_t *r) {
     if ((addr & 4095) || !size || (size & 4095) || size > m->size) { r[0] = R_INVALID_SIZE; return; }
     if (m->nmaps == 4) { r[0] = R_OUT_OF_RESOURCE; return; }
     IpcShmemMap *map = &m->maps[m->nmaps++]; map->addr = addr; map->size = size;
+#ifdef __APPLE__   /* other hosts (runtime/tests/host) always take the copy path */
     if (!(addr & (PAGE_16K - 1)) && !(size & (PAGE_16K - 1))) {
         mach_vm_address_t a = addr; vm_prot_t cur, max;
         kern_return_t kr = mach_vm_remap(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (mach_vm_address_t)(uintptr_t)m->host, FALSE, &cur, &max, VM_INHERIT_NONE);
         if (kr == KERN_SUCCESS && a == addr) { map->remapped = 1; mprotect((void *)addr, size, PROT_READ | ((r[3] & 2) ? PROT_WRITE : 0)); r[0] = 0; return; }
         LOG("ipc", "shared memory remap %#llx+%#llx failed (%d): falling back to a copy", (unsigned long long)addr, (unsigned long long)size, kr);
     }
+#endif
     uint64_t lo = addr & ~(PAGE_16K - 1), hi = (addr + size + PAGE_16K - 1) & ~(PAGE_16K - 1);
     if (mprotect((void *)lo, hi - lo, PROT_READ | PROT_WRITE)) { m->nmaps--; r[0] = R_INVALID_CURRENT_MEMORY; return; }
     memcpy((void *)addr, m->host, size);
@@ -401,11 +410,20 @@ static void svc_connect_to_named_port(uint64_t *r) {
     const void *p = guest_ptr(r[1], 12);
     if (!p) { r[0] = R_INVALID_POINTER; return; }
     memcpy(name, p, 12);
-    if (strcmp(name, "sm:")) { LOG("ipc", "named port \"%s\" is not implemented", name); summary_ipc(name, 0xffff, 2, 0); runtime_fail("IPC named port \"%s\" not implemented", name); }
+    if (strcmp(name, "sm:")) {
+        if (ksession_connect_named(name, r)) return;      /* a port the game registered itself (ManageNamedPort) */
+        LOG("ipc", "named port \"%s\" is not implemented", name); summary_ipc(name, 0xffff, 2, 0); runtime_fail("IPC named port \"%s\" not implemented", name);
+    }
     r[0] = 0; r[1] = session_handle(sm_open());
 }
 static void svc_send_sync_request(uint64_t *r, int user_buffer) {
     uint32_t h = (uint32_t)(user_buffer ? r[2] : r[0]);
+    if (ksession_is_client(h)) {                          /* a session to a server thread of the game (ksession.c) */
+        uint32_t size = user_buffer ? (uint32_t)(r[1] < 0x10000 ? r[1] : 0x10000) : MSG_BYTES;
+        uint32_t *m = user_buffer ? guest_ptr(r[0], size) : pthread_getspecific(runtime_keys[2]);
+        r[0] = m ? ksession_send_request(h, m, size) : R_INVALID_POINTER;
+        return;
+    }
     IpcSession *s = handle_get(h, OBJ_SESSION);
     if (!s) { r[0] = R_INVALID_HANDLE; return; }
     uint32_t *m = user_buffer ? guest_ptr(r[0], MSG_BYTES) : pthread_getspecific(runtime_keys[2]);
@@ -416,6 +434,16 @@ static void svc_send_sync_request(uint64_t *r, int user_buffer) {
 }
 static void svc_send_sync(uint64_t *r) { svc_send_sync_request(r, 0); }
 static void svc_send_sync_user(uint64_t *r) { svc_send_sync_request(r, 1); }
+/* CreateSharedMemory(x1 size, w2 local permission, w3 remote permission) -> w1 handle. Zeroed host pages, mapped by MapSharedMemory. */
+static void svc_create_shared_memory(uint64_t *r) {
+    uint64_t size = r[1]; uint32_t local = (uint32_t)r[2], remote = (uint32_t)r[3];
+    if (!size || (size & 4095) || size > (4ull << 30)) { r[0] = R_INVALID_SIZE; return; }
+    if ((local != 1 && local != 3) || (remote != 1 && remote != 3 && remote != 0x10000000u)) { r[0] = R_INVALID_MEMORY_PERMISSIONS; return; }
+    IpcSharedMemory *m = ipc_shared_memory_new(size);
+    uint32_t h = handle_new(OBJ_SHMEM, m);                 /* the handle owns the reference ipc_shared_memory_new returned */
+    if (!h) { munmap(m->host, m->size); free(m); r[0] = R_OUT_OF_RESOURCE; return; }
+    r[0] = 0; r[1] = h;
+}
 static void svc_create_transfer_memory(uint64_t *r) {
     IpcTransferMemory *t = malloc(sizeof *t);
     if (!t) { r[0] = R_OUT_OF_RESOURCE; return; }
@@ -434,4 +462,6 @@ void svc_ipc_register(void) {
     svc_register(0x14, "UnmapSharedMemory", svc_unmap_shared_memory);
     svc_register(0x51, "MapTransferMemory", svc_map_transfer_memory);
     svc_register(0x52, "UnmapTransferMemory", svc_map_transfer_memory);
+    svc_register(0x50, "CreateSharedMemory", svc_create_shared_memory);
+    svc_ksession_register();
 }

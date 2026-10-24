@@ -59,20 +59,26 @@ static const float early_gain[5][10]={
     {0}
 };
 static const float pre_time[5]={12.5f,40,50,50,0};
-static void validate_delay(const AudrenDelayParam *p) {
+static int delay_ok(const AudrenDelayParam *p) {
     unsigned rate=(p->sample_rate>>14)/1000;
-    if(!channel_ok(p->channels) || p->channel_max<p->channels || rate<1 || rate>192 || p->delay_max>20000 || p->delay>p->delay_max)
-        napple_audio_fatal("audio delay parameters");
+    return channel_ok(p->channels) && p->channel_max>=p->channels && rate>=1 && rate<=192 && p->delay_max<=20000 && p->delay<=p->delay_max;
 }
-static void validate_reverb(const AudrenReverbParam *p) {
-    if(!channel_ok(p->channels) || p->channel_max<p->channels || p->sample_rate<16384 || p->sample_rate>192*16384 ||
-        p->early_mode<0 || p->early_mode>4 || p->late_mode<0 || p->late_mode>3 || p->decay<=0 || p->hf_decay<=0 || p->pre_delay<0)
-        napple_audio_fatal("audio standard reverb parameters");
+static int reverb_ok(const AudrenReverbParam *p) {
+    return channel_ok(p->channels) && p->channel_max>=p->channels && p->sample_rate>=16384 && p->sample_rate<=192*16384 &&
+        p->early_mode>=0 && p->early_mode<=4 && p->late_mode>=0 && p->late_mode<=3 && p->decay>0 && p->hf_decay>0 && p->pre_delay>=0;
 }
-static void validate_compressor(const AudrenCompressorParam *p) {
-    if(!channel_ok(p->channels) || p->channel_max<p->channels || !isfinite(p->threshold) || !(p->ratio>0) || !isfinite(p->ratio) ||
-        !(p->input_gain>=0 && p->input_gain<=1) || !(p->attack>=0 && p->attack<=1) || !(p->release>=0 && p->release<=1) || !isfinite(p->output_gain))
-        napple_audio_fatal("audio compressor parameters");
+static int compressor_ok(const AudrenCompressorParam *p) {
+    return channel_ok(p->channels) && p->channel_max>=p->channels && isfinite(p->threshold) && p->ratio>0 && isfinite(p->ratio) &&
+        p->input_gain>=0 && p->input_gain<=1 && p->attack>=0 && p->attack<=1 && p->release>=0 && p->release<=1 && isfinite(p->output_gain);
+}
+static void validate_delay(const AudrenDelayParam *p) { if(!delay_ok(p))napple_audio_fatal("audio delay parameters"); }
+static void validate_reverb(const AudrenReverbParam *p) { if(!reverb_ok(p))napple_audio_fatal("audio standard reverb parameters"); }
+static void validate_compressor(const AudrenCompressorParam *p) { if(!compressor_ok(p))napple_audio_fatal("audio compressor parameters"); }
+int audio_effect_valid(unsigned type,const void *param) {
+    if(type==3){AudrenDelayParam p;memcpy(&p,param,sizeof p);return delay_ok(&p);}
+    if(type==4){AudrenReverbParam p;memcpy(&p,param,sizeof p);return reverb_ok(&p);}
+    if(type==9){AudrenCompressorParam p;memcpy(&p,param,sizeof p);return compressor_ok(&p);}
+    return 0;
 }
 AudioEffectDsp *audio_effect_create(unsigned type,const void *param,unsigned revision) {
     AudioEffectDsp *s=calloc(1,sizeof *s);if(!s)napple_audio_fatal("audio effect allocation");

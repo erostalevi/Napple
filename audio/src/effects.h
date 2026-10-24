@@ -29,6 +29,8 @@ _Static_assert(offsetof(AudrenCompressorParam,status)==52,"compressor wire layou
 _Static_assert(sizeof(AudrenBufferMixParam)==148,"buffer-mix wire layout");
 _Static_assert(sizeof(AudrenBiquadEffectV1)==24 && sizeof(AudrenBiquadEffectV2)==40,"biquad wire layouts");
 typedef struct AudioEffectDsp AudioEffectDsp;
+/* Non-fatal parameter check for types 3 (delay), 4 (reverb) and 9 (compressor): 1 = audio_effect_create/_update will accept it. */
+int audio_effect_valid(unsigned type, const void *param);
 AudioEffectDsp *audio_effect_create(unsigned type, const void *param, unsigned revision);
 void audio_effect_free(AudioEffectDsp *s);
 void audio_effect_update(AudioEffectDsp *s, const void *param);

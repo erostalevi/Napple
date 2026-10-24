@@ -79,6 +79,9 @@ typedef struct pipe_key {
     uint32_t depth_slots[2];          /* per stage (vs, fs): binding slots holding depth textures */
 } pipe_key;
 @interface GfxPipe : NSObject { @public id<MTLRenderPipelineState> ps; GfxShader *vs, *fs; int state; int claimed; /* build started (atomic 0 -> 1) */ } @end
+blend_st mtl_blend_resolve(blend_st b);         /* advanced blend modes -> plain factors (logs the ones it approximates) */
+MTLBlendFactor mtl_blend_factor(unsigned nvn_blend_func);
+MTLBlendOperation mtl_blend_op(unsigned nvn_blend_equation);
 GfxPipe *mtl_pipe_get(const pipe_key *k);                  /* nil while compiling asynchronously */
 GfxShader *mtl_shader_for(uint64_t hash, const ShaderKey *key);   /* translated + compiled (async); never nil for a known blob */
 id<MTLComputePipelineState> mtl_compute_pipe(uint64_t hash, GfxShader *__autoreleasing *sh);

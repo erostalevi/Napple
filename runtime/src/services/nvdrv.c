@@ -1,7 +1,8 @@
 /* nvdrv / nvdrv:a / nvdrv:s / nvdrv:t: the Tegra driver front end the SDK's NvRm layer talks to (nv::InitializeGraphics, android:: gralloc
  * buffers of the vi native window, media). Napple's NVN is implemented by the graphics back end, so the GPU channels, address spaces and
  * syncpoints of the real driver are not needed: this service answers the *memory* side (nvmap handle bookkeeping on guest-provided memory) and
- * the control side (syncpoint counters, event objects) at the level the SDK initializes and polls, and refuses everything else by number
+ * the control side (syncpoint counters, event objects) at the level the SDK initializes and polls, the host1x channels of the multimedia
+ * engines (nvhost-nvdec/vic/nvjpg/msenc: the channel ioctls, with submits that complete at once), and refuses everything else by number
  * (NotImplemented) so a game that really needs a device reports it in the log and the compat summary. See docs/runtime-services.md. */
 #include "../ipc.h"
 #include <pthread.h>
@@ -10,14 +11,17 @@
 #include <string.h>
 
 enum { NV_OK = 0, NV_NOT_IMPLEMENTED = 1, NV_NOT_SUPPORTED = 2, NV_NOT_INITIALIZED = 3, NV_BAD_PARAMETER = 4, NV_TIMEOUT = 5, NV_INSUFFICIENT_MEMORY = 6, NV_ACCESS_DENIED = 0x10 };
-typedef enum { DEV_NONE, DEV_NVMAP, DEV_CTRL, DEV_OTHER } DevKind;
-typedef struct { DevKind kind; char path[48]; int open; } Fd;
+typedef enum { DEV_NONE, DEV_NVMAP, DEV_CTRL, DEV_CHANNEL, DEV_OTHER } DevKind;
+/* host1x client channel state (nvhost-nvdec / vic / nvjpg / msenc) */
+#define CHANNEL_SYNCPTS 16
+typedef struct { uint32_t class_id; int32_t nvmap_fd; uint32_t timeout_ms, submit_timeout_ms; uint32_t syncpt[CHANNEL_SYNCPTS]; uint64_t submits; } Channel;
+typedef struct { DevKind kind; char path[48]; int open; Channel ch; } Fd;
 #define MAX_FD 64
 static Fd fds[MAX_FD];
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static int initialized;
 
-typedef struct { uint32_t id; int used; uint32_t size, align, flags, heapmask; uint64_t addr; int allocated; uint32_t refs; } NvMapHandle;
+typedef struct { uint32_t id; int used; uint32_t size, align, flags, heapmask; uint64_t addr; int allocated; uint32_t refs; uint32_t iova; } NvMapHandle;
 #define MAX_NVMAP 4096
 static NvMapHandle nvmap[MAX_NVMAP];
 static uint32_t next_nvmap_id = 1;
@@ -40,8 +44,12 @@ static void syncpt_advance(uint32_t id, uint32_t n) {
     for (unsigned i = 0; i < MAX_SLOTS; i++) if (pending[i].used && pending[i].id == id && (int32_t)(syncpt[id] - pending[i].threshold) >= 0) { pending[i].used = 0; events_signal_for(i); }
 }
 
-static const char *const known_other[] = {"/dev/nvhost-gpu", "/dev/nvhost-as-gpu", "/dev/nvhost-ctrl-gpu", "/dev/nvhost-dbg-gpu", "/dev/nvhost-prof-gpu", "/dev/nvhost-nvdec",
-    "/dev/nvhost-vic", "/dev/nvhost-nvjpg", "/dev/nvhost-msenc", "/dev/nvhost-tsec", "/dev/nvdisp-disp0", "/dev/nvdisp-disp1", "/dev/nvdisp-ctrl", "/dev/nvsched-ctrl", "/dev/nvsched", "/dev/nvhost-ctrl-gpu"};
+static const char *const known_other[] = {"/dev/nvhost-gpu", "/dev/nvhost-as-gpu", "/dev/nvhost-ctrl-gpu", "/dev/nvhost-dbg-gpu", "/dev/nvhost-prof-gpu",
+    "/dev/nvhost-tsec", "/dev/nvdisp-disp0", "/dev/nvdisp-disp1", "/dev/nvdisp-ctrl", "/dev/nvsched-ctrl", "/dev/nvsched"};
+/* host1x engines with their host1x class ids */
+static const struct { const char *path; uint32_t class_id; } channels[] = {
+    {"/dev/nvhost-nvdec", 0xF0}, {"/dev/nvhost-vic", 0x5D}, {"/dev/nvhost-nvjpg", 0xC0}, {"/dev/nvhost-msenc", 0x21},
+};
 
 static NvMapHandle *nvmap_find(uint32_t id) { for (unsigned i = 0; i < MAX_NVMAP; i++) if (nvmap[i].used && nvmap[i].id == id) return &nvmap[i]; return NULL; }
 
@@ -122,42 +130,102 @@ static uint32_t ctrl_ioctl(unsigned nr, uint8_t *buf, uint32_t size) {
     }
     return NV_NOT_IMPLEMENTED;
 }
-/* Host1x channels (nvhost-nvdec/-vic/-nvjpg/-msenc): the engines are not emulated yet, submits complete instantly (syncpoints advance, output
- * surfaces keep whatever the guest had there). That lets a game's movie player run without crashing; the picture is not decoded.
- * Layout of Submit: {u32 cmdbufs, relocs, syncpt_incrs, fences} then cmdbufs{handle, offset, words}, relocs{4 x u32}, shifts{u32 per reloc},
- * incrs{id, count, 2 x u32 reserved}, fences{id, value} (out). */
-static uint32_t channel_syncpt_id(const char *path) { return !strcmp(path, "/dev/nvhost-nvdec") ? 28 : !strcmp(path, "/dev/nvhost-vic") ? 30 : !strcmp(path, "/dev/nvhost-msenc") ? 29 : !strcmp(path, "/dev/nvhost-nvjpg") ? 31 : 27; }
-static uint32_t channel_ioctl(const char *path, unsigned type, unsigned nr, uint8_t *buf, uint32_t size) {
-    if (type == 0x48) { if (nr == 0x01 || nr == 0x03) return NV_OK; return NV_NOT_IMPLEMENTED; }       /* SET_NVMAP_FD, SET_TIMEOUT-style */
-    if (type != 0) return NV_NOT_IMPLEMENTED;
-    switch (nr) {
-    case 0x01: {                                                                                       /* SUBMIT */
-        if (size < 16) return NV_BAD_PARAMETER;
-        uint32_t nc, nr_, ni, nf; memcpy(&nc, buf, 4); memcpy(&nr_, buf + 4, 4); memcpy(&ni, buf + 8, 4); memcpy(&nf, buf + 12, 4);
-        uint64_t incr_off = 16 + (uint64_t)nc * 12 + (uint64_t)nr_ * 16 + (uint64_t)nr_ * 4, fence_off = incr_off + (uint64_t)ni * 16;
-        if (fence_off + (uint64_t)nf * 8 > size) return NV_BAD_PARAMETER;
-        for (uint32_t i = 0; i < ni; i++) {
-            uint32_t id, n; memcpy(&id, buf + incr_off + i * 16, 4); memcpy(&n, buf + incr_off + i * 16 + 4, 4);
-            if (id >= NSYNC) return NV_BAD_PARAMETER;
-            pthread_mutex_lock(&lock);
-            syncpt_max[id] += n; uint32_t v = syncpt_max[id];
-            syncpt_advance(id, n);
-            pthread_mutex_unlock(&lock);
-            if (i < nf) { memcpy(buf + fence_off + i * 8, &id, 4); memcpy(buf + fence_off + i * 8 + 4, &v, 4); }
+/* Host1x channels (nvhost-nvdec / -vic / -nvjpg / -msenc). The ioctl surface is the nvhost channel ABI (the host1x part shared by the
+ * multimedia engines; layouts as documented by the public driver sources and switchbrew):
+ *   'H' 0x01 SET_NVMAP_FD {s32 fd}   'H' 0x03 SET_TIMEOUT {u32 ms}
+ *   0x01 SUBMIT {u32 cmdbufs, relocs, syncpt_incrs, fences} + cmdbuf{s32 handle, u32 offset, s32 words}[cmdbufs] + reloc{4 x s32}[relocs]
+ *        + u32 shift[relocs] + incr{u32 id, u32 count, 3 x u32 reserved}[syncpt_incrs] + u32 fence_threshold[fences] (out)
+ *   0x02 GET_SYNCPOINT {u32 index, u32 id (out)}   0x03 GET_WAITBASE {u32 index, u32 base (out)}   0x07 SET_SUBMIT_TIMEOUT {u32 ms}
+ *   0x09 MAP_CMD_BUFFER / 0x0A UNMAP_CMD_BUFFER {u32 count, u32 data_address, u8 attach_host_ch_das, pad[3]} + {u32 handle, u32 iova (out)}[count]
+ * The engines themselves are not emulated: a submit is validated (command buffers must lie inside live nvmap handles) and completes
+ * at once, its syncpoint increments land immediately and the fence thresholds are what the guest then waits for. Output surfaces keep
+ * whatever the guest had there (video is decoded by movie.c at the media library level instead). */
+enum { NV_BAD_VALUE = 0xB, NV_INVALID_STATE = 8 };
+#define SYNCPT_FIRST_DYNAMIC 32                         /* ids below are the fixed ones (display, GPU) the SDK may poll through nvhost-ctrl */
+static uint8_t syncpt_owned[NSYNC];
+static uint32_t syncpt_alloc(void) {
+    for (uint32_t i = SYNCPT_FIRST_DYNAMIC; i < NSYNC; i++) if (!syncpt_owned[i]) { syncpt_owned[i] = 1; return i; }
+    return 0;
+}
+/* Device addresses for MAP_CMD_BUFFER: a bump allocator over the 32-bit host1x space, one stable address per nvmap handle. */
+static uint32_t next_iova = 0x10000000u;
+static uint32_t nvmap_pin(NvMapHandle *h) {
+    if (h->iova) return h->iova;
+    uint64_t align = h->align > 0x1000 ? h->align : 0x1000, at = ((uint64_t)next_iova + align - 1) & ~(align - 1), end = at + (((uint64_t)h->size + 0xfff) & ~0xfffull);
+    if (end > 0xfff00000u) return 0;
+    next_iova = (uint32_t)end; h->iova = (uint32_t)at;
+    return h->iova;
+}
+static uint32_t rd32(const uint8_t *p) { uint32_t v; memcpy(&v, p, 4); return v; }
+static void wr32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
+
+static uint32_t channel_submit(Channel *ch, uint8_t *buf, uint32_t size) {
+    if (size < 16) return NV_BAD_PARAMETER;
+    uint32_t nc = rd32(buf), nrel = rd32(buf + 4), ni = rd32(buf + 8), nf = rd32(buf + 12);
+    if (nc > 0x400 || nrel > 0x400 || ni > 0x400 || nf > 0x400) return NV_BAD_PARAMETER;
+    uint64_t cmd_off = 16, rel_off = cmd_off + (uint64_t)nc * 12, shift_off = rel_off + (uint64_t)nrel * 16, incr_off = shift_off + (uint64_t)nrel * 4,
+             fence_off = incr_off + (uint64_t)ni * 20, end = fence_off + (uint64_t)nf * 4;
+    if (end > size) return NV_BAD_PARAMETER;
+    for (uint32_t i = 0; i < nc; i++) {                              /* every command buffer inside a live nvmap handle */
+        const uint8_t *e = buf + cmd_off + (uint64_t)i * 12;
+        uint32_t handle = rd32(e), offset = rd32(e + 4); int32_t words = (int32_t)rd32(e + 8);
+        NvMapHandle *h = nvmap_find(handle);
+        if (!h || words < 0 || (uint64_t)offset + (uint64_t)words * 4 > h->size) return NV_BAD_PARAMETER;
+    }
+    for (uint32_t i = 0; i < ni; i++) if (rd32(buf + incr_off + (uint64_t)i * 20) >= NSYNC) return NV_BAD_PARAMETER;
+    for (uint32_t i = 0; i < ni; i++) {
+        const uint8_t *e = buf + incr_off + (uint64_t)i * 20;
+        uint32_t id = rd32(e), n = rd32(e + 4);
+        syncpt_max[id] += n; uint32_t threshold = syncpt_max[id];
+        syncpt_advance(id, n);                                       /* the engine is instant: completed as soon as submitted */
+        if (i < nf) wr32(buf + fence_off + (uint64_t)i * 4, threshold);
+    }
+    ch->submits++;
+    return NV_OK;
+}
+static uint32_t channel_map(int unmap, uint8_t *buf, uint32_t size) {
+    if (size < 12) return NV_BAD_PARAMETER;
+    uint32_t cnt = rd32(buf);
+    if (12 + (uint64_t)cnt * 8 > size) return NV_BAD_PARAMETER;
+    for (uint32_t i = 0; i < cnt; i++) if (!nvmap_find(rd32(buf + 12 + (uint64_t)i * 8))) return NV_BAD_PARAMETER;
+    for (uint32_t i = 0; i < cnt; i++) {
+        uint8_t *e = buf + 12 + (uint64_t)i * 8;
+        NvMapHandle *h = nvmap_find(rd32(e));
+        if (unmap) continue;                                          /* the mapping stays: other channels may still use the handle */
+        uint32_t iova = nvmap_pin(h);
+        if (!iova) return NV_INSUFFICIENT_MEMORY;
+        wr32(e + 4, iova);
+    }
+    return NV_OK;
+}
+static uint32_t channel_ioctl(Channel *ch, unsigned type, unsigned nr, uint8_t *buf, uint32_t size) {
+    pthread_mutex_lock(&lock);
+    uint32_t r = NV_NOT_IMPLEMENTED;
+    if (type == 0x48) {
+        switch (nr) {
+        case 0x01: if (size < 4) { r = NV_BAD_PARAMETER; break; } ch->nvmap_fd = (int32_t)rd32(buf); r = NV_OK; break;          /* SET_NVMAP_FD */
+        case 0x03: if (size < 4) { r = NV_BAD_PARAMETER; break; } ch->timeout_ms = rd32(buf); r = NV_OK; break;                 /* SET_TIMEOUT */
         }
-        return NV_OK;
+    } else if (type == 0) {
+        switch (nr) {
+        case 0x01: r = channel_submit(ch, buf, size); break;
+        case 0x02: case 0x03: {                                                                                                    /* GET_SYNCPOINT / GET_WAITBASE */
+            if (size < 8) { r = NV_BAD_PARAMETER; break; }
+            uint32_t index = rd32(buf);
+            if (index >= CHANNEL_SYNCPTS) { r = NV_BAD_PARAMETER; break; }
+            uint32_t v = 0;
+            if (nr == 0x02) { if (!ch->syncpt[index]) ch->syncpt[index] = syncpt_alloc(); v = ch->syncpt[index]; if (!v) { r = NV_INSUFFICIENT_MEMORY; break; } }
+            wr32(buf + 4, v); r = NV_OK; break;                                                                                    /* wait bases are not used by the SDK: 0 */
+        }
+        case 0x07: if (size < 4) { r = NV_BAD_PARAMETER; break; } ch->submit_timeout_ms = rd32(buf); r = NV_OK; break;          /* SET_SUBMIT_TIMEOUT */
+        case 0x09: case 0x0a: r = channel_map(nr == 0x0a, buf, size); break;
+        }
     }
-    case 0x02: case 0x03: if (size >= 8) { uint32_t param; memcpy(&param, buf, 4); uint32_t v = param == 0 ? channel_syncpt_id(path) : 0; memcpy(buf + 4, &v, 4); return NV_OK; } return NV_BAD_PARAMETER;   /* GET_SYNCPOINT / GET_WAITBASE {param, value} */
-    case 0x07: return NV_OK;                                                                           /* SET_SUBMIT_TIMEOUT */
-    case 0x09: case 0x0a: {                                                                            /* MAP/UNMAP_CMD_BUFFER {u32 count, u32 reserved, u32 compressed, ...entries{handle, address}} */
-        if (size < 12) return NV_BAD_PARAMETER;
-        uint32_t cnt; memcpy(&cnt, buf, 4);
-        if (12 + (uint64_t)cnt * 8 > size && cnt * 8 + 12 > size) { cnt = (size - 12) / 8; }
-        if (nr == 0x09) for (uint32_t i = 0; i < cnt; i++) { uint32_t h; memcpy(&h, buf + 12 + i * 8, 4); uint32_t addr = 0x10000000u + h * 0x10000u; memcpy(buf + 12 + i * 8 + 4, &addr, 4); }
-        return NV_OK;
-    }
-    }
-    return NV_NOT_IMPLEMENTED;
+    pthread_mutex_unlock(&lock);
+    return r;
+}
+static void channel_release(Channel *ch) {                       /* close of the fd: its syncpoints go back to the pool */
+    for (unsigned i = 0; i < CHANNEL_SYNCPTS; i++) if (ch->syncpt[i]) { syncpt_owned[ch->syncpt[i]] = 0; ch->syncpt[i] = 0; }
 }
 
 /* ---- IPC ----------------------------------------------------------------------------------------------------------------------------- */
@@ -167,14 +235,21 @@ static void nv_open(IpcObject *s, IpcCall *c) {
     const char *path = b ? ipc_buf_ptr(b) : NULL;
     char p[48] = {0};
     if (path) { size_t n = b->size < sizeof p - 1 ? (size_t)b->size : sizeof p - 1; memcpy(p, path, n); }
-    DevKind kind = DEV_NONE;
+    DevKind kind = DEV_NONE; uint32_t class_id = 0;
     if (!strcmp(p, "/dev/nvmap")) kind = DEV_NVMAP;
     else if (!strcmp(p, "/dev/nvhost-ctrl")) kind = DEV_CTRL;
-    else for (unsigned i = 0; i < sizeof known_other / sizeof *known_other; i++) if (!strcmp(p, known_other[i])) kind = DEV_OTHER;
+    else {
+        for (unsigned i = 0; i < sizeof channels / sizeof *channels; i++) if (!strcmp(p, channels[i].path)) { kind = DEV_CHANNEL; class_id = channels[i].class_id; }
+        for (unsigned i = 0; i < sizeof known_other / sizeof *known_other; i++) if (!strcmp(p, known_other[i])) kind = DEV_OTHER;
+    }
     uint32_t fd = 0, err = NV_NOT_SUPPORTED;
     if (kind != DEV_NONE) {
         pthread_mutex_lock(&lock);
-        for (unsigned i = 1; i < MAX_FD; i++) if (!fds[i].open) { fds[i] = (Fd){kind, "", 1}; snprintf(fds[i].path, sizeof fds[i].path, "%s", p); fd = i; err = NV_OK; break; }
+        err = NV_INSUFFICIENT_MEMORY;
+        for (unsigned i = 1; i < MAX_FD; i++) if (!fds[i].open) {
+            fds[i] = (Fd){.kind = kind, .open = 1, .ch = {.class_id = class_id, .nvmap_fd = -1}};
+            snprintf(fds[i].path, sizeof fds[i].path, "%s", p); fd = i; err = NV_OK; break;
+        }
         pthread_mutex_unlock(&lock);
     }
     LOGV("nvdrv", "Open(\"%s\") -> fd %u error %u", p, fd, err);
@@ -194,10 +269,7 @@ static void do_ioctl(IpcCall *c, unsigned in_idx, unsigned out_idx) {
     switch (fds[fd].kind) {
     case DEV_NVMAP: err = type == 1 ? nvmap_ioctl(nr, tmp, size) : NV_NOT_IMPLEMENTED; break;
     case DEV_CTRL: err = type == 0 ? ctrl_ioctl(nr, tmp, size) : NV_NOT_IMPLEMENTED; break;
-    case DEV_OTHER:
-        if (!strcmp(fds[fd].path, "/dev/nvhost-nvdec") || !strcmp(fds[fd].path, "/dev/nvhost-vic") || !strcmp(fds[fd].path, "/dev/nvhost-msenc") || !strcmp(fds[fd].path, "/dev/nvhost-nvjpg"))
-            err = channel_ioctl(fds[fd].path, type, nr, tmp, size);
-        break;
+    case DEV_CHANNEL: err = channel_ioctl(&fds[fd].ch, type, nr, tmp, size); break;
     default: break;
     }
     if (out) ipc_write_buf(c, out, tmp, out->size < size ? out->size : size);
@@ -219,7 +291,7 @@ static void nv_ioctl2(IpcObject *s, IpcCall *c) { (void)s; do_ioctl(c, 0, 0); } 
 static void nv_ioctl3(IpcObject *s, IpcCall *c) { (void)s; do_ioctl(c, 0, 0); }
 static void nv_close(IpcObject *s, IpcCall *c) {
     (void)s; uint32_t fd = IPC_IN(c, uint32_t, 0); uint32_t err = NV_BAD_PARAMETER;
-    pthread_mutex_lock(&lock); if (fd < MAX_FD && fds[fd].open) { fds[fd].open = 0; err = NV_OK; } pthread_mutex_unlock(&lock);
+    pthread_mutex_lock(&lock); if (fd < MAX_FD && fds[fd].open) { if (fds[fd].kind == DEV_CHANNEL) channel_release(&fds[fd].ch); fds[fd].open = 0; err = NV_OK; } pthread_mutex_unlock(&lock);
     IPC_OUT(c, err);
 }
 static void nv_initialize(IpcObject *s, IpcCall *c) { (void)s; initialized = 1; uint32_t err = NV_OK; IPC_OUT(c, err); }

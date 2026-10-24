@@ -18,6 +18,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <libkern/OSCacheControl.h>
+
+int kcode_query(uint64_t addr, uint64_t *base, uint64_t *size, unsigned *state, unsigned *perm);
+void svc_kcode_register(void);
 
 #define GUEST_LIMIT (1ULL << 39)
 #define STACK_OFF 0x10000000ULL
@@ -189,6 +193,41 @@ static uint64_t alias_map(int unmap, uint64_t addr, uint64_t size) {
     return 0;
 }
 
+/* ---- code memory aliases (kcode.c) --------------------------------------------------------------------------------------
+ * The guest picks the alias address in a range QueryMemory reports Free: the unused parts of the reservation around the stack region and the
+ * heap cap. The alias shares the source pages (mach_vm_remap without copy), which needs 16 KiB host pages on both sides. */
+int memory_is_heap(uint64_t addr, uint64_t size) {
+    memory_init();
+    return in_heap_region(addr, size) && size <= heap_size && addr - (uintptr_t)heap <= heap_size - size;
+}
+int memory_range_unused(uint64_t a, uint64_t n) {
+    memory_init();
+    uint64_t lo = (uintptr_t)low_space, gaps[3][2] = {{lo, lo + STACK_OFF}, {lo + STACK_OFF + STACK_SIZE, (uintptr_t)heap}, {(uintptr_t)heap + HEAP_CAP, lo + LOW_SIZE}};
+    for (unsigned i = 0; i < 3; i++) if (a >= gaps[i][0] && n <= gaps[i][1] - gaps[i][0] && a - gaps[i][0] <= gaps[i][1] - gaps[i][0] - n) return 1;
+    return 0;
+}
+uint32_t memory_code_alias(uint64_t dst, uint64_t src, uint64_t size, unsigned perm) {
+    if ((dst | src | size) & (PAGE_16K - 1)) {
+        LOG("memory", "code memory alias %#llx <- %#llx+%#llx: not 16 KiB aligned, refused", (unsigned long long)dst, (unsigned long long)src, (unsigned long long)size);
+        summary_note("code memory alias not host-page aligned");
+        return R_INVALID_ADDRESS;
+    }
+    mach_vm_address_t a = dst; vm_prot_t cur, max;
+    kern_return_t kr = mach_vm_remap(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (mach_vm_address_t)src, FALSE, &cur, &max, VM_INHERIT_NONE);
+    if (kr != KERN_SUCCESS || a != dst) { LOG("memory", "code memory alias %#llx: remap failed (%d)", (unsigned long long)dst, kr); return R_OUT_OF_RESOURCE; }
+    int prot = PROT_READ | (perm & 2 ? PROT_WRITE : 0) | (perm & 4 ? PROT_EXEC : 0);
+    if (mprotect((void *)dst, size, prot)) {
+        LOG("memory", "code memory alias %#llx: permission %u refused by the host", (unsigned long long)dst, perm);
+        mmap((void *)dst, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0);
+        return R_INVALID_MEMORY_PERMISSIONS;
+    }
+    if (perm & 4) sys_icache_invalidate((void *)dst, size);
+    return 0;
+}
+void memory_code_unalias(uint64_t dst, uint64_t size) {
+    if (mmap((void *)dst, size, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0) != (void *)dst) runtime_fail("code memory unmap");
+}
+
 /* ---- svc handlers --------------------------------------------------------------------------------------------- */
 static void svc_set_heap_size(uint64_t *r) {
     memory_init();
@@ -264,6 +303,7 @@ static void svc_query_memory(uint64_t *r) {
         else if (state == 5) { uint64_t old_end = base + size; if (send <= addr && send > base) base = send; if (m->src > addr && m->src < old_end) old_end = m->src; size = old_end - base; }
     }
     pthread_mutex_unlock(&mem_lock);
+    { uint64_t cb, cs; unsigned cst, cp; if (kcode_query(addr, &cb, &cs, &cst, &cp)) { base = cb; size = cs; state = cst; perm = cp; attr = 0; } }
     struct { uint64_t base, size; uint32_t state, attr, perm, ipc, device, pad; } info = {base, size, state, attr, perm, 0, 0, 0};
     void *out = guest_ptr(r[0], sizeof info);
     if (!out) { r[0] = R_INVALID_POINTER; return; }
@@ -280,4 +320,5 @@ void svc_memory_register(void) {
     svc_register(0x06, "QueryMemory", svc_query_memory);
     svc_register(0x2C, "MapPhysicalMemory", svc_map_physical_memory);
     svc_register(0x2D, "UnmapPhysicalMemory", svc_unmap_physical_memory);
+    svc_kcode_register();
 }

@@ -10,6 +10,8 @@ typedef struct {
 } Reverb3dParam;
 _Static_assert(__builtin_offsetof(Reverb3dParam, status) == 72, "reverb3d wire layout");
 typedef struct Reverb3d Reverb3d;
+/* Non-fatal parameter check (what audio_reverb_create / _update would otherwise trap on): 1 = usable. */
+int audio_reverb_valid(const Reverb3dParam *p);
 Reverb3d *audio_reverb_create(const Reverb3dParam *p);
 void audio_reverb_free(Reverb3d *s);
 void audio_reverb_update(Reverb3d *s, const Reverb3dParam *p);

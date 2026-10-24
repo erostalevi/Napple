@@ -24,7 +24,7 @@ typedef struct { int32_t ndest; int32_t *ids; } SplitInfo;
 typedef struct {
     Reverb3d *reverb; Reverb3dParam param; int pending;
     float *delay, detector[6], compression[6], peak[6], minimum[6]; int position[6], delay_max, channels;
-    AudioEffectDsp *dsp; unsigned type; uint8_t wire[160];
+    AudioEffectDsp *dsp; unsigned type; uint8_t wire[160]; uint8_t invalid;   /* invalid: parameters rejected, the effect is bypassed */
     float biquad_z[6][2], numerator[3], denominator[2]; uint8_t biquad_channels;
 } EffectState;
 typedef struct Mixer {
@@ -32,7 +32,7 @@ typedef struct Mixer {
     int *offset;                                   /* first mix buffer of each mix id */
     SplitInfo *split; int nsplit; SplitDest *dest; int ndest;
     nae_source *out;
-    EffectState *effect; int *effect_order; unsigned effect_reported;
+    EffectState *effect; int *effect_order; unsigned effect_reported, effect_in_use;
     uint64_t *sink_address; uint32_t *sink_size, *sink_offset, *sink_old, *sink_written;
     unsigned reported;                             /* one-time reports */
     float voice_scratch[6][MAX_FRAME], filter_scratch[MAX_FRAME], output_scratch[MAX_FRAME * 2];
@@ -126,7 +126,12 @@ void mixer_update_effects(AudioRenderer *r) {
             else if(e->type==4){AudrenReverbParam p,old;memcpy(&p,e->specific,sizeof p);memcpy(&old,s->wire,sizeof old);status=p.status;channels=p.channels;dimensions_changed=p.channels!=old.channels || p.sample_rate!=old.sample_rate;}
             else {AudrenCompressorParam p,old;memcpy(&p,e->specific,sizeof p);memcpy(&old,s->wire,sizeof old);status=p.status;channels=p.channels;dimensions_changed=p.channels!=old.channels;}
             if(status==0 || dimensions_changed){audio_effect_free(s->dsp);s->dsp=NULL;}
-            if(e->enabled && channels){if(!s->dsp)s->dsp=audio_effect_create(e->type,e->specific,revision);else audio_effect_update(s->dsp,e->specific);}
+            s->invalid=0;
+            if(e->enabled && channels){
+                if(!audio_effect_valid(e->type,e->specific)){   /* a bad parameter block must not take the whole renderer down: bypass the effect */
+                    audio_effect_free(s->dsp);s->dsp=NULL;s->invalid=1;report_once(r,6,"effect parameters rejected, effect bypassed (type)",(int)e->type);
+                } else if(!s->dsp)s->dsp=audio_effect_create(e->type,e->specific,revision);else audio_effect_update(s->dsp,e->specific);
+            }
         } else if(s->dsp){audio_effect_free(s->dsp);s->dsp=NULL;}
         if(e->type==6){
             unsigned status;
@@ -242,13 +247,40 @@ static void accumulate(Mixer *m, int buffer, const float *src, float vol, int fr
     float *d = mixbuf(m, buffer); for (int k = 0; k < frames; k++) d[k] += src[k] * vol;
 }
 static int mix_valid(AudioRenderer *r, int32_t id) { return id >= 0 && id <= r->param.submix_count && r->mixes[id].in_use; }
-static int mix_depth(AudioRenderer *r, int id) {
-    int d = 0;
-    for (int guard = 0; id > 0 && guard < 64; guard++, d++) {
-        if (!mix_valid(r, r->mixes[id].dest_mix_id)) return d + 1;
-        id = r->mixes[id].dest_mix_id;
+/* Mixes that submix `src` writes into: its splitter's used destinations when it has a splitter, else its destination mix. */
+static int mix_targets(AudioRenderer *r, int src, int *out, int cap) {
+    Mixer *m = r->mixer; const AudrenMixIn *x = &r->mixes[src]; int n = 0;
+    if (x->dest_splitter_id != SPLITTER_UNUSED && x->dest_splitter_id < (uint32_t)m->nsplit) {
+        const SplitInfo *si = &m->split[x->dest_splitter_id];
+        for (int k = 0; k < si->ndest && n < cap; k++) { const SplitDest *d = &m->dest[si->ids[k]]; if (d->used && mix_valid(r, d->dest)) out[n++] = d->dest; }
+    } else if (mix_valid(r, x->dest_mix_id) && n < cap) out[n++] = x->dest_mix_id;
+    return n;
+}
+/* Order in which the submixes (ids 1..) must run: every mix after all mixes that feed it, through destination mixes and splitters alike.
+   The mix buffers are cleared every frame, so audio sent into a submix that already ran is lost, not delayed.  Kahn's algorithm, lowest id first
+   among the ready ones; a feedback cycle cannot be ordered, its members run last in id order (what they send backwards is dropped). */
+static int mix_order(AudioRenderer *r, int *order, int max) {
+    Mixer *m = r->mixer; int ids[256], n = 0, indeg[256] = {0}, pos[256]; int mc = r->param.submix_count + 1;
+    for (int i = 1; i < mc && n < max; i++) if (r->mixes[i].in_use) { pos[i] = n; ids[n++] = i; }
+    for (int a = 0; a < n; a++) {
+        int t[64], nt = mix_targets(r, ids[a], t, 64);
+        for (int k = 0; k < nt; k++) if (t[k] > 0 && t[k] != ids[a] && r->mixes[t[k]].in_use && t[k] < mc) {
+            int dup = 0; for (int j = 0; j < k; j++) dup |= t[j] == t[k];   /* several splitter destinations to one mix count once */
+            if (!dup) indeg[pos[t[k]]]++;
+        }
     }
-    return d;
+    int done[256] = {0}, out = 0;
+    for (int round = 0; round < n; round++) {
+        int pick = -1; for (int a = 0; a < n; a++) if (!done[a] && indeg[a] == 0) { pick = a; break; }
+        if (pick < 0) { report_once(r, 7, "submix routing contains a cycle, running its members in id order", n); for (int a = 0; a < n; a++) if (!done[a]) { pick = a; break; } }
+        done[pick] = 1; order[out++] = ids[pick];
+        int t[64], nt = mix_targets(r, ids[pick], t, 64);
+        for (int k = 0; k < nt; k++) if (t[k] > 0 && t[k] != ids[pick] && t[k] < mc && r->mixes[t[k]].in_use) {
+            int dup = 0; for (int j = 0; j < k; j++) dup |= t[j] == t[k];
+            if (!dup && indeg[pos[t[k]]] > 0) indeg[pos[t[k]]]--;
+        }
+    }
+    (void)m; return out;
 }
 
 /* Guest custom effects exchange int32 samples in two rings. Each ring has CPU and DSP
@@ -362,7 +394,9 @@ static void mix_simple_effect(AudioRenderer *r,int mix,int id) {
             float x=in[c][k],y=s->numerator[0]*x+s->biquad_z[c][0];
             s->biquad_z[c][0]=s->numerator[1]*x+s->denominator[0]*y+s->biquad_z[c][1];s->biquad_z[c][1]=s->numerator[2]*x+s->denominator[1]*y;out[c][k]=y;
         }
-    } else {if(!s->dsp)napple_audio_fatal("audio DSP effect state missing");audio_effect_process(s->dsp,in,out,m->frame);}
+    } else if(!s->dsp){   /* parameters were rejected by mixer_update_effects: pass the signal through */
+        for(unsigned c=0;c<channels;c++)if(in[c]!=out[c])memmove(out[c],in[c],(size_t)m->frame*sizeof(float));
+    } else audio_effect_process(s->dsp,in,out,m->frame);
 }
 static void mix_effects(AudioRenderer *r, int mix) {
     Mixer *m=r->mixer; int count=0;
@@ -371,6 +405,7 @@ static void mix_effects(AudioRenderer *r, int mix) {
     }
     for(int n=0;n<count;n++) {
         int id=m->effect_order[n]; const AudrenEffectIn *e=&r->effects[id]; EffectState *s=&m->effect[id];
+        if(r->stats_every && e->enabled && e->type<32 && !(m->effect_in_use&(1u<<e->type))) { m->effect_in_use|=1u<<e->type; napple_audio_log(&r->host,"effect type %u in use (mix %d)",e->type,mix); }
         if(e->type==1 || e->type==3 || e->type==4 || e->type==6 || e->type==9){mix_simple_effect(r,mix,id);continue;}
         if(e->type==2) { mix_aux(r,mix,e); continue; }
         if(e->type==8) { mix_capture(r,mix,e);continue; }
@@ -380,7 +415,7 @@ static void mix_effects(AudioRenderer *r, int mix) {
             continue;
         }
         Reverb3dParam *p=&s->param; float *input[6]={0},*output[6]={0};
-        if(p->channels!=1 && p->channels!=2 && p->channels!=4 && p->channels!=6) { if(e->enabled)napple_audio_fatal("audio reverb channel count"); continue; }
+        if(p->channels!=1 && p->channels!=2 && p->channels!=4 && p->channels!=6) { if(e->enabled)report_once(r,6,"effect parameters rejected, effect bypassed (type)",5); continue; }
         for(int c=0;c<p->channels;c++) {
             int idx=c; /* REV11+ channel resources use L,R,C,LFE,BL,BR; the reference DSP uses legacy order. */
             if(p->channels==6 && (r->revision>>24)>='0'+11) { static const int map[6]={0,1,4,5,2,3}; idx=map[c]; }
@@ -388,6 +423,11 @@ static void mix_effects(AudioRenderer *r, int mix) {
             input[c]=mixbuf(m,m->offset[mix]+p->input[idx]); output[c]=mixbuf(m,m->offset[mix]+p->output[idx]);
         }
         if(!e->enabled) { for(int c=0;c<p->channels;c++)if(input[c]!=output[c])memmove(output[c],input[c],m->frame*sizeof(float)); continue; }
+        if(!audio_reverb_valid(p)) {   /* bypass instead of trapping: a rejected I3DL2 block used to mute the renderer for good */
+            report_once(r,6,"effect parameters rejected, effect bypassed (type)",5);
+            for(int c=0;c<p->channels;c++)if(input[c]!=output[c])memmove(output[c],input[c],m->frame*sizeof(float));
+            continue;
+        }
         if(!s->reverb)s->reverb=audio_reverb_create(p); else if(s->pending)audio_reverb_update(s->reverb,p);
         s->pending=0; audio_reverb_process(s->reverb,input,output,m->frame);
     }
@@ -443,6 +483,7 @@ void mixer_render(AudioRenderer *r) {
     for (int i = 0; i < r->param.voice_count; i++) {
         ServerVoice *v = &r->voices[i];
         if (!v->in.in_use || v->state != SV_STARTED || !v->in.sample_rate || !v->valid[v->index]) continue;
+        if (v->dropped) continue;   /* voice drop: not mixed this frame, but its clock still runs (audren_advance_voice) so wave buffers are given back on time */
         int cc = (int)v->in.channel_count; if (cc < 1 || cc > 6) { report_once(r, 2, "voice channel count unsupported", cc); continue; }
         voice_render(r, v, vs, frames);
         for (int f = 0; f < 2; f++) if (v->in.biquads[f].enable) {
@@ -480,9 +521,7 @@ void mixer_render(AudioRenderer *r) {
         }
     }
     /* submixes: deepest first, so every mix is complete before it is folded into its destination */
-    int order[256], n = 0, depth[256];
-    for (int i = 1; i < mc && n < 256; i++) if (r->mixes[i].in_use) { depth[n] = mix_depth(r, i); order[n++] = i; }
-    for (int a = 0; a < n; a++) for (int b = a + 1; b < n; b++) if (depth[b] > depth[a]) { int t = order[a]; order[a] = order[b]; order[b] = t; t = depth[a]; depth[a] = depth[b]; depth[b] = t; }
+    int order[256], n = mix_order(r, order, 256);
     for (int a = 0; a < n; a++) {
         mix_effects(r, order[a]);
         const AudrenMixIn *x = &r->mixes[order[a]]; int src = m->offset[order[a]];

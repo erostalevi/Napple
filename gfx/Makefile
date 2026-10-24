@@ -61,6 +61,9 @@ test: tests
 	@fail=0; for t in $(T_BIN); do echo "== $$t"; MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=0 $$t || { echo "FAILED: $$t"; fail=1; }; done; \
 	  echo "== t_triangle with a disk cache (binary archive)"; rm -rf build/t_triangle-cache; \
 	  for p in 1 2; do T_CACHE_PASS=$$p MTL_DEBUG_LAYER=1 MTL_SHADER_VALIDATION=0 $(OUT)/tests/t_triangle || { echo "FAILED: t_triangle cache pass $$p"; fail=1; }; done; \
+	  echo "== t_pipe_stress: persisted pipelines, prewarm racing the draws, GCD pool flooded (pass 2 compiles without the archive)"; \
+	  T_STRESS_PASS=1 MTL_DEBUG_LAYER=1 $(OUT)/tests/t_pipe_stress || { echo "FAILED: t_pipe_stress pass 1"; fail=1; }; \
+	  for th in 1 4; do T_STRESS_PASS=2 T_STRESS_THREADS=$$th NAPPLE_GFX_NO_ARCHIVE=1 MTL_DEBUG_LAYER=1 $(OUT)/tests/t_pipe_stress || { echo "FAILED: t_pipe_stress pass 2 ($$th threads)"; fail=1; }; done; \
 	  if [ $$fail = 0 ]; then echo "ALL TESTS PASSED"; else exit 1; fi
 
 clean:

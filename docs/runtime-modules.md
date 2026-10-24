@@ -65,3 +65,10 @@ source title id; BFTTF = `u32 0x18029A7F^K, u32 BE size^K`, TTF XOR K with K=0x0
 writes the same files straight into `<dir>` (what `runtime/src/services/pl.c` reads from `<save-root>/system/fonts`). Because that service reads
 the save root, the launcher copies/clones the bundle's `.ttf` files into `<save-root>/system/fonts` when missing or of a different size; a runtime
 fallback to `<data-dir>/../system/fonts` would make this unnecessary. Without `--firmware` the build succeeds and records a `compat:` note in `napple-app.json`.
+
+**Run-time modules (NROs).** `napple build` also rewrites every `*.nro` file of each version's RomFS into `<version dir>/nro/<module id
+hex, 64 chars>.{patched.bin,tables}`. The tables are NTB1 with the module id as build id, and the dynsym extent comes from the NRO header
+(0x78/0x7C) for GNU-hash modules. These are listed in `manifest.json` under `nro` as `[{path, module_id, nro_sha256, file_size, gates,
+relocs}]`. `ldr:ro` (`runtime/src/ro.c`) maps the image whose module id matches the NRO the game passes. A RomFS `.nro` that is not a
+valid NRO (or cannot be rewritten) is listed in the app's notes instead. The rewriter treats an NRO header (0x10..0x80 of text, "NRO0" at
+0x10) as data.

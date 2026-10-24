@@ -47,6 +47,11 @@ input thread    napple_input thread writes HID shared memory at 120 Hz
 | IAudioOut Start/Stop/GetState | `napple_audout_start / stop / state` |
 | IAudioOut AppendAudioOutBuffer(tag, AudioOutBuffer) | `napple_audout_append(o, tag, buf_ptr, data_size, data_offset)`; `host.buffer_event` signals the buffer event |
 | IAudioOut GetReleasedAudioOutBuffers / ContainsAudioOutBuffer | `napple_audout_get_released / contains` |
+| `audin:u` ListAudioIns(Auto, AutoFiltered) / OpenAudioIn(Auto)(rate, channels) | `napple_audin_device_name` ("BuiltInHeadset", always listed); `napple_audin_open(rate, ch, &host, &i, &granted_rate, &granted_ch)`, 0 = 48000 Hz / 2 ch, 1-2 channels, 8-96 kHz; reply (granted rate, channels, format=PCM16 (2), state=stopped (1)) |
+| IAudioIn Start/Stop/GetState, Set/GetAudioInDeviceGain (float, 0..2) | `napple_audin_start / stop / state / set_gain / get_gain` |
+| IAudioIn AppendAudioInBuffer(Auto)(tag, AudioInBuffer) | `napple_audin_append(i, tag, buf_ptr, data_size or capacity when data_size is 0, data_offset)`; at most 32 buffers queued or released-but-uncollected; `host.buffer_event` fires when one is full |
+| IAudioIn GetReleasedAudioInBuffer(sAuto) / ContainsAudioInBuffer / GetAudioInBufferCount / FlushAudioInBuffers | `napple_audin_get_released / contains / buffer_count / flush`; unused tags zero-filled as for audout. Not implemented: OpenAudioInProtocolSpecified (5), the UAC appends (7, 10) |
+| capture source | `napple_audin_set_source(read, user)`, mono float at the stream rate; none installed = silence. The runtime installs none (no Core Audio input, no `NSMicrophoneUsageDescription`) |
 | `hwopus` GetWorkBufferSize / OpenHardwareOpusDecoder | `napple_hwopus_work_buffer_size`, `napple_hwopus_open(rate, ch, &d)` (multistream: `..._ms`) |
 | IHardwareOpusDecoder DecodeInterleaved* | `napple_hwopus_decode(d, packet, size, pcm, pcm_bytes, &consumed, &samples)` |
 | nn::codec HardwareOpusDecoder (guest SDK symbols, when a game links them) | same functions; no IPC needed |
@@ -59,7 +64,9 @@ Error mapping: `NAPPLE_AUDIO_E_PROTOCOL` for a malformed update is a guest bug: 
 `ResultInvalidUpdateInfo` (module 153, description 41) or abort in strict mode. `E_SIZE` -> `ResultInsufficientBuffer`.
 
 Startup: `napple_audio_init(&(napple_audio_config){.use_device = 1})` once before the first renderer. Tests use
-`use_device = 0`. Environment: `NAPPLE_AUDIO_OFF=1` forces the null sink; `NAPPLE_AUDIO_PREFILL_MS` overrides prefill.
+`use_device = 0`. Environment: `NAPPLE_AUDIO_OFF=1` forces the null sink; `NAPPLE_AUDIO_PREFILL_MS` overrides prefill; `NAPPLE_AUDIO_STATS=1` logs each renderer's render stats
+(`napple_audren_get_stats`: render time, over-budget and late frames, dropped voice-frames) every 15 s and at close, and each effect type once when
+it is first used.
 
 ### 1.2 Output path and latency
 

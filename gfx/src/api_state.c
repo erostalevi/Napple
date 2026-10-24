@@ -16,19 +16,19 @@ NVN(nvnBlendStateSetBlendFunc, void, NVNblendState *s, NVNblendFunc sr, NVNblend
     blend_st *o = ST(blend_st, s); o->src_rgb = sr; o->dst_rgb = dr; o->src_a = sa; o->dst_a = da;
 }
 NVN(nvnBlendStateSetBlendEquation, void, NVNblendState *s, NVNblendEquation er, NVNblendEquation ea) { ST(blend_st, s)->eq_rgb = er; ST(blend_st, s)->eq_a = ea; }
-NVN_NOPROTO(nvnBlendStateSetAdvancedMode, void, NVNblendState *s, int m) { (void)s; (void)m; }
-NVN_NOPROTO(nvnBlendStateSetAdvancedOverlap, void, NVNblendState *s, int m) { (void)s; (void)m; }
-NVN_NOPROTO(nvnBlendStateSetAdvancedPremultipliedSrc, void, NVNblendState *s, uint32_t e) { (void)s; (void)e; }
-NVN_NOPROTO(nvnBlendStateSetAdvancedNormalizedDst, void, NVNblendState *s, uint32_t e) { (void)s; (void)e; }
+NVN_NOPROTO(nvnBlendStateSetAdvancedMode, void, NVNblendState *s, int m) { ST(blend_st, s)->adv_mode = (uint64_t)m & 0x3f; }
+NVN_NOPROTO(nvnBlendStateSetAdvancedOverlap, void, NVNblendState *s, int m) { ST(blend_st, s)->adv_overlap = (uint64_t)m & 3; }
+NVN_NOPROTO(nvnBlendStateSetAdvancedPremultipliedSrc, void, NVNblendState *s, uint32_t e) { ST(blend_st, s)->adv_nonpremul = !B(e); }
+NVN_NOPROTO(nvnBlendStateSetAdvancedNormalizedDst, void, NVNblendState *s, uint32_t e) { ST(blend_st, s)->adv_nonnorm = !B(e); }
 NVN_NOPROTO(nvnBlendStateGetBlendTarget, int, const NVNblendState *s) { return (int)CST(blend_st, s)->target; }
 NVN_NOPROTO(nvnBlendStateGetBlendFunc, void, const NVNblendState *s, int *sr, int *dr, int *sa, int *da) {
     const blend_st *o = CST(blend_st, s); *sr = (int)o->src_rgb; *dr = (int)o->dst_rgb; *sa = (int)o->src_a; *da = (int)o->dst_a;
 }
 NVN_NOPROTO(nvnBlendStateGetBlendEquation, void, const NVNblendState *s, int *er, int *ea) { *er = (int)CST(blend_st, s)->eq_rgb; *ea = (int)CST(blend_st, s)->eq_a; }
-NVN_NOPROTO(nvnBlendStateGetAdvancedMode, int, const NVNblendState *s) { (void)s; return 0; }
-NVN_NOPROTO(nvnBlendStateGetAdvancedOverlap, int, const NVNblendState *s) { (void)s; return 0; }
-NVN_NOPROTO(nvnBlendStateGetAdvancedPremultipliedSrc, NVNboolean, const NVNblendState *s) { (void)s; return 0; }
-NVN_NOPROTO(nvnBlendStateGetAdvancedNormalizedDst, NVNboolean, const NVNblendState *s) { (void)s; return 0; }
+NVN_NOPROTO(nvnBlendStateGetAdvancedMode, int, const NVNblendState *s) { return (int)CST(blend_st, s)->adv_mode; }
+NVN_NOPROTO(nvnBlendStateGetAdvancedOverlap, int, const NVNblendState *s) { return (int)CST(blend_st, s)->adv_overlap; }
+NVN_NOPROTO(nvnBlendStateGetAdvancedPremultipliedSrc, NVNboolean, const NVNblendState *s) { return !CST(blend_st, s)->adv_nonpremul; }
+NVN_NOPROTO(nvnBlendStateGetAdvancedNormalizedDst, NVNboolean, const NVNblendState *s) { return !CST(blend_st, s)->adv_nonnorm; }
 
 /* ---- color ---- */
 NVN(nvnColorStateSetDefaults, void, NVNcolorState *s) { *ST(color_st, s) = (color_st){ 0, NVN_LOGIC_OP_COPY, NVN_ALPHA_FUNC_ALWAYS }; }
@@ -68,7 +68,18 @@ NVN(nvnMultisampleStateSetCoverageToColorEnable, void, NVNmultisampleState *s, u
 NVN(nvnMultisampleStateSetCoverageToColorOutput, void, NVNmultisampleState *s, int o) { ST(ms_st, s)->cov2color_out = (uint8_t)o; }
 NVN(nvnMultisampleStateSetSampleLocationsEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->sl_en = B(e) != 0; }
 NVN(nvnMultisampleStateSetSampleLocationsGridEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->sl_grid = B(e) != 0; }
-NVN(nvnMultisampleStateSetSampleLocations, void, NVNmultisampleState *s, int start, int n, const float *v) { (void)s; (void)start; (void)n; (void)v; }
+static uint8_t sample_coord(float f) { int q = (int)(f * 16.0f); return (uint8_t)(q < 0 ? 0 : q > 15 ? 15 : q); }
+/* v holds n (x, y) pairs in [0, 1) for locations start.. (in grid mode, location pixel * samples + sample). Metal has one set of positions for every
+ * pixel, so only the first 8 locations (the first pixel of a grid) are kept. */
+NVN(nvnMultisampleStateSetSampleLocations, void, NVNmultisampleState *s, int start, int n, const float *v) {
+    ms_st *o = ST(ms_st, s);
+    for (int i = 0; i < n && v; i++) {
+        int idx = start + i;
+        if (idx < 0 || idx >= 8) continue;
+        o->sl_pos[idx] = (uint8_t)(sample_coord(v[2 * i]) | sample_coord(v[2 * i + 1]) << 4);
+        if (idx + 1 > o->sl_n) o->sl_n = (uint8_t)(idx + 1);
+    }
+}
 NVN(nvnMultisampleStateGetMultisampleEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->enable; }
 NVN(nvnMultisampleStateGetSamples, int, const NVNmultisampleState *s) { return CST(ms_st, s)->samples; }
 NVN(nvnMultisampleStateGetAlphaToCoverageEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->a2c; }
@@ -79,7 +90,13 @@ NVN(nvnMultisampleStateGetCoverageToColorEnable, NVNboolean, const NVNmultisampl
 NVN(nvnMultisampleStateGetCoverageToColorOutput, int, const NVNmultisampleState *s) { return CST(ms_st, s)->cov2color_out; }
 NVN(nvnMultisampleStateGetSampleLocationsEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->sl_en; }
 NVN(nvnMultisampleStateGetSampleLocationsGridEnable, NVNboolean, const NVNmultisampleState *s) { return CST(ms_st, s)->sl_grid; }
-NVN_NOPROTO(nvnMultisampleStateGetSampleLocationsGrid, void, const NVNmultisampleState *s, int *w, int *h) { (void)s; *w = 1; *h = 1; }
+/* The grid the programmable locations repeat over: the 16-entry location table divided by the sample count (4x4 pixels at 1 sample ... 1x1 at 16). */
+NVN_NOPROTO(nvnMultisampleStateGetSampleLocationsGrid, void, const NVNmultisampleState *s, int *w, int *h) {
+    int n = CST(ms_st, s)->samples > 1 ? CST(ms_st, s)->samples : 1, cells = n >= 16 ? 1 : 16 / n, gw = 1, gh = 1;
+    while (gw * gh < cells) { if (gw <= gh) gw *= 2; else gh *= 2; }
+    if (w) *w = gw;
+    if (h) *h = gh;
+}
 
 /* ---- polygon ---- */
 NVN(nvnPolygonStateSetDefaults, void, NVNpolygonState *s) { *ST(poly_st, s) = (poly_st){ NVN_FACE_NONE, NVN_FRONT_FACE_CCW, NVN_POLYGON_MODE_FILL, 0 }; }

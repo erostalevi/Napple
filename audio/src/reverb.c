@@ -23,19 +23,25 @@ static void delay_set(Delay *d, unsigned n) { if (n > d->cap) napple_audio_fatal
 static void delay_init(Delay *d, unsigned khz, float ms) { d->cap = samples(khz, ms); d->data = calloc(d->cap + 1, sizeof(float)); if (!d->data) napple_audio_fatal("reverb delay allocation"); delay_set(d, d->cap); }
 static float delay_update(Delay *d, float v) {
     d->data[d->write++] = v; float out = d->data[d->read++];
-    if (d->read >= d->cap) d->read = 0;
-    if (d->write >= d->cap) d->write = 0;
+    /* The ring has cap + 1 slots (a delay of cap needs them: write-then-read with write == read would be a delay of 0), so wrap
+       at cap + 1.  Wrapping at cap stranded the first sample in slot cap, where delay_tap (modulo cap + 1) replayed it every cap
+       samples, and made the full-length allpass lines one sample short. */
+    if (d->read > d->cap) d->read = 0;
+    if (d->write > d->cap) d->write = 0;
     return out;
 }
 static float delay_tap(const Delay *d, unsigned at) { int i = (int)d->write - (int)at - 1; if (i < 0) i += (int)d->cap + 1; return d->data[i]; }
 static float allpass(Delay *d, float x, float gain) { float v = x - gain * d->data[d->read]; return delay_update(d, v) + gain * v; }
 static float gain10(float x) { return x >= 0 ? 1 : x <= -5.3f ? 0 : powf(10, x); }
 static float radians(float x) { return x * 3.14159265358979323846f / 180; }
-static void validate(const Reverb3dParam *p) {
-    if ((p->channels != 1 && p->channels != 2 && p->channels != 4 && p->channels != 6) || p->sample_rate < 1000 || p->sample_rate > 192000 ||
-        !(p->decay_time > 0) || !(p->hf_decay_ratio > 0) || !(p->density >= 0 && p->density <= 100) ||
-        !(p->reflection_delay >= 0 && p->reverb_delay >= 0 && p->reflection_delay + p->reverb_delay <= .4f)) napple_audio_fatal("invalid reverb3d parameters");
+int audio_reverb_valid(const Reverb3dParam *p) {
+    return (p->channels == 1 || p->channels == 2 || p->channels == 4 || p->channels == 6) && p->sample_rate >= 1000 && p->sample_rate <= 192000 &&
+        p->decay_time > 0 && p->hf_decay_ratio > 0 && p->density >= 0 && p->density <= 100 &&
+        p->reflection_delay >= 0 && p->reverb_delay >= 0 && p->reflection_delay + p->reverb_delay <= .4f &&
+        isfinite(p->decay_time) && isfinite(p->hf_decay_ratio) && isfinite(p->room_hf) && isfinite(p->hf_reference) && isfinite(p->room_gain) &&
+        isfinite(p->reflections_gain) && isfinite(p->reverb_gain) && isfinite(p->diffusion) && isfinite(p->dry_gain);
 }
+static void validate(const Reverb3dParam *p) { if (!audio_reverb_valid(p)) napple_audio_fatal("invalid reverb3d parameters"); }
 Reverb3d *audio_reverb_create(const Reverb3dParam *p) {
     validate(p); Reverb3d *s = calloc(1, sizeof *s); if (!s) napple_audio_fatal("reverb allocation"); unsigned khz = p->sample_rate / 1000;
     for (int i=0;i<4;i++) { delay_init(&s->fdn[i],khz,fdn_max[i]); delay_init(&s->allpass1[i],khz,ap1_max[i]); delay_init(&s->allpass2[i],khz,ap2_max[i]); }
@@ -74,7 +80,7 @@ void audio_reverb_process(Reverb3d *s, float *const input[6], float *const outpu
         const float feedback[4]={fb[2]+fb[1],-fb[0]-fb[3],fb[0]-fb[3],fb[1]-fb[2]};
         for (int i=0;i<4;i++) { v[i]=allpass(&s->allpass2[i],allpass(&s->allpass1[i],tap*s->late_gain+feedback[i],s->diffusion),-.9f*s->diffusion); delay_update(&s->fdn[i],v[i]); }
         for (int c=0;c<channels;c++) {
-            if(channels==6 && c==4) output[c][k]+=early[c]*s->early_gain+delay_update(&s->center,(v[2]-v[3])*.5f)+dry[c]*s->p.dry_gain;
+            if(channels==6 && c==4) output[c][k]=early[c]*s->early_gain+delay_update(&s->center,(v[2]-v[3])*.5f)+dry[c]*s->p.dry_gain;
             else output[c][k]=early[c]*s->early_gain+v[c==5?3:c]+dry[c]*s->p.dry_gain;
         }
         if(channels==1)output[0][k]+=v[1];

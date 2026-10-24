@@ -110,6 +110,12 @@ fn data_words(img: &ModuleImage) -> HashSet<u32> {
             set.insert(o);
         }
     }
+    // An NRO keeps its header inside the text segment (0x10..0x80, after the entry branch and the MOD0 offset): data, never code.
+    if text >= 0x80 && img.bytes.get(0x10..0x14) == Some(&b"NRO0"[..]) {
+        for o in (0x10..0x80).step_by(4) {
+            set.insert(o);
+        }
+    }
     let chunks: Vec<HashSet<u32>> = (0..text / 4)
         .collect::<Vec<u32>>()
         .par_chunks(1 << 16)
@@ -238,5 +244,18 @@ pub(crate) mod tests {
         let r = scan(&img);
         assert!(r.sites.is_empty(), "{:?}", r.sites);
         assert_eq!(r.data_matches.len(), 2);
+    }
+
+    #[test]
+    fn nro_header_is_data() {
+        // word 0x10 = "NRO0"; a header word that decodes as `mov x18, x0` must not become a site, the same word after the header must
+        let mut w = vec![0xD503_201Fu32; 0x30];
+        w[4] = u32::from_le_bytes(*b"NRO0");
+        w[8] = 0xAA00_03F2;
+        w[0x24] = 0xAA00_03F2;
+        let img = module(&w);
+        let r = scan(&img);
+        assert_eq!(r.sites.keys().copied().collect::<Vec<_>>(), vec![0x90]);
+        assert_eq!(r.data_matches.len(), 1);
     }
 }

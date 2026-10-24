@@ -81,7 +81,7 @@ typedef struct texsnap {
     uint8_t valid;
     uint8_t pad[2];
 } texsnap;
-typedef struct { uint32_t magic, pad; texsnap s; } tex_t;                                    FITS(tex_t, NVNtexture);
+typedef struct { uint32_t magic, pad; texsnap s; const pool_t *pool; int64_t off; } tex_t;     FITS(tex_t, NVNtexture);   /* pool, off: as given to Initialize (GetMemoryPool / Offset) */
 
 /* NVNtextureView is 16 bytes. */
 typedef struct {
@@ -126,8 +126,11 @@ typedef struct {
  * --------------------------------------------------------------------------------------------------------------- */
 typedef struct { uint32_t blend_en : 8, logic_op : 4, alpha_func : 4; } color_st;               FITS(color_st, NVNcolorState);
 typedef struct { uint32_t mask; } chmask_st;                                                     FITS(chmask_st, NVNchannelMaskState);
-typedef struct { uint64_t target : 3, src_rgb : 7, dst_rgb : 7, src_a : 7, dst_a : 7, eq_rgb : 3, eq_a : 3; } blend_st;   FITS(blend_st, NVNblendState);
-typedef struct { uint8_t enable, samples, a2c, a2c_dither, raster_samples, cov_mod, cov2color_en, cov2color_out, sl_en, sl_grid; } ms_st;   FITS(ms_st, NVNmultisampleState);
+/* adv_*: NV_blend_equation_advanced state (mode 0 = off); premultiplied source and normalized destination are the defaults, stored inverted so zero is the default */
+typedef struct { uint64_t target : 3, src_rgb : 7, dst_rgb : 7, src_a : 7, dst_a : 7, eq_rgb : 3, eq_a : 3, adv_mode : 6, adv_overlap : 2, adv_nonpremul : 1, adv_nonnorm : 1; } blend_st;
+FITS(blend_st, NVNblendState);
+/* sl_pos: programmable sample locations 0..7 (x in the low nibble, y in the high one, 1/16 pixel units, as the hardware and Metal store them); sl_n: how many were set */
+typedef struct { uint8_t enable, samples, a2c, a2c_dither, raster_samples, cov_mod, cov2color_en, cov2color_out, sl_en, sl_grid, sl_n, sl_pos[8]; } ms_st;   FITS(ms_st, NVNmultisampleState);
 typedef struct { uint32_t cull : 2, front : 1, mode : 2, offset_en : 3; } poly_st;               FITS(poly_st, NVNpolygonState);
 typedef struct {
     uint64_t dt : 1, dw : 1, df : 4, st : 1, sf_f : 4, sf_b : 4, fail_f : 4, zfail_f : 4, zpass_f : 4, fail_b : 4, zfail_b : 4, zpass_b : 4;
@@ -164,7 +167,7 @@ enum {
     OP_DRAW_ARRAYS, OP_DRAW_ELEMENTS, OP_DRAW_ARRAYS_IND, OP_DRAW_ELEMENTS_IND, OP_DISPATCH, OP_DISPATCH_IND,
     OP_COPY_B2B, OP_COPY_B2T, OP_COPY_T2B, OP_COPY_T2T, OP_DOWNSAMPLE, OP_UPDATE_UBO, OP_COPY_STRIDES,
     OP_FENCE_SYNC, OP_WAIT_SYNC, OP_SIGNAL_EVENT, OP_WAIT_EVENT, OP_REPORT_COUNTER, OP_RESET_COUNTER, OP_BARRIER,
-    OP_DISCARD_COLOR, OP_DISCARD_DS, OP_DRAW_TEXTURE, OP_SCREEN_MARK, OP_COUNT
+    OP_DISCARD_COLOR, OP_DISCARD_DS, OP_DRAW_TEXTURE, OP_SCREEN_MARK, OP_DRAW_IND_COUNT, OP_COUNT
 };
 
 /* Payloads (follow op_hdr). All pointer-sized fields are raw guest/GPU addresses or handles; nothing points into guest-owned objects. */
@@ -179,6 +182,7 @@ typedef struct { float depth; uint32_t depth_mask; uint32_t stencil; uint32_t st
 typedef struct { uint32_t mode, first, count, base_instance, instances, pad; } p_draw_arrays;
 typedef struct { uint32_t mode, idx_type, count, base_vertex, base_instance, instances; uint64_t idx_addr; } p_draw_elems;
 typedef struct { uint32_t mode, idx_type; uint64_t indirect, idx_addr; } p_draw_ind;
+typedef struct { uint32_t mode, idx_type, indexed, max_draws; uint64_t indirect, idx_addr, count_addr, stride; } p_draw_ind_count;   /* MultiDraw*IndirectCount */
 typedef struct { uint32_t x, y, z, pad; } p_dispatch;
 typedef struct { uint64_t src, dst, size; } p_copy_b2b;
 typedef struct { uint32_t flags, pad; int32_t region[6]; uint64_t buf; texref tex; uint64_t row_stride, img_stride; } p_copy_xfer;   /* B2T / T2B */
@@ -187,7 +191,8 @@ typedef struct { uint64_t addr; uint32_t offset, size; } p_update_ubo;          
 typedef struct { uint64_t sync; uint32_t condition, flags; } p_sync;
 typedef struct { uint64_t addr; uint32_t mode, value, pad; } p_event;                            /* mode 0 write, 1 add; wait: mode = NVNeventWaitMode */
 typedef struct { uint32_t type, pad; uint64_t addr; } p_counter;
-typedef struct { uint32_t count, pad; } p_call;                                                  /* followed by count recording pointers */
+typedef struct { uint32_t count, pad; } p_call;
+typedef struct { uint64_t handle; float dst[4], src[4]; } p_draw_tex;                            /* NVNtextureHandle, NVNdrawTextureRegion x2 */                                                  /* followed by count recording pointers */
 
 /* A finished command list. Immutable once published; reference counted (owner command buffer, submissions, callers). */
 typedef struct cmdrec {

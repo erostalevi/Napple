@@ -1,0 +1,20 @@
+# Linux build of the device-free audio test suite (CI / cloud sessions).  make -f Makefile.linux [test|clean]
+# The sources are compiled unchanged; tests/linux/include supplies inert stand-ins for the Apple-only headers so that
+# engine.c builds with no device (every Core Audio call fails -> null sink).  Nothing here exercises Core Audio:
+# the device path is verified on a Mac with `make test` / `make demo`.
+CC      = clang
+CFLAGS  ?= -std=gnu11 -O2 -g -Wall -Wextra -Werror -Wno-deprecated-declarations -D_GNU_SOURCE
+INC     := -I/usr/include/opus -Iinclude -Isrc -Itests/linux/include
+SRC     := $(wildcard src/*.c)
+TESTS   := audren effects reverb3d review audout hwopus engine threads speed audin
+LIBS    := -lopus -lm -lpthread
+build/linux/test_%: tests/test_%.c $(SRC) $(wildcard src/*.h) include/napple_audio.h tests/wire.h
+	@mkdir -p build/linux
+	$(CC) $(CFLAGS) $(INC) $(SRC) $< $(LIBS) -o $@
+test: $(patsubst %,build/linux/test_%,$(TESTS))
+	@for t in $(TESTS); do echo "== $$t"; ./build/linux/test_$$t || exit 1; done
+asan:
+	@mkdir -p build/linux && for t in $(TESTS); do $(CC) -std=gnu11 -O1 -g -fsanitize=address,undefined -D_GNU_SOURCE $(INC) $(SRC) tests/test_$$t.c $(LIBS) -o build/linux/asan_$$t && echo "== asan $$t" && ./build/linux/asan_$$t || exit 1; done
+clean:
+	rm -rf build/linux
+.PHONY: test asan clean

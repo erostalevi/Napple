@@ -12,7 +12,7 @@
 
 #import "mtl_priv.h"
 
-#define TRANSLATOR_VERSION 4u          /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 6u          /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader @end
 @implementation GfxPipe @end
@@ -300,7 +300,7 @@ GfxShader *mtl_shader_for(uint64_t hash, const ShaderKey *key) { return shader_v
 /* ---------------------------------------------------------------------------------------------------------------
  * Render pipelines
  * --------------------------------------------------------------------------------------------------------------- */
-static MTLBlendFactor blend_factor(unsigned f) {
+MTLBlendFactor mtl_blend_factor(unsigned f) {
     switch (f) {
     case 1: return MTLBlendFactorZero; case 2: return MTLBlendFactorOne;
     case 3: return MTLBlendFactorSourceColor; case 4: return MTLBlendFactorOneMinusSourceColor;
@@ -315,8 +315,58 @@ static MTLBlendFactor blend_factor(unsigned f) {
     default: return MTLBlendFactorOne;
     }
 }
-static MTLBlendOperation blend_op(unsigned e) {
+MTLBlendOperation mtl_blend_op(unsigned e) {
     switch (e) { case 2: return MTLBlendOperationSubtract; case 3: return MTLBlendOperationReverseSubtract; case 4: return MTLBlendOperationMin; case 5: return MTLBlendOperationMax; default: return MTLBlendOperationAdd; }
+}
+
+/* Advanced blend modes (NV_blend_equation_advanced) as fixed-function blending. With a premultiplied source and the uncorrelated overlap (the
+ * defaults) the Porter-Duff modes, PLUS, SCREEN and MINUS are exact: result = Cs * Fs + Cd * Fd for constant factors. The others (MULTIPLY,
+ * OVERLAY, DARKEN, the HSL modes, ...) need the destination colour inside the fragment shader (framebuffer fetch, translator work) and fall
+ * back to SRC_OVER, as do the combinations a constant factor cannot express (see below). */
+blend_st mtl_blend_resolve(blend_st b) {
+    if (!b.adv_mode) return b;
+    enum { Z = 1, O = 2, SC = 3, OMSC = 4, SA = 5, OMSA = 6, DA = 7, OMDA = 8 };
+    static const struct { uint8_t mode, s, d, sa, da, eq, eqa; } map[] = {
+        { 0x05, Z, Z, Z, Z, 1, 1 },          /* ZERO */
+        { 0x06, O, Z, O, Z, 1, 1 },          /* SRC */
+        { 0x07, Z, O, Z, O, 1, 1 },          /* DST */
+        { 0x08, O, OMSA, O, OMSA, 1, 1 },    /* SRC_OVER */
+        { 0x09, OMDA, O, OMDA, O, 1, 1 },    /* DST_OVER */
+        { 0x0A, DA, Z, DA, Z, 1, 1 },        /* SRC_IN */
+        { 0x0B, Z, SA, Z, SA, 1, 1 },        /* DST_IN */
+        { 0x0C, OMDA, Z, OMDA, Z, 1, 1 },    /* SRC_OUT */
+        { 0x0D, Z, OMSA, Z, OMSA, 1, 1 },    /* DST_OUT */
+        { 0x0E, DA, OMSA, Z, O, 1, 1 },      /* SRC_ATOP: alpha = Ad */
+        { 0x0F, OMDA, SA, O, Z, 1, 1 },      /* DST_ATOP: alpha = As */
+        { 0x10, OMDA, OMSA, OMDA, OMSA, 1, 1 },  /* XOR */
+        { 0x11, O, O, O, O, 1, 1 },          /* PLUS */
+        { 0x12, O, O, O, O, 1, 1 },          /* PLUS_CLAMPED (normalized targets clamp) */
+        { 0x13, O, O, O, O, 1, 1 },          /* PLUS_CLAMPED_ALPHA */
+        { 0x16, O, OMSC, O, OMSA, 1, 1 },    /* SCREEN: Cs + Cd - Cs Cd */
+        { 0x1F, O, O, O, OMSA, 3, 1 },       /* MINUS: Cd - Cs, alpha As + Ad - As Ad */
+        { 0x20, O, O, O, OMSA, 3, 1 },       /* MINUS_CLAMPED */
+    };
+    blend_st r = b;
+    r.adv_mode = r.adv_overlap = r.adv_nonpremul = r.adv_nonnorm = 0;
+    for (unsigned i = 0; i < sizeof map / sizeof *map; i++) {
+        if (map[i].mode != b.adv_mode) continue;
+        /* the overlap only matters for the modes defined through it (not ZERO / SRC / DST / PLUS* / MINUS*); a non-premultiplied source only
+         * works when its own factor is 0 or 1 and the destination factor does not depend on its colour */
+        int m = (int)b.adv_mode, overlap_free = m <= 0x07 || (m >= 0x11 && m <= 0x13) || m >= 0x1F;
+        int premul_ok = !b.adv_nonpremul || ((map[i].s == Z || map[i].s == O) && map[i].d != OMSC);
+        if ((overlap_free || !b.adv_overlap) && premul_ok) {
+            r.src_rgb = map[i].s; r.dst_rgb = map[i].d; r.src_a = map[i].sa; r.dst_a = map[i].da; r.eq_rgb = map[i].eq; r.eq_a = map[i].eqa;
+            if (b.adv_nonpremul && map[i].s == O) r.src_rgb = SA;           /* a non-premultiplied source colour is premultiplied by the factor */
+            return r;
+        }
+        break;
+    }
+    static _Atomic uint32_t warned[2];
+    uint32_t bit = 1u << (b.adv_mode & 31);
+    if (!(atomic_fetch_or(&warned[b.adv_mode >> 5], bit) & bit))
+        LOGW("advanced blend mode %#x (overlap %u, %spremultiplied source) has no fixed-function equivalent: drawn as SRC_OVER", (unsigned)b.adv_mode, (unsigned)b.adv_overlap, b.adv_nonpremul ? "non-" : "");
+    r.src_rgb = b.adv_nonpremul ? SA : O; r.dst_rgb = OMSA; r.src_a = O; r.dst_a = OMSA; r.eq_rgb = r.eq_a = 1;
+    return r;
 }
 
 /* Channels (RGBA bits) a colour format stores, for the archive filter in build_pipe. */
@@ -391,9 +441,9 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
             if (k.blend_en[i]) {
                 const blend_st *b = &k.blend[i];
                 c.blendingEnabled = YES;
-                c.sourceRGBBlendFactor = blend_factor((unsigned)b->src_rgb); c.destinationRGBBlendFactor = blend_factor((unsigned)b->dst_rgb);
-                c.sourceAlphaBlendFactor = blend_factor((unsigned)b->src_a); c.destinationAlphaBlendFactor = blend_factor((unsigned)b->dst_a);
-                c.rgbBlendOperation = blend_op((unsigned)b->eq_rgb); c.alphaBlendOperation = blend_op((unsigned)b->eq_a);
+                c.sourceRGBBlendFactor = mtl_blend_factor((unsigned)b->src_rgb); c.destinationRGBBlendFactor = mtl_blend_factor((unsigned)b->dst_rgb);
+                c.sourceAlphaBlendFactor = mtl_blend_factor((unsigned)b->src_a); c.destinationAlphaBlendFactor = mtl_blend_factor((unsigned)b->dst_a);
+                c.rgbBlendOperation = mtl_blend_op((unsigned)b->eq_rgb); c.alphaBlendOperation = mtl_blend_op((unsigned)b->eq_a);
             }
         }
         d.depthAttachmentPixelFormat = (MTLPixelFormat)k.depth_fmt;

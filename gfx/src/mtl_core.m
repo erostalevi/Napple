@@ -135,13 +135,17 @@ static pthread_cond_t g_jq_cv = PTHREAD_COND_INITIALIZER;
 static pthread_t g_thread;
 static int g_thread_started;
 
-static void jq_push(job *j) {
+/* The sequence number is taken under the queue lock so jobs run in sequence order: completion is "everything up to seq", so a job
+ * pushed ahead of a lower sequence number (two threads submitting at once) would mark the other one complete before it ran. */
+static uint64_t jq_push(job *j) {
     j->tpush = g_prof_on ? gfx_now_ns() : 0;
     pthread_mutex_lock(&g_jq_mu);
+    if (j->kind != JOB_STOP) j->seq = gfx_timeline_alloc();
     if (g_jq_tail) g_jq_tail->next = j; else g_jq_head = j;
     g_jq_tail = j;
     pthread_cond_signal(&g_jq_cv);
     pthread_mutex_unlock(&g_jq_mu);
+    return j->seq;
 }
 
 static void prof_report(void) {
@@ -196,23 +200,17 @@ uint64_t gfx_mtl_submit(cmdrec *const *recs, uint32_t n) {
     j->recs = malloc(n * sizeof *j->recs);
     memcpy(j->recs, recs, n * sizeof *j->recs);
     j->n = n;
-    j->seq = gfx_timeline_alloc();
-    jq_push(j);
-    return j->seq;
+    return jq_push(j);
 }
 uint64_t gfx_mtl_present(win_t *w, int idx, const texsnap *t, uint32_t interval) {
     job *j = calloc(1, sizeof *j);
     j->kind = JOB_PRESENT; j->win = w; j->idx = idx; j->snap = *t; j->interval = interval;
-    j->seq = gfx_timeline_alloc();
-    jq_push(j);
-    return j->seq;
+    return jq_push(j);
 }
 uint64_t gfx_mtl_queue_wait(uint32_t kind, uint64_t seq, _Atomic uint64_t *cell) {
     job *j = calloc(1, sizeof *j);
     j->kind = JOB_WAIT; j->wkind = kind; j->wseq = seq; j->wcell = cell;
-    j->seq = gfx_timeline_alloc();
-    jq_push(j);
-    return j->seq;
+    return jq_push(j);
 }
 void gfx_mtl_flush(void) {}
 void gfx_mtl_finish(void) { gfx_wait_seq(gfx_timeline_last(), UINT64_MAX); }
