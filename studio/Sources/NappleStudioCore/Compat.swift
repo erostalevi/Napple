@@ -124,3 +124,30 @@ public struct CompatMatrix: Sendable {
         return nil
     }
 }
+
+// MARK: display helpers (Studio's compatibility card and library badges)
+
+extension CompatEntry {
+    /// Stages whose result is "pass".
+    public var passCount: Int { stages.filter { $0.status.lowercased() == "pass" }.count }
+
+    /// The note for the furthest stage that is not passing ("In game: 3D picture is black (gfx)"), cut to a card-friendly length.
+    public var attentionNote: String? {
+        for name in ["ingame", "title-screen", "runtime-boot"] {
+            guard let s = stages.first(where: { $0.name == name }) else { continue }
+            let st = s.status.lowercased()
+            if st == "pass" { return nil }
+            guard let r = s.reason?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty else { continue }
+            let clipped = r.count > 150 ? String(r.prefix(147)) + "…" : r
+            return "\(CompatEntry.stageTitle(name)): \(clipped)"
+        }
+        return nil
+    }
+
+    public static func stageTitle(_ name: String) -> String {
+        let titles = ["ingest": "Ingest", "build-plan": "Build plan", "nso-load": "NSO load", "site-scan": "Site scan", "rewrite": "Rewrite",
+                      "rewrite-verify": "Rewrite check", "runtime-boot": "Runtime boot", "video": "Video", "audio": "Audio", "input": "Input",
+                      "saves": "Saves", "title-screen": "Title screen", "ingame": "In game"]
+        return titles[name] ?? name.replacingOccurrences(of: "-", with: " ").capitalized
+    }
+}

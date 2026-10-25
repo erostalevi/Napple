@@ -46,6 +46,18 @@ public struct PlanResult: Decodable, Equatable, Sendable {
         (updates + dlc).filter(\.selected).reduce(0) { $0 + $1.size }
     }
     public var totalSelectedBytes: UInt64 { (base?.size ?? 0) + extraSelectedBytes }
+    /// Versions to pass to `napple build --updates`.
+    public var selectedUpdateVersions: [UInt32] { updates.filter(\.selected).map(\.version) }
+    /// Title ids to pass to `napple build --dlc`.
+    public var selectedDLCIds: [String] { dlc.filter(\.selected).map(\.titleId) }
+    /// "1 update · 2 DLC" for what is embedded; "Base game only" when nothing extra is selected.
+    public var includedSummary: String {
+        let u = updates.filter(\.selected).count, d = dlc.filter(\.selected).count
+        var parts: [String] = []
+        if u > 0 { parts.append("\(u) \(u == 1 ? "update" : "updates")") }
+        if d > 0 { parts.append("\(d) DLC") }
+        return parts.isEmpty ? "Base game only" : parts.joined(separator: " · ")
+    }
 
     public static func formatBytes(_ n: UInt64) -> String {
         let f = ByteCountFormatter()
