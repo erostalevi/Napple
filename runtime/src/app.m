@@ -268,7 +268,26 @@ int frontend_text_input(const char *header, const char *sub, const char *guide, 
 void frontend_alert(const char *title, const char *message) {
     if (!g_fe) { LOG("applet", "alert (headless): %s: %s", title, message); return; }
     NSString *t = [NSString stringWithUTF8String:title ? title : ""], *m = [NSString stringWithUTF8String:message ? message : ""];
+#if NAPPLE_IOS
+    void (^show)(void) = ^{
+        UIWindow *window = nil;
+        for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+            if (![scene isKindOfClass:UIWindowScene.class]) continue;
+            for (UIWindow *candidate in ((UIWindowScene *)scene).windows) {
+                if (candidate.isKeyWindow) { window = candidate; break; }
+            }
+            if (window) break;
+        }
+        UIViewController *presenter = window.rootViewController;
+        while (presenter.presentedViewController) presenter = presenter.presentedViewController;
+        if (!presenter) return;
+        UIAlertController *a = [UIAlertController alertControllerWithTitle:t message:m preferredStyle:UIAlertControllerStyleAlert];
+        [a addAction:[UIAlertAction actionWithTitle:@"OK" style:UIAlertActionStyleDefault handler:nil]];
+        [presenter presentViewController:a animated:YES completion:nil];
+    };
+#else
     void (^show)(void) = ^{ NSAlert *a = [[NSAlert alloc] init]; a.messageText = t; a.informativeText = m; [a addButtonWithTitle:@"OK"]; [a runModal]; };
+#endif
     if ([NSThread isMainThread]) show(); else dispatch_sync(dispatch_get_main_queue(), show);
 }
 
