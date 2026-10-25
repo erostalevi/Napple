@@ -1,6 +1,6 @@
 <div align="center">
 
-# Napple
+<h1><img src="site/assets/icon.png" alt="" width="56" height="56" align="absmiddle">&nbsp;Napple</h1>
 
 **Turn a Switch game you own into a native Apple Silicon app.**
 
