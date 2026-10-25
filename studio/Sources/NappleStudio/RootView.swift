@@ -26,6 +26,7 @@ struct RootView: View {
                     .allowsHitTesting(false)
             }
         }
+        .ignoresSafeArea()
         .frame(width: Metrics.width, height: Metrics.height)
         .glassEffect(.regular.tint(Palette.red.opacity(0.06)), in: shape)
         .clipShape(shape)
@@ -119,7 +120,18 @@ struct HeaderBar: View {
         }
         .padding(.horizontal, 16)
         .frame(height: Metrics.header)
+        .background(WindowDragArea())
     }
+}
+
+/// Dragging empty header space moves the window (the panel has no system title bar to grab).
+struct WindowDragArea: NSViewRepresentable {
+    final class DragView: NSView {
+        override var mouseDownCanMoveWindow: Bool { true }
+        override func mouseDown(with event: NSEvent) { window?.performDrag(with: event) }
+    }
+    func makeNSView(context: Context) -> NSView { DragView() }
+    func updateNSView(_ v: NSView, context: Context) {}
 }
 
 /// Dragging files over any screen shows this; letting go reads them.

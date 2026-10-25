@@ -89,6 +89,7 @@ final class AppModel {
     private(set) var matrix: CompatMatrix?
     private var buildTask: Task<Void, Never>?
     private var activity: NSObjectProtocol?
+    private var returnHomeOnCancel = false
 
     // MARK: destination, iOS
     var destination: Destination = .mac {
@@ -248,8 +249,8 @@ final class AppModel {
     var canGoBack: Bool {
         switch screen {
         case .welcome: return !libraryItems.isEmpty || !sets.isEmpty
-        case .library, .building: return false
-        case .add, .plan, .done, .settings: return true
+        case .library: return false
+        case .add, .plan, .building, .done, .settings: return true
         }
     }
 
@@ -260,7 +261,20 @@ final class AppModel {
             resetPlanState()
             pendingDrops = []
             screen = .library
-        case .library, .building: break
+        case .building:
+            if phase == .building {
+                let a = NSAlert()
+                a.messageText = "Cancel this build and go home?"
+                a.informativeText = "The build stops and nothing is saved."
+                a.addButton(withTitle: "Keep Building"); a.addButton(withTitle: "Cancel Build")
+                guard a.runModal() == .alertSecondButtonReturn else { return }
+                returnHomeOnCancel = true
+                cancelBuild()
+            } else {
+                resetPlanState()
+                screen = .library
+            }
+        case .library: break
         }
     }
 
@@ -508,7 +522,10 @@ final class AppModel {
                 finishDebug(0)
             } catch {
                 if Task.isCancelled || cancelling || error.localizedDescription == "Build cancelled." {
-                    phase = .ready; errorText = nil; screen = .plan; say("Build cancelled.")
+                    phase = .ready; errorText = nil
+                    if returnHomeOnCancel { resetPlanState(); screen = .library } else { screen = .plan }
+                    returnHomeOnCancel = false
+                    say("Build cancelled.")
                 } else {
                     phase = .failed; errorText = error.localizedDescription
                     if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
