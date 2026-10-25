@@ -23,6 +23,7 @@ final class AppModel {
     var showLegal = false
     var showSetup = false
     var installMessage: String?
+    var engineMessage: String?
     // iOS / iPadOS targets (docs/ios.md)
     var target: BuildTarget = BuildTarget(rawValue: UserDefaults.standard.string(forKey: "target") ?? "") ?? .macos {
         didSet { UserDefaults.standard.set(target.rawValue, forKey: "target"); if target.isIOS { Task { await refreshIOS() } } }
@@ -78,6 +79,7 @@ final class AppModel {
         refreshSets()
         if target.isIOS { Task { await refreshIOS() } }
         showSetup = sets.isEmpty
+        if !args.contains("--no-engine-setup") { setUpEngine() }
         if let d = arg("--debug-drop") { Task { await self.add(urls: [URL(fileURLWithPath: d)]) } }
     }
 
@@ -86,6 +88,49 @@ final class AppModel {
     func refreshSets() {
         sets = keysets.list()
         if !sets.contains(where: { $0.name == selectedSetName }) { selectedSetName = sets.first?.name ?? "" }
+    }
+
+    // MARK: first-launch engine setup (EngineInstaller)
+    /// Copies the bundled CLI/runtime/launcher to Application Support and exports NAPPLE_HOME / NAPPLE_CLI, once per Studio version.
+    private func setUpEngine() {
+        guard let res = Bundle.main.resourceURL else { return }
+        let info = Bundle.main.infoDictionary
+        let version = [info?["CFBundleShortVersionString"] as? String, info?["CFBundleVersion"] as? String].compactMap { $0 }.joined(separator: "-")
+        let installer = EngineInstaller(resources: res)
+        guard installer.bundleHasEngine, !version.isEmpty else { return }
+        let firstRun = !installer.isUpToDate(version: version)
+        if firstRun { engineMessage = "Setting up the Napple engine..." }
+        Task.detached {
+            let result = Result { try installer.install(version: version) }
+            await MainActor.run {
+                switch result {
+                case .success(let r):
+                    self.engineMessage = r.installed ? "Napple engine \(r.version) is ready. The napple command works in new Terminal windows." : nil
+                    r.notes.forEach { self.log.append("engine: \($0)") }
+                case .failure(let e): self.engineMessage = "Engine setup failed: \(e.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    /// Running straight from the mounted disk image: offer to copy into /Applications and relaunch from there.
+    func offerMoveToApplications() {
+        let path = Bundle.main.bundleURL.path
+        guard path.hasPrefix("/Volumes/"), !CommandLine.arguments.contains("--no-engine-setup") else { return }
+        let a = NSAlert()
+        a.messageText = "Move Napple Studio to Applications?"
+        a.informativeText = "Studio is running from the disk image. It will copy itself to /Applications, set itself up and reopen from there."
+        a.addButton(withTitle: "Move to Applications"); a.addButton(withTitle: "Not now")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let dest = URL(fileURLWithPath: "/Applications/NappleStudio.app")
+        do {
+            if FileManager.default.fileExists(atPath: dest.path) { try FileManager.default.trashItem(at: dest, resultingItemURL: nil) }
+            try FileManager.default.copyItem(at: Bundle.main.bundleURL, to: dest)
+            _ = try? Process.run(URL(fileURLWithPath: "/usr/bin/xattr"), arguments: ["-dr", "com.apple.quarantine", dest.path])
+            NSWorkspace.shared.openApplication(at: dest, configuration: NSWorkspace.OpenConfiguration()) { _, _ in
+                DispatchQueue.main.async { NSApp.terminate(nil) }
+            }
+        } catch { engineMessage = "Could not move to Applications: \(error.localizedDescription). Drag it there manually." }
     }
 
     // MARK: plan

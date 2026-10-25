@@ -1,4 +1,5 @@
-name: Pages
+# Publishes ./site to GitHub Pages. One-time setup: repo Settings > Pages > Build and deployment > Source: "GitHub Actions".
+name: pages
 
 on:
   push:

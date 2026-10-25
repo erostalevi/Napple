@@ -3,153 +3,193 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Napple: Switch games, native on Apple Silicon</title>
+<title>Napple: Switch games, native on your Mac</title>
 <meta name="description" content="Napple turns a Switch game you own into a native Apple Silicon app. Ahead-of-time ARM64 rewrite, Horizon HLE, NVN to Metal. No emulator, no JIT.">
-<meta property="og:title" content="Napple: Switch games, native on Apple Silicon">
-<meta property="og:description" content="Ahead-of-time ARM64 rewrite, Horizon HLE, NVN to Metal. No emulator, no JIT.">
-<meta property="og:type" content="website">
-<style>
-  :root {
-    --bg: #0b0d12; --panel: #131722; --line: #232a3a; --text: #e9ecf4; --muted: #98a1b8;
-    --accent: #ff6b4a; --accent2: #ffb347; --ok: #4ade80;
-    color-scheme: dark;
-  }
-  :root[data-theme="light"] { --bg:#fbfaf8; --panel:#fff; --line:#e6e2db; --text:#16181d; --muted:#5b6275; --accent:#e5482a; --accent2:#c97a00; --ok:#15803d; color-scheme: light; }
-  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg:#fbfaf8; --panel:#fff; --line:#e6e2db; --text:#16181d; --muted:#5b6275; --accent:#e5482a; --accent2:#c97a00; --ok:#15803d; color-scheme: light; } }
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif; }
-  a { color: inherit; }
-  .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
-  nav { display:flex; justify-content:space-between; align-items:center; padding:20px 0; }
-  nav .brand { font-weight:700; text-decoration:none; letter-spacing:-.01em; }
-  nav .links { display:flex; gap:20px; font-size:14px; color:var(--muted); }
-  nav .links a { text-decoration:none; }
-  nav .links a:hover { color:var(--text); }
-  .hero { padding: 72px 0 56px; text-align:center; }
-  .pill { display:inline-block; padding:4px 12px; border:1px solid var(--line); border-radius:999px; font-size:13px; color:var(--muted); }
-  h1 { font-size: clamp(2.2rem, 6vw, 4rem); line-height:1.05; letter-spacing:-.03em; margin:20px 0 16px; }
-  h1 span { background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
-  .lead { max-width: 640px; margin: 0 auto 32px; color: var(--muted); font-size: 1.15rem; }
-  .cta { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
-  .btn { display:inline-block; padding:12px 22px; border-radius:10px; font-weight:600; text-decoration:none; border:1px solid var(--line); }
-  .btn.primary { background: linear-gradient(90deg, var(--accent), var(--accent2)); color:#1a0f08; border-color:transparent; }
-  .btn:hover { filter:brightness(1.08); }
-  .fine { margin-top:14px; font-size:13px; color:var(--muted); }
-  section { padding: 48px 0; border-top: 1px solid var(--line); }
-  h2 { font-size: 1.6rem; letter-spacing:-.02em; margin:0 0 8px; }
-  .sub { color:var(--muted); margin:0 0 28px; max-width:640px; }
-  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:16px; }
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px; }
-  .card h3 { margin:0 0 6px; font-size:1.05rem; }
-  .card p { margin:0; color:var(--muted); font-size:.95rem; }
-  .pipe { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:12px; counter-reset: s; }
-  .pipe div { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; counter-increment:s; font-size:.92rem; color:var(--muted); }
-  .pipe b { display:block; color:var(--text); margin-bottom:2px; }
-  .pipe b::before { content: counter(s) ". "; color: var(--accent); }
-  .stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:16px; text-align:center; }
-  .stat { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px; }
-  .stat strong { display:block; font-size:2rem; letter-spacing:-.02em; }
-  .stat span { color:var(--muted); font-size:.9rem; }
-  table { width:100%; border-collapse:collapse; font-size:.95rem; }
-  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); }
-  th { color:var(--muted); font-weight:500; }
-  .ok { color:var(--ok); } .part { color:var(--accent2); }
-  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:.9em; background:var(--panel); border:1px solid var(--line); padding:1px 6px; border-radius:6px; }
-  .legal { color:var(--muted); font-size:.92rem; }
-  footer { padding:32px 0 56px; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem; display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px; }
-</style>
+<meta name="theme-color" content="#120c1a">
+<meta name="napple-repo" content=""><!-- owner/repo; empty = derived from the github.io address, see app.js -->
+<link rel="icon" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<meta property="og:title" content="Napple">
+<meta property="og:description" content="Turn a Switch game you own into a native Apple Silicon app. No emulator, no JIT.">
+<meta property="og:image" content="assets/social.png">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="wrap">
+<div class="bg" aria-hidden="true"></div>
+
+<header class="nav">
+  <a class="brand" href="#top"><img src="assets/favicon.png" alt="" width="28" height="28"> Napple</a>
   <nav>
-    <a class="brand" href="#">🍎 Napple</a>
-    <div class="links">
-      <a href="#how">How it works</a>
-      <a href="#status">Status</a>
-      <a href="#download">Download</a>
-      <a href="https://github.com/erostalevi/Napple">GitHub</a>
-    </div>
+    <a href="#how">How it works</a>
+    <a href="#studio">Studio</a>
+    <a href="#status">Status</a>
+    <a href="#install">Install</a>
+    <a class="pill" href="#download" data-dl-nav>Download</a>
   </nav>
+</header>
 
-  <header class="hero">
-    <span class="pill">Early and experimental · open source · MIT</span>
-    <h1>Switch games, <span>native</span> on Apple Silicon.</h1>
-    <p class="lead">Napple turns a game you own into a standalone Mac app. It runs the game's own ARM64 code directly on your CPU, with no emulator and no JIT.</p>
-    <div class="cta">
-      <a class="btn primary" href="https://github.com/erostalevi/Napple/releases/latest/download/NappleStudio.dmg">Download Napple Studio</a>
-      <a class="btn" href="https://github.com/erostalevi/Napple">View on GitHub</a>
+<main id="top">
+  <section class="hero">
+    <img class="hero-icon" src="assets/icon.png" alt="Napple app icon" width="132" height="132">
+    <p class="eyebrow">Early &amp; experimental · Apple Silicon · macOS 26+</p>
+    <h1>Switch games you own,<br><span class="grad">native on your Mac.</span></h1>
+    <p class="lead">Napple rewrites a game's own ARM64 code ahead of time, answers the console OS with a Horizon runtime and translates the GPU API to Metal.
+      <strong>No emulator. No JIT.</strong> You get a standalone <code>.app</code>.</p>
+
+    <div class="cta" id="download">
+      <a class="btn primary" id="dl-dmg" href="#" rel="noopener">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3zM5 19h14v2H5z"/></svg>
+        <span><b>Download for macOS</b><small id="dl-meta">Latest build · .dmg</small></span>
+      </a>
+      <a class="btn" id="dl-zip" href="#" rel="noopener"><span><b>.zip</b><small>app + CLI + installer</small></span></a>
     </div>
-    <p class="fine" id="build">Latest automatic build from <code>main</code> · macOS 26+ · Apple Silicon</p>
-  </header>
+    <div class="cta social">
+      <a class="btn ghost" href="https://x.com/torytalevi" target="_blank" rel="noopener me">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M18.2 2.5h3.3l-7.2 8.3 8.5 11.2h-6.7l-5.2-6.8-6 6.8H1.6l7.7-8.8L1.2 2.5H8l4.7 6.2zm-1.2 17.5h1.8L7 4.4H5.1z"/></svg>
+        <span>Follow <b>@torytalevi</b></span></a>
+      <span class="btn ghost disabled" aria-disabled="true" title="Coming soon">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
+        <span>Discord <em class="soon">Coming soon</em></span></span>
+    </div>
+    <p class="fine" id="dl-fine">Requires an Apple Silicon Mac. You bring your own game and keys; nothing is bundled.</p>
+  </section>
 
-  <section id="how">
-    <h2>How it works</h2>
-    <p class="sub">The Switch and every Apple Silicon Mac are both ARM64. So instead of emulating the console, Napple rewrites ahead of time only the few things macOS forbids, and answers everything else in a Horizon runtime.</p>
-    <div class="pipe">
-      <div><b>Ingest</b>Containers, decryption with your keys, updates and DLC.</div>
-      <div><b>Analyze</b>Load modules, find functions and patch sites.</div>
-      <div><b>Resolve</b>Match known signatures, fall back to reverse engineering.</div>
-      <div><b>Rewrite</b>Patch <code>x18</code>, thread pointer, <code>svc</code> and timer registers.</div>
-      <div><b>Package</b>Runtime plus a per-game patch table, as a local <code>.app</code>.</div>
+  <section class="strip" aria-label="Key facts">
+    <div><b>AOT</b><span>ARM64 rewrite</span></div>
+    <div><b>Horizon</b><span>HLE kernel &amp; services</span></div>
+    <div><b>NVN → Metal</b><span>GPU translation</span></div>
+    <div><b>0</b><span>emulators, 0 JIT</span></div>
+  </section>
+
+  <section id="how" class="sec">
+    <h2>The Switch and your Mac speak the same CPU language</h2>
+    <p class="sub">Both are ARM64. So Napple doesn't emulate the console, it runs the game's own machine code and rewrites, ahead of time, only what macOS forbids.</p>
+    <ol class="steps">
+      <li><span>1</span><h3>Ingest</h3><p>XCI / NSP / NSZ containers, NCA decryption with <em>your</em> keys, updates and DLC merged in any order.</p></li>
+      <li><span>2</span><h3>Analyze &amp; resolve</h3><p>Load the NSOs, discover functions and patch sites, look up signatures from data, never per-game code.</p></li>
+      <li><span>3</span><h3>Rewrite</h3><p>The reserved <code>x18</code> register, thread pointer, <code>svc</code> calls and timer counters are rewritten. Everything else runs natively.</p></li>
+      <li><span>4</span><h3>Package &amp; play</h3><p>A locally signed <code>.app</code> with the Horizon runtime, NVN→Metal, audio, input and saves built in.</p></li>
+    </ol>
+  </section>
+
+  <section id="studio" class="sec">
+    <h2>Napple Studio: drop a game, get an app</h2>
+    <p class="sub">A small SwiftUI app. Give it your keys once, drop a game on the window, watch the pipeline run, launch the result. The first launch sets up the engine and its environment variables for you.</p>
+
+    <div class="shots">
+      <figure class="shot wide" data-shot="studio-drop.png">
+        <div class="mock win" role="img" aria-label="Illustration of Napple Studio waiting for a game">
+          <div class="bar"><i></i><i></i><i></i><span>Napple Studio</span></div>
+          <div class="body">
+            <div class="drop"><svg viewBox="0 0 24 24" width="34" height="34"><path fill="currentColor" d="M5 20h14v-2H5zm7-16-5.5 5.500 1.400 1.400L11 7.800V16h2V7.800l3.100 3.100 1.400-1.400z"/></svg><b>Drop a game here</b><small>XCI · NSP · NSZ · folders</small></div>
+            <div class="row"><span>Key set</span><b>Default</b></div>
+            <div class="row"><span>Target</span><b>macOS</b></div>
+            <div class="go">Build</div>
+          </div>
+        </div>
+        <figcaption>Drop a game, pick updates and DLC</figcaption>
+      </figure>
+      <figure class="shot" data-shot="studio-build.png">
+        <div class="mock win" role="img" aria-label="Illustration of Napple Studio building an app">
+          <div class="bar"><i></i><i></i><i></i><span>Napple Studio</span></div>
+          <div class="body">
+            <div class="row"><span>Rewrite</span><b>main · 2170 x18 sites</b></div>
+            <div class="prog"><u style="width:62%"></u></div>
+            <div class="stages"><em class="d">ingest</em><em class="d">plan</em><em class="d">rewrite</em><em class="a">romfs</em><em>bundle</em><em>sign</em></div>
+            <pre>[rewrite] 24% main (1 gates, 5 relocations)
+[romfs]   62% copying 2.4 GB</pre>
+          </div>
+        </div>
+        <figcaption>One progress bar, every stage logged</figcaption>
+      </figure>
+      <figure class="shot" data-shot="studio-done.png">
+        <div class="mock win" role="img" aria-label="Illustration of Napple Studio after a finished build">
+          <div class="bar"><i></i><i></i><i></i><span>Napple Studio</span></div>
+          <div class="body">
+            <div class="ok"><svg viewBox="0 0 24 24" width="30" height="30"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.500 14.500-4-4 1.400-1.400 2.600 2.600 5.600-5.600 1.400 1.400z"/></svg><b>App built</b></div>
+            <div class="btns"><span class="go sm">Launch</span><span class="go sm alt">Reveal</span><span class="go sm alt">Install</span></div>
+            <small>Personal use only. Do not share built apps.</small>
+          </div>
+        </div>
+        <figcaption>Launch it, or install to Applications</figcaption>
+      </figure>
+    </div>
+
+    <div class="games" id="games" hidden>
+      <h3>Running on the runtime</h3>
+      <div class="shots games-grid">
+        <figure class="shot game" data-shot="game-1.png" data-optional><img alt="A game running on Napple"></figure>
+        <figure class="shot game" data-shot="game-2.png" data-optional><img alt="A game running on Napple"></figure>
+        <figure class="shot game" data-shot="game-3.png" data-optional><img alt="A game running on Napple"></figure>
+        <figure class="shot game" data-shot="game-4.png" data-optional><img alt="A game running on Napple"></figure>
+      </div>
     </div>
   </section>
 
-  <section>
-    <h2>What's inside</h2>
-    <p class="sub">Per-game knowledge lives in data, never in per-game code branches.</p>
-    <div class="grid">
-      <div class="card"><h3>Native speed</h3><p>Guest code runs directly on the CPU. Nothing is interpreted or recompiled at run time.</p></div>
-      <div class="card"><h3>Horizon kernel and services</h3><p>Threads, scheduling, memory, IPC and a broad set of HLE services, with offline answers for online ones.</p></div>
-      <div class="card"><h3>NVN to Metal</h3><p>A Maxwell shader translator and NVN pipeline support, with MSAA, indirect draws and queries.</p></div>
-      <div class="card"><h3>Audio and input</h3><p>Audio renderer with effects and Opus over Core Audio. Controllers with rumble, plus keyboard and mouse.</p></div>
-      <div class="card"><h3>Napple Studio</h3><p>Drop a game on the window, watch the pipeline run, install the result.</p></div>
-      <div class="card"><h3>Open compatibility data</h3><p>Every game and every pipeline stage is tracked with evidence in a public matrix.</p></div>
-    </div>
-  </section>
-
-  <section id="status">
+  <section id="status" class="sec">
     <h2>Where it stands</h2>
-    <p class="sub">Napple is early. Two titles boot all the way to their title screen or early gameplay; neither is fully playable yet. Coverage below estimates the Switch platform surface the pipeline and runtime handle, not per-game compatibility.</p>
-    <div class="stats">
-      <div class="stat"><strong>≈ 87%</strong><span>overall platform coverage</span></div>
-      <div class="stat"><strong>100%</strong><span>AOT A64 rewrite</span></div>
-      <div class="stat"><strong>97%</strong><span>HLE service coverage</span></div>
-      <div class="stat"><strong>81%</strong><span>NVN API surface</span></div>
+    <p class="sub">Napple is early and moving fast. Two titles boot to their title screen and early gameplay; neither is fully playable yet. Coverage below is an estimate of the Switch platform surface, not per-game compatibility.</p>
+    <div class="cov" id="cov">
+      <div class="row"><span>CPU · AOT A64 rewrite</span><i style="--v:100"></i><b>100%</b></div>
+      <div class="row"><span>Loader · NSO / NRO / relocations</span><i style="--v:100"></i><b>100%</b></div>
+      <div class="row"><span>Kernel · svcs + scheduling</span><i style="--v:99"></i><b>99%</b></div>
+      <div class="row"><span>IPC · HLE service coverage</span><i style="--v:97"></i><b>97%</b></div>
+      <div class="row"><span>IPC · command depth</span><i style="--v:45"></i><b>45%</b></div>
+      <div class="row"><span>GPU · Maxwell shader ISA</span><i style="--v:81"></i><b>81%</b></div>
+      <div class="row"><span>GPU · NVN API surface</span><i style="--v:81"></i><b>81%</b></div>
+      <div class="row"><span>GPU · formats + pipeline</span><i style="--v:83"></i><b>83%</b></div>
+      <div class="row"><span>Audio</span><i style="--v:94"></i><b>94%</b></div>
+      <div class="row"><span>Input</span><i style="--v:99"></i><b>99%</b></div>
+      <div class="row"><span>Content · containers, crypto, DLC</span><i style="--v:91"></i><b>91%</b></div>
+      <div class="row"><span>Saves + storage</span><i style="--v:100"></i><b>100%</b></div>
+      <div class="row"><span>Library applets</span><i style="--v:48"></i><b>48%</b></div>
+      <div class="row"><span>Video / media decode</span><i style="--v:61"></i><b>61%</b></div>
+      <div class="row total"><span>Overall</span><i style="--v:87"></i><b>≈ 87%</b></div>
     </div>
-    <p class="sub" style="margin-top:20px">Coverage is not compatibility: the long tail of command depth, shader corner cases and GPU behavior is what real games trip over first. Per-stage results are in the <a href="https://github.com/erostalevi/Napple/blob/main/COMPATIBILITY.md">compatibility matrix</a>.</p>
   </section>
 
-  <section id="download">
-    <h2>Download</h2>
-    <p class="sub">Every commit to <code>main</code> publishes a new build with a DMG installer.</p>
-    <div class="cta" style="justify-content:flex-start">
-      <a class="btn primary" href="https://github.com/erostalevi/Napple/releases/latest/download/NappleStudio.dmg">NappleStudio.dmg</a>
-      <a class="btn" href="https://github.com/erostalevi/Napple/releases">All builds</a>
+  <section id="install" class="sec two">
+    <div>
+      <h2>Install in one step</h2>
+      <ol class="inst">
+        <li>Download the <b>.dmg</b> and drag <b>Napple Studio</b> onto <b>Applications</b>.</li>
+        <li>Open it. Studio places the engine (<code>napple</code>, runtime, launcher) and sets <code>NAPPLE_HOME</code> / <code>NAPPLE_CLI</code> for you.</li>
+        <li>Add your own <code>prod.keys</code> and firmware once, then drop a game.</li>
+      </ol>
+      <p class="fine">Prefer the terminal? Unzip the <b>.zip</b> and run <code>./install.sh</code>. The <code>napple</code> command works in new Terminal windows afterwards.</p>
     </div>
-    <p class="fine">Builds are ad-hoc signed, not notarized. On first launch, right-click the app and choose <b>Open</b>. Requires an Apple Silicon Mac on macOS 26 or newer.</p>
+    <div class="note">
+      <h3>"macOS can't verify this app"?</h3>
+      <p>Builds are ad-hoc signed unless the maintainers have notarization configured. Right-click the app and choose <b>Open</b>, or run once:</p>
+      <pre>xattr -dr com.apple.quarantine /Applications/NappleStudio.app</pre>
+      <p class="fine">Needs Apple Silicon and macOS 26 or later. Every commit to <code>main</code> publishes a new release.</p>
+    </div>
   </section>
 
-  <section>
+  <section class="sec legal">
     <h2>Legal, up front</h2>
-    <p class="legal">You must own the game and bring your own <code>prod.keys</code> and firmware. Keys, firmware and game files are needed only at build time, and nothing is downloaded, bundled or committed. The produced app contains game-derived content and is for your personal use only; Napple does not condone sharing builds. Napple is not affiliated with or endorsed by Nintendo.</p>
+    <ul>
+      <li>You must <b>own the game</b> and bring <b>your own keys and firmware</b>. Nothing is downloaded, bundled or committed.</li>
+      <li>Built apps contain game-derived content and are <b>for your personal use only</b>. Don't share them.</li>
+      <li>Napple is not affiliated with or endorsed by Nintendo.</li>
+    </ul>
   </section>
+</main>
 
-  <footer>
-    <span>Napple · MIT license · made by <a href="https://github.com/erostalevi">Eros Talevi</a></span>
-    <span><a href="https://github.com/erostalevi/Napple/issues/new/choose">Send a compatibility report</a></span>
-  </footer>
-</div>
-<script>
-  // Show the latest build number/date next to the download button, if the GitHub API is reachable.
-  fetch("https://api.github.com/repos/erostalevi/Napple/releases/latest")
-    .then(function (r) { return r.ok ? r.json() : null; })
-    .then(function (rel) {
-      if (!rel) return;
-      var d = new Date(rel.published_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-      document.getElementById("build").textContent = rel.name + " · " + d + " · macOS 26+ · Apple Silicon";
-    })
-    .catch(function () {});
-</script>
+<footer>
+  <div class="f-row">
+    <span class="brand"><img src="assets/favicon.png" alt="" width="22" height="22"> Napple</span>
+    <span class="links">
+      <a href="#download" data-dl-nav>Download</a>
+      <a id="gh-link" href="#" rel="noopener">GitHub</a>
+      <a id="rel-link" href="#" rel="noopener">All releases</a>
+      <a href="https://x.com/torytalevi" target="_blank" rel="noopener me">X / Twitter</a>
+      <span class="off">Discord · soon</span>
+    </span>
+  </div>
+  <p>MIT licensed. Built by <a href="https://x.com/torytalevi" target="_blank" rel="noopener me">@torytalevi</a>.</p>
+</footer>
+<script src="app.js"></script>
 </body>
 </html>

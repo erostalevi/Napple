@@ -8,6 +8,8 @@ ROOT="$(cd "$HERE/.." && pwd)"
 OUT="${1:-$HERE/dist}"
 SCRATCH="${NAPPLE_STUDIO_SCRATCH:-${TMPDIR:-/tmp}/napple-studio-build}"
 APP="$OUT/NappleStudio.app"
+VERSION="${NAPPLE_VERSION:-0.1.0}"   # CFBundleShortVersionString; the release pipeline passes the build number as NAPPLE_BUILD
+BUILD_NO="${NAPPLE_BUILD:-1}"
 
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 # Everything Studio's Build step needs: CLI, runtime, launcher (built here when missing; NAPPLE_REBUILD=1 forces).
@@ -30,7 +32,16 @@ cp "$BIN" "$APP/Contents/MacOS/NappleStudio"
 cp "$ROOT/target/release/napple" "$ROOT/runtime/build/napple-runtime" "$ROOT/packaging/build/napple-launcher" "$APP/Contents/Resources/"
 [ -x "$ROOT/runtime/build-ios/napple-runtime" ] && cp "$ROOT/runtime/build-ios/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios"   # optional: tools/build_ios.sh
 [ -f "$ROOT/compat/matrix.json" ] && cp "$ROOT/compat/matrix.json" "$APP/Contents/Resources/matrix.json"
-cat > "$APP/Contents/Info.plist" <<'P'
+# App icon (studio/packaging/icon.png -> AppIcon.icns)
+if [ -f "$HERE/packaging/icon.png" ] && command -v iconutil >/dev/null 2>&1; then
+  ICONSET="$SCRATCH/AppIcon.iconset"; rm -rf "$ICONSET"; mkdir -p "$ICONSET"
+  for s in 16 32 128 256 512; do
+    sips -z $s $s "$HERE/packaging/icon.png" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
+    sips -z $((s*2)) $((s*2)) "$HERE/packaging/icon.png" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/AppIcon.icns"
+fi
+cat > "$APP/Contents/Info.plist" <<P
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -39,8 +50,9 @@ cat > "$APP/Contents/Info.plist" <<'P'
 <key>CFBundleIdentifier</key><string>app.napple.studio</string>
 <key>CFBundleExecutable</key><string>NappleStudio</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>0.1.0</string>
-<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>$VERSION</string>
+<key>CFBundleVersion</key><string>$BUILD_NO</string>
+<key>CFBundleIconFile</key><string>AppIcon</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 <key>NSHighResolutionCapable</key><true/>

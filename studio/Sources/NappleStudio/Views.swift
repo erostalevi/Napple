@@ -19,6 +19,9 @@ struct ContentView: View {
             } else {
                 MainView()
             }
+            if let msg = m.engineMessage {
+                Text(msg).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+            }
             Text("Built apps contain game-derived content for your personal use only. Do not share them.")
                 .font(.caption2).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 .accessibilityLabel("Legal notice: built apps are for your personal use only and must not be shared")

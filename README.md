@@ -84,6 +84,11 @@ The table is an **estimate of how much of the Switch platform surface the pipeli
 
 Coverage is not compatibility: a long tail of command depth, shader corner cases and GPU behaviour is exactly what real games trip over first.
 
+## Download
+
+Every commit to `main` publishes a release (`.github/workflows/release.yml`): **Napple-Studio.dmg** (drag to Applications; Studio sets up the engine and
+`NAPPLE_HOME` / `NAPPLE_CLI` on first launch) and **Napple-macOS-arm64.zip** (Studio + `bin/` + `install.sh`). Landing page source: `site/` (GitHub Pages via `pages.yml`).
+
 ## Quick start
 
 > Requires an Apple Silicon Mac, Xcode command line tools, a Rust toolchain (2024 edition), and your own keys and game.

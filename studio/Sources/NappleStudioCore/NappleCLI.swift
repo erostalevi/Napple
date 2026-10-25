@@ -93,11 +93,12 @@ public struct NappleCLI: Sendable {
     public let executable: URL
     public init(executable: URL) { self.executable = executable }
 
-    /// Resolution order: NAPPLE_CLI env, bundled Resources/napple, repo target/release, /usr/local/bin, /opt/homebrew/bin.
+    /// Resolution order: NAPPLE_CLI env, bundled Resources/napple, installed engine (Application Support/Napple/engine/current), repo target/release, /usr/local/bin, /opt/homebrew/bin.
     public static func locate() -> NappleCLI? {
         var c: [String] = []
         if let e = ProcessInfo.processInfo.environment["NAPPLE_CLI"] { c.append(e) }
         if let r = Bundle.main.resourceURL { c.append(r.appendingPathComponent("napple").path) }
+        c.append(EngineInstaller(resources: Bundle.main.resourceURL ?? URL(fileURLWithPath: "/")).cli.path)   // copy placed by first-launch setup
         let exe = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
         var d = exe.deletingLastPathComponent()
         for _ in 0..<7 { c.append(d.appendingPathComponent("target/release/napple").path); d = d.deletingLastPathComponent() }

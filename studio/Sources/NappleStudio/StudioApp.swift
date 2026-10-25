@@ -7,6 +7,7 @@ struct StudioApp: App {
         Window("Napple Studio", id: "main") {
             ContentView().environment(model)
                 .frame(minWidth: 520, idealWidth: 520, minHeight: 420, idealHeight: 540)
+                .onAppear { model.offerMoveToApplications() }
         }
         .defaultSize(width: 520, height: 540)
         .windowResizability(.contentMinSize)

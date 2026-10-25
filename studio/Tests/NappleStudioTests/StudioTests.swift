@@ -218,3 +218,55 @@ func fakeFirmwareDir(in dir: URL) -> URL {
         #expect(ErrorText.humanize("error: [install] devicectl failed").contains("Developer Mode"))
     }
 }
+
+@Suite struct EngineInstallerTests {
+    func bundle(in dir: URL) -> URL {
+        let r = dir.appendingPathComponent("Resources"); try! FileManager.default.createDirectory(at: r, withIntermediateDirectories: true)
+        for f in EngineInstaller.requiredFiles {
+            let u = r.appendingPathComponent(f); try! "#!/bin/sh\n".write(to: u, atomically: true, encoding: .utf8)
+            try! FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: u.path)
+        }
+        return r
+    }
+
+    @Test func installsLinksAndIsIdempotent() throws {
+        let root = tmp(), home = tmp()
+        var inst = EngineInstaller(resources: bundle(in: root), support: home.appendingPathComponent("Support"), home: home)
+        inst.setLaunchctl = false
+        #expect(!inst.isUpToDate(version: "1-1"))
+        let r = try inst.install(version: "1-1")
+        #expect(r.installed && r.notes.isEmpty)
+        #expect(inst.isUpToDate(version: "1-1"))
+        #expect(FileManager.default.isExecutableFile(atPath: inst.cli.path))
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: inst.binLink.path) == inst.cli.path)
+        let env = try String(contentsOf: inst.envScript, encoding: .utf8)
+        #expect(env.contains("NAPPLE_CLI=") && env.contains("NAPPLE_HOME="))
+        let profile = try String(contentsOf: inst.zprofile, encoding: .utf8)
+        #expect(profile.components(separatedBy: EngineInstaller.profileMarkerBegin).count == 2)
+
+        let again = try inst.install(version: "1-1")
+        #expect(!again.installed)
+        let up = try inst.install(version: "1-2")
+        #expect(up.installed && inst.isUpToDate(version: "1-2"))
+        let profile2 = try String(contentsOf: inst.zprofile, encoding: .utf8)
+        #expect(profile2.components(separatedBy: EngineInstaller.profileMarkerBegin).count == 2)
+    }
+
+    @Test func keepsUserProfileAndForeignBinary() throws {
+        let root = tmp(), home = tmp()
+        try "export FOO=1".write(to: home.appendingPathComponent(".zprofile"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: home.appendingPathComponent(".local/bin"), withIntermediateDirectories: true)
+        try "mine".write(to: home.appendingPathComponent(".local/bin/napple"), atomically: true, encoding: .utf8)
+        var inst = EngineInstaller(resources: bundle(in: root), support: home.appendingPathComponent("Support"), home: home)
+        inst.setLaunchctl = false
+        let r = try inst.install(version: "1-1")
+        #expect(r.notes.count == 1)
+        #expect(try String(contentsOf: inst.binLink, encoding: .utf8) == "mine")
+        #expect(try String(contentsOf: inst.zprofile, encoding: .utf8).hasPrefix("export FOO=1\n"))
+    }
+
+    @Test func missingEngineThrows() {
+        let inst = EngineInstaller(resources: tmp(), support: tmp(), home: tmp())
+        #expect(throws: CLIError.self) { try inst.install(version: "1") }
+    }
+}

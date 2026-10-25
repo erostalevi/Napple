@@ -1,101 +1,143 @@
-name: Release
+# Builds Napple for Apple Silicon on every commit to main and publishes a GitHub Release.
+#
+# Release assets (fixed names, so https://github.com/<owner>/<repo>/releases/latest/download/<name> always points at the newest build):
+#   Napple-Studio.dmg        drag-and-drop installer for Napple Studio
+#   Napple-macOS-arm64.zip   Studio.app + bin/ (napple, napple-runtime, napple-launcher) + install.sh + notices
+#   SHA256SUMS.txt
+#
+# Optional signing and notarization (no secrets = ad-hoc signed, which still runs; see the README "Install" notes):
+#   MACOS_CERT_P12_BASE64, MACOS_CERT_PASSWORD   Developer ID Application certificate (.p12, base64)
+#   MACOS_SIGN_IDENTITY                          e.g. "Developer ID Application: Name (TEAMID)"
+#   NOTARY_APPLE_ID, NOTARY_TEAM_ID, NOTARY_PASSWORD   app-specific password, enables notarization + stapling
+name: release
 
-# Every commit that lands on main builds Napple Studio (CLI + runtime + launcher bundled inside)
-# and publishes it as a GitHub release with a DMG installer.
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - "site/**"
-      - "docs/**"
-      - "**.md"
-      - ".github/ISSUE_TEMPLATE/**"
+    paths-ignore: ["site/**", "docs/**", "**/*.md", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
+# One release build at a time; a newer commit supersedes a queued one but never cancels one that is already publishing.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 permissions:
   contents: write
 
 env:
-  KEEP_RELEASES: 30
+  MAJOR_MINOR: "0.1"   # release version = MAJOR_MINOR.<run number>; bump here for a new minor
 
 jobs:
   build:
-    # Studio targets macOS 26 (studio/Package.swift), so the runner must be macOS 26 on Apple Silicon.
-    runs-on: macos-26
-    timeout-minutes: 60
+    runs-on: macos-26   # Studio targets macOS 26 (studio/Package.swift), so the runner needs the macOS 26 SDK
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install native libraries
-        run: brew install opus libvpx
-
-      - name: Rust tests
-        run: cargo test --workspace
-
-      - name: Build CLI
-        run: cargo build --release -p napple-cli
-
-      - name: Build runtime libraries
+      - name: Toolchain
         run: |
-          make -C input
-          make -C audio
-          make -C frontend
-          make -C gfx
-          make -C runtime
-          make -C packaging
+          rustup update stable --no-self-update
+          rustup default stable
+          brew install opus libvpx     # linked statically into napple-runtime
+          xcodebuild -version; swift --version; rustc --version
 
-      - name: Build Napple Studio.app
-        run: studio/build_app.sh studio/dist
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
 
-      - name: Package DMG
-        id: pkg
+      - name: Version
+        id: ver
         run: |
-          SHORT="${GITHUB_SHA::7}"
-          TAG="build-${GITHUB_RUN_NUMBER}-${SHORT}"
-          DMG="NappleStudio-${TAG}.dmg"
-          STAGE="$(mktemp -d)"
-          cp -R studio/dist/NappleStudio.app "$STAGE/Napple Studio.app"
-          ln -s /Applications "$STAGE/Applications"
-          hdiutil create -volname "Napple Studio" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-          # Stable name so the website can link releases/latest/download/NappleStudio.dmg
-          cp "$DMG" NappleStudio.dmg
-          shasum -a 256 "$DMG" > "$DMG.sha256"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          echo "version=${MAJOR_MINOR}.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+          echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Import signing certificate (optional)
+        id: sign
+        env:
+          P12: ${{ secrets.MACOS_CERT_P12_BASE64 }}
+          P12_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          if [ -z "$P12" ] || [ -z "$IDENTITY" ]; then echo "No signing secrets: building ad-hoc signed."; exit 0; fi
+          KC="$RUNNER_TEMP/napple.keychain-db"; KCPW="$(uuidgen)"
+          echo "$P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security create-keychain -p "$KCPW" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KCPW" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+          rm -f "$RUNNER_TEMP/cert.p12"
+          echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
+          if [ -n "$NOTARY_APPLE_ID" ] && [ -n "$NOTARY_PASSWORD" ]; then
+            xcrun notarytool store-credentials napple-notary --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" --keychain "$KC"
+            echo "notary=napple-notary" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build (CLI, libraries, runtime, Studio, DMG, ZIP)
+        env:
+          NAPPLE_VERSION: ${{ steps.ver.outputs.version }}
+          NAPPLE_BUILD: ${{ github.run_number }}
+          NAPPLE_SIGN_IDENTITY: ${{ steps.sign.outputs.identity }}
+          NAPPLE_NOTARY_PROFILE: ${{ steps.sign.outputs.notary }}
+        run: tools/ci_build.sh "$GITHUB_WORKSPACE/dist"
+
+      - name: Smoke test the artifacts
+        run: |
+          set -e
+          cd dist
+          shasum -a 256 -c SHA256SUMS.txt
+          unzip -q Napple-macOS-arm64.zip -d unz
+          for b in unz/Napple-*/bin/napple unz/Napple-*/bin/napple-runtime unz/Napple-*/bin/napple-launcher; do
+            test "$(lipo -archs "$b")" = "arm64" || { echo "$b is not arm64"; exit 1; }
+          done
+          hdiutil attach Napple-Studio.dmg -nobrowse -mountpoint /tmp/napple-dmg
+          test -d "/tmp/napple-dmg/NappleStudio.app" && test -L /tmp/napple-dmg/Applications
+          codesign --verify --deep --strict "/tmp/napple-dmg/NappleStudio.app"
+          hdiutil detach /tmp/napple-dmg
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: napple-${{ steps.ver.outputs.version }}
+          path: |
+            dist/Napple-Studio.dmg
+            dist/Napple-macOS-arm64.zip
+            dist/SHA256SUMS.txt
+          retention-days: 14
 
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.pkg.outputs.tag }}
-          DMG: ${{ steps.pkg.outputs.dmg }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          SHORT: ${{ steps.ver.outputs.short }}
         run: |
-          NOTES="$(mktemp)"
-          {
-            echo "Automatic build of \`${GITHUB_SHA::7}\` from \`main\`."
-            echo
-            echo "**Install:** open the DMG, drag *Napple Studio* to Applications. The app is ad-hoc signed, not notarized: on first launch right-click it and choose *Open*."
-            echo
-            echo "Requires an Apple Silicon Mac on macOS 26 or newer. You must bring your own game, \`prod.keys\` and firmware; none are included."
-            echo
-            echo "SHA-256: \`$(cut -d' ' -f1 "$DMG.sha256")\`"
-          } > "$NOTES"
-          git log -1 --format='%n### Latest commit%n%s%n%n%b' >> "$NOTES"
-          gh release create "$TAG" "$DMG" NappleStudio.dmg "$DMG.sha256" \
-            --target "$GITHUB_SHA" --title "Build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
-            --notes-file "$NOTES" --latest
+          MSG="$(git log -1 --pretty=%s)"
+          cat > notes.md <<NOTES
+          **Napple ${VERSION}**, built from \`${SHORT}\` on main: ${MSG}
 
-      - name: Prune old releases
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release list --limit 200 --json tagName,createdAt \
-            --jq 'map(select(.tagName | startswith("build-"))) | sort_by(.createdAt) | reverse | .['"$KEEP_RELEASES"':][] | .tagName' |
-          while read -r t; do gh release delete "$t" --cleanup-tag --yes; done
+          ### Install
+          - **Napple-Studio.dmg**: open it and drag *Napple Studio* onto *Applications*. On first launch Studio sets up the napple engine and the \`NAPPLE_HOME\` / \`NAPPLE_CLI\` variables for you.
+          - **Napple-macOS-arm64.zip**: Studio plus the standalone \`napple\`, \`napple-runtime\` and \`napple-launcher\` binaries and an \`install.sh\`.
+
+          Needs an Apple Silicon Mac on macOS 26 or later. You supply your own keys and game; nothing is bundled.
+
+          If macOS says the app "can't be opened": right-click it, choose *Open*, or run
+          \`xattr -dr com.apple.quarantine /Applications/NappleStudio.app\` once. Builds are only notarized when the maintainers configured signing secrets.
+          NOTES
+          ASSETS=(dist/Napple-Studio.dmg dist/Napple-macOS-arm64.zip dist/SHA256SUMS.txt)
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then   # re-run of the same workflow run
+            gh release upload "v${VERSION}" "${ASSETS[@]}" --clobber
+          else
+            gh release create "v${VERSION}" "${ASSETS[@]}" \
+              --target "$GITHUB_SHA" --title "Napple ${VERSION}" --notes-file notes.md --latest
+          fi
