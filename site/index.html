@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Napple: Switch games, native on Apple Silicon</title>
+<meta name="description" content="Napple turns a Switch game you own into a native Apple Silicon app. Ahead-of-time ARM64 rewrite, Horizon HLE, NVN to Metal. No emulator, no JIT.">
+<meta property="og:title" content="Napple: Switch games, native on Apple Silicon">
+<meta property="og:description" content="Ahead-of-time ARM64 rewrite, Horizon HLE, NVN to Metal. No emulator, no JIT.">
+<meta property="og:type" content="website">
+<style>
+  :root {
+    --bg: #0b0d12; --panel: #131722; --line: #232a3a; --text: #e9ecf4; --muted: #98a1b8;
+    --accent: #ff6b4a; --accent2: #ffb347; --ok: #4ade80;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] { --bg:#fbfaf8; --panel:#fff; --line:#e6e2db; --text:#16181d; --muted:#5b6275; --accent:#e5482a; --accent2:#c97a00; --ok:#15803d; color-scheme: light; }
+  @media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) { --bg:#fbfaf8; --panel:#fff; --line:#e6e2db; --text:#16181d; --muted:#5b6275; --accent:#e5482a; --accent2:#c97a00; --ok:#15803d; color-scheme: light; } }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body { margin:0; background:var(--bg); color:var(--text); font:16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, system-ui, sans-serif; }
+  a { color: inherit; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px; }
+  nav { display:flex; justify-content:space-between; align-items:center; padding:20px 0; }
+  nav .brand { font-weight:700; text-decoration:none; letter-spacing:-.01em; }
+  nav .links { display:flex; gap:20px; font-size:14px; color:var(--muted); }
+  nav .links a { text-decoration:none; }
+  nav .links a:hover { color:var(--text); }
+  .hero { padding: 72px 0 56px; text-align:center; }
+  .pill { display:inline-block; padding:4px 12px; border:1px solid var(--line); border-radius:999px; font-size:13px; color:var(--muted); }
+  h1 { font-size: clamp(2.2rem, 6vw, 4rem); line-height:1.05; letter-spacing:-.03em; margin:20px 0 16px; }
+  h1 span { background: linear-gradient(90deg, var(--accent), var(--accent2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  .lead { max-width: 640px; margin: 0 auto 32px; color: var(--muted); font-size: 1.15rem; }
+  .cta { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+  .btn { display:inline-block; padding:12px 22px; border-radius:10px; font-weight:600; text-decoration:none; border:1px solid var(--line); }
+  .btn.primary { background: linear-gradient(90deg, var(--accent), var(--accent2)); color:#1a0f08; border-color:transparent; }
+  .btn:hover { filter:brightness(1.08); }
+  .fine { margin-top:14px; font-size:13px; color:var(--muted); }
+  section { padding: 48px 0; border-top: 1px solid var(--line); }
+  h2 { font-size: 1.6rem; letter-spacing:-.02em; margin:0 0 8px; }
+  .sub { color:var(--muted); margin:0 0 28px; max-width:640px; }
+  .grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .card h3 { margin:0 0 6px; font-size:1.05rem; }
+  .card p { margin:0; color:var(--muted); font-size:.95rem; }
+  .pipe { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:12px; counter-reset: s; }
+  .pipe div { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; counter-increment:s; font-size:.92rem; color:var(--muted); }
+  .pipe b { display:block; color:var(--text); margin-bottom:2px; }
+  .pipe b::before { content: counter(s) ". "; color: var(--accent); }
+  .stats { display:grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap:16px; text-align:center; }
+  .stat { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:20px; }
+  .stat strong { display:block; font-size:2rem; letter-spacing:-.02em; }
+  .stat span { color:var(--muted); font-size:.9rem; }
+  table { width:100%; border-collapse:collapse; font-size:.95rem; }
+  th, td { text-align:left; padding:10px 12px; border-bottom:1px solid var(--line); }
+  th { color:var(--muted); font-weight:500; }
+  .ok { color:var(--ok); } .part { color:var(--accent2); }
+  code { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size:.9em; background:var(--panel); border:1px solid var(--line); padding:1px 6px; border-radius:6px; }
+  .legal { color:var(--muted); font-size:.92rem; }
+  footer { padding:32px 0 56px; border-top:1px solid var(--line); color:var(--muted); font-size:.9rem; display:flex; justify-content:space-between; flex-wrap:wrap; gap:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <nav>
+    <a class="brand" href="#">🍎 Napple</a>
+    <div class="links">
+      <a href="#how">How it works</a>
+      <a href="#status">Status</a>
+      <a href="#download">Download</a>
+      <a href="https://github.com/erostalevi/Napple">GitHub</a>
+    </div>
+  </nav>
+
+  <header class="hero">
+    <span class="pill">Early and experimental · open source · MIT</span>
+    <h1>Switch games, <span>native</span> on Apple Silicon.</h1>
+    <p class="lead">Napple turns a game you own into a standalone Mac app. It runs the game's own ARM64 code directly on your CPU, with no emulator and no JIT.</p>
+    <div class="cta">
+      <a class="btn primary" href="https://github.com/erostalevi/Napple/releases/latest/download/NappleStudio.dmg">Download Napple Studio</a>
+      <a class="btn" href="https://github.com/erostalevi/Napple">View on GitHub</a>
+    </div>
+    <p class="fine" id="build">Latest automatic build from <code>main</code> · macOS 26+ · Apple Silicon</p>
+  </header>
+
+  <section id="how">
+    <h2>How it works</h2>
+    <p class="sub">The Switch and every Apple Silicon Mac are both ARM64. So instead of emulating the console, Napple rewrites ahead of time only the few things macOS forbids, and answers everything else in a Horizon runtime.</p>
+    <div class="pipe">
+      <div><b>Ingest</b>Containers, decryption with your keys, updates and DLC.</div>
+      <div><b>Analyze</b>Load modules, find functions and patch sites.</div>
+      <div><b>Resolve</b>Match known signatures, fall back to reverse engineering.</div>
+      <div><b>Rewrite</b>Patch <code>x18</code>, thread pointer, <code>svc</code> and timer registers.</div>
+      <div><b>Package</b>Runtime plus a per-game patch table, as a local <code>.app</code>.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What's inside</h2>
+    <p class="sub">Per-game knowledge lives in data, never in per-game code branches.</p>
+    <div class="grid">
+      <div class="card"><h3>Native speed</h3><p>Guest code runs directly on the CPU. Nothing is interpreted or recompiled at run time.</p></div>
+      <div class="card"><h3>Horizon kernel and services</h3><p>Threads, scheduling, memory, IPC and a broad set of HLE services, with offline answers for online ones.</p></div>
+      <div class="card"><h3>NVN to Metal</h3><p>A Maxwell shader translator and NVN pipeline support, with MSAA, indirect draws and queries.</p></div>
+      <div class="card"><h3>Audio and input</h3><p>Audio renderer with effects and Opus over Core Audio. Controllers with rumble, plus keyboard and mouse.</p></div>
+      <div class="card"><h3>Napple Studio</h3><p>Drop a game on the window, watch the pipeline run, install the result.</p></div>
+      <div class="card"><h3>Open compatibility data</h3><p>Every game and every pipeline stage is tracked with evidence in a public matrix.</p></div>
+    </div>
+  </section>
+
+  <section id="status">
+    <h2>Where it stands</h2>
+    <p class="sub">Napple is early. Two titles boot all the way to their title screen or early gameplay; neither is fully playable yet. Coverage below estimates the Switch platform surface the pipeline and runtime handle, not per-game compatibility.</p>
+    <div class="stats">
+      <div class="stat"><strong>≈ 87%</strong><span>overall platform coverage</span></div>
+      <div class="stat"><strong>100%</strong><span>AOT A64 rewrite</span></div>
+      <div class="stat"><strong>97%</strong><span>HLE service coverage</span></div>
+      <div class="stat"><strong>81%</strong><span>NVN API surface</span></div>
+    </div>
+    <p class="sub" style="margin-top:20px">Coverage is not compatibility: the long tail of command depth, shader corner cases and GPU behavior is what real games trip over first. Per-stage results are in the <a href="https://github.com/erostalevi/Napple/blob/main/COMPATIBILITY.md">compatibility matrix</a>.</p>
+  </section>
+
+  <section id="download">
+    <h2>Download</h2>
+    <p class="sub">Every commit to <code>main</code> publishes a new build with a DMG installer.</p>
+    <div class="cta" style="justify-content:flex-start">
+      <a class="btn primary" href="https://github.com/erostalevi/Napple/releases/latest/download/NappleStudio.dmg">NappleStudio.dmg</a>
+      <a class="btn" href="https://github.com/erostalevi/Napple/releases">All builds</a>
+    </div>
+    <p class="fine">Builds are ad-hoc signed, not notarized. On first launch, right-click the app and choose <b>Open</b>. Requires an Apple Silicon Mac on macOS 26 or newer.</p>
+  </section>
+
+  <section>
+    <h2>Legal, up front</h2>
+    <p class="legal">You must own the game and bring your own <code>prod.keys</code> and firmware. Keys, firmware and game files are needed only at build time, and nothing is downloaded, bundled or committed. The produced app contains game-derived content and is for your personal use only; Napple does not condone sharing builds. Napple is not affiliated with or endorsed by Nintendo.</p>
+  </section>
+
+  <footer>
+    <span>Napple · MIT license · made by <a href="https://github.com/erostalevi">Eros Talevi</a></span>
+    <span><a href="https://github.com/erostalevi/Napple/issues/new/choose">Send a compatibility report</a></span>
+  </footer>
+</div>
+<script>
+  // Show the latest build number/date next to the download button, if the GitHub API is reachable.
+  fetch("https://api.github.com/repos/erostalevi/Napple/releases/latest")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (rel) {
+      if (!rel) return;
+      var d = new Date(rel.published_at).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+      document.getElementById("build").textContent = rel.name + " · " + d + " · macOS 26+ · Apple Silicon";
+    })
+    .catch(function () {});
+</script>
+</body>
+</html>

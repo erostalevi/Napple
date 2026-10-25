@@ -1,0 +1,43 @@
+name: Compatibility report
+description: Tell us how a game behaves on the Napple runtime
+labels: [compat]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never attach game files, keys or firmware**, here or anywhere else. Metadata and logs only.
+  - type: input
+    id: game
+    attributes:
+      label: Game and title ID
+      placeholder: "Name (0100000000000000), base version / update"
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Napple build
+      description: Release name or commit, e.g. "Build 42 (a1b2c3d)"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac
+      placeholder: "M2 Pro, macOS 26.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: How far did it get?
+      options: [ingest, build-plan, rewrite, runtime boot, title screen, in game]
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What happened
+      description: Missing services, NVN calls, crashes, glitches. Paste relevant log lines.
+    validations:
+      required: true

@@ -1,0 +1,101 @@
+name: Release
+
+# Every commit that lands on main builds Napple Studio (CLI + runtime + launcher bundled inside)
+# and publishes it as a GitHub release with a DMG installer.
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "site/**"
+      - "docs/**"
+      - "**.md"
+      - ".github/ISSUE_TEMPLATE/**"
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  KEEP_RELEASES: 30
+
+jobs:
+  build:
+    # Studio targets macOS 26 (studio/Package.swift), so the runner must be macOS 26 on Apple Silicon.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install native libraries
+        run: brew install opus libvpx
+
+      - name: Rust tests
+        run: cargo test --workspace
+
+      - name: Build CLI
+        run: cargo build --release -p napple-cli
+
+      - name: Build runtime libraries
+        run: |
+          make -C input
+          make -C audio
+          make -C frontend
+          make -C gfx
+          make -C runtime
+          make -C packaging
+
+      - name: Build Napple Studio.app
+        run: studio/build_app.sh studio/dist
+
+      - name: Package DMG
+        id: pkg
+        run: |
+          SHORT="${GITHUB_SHA::7}"
+          TAG="build-${GITHUB_RUN_NUMBER}-${SHORT}"
+          DMG="NappleStudio-${TAG}.dmg"
+          STAGE="$(mktemp -d)"
+          cp -R studio/dist/NappleStudio.app "$STAGE/Napple Studio.app"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create -volname "Napple Studio" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+          # Stable name so the website can link releases/latest/download/NappleStudio.dmg
+          cp "$DMG" NappleStudio.dmg
+          shasum -a 256 "$DMG" > "$DMG.sha256"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.pkg.outputs.tag }}
+          DMG: ${{ steps.pkg.outputs.dmg }}
+        run: |
+          NOTES="$(mktemp)"
+          {
+            echo "Automatic build of \`${GITHUB_SHA::7}\` from \`main\`."
+            echo
+            echo "**Install:** open the DMG, drag *Napple Studio* to Applications. The app is ad-hoc signed, not notarized: on first launch right-click it and choose *Open*."
+            echo
+            echo "Requires an Apple Silicon Mac on macOS 26 or newer. You must bring your own game, \`prod.keys\` and firmware; none are included."
+            echo
+            echo "SHA-256: \`$(cut -d' ' -f1 "$DMG.sha256")\`"
+          } > "$NOTES"
+          git log -1 --format='%n### Latest commit%n%s%n%n%b' >> "$NOTES"
+          gh release create "$TAG" "$DMG" NappleStudio.dmg "$DMG.sha256" \
+            --target "$GITHUB_SHA" --title "Build ${GITHUB_RUN_NUMBER} (${GITHUB_SHA::7})" \
+            --notes-file "$NOTES" --latest
+
+      - name: Prune old releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --limit 200 --json tagName,createdAt \
+            --jq 'map(select(.tagName | startswith("build-"))) | sort_by(.createdAt) | reverse | .['"$KEEP_RELEASES"':][] | .tagName' |
+          while read -r t; do gh release delete "$t" --cleanup-tag --yes; done
