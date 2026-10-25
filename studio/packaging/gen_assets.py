@@ -2,33 +2,40 @@
 """Regenerates the Studio icon and the DMG background (committed outputs; CI does not need Pillow).
    python3 studio/packaging/gen_assets.py"""
 import math, os
-from PIL import Image, ImageDraw, ImageFilter, ImageFont
+from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 S = 4  # supersampling
 
-def apple_mask(size):
-    """White apple with a bite and a leaf on a transparent canvas, drawn on a 1024 grid scaled to `size`."""
-    k = size / 1024 * S
-    m = Image.new("L", (int(size * S / (size / 1024) * (size / 1024)) , int(size * S / (size / 1024) * (size / 1024))), 0) if False else Image.new("L", (int(size * S), int(size * S)), 0)
-    d = ImageDraw.Draw(m)
-    def circ(cx, cy, r, v=255): d.ellipse([(cx - r) * k, (cy - r) * k, (cx + r) * k, (cy + r) * k], fill=v)
+DY = -85  # lifts the silhouette (no leaf) so it sits centred on the canvas
+SC = 0.9  # silhouette scale about the canvas centre
+T = lambda v: 512 + (v - 512) * SC
+
+def apple_shape(W, k):
+    """The original apple silhouette (two lobes, top dip, no bite, no leaf) on a 1024 grid, as an L mask of side W."""
+    m = Image.new("L", (W, W), 0); d = ImageDraw.Draw(m)
+    def circ(cx, cy, r, v=255): X, Y, R = T(cx), T(cy + DY), r * SC; d.ellipse([(X - R) * k, (Y - R) * k, (X + R) * k, (Y + R) * k], fill=v)
     circ(420, 560, 215); circ(604, 560, 215)
-    d.ellipse([(512 - 290) * k, (610 - 230) * k, (512 + 290) * k, (610 + 235) * k], fill=255)
+    d.ellipse([T(512 - 290) * k, T(610 + DY - 230) * k, T(512 + 290) * k, T(610 + DY + 235) * k], fill=255)
     circ(440, 690, 170); circ(584, 690, 170)
-    circ(512, 372, 70, 0)            # top dip
-    circ(790, 470, 105, 0)           # the bite
-    # leaf
-    pts = []
-    for i in range(41):
-        t = i / 40
-        x = 170 * t; y = 62 * math.sin(math.pi * t)
-        pts.append((x, y))
-    leaf = [(x, y) for x, y in pts] + [(x, -y) for x, y in reversed(pts)]
-    a = math.radians(-50)
-    L = [((520 + (x * math.cos(a) - y * math.sin(a))) * k, (345 + (x * math.sin(a) + y * math.cos(a))) * k) for x, y in leaf]
-    d.polygon(L, fill=255)
-    return m.resize((size, size), Image.LANCZOS)
+    circ(512, 332, 62, 0)            # top dip
+    return m
+
+def joycon_apple(size, gap=16):
+    """Two-tone 'Joy-Con' apple: a black left half with a stick, a white right half with four buttons. Returns (black, white) RGBA layers."""
+    k = size / 1024 * S; W = size * S
+    def layer(half, ink, face, detail):
+        shape = apple_shape(W, k)
+        cut = Image.new("L", (W, W), 0); cd = ImageDraw.Draw(cut)
+        cd.rectangle([0, 0, (512 - gap / 2) * k, W] if half == 0 else [(512 + gap / 2) * k, 0, W, W], fill=255)
+        shape = ImageChops.multiply(shape, cut)
+        im = Image.new("RGBA", (W, W), (0, 0, 0, 0)); im.paste(face, (0, 0), shape)
+        d = ImageDraw.Draw(im); c = lambda x, y, r: d.ellipse([(x - r) * k, (y - r) * k, (x + r) * k, (y + r) * k], fill=ink)
+        for (x, y, r) in detail: c(T(x), T(y), r * SC)
+        return im.resize((size, size), Image.LANCZOS)
+    left = layer(0, (255, 255, 255, 255), (22, 22, 26, 255), [(385, 490, 60)])
+    right = layer(1, (22, 22, 26, 255), (255, 255, 255, 255), [(645, 440, 26), (645, 550, 26), (590, 495, 26), (700, 495, 26)])
+    return left, right
 
 def icon(size=1024):
     bg = Image.new("RGB", (size, size))
@@ -43,16 +50,12 @@ def icon(size=1024):
     ImageDraw.Draw(mask).rounded_rectangle([int(size * 0.098 * S), int(size * 0.098 * S), int(size * 0.902 * S), int(size * 0.902 * S)], radius=int(size * 0.18 * S), fill=255)
     mask = mask.resize((size, size), Image.LANCZOS)
     out.paste(bg, (0, 0), mask)
-    ap = apple_mask(size)
-    scale = 0.64; a2 = ap.resize((int(size * scale), int(size * scale)), Image.LANCZOS)
-    shadow = Image.new("RGBA", out.size, (0, 0, 0, 0))
-    sh = Image.new("L", out.size, 0); sh.paste(a2, (int(size * (1 - scale) / 2), int(size * (1 - scale) / 2) + int(size * 0.02)))
+    left, right = joycon_apple(size)
+    both = Image.alpha_composite(left, right)
+    sh = both.getchannel("A").transform(both.size, Image.AFFINE, (1, 0, 0, 0, 1, -size * 0.016))
     sh = sh.filter(ImageFilter.GaussianBlur(size * 0.012)).point(lambda v: int(v * 0.35))
-    shadow.putalpha(sh); out = Image.alpha_composite(out, shadow)
-    white = Image.new("RGBA", out.size, (0, 0, 0, 0))
-    wm = Image.new("L", out.size, 0); wm.paste(a2, (int(size * (1 - scale) / 2), int(size * (1 - scale) / 2)))
-    white.paste((255, 255, 255, 255), (0, 0), wm)
-    return Image.alpha_composite(out, white)
+    shadow = Image.new("RGBA", out.size, (0, 0, 0, 0)); shadow.putalpha(sh)
+    return Image.alpha_composite(Image.alpha_composite(out, shadow), both)
 
 def font(sz, bold=False):
     for p in ["/System/Library/Fonts/SFNS.ttf", "/usr/share/fonts/opentype/inter/Inter-%s.otf" % ("Bold" if bold else "Regular"),
@@ -87,7 +90,11 @@ def dmg_bg(scale):
     return im.convert("RGB")
 
 if __name__ == "__main__":
-    icon(1024).save(os.path.join(HERE, "icon.png"))
+    big = icon(1024)
+    big.save(os.path.join(HERE, "icon.png"))
+    site = os.path.join(HERE, "..", "..", "site", "assets")
+    for name, px in (("icon.png", 512), ("apple-touch-icon.png", 180), ("favicon.png", 64)):
+        big.resize((px, px), Image.LANCZOS).save(os.path.join(site, name))
     dmg_bg(1).save(os.path.join(HERE, "dmg-background.png"))
     dmg_bg(2).save(os.path.join(HERE, "dmg-background@2x.png"))
     print("ok")
