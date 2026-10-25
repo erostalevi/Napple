@@ -1,7 +1,7 @@
 // Landing page behavior: wires the download buttons to the latest GitHub release and swaps in real screenshots when present.
 (function () {
   "use strict";
-  var DMG = "Napple-Studio.dmg", ZIP = "Napple-macOS-arm64.zip";
+  var DMG = "Napple-Studio.dmg";
 
   // owner/repo: <meta name="napple-repo">, else https://<owner>.github.io/<repo>/ , else a ?repo=owner/name override for testing.
   function repo() {
@@ -20,7 +20,6 @@
   if (R) {
     var base = "https://github.com/" + R;
     $("dl-dmg").href = base + "/releases/latest/download/" + DMG;
-    $("dl-zip").href = base + "/releases/latest/download/" + ZIP;
     $("gh-link").href = base;
     $("rel-link").href = base + "/releases";
     document.querySelectorAll("[data-dl-nav]").forEach(function (a) { a.setAttribute("href", "#download"); });
@@ -37,7 +36,7 @@
       .catch(function () { $("dl-meta").textContent = "Latest build · .dmg"; });
   } else {
     // Unknown repository (custom domain without the meta tag): never leave a dead "#" button.
-    ["dl-dmg", "dl-zip", "gh-link", "rel-link"].forEach(function (id) { var e = $(id); if (e) { e.removeAttribute("href"); e.setAttribute("aria-disabled", "true"); } });
+    ["dl-dmg", "gh-link", "rel-link"].forEach(function (id) { var e = $(id); if (e) { e.removeAttribute("href"); e.setAttribute("aria-disabled", "true"); } });
     $("dl-meta").textContent = "Set the repo in index.html";
   }
 
