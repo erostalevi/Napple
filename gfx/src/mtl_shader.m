@@ -12,7 +12,7 @@
 
 #import "mtl_priv.h"
 
-#define TRANSLATOR_VERSION 6u          /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 7u          /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader @end
 @implementation GfxPipe @end
@@ -623,7 +623,10 @@ GfxPipe *mtl_pipe_get(const pipe_key *k) {
         if (skip_mode && !kc.probe) dispatch_async(g_pipe_q, ^{ build_pipe(p, kc); });
         else {                        /* synchronous on first use: nothing is skipped (built on this thread, see the comment at the top) */
             atomic_fetch_add(&g_gfx.compiles_blocking, 1);
+            uint64_t b0 = gfx_now_ns();
             build_pipe(p, kc);
+            { uint64_t us = (gfx_now_ns() - b0) / 1000, o = atomic_load(&g_gfx.pipe_build_max_us);
+              atomic_fetch_add(&g_gfx.pipe_build_us, us); while (us > o && !atomic_compare_exchange_weak(&g_gfx.pipe_build_max_us, &o, us)) {} }
             atomic_fetch_sub(&g_gfx.compiles_blocking, 1);
         }
     } else {

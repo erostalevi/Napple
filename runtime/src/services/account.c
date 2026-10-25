@@ -27,7 +27,13 @@ static const IpcCmd profile_cmds[] = {
 };
 static void manager_check(IpcObject *s, IpcCall *c) { (void)s; (void)c; }
 static void manager_account_id(IpcObject *s, IpcCall *c) { (void)s; uint64_t v = 0x4e61707070304e53ULL; IPC_OUT(c, v); }
-static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IPC_STUB}, {1, "GetAccountId", manager_account_id, IPC_STUB}};
+/* GetNintendoAccountUserResourceCacheForApplication: the local user is not linked to a Nintendo Account: id 0 and an all-zero cache (no result error: titles tolerate "nothing cached"). */
+static void manager_na_cache(IpcObject *s, IpcCall *c) {
+    (void)s; uint64_t v = 0; IPC_OUT(c, v);
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b) { uint8_t z[0x68] = {0}; ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z); }
+}
+static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IPC_STUB}, {1, "GetAccountId", manager_account_id, IPC_STUB}, {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_STUB}};
 
 static void acc_user_count(IpcObject *s, IpcCall *c) { (void)s; int32_t v = 1; IPC_OUT(c, v); }
 static void acc_user_exists(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = !memcmp(ipc_in(c, 0, 16), g_user_id, 16); IPC_OUT(c, v); }

@@ -130,6 +130,7 @@ static void crash(int num, siginfo_t *info, void *context) {
     if ((num == SIGBUS || num == SIGSEGV) && guest_fault(info->si_addr, (int)((u->uc_mcontext->__es.__esr >> 6) & 1), context)) return;
 
     runtime_peek("at crash");
+    { extern void a32_crash_report(void) __attribute__((weak)); if (a32_crash_report) a32_crash_report(); }   /* AArch32 guest: the interpreter's cpu state at the fault */
     uint64_t fp = u->uc_mcontext->__ss.__fp, lr = u->uc_mcontext->__ss.__lr;
     char where[96], text[256];
     module_describe(pc, where, sizeof where);

@@ -133,6 +133,22 @@ static void mtl_tex_rescale(GfxTex *t, int for_gpu_write) {
     mtl_scale_count(pk.rx != 1 || pk.ry != 1, pk.rx != 1 || pk.ry != 1 ? (uint64_t)pk.w * pk.h * 4 * t->samples : 0);
 }
 
+/* A render pass whose attachments disagree (some scaled, some not) would render only their overlap (the top-left corner) and leave the rest garbage: SMO's
+ * G-buffer pass has a colour target that was once filled from guest memory (never scaled by mtl_tex_rescale) next to scaled siblings. The target is a render
+ * target now, so it is re-allocated at the siblings' factor; what it held is lost (the pass renders it, a load would read zeros). */
+void mtl_tex_force_scale(GfxTex *t, float rx, float ry) {
+    if (!t || (t->rsx == rx && t->rsy == ry) || (t->tex.textureType != MTLTextureType2D && t->tex.textureType != MTLTextureType2DArray) || t->tex.mipmapLevelCount > 1) return;
+    uint32_t nw = (uint32_t)lroundf((float)t->w * rx), nh = (uint32_t)lroundf((float)t->h * ry);
+    if (nw < 1 || nh < 1 || nw > 16384 || nh > 16384) return;
+    pthread_mutex_lock(&g_tt_mu);
+    MTLTextureDescriptor *td = [MTLTextureDescriptor new];
+    td.textureType = t->tex.textureType; td.pixelFormat = t->tex.pixelFormat; td.width = nw; td.height = nh; td.depth = 1;
+    td.mipmapLevelCount = 1; td.arrayLength = t->tex.arrayLength; td.sampleCount = t->tex.sampleCount; td.storageMode = MTLStorageModeShared; td.usage = t->tex.usage;
+    id<MTLTexture> n = [g_mtl.dev newTextureWithDescriptor:td];
+    if (n) { t->tex = n; t->rsx = (float)nw / (float)t->w; t->rsy = (float)nh / (float)t->h; t->views = [NSMutableDictionary dictionary]; t->gpu_owned = 1; }
+    pthread_mutex_unlock(&g_tt_mu);
+}
+
 GfxTex *mtl_tex_get(const texsnap *s, int for_gpu_write) {
     if (!s || !s->valid) return nil;
     uint64_t h = tex_hash(s);
@@ -407,7 +423,17 @@ id<MTLTexture> mtl_tex_attach_view(GfxTex *t, const view_t *v, int has_view, uin
     if (cached) return cached;
     int bw, bh, bv = napple_fmt_bpb(v->format, &bw, &bh), bt = napple_fmt_bpb(t->key.d.format, &bw, &bh);
     id<MTLTexture> nv = nil;
-    if (bv && bv == bt && (t->tex.usage & MTLTextureUsagePixelFormatView)) nv = [t->tex newTextureViewWithPixelFormat:pf];
+    MTLPixelFormat sp = t->tex.pixelFormat;
+    int src_bc = sp >= MTLPixelFormatBC1_RGBA && sp <= MTLPixelFormatBC7_RGBAUnorm_sRGB, dst_bc = pf >= MTLPixelFormatBC1_RGBA && pf <= MTLPixelFormatBC7_RGBAUnorm_sRGB;
+    if (src_bc && !dst_bc) {
+        /* Rendering into a block-compressed texture through an integer view (one texel per 4x4 block, e.g. runtime texture compression): Metal cannot view BC as uint and a BC
+         * texture is not renderable, so the pass draws into an auxiliary texture of the block grid. TODO: copy it back into the BC texture before that is sampled. */
+        MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf width:MAX(1, (t->tex.width + 3) / 4) height:MAX(1, (t->tex.height + 3) / 4) mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead; td.storageMode = MTLStorageModePrivate;
+        nv = [g_mtl.dev newTextureWithDescriptor:td];
+        LOG_ONCE(NAPPLE_LOG_WARN, "render target view %#x of a block-compressed texture (format %#x): rendering into a block-grid texture; the result is not copied back into the compressed texture yet", v->format, t->key.d.format);
+    }
+    else if (bv && bv == bt && (t->tex.usage & MTLTextureUsagePixelFormatView)) nv = [t->tex newTextureViewWithPixelFormat:pf];
     if (!nv) {
         LOG_ONCE(NAPPLE_LOG_WARN, "render target view format %#x is not view-compatible with the texture (format %#x): drawn in the texture's format", v->format, t->key.d.format);
         nv = t->tex;

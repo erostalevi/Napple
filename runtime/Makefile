@@ -1,7 +1,7 @@
 # napple-runtime: native Horizon host for rewritten Switch games.   make -C runtime [debug=1]
 CC ?= clang
 BUILD := build
-SRC := $(wildcard src/*.c src/services/*.c)
+SRC := $(wildcard src/*.c src/services/*.c src/a32/*.c)
 MSRC := $(wildcard src/*.m)
 ASM := $(wildcard src/*.S)
 OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC)) $(patsubst src/%.m,$(BUILD)/%.o,$(MSRC)) $(patsubst src/%.S,$(BUILD)/%.o,$(ASM))

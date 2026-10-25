@@ -144,6 +144,15 @@ fn rewrite_version(exefs: &[(String, Vec<u8>)], dir: &Path, label: &str, lo: f64
         .map(|(name, bytes)| {
             check_cancel()?;
             let nso = Nso::parse(bytes).map_err(|e| BuildError::new("container", format!("{label} {name}: {e}")))?;
+            if crate::tables32::is_elf32(&nso) {      // AArch32 module (MK8D): no AArch64 rewrite; plain image + NTB2 tables
+                let (image, tables, st) = crate::tables32::build_module32(name, &nso, bytes)?;
+                std::fs::write(mdir.join(format!("{name}.patched.bin")), &image).map_err(|e| BuildError::io("write module", e))?;
+                std::fs::write(mdir.join(format!("{name}.tables")), &tables).map_err(|e| BuildError::io("write tables", e))?;
+                use sha2::{Digest, Sha256};
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                progress("rewrite", lo + (hi - lo) * n as f64 / total as f64, &format!("{label}: {name} (AArch32, {} relocations)", st.relocs));
+                return Ok(ModOut { name: name.clone(), file_size: image.len(), sha256: hex(&Sha256::digest(&image)), build_id: st.build_id, symbols: st.symbols, relocs: st.relocs, gates: 0 });
+            }
             let out = napple_rewrite::rewrite_module(&nso, &nso.build_id_hex()[..32], &RewriteOptions::default()).map_err(|e| BuildError::new("rewrite", format!("{label} {name}: {e}")))?;
             let orig = ModuleImage::from_nso(&nso).map_err(|e| BuildError::new("rewrite", format!("{label} {name}: {e}")))?;
             let chk = check::verify(&orig, &out);

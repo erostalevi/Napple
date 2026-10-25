@@ -87,3 +87,9 @@ uint32_t host_thread_attach(void *tlr) {
     pthread_setspecific(runtime_keys[2], tlr);
     return threads_register_main();
 }
+
+/* AArch32 hooks (memory.c / a32): host tests run only AArch64 guests, so addresses pass through. */
+uint8_t *memory_a32_base(void) { return 0; }
+void a32_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp) { (void)entry; (void)arg; (void)sp; }
+uint64_t guest_addr_to_host(uint64_t a) { return a; }
+uint64_t host_addr_to_guest(uint64_t a) { return a; }

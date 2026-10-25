@@ -209,6 +209,7 @@ void cmdrec_retain(cmdrec *r);
 void cmdrec_release(cmdrec *r);
 cmdrec *cmdrec_from_handle(uint64_t h);   /* NULL if stale */
 uint32_t cmdrec_now(void);                 /* coarse clock (seconds) for last_use */
+uint64_t gfx_cmdrec_live(void);                     /* recordings alive (diagnostics, NAPPLE_PERF_LOG) */
 
 #ifdef __cplusplus
 }

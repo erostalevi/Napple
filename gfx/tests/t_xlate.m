@@ -152,7 +152,7 @@ int main(void) {
             ShaderInfo *l = xl(code, 0x400, STAGE_VERTEX, lk);
             CHECK(l->msl != NULL, "LDC.64 translation: %s", l->error);
             if (l->msl) {
-                const char *hi = strstr(l->msl, "r13 = cbr(cb6, (r12) + 28u)"), *lo = strstr(l->msl, "r12 = cbr(cb6, (r12) + 24u)");
+                const char *hi = strstr(l->msl, "r13 = cbr(cb6, cbsz[6], (r12) + 28u)"), *lo = strstr(l->msl, "r12 = cbr(cb6, cbsz[6], (r12) + 24u)");
                 CHECK(hi && lo && hi < lo, "LDC.64 with an aliased address loads the high half before overwriting the address register");
                MSL_COMPILES(l->msl, "LDC.64");
             }

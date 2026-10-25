@@ -31,15 +31,17 @@ void svc_kcode_register(void);
 /* Without the extended-virtual-addressing entitlement an iOS app gets one 6 GiB window at 0x70_0000_0000 (measured on an iPhone 16 Pro Max, iOS 26).
  * Odyssey asks for a 0xc8000000 heap whatever the pool size says, so: a 3.25 GiB heap cap, and an alias region that shrinks from the request down to 1 GiB
  * in 1 GiB steps (3.25 GiB + 0.75 GiB of stack/gaps + 1 GiB tail + 1 GiB alias = 6 GiB). */
-#define HEAP_CAP (0xD0000000ULL)
+#define HEAP_CAP_DEFAULT (0xD0000000ULL)
 #define ALIAS_STEP (1ULL << 30)
 #define ALIAS_LEAST (1ULL << 30)
 #else
-#define HEAP_CAP (4ULL << 30)
+#define HEAP_CAP_DEFAULT (4ULL << 30)
 #define ALIAS_STEP (4ULL << 30)
 #define ALIAS_LEAST (4ULL << 30)
 #endif
-#define LOW_SIZE (HEAP_OFF + HEAP_CAP + (1ULL << 30))
+static uint64_t heap_cap_v = HEAP_CAP_DEFAULT, low_gap_v = 1ULL << 30;   /* AArch32 processes shrink them to fit a 4 GiB window (memory_init_a32) */
+#define HEAP_CAP heap_cap_v
+#define LOW_SIZE (HEAP_OFF + HEAP_CAP + low_gap_v)
 #define ALIAS_MAX (64ULL << 30)
 #define SEARCH_FROM 0x300000000ULL
 
@@ -47,6 +49,7 @@ uint64_t g_program_id;
 uint64_t g_application_pool_bytes = 0xcd500000ULL;
 
 static uint8_t *low_space, *alias_space, *heap;
+static uint8_t *a32_base;      /* AArch32 process: host address of guest address 0 (a 4 GiB window), guest addresses are 32 bit */
 static uint64_t alias_len, heap_size, alias_bytes;
 static pthread_mutex_t mem_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint8_t alias_state[ALIAS_MAX / PAGE_4K];    /* per 4 KiB: 0 free, 5 physical memory, 6 shared, 0xd transfer */
@@ -118,6 +121,22 @@ void memory_init(void) {
     pthread_mutex_unlock(&mem_lock);
 }
 
+/* AArch32 process (a32_proc.c): the guest's 4 GiB window is `window`. Same carving as the 64-bit layout, scaled down: modules below STACK_OFF, the stack region at
+ * 0x10000000, the heap at 0x30000000 (2 GiB cap: MK8D asks for 0x78000000), the alias region above it (1.125 GiB). Every address the runtime's handlers see is a host address in the window;
+ * a32_proc.c converts at the svc boundary and guest_ptr() adds the base to the 32-bit addresses found in IPC descriptors. */
+void memory_init_a32(uint8_t *window) {
+    pthread_mutex_lock(&mem_lock);
+    a32_base = window; heap_cap_v = 0x80000000ULL; low_gap_v = 0x08000000ULL;
+    low_space = window; heap = window + HEAP_OFF; alias_space = window + LOW_SIZE; alias_len = 0x100000000ULL - LOW_SIZE;
+    LOG("memory", "AArch32 guest layout (window %p): stack %#llx+%#llx heap %#llx (cap %#llx) alias %#llx+%#llx", (void *)window, (unsigned long long)STACK_OFF, (unsigned long long)STACK_SIZE,
+        (unsigned long long)HEAP_OFF, (unsigned long long)HEAP_CAP, (unsigned long long)LOW_SIZE, (unsigned long long)alias_len);
+    pthread_mutex_unlock(&mem_lock);
+}
+uint8_t *memory_a32_base(void) { return a32_base; }
+/* IPC buffer descriptors carry guest addresses; the services work on host addresses (identical in a 64-bit process, base + address in an AArch32 one). */
+uint64_t guest_addr_to_host(uint64_t a) { return a32_base && a && a < (1ULL << 32) ? (uint64_t)(uintptr_t)a32_base + a : a; }
+uint64_t host_addr_to_guest(uint64_t a) { return a32_base && a >= (uintptr_t)a32_base && a < (uintptr_t)a32_base + (1ULL << 32) ? a - (uintptr_t)a32_base : a; }
+
 uint64_t memory_heap_base(void) { memory_init(); return (uintptr_t)heap; }
 uint64_t memory_heap_cap(void) { return HEAP_CAP; }
 uint64_t memory_alias_base(void) { memory_init(); return (uintptr_t)alias_space; }
@@ -130,6 +149,10 @@ uint64_t memory_used_bytes(void) { return module_image_bytes() + heap_size + ali
 uint64_t memory_exception_context(void) { return (uintptr_t)exception_context; }
 
 void *guest_ptr(uint64_t addr, uint64_t size) {
+    if (a32_base) {   /* AArch32 process: a 32-bit guest address, or a host pointer the svc adapter already converted */
+        if (addr >= (uintptr_t)a32_base) return addr + size >= addr && addr + size <= (uintptr_t)a32_base + (1ULL << 32) ? (void *)(uintptr_t)addr : NULL;
+        return addr >= 0x10000 && addr + size >= addr && addr + size <= (1ULL << 32) ? (void *)(a32_base + addr) : NULL;
+    }
     if (addr < 0x10000 || addr + size < addr || addr + size > GUEST_LIMIT) return NULL;
     return (void *)(uintptr_t)addr;
 }

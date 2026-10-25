@@ -78,7 +78,7 @@ static cmdrec **g_grave; static uint32_t g_ngrave, g_capgrave, g_grave_pruned;
 static pthread_mutex_t g_grave_mu = PTHREAD_MUTEX_INITIALIZER;
 uint32_t cmdrec_now(void) { return (uint32_t)(gfx_now_ns() / 1000000000ull); }
 static void grave_add(cmdrec *r) {
-    cmdrec *rel[256]; uint32_t nrel = 0, now = cmdrec_now();
+    cmdrec *rel_stack[256], **rel = rel_stack; uint32_t nrel = 0, caprel = 256, now = cmdrec_now();
     pthread_mutex_lock(&g_grave_mu);
     if (g_ngrave >= GRAVE_CAP) {
         LOG_ONCE(NAPPLE_LOG_WARN, "%u finalized command lists still alive: releasing the oldest", g_ngrave);
@@ -91,14 +91,23 @@ static void grave_add(cmdrec *r) {
         uint32_t k = 0;
         for (uint32_t i = 0; i < g_ngrave; i++) {
             cmdrec *e = g_grave[i];
-            if (nrel < 256 && (atomic_load(&e->dead) || now - atomic_load(&e->last_use) > GRAVE_IDLE_S)) { rel[nrel++] = e; continue; }
+            if (atomic_load(&e->dead) || now - atomic_load(&e->last_use) > GRAVE_IDLE_S) {      /* no per-pass cap: a cap of 256 a second let the graveyard grow to GRAVE_CAP (~2 GB) in live play */
+                if (nrel == caprel) {
+                    cmdrec **n = malloc((caprel *= 2) * sizeof *n); memcpy(n, rel, nrel * sizeof *n);
+                    if (rel != rel_stack) free(rel);
+                    rel = n;
+                }
+                rel[nrel++] = e; continue;
+            }
             g_grave[k++] = e;
         }
         g_ngrave = k;
     }
     pthread_mutex_unlock(&g_grave_mu);
     for (uint32_t i = 0; i < nrel; i++) { CMDTRACE("grave release %#llx\n", (unsigned long long)rel[i]->handle); atomic_fetch_add(&g_rel_why[0], 1); cmdrec_release(rel[i]); }
+    if (rel != rel_stack) free(rel);
 }
+uint64_t gfx_cmdrec_live(void) { return atomic_load(&g_rec_live); }
 static uintptr_t g_reuse_hi;   /* end of the command memory being handed back (pred_chunk argument is its start) */
 static int pred_chunk(const cmdbuf_host *h, uint32_t i, uintptr_t a) { return h->rec_chunk[i] < g_reuse_hi && a < h->rec_chunk_end[i]; }
 

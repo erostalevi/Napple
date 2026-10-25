@@ -25,3 +25,5 @@ gfx/build-*/
 studio/dist/
 *.o
 *.dSYM/
+__pycache__/
+*.pyc

@@ -54,9 +54,13 @@ static void host_log(void *user, const char *line) { (void)user; LOGV("audio", "
 typedef struct { uint32_t ev_w; uint32_t ev_r; } EventPair;
 static void host_frame_event(void *user) { EventPair *e = user; event_signal_handle(e->ev_w); }
 static void host_buffer_event(void *user) { EventPair *e = user; event_signal_handle(e->ev_w); }
+uint8_t *memory_a32_base(void);
+/* AArch32 process: the library's guest addresses (memory pools, wave buffers, ...) are 32-bit window addresses. */
+static void *host_translate(void *user, uint64_t guest_addr, uint64_t size) { (void)user; return guest_ptr(guest_addr, size); }
 static napple_audio_host make_host(EventPair *e, int frame) {
     napple_audio_host h = {0};
     h.user = e; h.write_prepare = host_write_prepare; h.log = host_log;
+    if (memory_a32_base()) h.translate = host_translate;
     if (frame) h.frame_event = host_frame_event; else h.buffer_event = host_buffer_event;
     return h;
 }

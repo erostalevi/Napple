@@ -192,6 +192,8 @@ static void svc_map_transfer_memory(uint64_t *r) { r[0] = handle_get((uint32_t)r
 
 /* ---- HIPC framing ------------------------------------------------------------------------------------------------ */
 static uint64_t static_addr(const uint32_t *d) { return d[1] | ((uint64_t)((d[0] >> 12) & 0xf) << 32) | ((uint64_t)((d[0] >> 6) & 0x3f) << 36); }
+uint64_t guest_addr_to_host(uint64_t a);
+uint64_t host_addr_to_guest(uint64_t a);
 static uint64_t buffer_addr(const uint32_t *d) { return d[1] | ((uint64_t)((d[2] >> 28) & 0xf) << 32) | ((uint64_t)((d[2] >> 2) & 0x3fffff) << 36); }
 static uint64_t buffer_size(const uint32_t *d) { return d[0] | ((uint64_t)((d[2] >> 24) & 0xf) << 32); }
 
@@ -213,14 +215,14 @@ static void parse(const uint32_t *m, IpcCall *c, ParseTail *tail) {
         for (unsigned i = 0; i < c->ncopy; i++) c->copy[i] = *p++;
         for (unsigned i = 0; i < c->nmove; i++) c->move[i] = *p++;
     }
-    for (unsigned i = 0; i < c->nx; i++, p += 2) c->x[i] = (IpcBuf){static_addr(p), p[0] >> 16, p[0] & 0x3f};
+    for (unsigned i = 0; i < c->nx; i++, p += 2) c->x[i] = (IpcBuf){guest_addr_to_host(static_addr(p)), p[0] >> 16, p[0] & 0x3f};
     IpcBuf *lists[3] = {c->a, c->b, c->w}; unsigned counts[3] = {c->na, c->nb, c->nw};
-    for (unsigned k = 0; k < 3; k++) for (unsigned i = 0; i < counts[k]; i++, p += 3) lists[k][i] = (IpcBuf){buffer_addr(p), buffer_size(p), i};
+    for (unsigned k = 0; k < 3; k++) for (unsigned i = 0; i < counts[k]; i++, p += 3) lists[k][i] = (IpcBuf){guest_addr_to_host(buffer_addr(p)), buffer_size(p), i};
     tail->data_words = p;
     const uint32_t *recv = p + tail->ndata;
     c->nc = recv_mode == 2 ? 1 : recv_mode > 2 ? recv_mode - 2 : 0;
     if (c->nc > IPC_MAX_BUF) runtime_fail("IPC message with too many receive buffers");
-    for (unsigned i = 0; i < c->nc; i++, recv += 2) c->c[i] = (IpcBuf){recv[0] | ((uint64_t)(recv[1] & 0xffff) << 32), recv[1] >> 16, i};
+    for (unsigned i = 0; i < c->nc; i++, recv += 2) c->c[i] = (IpcBuf){guest_addr_to_host(recv[0] | ((uint64_t)(recv[1] & 0xffff) << 32)), recv[1] >> 16, i};
     if ((const uint8_t *)recv - (const uint8_t *)m > MSG_BYTES) runtime_fail("IPC request exceeds the message buffer");
 }
 
@@ -234,7 +236,7 @@ static void respond(uint32_t *m, int domain, const IpcCall *c, const uint32_t *o
         for (unsigned i = 0; i < c->nout_move; i++) *p++ = c->out_move[i];
     }
     for (unsigned i = 0; i < c->nxout; i++, p += 2) {
-        uint64_t a = c->xout[i].addr;
+        uint64_t a = host_addr_to_guest(c->xout[i].addr);
         p[0] = (c->xout[i].index & 0x3f) | (uint32_t)(((a >> 36) & 0x3f) << 6) | (uint32_t)(((a >> 32) & 0xf) << 12) | (uint32_t)(c->xout[i].size << 16);
         p[1] = (uint32_t)a;
     }

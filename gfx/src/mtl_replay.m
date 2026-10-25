@@ -254,7 +254,20 @@ static void cb_commit(int complete_seq) {
 /* ---------------------------------------------------------------------------------------------------------------
  * Render pass
  * --------------------------------------------------------------------------------------------------------------- */
+static void pass_unify_scale(void) {   /* all attachments of a pass share one allocation size: lift the unscaled ones to the largest factor present (see mtl_tex_force_scale) */
+    GfxTex *att[9]; int n = 0; float mx = 1, my = 1;
+    for (uint32_t i = 0; i < S.rt.n && i < 8; i++) { GfxTex *t = mtl_tex_get(&S.rt.color[i].s, 1); if (t) att[n++] = t; }
+    GfxTex *d = S.rt.depth.s.valid ? mtl_tex_get(&S.rt.depth.s, 1) : nil; if (d) att[n++] = d;
+    for (int i = 0; i < n; i++) { if (att[i]->rsx > mx) mx = att[i]->rsx; if (att[i]->rsy > my) my = att[i]->rsy; }
+    if (mx == 1 && my == 1) return;
+    { int mixed = 0; for (int i = 0; i < n; i++) if (att[i]->rsx != mx || att[i]->rsy != my) mixed = 1;
+      if (mixed && getenv("NAPPLE_SCALE_DIAG")) { static int once; if (once++ < 6) for (int i = 0; i < n; i++) fprintf(stderr, "[scale-diag] unify att %d: guest %ux%u rsx %.3f tex %lux%lu type %d samples %lu stamp %d gpu_owned %d\n", i, att[i]->w, att[i]->h, att[i]->rsx, (unsigned long)att[i]->tex.width, (unsigned long)att[i]->tex.height, (int)att[i]->tex.textureType, (unsigned long)att[i]->tex.sampleCount, (int)att[i]->stamp, (int)att[i]->gpu_owned); } }
+    for (int i = 0; i < n; i++) if (att[i]->rsx != mx || att[i]->rsy != my) {
+        if (att[i]->w == att[0]->w && att[i]->h == att[0]->h) mtl_tex_force_scale(att[i], mx, my);   /* same guest size as the rest: it is screen sized */
+    }
+}
 static void pass_info_from_rt(void) {
+    pass_unify_scale();
     P.ncolor = 0; P.w = P.h = 0; P.samples = 1; P.depth_fmt = P.stencil_fmt = 0; P.sx = P.sy = 1;
     memset(P.color_fmt, 0, sizeof P.color_fmt);
     for (uint32_t i = 0; i < S.rt.n && i < 8; i++) {
@@ -263,6 +276,8 @@ static void pass_info_from_rt(void) {
         uint32_t lv, sl;
         P.color_fmt[i] = (uint32_t)mtl_tex_attach_view(t, &S.rt.color[i].view, S.rt.color[i].has_view, &lv, &sl).pixelFormat;   /* the view's format, if it has one */
         if (!P.w) { P.w = t->w; P.h = t->h; P.samples = t->samples; P.sx = t->rsx > 0 ? t->rsx : 1; P.sy = t->rsy > 0 ? t->rsy : 1; }
+        { id<MTLTexture> av = mtl_tex_attach_view(t, &S.rt.color[i].view, S.rt.color[i].has_view, &lv, &sl);
+          if (av != t->tex && (NSUInteger)lroundf((float)t->w * (t->rsx > 0 ? t->rsx : 1)) != av.width && i == 0 && t->tex.width != av.width) { P.w = (uint32_t)av.width; P.h = (uint32_t)av.height; P.sx = P.sy = 1; } }   /* block-grid render of a compressed texture */
         P.ncolor = (int)i + 1;
     }
     GfxTex *d = S.rt.depth.s.valid ? mtl_tex_get(&S.rt.depth.s, 1) : nil;
@@ -287,6 +302,20 @@ static int pass_begin(void) {
     end_encoders();
     pass_info_from_rt();
     if (!P.w) return 0;
+    if (getenv("NAPPLE_SCALE_DIAG")) {      /* every distinct pass whose attachments do not all match guest size x scale (render target scaling bugs) */
+        static uint64_t seen[256]; static int nseen;
+        for (uint32_t i = 0; i <= S.rt.n && i < 9; i++) {
+            GfxTex *t = i < S.rt.n ? mtl_tex_get(&S.rt.color[i].s, 1) : (S.rt.depth.s.valid ? mtl_tex_get(&S.rt.depth.s, 1) : nil);
+            if (!t) continue;
+            uint32_t ew = (uint32_t)lroundf((float)P.w * P.sx), eh = (uint32_t)lroundf((float)P.h * P.sy);
+            if (t->tex.width == ew && t->tex.height == eh && t->w == P.w) continue;
+            uint64_t key = ((uint64_t)t->tex.width << 40) ^ ((uint64_t)t->tex.height << 24) ^ ((uint64_t)P.w << 8) ^ i ^ ((uint64_t)(P.sx * 1000) << 52); int dup = 0;
+            for (int k = 0; k < nseen; k++) if (seen[k] == key) dup = 1;
+            if (dup || nseen >= 256) continue;
+            seen[nseen++] = key;
+            fprintf(stderr, "[scale-diag] pass att %u (%s): tex %lux%lu guest %ux%u rsx %.3f | pass guest %ux%u scale %.3f -> expected %ux%u\n", i, i < S.rt.n ? "color" : "depth", (unsigned long)t->tex.width, (unsigned long)t->tex.height, t->w, t->h, t->rsx, P.w, P.h, P.sx, ew, eh);
+        }
+    }
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
     for (uint32_t i = 0; i < S.rt.n && i < 8; i++) {
         GfxTex *t = mtl_tex_get(&S.rt.color[i].s, 1);
@@ -754,6 +783,7 @@ static void make_pools_resident(id enc, int compute) {
 /* Bind constant buffers, textures and samplers of one stage. `enc` is the render or compute encoder. */
 static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint32_t cs_groups[3]) {
     const ShaderInfo *si = &sh->info;
+    uint32_t cbsz[18]; for (int i = 0; i < 18; i++) cbsz[i] = 0x10000;       /* bound size per constant buffer (the shader reads 0 past it: CBSZ_BUFFER_INDEX) */
     for (int k = 0; k < 18; k++) {
         if (!(si->cbuf_mask & (1u << k))) continue;
         id<MTLBuffer> buf = nil; uint32_t off = 0;
@@ -792,10 +822,16 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
             if (sz < 16) sz = 16;
             uint8_t *p = ring_alloc(&g_ring, sz, 256, &buf, &off);
             if (r.addr) memcpy(p, (const void *)(uintptr_t)r.addr, sz); else memset(p, 0, sz);
+            cbsz[k] = r.addr ? (r.size && r.size < sz ? (uint32_t)r.size : sz) : 0;
         }
         if (compute) [(id<MTLComputeCommandEncoder>)enc setBuffer:buf offset:off atIndex:k];
         else if (stage == ST_VS) [(id<MTLRenderCommandEncoder>)enc setVertexBuffer:buf offset:off atIndex:k];
         else [(id<MTLRenderCommandEncoder>)enc setFragmentBuffer:buf offset:off atIndex:k];
+    }
+    if (si->cbuf_dynamic) {
+        if (compute) [(id<MTLComputeCommandEncoder>)enc setBytes:cbsz length:sizeof cbsz atIndex:CBSZ_BUFFER_INDEX];
+        else if (stage == ST_VS) [(id<MTLRenderCommandEncoder>)enc setVertexBytes:cbsz length:sizeof cbsz atIndex:CBSZ_BUFFER_INDEX];
+        else [(id<MTLRenderCommandEncoder>)enc setFragmentBytes:cbsz length:sizeof cbsz atIndex:CBSZ_BUFFER_INDEX];
     }
     float *rscale_ptr = NULL;                           /* the rscale table of this stage (filled per texture below) */
     if (si->uses_gmem) make_pools_resident(enc, compute);

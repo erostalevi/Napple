@@ -44,6 +44,9 @@ static void report_once(AudioRenderer *r, unsigned bit, const char *msg, int val
     if (m->reported & (1u << bit)) return;
     m->reported |= 1u << bit; napple_audio_log(&r->host, "%s (%d)", msg, value);
 }
+/* Voice sample data is read straight from guest memory on the render thread: addresses go through the host's translate hook (identity for a 64-bit guest). */
+static _Thread_local const napple_audio_host *g_mix_host;
+static inline const uint8_t *vaddr(uint64_t a) { return (const uint8_t *)(g_mix_host && g_mix_host->translate && a ? g_mix_host->translate(g_mix_host->user, a, 1) : (void *)(uintptr_t)a); }
 static void *guest_need(AudioRenderer *r, uint64_t addr, uint64_t size) {
     void *p = napple_audio_guest(&r->host, addr, size);
     if (!p) napple_audio_fatal("guest buffer is not mapped");
@@ -169,7 +172,7 @@ typedef struct { ServerVoice *v; unsigned index; uint64_t offset; int32_t loops;
 static int fmt_bytes(int f) { return f == FMT_PCM8 ? 1 : f == FMT_PCM16 ? 2 : f==FMT_PCM24?3:f == FMT_PCM32 || f == FMT_PCMF32 ? 4 : 0; }
 /* DSP-ADPCM: 8-byte frames of a predictor/scale byte and 14 4-bit samples; the history runs across samples. */
 static int16_t adpcm_next(Walk *w, const AudrenWaveBuffer *b, const int16_t *coef, uint64_t i) {
-    const uint8_t *d = (const uint8_t *)(uintptr_t)b->address;
+    const uint8_t *d = vaddr(b->address);
     uint64_t frame = i / 14, nib = i % 14;
     if ((frame + 1) * 8 > b->size) return 0;
     uint8_t ps = d[frame * 8]; int scale = 1 << (ps & 15), pred = (ps >> 4) & 7;
@@ -184,10 +187,10 @@ static float sample_at(Walk *w, int ch) {
     uint64_t i = (uint64_t)b->start + w->offset; int f = v->in.sample_format, cc = (int)v->in.channel_count;
     if (f == FMT_ADPCM) {
         if (cc != 1 || !v->in.extra_address || v->in.extra_size < 32) return 0;
-        const int16_t *coef = (const int16_t *)(uintptr_t)v->in.extra_address;
+        const int16_t *coef = (const int16_t *)vaddr(v->in.extra_address);
         if (w->abuf != (int32_t)w->index || w->aat > i + 1) {   /* (re)start this buffer: from its context, else from the frame boundary with carried history */
             w->abuf = (int32_t)w->index;
-            if (b->context_address && b->context_size >= 6) { const int16_t *c = (const int16_t *)(uintptr_t)b->context_address; w->h1 = c[1]; w->h2 = c[2]; w->aat = (uint64_t)b->start; }
+            if (b->context_address && b->context_size >= 6) { const int16_t *c = (const int16_t *)vaddr(b->context_address); w->h1 = c[1]; w->h2 = c[2]; w->aat = (uint64_t)b->start; }
             else w->aat = (uint64_t)b->start - (uint64_t)b->start % 14;
             if (i < w->aat) w->aat = i;
         }
@@ -197,7 +200,7 @@ static float sample_at(Walk *w, int ch) {
     int bytes = fmt_bytes(f); if (!bytes || ch >= cc) return 0;
     uint64_t at = (i * (uint64_t)cc + (uint64_t)ch) * (uint64_t)bytes;
     if (at + (uint64_t)bytes > b->size) return 0;
-    const uint8_t *p = (const uint8_t *)(uintptr_t)b->address + at;
+    const uint8_t *p = vaddr(b->address) + at;
     switch (f) {
     case FMT_PCM8: return (int8_t)p[0] / 128.0f;
     case FMT_PCM16: { int16_t s; memcpy(&s, p, 2); return s / 32768.0f; }
@@ -472,6 +475,7 @@ static void mix_circular_sink(AudioRenderer *r,int id) {
 uint32_t mixer_sink_written(AudioRenderer *r,int id) {Mixer *m=r->mixer;return m?m->sink_written[id]:0;}
 
 void mixer_render(AudioRenderer *r) {
+    g_mix_host = &r->host;
     Mixer *m = r->mixer; if (!m) return;
     const int frames = m->frame, mc = r->param.submix_count + 1;
     memset(m->buf, 0, (size_t)m->nbuf * (size_t)frames * sizeof(float));

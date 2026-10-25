@@ -19,6 +19,7 @@ pub mod pipeline;
 pub mod stream;
 pub mod sysdata;
 pub mod tables;
+pub mod tables32;
 pub mod util;
 pub mod zipread;
 

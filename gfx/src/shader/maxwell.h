@@ -63,6 +63,7 @@ typedef struct {
 } ShaderInfo;
 
 #define GMEM_BUFFER_INDEX 17
+#define CBSZ_BUFFER_INDEX 30     /* uint[18]: bound size in bytes of each constant buffer (register-indexed reads past it return 0) */
 extern uint64_t maxwell_gmem_base, maxwell_gmem_size;   /* guest heap window addressed by global memory instructions */
 
 /* blob: shader binary (graphics stages: 0x30-byte NVN header + 0x50-byte SPH + code; compute: code only). */

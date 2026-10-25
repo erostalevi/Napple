@@ -555,6 +555,8 @@ static IpcObject *open_romfs_storage(IpcCall *c) {
  * them from the system NAND), else not found. */
 /* weak default (no DLC): the host-only fs tests link fs.c without misc.c; misc.c's definition wins in the runtime. */
 __attribute__((weak)) const char *aoc_data_id_romfs(uint64_t data_id) { (void)data_id; return NULL; }
+/* OpenPatchDataStorageByCurrentProcess: the romfs.bin served by OpenDataStorageByCurrentProcess already is the patched data (update layered in by the packager), so there is no separate patch storage: report that. */
+static void srv_open_patch_storage(IpcObject *self, IpcCall *c) { (void)self; c->result = R_FS_NOT_FOUND_DATA; }
 static void srv_open_data_storage_by_id(IpcObject *s, IpcCall *c) {
     (void)s; if (c->in_size < 16) { c->result = R_FS_INVALID_ARGUMENT; return; }
     uint8_t storage = IPC_IN(c, uint8_t, 0); uint64_t id = IPC_IN(c, uint64_t, 8);
@@ -806,6 +808,7 @@ static const IpcCmd srv_cmds[] = {
     {71, "ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute", srv_read_extra_mask_by_attr, IPC_IMPL},
     {30, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},
     {200, "OpenDataStorageByCurrentProcess", srv_open_data_storage, IPC_IMPL},
+    {203, "OpenPatchDataStorageByCurrentProcess", srv_open_patch_storage, IPC_IMPL},
     {202, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},
     {1003, "DisableAutoSaveDataCreation", srv_noop, IPC_STUB},
     {1005, "GetGlobalAccessLogMode", srv_get_log_mode, IPC_STUB},

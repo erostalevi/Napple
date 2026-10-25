@@ -1,6 +1,10 @@
 /* napple-runtime <data-dir>: runs a rewritten game from its data directory (see docs/runtime-modules.md). */
 #include "napple_display.h"
 #include "napple.h"
+uint8_t *memory_a32_base(void);
+void a32_process_init(const char *data_dir);
+int a32_detect_nvn_version(unsigned *major, unsigned *minor);
+_Noreturn void a32_boot(uint32_t main_handle);
 #include "frontend.h"
 #include "gfx.h"
 #include "ipc.h"
@@ -122,6 +126,7 @@ static void boot(void) {
     frontend_wait_shader_prewarm(gc.cache_dir);
     runtime_thread_init();
     uint32_t main_handle = threads_register_main();
+    if (memory_a32_base()) a32_boot(main_handle);   /* AArch32 title: replays rtld's startup sequence on the interpreter (never returns) */
     void *start2 = module_find_symbol("_ZN2nn4init5StartEmmPFvvES2_");
     void *start3 = module_find_symbol("_ZN2nn4init5StartEmmPFvvES2_S2_");
     summary_stage("start");
@@ -180,12 +185,14 @@ int main(int argc, char **argv) {
     thread_env_init_keys();
     signals_install();
     svc_kernel_register(); svc_threads_register(); svc_memory_register(); svc_ipc_register();
-    memory_init();
+    int a32_title = g_npdm.valid && !g_npdm.is_64bit;
+    if (a32_title) a32_process_init(g_cfg.data_dir); else memory_init();
     { size_t n; const HostSymbol *t = gfx_hle_table(&n); host_symbols_register(t, n); }
     movie_register_overrides();
-    modules_load(g_cfg.data_dir);
+    if (!a32_title) modules_load(g_cfg.data_dir);
     { extern void watch_install(void); watch_install(); }
-    if (!g_cfg.nvn_major) detect_nvn_version();
+    if (!g_cfg.nvn_major && !a32_title) detect_nvn_version();
+    if (!g_cfg.nvn_major && a32_title) { unsigned ma, mi; if (a32_detect_nvn_version(&ma, &mi)) { g_cfg.nvn_major = ma; g_cfg.nvn_minor = mi; LOG("main", "NVN API version %u.%u detected in the AArch32 main module", ma, mi); } }
     dispatch_build_index();
     services_init();
     { extern void service_register_ro(void); service_register_ro(); }   /* ldr:ro / ro:1 belong to the loader (ro.c) */

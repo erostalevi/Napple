@@ -72,6 +72,7 @@ void ring_end(ring *r);                                  /* returns chunks to th
 }
 @end
 GfxTex *mtl_tex_get(const texsnap *s, int for_gpu_write);                 /* find or create; replay thread */
+void    mtl_tex_force_scale(GfxTex *t, float rx, float ry);                 /* re-allocate at guest size x (rx, ry): a pass mixed scaled and unscaled attachments; replay thread */
 void mtl_tex_debug_dump(GfxTex *t, const char *dir, unsigned layer);       /* NAPPLE_DRAWLOG_TEX debugging aid */
 void mtl_tex_prepare_sample(GfxTex *t);                                    /* upload if the CPU wrote the storage */
 id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, int has_view, int shader_type, int shadow);   /* sampled view */

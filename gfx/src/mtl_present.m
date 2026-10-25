@@ -334,6 +334,25 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
     last_present_ns = t_enter;
     g_display_stats.game_fps = ema_dt > 0 ? 1.0 / ema_dt : 0;
     g_display_stats.game_frames++;
+    { /* NAPPLE_PERF_LOG=1: one stats line every 5 s (fps over the window, worst frame gap, GPU/output ms) for long-run slowdown hunts */
+      static int perf_on = -1; static uint64_t w_start, w_frames, w_max_gap, w_last; static double w_gpu_max; static uint64_t w_pc, w_st, w_pw, w_ds, w_pb;
+      if (perf_on < 0) perf_on = getenv("NAPPLE_PERF_LOG") != NULL;
+      if (perf_on) {
+          if (!w_start) w_start = t_enter;
+          if (w_last && t_enter - w_last > w_max_gap) w_max_gap = t_enter - w_last;
+          w_last = t_enter; w_frames++;
+          if (g_display_stats.gpu_ms > w_gpu_max) w_gpu_max = g_display_stats.gpu_ms;
+          if (t_enter - w_start >= 5000000000ull) {
+              double secs = (double)(t_enter - w_start) / 1e9;
+              uint64_t pc = atomic_load(&g_gfx.pipelines_compiled), st = atomic_load(&g_gfx.shaders_translated), pw = atomic_load(&g_gfx.pipeline_wait_us), ds = atomic_load(&g_gfx.draws_skipped), pb = atomic_load(&g_gfx.pipe_build_us), pbm = atomic_exchange(&g_gfx.pipe_build_max_us, 0);
+              fprintf(stderr, "[perf] fps %.1f maxgap_ms %.1f gpu_ms_max %.2f out_ms %.2f shown_fps %.1f frames %llu | pipes+%llu shaders+%llu pipewait_ms+%llu skipped+%llu pending %llu | blockbuild_ms+%llu max %llu | cmdrecs live %llu\n", (double)w_frames / secs, (double)w_max_gap / 1e6,
+                      w_gpu_max, g_display_stats.output_ms, g_display_stats.out_fps, (unsigned long long)g_display_stats.game_frames, (unsigned long long)(pc - w_pc), (unsigned long long)(st - w_st),
+                      (unsigned long long)((pw - w_pw) / 1000), (unsigned long long)(ds - w_ds), (unsigned long long)atomic_load(&g_gfx.shaders_pending), (unsigned long long)((pb - w_pb) / 1000), (unsigned long long)(pbm / 1000), (unsigned long long)gfx_cmdrec_live());
+              w_pb = pb; w_pc = pc; w_st = st; w_pw = pw; w_ds = ds;
+              w_start = t_enter; w_frames = 0; w_max_gap = 0; w_gpu_max = 0;
+          }
+      }
+    }
     g_display_stats.gpu_ms = (double)atomic_exchange(&g_gpu_ns_acc, 0) / 1e6;
     g_display_stats.base_w = snap->d.width; g_display_stats.base_h = snap->d.height;
     if (gt) { g_display_stats.render_w = (uint32_t)gt->tex.width; g_display_stats.render_h = (uint32_t)gt->tex.height; g_display_stats.scale_x = gt->rsx; g_display_stats.scale_y = gt->rsy; }

@@ -42,7 +42,7 @@ typedef struct gfx_global {
     _Atomic uint32_t settings_gen;
     _Atomic uint64_t frames;
     _Atomic uint64_t draws, dispatches, submits;
-    _Atomic uint64_t pipelines_compiled, pipelines_hit, shaders_translated, shader_disk_hits, shaders_pending, draws_skipped, pipelines_prewarmed, pipeline_wait_us, pipelines_failed;
+    _Atomic uint64_t pipelines_compiled, pipelines_hit, shaders_translated, shader_disk_hits, shaders_pending, draws_skipped, pipelines_prewarmed, pipeline_wait_us, pipelines_failed, pipe_build_us, pipe_build_max_us;
     _Atomic uint64_t unimpl_total;
     _Atomic uint64_t gpu_us_last;
     _Atomic uint32_t prewarm_done, prewarm_total;

@@ -198,6 +198,10 @@ extern void runtime_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp, uint
 extern _Noreturn void runtime_thread_leave(const uint64_t *host_context, void *arg, void (*fn)(void *));
 void runtime_thread_cleanup(void);
 
+uint8_t *memory_a32_base(void);
+void a32_thread_enter(uint64_t entry, uint64_t arg, uint64_t sp);
+/* AArch32 threads keep their thread local region in the guest window: point the kernel's view of it there. */
+void threads_set_tlr_current(void *tlr) { Thread *t = pthread_getspecific(g_key); if (t) t->tlr = tlr; }
 static void *thread_main(void *p) {
     Thread *t = p;
     pthread_setspecific(g_key, t);
@@ -209,6 +213,7 @@ static void *thread_main(void *p) {
     core_take(t);
     pthread_mutex_unlock(&G);
     { volatile char marker = 0; runtime_hle_stack_set((uintptr_t)&marker - 1024); }   /* host services of this thread run below here */
+    if (memory_a32_base()) a32_thread_enter(t->entry, t->arg, t->stack_top);           /* AArch32 process: the interpreter runs this thread (never returns: ExitThread) */
     runtime_thread_enter(t->entry, t->arg, t->stack_top, t->host_context);            /* never returns: ExitThread */
     runtime_fail("guest thread entry returned without ExitThread");
 }
