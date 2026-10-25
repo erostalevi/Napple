@@ -5,34 +5,34 @@ import NappleStudioCore
 /// Home: every Mac app Studio has built, ready to launch.
 struct LibraryView: View {
     @Environment(AppModel.self) private var m
-    private let columns = Array(repeating: GridItem(.flexible(), spacing: 14, alignment: .top), count: 3)
+    private let columns = Array(repeating: GridItem(.flexible(), spacing: 12, alignment: .top), count: 2)
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .bottom) {
-                ScreenTitle(title: "Your games", subtitle: m.libraryItems.isEmpty ? "Nothing built yet." : countLine, size: 34)
+                ScreenTitle(title: "Your games", subtitle: m.libraryItems.isEmpty ? "Nothing built yet." : countLine, size: 28)
                 Spacer()
                 Button { m.showAdd() } label: { Label("Add game", systemImage: "plus") }
-                    .buttonStyle(PrimaryPill(height: 40))
+                    .buttonStyle(PrimaryPill(height: 34, fontSize: 13))
                     .accessibilityLabel("Add a game")
             }
-            .padding(.horizontal, 40)
+            .padding(.horizontal, Metrics.pad)
 
             if m.libraryItems.isEmpty {
                 EmptyLibrary()
             } else {
                 ScrollView {
-                    LazyVGrid(columns: columns, spacing: 14) {
+                    LazyVGrid(columns: columns, spacing: 12) {
                         ForEach(m.libraryItems) { LibraryCard(item: $0) }
                         AddTile()
                     }
-                    .padding(.horizontal, 40).padding(.bottom, 4)
+                    .padding(.horizontal, Metrics.pad).padding(.bottom, 4)
                 }
                 .scrollIndicators(.hidden)
             }
             LegalFooter().padding(.bottom, 4)
         }
-        .padding(.top, 10).padding(.bottom, 14)
+        .padding(.top, 6).padding(.bottom, 10)
     }
 
     private var countLine: String {
@@ -47,14 +47,14 @@ struct EmptyLibrary: View {
     @Environment(AppModel.self) private var m
     var body: some View {
         VStack(spacing: 12) {
-            Image(systemName: "gamecontroller").font(.system(size: 40)).foregroundStyle(Palette.red)
-            Text("Build your first game").font(.system(size: 20, weight: .semibold))
+            Image(systemName: "gamecontroller").font(.system(size: 32)).foregroundStyle(Palette.red)
+            Text("Build your first game").font(.system(size: 17, weight: .semibold))
             Text("Drag .nsp, .xci, .nsz or .xcz files anywhere into this window, or pick them yourself.")
-                .font(.system(size: 14)).foregroundStyle(Palette.secondary).multilineTextAlignment(.center)
-            Button("Choose Files…") { m.pickFilesAndAdd() }.buttonStyle(SecondaryPill(height: 36, fontSize: 13))
+                .font(.system(size: 13)).foregroundStyle(Palette.secondary).multilineTextAlignment(.center)
+            Button("Choose Files…") { m.pickFilesAndAdd() }.buttonStyle(SecondaryPill(height: 30, fontSize: 12))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(40)
+        .padding(24)
     }
 }
 
@@ -63,14 +63,14 @@ struct AddTile: View {
     var body: some View {
         Button { m.showAdd() } label: {
             VStack(spacing: 8) {
-                Image(systemName: "plus").font(.system(size: 18, weight: .bold)).foregroundStyle(Palette.pink)
-                    .frame(width: 44, height: 44).background(Palette.red.opacity(0.22), in: Circle())
-                Text("Add a game").font(.system(size: 14, weight: .medium))
+                Image(systemName: "plus").font(.system(size: 16, weight: .bold)).foregroundStyle(Palette.pink)
+                    .frame(width: 36, height: 36).background(Palette.red.opacity(0.22), in: Circle())
+                Text("Add a game").font(.system(size: 13, weight: .medium))
             }
-            .frame(maxWidth: .infinity, minHeight: 150)
-            .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous)
+            .frame(maxWidth: .infinity, minHeight: 118)
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .strokeBorder(Palette.strokeStrong, style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])))
-            .contentShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Add a game")
@@ -85,18 +85,18 @@ struct LibraryCard: View {
     private var present: Bool { item.status == .present }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 14) {
-                AppIconView(url: item.url, size: 72, radius: 14)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                AppIconView(url: item.url, size: 56, radius: 12)
                     .opacity(present ? 1 : 0.55)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(item.entry.name).font(.system(size: 15, weight: .semibold)).lineLimit(2)
+                    Text(item.entry.name).font(.system(size: 13, weight: .semibold)).lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text(detail).font(.system(size: 12)).foregroundStyle(Palette.tertiary).monospacedDigit()
+                    Text(detail).font(.system(size: 11)).foregroundStyle(Palette.tertiary).monospacedDigit()
                     if present { CompatBadge(entry: item.compat) }
                     else {
                         Label(item.status == .replaced ? "Not this game any more" : "Can't find this app", systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.amber)
+                            .font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.amber)
                     }
                 }
             }
@@ -104,24 +104,24 @@ struct LibraryCard: View {
             HStack(spacing: 8) {
                 if present {
                     Button { m.launch(item.url) } label: { Text("Launch").frame(maxWidth: .infinity) }
-                        .buttonStyle(PrimaryPill(height: 36))
+                        .buttonStyle(PrimaryPill(height: 30, fontSize: 12))
                         .accessibilityLabel("Launch \(item.entry.name)")
                 } else {
                     Button { m.locate(item) } label: { Text("Locate…").frame(maxWidth: .infinity) }
-                        .buttonStyle(SecondaryPill(height: 36, fontSize: 13))
+                        .buttonStyle(SecondaryPill(height: 30, fontSize: 12))
                         .accessibilityLabel("Locate \(item.entry.name)")
                 }
                 Menu { actions } label: {
-                    Image(systemName: "ellipsis").font(.system(size: 13, weight: .bold))
-                        .frame(width: 36, height: 36).background(Palette.fill, in: Circle())
+                    Image(systemName: "ellipsis").font(.system(size: 12, weight: .bold))
+                        .frame(width: 30, height: 30).background(Palette.fill, in: Circle())
                         .overlay(Circle().strokeBorder(Palette.strokeStrong))
                 }
                 .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize()
                 .accessibilityLabel("More actions for \(item.entry.name)")
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 150, alignment: .topLeading)
-        .card(radius: 28, padding: 14)
+        .frame(maxWidth: .infinity, minHeight: 118, alignment: .topLeading)
+        .card(radius: 24, padding: 12)
         .contextMenu { actions }
         .confirmationDialog("Move \(item.entry.name) to the Trash?", isPresented: $confirmTrash) {
             Button("Move to Trash", role: .destructive) { m.trashFromLibrary(item) }
@@ -153,32 +153,32 @@ struct AddView: View {
     @Environment(AppModel.self) private var m
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 12) {
             ScreenTitle(title: "Turn a game dump into a Mac app.",
                         subtitle: "Drop the base game, plus any updates and DLC. Studio reads them, shows you what's inside, then builds a standalone app.",
-                        size: 34)
-            VStack(spacing: 14) {
-                Image(systemName: "tray.and.arrow.down").font(.system(size: 34)).foregroundStyle(Palette.red)
-                    .frame(width: 76, height: 76).background(Palette.fillStrong, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                Text("Drop your game here").font(.system(size: 22, weight: .semibold))
+                        size: 26)
+            VStack(spacing: 10) {
+                Image(systemName: "tray.and.arrow.down").font(.system(size: 27)).foregroundStyle(Palette.red)
+                    .frame(width: 56, height: 56).background(Palette.fillStrong, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                Text("Drop your game here").font(.system(size: 19, weight: .semibold))
                 HStack(spacing: 8) {
                     ForEach([".nsp", ".xci", ".nsz", ".xcz", "folders"], id: \.self) { t in
-                        Text(t).font(.system(size: 12, design: t == "folders" ? .default : .monospaced))
+                        Text(t).font(.system(size: 11, design: t == "folders" ? .default : .monospaced))
                             .padding(.horizontal, 10).padding(.vertical, 4).background(Palette.fillStrong, in: Capsule())
                     }
                 }
                 Button("Choose Files…") { m.pickFilesAndAdd() }
-                    .buttonStyle(PrimaryPill(height: 44, fontSize: 15)).padding(.top, 4)
+                    .buttonStyle(PrimaryPill(height: 36, fontSize: 13)).padding(.top, 2)
                 if let e = m.errorText { Banner(text: e, tone: .warn).frame(maxWidth: 520) }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(RoundedRectangle(cornerRadius: 22, style: .continuous).fill(Palette.fill.opacity(0.6)))
-            .overlay(RoundedRectangle(cornerRadius: 22, style: .continuous)
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Palette.fill.opacity(0.6)))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(Palette.strokeStrong, style: StrokeStyle(lineWidth: 1.5, dash: [7, 6])))
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Drop zone for game files")
             LegalFooter()
         }
-        .padding(.horizontal, 40).padding(.top, 14).padding(.bottom, 14)
+        .padding(.horizontal, Metrics.pad).padding(.top, 6).padding(.bottom, 10)
     }
 }

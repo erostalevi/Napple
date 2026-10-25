@@ -22,8 +22,8 @@ struct PlanView: View {
     private var reading: some View {
         VStack(spacing: 14) {
             ProgressView().controlSize(.large)
-            Text("Reading packages…").font(.system(size: 15, weight: .medium))
-            Text("This can take a minute for large games.").font(.system(size: 12)).foregroundStyle(Palette.tertiary)
+            Text("Reading packages…").font(.system(size: 13, weight: .medium))
+            Text("This can take a minute for large games.").font(.system(size: 11)).foregroundStyle(Palette.tertiary)
             Button("Cancel") { m.goBack() }.buttonStyle(SecondaryPill(height: 32))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -31,9 +31,9 @@ struct PlanView: View {
 
     private var failure: some View {
         VStack(spacing: 14) {
-            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 34)).foregroundStyle(Palette.danger)
-            Text("Couldn't read these files").font(.system(size: 20, weight: .semibold, design: .serif))
-            Text(m.errorText ?? "Unknown error.").font(.system(size: 13)).foregroundStyle(Palette.secondary)
+            Image(systemName: "exclamationmark.triangle.fill").font(.system(size: 27)).foregroundStyle(Palette.danger)
+            Text("Couldn't read these files").font(.system(size: 17, weight: .semibold, design: .serif))
+            Text(m.errorText ?? "Unknown error.").font(.system(size: 12)).foregroundStyle(Palette.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 520).textSelection(.enabled)
             HStack(spacing: 10) {
                 Button("Try again") { Task { await m.replan() } }.buttonStyle(PrimaryPill(height: 38))
@@ -47,14 +47,14 @@ struct PlanView: View {
     // MARK: the plan
 
     private func content(_ plan: PlanResult) -> some View {
-        HStack(alignment: .top, spacing: 28) {
-            VStack(alignment: .leading, spacing: 14) {
+        HStack(alignment: .top, spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
                 titleRow(plan)
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 12) {
                         if let note = m.inputNote { Banner(text: note, tone: .warn) }
                         ForEach(Array(plan.warnings.prefix(3)), id: \.self) { Banner(text: $0, tone: .neutral) }
-                        if plan.warnings.count > 3 { Text("and \(plan.warnings.count - 3) more notes in the log.").font(.system(size: 12)).foregroundStyle(Palette.tertiary) }
+                        if plan.warnings.count > 3 { Text("and \(plan.warnings.count - 3) more notes in the log.").font(.system(size: 11)).foregroundStyle(Palette.tertiary) }
                         baseSection(plan)
                         if !plan.updates.isEmpty { listSection("Updates · pick at launch", plan.updates, isUpdate: true) }
                         if !plan.dlc.isEmpty { listSection("DLC · toggled at launch", plan.dlc, isUpdate: false) }
@@ -62,7 +62,7 @@ struct PlanView: View {
                     .padding(.bottom, 4)
                 }
                 .scrollIndicators(.automatic)
-                HStack(spacing: 12) {
+                HStack(spacing: 8) {
                     labeled("Build for") { DestinationMenu() }
                     labeled("Keys and firmware") { KeysMenu() }
                 }
@@ -70,24 +70,24 @@ struct PlanView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             sidebar(plan)
         }
-        .padding(.horizontal, 40).padding(.top, 12).padding(.bottom, 20)
+        .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, 12)
         .disabled(m.phase == .building)
     }
 
     private func titleRow(_ plan: PlanResult) -> some View {
-        HStack(spacing: 16) {
-            GameTile(size: 72, radius: 18)
+        HStack(spacing: 12) {
+            GameTile(size: 48, radius: 12)
             VStack(alignment: .leading, spacing: 4) {
-                Text(m.planTitle).font(.system(size: 28, weight: .medium, design: .serif)).lineLimit(2)
+                Text(m.planTitle).font(.system(size: 20, weight: .medium, design: .serif)).lineLimit(2)
                     .minimumScaleFactor(0.7).accessibilityAddTraits(.isHeader)
                 HStack(spacing: 8) {
-                    Text(plan.base?.titleId ?? "No base game").font(.system(size: 13, design: .monospaced)).foregroundStyle(Palette.tertiary)
-                    Text("· \(m.files.count) \(m.files.count == 1 ? "package" : "packages") read").font(.system(size: 13)).foregroundStyle(Palette.tertiary)
+                    Text(plan.base?.titleId ?? "No base game").font(.system(size: 12, design: .monospaced)).foregroundStyle(Palette.tertiary)
+                    Text("· \(m.files.count) \(m.files.count == 1 ? "package" : "packages") read").font(.system(size: 12)).foregroundStyle(Palette.tertiary)
                     if m.phase == .planning { ProgressView().controlSize(.small) }
                 }
             }
             Spacer(minLength: 0)
-            Button("Add files…") { m.pickFilesAndAdd() }.buttonStyle(SecondaryPill(height: 30))
+            Button("Add files…") { m.pickFilesAndAdd() }.buttonStyle(SecondaryPill(height: 26, fontSize: 11))
                 .help("Add updates or DLC (or drop them on the window)")
                 .accessibilityLabel("Add more files")
         }
@@ -98,22 +98,22 @@ struct PlanView: View {
             SectionLabel("Base game")
             if let b = plan.base {
                 HStack(spacing: 12) {
-                    Image(systemName: "gamecontroller").font(.system(size: 15)).foregroundStyle(Palette.red)
-                        .frame(width: 32, height: 32).background(Palette.fillStrong, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                    Text("Version \(b.versionLabel)").font(.system(size: 14, weight: .medium)).lineLimit(1)
+                    Image(systemName: "gamecontroller").font(.system(size: 13)).foregroundStyle(Palette.red)
+                        .frame(width: 28, height: 28).background(Palette.fillStrong, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    Text("Version \(b.versionLabel)").font(.system(size: 13, weight: .medium)).lineLimit(1)
                     Spacer()
-                    Text(PlanResult.formatBytes(b.size)).font(.system(size: 13)).foregroundStyle(Palette.tertiary).monospacedDigit()
+                    Text(PlanResult.formatBytes(b.size)).font(.system(size: 12)).foregroundStyle(Palette.tertiary).monospacedDigit()
                 }
-                .card(radius: 20, padding: 12)
+                .card(radius: 16, padding: 8)
                 .accessibilityElement(children: .combine)
             } else {
                 HStack(spacing: 10) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(Palette.amber)
-                    Text("No base game found. Add the base game too.").font(.system(size: 13)).foregroundStyle(Palette.secondary)
+                    Text("No base game found. Add the base game too.").font(.system(size: 12)).foregroundStyle(Palette.secondary)
                     Spacer()
                     Button("Add files…") { m.pickFilesAndAdd() }.buttonStyle(SecondaryPill(height: 28))
                 }
-                .card(radius: 20, padding: 12, tint: Palette.amber.opacity(0.12))
+                .card(radius: 16, padding: 8, tint: Palette.amber.opacity(0.12))
             }
         }
     }
@@ -125,21 +125,21 @@ struct PlanView: View {
                 HStack(spacing: 12) {
                     Toggle(isOn: Binding(get: { item.selected }, set: { _ in m.toggle(updates: isUpdate, id: item.id) })) {
                         Text(isUpdate ? "Update \(item.versionLabel)" : item.titleId)
-                            .font(.system(size: 14, weight: .medium, design: isUpdate ? .default : .monospaced)).lineLimit(1)
+                            .font(.system(size: 13, weight: .medium, design: isUpdate ? .default : .monospaced)).lineLimit(1)
                     }
                     .toggleStyle(.checkbox)
                     .accessibilityLabel("Include \(isUpdate ? "update" : "DLC") \(isUpdate ? item.versionLabel : item.titleId), adds \(PlanResult.formatBytes(item.size))")
                     Spacer()
-                    Text("+" + PlanResult.formatBytes(item.size)).font(.system(size: 13)).foregroundStyle(Palette.tertiary).monospacedDigit()
+                    Text("+" + PlanResult.formatBytes(item.size)).font(.system(size: 12)).foregroundStyle(Palette.tertiary).monospacedDigit()
                 }
-                .card(radius: 20, padding: 12)
+                .card(radius: 16, padding: 8)
             }
         }
     }
 
     private func labeled<V: View>(_ title: String, @ViewBuilder _ field: () -> V) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(Palette.tertiary)
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.tertiary)
             field()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -148,7 +148,7 @@ struct PlanView: View {
     // MARK: right column
 
     private func sidebar(_ plan: PlanResult) -> some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             CompatCard(entry: m.compat, hasBase: plan.base != nil)
             VStack(alignment: .leading, spacing: 6) {
                 if let e = m.errorText { Banner(text: e, tone: .bad) }
@@ -162,18 +162,18 @@ struct PlanView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             Divider().overlay(Palette.stroke)
             HStack(alignment: .firstTextBaseline) {
-                Text("Estimated app size").font(.system(size: 13)).foregroundStyle(Palette.secondary)
+                Text("Estimated app size").font(.system(size: 12)).foregroundStyle(Palette.secondary)
                 Spacer()
-                Text(PlanResult.formatBytes(plan.totalSelectedBytes)).font(.system(size: 20, weight: .semibold)).monospacedDigit()
+                Text(PlanResult.formatBytes(plan.totalSelectedBytes)).font(.system(size: 16, weight: .semibold)).monospacedDigit()
             }
             .accessibilityElement(children: .combine)
             Button { m.startBuild() } label: { Text("Build app").frame(maxWidth: .infinity) }
-                .buttonStyle(PrimaryPill(height: 48, fontSize: 16))
+                .buttonStyle(PrimaryPill(height: 38, fontSize: 14))
                 .disabled(!m.canBuild)
                 .keyboardShortcut(.defaultAction)
                 .accessibilityLabel("Build the app")
         }
-        .frame(width: 340)
+        .frame(width: 250)
     }
 }
 
@@ -189,7 +189,7 @@ struct CompatCard: View {
             if let e = entry { known(e) } else { unknown }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .card(radius: 14, padding: 14, tint: tint)
+        .card(radius: 14, padding: 10, tint: tint)
         .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(border))
     }
 
@@ -206,9 +206,9 @@ struct CompatCard: View {
     private var unknown: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label(hasBase ? "Not in the compatibility matrix yet" : "Compatibility unknown", systemImage: "questionmark.circle")
-                .font(.system(size: 14, weight: .semibold)).foregroundStyle(Palette.secondary)
+                .font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.secondary)
             Text(hasBase ? "Nobody has tested this game with Napple, so it may not run well. You can still build it." : "Add the base game to see how well it runs.")
-                .font(.system(size: 12)).foregroundStyle(Palette.tertiary).fixedSize(horizontal: false, vertical: true)
+                .font(.system(size: 11)).foregroundStyle(Palette.tertiary).fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
         }
     }
@@ -217,12 +217,12 @@ struct CompatCard: View {
         let total = e.stages.count
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Label(e.status.label, systemImage: "shield").font(.system(size: 15, weight: .semibold)).foregroundStyle(e.status.tone.color)
+                Label(e.status.label, systemImage: "shield").font(.system(size: 13, weight: .semibold)).foregroundStyle(e.status.tone.color)
                 Spacer()
-                if total > 0 { Text("\(e.passCount) of \(total) stages pass").font(.system(size: 12)).foregroundStyle(Palette.secondary) }
+                if total > 0 { Text("\(e.passCount) of \(total) stages pass").font(.system(size: 11)).foregroundStyle(Palette.secondary) }
             }
             if total > 0 {
-                HStack(spacing: 3) {
+                HStack(spacing: 2) {
                     ForEach(Array(e.stages.enumerated()), id: \.offset) { _, s in
                         Capsule().fill(stageTone(s.status).color).frame(height: 6)
                     }
@@ -230,21 +230,21 @@ struct CompatCard: View {
                 .accessibilityHidden(true)
             }
             if !e.status.isAtLeastPartial {
-                Text("This game may not run well yet.").font(.system(size: 12, weight: .medium)).foregroundStyle(Palette.amber)
+                Text("This game may not run well yet.").font(.system(size: 11, weight: .medium)).foregroundStyle(Palette.amber)
             }
             if let n = e.attentionNote ?? e.notes {
-                Text(n).font(.system(size: 12)).foregroundStyle(Palette.secondary).lineLimit(4).fixedSize(horizontal: false, vertical: true)
+                Text(n).font(.system(size: 11)).foregroundStyle(Palette.secondary).lineLimit(3).fixedSize(horizontal: false, vertical: true)
             }
             if total > 0 {
                 Divider().overlay(Palette.stroke)
                 LazyVGrid(columns: [GridItem(.flexible(), spacing: 12, alignment: .leading), GridItem(.flexible(), alignment: .leading)], spacing: 0) {
                     ForEach(e.stages, id: \.name) { s in
                         HStack(spacing: 8) {
-                            Image(systemName: stageSymbol(s.status)).font(.system(size: 12, weight: .semibold))
+                            Image(systemName: stageSymbol(s.status)).font(.system(size: 11, weight: .semibold))
                                 .foregroundStyle(stageTone(s.status).color).frame(width: 14)
-                            Text(CompatEntry.stageTitle(s.name)).font(.system(size: 12)).foregroundStyle(Palette.secondary).lineLimit(1)
+                            Text(CompatEntry.stageTitle(s.name)).font(.system(size: 11)).foregroundStyle(Palette.secondary).lineLimit(1)
                         }
-                        .padding(.vertical, 5)
+                        .padding(.vertical, 3)
                         .help(s.reason ?? s.status.capitalized)
                         .accessibilityElement(children: .combine)
                         .accessibilityLabel("\(CompatEntry.stageTitle(s.name)): \(s.status)")
@@ -286,7 +286,7 @@ struct DestinationMenu: View {
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.tertiary)
             }
-            .font(.system(size: 14)).padding(.horizontal, 12).frame(height: 40)
+            .font(.system(size: 13)).padding(.horizontal, 10).frame(height: 32)
             .background(Palette.fill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.strokeStrong))
         }
@@ -311,7 +311,7 @@ struct KeysMenu: View {
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.up.chevron.down").font(.system(size: 10, weight: .semibold)).foregroundStyle(Palette.tertiary)
             }
-            .font(.system(size: 14)).padding(.horizontal, 12).frame(height: 40)
+            .font(.system(size: 13)).padding(.horizontal, 10).frame(height: 32)
             .background(Palette.fill, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
             .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).strokeBorder(Palette.strokeStrong))
         }
@@ -328,7 +328,7 @@ struct IOSSigningSheet: View {
     var body: some View {
         @Bindable var m = m
         VStack(alignment: .leading, spacing: 12) {
-            Text("Signing for iPhone and iPad").font(.system(size: 18, weight: .semibold, design: .serif))
+            Text("Signing for iPhone and iPad").font(.system(size: 16, weight: .semibold, design: .serif))
             Toggle("Unsigned (sign it yourself with AltStore, Sideloadly, …)", isOn: $m.iosUnsigned).toggleStyle(.checkbox)
             if !m.iosUnsigned {
                 Picker("Identity", selection: $m.iosIdentity) {
@@ -353,7 +353,7 @@ struct IOSSigningSheet: View {
             }
             if let why = m.destinationBlocker { Banner(text: why, tone: .warn) }
             Text("Needs iOS or iPadOS 26+, Developer Mode on the device, and the game's memory fitting the device. A free Apple ID profile expires after 7 days.")
-                .font(.system(size: 12)).foregroundStyle(Palette.tertiary)
+                .font(.system(size: 11)).foregroundStyle(Palette.tertiary)
         }
         .padding(24).frame(width: 520)
         .task { if m.signing == nil { await m.refreshIOS() } }

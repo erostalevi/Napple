@@ -40,9 +40,9 @@ struct StudioApp: App {
                     model.refreshLibrary()
                 }
         }
-        .windowStyle(.hiddenTitleBar)
+        .windowStyle(.plain)
         .windowResizability(.contentSize)
-        .defaultSize(width: 900, height: 620)
+        .defaultSize(width: Metrics.width, height: Metrics.height)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Add Game…") { model.pickFilesAndAdd() }.keyboardShortcut("o")

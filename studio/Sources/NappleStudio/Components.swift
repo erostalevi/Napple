@@ -14,6 +14,14 @@ func pick(files: Bool, dirs: Bool, multiple: Bool = false, message: String, type
 
 // MARK: palette (the app icon's red, pink and violet over dark glass)
 
+/// Window and spacing constants. The window is a fixed glass panel, two thirds the size of the first design (900 x 620).
+enum Metrics {
+    static let width: CGFloat = 600
+    static let height: CGFloat = 420
+    static let header: CGFloat = 44
+    static let pad: CGFloat = 24
+}
+
 enum Palette {
     static let red = Color(red: 1.0, green: 0.369, blue: 0.384)       // FF5E62
     static let pink = Color(red: 1.0, green: 0.541, blue: 0.561)      // FF8A8F
@@ -185,7 +193,7 @@ struct CompatBadge: View {
         let status = entry?.status ?? .unknown
         let text = entry == nil ? "Not tested yet" : status.label
         Label(text, systemImage: status.symbol)
-            .font(.system(size: 12, weight: .medium))
+            .font(.system(size: 11, weight: .medium))
             .foregroundStyle(entry == nil ? StatusTone.neutral.color : status.tone.color)
             .labelStyle(.titleAndIcon)
             .accessibilityLabel("Compatibility: \(text)")
@@ -218,10 +226,10 @@ struct LegalFooter: View {
     var body: some View {
         VStack(spacing: 4) {
             if let msg = m.engineMessage {
-                Text(msg).font(.system(size: 12)).foregroundStyle(Palette.secondary).multilineTextAlignment(.center)
+                Text(msg).font(.system(size: 11)).foregroundStyle(Palette.secondary).multilineTextAlignment(.center)
             }
             Text("Built apps contain game-derived content for your personal use only. Do not share them.")
-                .font(.system(size: 12)).foregroundStyle(Palette.tertiary).multilineTextAlignment(.center)
+                .font(.system(size: 11)).foregroundStyle(Palette.tertiary).multilineTextAlignment(.center)
                 .accessibilityLabel("Legal notice: built apps are for your personal use only and must not be shared")
         }
         .frame(maxWidth: .infinity)
@@ -232,7 +240,7 @@ struct ToastView: View {
     let text: String
     var body: some View {
         Text(text)
-            .font(.system(size: 13, weight: .medium))
+            .font(.system(size: 12, weight: .medium))
             .foregroundStyle(.white)
             .multilineTextAlignment(.center)
             .padding(.horizontal, 16).padding(.vertical, 10)
@@ -252,7 +260,7 @@ struct Banner: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: symbol ?? (tone == .bad ? "exclamationmark.triangle.fill" : tone == .warn ? "exclamationmark.triangle" : "info.circle"))
                 .foregroundStyle(tone.color)
-            Text(text).font(.system(size: 12)).foregroundStyle(Palette.secondary)
+            Text(text).font(.system(size: 11)).foregroundStyle(Palette.secondary)
                 .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
             Spacer(minLength: 0)
         }
@@ -273,7 +281,7 @@ struct ScreenTitle: View {
                 .multilineTextAlignment(centered ? .center : .leading)
                 .accessibilityAddTraits(.isHeader)
             if let subtitle {
-                Text(subtitle).font(.system(size: 14)).foregroundStyle(Palette.secondary)
+                Text(subtitle).font(.system(size: 13)).foregroundStyle(Palette.secondary)
                     .multilineTextAlignment(centered ? .center : .leading).fixedSize(horizontal: false, vertical: true)
             }
         }
