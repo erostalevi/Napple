@@ -11,7 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include "mach_vm_compat.h"
 
 #define HLE_THUNKS 16384
 #define HLE_THUNK_BYTES 16

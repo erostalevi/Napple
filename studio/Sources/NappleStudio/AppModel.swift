@@ -23,6 +23,21 @@ final class AppModel {
     var showLegal = false
     var showSetup = false
     var installMessage: String?
+    // iOS / iPadOS targets (docs/ios.md)
+    var target: BuildTarget = BuildTarget(rawValue: UserDefaults.standard.string(forKey: "target") ?? "") ?? .macos {
+        didSet { UserDefaults.standard.set(target.rawValue, forKey: "target"); if target.isIOS { Task { await refreshIOS() } } }
+    }
+    var signing: SigningInfo?
+    var devices: [IOSDevice] = []
+    var iosIdentity: String = UserDefaults.standard.string(forKey: "iosIdentity") ?? "" { didSet { UserDefaults.standard.set(iosIdentity, forKey: "iosIdentity") } }
+    var iosProfilePath: String = UserDefaults.standard.string(forKey: "iosProfile") ?? "" { didSet { UserDefaults.standard.set(iosProfilePath, forKey: "iosProfile") } }
+    var iosBundleId: String = UserDefaults.standard.string(forKey: "iosBundleId") ?? "" { didSet { UserDefaults.standard.set(iosBundleId, forKey: "iosBundleId") } }
+    var iosDeviceId: String = UserDefaults.standard.string(forKey: "iosDevice") ?? "" { didSet { UserDefaults.standard.set(iosDeviceId, forKey: "iosDevice") } }
+    var iosExportIPA = UserDefaults.standard.bool(forKey: "iosIPA") { didSet { UserDefaults.standard.set(iosExportIPA, forKey: "iosIPA") } }
+    var iosUnsigned = UserDefaults.standard.bool(forKey: "iosUnsigned") { didSet { UserDefaults.standard.set(iosUnsigned, forKey: "iosUnsigned") } }
+    var iosInstallAfterBuild = UserDefaults.standard.object(forKey: "iosAutoInstall") as? Bool ?? true { didSet { UserDefaults.standard.set(iosInstallAfterBuild, forKey: "iosAutoInstall") } }
+    var iosLaunchAfterInstall = UserDefaults.standard.object(forKey: "iosLaunch") as? Bool ?? true { didSet { UserDefaults.standard.set(iosLaunchAfterInstall, forKey: "iosLaunch") } }
+    var installing = false
     var legalAck: Bool { didSet { UserDefaults.standard.set(legalAck, forKey: "legalAck") } }
     private var buildTask: Task<Void, Never>?
 
@@ -61,6 +76,7 @@ final class AppModel {
                               firmware: arg("--debug-firmware").map { URL(fileURLWithPath: $0) }, replace: true)
         }
         refreshSets()
+        if target.isIOS { Task { await refreshIOS() } }
         showSetup = sets.isEmpty
         if let d = arg("--debug-drop") { Task { await self.add(urls: [URL(fileURLWithPath: d)]) } }
     }
@@ -134,6 +150,56 @@ final class AppModel {
         plan = p
     }
 
+    // MARK: iOS signing and devices
+    var selectedProfile: SigningProfile? { signing?.profiles.first { $0.path == iosProfilePath } }
+    var selectedDevice: IOSDevice? { devices.first { $0.id == iosDeviceId } }
+    /// Bundle id the build will use: the field, else the explicit id of the chosen profile, else Napple's default (fine for wildcard profiles).
+    var effectiveBundleId: String? {
+        if !iosBundleId.trimmingCharacters(in: .whitespaces).isEmpty { return iosBundleId.trimmingCharacters(in: .whitespaces) }
+        return selectedProfile?.explicitBundleId
+    }
+    /// Why an iOS build cannot start yet (nil = fine).
+    var iosBlocker: String? {
+        guard target.isIOS else { return nil }
+        if iosUnsigned { return nil }
+        if cli == nil { return CLIError.notFound.localizedDescription }
+        if signing?.identities.isEmpty ?? true { return "No code-signing identity found. In Xcode: Settings > Accounts > add your Apple ID > Manage Certificates > + Apple Development." }
+        if iosIdentity.isEmpty { return "Choose a signing identity." }
+        guard let prof = selectedProfile else {
+            return "Choose a provisioning profile. Create one by running any app on your device from Xcode with that bundle id (a free Apple ID works; the profile then lasts 7 days)."
+        }
+        if let b = effectiveBundleId, !prof.covers(bundleId: b) { return "The profile is for \(prof.appId); the bundle id is \(b)." }
+        return nil
+    }
+
+    func refreshIOS() async {
+        if let cli { signing = try? await cli.listSigning() }
+        if let s = signing {
+            if !s.identities.contains(where: { $0.sha1 == iosIdentity }) { iosIdentity = s.identities.first?.sha1 ?? "" }
+            if !s.profiles.contains(where: { $0.path == iosProfilePath }) { iosProfilePath = s.profiles.first?.path ?? "" }
+        }
+        await refreshDevices()
+    }
+    func refreshDevices() async {
+        devices = (try? await NappleCLI.listDevices()) ?? []
+        if !devices.contains(where: { $0.id == iosDeviceId }) { iosDeviceId = devices.first(where: { $0.connected })?.id ?? devices.first?.id ?? "" }
+    }
+
+    var builtIPA: URL? { builtApp.map { $0.deletingPathExtension().appendingPathExtension("ipa") }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } }
+
+    func installToDevice() {
+        guard let app = builtApp, let dev = selectedDevice else { installMessage = "Choose a connected device first."; return }
+        if !dev.supported { installMessage = "\(dev.name) runs iOS \(dev.osVersion); Napple apps need iOS or iPadOS 26 or later."; return }
+        if !dev.developerMode { installMessage = "Turn on Developer Mode on \(dev.name): Settings > Privacy & Security > Developer Mode, then restart it."; return }
+        installing = true; installMessage = "Installing on \(dev.name)..."
+        let id = NappleCLI.bundleId(of: app), launch = iosLaunchAfterInstall
+        Task {
+            do { try await NappleCLI.installApp(app, bundleId: id, on: dev.id, launch: launch); installMessage = launch ? "Installed and launched on \(dev.name)." : "Installed on \(dev.name)." }
+            catch { installMessage = error.localizedDescription }
+            installing = false
+        }
+    }
+
     // MARK: build
     func startBuild() {
         guard let plan, let set = selectedSet, let cli else { return }
@@ -141,9 +207,15 @@ final class AppModel {
         if let msg = diskPreflight(plan) { errorText = msg; phase = .failed; finishDebug(1); return }
         let out = outputDir
         try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+        if let why = iosBlocker { errorText = why; phase = .failed; finishDebug(1); return }
+        var ios: IOSOptions?
+        if target.isIOS {
+            ios = IOSOptions(identity: iosIdentity.isEmpty ? nil : iosIdentity, profile: selectedProfile.map { URL(fileURLWithPath: $0.path) },
+                             bundleId: effectiveBundleId, ipa: iosExportIPA || iosUnsigned, unsigned: iosUnsigned)
+        }
         let req = BuildRequest(files: expand(files), keyset: set,
                                updates: plan.updates.filter(\.selected).map(\.version),
-                               dlc: plan.dlc.filter(\.selected).map(\.titleId), output: out)
+                               dlc: plan.dlc.filter(\.selected).map(\.titleId), target: target.rawValue, output: out, ios: ios)
         phase = .building; errorText = nil; notes = []; installMessage = nil
         progress = ProgressEvent(stage: "preflight", percent: 0, message: "Checking keys and firmware"); log = []
         openLog()
@@ -156,6 +228,7 @@ final class AppModel {
                 try? await Task.sleep(nanoseconds: 200_000_000)
                 builtApp = app ?? firstApp(in: out)
                 phase = .done
+                if target.isIOS, iosInstallAfterBuild, !iosUnsigned, selectedDevice?.connected == true { installToDevice() }
                 writeLog("DONE \(builtApp?.path ?? "?")")
                 finishDebug(builtApp == nil ? 1 : 0)
             } catch {

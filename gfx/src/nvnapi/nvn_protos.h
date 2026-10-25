@@ -78,9 +78,9 @@ typedef void (*NVNT_nvnMemoryPoolBuilderSetDevice)(NVNmemoryPoolBuilder*, NVNdev
 typedef void (*NVNT_nvnMemoryPoolBuilderSetDefaults)(NVNmemoryPoolBuilder*);
 typedef void (*NVNT_nvnMemoryPoolBuilderSetStorage)(NVNmemoryPoolBuilder*, void*, size_t);
 typedef void (*NVNT_nvnMemoryPoolBuilderSetFlags)(NVNmemoryPoolBuilder*, int);
-typedef void (*NVNT_nvnMemoryPoolBuilderGetMemory)(const NVNmemoryPoolBuilder*);
-typedef size_t (*NVNT_nvnMemoryPoolBuilderGetSize)(const NVNmemoryPoolBuilder*);
-typedef NVNmemoryPoolFlags (*NVNT_nvnMemoryPoolBuilderGetFlags)(const NVNmemoryPoolBuilder*);
+typedef void * (*NVNT_nvnMemoryPoolBuilderGetMemory)(const NVNmemoryPoolBuilder *b);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef size_t (*NVNT_nvnMemoryPoolBuilderGetSize)(const NVNmemoryPoolBuilder *b);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef int (*NVNT_nvnMemoryPoolBuilderGetFlags)(const NVNmemoryPoolBuilder *b);  // corrected: the bundled header prototype differs from the NVN ABI
 typedef NVNboolean (*NVNT_nvnMemoryPoolInitialize)(NVNmemoryPool*, const NVNmemoryPoolBuilder*);
 typedef void (*NVNT_nvnMemoryPoolSetDebugLabel)(NVNmemoryPool*, const char*);
 typedef void (*NVNT_nvnMemoryPoolFinalize)(NVNmemoryPool*);
@@ -110,9 +110,9 @@ typedef int (*NVNT_nvnSamplerPoolGetSize)(const NVNsamplerPool*);
 typedef void (*NVNT_nvnBufferBuilderSetDevice)(NVNbufferBuilder*, NVNdevice*);
 typedef void (*NVNT_nvnBufferBuilderSetDefaults)(NVNbufferBuilder*);
 typedef void (*NVNT_nvnBufferBuilderSetStorage)(NVNbufferBuilder*, NVNmemoryPool*, ptrdiff_t, size_t);
-typedef const NVNmemoryPool *(*NVNT_nvnBufferBuilderGetMemoryPool)(const NVNbufferBuilder*);
-typedef ptrdiff_t (*NVNT_nvnBufferBuilderGetMemoryOffset)(const NVNbufferBuilder*);
-typedef size_t (*NVNT_nvnBufferBuilderGetSize)(const NVNbufferBuilder*);
+typedef NVNmemoryPool * (*NVNT_nvnBufferBuilderGetMemoryPool)(const NVNbufferBuilder *b);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef ptrdiff_t (*NVNT_nvnBufferBuilderGetMemoryOffset)(const NVNbufferBuilder *b);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef size_t (*NVNT_nvnBufferBuilderGetSize)(const NVNbufferBuilder *b);  // corrected: the bundled header prototype differs from the NVN ABI
 typedef NVNboolean (*NVNT_nvnBufferInitialize)(NVNbuffer*, const NVNbufferBuilder*);
 typedef void (*NVNT_nvnBufferSetDebugLabel)(NVNbuffer*, const char*);
 typedef void (*NVNT_nvnBufferFinalize)(NVNbuffer*);
@@ -162,8 +162,8 @@ typedef ptrdiff_t (*NVNT_nvnTextureBuilderGetStride)(const NVNtextureBuilder*);
 typedef void (*NVNT_nvnTextureBuilderGetSparseTileLayout)(const NVNtextureBuilder*, NVNtextureSparseTileLayout*);
 typedef uint32_t (*NVNT_nvnTextureBuilderGetGLTextureName)(const NVNtextureBuilder*);
 typedef size_t (*NVNT_nvnTextureBuilderGetZCullStorageSize)(const NVNtextureBuilder*);
-typedef const NVNmemoryPool *(*NVNT_nvnTextureBuilderGetMemoryPool)(const NVNtextureBuilder*);
-typedef ptrdiff_t (*NVNT_nvnTextureBuilderGetMemoryOffset)(const NVNtextureBuilder*);
+typedef const NVNmemoryPool * (*NVNT_nvnTextureBuilderGetMemoryPool)(const NVNtextureBuilder *b);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef ptrdiff_t (*NVNT_nvnTextureBuilderGetMemoryOffset)(const NVNtextureBuilder *b);  // corrected: the bundled header prototype differs from the NVN ABI
 typedef void (*NVNT_nvnTextureViewSetDefaults)(NVNtextureView*);
 typedef void (*NVNT_nvnTextureViewSetLevels)(NVNtextureView*, int, int);
 typedef void (*NVNT_nvnTextureViewSetLayers)(NVNtextureView*, int, int);
@@ -203,8 +203,8 @@ typedef void (*NVNT_nvnTextureReadTexels)(const NVNtexture*, const NVNtextureVie
 typedef void (*NVNT_nvnTextureReadTexelsStrided)(const NVNtexture*, const NVNtextureView*, const NVNcopyRegion*, void*, ptrdiff_t, ptrdiff_t);
 typedef void (*NVNT_nvnTextureFlushTexels)(const NVNtexture*, const NVNtextureView*, const NVNcopyRegion*);
 typedef void (*NVNT_nvnTextureInvalidateTexels)(const NVNtexture*, const NVNtextureView*, const NVNcopyRegion*);
-typedef const NVNmemoryPool *(*NVNT_nvnTextureGetMemoryPool)(const NVNtexture*);
-typedef ptrdiff_t (*NVNT_nvnTextureGetMemoryOffset)(const NVNtexture*);
+typedef const NVNmemoryPool * (*NVNT_nvnTextureGetMemoryPool)(const NVNtexture *t);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef ptrdiff_t (*NVNT_nvnTextureGetMemoryOffset)(const NVNtexture *t);  // corrected: the bundled header prototype differs from the NVN ABI
 typedef int (*NVNT_nvnTextureGetStorageSize)(const NVNtexture*);
 typedef NVNboolean (*NVNT_nvnTextureCompare)(const NVNtexture*, const NVNtexture*);
 typedef uint64_t (*NVNT_nvnTextureGetDebugID)(const NVNtexture*);
@@ -251,27 +251,27 @@ typedef void (*NVNT_nvnBlendStateSetDefaults)(NVNblendState*);
 typedef void (*NVNT_nvnBlendStateSetBlendTarget)(NVNblendState*, int);
 typedef void (*NVNT_nvnBlendStateSetBlendFunc)(NVNblendState*, NVNblendFunc, NVNblendFunc, NVNblendFunc, NVNblendFunc);
 typedef void (*NVNT_nvnBlendStateSetBlendEquation)(NVNblendState*, NVNblendEquation, NVNblendEquation);
-typedef void (*NVNT_nvnBlendStateSetAdvancedMode)(NVNblendState*, NVNblendAdvancedMode);
-typedef void (*NVNT_nvnBlendStateSetAdvancedOverlap)(NVNblendState*, NVNblendAdvancedOverlap);
-typedef void (*NVNT_nvnBlendStateSetAdvancedPremultipliedSrc)(NVNblendState*, uint32_t);
-typedef void (*NVNT_nvnBlendStateSetAdvancedNormalizedDst)(NVNblendState*, uint32_t);
-typedef int (*NVNT_nvnBlendStateGetBlendTarget)(const NVNblendState*);
-typedef void (*NVNT_nvnBlendStateGetBlendFunc)(const NVNblendState*, NVNblendFunc*, NVNblendFunc*, NVNblendFunc*, NVNblendFunc*);
-typedef void (*NVNT_nvnBlendStateGetBlendEquation)(const NVNblendState*, NVNblendEquation*, NVNblendEquation*);
-typedef NVNblendAdvancedMode (*NVNT_nvnBlendStateGetAdvancedMode)(const NVNblendState*);
-typedef NVNblendAdvancedOverlap (*NVNT_nvnBlendStateGetAdvancedOverlap)(const NVNblendState*);
-typedef NVNboolean (*NVNT_nvnBlendStateGetAdvancedPremultipliedSrc)(const NVNblendState*);
-typedef NVNboolean (*NVNT_nvnBlendStateGetAdvancedNormalizedDst)(const NVNblendState*);
+typedef void (*NVNT_nvnBlendStateSetAdvancedMode)(NVNblendState *s, int m);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef void (*NVNT_nvnBlendStateSetAdvancedOverlap)(NVNblendState *s, int m);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef void (*NVNT_nvnBlendStateSetAdvancedPremultipliedSrc)(NVNblendState *s, uint32_t e);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef void (*NVNT_nvnBlendStateSetAdvancedNormalizedDst)(NVNblendState *s, uint32_t e);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef int (*NVNT_nvnBlendStateGetBlendTarget)(const NVNblendState *s);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef void (*NVNT_nvnBlendStateGetBlendFunc)(const NVNblendState *s, int *sr, int *dr, int *sa, int *da);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef void (*NVNT_nvnBlendStateGetBlendEquation)(const NVNblendState *s, int *er, int *ea);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef int (*NVNT_nvnBlendStateGetAdvancedMode)(const NVNblendState *s);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef int (*NVNT_nvnBlendStateGetAdvancedOverlap)(const NVNblendState *s);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef NVNboolean (*NVNT_nvnBlendStateGetAdvancedPremultipliedSrc)(const NVNblendState *s);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef NVNboolean (*NVNT_nvnBlendStateGetAdvancedNormalizedDst)(const NVNblendState *s);  // corrected: the bundled header prototype differs from the NVN ABI
 typedef void (*NVNT_nvnColorStateSetDefaults)(NVNcolorState*);
 typedef void (*NVNT_nvnColorStateSetBlendEnable)(NVNcolorState*, int, uint32_t);
-typedef void (*NVNT_nvnColorStateSetLogicOp)(NVNcolorState*, NVNlogicOp);
-typedef void (*NVNT_nvnColorStateSetAlphaTest)(NVNcolorState*, NVNalphaFunc);
-typedef NVNboolean (*NVNT_nvnColorStateGetBlendEnable)(const NVNcolorState*, int);
-typedef NVNlogicOp (*NVNT_nvnColorStateGetLogicOp)(const NVNcolorState*);
-typedef NVNalphaFunc (*NVNT_nvnColorStateGetAlphaTest)(const NVNcolorState*);
+typedef void (*NVNT_nvnColorStateSetLogicOp)(NVNcolorState *s, int op);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef void (*NVNT_nvnColorStateSetAlphaTest)(NVNcolorState *s, int f);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef NVNboolean (*NVNT_nvnColorStateGetBlendEnable)(const NVNcolorState *s, int i);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef int (*NVNT_nvnColorStateGetLogicOp)(const NVNcolorState *s);  // corrected: the bundled header prototype differs from the NVN ABI
+typedef int (*NVNT_nvnColorStateGetAlphaTest)(const NVNcolorState *s);  // corrected: the bundled header prototype differs from the NVN ABI
 typedef void (*NVNT_nvnChannelMaskStateSetDefaults)(NVNchannelMaskState*);
 typedef void (*NVNT_nvnChannelMaskStateSetChannelMask)(NVNchannelMaskState*, int, uint32_t, uint32_t, uint32_t, uint32_t);
-typedef void (*NVNT_nvnChannelMaskStateGetChannelMask)(const NVNchannelMaskState*, int, NVNboolean*, NVNboolean*, NVNboolean*, NVNboolean*);
+typedef void (*NVNT_nvnChannelMaskStateGetChannelMask)(const NVNchannelMaskState *s, int i, NVNboolean *r, NVNboolean *g, NVNboolean *b, NVNboolean *a);  // corrected: the bundled header prototype differs from the NVN ABI
 typedef void (*NVNT_nvnMultisampleStateSetDefaults)(NVNmultisampleState*);
 typedef void (*NVNT_nvnMultisampleStateSetMultisampleEnable)(NVNmultisampleState*, uint32_t);
 typedef void (*NVNT_nvnMultisampleStateSetSamples)(NVNmultisampleState*, int);
@@ -291,7 +291,7 @@ typedef void (*NVNT_nvnMultisampleStateSetCoverageToColorOutput)(NVNmultisampleS
 typedef int (*NVNT_nvnMultisampleStateGetCoverageToColorOutput)(const NVNmultisampleState*);
 typedef void (*NVNT_nvnMultisampleStateSetSampleLocationsEnable)(NVNmultisampleState*, uint32_t);
 typedef NVNboolean (*NVNT_nvnMultisampleStateGetSampleLocationsEnable)(const NVNmultisampleState*);
-typedef void (*NVNT_nvnMultisampleStateGetSampleLocationsGrid)(NVNmultisampleState*, int*, int*);
+typedef void (*NVNT_nvnMultisampleStateGetSampleLocationsGrid)(const NVNmultisampleState *s, int *w, int *h);  // corrected: the bundled header prototype differs from the NVN ABI
 typedef void (*NVNT_nvnMultisampleStateSetSampleLocationsGridEnable)(NVNmultisampleState*, uint32_t);
 typedef NVNboolean (*NVNT_nvnMultisampleStateGetSampleLocationsGridEnable)(const NVNmultisampleState*);
 typedef void (*NVNT_nvnMultisampleStateSetSampleLocations)(NVNmultisampleState*, int, int, const float*);
@@ -574,3 +574,4 @@ typedef void (*NVNT_nvnCommandBufferSignalEvent)(NVNcommandBuffer*, const NVNeve
 //   nvnDeviceSetAutomaticCheckpointsByDebugGroup
 //   nvnDeviceSetCheckpointCallStacksEnable
 //   nvnDeviceSetCheckpointMaxCallStacksDepth
+#include "nvn_protos_ext.h"

@@ -34,7 +34,7 @@ Everything else is unsupported and reported by number and name.
 | `fsp-srv` | implemented | RomFS as IStorage over `romfs.bin`; save data and sdcard as host directories; save data of type account/device/system/cache is transactional (see "Save data"); stubs: access log, auto save data creation, free space (1 GiB) |
 | `set` / `set:sys` | implemented / stubs | language list, region (USA stub), firmware 18.1.0 |
 | `acc:u0` | implemented / stubs | one offline user; profile image calls stubbed |
-| `aoc:u` | stub | no add-on content yet (DLC mounting is a packaging task) |
+| `aoc:u` | tested | add-on content from the `dlc` array of `manifest.json`; DLC romfs mounted through `fsp-srv` command 30 (see the aoc:u section below) |
 | `pctl` | stub | unrestricted device |
 | `time:u/s/a` | implemented | clock contexts in the shared memory block, time zone = host |
 | `hid` | implemented / stubs | shared memory + configuration through `input/` (libnapple_input); SendVibrationValue(s) / GetActualVibrationValue / GetVibrationDeviceInfo drive CoreHaptics rumble; xpad/gesture stubs |
@@ -195,11 +195,11 @@ Status words: *real* = state or logic behind the answer, covered by a unit test;
 | Service | Status | Notes |
 |---|---|---|
 | `mii:u` | partial | read-only database: the local player's Mii plus six default Miis (CharInfo 0x58); GetCount, Get, Get1, UpdateLatest, BuildRandom (a default of the requested gender), BuildDefault, FindIndex, GetIndex; no editing, no StoreData variants |
-| `caps:su` | partial | every save call succeeds and returns an album entry without a file; refused after `SetScreenShotPermission(Disable)` |
-| `caps:u` | partial | album is always empty; load/size/delete report not found |
+| `caps:su` | partial | every save call succeeds and adds an in-memory album entry without a file (64 max, oldest dropped); refused after `SetScreenShotPermission(Disable)` |
+| `caps:u` | partial | in-memory album: lists saved entries, size/load of one yield 0 bytes, delete removes it, unknown entries report not found (host tests only, unverified on Mac) |
 | `psm` | partial | battery percentage, charger type, voltage state, enough-power, charging flags from a configured host situation (docked = AC; `NAPPLE_BATTERY="NN[,ac|battery]"`), not the Mac's battery |
 | `lbl` | real | brightness (clamped), applied brightness, switch, dimming, auto brightness, VR brightness; nothing reaches the display; no light sensor |
-| `ncm` | stub | empty content-meta databases and storages |
+| `ncm` | partial | in-memory content-meta database (Set/Get/Remove/Has/HasAll/List/ListApplication/GetLatestContentMetaKey/GetSize/GetPatchId) and content storage (placeholders, Register, Has, Delete, counts, sizes); starts empty, nothing persisted, no content files (GetPath is empty); unverified layouts; GetContentIdByType/ListContentInfo/HasContent/ListContentMetaInfo/LookupOrphanContent stay stubs |
 | `ns:am2`, `ns:ec` | partial | language conversion/selection with regional fallbacks and free/total space (statvfs of the save volume) are real; no application records; control data not found; e-commerce fails offline |
 | `ns:vm` | stub | never needs a vulnerability update |
 | `sfdnsres` | partial | error strings real; every lookup fails like a resolver with no server |
@@ -219,3 +219,22 @@ zero drift per handle, player LED pattern, joy hold type, handheld mode, home-bu
 mode, styles read back); `time:*` 12 → 8 (LoadTimeZoneRule and rule-aware ToCalendarTime/ToPosixTime, ClockSnapshot 400/401, 500/501, automatic
 correction, device location = host IANA zone); `offline.c` stays 146 stub rows but `bsd:u` has a descriptor table with per-call errno, `nifm` requests
 finish rejected with a result, `ssl` handshakes fail, `friend` notification Pop on an empty queue fails; `misc.c` (aoc, pctl) unchanged.
+
+## aoc:u and the error / player select / controller library applets (applets-dlc-2026-10-24-plan5)
+
+Supersedes the `aoc:u` row above (stub) and the library applet answers; status of everything here is *tested* on Linux against the IPC mock, *unbuilt* on macOS.
+
+* **aoc:u** reads the `dlc` array of `<data-dir>/manifest.json` (written by `napple build`: `title_id`, `version`, `dir` relative to the manifest, `romfs`, `default_enabled`). Entries with `default_enabled` false, a title id outside `application id + 0x1000 + 1..0xfff`, or a duplicate index are dropped. `ListAddOnContent` returns the 1-based indices (title id minus the base id) sorted; `PrepareAddOnContent(index)` succeeds only for a kept index. No DLC (no array, bad JSON, no manifest) keeps the old answers (count 0, empty list, Prepare fails). Mounting: `fsp-srv` command 30 `OpenDataStorageByDataId(u8 storage, u64 data id)` serves the DLC's `romfs.bin` as a read-only `IStorage` (same object as the base RomFS); unknown ids answer `R_FS_NOT_FOUND_DATA`. Core: `aoc_core.[ch]`; manifest reading and the commands: `misc.c`. Command layouts and the `R_AOC_NOT_FOUND` result (module 2, description 1) are [unverified].
+* **Library applets** (`applet.c`, answers in `applet_lib_core.[ch]`): all three are answered as if the user confirmed with the one profile / pad, so a headless run continues.
+  * error (0xe): dismissed (success, no output); the header type, jump flag and first argument word are logged and put in the run summary (`summary_note`). A jump-to-settings request is not followed.
+  * player select (0x10): success with the only profile (`g_user_id`): output `{u64 result = 0; u8 uid[16]}` (0x18). Cancel (result 2) exists in the core but nothing selects it yet.
+  * controller support (0xc): `player_count_min..max` from the argument header (unset = 1..4), players = min clamped to max; single mode reports npad 0 (Player 1) as the selected id, otherwise `0xffffffff`. Output `{s32 players; u32 selected_id; u32 result = 0}` (0xC).
+  Struct layouts follow libnx as remembered and are [unverified] against a title.
+
+`audrec:u` (audio-small, 2026-10-24, unbuilt on macOS): `OpenFinalOutputRecorder` returns an `IFinalOutputRecorder` that records silence (48 kHz stereo PCM16); appended buffers are zero-filled and complete at once, with end times as a running frame count. Command ids and layouts from memory, unverified. Core: `audrec_core.[ch]`.
+
+H.264 movies (2026-10-24, media-h264): `movie.c` also hosts `video/avc` decoders through VideoToolbox (`src/vt_h264.c`). Annex B or AVCC access units, SPS/PPS taken in-band (or csd via `vth264_config`), output packed NV12 into the same slots/pacing as VP9, B-frame reordering by pts (depth 2; 0 for baseline). The DecoderType value for AVC (0) is inferred, not confirmed: `NAPPLE_MOVIE_H264_TYPE` overrides. `vt_h264.c` also has `jpeg_decode_rgba` / `jpeg_encode_rgba` (ImageIO); not yet wired to nvjpg or caps.
+
+ac-services (2026-10-24, plan9): `fsp-srv` cmd 202 `OpenDataStorageByDataId` shares cmd 30's handler: DLC data ids resolve through `aoc_data_id_romfs`; any other id is a system data archive served from `<data-dir>/sysdata/<id as 16 hex>.bin` when that file exists, else `NOT_FOUND_DATA` (0x7d202). Nothing creates `sysdata/` yet, so system data (e.g. id 0100000000000823, storage 3, asked by the v0 AC build) is still missing. `ICommonStateGetter` cmd 900 `SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled` is accepted as a no-op (stub). Tests: `test_svc_fs`, `test_svc_applet`.
+
+sysdata-firmware (2026-10-24, plan10): `napple build --firmware` now writes every firmware data archive for title ids 0100000000000800-0FFF that has a RomFS (≤64 MiB; 40 on 22.1.0, ~300 MB) as `<title dir>/sysdata/<id16hex>.bin` (the raw RomFS image). fs.c `OpenDataStorageByDataId` looks in `<data-dir>/sysdata/` then `<data-dir>/../sysdata/` (data-dir is the build-id directory). AC v0 now gets 0100000000000823 (98324 bytes) and boots past it; the next stop is an SDK abort after `nfp:user` opens (SetTerminateResult 0x2a2).

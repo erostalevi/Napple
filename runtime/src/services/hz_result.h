@@ -12,7 +12,7 @@
 enum {
     HZ_MOD_NCM = 5, HZ_MOD_NS = 16, HZ_MOD_SETTINGS = 105, HZ_MOD_NIFM = 110, HZ_MOD_TIME = 116, HZ_MOD_NSD = 117,
     HZ_MOD_FRIENDS = 121, HZ_MOD_BCAT = 122, HZ_MOD_SSL = 123, HZ_MOD_APPLET = 128, HZ_MOD_MII = 148, HZ_MOD_HID = 202,
-    HZ_MOD_LDN = 203, HZ_MOD_BTM = 143, HZ_MOD_AUDIO_IN = 153, HZ_MOD_IRSENSOR = 205, HZ_MOD_CAPTURE = 206,
+    HZ_MOD_LDN = 203, HZ_MOD_BTM = 143, HZ_MOD_AUDIO = 153, HZ_MOD_AUDIO_IN = HZ_MOD_AUDIO, HZ_MOD_IRSENSOR = 205, HZ_MOD_CAPTURE = 206,
 };
 
 /* Results the offline answers use. */
@@ -27,6 +27,8 @@ enum {
 #define HZ_R_CAPTURE_SCREENSHOT_NOT_PERMITTED HZ_RESULT(HZ_MOD_CAPTURE, 1052)   /* [unverified] */
 #define HZ_R_LDN_NETWORK_NOT_AVAILABLE HZ_RESULT(HZ_MOD_LDN, 22)                /* [unverified] */
 #define HZ_R_IRSENSOR_NOT_CONNECTED HZ_RESULT(HZ_MOD_IRSENSOR, 3)               /* [unverified] */
+#define HZ_R_AUDREC_BUFFER_COUNT_LIMIT HZ_RESULT(HZ_MOD_AUDIO, 8)               /* [unverified] AppendFinalOutputRecorderBuffer past the queue limit */
+#define HZ_R_AUDREC_BUFFER_NOT_FOUND HZ_RESULT(HZ_MOD_AUDIO, 8)                 /* [unverified] a tag that is not queued */
 #define HZ_R_HID_NOT_CONNECTED HZ_RESULT(HZ_MOD_HID, 7)                         /* [unverified] */
 #define HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE HZ_RESULT(HZ_MOD_FRIENDS, 15)   /* [unverified] */
 #define HZ_R_SSL_NOT_CONNECTED HZ_RESULT(HZ_MOD_SSL, 205)                       /* [unverified] */

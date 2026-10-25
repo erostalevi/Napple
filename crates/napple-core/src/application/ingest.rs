@@ -2,6 +2,7 @@
 use crate::domain::error::{Error, Result};
 use crate::domain::keys::KeySet;
 use crate::infrastructure::io::{FileSource, Src};
+use crate::infrastructure::ncz;
 use crate::infrastructure::nca::{self, ContentType, FsType, Nca, TitleKeys};
 use crate::infrastructure::pfs::{parse_pfs0, Fs};
 use crate::infrastructure::romfs::RomFs;
@@ -39,6 +40,9 @@ pub(crate) fn collect(src: Src) -> Result<(Vec<(String, Src)>, TitleKeys)> {
         for e in &fs.entries {
             if e.name.ends_with(".nca") {
                 ncas.push((e.name.clone(), fs.open(&e.name)?));
+            } else if e.name.ends_with(".ncz") {
+                // NSZ/XCZ member: presented as the original NCA.
+                ncas.push((ncz::nca_name(&e.name), ncz::NczSource::open(fs.open(&e.name)?)?));
             } else if e.name.ends_with(".tik") {
                 let t = parse_ticket(&fs.read(&e.name)?)?;
                 if t.key_type == 0 {

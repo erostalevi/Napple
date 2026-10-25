@@ -6,6 +6,7 @@
 #include "napple.h"
 #include "json.h"
 #include "sha256.h"
+#include "ios_dylib.h"
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -15,6 +16,10 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#if NAPPLE_IOS
+#include <limits.h>
+#include <mach-o/dyld.h>
+#endif
 
 Module *g_modules;
 unsigned g_nmodules;
@@ -136,7 +141,49 @@ static void load_tables(Module *m, const char *dir, const char *file) {
     for (unsigned i = 0; i < m->nsym; i++) if (m->syms[i].name >= strsz) runtime_fail("module tables %s: bad symbol name", path);
 }
 
+/* Layout check and the key page: shared by the anonymous-memory path (macOS) and the dylib path (iOS). */
+static void finish_image(Module *m) {
+    if (m->key_off % PAGE_16K || m->key_off + PAGE_16K > m->patch_off || m->patch_off >= m->size) runtime_fail("%s: key page / patch layout", m->name);
+    uint64_t *key = (uint64_t *)(m->base + m->key_off);
+    for (unsigned i = 0; i < 8; i++) key[i] = (uint64_t)runtime_keys[i] * 8;
+    make_hash(m);
+}
+
+#if NAPPLE_IOS
+/* iOS cannot make anonymous memory executable (no JIT), so the executable pages of a module come from a code-signed Mach-O dylib that
+ * `napple build --target ios` wrote at build time: the same image at +IOS_DYLIB_HEADER_PAGE, with the segment protections seal() would
+ * set on macOS already in place (crates/napple-build/src/macho.rs). dyld maps it; the key page and the relocations are written into its
+ * private, writable __DATA segment exactly as on macOS. */
+static const void *find_image_header(const char *path) {
+    char want[PATH_MAX], have[PATH_MAX];
+    if (!realpath(path, want)) snprintf(want, sizeof want, "%s", path);
+    for (uint32_t i = 0; i < _dyld_image_count(); i++) {
+        const char *n = _dyld_get_image_name(i);
+        if (n && (!strcmp(n, path) || !strcmp(n, want) || (realpath(n, have) && !strcmp(have, want)))) return _dyld_get_image_header(i);
+    }
+    return NULL;
+}
+static void map_dylib(Module *m, const char *dir, const char *file) {
+    char path[4096];
+    if (ios_dylib_path(path, sizeof path, dir, file)) runtime_fail("%s: cannot derive the module dylib path from %s", m->name, dir);
+    m->dl = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!m->dl) runtime_fail("cannot load %s: %s (the dylib must be code-signed with the app's identity; rebuild with napple build --target ios and a valid provisioning profile)", path, dlerror());
+    const void *hdr = find_image_header(path);
+    if (!hdr) runtime_fail("%s: loaded, but dyld does not list it", path);
+    const char *bad = ios_dylib_check(hdr, m->text_end, m->data_off, m->key_off, m->patch_off, m->file_size);
+    if (bad) runtime_fail("%s: %s", path, bad);
+    m->base = (uint8_t *)hdr + IOS_DYLIB_HEADER_PAGE;
+    m->size = page_up(m->file_size);
+    finish_image(m);
+}
+#endif
+
 static void map_image(Module *m, const char *dir, const char *file, const char *expect_sha) {
+#if NAPPLE_IOS
+    (void)expect_sha;                       /* the code signature covers the dylib */
+    map_dylib(m, dir, file);
+    return;
+#else
     char path[4096]; snprintf(path, sizeof path, "%s/%s.patched.bin", dir, file);
     int fd = open(path, O_RDONLY);
     if (fd < 0) runtime_fail("cannot open %s", path);
@@ -156,10 +203,8 @@ static void map_image(Module *m, const char *dir, const char *file, const char *
         sha256(m->base, m->file_size, digest); hex(digest, 32, text);
         if (strcmp(text, expect_sha)) runtime_fail("%s: image sha256 differs from the manifest", path);
     }
-    if (m->key_off % PAGE_16K || m->key_off + PAGE_16K > m->patch_off || m->patch_off >= m->size) runtime_fail("%s: key page / patch layout", m->name);
-    uint64_t *key = (uint64_t *)(m->base + m->key_off);
-    for (unsigned i = 0; i < 8; i++) key[i] = (uint64_t)runtime_keys[i] * 8;
-    make_hash(m);
+    finish_image(m);
+#endif
 }
 
 /* Imports the loader could not bind: called through a per-import trap stub (hle_stack.c) so the failure names it. */
@@ -193,6 +238,11 @@ static void relocate(Module *m) {
 }
 
 static void seal(Module *m) {
+#if NAPPLE_IOS
+    /* text, rodata and the patch area already have their final protections from the dylib's segments; only the key page turns read-only. */
+    if (mprotect(m->base + m->key_off, PAGE_16K, PROT_READ)) runtime_fail("%s: key page R: %s", m->name, strerror(errno));
+    return;
+#else
     size_t rx = page_up(m->text_end), ro_end = m->data_off & ~(size_t)(PAGE_16K - 1);
     if (rx > ro_end) runtime_fail("%s: text overlaps data", m->name);
     if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) runtime_fail("%s: text RX: %s", m->name, strerror(errno));
@@ -201,6 +251,7 @@ static void seal(Module *m) {
     if (mprotect(m->base + m->patch_off, m->size - m->patch_off, PROT_READ | PROT_EXEC)) runtime_fail("%s: patch RX", m->name);
     __builtin___clear_cache((char *)m->base, (char *)m->base + rx);
     __builtin___clear_cache((char *)m->base + m->patch_off, (char *)m->base + m->size);
+#endif
 }
 
 void modules_load(const char *dir) {
@@ -275,7 +326,11 @@ void module_unload(Module *m) {
     dispatch_modules_changed();
     unsigned i = (unsigned)(m - g_modules);
     pthread_mutex_lock(&perm_lock); free(page_perm[i]); page_perm[i] = NULL; pthread_mutex_unlock(&perm_lock);
+#if NAPPLE_IOS
+    if (m->dl) { dlclose(m->dl); m->dl = NULL; }
+#else
     munmap(m->base, m->size);
+#endif
     free(m->hash); m->hash = NULL;                  /* tables_blob stays: replaced gate indexes may still point into it */
     LOG("loader", "NRO %s unmapped", m->name);
     pthread_mutex_unlock(&load_lock);

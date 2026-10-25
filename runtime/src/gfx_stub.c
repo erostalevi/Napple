@@ -51,6 +51,7 @@ const HostSymbol *gfx_hle_table(size_t *count) { *count = sizeof table / sizeof 
 int gfx_handle_fault(void *addr, int is_write, void *ucontext) { (void)addr; (void)is_write; (void)ucontext; return 0; }
 void gfx_guest_write_prepare(void *addr, size_t n) { (void)addr; (void)n; }
 uint64_t gfx_vsync_period_ns(void) { return 16666667; }
+void gfx_set_nvn_version(unsigned major, unsigned minor) { (void)major; (void)minor; }
 void gfx_shutdown(void) {}
 int gfx_screenshot(const char *p) { (void)p; return -1; }
 int gfx_screenshot_pending(void) { return 0; }

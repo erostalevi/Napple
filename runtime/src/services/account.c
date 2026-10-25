@@ -47,7 +47,7 @@ static const IpcCmd acc_cmds[] = {
     {50, "IsUserRegistrationRequestPermitted", acc_bool_false, IPC_STUB}, {51, "TrySelectUserWithoutInteraction", acc_last_opened, IPC_IMPL},
     {100, "InitializeApplicationInfoV0", noop, IPC_STUB}, {101, "GetBaasAccountManagerForApplication", acc_baas_manager, IPC_IMPL},
     {140, "InitializeApplicationInfo", noop, IPC_STUB}, {141, "ListQualifiedUsers", acc_list_users, IPC_IMPL},
-    {150, "IsUserAccountSwitchLocked", acc_bool_false, IPC_STUB},
+    {150, "IsUserAccountSwitchLocked", acc_bool_false, IPC_STUB}, {160, "InitializeApplicationInfoV2", noop, IPC_STUB},
 };
 static IpcObject *acc_open(void) { return IPC_OBJECT("acc:u0", acc_cmds, NULL, NULL); }
 void service_register_account(void) { ipc_register_service("acc:u0", acc_open); (void)acc_bool_true; }

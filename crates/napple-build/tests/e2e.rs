@@ -124,6 +124,21 @@ fn update_with_full_romfs_section_and_app_bundle() {
 }
 
 #[test]
+fn ios_build_reaches_the_dylib_step_and_rejects_the_tiny_fixture_layout() {
+    // The synthetic NSO is 0x2300 bytes with data in the first 16 KiB page, a layout no real game has (the runtime refuses it too:
+    // "text overlaps data"). So the full iOS bundle shape is covered by ios::tests::dylibize_converts_modules_and_nros and the
+    // macho tests; here we prove the iOS path runs up to the dylib step and fails with a precise, machine-readable code.
+    let _t = tmp("ios1");
+    let g = make_game(&_t, false);
+    let out = tmp("ios1-out");
+    let rt = g.dir.join("rt-ios");
+    std::fs::write(&rt, b"fake ios runtime").unwrap();
+    let e = run(&[p(&g.base_nsp), "-k", p(&g.keys), "--updates", "none", "--target", "ipad", "--bundle-id", "com.me.napple", "--runtime", p(&rt), "--no-sign", "-o", p(&out), "--name", "iOS Game"]).unwrap_err();
+    assert!(e.starts_with("[macho]") && e.contains("text overlaps data"), "{e}");
+    assert!(!out.join("iOS Game.app").exists(), "a failed build publishes nothing");
+}
+
+#[test]
 fn keep_cache_allows_resume() {
     let _t = tmp("e");
     let g = make_game(&_t, true);
@@ -158,8 +173,10 @@ fn errors_are_machine_readable() {
     let e = run(&[p(&g.base_nsp), "-k", p(&wrong), "--data-only", "-o", p(&out)]).unwrap_err();
     assert!(e.contains("integrity") || e.contains("wrong keys"), "{e}");
     assert!(!e.contains(&hex(&HEADER_KEY)) && !e.contains(&hex(&KAK)), "no key material in errors");
+    // iOS needs signing inputs (checked before any heavy work) and unknown targets are usage errors
     let e = run(&[p(&g.base_nsp), "-k", p(&g.keys), "--target", "ios", "-o", p(&out)]).unwrap_err();
-    assert!(e.starts_with("[target]"), "{e}");
+    assert!(e.starts_with("[sign]"), "{e}");
+    assert!(run(&[p(&g.base_nsp), "-k", p(&g.keys), "--target", "tvos", "-o", p(&out)]).is_err());
     let e = run(&["/no/such/file.nsp", "-k", p(&g.keys), "--data-only", "-o", p(&out)]).unwrap_err();
     assert!(e.starts_with("[input]") || e.starts_with("[container]"), "{e}");
     assert!(run(&[p(&g.base_nsp)]).is_err());
@@ -178,9 +195,9 @@ fn check_subcommand_reports_without_key_values() {
 
 #[test]
 fn bktr_base_offsets_in_data_level_space_are_detected() {
-    let _t = tmp("i");
+    let _t = tmp("bktr1");
     let g = make_game_with(&_t, true, true);
-    let out = tmp("i-out");
+    let out = tmp("bktr1-out");
     run(&[p(&g.base_nsp), p(&g.update_nsp), "-k", p(&g.keys), "--updates", "all", "--data-only", "-o", p(&out)]).unwrap();
     let upd = out.join(format!("{APP_ID:016X}/3233343536373839"));
     assert_eq!(std::fs::read(upd.join("romfs.bin")).unwrap(), g.update_romfs);

@@ -28,3 +28,11 @@ Preflight: `napple build --check -k <prod.keys> [--firmware <zip|dir>] [--json]`
   disk-space io sign target check cancelled`. Never print key values.
 - Cancel: SIGTERM/SIGINT stop the build between chunks (<= 8 MB), remove the staging directory and exit 1 with `[cancelled]`. A complete RomFS copy
   made before a failure/cancel stays in `.napple-cache.nosync` (in the temp dir when it is on the output volume, else in `-o`) so a retry skips it.
+
+## iOS / iPadOS targets (iOS 26 and later; docs/ios.md)
+`--target ios|iphone|ipad` (ios = iPhone and iPad) builds a flat `<Name>.app` (no `Contents/`) with the runtime as its executable and the rewritten modules as
+Mach-O dylibs in `Frameworks/`. Extra options: `--signing-identity <name|sha1>`, `--provisioning-profile <file.mobileprovision>`, `--bundle-id <id>`, `--ipa`
+(also writes `<Name>.ipa` next to the app), `--install <device>` (+ `--launch`; `xcrun devicectl`), `--no-sign` (unsigned app/IPA for an external signer). The runtime comes from
+`--runtime` (default: `runtime/build-ios/napple-runtime`, built by `tools/build_ios.sh`); there is no launcher on iOS. Without identity and profile (and without `--no-sign`) the build stops
+immediately with `[sign]`. `napple build --list-signing [--json]` prints `{"identities":[{"sha1","name"}],"profiles":[{"path","name","team","app_id","expires","devices"}]}`
+for Studio's pickers. New error codes: `macho` (a module could not be packed), `ipa`, `install`. Studio lists devices itself with `xcrun devicectl list devices --json-output`.

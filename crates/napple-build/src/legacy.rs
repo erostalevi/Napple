@@ -56,6 +56,7 @@ fn dump_romfs(game: &PathBuf, keys: &KeySet, out: &PathBuf) -> Result<(), String
     for fs in &parts {
         for en in &fs.entries {
             if en.name.ends_with(".nca") { ncas.push((en.name.clone(), fs.open(&en.name).map_err(e)?)); }
+            else if en.name.ends_with(".ncz") { ncas.push((napple_core::infrastructure::ncz::nca_name(&en.name), napple_core::infrastructure::ncz::NczSource::open(fs.open(&en.name).map_err(e)?).map_err(e)?)); }
             else if en.name.ends_with(".tik") {
                 let t = parse_ticket(&fs.read(&en.name).map_err(e)?).map_err(e)?;
                 if t.key_type == 0 { tks.insert(t.rights_id, t.encrypted_title_key); }

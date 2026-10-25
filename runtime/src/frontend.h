@@ -17,4 +17,8 @@ struct napple_input *hid_input_get(void);                /* services/hid.c: the 
 /* Blocking software keyboard (swkbd applet): UTF-8 in/out; returns 1 when accepted. */
 int frontend_text_input(const char *header, const char *sub, const char *guide, const char *initial, unsigned max_len, unsigned min_len,
                         int password, int numeric, char *out, unsigned cap);
+/* Modal message (error applet): a native alert in window mode, a log line headless. */
+void frontend_alert(const char *title, const char *message);
+/* Controllers the input backend sees (keyboard-only = 1); NAPPLE_CONTROLLER_PADS=n overrides it, and headless runs report 1 without it. */
+int frontend_connected_pads(void);
 void audio_init_once(void);                              /* services/audio.c */

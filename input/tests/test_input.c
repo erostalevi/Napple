@@ -33,6 +33,16 @@ int main(void) {
     CHECK(fabsf(sqrtf(dx * dx + dy * dy) - 32767.f) < 3, "diagonal magnitude %f", sqrtf(dx * dx + dy * dy));
     /* keyboard section: usage 15 ('L') down */
     const uint8_t *k = napple_hid_lifo_latest(shm, l.keyboard, 0x30); CHECK(k && (k[16 + 1] & 0x80), "keyboard usage bitmap has L");
+    /* on-screen controller: analog stick + buttons for player 1, merged with the keyboard (bigger deflection wins), cleared by focus loss */
+    napple_input_key(in, 13, 0); napple_input_key(in, 2, 0); napple_input_key(in, 37, 0); napple_input_key(in, 49, 0);
+    napple_input_virtual_pad(in, NAPPLE_BTN_MASK(NAPPLE_BTN_X) | NAPPLE_BTN_MASK(NAPPLE_BTN_L), 0.5f, 0.f, 0.f, -1.f);
+    napple_input_update(in, 1020000000ull); e = latest(in, shm, &l, 0, l.npad_lifo[0]);
+    b = r64(e + 8);
+    CHECK((b & NAPPLE_BTN_MASK(NAPPLE_BTN_X)) && (b & NAPPLE_BTN_MASK(NAPPLE_BTN_L)) && !(b & NAPPLE_BTN_MASK(NAPPLE_BTN_A)), "virtual buttons X+L (%llx)", (unsigned long long)b);
+    CHECK(abs((int32_t)r32(e + 0x10) - 16384) < 3 && (int32_t)r32(e + 0x14) == 0 && (int32_t)r32(e + 0x1c) == -32767, "virtual sticks are analog");
+    napple_input_virtual_pad(in, 0, 0, 0, 0, 0);
+    napple_input_update(in, 1022000000ull); e = latest(in, shm, &l, 0, l.npad_lifo[0]);
+    CHECK((r64(e + 8) & 0xffff) == 0 && r32(e + 0x10) == 0, "virtual pad released");
     /* focus loss releases everything */
     napple_input_focus(in, 0); napple_input_update(in, 1024000000ull); e = latest(in, shm, &l, 0, l.npad_lifo[0]);
     CHECK((r64(e + 8) & 0xffff) == 0 && r32(e + 0x14) == 0, "unfocused = neutral");

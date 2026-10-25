@@ -177,3 +177,44 @@ func fakeFirmwareDir(in dir: URL) -> URL {
         #expect(KeyFinder.scan(root).firmware == root)
     }
 }
+
+@Suite struct IOSTests {
+    static let devices = """
+    {"info":{"outcome":"success"},"result":{"devices":[
+      {"identifier":"AAAA-1111","deviceProperties":{"name":"Neto's iPhone","osVersionNumber":"26.0.1","developerModeStatus":"enabled"},
+       "hardwareProperties":{"marketingName":"iPhone 17 Pro","platform":"iOS","deviceType":"iPhone","udid":"00008150-001"},"connectionProperties":{"tunnelState":"connected"}},
+      {"identifier":"BBBB-2222","deviceProperties":{"name":"Old iPad","osVersionNumber":"18.4","developerModeStatus":"disabled"},
+       "hardwareProperties":{"marketingName":"iPad Air","platform":"iOS","deviceType":"iPad"},"connectionProperties":{"tunnelState":"disconnected"}},
+      {"identifier":"CCCC-3333","deviceProperties":{"name":"Watch","osVersionNumber":"11"},"hardwareProperties":{"platform":"watchOS","deviceType":"appleWatch"}}
+    ]}}
+    """
+
+    @Test func parsesDevicectlListAndFlagsUnsupportedDevices() throws {
+        let d = DeviceList.parse(Data(Self.devices.utf8))
+        #expect(d.map(\.id) == ["AAAA-1111", "BBBB-2222"])          // the watch is not a target
+        #expect(d[0].connected && d[0].developerMode && d[0].supported)
+        #expect(!d[1].connected && !d[1].developerMode && !d[1].supported)
+        #expect(d[1].summary.contains("not connected"))
+        #expect(DeviceList.parse(Data("{}".utf8)).isEmpty && DeviceList.parse(Data("junk".utf8)).isEmpty)
+    }
+
+    @Test func decodesSigningListAndMatchesProfilesToBundleIds() throws {
+        let json = """
+        {"identities":[{"sha1":"ABCDEF0123456789ABCDEF0123456789ABCDEF01","name":"Apple Development: me@example.com (TEAM123456)"}],
+         "profiles":[{"path":"/p/a.mobileprovision","name":"iOS Team Provisioning Profile: com.me.napple","team":"TEAM123456","app_id":"TEAM123456.com.me.napple","expires":"2026-11-01T00:00:00Z","devices":1},
+                     {"path":"/p/b.mobileprovision","name":"Wildcard","team":"TEAM123456","app_id":"TEAM123456.*","expires":"2027-01-01T00:00:00Z","devices":3}]}
+        """
+        let s = try SigningInfo.decode(Data(json.utf8))
+        #expect(s.identities.count == 1 && s.profiles.count == 2)
+        let (explicit, wild) = (s.profiles[0], s.profiles[1])
+        #expect(explicit.covers(bundleId: "com.me.napple") && !explicit.covers(bundleId: "com.me.other"))
+        #expect(wild.covers(bundleId: "com.napple.game.0100000000010000"))
+        #expect(explicit.explicitBundleId == "com.me.napple" && wild.explicitBundleId == nil)
+    }
+
+    @Test func buildArgumentsCarrySigningOptions() {
+        #expect(BuildTarget.allCases.map(\.rawValue) == ["macos", "ios", "iphone", "ipad"])
+        #expect(BuildTarget.ios.isIOS && !BuildTarget.macos.isIOS)
+        #expect(ErrorText.humanize("error: [install] devicectl failed").contains("Developer Mode"))
+    }
+}

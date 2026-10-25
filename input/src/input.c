@@ -41,6 +41,8 @@ struct napple_input {
     uint8_t keys[256];
     float mouse_nx, mouse_ny, scroll_dx, scroll_dy; int mouse_buttons, mouse_have_pos; int32_t last_mx, last_my;
     int focused, blocked;
+    /* on-screen controller (touch devices): buttons NAPPLE_BTN_MASK bits and analog sticks in [-1,1], y up; merged into player 1 */
+    uint64_t virt_buttons; float virt_lx, virt_ly, virt_rx, virt_ry;
     /* guest configuration */
     uint32_t supported_styles, assign_mode; int player_count, sixaxis_enabled;
     /* sampled state */
@@ -221,12 +223,20 @@ void napple_input_release_all(napple_input *in) {
     pthread_mutex_lock(&in->lock); memset(in->keys, 0, sizeof in->keys); in->mouse_buttons = 0; pthread_mutex_unlock(&in->lock);
     ng_rumble_quiet();
 }
+void napple_input_virtual_pad(napple_input *in, uint64_t buttons, float lx, float ly, float rx, float ry) {
+    pthread_mutex_lock(&in->lock);
+    if (in->blocked || !in->focused) buttons = 0, lx = ly = rx = ry = 0;
+    in->virt_buttons = buttons & (NAPPLE_BTN_MASK(NAPPLE_BTN_COUNT_BASIC) - 1);
+    float *dst[4] = {&in->virt_lx, &in->virt_ly, &in->virt_rx, &in->virt_ry}; float src[4] = {lx, ly, rx, ry};
+    for (int i = 0; i < 4; i++) *dst[i] = src[i] > 1 ? 1 : src[i] < -1 ? -1 : src[i];
+    pthread_mutex_unlock(&in->lock);
+}
 void napple_input_focus(napple_input *in, int focused) {
-    pthread_mutex_lock(&in->lock); in->focused = focused != 0; if (!focused) { memset(in->keys, 0, sizeof in->keys); in->mouse_buttons = 0; } pthread_mutex_unlock(&in->lock);
+    pthread_mutex_lock(&in->lock); in->focused = focused != 0; if (!focused) { memset(in->keys, 0, sizeof in->keys); in->mouse_buttons = 0; in->virt_buttons = 0; in->virt_lx = in->virt_ly = in->virt_rx = in->virt_ry = 0; } pthread_mutex_unlock(&in->lock);
     if (!focused) ng_rumble_quiet();
 }
 void napple_input_set_blocked(napple_input *in, int blocked) {
-    pthread_mutex_lock(&in->lock); in->blocked = blocked != 0; if (blocked) { memset(in->keys, 0, sizeof in->keys); in->mouse_buttons = 0; } pthread_mutex_unlock(&in->lock);
+    pthread_mutex_lock(&in->lock); in->blocked = blocked != 0; if (blocked) { memset(in->keys, 0, sizeof in->keys); in->mouse_buttons = 0; in->virt_buttons = 0; in->virt_lx = in->virt_ly = in->virt_rx = in->virt_ry = 0; } pthread_mutex_unlock(&in->lock);
     if (blocked) ng_rumble_quiet();
 }
 
@@ -276,6 +286,11 @@ static void map_slot(const napple_input *in, int slot, napple_npad_state *st) {
         m = sqrtf(krx * krx + kry * kry); if (m > 1) { krx /= m; kry /= m; }
     }
     float lx = kx, ly = ky, rx = krx, ry = kry;
+    if (slot == 0) {   /* on-screen controller (touch devices): the larger deflection wins, like a physical pad */
+        st->buttons |= in->virt_buttons;
+        if (in->virt_lx * in->virt_lx + in->virt_ly * in->virt_ly > lx * lx + ly * ly) { lx = in->virt_lx; ly = in->virt_ly; }
+        if (in->virt_rx * in->virt_rx + in->virt_ry * in->virt_ry > rx * rx + ry * ry) { rx = in->virt_rx; ry = in->virt_ry; }
+    }
     if (slot < in->npads) {
         const ng_pad *p = &in->pads[slot]; uint32_t e = p->elements;
         if ((in->bind.face_layout == 1 && p->by_label) || (in->bind.face_layout == 2 && !p->by_label)) e = swap_face(e);

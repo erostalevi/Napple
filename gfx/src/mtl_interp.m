@@ -258,7 +258,7 @@ static void show_image(FrameRec *a, FrameRec *b, float t, int mode, double at, i
     if (dr) {
         if (at > CACurrentMediaTime() + 0.0005) [cb presentDrawable:dr atTime:at]; else [cb presentDrawable:dr];
         g_last_present_media = at > CACurrentMediaTime() ? at : CACurrentMediaTime();
-        if (release_after) [dr addPresentedHandler:^(id<MTLDrawable> d) { (void)d; rec_release(b); }];
+        if (release_after) napple_drawable_presented(cb, dr, ^(id<MTLDrawable> d) { (void)d; rec_release(b); });
     }
     [cb addCompletedHandler:^(id<MTLCommandBuffer> c) {
         if (a) g_display_stats.fg_ms = (c.GPUEndTime - c.GPUStartTime) * 1000.0;

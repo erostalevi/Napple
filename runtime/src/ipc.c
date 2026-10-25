@@ -6,7 +6,7 @@
 #include <string.h>
 #ifdef __APPLE__
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include "mach_vm_compat.h"
 #endif
 #include <sys/mman.h>
 
@@ -306,12 +306,49 @@ static void control(IpcSession *s, IpcCall *c, uint32_t *domain_object_out) {
     }
 }
 
+/* TIPC (Horizon 12+): the command id is the message type minus 16, the arguments follow the descriptors with no CMIF header or
+ * alignment, and the reply carries the result code as its first raw word, then the output data. No domains, no control requests. */
+static void respond_tipc(uint32_t *m, const IpcCall *c) {
+    uint32_t out[MSG_BYTES / 4]; memset(out, 0, sizeof out);
+    unsigned special = c->nout_copy || c->nout_move;
+    uint32_t *p = out + 2;
+    if (special) {
+        *p++ = (c->nout_copy << 1) | (c->nout_move << 5);
+        for (unsigned i = 0; i < c->nout_copy; i++) *p++ = c->out_copy[i];
+        for (unsigned i = 0; i < c->nout_move; i++) *p++ = c->out_move[i];
+    }
+    for (unsigned i = 0; i < c->nxout; i++, p += 2) {
+        uint64_t a = c->xout[i].addr;
+        p[0] = (c->xout[i].index & 0x3f) | (uint32_t)(((a >> 36) & 0x3f) << 6) | (uint32_t)(((a >> 32) & 0xf) << 12) | (uint32_t)(c->xout[i].size << 16);
+        p[1] = (uint32_t)a;
+    }
+    unsigned nwords = 1 + (c->out_size + 3) / 4;
+    if ((size_t)((uint8_t *)p - (uint8_t *)out) + nwords * 4 > MSG_BYTES) runtime_fail("TIPC response exceeds the message buffer");
+    *p++ = c->result; memcpy(p, c->out, c->out_size);
+    out[0] = (c->nxout & 0xf) << 16;
+    out[1] = (nwords & 0x3ff) | (special ? 1u << 31 : 0);
+    memcpy(m, out, MSG_BYTES);
+}
+static void dispatch_tipc(IpcSession *s, uint32_t *m, IpcCall *c, const ParseTail *tail) {
+    if (s->is_domain || !s->object) runtime_fail("TIPC request on a session without a plain object");
+    c->cmd = c->type - T_TIPC_BASE;
+    c->in = (const uint8_t *)tail->data_words; c->in_size = tail->ndata * 4;
+    for (unsigned i = 0; i < c->ncopy; i++) {                       /* objects passed as arguments arrive as copy handles */
+        IpcSession *as = handle_get(c->copy[i], OBJ_SESSION);
+        if (as && as->object) c->in_objects[c->nin_objects++] = as->object;
+    }
+    run_object(s->object, c);
+    for (unsigned i = 0; i < c->nout_objects; i++) ipc_out_move_handle(c, session_handle(c->out_objects[i]));
+    c->nout_objects = 0;
+    respond_tipc(m, c);
+}
+
 static void dispatch(IpcSession *s, uint32_t *m) {
     IpcCall c; ParseTail tail;
     parse(m, &c, &tail);
     c.session = s;
     if (c.type == T_CLOSE || c.type == T_TIPC_CLOSE) return;
-    if (c.type >= T_TIPC_BASE) { LOG("ipc", "TIPC request (cmd %u) is not implemented", c.type - T_TIPC_BASE); runtime_fail("TIPC not implemented"); }
+    if (c.type >= T_TIPC_BASE) { dispatch_tipc(s, m, &c, &tail); return; }
     int control_msg = c.type == T_CONTROL || c.type == T_CONTROL_CTX;
     if (!control_msg && c.type != T_REQUEST && c.type != T_REQUEST_CTX) {
         LOG("ipc", "unsupported HIPC message type %u", c.type);
@@ -370,6 +407,11 @@ static void dispatch(IpcSession *s, uint32_t *m) {
 
 /* ---- sm: ------------------------------------------------------------------------------------------------------- */
 static void sm_initialize(IpcObject *self, IpcCall *c) { (void)self; (void)c; }        /* RegisterClient(pid) */
+/* The SDK's TIPC sm client (nn::sm GetServiceHandle) reads the reply at fixed positions: move handle at word 3, result at word 4, as in a successful
+ * reply, without checking the special header first. An error reply laid out as header + result alone leaves word 4 holding whatever the request wrote
+ * there (the high half of the service name), so the refusal read as "success, handle 0" (AC 3.0.x: vi:m/vi:s probes "succeeded", then a request on handle 0
+ * killed boot; pctl:* likewise). Keep the success layout and put a 0 handle in it. */
+static void sm_tipc_error_layout(IpcCall *c) { if (c->type >= T_TIPC_BASE) ipc_out_move_handle(c, 0); }
 static void sm_get_service(IpcObject *self, IpcCall *c) {
     (void)self;
     char name[9] = {0}; memcpy(name, ipc_in(c, 0, 8), 8);
@@ -382,6 +424,7 @@ static void sm_get_service(IpcObject *self, IpcCall *c) {
         LOG("ipc", "sm: \"%s\" refused: not in the NPDM service access list", name);
         trace_event("service_refused", "\"service\":\"%s\"", name);
         c->result = IPC_R_NOT_FOUND(21, 8);
+        sm_tipc_error_layout(c);
         return;
     }
     if (!found) {
@@ -391,6 +434,7 @@ static void sm_get_service(IpcObject *self, IpcCall *c) {
         runtime_trace_guest(trace_fp, trace_lr);
         if (!getenv("NAPPLE_IPC_LENIENT")) runtime_fail("IPC service \"%s\" not implemented", name);
         c->result = IPC_R_NOT_FOUND(21, 5);   /* sm: ServiceNotRegistered-style error */
+        sm_tipc_error_layout(c);
         return;
     }
     if (!allowed) LOG("ipc", "sm: note: \"%s\" is not in the NPDM service access list (a real console would refuse it)", name);

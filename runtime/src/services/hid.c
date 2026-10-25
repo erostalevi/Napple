@@ -14,7 +14,7 @@
 #include "napple.h"
 #include <sys/ucontext.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include "mach_vm_compat.h"
 
 static napple_input *g_input;
 static int trace_on;
@@ -121,9 +121,7 @@ int hid_trace_fault(const void *addr, void *context) {
 napple_input *hid_input_get(void) { ensure_input(); return g_input; }
 
 static void noop(IpcObject *s, IpcCall *c) { (void)s; (void)c; }
-static void ret_u32_0(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = 0; IPC_OUT(c, v); }
 static void ret_i64_0(IpcObject *s, IpcCall *c) { (void)s; int64_t v = 0; IPC_OUT(c, v); }
-static void ret_u8_0(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 0; IPC_OUT(c, v); }
 static void ret_u8_1(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 1; IPC_OUT(c, v); }
 static void event_handle(IpcObject *s, IpcCall *c) { (void)s; uint32_t r = 0; event_create(&r); ipc_out_copy_handle(c, r); (void)npad_events; }
 
@@ -253,6 +251,7 @@ static void hid_set_comm_mode(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 
 static void hid_get_comm_mode(IpcObject *s, IpcCall *c) { (void)s; uint64_t v = HC()->comm_mode; IPC_OUT(c, v); }
 static void hid_device_mounted(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 1; IPC_OUT(c, v); }   /* a vibration device handle the SDK produced is always attached (one virtual pad per slot) */
 
+static void hid_fw_update_needed(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = 0; IPC_OUT(c, v); }
 static const IpcCmd hid_cmds[] = {
     {0, "CreateAppletResource", hid_create_applet_resource, IPC_IMPL},
     {1, "ActivateDebugPad", noop, IPC_IMPL}, {11, "ActivateTouchScreen", noop, IPC_IMPL}, {21, "ActivateMouse", noop, IPC_IMPL},
@@ -282,6 +281,8 @@ static const IpcCmd hid_cmds[] = {
     {211, "IsVibrationDeviceMounted", hid_device_mounted, IPC_STUB},
     {300, "ActivateConsoleSixAxisSensor", noop, IPC_STUB}, {301, "StartConsoleSixAxisSensor", noop, IPC_STUB}, {302, "StopConsoleSixAxisSensor", noop, IPC_STUB},
     {1000, "SetNpadCommunicationMode", hid_set_comm_mode, IPC_IMPL}, {1001, "GetNpadCommunicationMode", hid_get_comm_mode, IPC_IMPL},
+    {1002, "SetTouchScreenConfiguration", noop, IPC_STUB}, {1003, "IsFirmwareUpdateNeededForNotification", hid_fw_update_needed, IPC_STUB},
+    {1004, "SetTouchScreenResolution", noop, IPC_STUB},
 };
 static IpcObject *hid_open(void) { return IPC_OBJECT("hid", hid_cmds, NULL, NULL); }
 void service_register_hid(void) { ipc_register_service("hid", hid_open); }

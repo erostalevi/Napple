@@ -140,6 +140,8 @@ void napple_gfx_guest_write_prepare(void *addr, size_t len);
 /* ---- frame / presentation / pacing ----------------------------------------------------------------------------- */
 /* Period in ns at which the runtime should signal the guest's vsync / display event: 1e9/refresh, or 1e9/target_fps (FIXED). */
 uint64_t napple_gfx_vsync_period_ns(void);
+/* Override the API version nvnDeviceGetInteger reports (the runtime learns it from the guest after napple_gfx_init). */
+void napple_gfx_set_nvn_version(uint32_t major, uint32_t minor);
 /* Blocks until the in-flight frame budget allows another acquire (internal; the runtime normally never calls it). */
 uint64_t napple_gfx_frame_count(void);
 

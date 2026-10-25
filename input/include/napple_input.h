@@ -178,6 +178,9 @@ void napple_input_keys(napple_input *in, const uint16_t *mac_keycodes, int count
 void napple_input_mouse_position(napple_input *in, float nx, float ny);            /* normalised 0..1 inside the game view, y down */
 void napple_input_mouse_button(napple_input *in, int button, int down);            /* 0 left, 1 right, 2 middle */
 void napple_input_mouse_scroll(napple_input *in, float dx, float dy);
+/* On-screen controller (iOS touch overlay): the pressed Switch buttons (NAPPLE_BTN_MASK bits A..DOWN) and analog sticks in [-1,1] (y up) for player 1,
+   merged with keyboard and controllers (larger stick deflection wins). Ignored while blocked or unfocused; cleared when either starts. Call with zeros to release. */
+void napple_input_virtual_pad(napple_input *in, uint64_t buttons, float lx, float ly, float rx, float ry);
 void napple_input_focus(napple_input *in, int focused);                            /* losing focus releases everything */
 /* Release all held host keys/buttons (menu opened, etc). */
 void napple_input_release_all(napple_input *in);

@@ -37,6 +37,6 @@ static NVNboolean set_shaders(NVNprogram *p, int n, const uint8_t *data, size_t 
 }
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *d) { return set_shaders(p, n, (const uint8_t *)d, sizeof(NVNshaderData)); }
 /* NVNshaderDataExt = { data, control, reserved }, 0x18 bytes. */
-NVN_NOPROTO(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const void *d) { return set_shaders(p, n, (const uint8_t *)d, 24); }
+NVN(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const void *d) { return set_shaders(p, n, (const uint8_t *)d, 24); }
 NVN(nvnProgramSetSubroutineLinkage, NVNboolean, NVNprogram *p, int n, const NVNsubroutineLinkageMapPtr *m) { (void)p; (void)n; (void)m; return 1; }
-NVN_NOPROTO(nvnProgramSetSampleShading, void, NVNprogram *p, uint32_t enable, float rate) { (void)p; (void)enable; (void)rate; }
+NVN(nvnProgramSetSampleShading, void, NVNprogram *p, uint32_t enable, float rate) { (void)p; (void)enable; (void)rate; }

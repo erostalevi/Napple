@@ -1,0 +1,50 @@
+// Hand-maintained prototypes for entry points newer than the bundled NVN header (previously NVN_NOPROTO). NVNboolean parameters are uint32_t.
+#pragma once
+#include "nvn.h"
+
+typedef void (*NVNT_nvnCommandBufferSetCommandMemoryCallbackEnabled)(NVNcommandBuffer *c, uint32_t e);
+typedef void (*NVNT_nvnCommandBufferSetColorReductionEnable)(NVNcommandBuffer *c, uint32_t e);
+typedef void (*NVNT_nvnCommandBufferSetColorReductionThresholds)(NVNcommandBuffer *c, int a, int b);
+typedef void (*NVNT_nvnCommandBufferSetStencilCullCriteria)(NVNcommandBuffer *c, int a, int b, int d);
+typedef void (*NVNT_nvnCommandBufferInsertCheckpointStatic)(NVNcommandBuffer *c, uint32_t id, const char *s);
+typedef void (*NVNT_nvnCommandBufferInsertCheckpointDynamic)(NVNcommandBuffer *c, uint32_t id, const char *s);
+typedef int (*NVNT_nvnDeviceBuilderGetFlags)(const NVNdeviceBuilder *b);
+typedef void (*NVNT_nvnDeviceSetAutomaticCheckpointsEnable)(NVNdevice *d, uint32_t e);
+typedef void (*NVNT_nvnDeviceSetAutomaticCheckpointsSamplingInterval)(NVNdevice *d, int v);
+typedef void (*NVNT_nvnDeviceSetAutomaticCheckpointsByDebugGroup)(NVNdevice *d, uint32_t e);
+typedef void (*NVNT_nvnDeviceSetCheckpointCallStacksEnable)(NVNdevice *d, uint32_t e);
+typedef void (*NVNT_nvnDeviceSetCheckpointMaxCallStacksDepth)(NVNdevice *d, int v);
+typedef void (*NVNT_nvnQueueBuilderSetQueuePriority)(NVNqueueBuilder *b, int p);
+typedef int (*NVNT_nvnQueueBuilderGetQueuePriority)(const NVNqueueBuilder *b);
+typedef const NVNdevice * (*NVNT_nvnQueueBuilderGetDevice)(const NVNqueueBuilder *b);
+typedef int (*NVNT_nvnQueueBuilderGetFlags)(const NVNqueueBuilder *b);
+typedef size_t (*NVNT_nvnQueueBuilderGetCommandMemorySize)(const NVNqueueBuilder *b);
+typedef size_t (*NVNT_nvnQueueBuilderGetComputeMemorySize)(const NVNqueueBuilder *b);
+typedef size_t (*NVNT_nvnQueueBuilderGetControlMemorySize)(const NVNqueueBuilder *b);
+typedef size_t (*NVNT_nvnQueueBuilderGetCommandFlushThreshold)(const NVNqueueBuilder *b);
+typedef size_t (*NVNT_nvnQueueBuilderGetMemorySize)(const NVNqueueBuilder *b);
+typedef void * (*NVNT_nvnQueueBuilderGetMemory)(const NVNqueueBuilder *b);
+typedef void (*NVNT_nvnEventBuilderGetStorage)(const NVNeventBuilder *b, const NVNmemoryPool **p, int64_t *off);
+typedef const NVNmemoryPool * (*NVNT_nvnEventBuilderGetMemoryPool)(const NVNeventBuilder *b);
+typedef int64_t (*NVNT_nvnEventBuilderGetMemoryOffset)(const NVNeventBuilder *b);
+typedef const NVNmemoryPool * (*NVNT_nvnEventGetMemoryPool)(const NVNevent *e);
+typedef int64_t (*NVNT_nvnEventGetMemoryOffset)(const NVNevent *e);
+typedef const NVNdevice * (*NVNT_nvnMemoryPoolBuilderGetDevice)(const NVNmemoryPoolBuilder *b);
+typedef const NVNdevice * (*NVNT_nvnBufferBuilderGetDevice)(const NVNbufferBuilder *b);
+typedef NVNboolean (*NVNT_nvnProgramSetShadersExt)(NVNprogram *p, int n, const void *d);
+typedef void (*NVNT_nvnProgramSetSampleShading)(NVNprogram *p, uint32_t enable, float rate);
+typedef const NVNdevice * (*NVNT_nvnTextureBuilderGetDevice)(const NVNtextureBuilder *b);
+typedef const NVNpackagedTextureLayout * (*NVNT_nvnTextureBuilderGetPackagedTextureLayout)(const NVNtextureBuilder *b);
+typedef int (*NVNT_nvnTextureBuilderGetRawStorageClass)(const NVNtextureBuilder *b);
+typedef int (*NVNT_nvnTextureGetRawStorageClass)(const NVNtexture *t);
+typedef const NVNdevice * (*NVNT_nvnSamplerBuilderGetDevice)(const NVNsamplerBuilder *b);
+typedef void (*NVNT_nvnWindowBuilderSetNumActiveTextures)(NVNwindowBuilder *b, int n);
+typedef int (*NVNT_nvnWindowBuilderGetNumActiveTextures)(const NVNwindowBuilder *b);
+typedef const NVNdevice * (*NVNT_nvnWindowBuilderGetDevice)(const NVNwindowBuilder *b);
+typedef int (*NVNT_nvnWindowBuilderGetNumTextures)(const NVNwindowBuilder *b);
+typedef const NVNtexture * (*NVNT_nvnWindowBuilderGetTexture)(const NVNwindowBuilder *b, int i);
+typedef void (*NVNT_nvnWindowSetNumActiveTextures)(NVNwindow *w, int n);
+typedef int (*NVNT_nvnWindowGetNumActiveTextures)(const NVNwindow *w);
+typedef int (*NVNT_nvnWindowGetNumTextures)(const NVNwindow *w);
+typedef NVNboolean (*NVNT_nvnSyncInitializeFromFencedGLSync)(NVNsync *s, NVNdevice *d, const void *gl_sync);
+typedef void * (*NVNT_nvnSyncCreateGLSync)(const NVNsync *s);

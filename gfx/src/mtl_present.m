@@ -10,7 +10,10 @@
  *   - statistics for the overlay.
  * Runs on the replay thread (one job at a time). */
 #import <ImageIO/ImageIO.h>
+#if __has_include(<MetalFX/MetalFX.h>)
 #import <MetalFX/MetalFX.h>
+#define NAPPLE_HAVE_METALFX 1   /* absent from the Xcode 27 iOS Simulator SDK: the upscaler is then unavailable and the plain scaler is used */
+#endif
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <math.h>
 #include <pthread.h>
@@ -135,6 +138,7 @@ static id<MTLRenderCommandEncoder> begin_pass(id<MTLCommandBuffer> cb, id<MTLTex
     return [cb renderCommandEncoderWithDescriptor:rp];
 }
 
+#ifdef NAPPLE_HAVE_METALFX
 /* MetalFX spatial scaler cache (one per input/output size and format). */
 static id<MTLFXSpatialScaler> get_fx(MTLPixelFormat in_pf, uint32_t iw, uint32_t ih, uint32_t ow, uint32_t oh) {
     static id<MTLFXSpatialScaler> sc; static uint64_t key;
@@ -149,6 +153,7 @@ static id<MTLFXSpatialScaler> get_fx(MTLPixelFormat in_pf, uint32_t iw, uint32_t
     if (!sc) LOGW("MetalFX spatial scaler %ux%u -> %ux%u is not available (format %lu)", iw, ih, ow, oh, (unsigned long)in_pf);
     return sc;
 }
+#endif
 
 void mtl_present_compose(id<MTLCommandBuffer> cb, id<MTLTexture> src, const float crop_in[4], float gw, float gh, id<MTLTexture> target,
                          const napple_display_settings *ds, int allow_upscaler) {
@@ -181,6 +186,7 @@ void mtl_present_compose(id<MTLCommandBuffer> cb, id<MTLTexture> src, const floa
     uint32_t in_h = (uint32_t)lroundf(spy); if (in_h < 1) in_h = 1;
 
     /* MetalFX spatial upscaling: only when the source is smaller than the destination on both axes and covers the whole texture */
+#ifdef NAPPLE_HAVE_METALFX
     if (allow_upscaler && ds->upscaler == 1 && rx < 0.999f && ry < 0.999f && fabsf(cw - 1) < 1e-4f && fabsf(ch - 1) < 1e-4f && !vflip) {
         id<MTLFXSpatialScaler> fx = get_fx(src.pixelFormat, (uint32_t)src.width, (uint32_t)src.height, dw, dh);
         if (fx) {
@@ -197,6 +203,7 @@ void mtl_present_compose(id<MTLCommandBuffer> cb, id<MTLTexture> src, const floa
             return;
         }
     }
+#endif
 
     /* 1:1: exact copy */
     int one_to_one = fabsf(rx - 1) < 0.001f && fabsf(ry - 1) < 0.001f;
@@ -379,8 +386,8 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
     };
     if (dr) {
         last_shown_ns = gfx_now_ns();
-        if (min_dur > 0 && min_dur >= disp_period * 0.92) [cb presentDrawable:dr afterMinimumDuration:min_dur]; else [cb presentDrawable:dr];
-        [dr addPresentedHandler:^(id<MTLDrawable> d) { (void)d; finish_display(); }];
+        if (min_dur > 0 && min_dur >= disp_period * 0.92) napple_present_after(cb, dr, min_dur); else [cb presentDrawable:dr];
+        napple_drawable_presented(cb, dr, ^(id<MTLDrawable> d) { (void)d; finish_display(); });
     }
     [cb addCompletedHandler:^(id<MTLCommandBuffer> c) {
         atomic_store(&g_frame_gpu_us, (gfx_now_ns() - t0) / 1000);

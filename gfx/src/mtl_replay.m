@@ -6,7 +6,10 @@
  * encoded can never leak into it. */
 #include <pthread.h>
 #include <mach/mach.h>
+#include <TargetConditionals.h>
+#if !TARGET_OS_IOS   /* unused here; the iOS SDKs reject the header */
 #include <mach/mach_vm.h>
+#endif
 
 #import "mtl_priv.h"
 #import "mtl_display.h"

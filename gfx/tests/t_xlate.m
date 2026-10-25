@@ -57,6 +57,15 @@ static uint64_t i_prmt(int d, int a, int b, int c_, int mode) { return 0x5bc0000
 static uint64_t i_r2p(int a, int b, int cc, int byte) { return 0x5cf0000000000000ull | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)cc << 40) | ((uint64_t)byte << 41) | PT_BITS; }
 static uint64_t i_ald_idx(int d, int a, int addr, int n) { return 0xefd8000000000000ull | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)addr << 20) | ((uint64_t)(n - 1) << 47) | PT_BITS; }
 
+/* IMAD / LEA: layouts from memory (see maxwell_translate.c), so these tests pin the translator's reading of them, not the hardware's */
+static uint64_t i_imad(uint64_t cls, int d, int a, int b, int c_, uint64_t flags) { return (cls << 56) | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)c_ << 39) | flags | PT_BITS; }
+#define IMAD_S (1ull << 48)
+#define IMAD_NC (1ull << 49)
+#define IMAD_NP (1ull << 51)
+#define IMAD_HI (1ull << 53)
+static uint64_t i_lea_lo(uint64_t cls, int d, int a, int b, int scale, uint64_t flags) { return (cls << 56) | (0xdull << 52) | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)scale << 39) | flags | PT_BITS; }
+static uint64_t i_lea_hi(int d, int a, int b, int c_, int scale, uint64_t flags) { return (0x5bull << 56) | (0xdull << 52) | (1ull << 51) | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)scale << 28) | ((uint64_t)c_ << 39) | flags | PT_BITS; }
+
 /* translate `n` instructions as `stage` (compute programs have no header: the code starts at the blob) */
 static ShaderInfo *xl_ins(int stage, const uint64_t *ins, int n, ShaderKey key, uint32_t omap) {
     static uint8_t cs[0x1000], ctl[0x880];
@@ -323,6 +332,34 @@ int main(void) {
             maxwell_free(lk);
             XL_REFUSE(x1, STAGE_FRAGMENT, z, 0xf, "1D", "TXD 1D", i_txd(0, 8, 12, 8, 0, 0, 0xf, 0), ins_exit());
             XL_REFUSE(xo, STAGE_FRAGMENT, z, 0xf, "offsets", "TXD with offsets", i_txd(0, 8, 12, 8, 1, 0, 0xf, 1), ins_exit());
+        }
+        /* -- IMAD (reg, rc, cr, imm forms; .HI; negations) and LEA (.LO, .LO.CC/.X, .HI) */
+        {
+            XL_OK(im, STAGE_FRAGMENT, z, 0xf, "IMAD", i_imad(0x5a, 1, 2, 3, 4, 0), i_imad(0x5a, 5, 2, 3, 4, IMAD_NC | IMAD_NP), i_imad(0x5a, 6, 2, 3, 4, IMAD_HI),
+                  i_imad(0x5a, 7, 2, 3, 4, IMAD_HI | IMAD_S | IMAD_NP), i_imad(0x52, 8, 2, 3, 0x10, 0), i_imad(0x4a, 9, 2, 0x10, 4, 0), ins_exit());
+            CHECK(HAS(im, "r1 = (r2 * r3 + r4)"), "IMAD low word");
+            CHECK(HAS(im, "r5 = ((0u - r2 * r3) + (0u - r4))"), "IMAD negations");
+            CHECK(HAS(im, "r6 = (uint((ulong(r2) * ulong(r3)) >> 32) + r4)"), "IMAD.HI unsigned");
+            CHECK(HAS(im, "r7 = (uint((0ul - ulong(long(int(r2)) * long(int(r3)))) >> 32) + r4)"), "IMAD.HI signed with a negated product");
+            CHECK(HAS(im, "r8 = (r2 * r16 + cb0["), "IMAD rc form: B = REG_39, C = constant buffer");
+            CHECK(HAS(im, "r9 = (r2 * cb0["), "IMAD cr form: B = constant buffer");
+            maxwell_free(im);
+            XL_OK(ii, STAGE_FRAGMENT, z, 0xf, "IMAD imm", i_imad(0x34, 1, 2, 0x10, 4, 0), ins_exit());
+            CHECK(HAS(ii, "r1 = (r2 * 0x00000010u + r4)"), "IMAD with an immediate B");
+            maxwell_free(ii);
+            XL_REFUSE(ic, STAGE_FRAGMENT, z, 0xf, "imad carry", "IMAD.CC", i_imad(0x5a, 1, 2, 3, 4, 1ull << 47), ins_exit());
+            XL_OK(lo, STAGE_FRAGMENT, z, 0xf, "LEA.LO", i_lea_lo(0x5b, 1, 2, 3, 2, 0), i_lea_lo(0x5b, 4, 2, 3, 5, 1ull << 45), i_lea_lo(0x5b, 5, 2, 3, 3, 1ull << 47),
+                  i_lea_lo(0x5b, 6, 2, 3, 0, 1ull << 48), ins_exit());
+            CHECK(HAS(lo, "r1 = ((r2 << 2u) + r3)") && HAS(lo, "r4 = ((r2 << 5u) + (0u - r3))"), "LEA.LO scales A and adds (or subtracts) B");
+            CHECK(HAS(lo, "cc = uint(sum >> 32) & 1u") && HAS(lo, "ulong sum = ulong(r2 << 3u) + ulong(r3);") && HAS(lo, "ulong(r3) + ulong(cc)") && HAS(lo, "uint cc = 0;"), "LEA.LO .CC and .X use the carry flag");
+            maxwell_free(lo);
+            XL_OK(hi, STAGE_FRAGMENT, z, 0xf, "LEA.HI", i_lea_hi(1, 2, 3, 4, 3, 0), i_lea_hi(5, 2, 3, 4, 0, 0), i_lea_hi(6, 2, 3, 4, 7, 1ull << 48), ins_exit());
+            CHECK(HAS(hi, "r1 = (((r4 << 3u) | (r2 >> 29u)) + r3);"), "LEA.HI: high word of the shifted 64-bit pair");
+            CHECK(HAS(hi, "r5 = (r4 + r3);") && HAS(hi, "r6 = (((r4 << 7u) | (r2 >> 25u)) + r3 + cc)"), "LEA.HI scale 0 and .X");
+            maxwell_free(hi);
+            XL_OK(li, STAGE_FRAGMENT, z, 0xf, "LEA imm", i_lea_lo(0x36, 1, 2, 0x10, 4, 0), ins_exit());
+            CHECK(HAS(li, "r1 = ((r2 << 4u) + 0x00000010u)"), "LEA.LO with an immediate B");
+            maxwell_free(li);
         }
         /* -- bfe.brev, prmt modes, r2p.cc, indexed attribute loads */
         {

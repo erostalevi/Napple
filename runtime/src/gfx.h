@@ -40,6 +40,7 @@ const HostSymbol *gfx_hle_table(size_t *count);
 int gfx_handle_fault(void *addr, int is_write, void *ucontext);  /* 1 = handled, retry the instruction */
 void gfx_guest_write_prepare(void *addr, size_t n);
 uint64_t gfx_vsync_period_ns(void);
+void gfx_set_nvn_version(unsigned major, unsigned minor);        /* API version nvnDeviceGetInteger reports; may follow gfx_init */
 void gfx_shutdown(void);
 int gfx_screenshot(const char *png_path);                        /* PNG of the next presented frame (async); 0 = queued */
 int gfx_screenshot_pending(void);

@@ -70,16 +70,16 @@ NVN(nvnTextureBuilderGetStride, ptrdiff_t, const NVNtextureBuilder *b) { return 
 NVN(nvnTextureBuilderGetGLTextureName, uint32_t, const NVNtextureBuilder *b) { (void)b; return 0; }
 NVN(nvnTextureBuilderGetZCullStorageSize, size_t, const NVNtextureBuilder *b) { (void)b; return 0; }
 NVN(nvnTextureBuilderGetSparseTileLayout, void, const NVNtextureBuilder *b, NVNtextureSparseTileLayout *l) { (void)b; (void)l; }
-NVN_NOPROTO(nvnTextureBuilderGetDevice, const NVNdevice *, const NVNtextureBuilder *b) { return CTB(b)->dev; }
-NVN_NOPROTO(nvnTextureBuilderGetMemoryPool, const NVNmemoryPool *, const NVNtextureBuilder *b) { return (const NVNmemoryPool *)CTB(b)->pool; }
-NVN_NOPROTO(nvnTextureBuilderGetMemoryOffset, ptrdiff_t, const NVNtextureBuilder *b) { return (ptrdiff_t)CTB(b)->off; }
-NVN_NOPROTO(nvnTextureBuilderGetPackagedTextureLayout, const NVNpackagedTextureLayout *, const NVNtextureBuilder *b) { return CTB(b)->has_layout ? (const NVNpackagedTextureLayout *)CTB(b)->layout : NULL; }
+NVN(nvnTextureBuilderGetDevice, const NVNdevice *, const NVNtextureBuilder *b) { return CTB(b)->dev; }
+NVN(nvnTextureBuilderGetMemoryPool, const NVNmemoryPool *, const NVNtextureBuilder *b) { return (const NVNmemoryPool *)CTB(b)->pool; }
+NVN(nvnTextureBuilderGetMemoryOffset, ptrdiff_t, const NVNtextureBuilder *b) { return (ptrdiff_t)CTB(b)->off; }
+NVN(nvnTextureBuilderGetPackagedTextureLayout, const NVNpackagedTextureLayout *, const NVNtextureBuilder *b) { return CTB(b)->has_layout ? (const NVNpackagedTextureLayout *)CTB(b)->layout : NULL; }
 
 /* Storage classes are opaque compatibility identifiers: encoded storage always lives in guest memory and is decoded per descriptor. */
 static NVNstorageClass storage_class(const napple_texdesc *d) { return d->target == NVN_TEXTURE_TARGET_BUFFER ? 0 : 1; }
 NVN(nvnTextureBuilderGetStorageClass, NVNstorageClass, const NVNtextureBuilder *b) { return storage_class(&CTB(b)->d); }
 /* The raw class is the hardware memory kind behind the storage class; this driver has one kind per storage class (no compression), so they agree. */
-NVN_NOPROTO(nvnTextureBuilderGetRawStorageClass, int, const NVNtextureBuilder *b) { return (int)storage_class(&CTB(b)->d); }
+NVN(nvnTextureBuilderGetRawStorageClass, int, const NVNtextureBuilder *b) { return (int)storage_class(&CTB(b)->d); }
 
 NVN(nvnTextureBuilderGetStorageSize, size_t, const NVNtextureBuilder *b) {
     napple_texlayout L;
@@ -128,7 +128,7 @@ NVN(nvnTextureFinalize, void, NVNtexture *t) { memset(t, 0, sizeof(tex_t)); }
 NVN(nvnTextureSetDebugLabel, void, NVNtexture *t, const char *l) { (void)t; (void)l; }
 NVN(nvnTextureGetZCullStorageSize, size_t, const NVNtexture *t) { (void)t; return 0; }
 NVN(nvnTextureGetStorageClass, NVNstorageClass, const NVNtexture *t) { return storage_class(&CTX(t)->s.d); }
-NVN_NOPROTO(nvnTextureGetRawStorageClass, int, const NVNtexture *t) { return (int)storage_class(&CTX(t)->s.d); }
+NVN(nvnTextureGetRawStorageClass, int, const NVNtexture *t) { return (int)storage_class(&CTX(t)->s.d); }
 NVN(nvnTextureGetFlags, NVNtextureFlags, const NVNtexture *t) { return (NVNtextureFlags)CTX(t)->s.d.flags; }
 NVN(nvnTextureGetTarget, NVNtextureTarget, const NVNtexture *t) { return (NVNtextureTarget)CTX(t)->s.d.target; }
 NVN(nvnTextureGetWidth, int, const NVNtexture *t) { return (int)CTX(t)->s.d.width; }
@@ -151,8 +151,8 @@ NVN(nvnTextureCompare, NVNboolean, const NVNtexture *a, const NVNtexture *b) {
     const tex_t *x = CTX(a), *y = CTX(b);
     return x->s.mem == y->s.mem && !memcmp(&x->s.d, &y->s.d, sizeof x->s.d);
 }
-NVN_NOPROTO(nvnTextureGetMemoryPool, const NVNmemoryPool *, const NVNtexture *t) { return (const NVNmemoryPool *)CTX(t)->pool; }
-NVN_NOPROTO(nvnTextureGetMemoryOffset, ptrdiff_t, const NVNtexture *t) { return (ptrdiff_t)CTX(t)->off; }
+NVN(nvnTextureGetMemoryPool, const NVNmemoryPool *, const NVNtexture *t) { return (const NVNmemoryPool *)CTX(t)->pool; }
+NVN(nvnTextureGetMemoryOffset, ptrdiff_t, const NVNtexture *t) { return (ptrdiff_t)CTX(t)->off; }
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Texture views
@@ -249,20 +249,27 @@ NVN(nvnSamplerBuilderSetBorderColorui, void, NVNsamplerBuilder *b, const uint32_
 NVN(nvnSamplerBuilderSetMaxAnisotropy, void, NVNsamplerBuilder *b, float v) { SB(b)->p.aniso = v; }
 NVN(nvnSamplerBuilderSetReductionFilter, void, NVNsamplerBuilder *b, NVNsamplerReduction r) { SB(b)->p.reduction = (uint8_t)r; }
 NVN(nvnSamplerBuilderSetLodSnap, void, NVNsamplerBuilder *b, float v) { SB(b)->p.lod_snap = v; }
-NVN_NOPROTO(nvnSamplerBuilderGetDevice, const NVNdevice *, const NVNsamplerBuilder *b) { return CSB(b)->dev; }
-#define SAMPLER_GETTERS(PFX, T, P)                                                                                        \
-    NVN(nvn##PFX##GetMinMagFilter, void, const T *b, NVNminFilter *mn, NVNmagFilter *mg) { *mn = (NVNminFilter)P(b)->p.minf; *mg = (NVNmagFilter)P(b)->p.magf; } \
-    NVN(nvn##PFX##GetWrapMode, void, const T *b, NVNwrapMode *s, NVNwrapMode *t, NVNwrapMode *r) { *s = (NVNwrapMode)P(b)->p.ws; *t = (NVNwrapMode)P(b)->p.wt; *r = (NVNwrapMode)P(b)->p.wr; } \
-    NVN(nvn##PFX##GetLodClamp, void, const T *b, float *mn, float *mx) { *mn = P(b)->p.lod_min; *mx = P(b)->p.lod_max; }  \
-    NVN(nvn##PFX##GetLodBias, float, const T *b) { return P(b)->p.lod_bias; }                                              \
-    NVN(nvn##PFX##GetCompare, void, const T *b, NVNcompareMode *m, NVNcompareFunc *f) { *m = (NVNcompareMode)P(b)->p.cmp_mode; *f = (NVNcompareFunc)P(b)->p.cmp_func; } \
-    NVN(nvn##PFX##GetBorderColor, void, const T *b, float *c) { memcpy(c, P(b)->p.border, 16); }                           \
-    NVN(nvn##PFX##GetBorderColori, void, const T *b, int *c) { for (int i = 0; i < 4; i++) c[i] = (int)P(b)->p.border[i]; } \
-    NVN(nvn##PFX##GetBorderColorui, void, const T *b, uint32_t *c) { for (int i = 0; i < 4; i++) c[i] = (uint32_t)P(b)->p.border[i]; } \
-    NVN(nvn##PFX##GetMaxAnisotropy, float, const T *b) { return P(b)->p.aniso; }                                           \
-    NVN(nvn##PFX##GetReductionFilter, NVNsamplerReduction, const T *b) { return (NVNsamplerReduction)P(b)->p.reduction; }
-SAMPLER_GETTERS(SamplerBuilder, NVNsamplerBuilder, CSB)
-SAMPLER_GETTERS(Sampler, NVNsampler, CSP)
+NVN(nvnSamplerBuilderGetDevice, const NVNdevice *, const NVNsamplerBuilder *b) { return CSB(b)->dev; }
+NVN(nvnSamplerBuilderGetMinMagFilter, void, const NVNsamplerBuilder *b, NVNminFilter *mn, NVNmagFilter *mg) { *mn = (NVNminFilter)CSB(b)->p.minf; *mg = (NVNmagFilter)CSB(b)->p.magf; }
+NVN(nvnSamplerBuilderGetWrapMode, void, const NVNsamplerBuilder *b, NVNwrapMode *s, NVNwrapMode *t, NVNwrapMode *r) { *s = (NVNwrapMode)CSB(b)->p.ws; *t = (NVNwrapMode)CSB(b)->p.wt; *r = (NVNwrapMode)CSB(b)->p.wr; }
+NVN(nvnSamplerBuilderGetLodClamp, void, const NVNsamplerBuilder *b, float *mn, float *mx) { *mn = CSB(b)->p.lod_min; *mx = CSB(b)->p.lod_max; }
+NVN(nvnSamplerBuilderGetLodBias, float, const NVNsamplerBuilder *b) { return CSB(b)->p.lod_bias; }
+NVN(nvnSamplerBuilderGetCompare, void, const NVNsamplerBuilder *b, NVNcompareMode *m, NVNcompareFunc *f) { *m = (NVNcompareMode)CSB(b)->p.cmp_mode; *f = (NVNcompareFunc)CSB(b)->p.cmp_func; }
+NVN(nvnSamplerBuilderGetBorderColor, void, const NVNsamplerBuilder *b, float *c) { memcpy(c, CSB(b)->p.border, 16); }
+NVN(nvnSamplerBuilderGetBorderColori, void, const NVNsamplerBuilder *b, int *c) { for (int i = 0; i < 4; i++) c[i] = (int)CSB(b)->p.border[i]; }
+NVN(nvnSamplerBuilderGetBorderColorui, void, const NVNsamplerBuilder *b, uint32_t *c) { for (int i = 0; i < 4; i++) c[i] = (uint32_t)CSB(b)->p.border[i]; }
+NVN(nvnSamplerBuilderGetMaxAnisotropy, float, const NVNsamplerBuilder *b) { return CSB(b)->p.aniso; }
+NVN(nvnSamplerBuilderGetReductionFilter, NVNsamplerReduction, const NVNsamplerBuilder *b) { return (NVNsamplerReduction)CSB(b)->p.reduction; }
+NVN(nvnSamplerGetMinMagFilter, void, const NVNsampler *b, NVNminFilter *mn, NVNmagFilter *mg) { *mn = (NVNminFilter)CSP(b)->p.minf; *mg = (NVNmagFilter)CSP(b)->p.magf; }
+NVN(nvnSamplerGetWrapMode, void, const NVNsampler *b, NVNwrapMode *s, NVNwrapMode *t, NVNwrapMode *r) { *s = (NVNwrapMode)CSP(b)->p.ws; *t = (NVNwrapMode)CSP(b)->p.wt; *r = (NVNwrapMode)CSP(b)->p.wr; }
+NVN(nvnSamplerGetLodClamp, void, const NVNsampler *b, float *mn, float *mx) { *mn = CSP(b)->p.lod_min; *mx = CSP(b)->p.lod_max; }
+NVN(nvnSamplerGetLodBias, float, const NVNsampler *b) { return CSP(b)->p.lod_bias; }
+NVN(nvnSamplerGetCompare, void, const NVNsampler *b, NVNcompareMode *m, NVNcompareFunc *f) { *m = (NVNcompareMode)CSP(b)->p.cmp_mode; *f = (NVNcompareFunc)CSP(b)->p.cmp_func; }
+NVN(nvnSamplerGetBorderColor, void, const NVNsampler *b, float *c) { memcpy(c, CSP(b)->p.border, 16); }
+NVN(nvnSamplerGetBorderColori, void, const NVNsampler *b, int *c) { for (int i = 0; i < 4; i++) c[i] = (int)CSP(b)->p.border[i]; }
+NVN(nvnSamplerGetBorderColorui, void, const NVNsampler *b, uint32_t *c) { for (int i = 0; i < 4; i++) c[i] = (uint32_t)CSP(b)->p.border[i]; }
+NVN(nvnSamplerGetMaxAnisotropy, float, const NVNsampler *b) { return CSP(b)->p.aniso; }
+NVN(nvnSamplerGetReductionFilter, NVNsamplerReduction, const NVNsampler *b) { return (NVNsamplerReduction)CSP(b)->p.reduction; }
 NVN(nvnSamplerBuilderGetLodSnap, float, const NVNsamplerBuilder *b) { return CSB(b)->p.lod_snap; }
 NVN(nvnSamplerInitialize, NVNboolean, NVNsampler *s, const NVNsamplerBuilder *b) { SP(s)->magic = SAMP_MAGIC; SP(s)->p = CSB(b)->p; return 1; }
 NVN(nvnSamplerFinalize, void, NVNsampler *s) { SP(s)->magic = 0; }

@@ -5,6 +5,7 @@
  * the kernel (svc), the IPC services and, behind gfx.h, the graphics driver. Nothing in here is specific to one game:
  * everything per game comes from the data directory (docs/runtime-modules.md). */
 #pragma once
+#include "platform.h"
 #include <pthread.h>
 #include <stdarg.h>
 #include <stddef.h>
@@ -54,6 +55,7 @@ typedef struct Module {
     unsigned *hash, hash_mask;
     unsigned relative, symbolic, cross, weak;
     void *tables_blob;
+    void *dl;                        /* iOS: dlopen handle of the module's Mach-O dylib (the executable pages come from it) */
     int dynamic, gone;               /* loaded at run time (NRO through ldr:ro); unloaded again (slot reusable) */
 } Module;
 #define MAX_MODULES 128              /* static modules plus NROs loaded at run time; g_modules never moves */

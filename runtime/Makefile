@@ -19,6 +19,7 @@ CFLAGS := -std=gnu11 $(INCS) $(OPT) -g -Wall -Wextra -Wno-unused-parameter -Wno-
 FRAMEWORKS := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Metal -framework Foundation -framework CoreFoundation -framework AudioToolbox -framework CoreAudio -framework GameController
 OPUS ?= /opt/homebrew/opt/opus/lib/libopus.a
 VPX ?= /opt/homebrew/opt/libvpx/lib/libvpx.a
+FRAMEWORKS += -framework VideoToolbox -framework CoreMedia -framework ImageIO
 EXTRA_LIBS ?= -L$(ROOT)/frontend -lnapple_frontend -L$(ROOT)/input -lnapple_input -L$(ROOT)/audio -lnapple_audio $(OPUS) $(VPX) -framework CoreHaptics -framework IOKit
 
 all: $(BUILD)/napple-runtime
@@ -51,7 +52,10 @@ $(BUILD)/tests/test_hid_service: tests/test_hid_service.c tests/check.h $(BUILD)
 	$(CC) $(CFLAGS) tests/test_hid_service.c $(BUILD)/tests/stubs.o $(filter-out $(BUILD)/services/hid.o,$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
 $(BUILD)/tests/test_timescale: tests/test_timescale.c src/timescale.c src/timescale.h tests/check.h $(BUILD)/tests/stubs.o $(OBJ)
 	$(CC) $(CFLAGS) tests/test_timescale.c $(BUILD)/tests/stubs.o $(filter-out $(BUILD)/timescale.o,$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
-test: $(BUILD)/tests/test_ipc $(BUILD)/tests/test_fs_journal $(BUILD)/tests/test_hid_service $(BUILD)/tests/test_timescale
+$(BUILD)/tests/test_media: tests/test_media.c src/vt_h264.c src/vt_h264.h tests/check.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) tests/test_media.c src/vt_h264.c -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework ImageIO -framework CoreGraphics -o $@
+test: $(BUILD)/tests/test_media $(BUILD)/tests/test_ipc $(BUILD)/tests/test_fs_journal $(BUILD)/tests/test_hid_service $(BUILD)/tests/test_timescale
 	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
 
 # Host unit tests (any POSIX host, e.g. Linux): the portable kernel, loader and service code with tests/host stand-ins for the macOS-only
@@ -62,11 +66,14 @@ HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format
 HOST_KERNEL := src/kernel.c src/threads.c src/ksession.c src/kmsg.c src/kcode.c src/timescale.c tests/host/host_stubs.c
 HOST_LOADER := src/module.c src/dispatch.c src/json.c src/nro.c src/sha256.c src/ipc.c
 HOST_HDRS := $(wildcard src/*.h) $(wildcard tests/host/*.h) tests/check.h
-HOST_TESTS := $(HOST_BUILD)/test_kernel_ipc $(HOST_BUILD)/test_loader $(HOST_BUILD)/test_nvdrv $(HOST_BUILD)/test_fs_savedata $(HOST_BUILD)/test_fs_journal
+HOST_TESTS := $(HOST_BUILD)/test_svc_async $(HOST_BUILD)/test_kernel_ipc $(HOST_BUILD)/test_loader $(HOST_BUILD)/test_nvdrv $(HOST_BUILD)/test_fs_savedata $(HOST_BUILD)/test_fs_journal $(HOST_BUILD)/test_ios_dylib
 HOST_FS := src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c tests/host/host_save_dir.c
 $(HOST_BUILD)/test_kernel_ipc: tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) $(HOST_HDRS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
+$(HOST_BUILD)/test_svc_async: tests/host/test_svc_async.c src/kernel.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_svc_async.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
 $(HOST_BUILD)/test_loader: tests/host/test_loader.c src/ro.c $(HOST_KERNEL) $(HOST_LOADER) $(HOST_HDRS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_loader.c $(HOST_KERNEL) $(HOST_LOADER) -o $@
@@ -79,6 +86,9 @@ $(HOST_BUILD)/test_fs_savedata: tests/host/test_fs_savedata.c src/services/fs.c 
 $(HOST_BUILD)/test_fs_journal: tests/test_fs_journal.c src/services/fs.c $(HOST_KERNEL) $(HOST_HDRS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/test_fs_journal.c $(HOST_FS) -o $@
+$(HOST_BUILD)/test_ios_dylib: tests/host/test_ios_dylib.c src/ios_dylib.c $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_ios_dylib.c src/ios_dylib.c -o $@
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 

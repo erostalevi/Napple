@@ -122,6 +122,21 @@ static void svc_close_handle(uint64_t *r) {
     if (o != (void *)1 && !threads_close_object(type, o) && !ksession_close_object(type, o) && !kcode_close_object(type, o)) ipc_close_object(type, o);
     r[0] = 0;
 }
+/* SendAsyncRequestWithUserBuffer(x1 message buffer, x2 size, w3 session) -> w1 readable event. There is no second kernel thread to run the
+ * request in the background, so it is delivered like SendSyncRequestWithUserBuffer (0x22) and the returned event is already signalled:
+ * a guest that waits on it, or reads the reply after it, sees the same result as on hardware once the server has answered. A request to a
+ * guest server thread therefore blocks here until that server replies. */
+static void svc_send_async_user(uint64_t *r) {
+    SvcHandler sync = handlers[0x22];
+    if (!sync) { r[0] = R_NOT_IMPLEMENTED; return; }
+    uint64_t s[9] = {r[1], r[2], r[3]};
+    sync(s);                                                    /* x0 addr, x1 size, x2 session handle */
+    if (s[0]) { r[0] = s[0]; return; }
+    uint32_t rd = 0, w = event_create(&rd);
+    event_signal_handle(w);
+    uint64_t c[9] = {w}; svc_close_handle(c);                   /* the guest only gets the readable end */
+    r[0] = 0; r[1] = rd;
+}
 static void svc_get_system_tick(uint64_t *r) { r[0] = runtime_guest_ticks(); }
 static void svc_get_process_id(uint64_t *r) { r[0] = 0; r[1] = 0x80; }
 static void svc_flush_cache(uint64_t *r) { r[0] = 0; }
@@ -218,6 +233,7 @@ void svc_kernel_register(void) {
     svc_register(0x07, "ExitProcess", svc_exit_process);
     svc_register(0x16, "CloseHandle", svc_close_handle);
     svc_register(0x1E, "GetSystemTick", svc_get_system_tick);
+    svc_register(0x23, "SendAsyncRequestWithUserBuffer", svc_send_async_user);
     svc_register(0x24, "GetProcessId", svc_get_process_id);
     svc_register(0x26, "Break", svc_break);
     svc_register(0x27, "OutputDebugString", svc_output_debug_string);

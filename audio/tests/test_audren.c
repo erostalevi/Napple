@@ -250,12 +250,41 @@ static void t_circular_sink(void) {
     napple_audren_close(g.r);
 }
 
+static void t_performance(void) {
+    AudrenParameter p = param_default(); Rig g; rig_open(&g, p);
+    Update u; scene_init(&u, 11, &p);
+    u.voices[0] = voice_pcm(0, FMT_PCM16, g_pcm, sizeof g_pcm, 240);
+    uint8_t perf[0x10 + 16 * 16]; size_t w = 0; uint32_t hdr[4], ent[4];
+    size_t n = build_update(&u, g.in);
+    memset(perf, 0xcc, sizeof perf);
+    CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf) == 0, "update with a performance buffer");
+    memcpy(hdr, perf, sizeof hdr);
+    /* default rig: 1 started voice + 1 submix + final mix + 1 sink */
+    CHECK(hdr[1] >= 3 && hdr[0] == 0x10 + hdr[1] * 0x10 && hdr[2] == 0, "perf header: size %u entries %u", hdr[0], hdr[1]);
+    uint32_t t = 0, kinds[5] = {0};
+    for (uint32_t i = 0; i < hdr[1]; i++) {
+        memcpy(ent, perf + 0x10 + i * 0x10, sizeof ent);
+        CHECK(ent[1] == t && ent[2] > 0 && ent[3] >= 1 && ent[3] <= 4, "perf entry %u is contiguous with a plausible time", i);
+        t += ent[2]; kinds[ent[3]]++;
+    }
+    CHECK(hdr[3] == t, "perf next start time = sum of entries");
+    CHECK(kinds[1] == 1 && kinds[3] == 1 && kinds[4] == 1, "one voice, one final mix, one sink");
+    AudrenHeader oh; memcpy(&oh, g.out, sizeof oh); uint32_t pb;
+    size_t off = sizeof oh + oh.memory_pools + oh.voices + oh.effects + oh.sinks; memcpy(&pb, g.out + off, 4);
+    CHECK(pb == hdr[0], "update output carries the performance byte count");
+    size_t n2 = build_update(&u, g.in); uint8_t tiny[0x30]; memset(tiny, 0, sizeof tiny);
+    CHECK(napple_audren_request_update(g.r, g.in, n2, g.out, sizeof g.out, &w, tiny, sizeof tiny) == 0, "small performance buffer is accepted");
+    memcpy(hdr, tiny, sizeof hdr); CHECK(hdr[1] == 2 && hdr[0] == 0x30, "entries are capped to the buffer");
+    CHECK(napple_audren_request_update(g.r, g.in, n2, g.out, sizeof g.out, &w, tiny, 8) == 0, "buffer smaller than the header is ignored");
+    napple_audren_close(g.r);
+}
+
 int main(void) {
     napple_audio_config c = {.use_device = 0};
     napple_audio_init(&c);
     for (int i = 0; i < 4800; i++) g_pcm[i] = (int16_t)(16000 * sin(2 * M_PI * 1000 * i / 48000.0));
     t_pcm16_channel_mix(); t_pitch_half(); t_adpcm(); t_submix_splitter(); t_voice_state_machine();
-    t_rev15_float_biquads(); t_cascaded_q14_biquads(); t_limiter_and_aux(); t_malformed(); t_revisions_and_pools(); t_circular_sink();
+    t_rev15_float_biquads(); t_cascaded_q14_biquads(); t_limiter_and_aux(); t_malformed(); t_revisions_and_pools(); t_circular_sink(); t_performance();
     napple_audio_shutdown();
     printf("{\"test\":\"audren\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed ? 1 : 0;

@@ -1150,7 +1150,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         default: sprintf(t, "%s", x);
         }
         if (dfmt == 1) {  // F16 result in the low half, high half zero
-            char h[1100];
+            char h[2200];
             snprintf(h, sizeof h, "(uint(as_type<ushort>(half(%s))))",
                      bits(w, 50, 1) ? (sprintf(u, "saturate(%s)", t), u) : t);
             set_reg(c, d, h);
@@ -1208,6 +1208,53 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0x1400000000000000ull, 0xfc00000000000000ull)) {  // ISCADD32I
         sprintf(t, "((%s << %du) + 0x%08xu)", R(a), (int)bits(w, 53, 5), (uint32_t)bits(w, 20, 32));
         set_reg(c, d, t);
+    } else if (OPM(0x5a00000000000000ull, 0xff80000000000000ull) || OPM(0x5200000000000000ull, 0xff80000000000000ull) ||
+               OPM(0x4a00000000000000ull, 0xff80000000000000ull) || OPM(0x3400000000000000ull, 0xfe00000000000000ull)) {  // IMAD
+        /* Bit layout from memory; no real word in the LAS or SMO corpora (docs/changes/2026-10-24-audio-small.md). d = [0,8), a = [8,16), B by the
+         * opcode class (reg 0x5a, cbuf 0x4a, imm 0x34) and c = REG_39; the 0x52 form has B = REG_39 and c = a cbuf. Bit 48 signed, 49 negate c,
+         * 51 negate the product, 53 .HI (high word of the 64-bit product, plus c). The carry forms (.CC bit 47, .X bit 54) fail cleanly. */
+        char cb[128], pr[256], cs[160];
+        const char *bv, *cv;
+        if ((w >> 56) == 0x52) { bv = R((int)bits(w, 39, 8)); cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb); }
+        else { bv = B(false); cv = R((int)bits(w, 39, 8)); }
+        bool sgn = bits(w, 48, 1), negc = bits(w, 49, 1), negp = bits(w, 51, 1), hi = bits(w, 53, 1);
+        if (bits(w, 47, 1) || bits(w, 54, 1)) { fail(c, "imad carry forms (.CC/.X)"); return; }
+        sprintf(cs, negc ? "(0u - %s)" : "%s", cv);
+        if (hi) {
+            if (sgn) sprintf(pr, "ulong(long(int(%s)) * long(int(%s)))", R(a), bv); else sprintf(pr, "(ulong(%s) * ulong(%s))", R(a), bv);
+            sprintf(t, "(uint(%s%s%s >> 32) + %s)", negp ? "(0ul - " : "", pr, negp ? ")" : "", cs);
+        } else {
+            sprintf(t, negp ? "((0u - %s * %s) + %s)" : "(%s * %s + %s)", R(a), bv, cs);
+        }
+        set_reg(c, d, t);
+    } else if (OPM(0x5bd0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bd0000000000000ull, 0xfff0000000000000ull) ||
+               OPM(0x36d0000000000000ull, 0xfef8000000000000ull)) {  // LEA (.LO, and .HI in the reg and cbuf forms)
+        /* Bit layout from memory; no real word in the corpora. B by the opcode class, bit 45 negates B. .LO (opcode bit 51 clear): d = (a << scale) + B,
+         * scale = [39,44), .CC bit 47 writes the carry out, .X bit 48 adds the carry in. .HI (bit 51 set, not in the imm class): the high word of the
+         * 64-bit value {c:a} << scale, plus B, with scale = [28,33), c = REG_39 and .X at bit 48 (as in .LO). They build 64-bit address arithmetic with IADD.X. */
+        bool hi = bits(w, 51, 1), negb = bits(w, 45, 1);
+        char bn[160];
+        sprintf(bn, negb ? "(0u - %s)" : "%s", B(false));
+        if (hi) {
+            int sc = (int)bits(w, 28, 5); bool x = bits(w, 48, 1);
+            const char *cv = R((int)bits(w, 39, 8));
+            if (x) c->uses_cc = true;
+            if (sc) sprintf(t, "(((%s << %du) | (%s >> %du)) + %s%s)", cv, sc, R(a), 32 - sc, bn, x ? " + cc" : "");
+            else sprintf(t, "(%s + %s%s)", cv, bn, x ? " + cc" : "");
+            set_reg(c, d, t);
+        } else {
+            int sc = (int)bits(w, 39, 5); bool wcc = bits(w, 47, 1), x = bits(w, 48, 1);
+            if (wcc || x) {
+                c->uses_cc = true;
+                sp(&c->body, "    { ulong sum = ulong(%s << %du) + ulong(%s)%s;\n", R(a), sc, bn, x ? " + ulong(cc)" : "");
+                if (wcc) sp(&c->body, "      cc = uint(sum >> 32) & 1u;\n");
+                if (d != RZ) { c->reg_used[d] = 1; c->reg_cb[d] = -1; sp(&c->body, "      r%d = uint(sum);\n", d); }
+                sp(&c->body, "    }\n");
+            } else {
+                sprintf(t, "((%s << %du) + %s)", R(a), sc, bn);
+                set_reg(c, d, t);
+            }
+        }
     } else if (OPM(0x5b60000000000000ull, 0xfff0000000000000ull) || OPM(0x4b60000000000000ull, 0xfff0000000000000ull) ||
                OPM(0x3660000000000000ull, 0xfef0000000000000ull)) {  // ISETP
         char cmp[512];

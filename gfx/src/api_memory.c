@@ -2,7 +2,15 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <mach/mach.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_IOS
+/* iOS has no <mach/mach_vm.h>: vm_remap has the same signature with 64-bit address types on arm64 */
+#include <mach/vm_map.h>
+#define mach_vm_address_t vm_address_t /* uint64_t in the iOS headers, but vm_remap takes a vm_address_t pointer */
+#define mach_vm_remap vm_remap
+#else
 #include <mach/mach_vm.h>
+#endif
 #include <sys/mman.h>
 #include "gfx_mtl.h"
 #include "timeline.h"
@@ -23,10 +31,10 @@ NVN(nvnMemoryPoolBuilderSetDefaults, void, NVNmemoryPoolBuilder *b) {
 }
 NVN(nvnMemoryPoolBuilderSetStorage, void, NVNmemoryPoolBuilder *b, void *m, size_t n) { PB(b)->mem = m; PB(b)->size = n; }
 NVN(nvnMemoryPoolBuilderSetFlags, void, NVNmemoryPoolBuilder *b, int f) { PB(b)->flags = (uint32_t)f; }
-NVN_NOPROTO(nvnMemoryPoolBuilderGetDevice, const NVNdevice *, const NVNmemoryPoolBuilder *b) { return CPB(b)->dev; }
-NVN_NOPROTO(nvnMemoryPoolBuilderGetMemory, void *, const NVNmemoryPoolBuilder *b) { return CPB(b)->mem; }
-NVN_NOPROTO(nvnMemoryPoolBuilderGetSize, size_t, const NVNmemoryPoolBuilder *b) { return (size_t)CPB(b)->size; }
-NVN_NOPROTO(nvnMemoryPoolBuilderGetFlags, int, const NVNmemoryPoolBuilder *b) { return (int)CPB(b)->flags; }
+NVN(nvnMemoryPoolBuilderGetDevice, const NVNdevice *, const NVNmemoryPoolBuilder *b) { return CPB(b)->dev; }
+NVN(nvnMemoryPoolBuilderGetMemory, void *, const NVNmemoryPoolBuilder *b) { return CPB(b)->mem; }
+NVN(nvnMemoryPoolBuilderGetSize, size_t, const NVNmemoryPoolBuilder *b) { return (size_t)CPB(b)->size; }
+NVN(nvnMemoryPoolBuilderGetFlags, int, const NVNmemoryPoolBuilder *b) { return (int)CPB(b)->flags; }
 
 static uint64_t g_last_phys_mis;      /* start address of the most recent physical pool (its misalignment is copied by virtual pools) */
 NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
@@ -165,10 +173,10 @@ NVN(nvnMemoryPoolGetFlags, NVNmemoryPoolFlags, const NVNmemoryPool *p) { return 
 NVN(nvnBufferBuilderSetDevice, void, NVNbufferBuilder *b, NVNdevice *d) { BB(b)->dev = d; }
 NVN(nvnBufferBuilderSetDefaults, void, NVNbufferBuilder *b) { NVNdevice *d = BB(b)->dev; memset(b, 0, sizeof(buf_builder_t)); BB(b)->dev = d; }
 NVN(nvnBufferBuilderSetStorage, void, NVNbufferBuilder *b, NVNmemoryPool *p, ptrdiff_t off, size_t size) { BB(b)->pool = (pool_t *)p; BB(b)->off = off; BB(b)->size = size; }
-NVN_NOPROTO(nvnBufferBuilderGetDevice, const NVNdevice *, const NVNbufferBuilder *b) { return BB(b)->dev; }
-NVN_NOPROTO(nvnBufferBuilderGetMemoryPool, NVNmemoryPool *, const NVNbufferBuilder *b) { return (NVNmemoryPool *)BB(b)->pool; }
-NVN_NOPROTO(nvnBufferBuilderGetMemoryOffset, ptrdiff_t, const NVNbufferBuilder *b) { return (ptrdiff_t)BB(b)->off; }
-NVN_NOPROTO(nvnBufferBuilderGetSize, size_t, const NVNbufferBuilder *b) { return (size_t)BB(b)->size; }
+NVN(nvnBufferBuilderGetDevice, const NVNdevice *, const NVNbufferBuilder *b) { return BB(b)->dev; }
+NVN(nvnBufferBuilderGetMemoryPool, NVNmemoryPool *, const NVNbufferBuilder *b) { return (NVNmemoryPool *)BB(b)->pool; }
+NVN(nvnBufferBuilderGetMemoryOffset, ptrdiff_t, const NVNbufferBuilder *b) { return (ptrdiff_t)BB(b)->off; }
+NVN(nvnBufferBuilderGetSize, size_t, const NVNbufferBuilder *b) { return (size_t)BB(b)->size; }
 
 NVN(nvnBufferInitialize, NVNboolean, NVNbuffer *b, const NVNbufferBuilder *builder) {
     const buf_builder_t *v = (const buf_builder_t *)builder;

@@ -51,6 +51,10 @@ pub struct Opts {
     /// Write only the runtime data directories (`<out>/<titleid>/<buildid16>/...`, same layout as an app's Resources/game)
     /// instead of an .app: what `tools/prepare_game.sh` used to produce, for runtime development.
     pub data_only: bool,
+    /// iOS targets: signing inputs, IPA export, device install.
+    pub signing: crate::ios::Signing,
+    /// iOS: launch the app after `--install`.
+    pub launch: bool,
 }
 
 // Overall progress budget (percent).
@@ -315,8 +319,11 @@ fn resolve_exec(explicit: &Option<PathBuf>, name: &str, rel: &str, what: &str) -
 pub fn build(o: &Opts) -> Result<PathBuf> {
     crate::util::reset_progress();
     crate::util::install_cancel_handlers();
-    if o.target != "macos" {
-        return Err(BuildError::new("target", format!("target {:?} is not implemented yet (only macos)", o.target)));
+    let target = crate::ios::Target::parse(&o.target).ok_or_else(|| BuildError::new("target", format!("unknown target {:?} (macos, ios, iphone, ipad, ios-sim)", o.target)))?;
+    let ios = target.is_ios();
+    if ios && !target.is_sim() && !o.data_only && !o.no_sign && (o.signing.identity.is_none() || o.signing.profile.is_none()) {
+        // fail before the multi-GB work, not after it
+        return Err(BuildError::new("sign", "iOS signing needs --signing-identity and --provisioning-profile (see `napple build --list-signing`), or pass --no-sign to build an unsigned app/IPA for an external signer"));
     }
     progress("preflight", 0.0, "checking keys and tools");
     let keys = crate::util::load_keys(&o.keys)?;
@@ -341,6 +348,9 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
     }
     let (runtime, launcher) = if o.data_only {
         (PathBuf::new(), PathBuf::new())
+    } else if ios {
+        // iOS has no launcher (no exec): the runtime is the app executable.
+        (resolve_exec(&o.runtime, RUNTIME_NAME, "runtime/build-ios/napple-runtime", "the iOS runtime binary (make -C runtime -f Makefile.ios on a Mac)")?, PathBuf::new())
     } else {
         (resolve_exec(&o.runtime, RUNTIME_NAME, "runtime/build/napple-runtime", "the runtime binary")?, resolve_exec(&o.launcher, LAUNCHER_NAME, "packaging/build/napple-launcher", "the launcher binary")?)
     };
@@ -487,8 +497,9 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
 
     // ---- staging bundle ------------------------------------------------------------------------------------------
     let stage = TempDir::create(root.join(crate::util::staging_name()))?;
-    let app = stage.path.join(format!("{app_name}.app"));
-    let (macos, res) = (app.join("Contents/MacOS"), app.join("Contents/Resources"));
+    // iOS: the app is staged inside Payload/ so the same directory can be zipped into an .ipa without a copy.
+    let app = if ios { stage.path.join("Payload").join(format!("{app_name}.app")) } else { stage.path.join(format!("{app_name}.app")) };
+    let (macos, res) = if ios { (app.clone(), app.clone()) } else { (app.join("Contents/MacOS"), app.join("Contents/Resources")) };
     let game = if o.data_only { stage.path.join("game") } else { res.join("game") };
     for d in [&macos, &game] {
         std::fs::create_dir_all(d).map_err(|e| BuildError::io("create bundle dirs", e))?;
@@ -595,6 +606,10 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         Some(fwi) => {
             let fonts = sysdata::find_fonts(fwi, &keys)?;
             fw_version = sysdata::firmware_version(fwi, &keys)?;
+            let sys = sysdata::write_system_archives(fwi, &keys, &game.join("sysdata"))?;
+            if !sys.contains(&0x0100_0000_0000_0823) {
+                notes.push("compat: system data archive 0100000000000823 (BuiltInSystem) not found in the firmware; games that read it will abort".into());
+            }
             if fonts.is_empty() {
                 notes.push("compat: no shared fonts found in the firmware; games that render text through pl:u will get empty fonts".into());
             } else {
@@ -612,7 +627,15 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
     // icon
     progress("bundle", P_FONTS + 0.5, "icon");
     let mut has_icon = false;
+    let mut ios_icons: Vec<String> = vec![];
     if o.data_only {
+    } else if let (true, Some(jpeg)) = (ios, control.as_ref().and_then(|c| c.icon.as_ref())) {
+        ios_icons = crate::ios::make_icons(jpeg, &stage.path.join("icon-work"), &app)?;
+        if ios_icons.is_empty() {
+            notes.push("the icon could not be converted (sips unavailable): the app has the default icon".into());
+        }
+    } else if ios {
+        notes.push("no icon found in the Control NCA: the app has the default icon".into());
     } else if let Some(jpeg) = control.as_ref().and_then(|c| c.icon.as_ref()) {
         has_icon = bundle::make_icns(jpeg, &stage.path.join("icon-work"), &res.join("AppIcon.icns"))?;
         if !has_icon {
@@ -708,7 +731,7 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             ("name", jstr(&app_name)),
             ("display_version", jstr(&display_version)),
             ("builder", jstr(&format!("napple-build {}", env!("CARGO_PKG_VERSION")))),
-            ("target", jstr("macos")),
+            ("target", jstr(target.name())),
             ("versions", arr(&ver_json)),
             ("dlc", arr(&dlc_json)),
             ("defaults", obj(&[("version", jstr(&default_dir)), ("dlc", arr(&dlcs.iter().map(|d| jstr(&format!("{:016X}", d.title_id))).collect::<Vec<_>>()))], false)),
@@ -747,12 +770,24 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
 
     // ---- bundle files ---------------------------------------------------------------------------------------------
     progress("bundle", P_FONTS + 2.0, "Info.plist, executables");
-    std::fs::write(app.join("Contents/Info.plist"), bundle::info_plist(app_id, &app_name, &display_version, has_icon)).map_err(|e| BuildError::io("write Info.plist", e))?;
-    std::fs::write(app.join("Contents/PkgInfo"), b"APPL????").map_err(|e| BuildError::io("write PkgInfo", e))?;
-    for (src, name) in [(&launcher, LAUNCHER_NAME), (&runtime, RUNTIME_NAME)] {
-        std::fs::copy(src, macos.join(name)).map_err(|e| BuildError::io(&format!("copy {}", src.display()), e))?;
+    let bundle_id = crate::ios::bundle_id_for(app_id, o.signing.bundle_id.as_deref());
+    if ios {
+        std::fs::write(app.join("Info.plist"), crate::ios::info_plist(app_id, &bundle_id, &app_name, &display_version, target, &ios_icons)).map_err(|e| BuildError::io("write Info.plist", e))?;
+        std::fs::write(app.join("PkgInfo"), b"APPL????").map_err(|e| BuildError::io("write PkgInfo", e))?;
+        std::fs::copy(&runtime, app.join(RUNTIME_NAME)).map_err(|e| BuildError::io(&format!("copy {}", runtime.display()), e))?;
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(macos.join(name), std::fs::Permissions::from_mode(0o755)).map_err(|e| BuildError::io("chmod", e))?;
+        std::fs::set_permissions(app.join(RUNTIME_NAME), std::fs::Permissions::from_mode(0o755)).map_err(|e| BuildError::io("chmod", e))?;
+        // iOS cannot make anonymous memory executable: every rewritten module becomes a signable Mach-O dylib (macho.rs).
+        let n = crate::ios::dylibize(&game, &app.join("Frameworks"), target.platform())?;
+        notes.push(format!("{n} rewritten module(s) packed as Mach-O dylibs in Frameworks/ (iOS maps executable code only from signed files)"));
+    } else {
+        std::fs::write(app.join("Contents/Info.plist"), bundle::info_plist(app_id, &app_name, &display_version, has_icon)).map_err(|e| BuildError::io("write Info.plist", e))?;
+        std::fs::write(app.join("Contents/PkgInfo"), b"APPL????").map_err(|e| BuildError::io("write PkgInfo", e))?;
+        for (src, name) in [(&launcher, LAUNCHER_NAME), (&runtime, RUNTIME_NAME)] {
+            std::fs::copy(src, macos.join(name)).map_err(|e| BuildError::io(&format!("copy {}", src.display()), e))?;
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(macos.join(name), std::fs::Permissions::from_mode(0o755)).map_err(|e| BuildError::io("chmod", e))?;
+        }
     }
     progress("bundle", P_BUNDLE, "bundle assembled");
     check_cancel()?;
@@ -760,6 +795,20 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
     // ---- sign ----------------------------------------------------------------------------------------------------------
     if o.no_sign {
         progress("sign", P_SIGN, "signing skipped (--no-sign)");
+        if ios {
+            notes.push("iOS app is unsigned: sign it (and its Frameworks/*.dylib) with your own tool before installing".into());
+        }
+    } else if target.is_sim() {
+        progress("sign", P_BUNDLE + 1.0, "codesign (ad-hoc) for the iOS Simulator");
+        notes.extend(crate::ios::sign_sim(&app)?);
+        progress("sign", P_SIGN, "codesign --verify passed");
+    } else if ios {
+        progress("sign", P_BUNDLE + 1.0, "codesign with your identity and provisioning profile");
+        let work = stage.path.join("sign-work");
+        std::fs::create_dir_all(&work).map_err(|e| BuildError::io("create sign dir", e))?;
+        notes.extend(crate::ios::sign(&app, &work, &o.signing, &bundle_id)?);
+        let _ = std::fs::remove_dir_all(&work);
+        progress("sign", P_SIGN, "codesign --verify passed");
     } else {
         progress("sign", P_BUNDLE + 1.0, "codesign (ad-hoc), hashing the bundle");
         bundle::clear_xattrs(&app);
@@ -767,6 +816,11 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         progress("sign", P_SIGN, "codesign --verify passed");
     }
     check_cancel()?;
+
+    if ios && o.signing.ipa {
+        progress("sign", P_SIGN + 0.2, "writing the .ipa");
+        crate::ios::export_ipa(&stage.path.join("Payload"), &out.join(format!("{app_name}.ipa")))?;
+    }
 
     // ---- atomic publish --------------------------------------------------------------------------------------------
     let final_app = out.join(format!("{app_name}.app"));
@@ -789,7 +843,7 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         let _ = std::fs::remove_dir_all(&old);
     }
     drop(stage);
-    if !o.no_sign && bundle::verify(&final_app).is_err() {
+    if !ios && !o.no_sign && bundle::verify(&final_app).is_err() {
         // File Provider folders add Finder metadata to the bundle directory after the move: clear it and re-check.
         bundle::clear_xattrs(&final_app);
         if let Err(e) = bundle::verify(&final_app) {
@@ -802,6 +856,10 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
     }
     for n in &notes {
         println!("note: {n}");
+    }
+    if let Some(dev) = &o.signing.install {
+        progress("install", 99.5, &format!("installing on {dev}"));
+        crate::ios::install(dev, &final_app, &bundle_id, o.launch)?;
     }
     progress("done", 100.0, &format!("{app_name}.app ready"));
     println!("RESULT {}", final_app.display());

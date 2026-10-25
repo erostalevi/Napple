@@ -81,6 +81,22 @@ int main(void) {
     uint32_t sub_h = m[3]; IpcSession *ss = handle_get(sub_h, OBJ_SESSION); CHECK(ss && ss->object && !strcmp(ss->object->iface, "ISub"), "move handle is a session of the sub-object");
     if (ss) { arg = 9; build(m, T_REQUEST, 0, &arg, 4, -1, 0, NULL); dispatch(ss, m); out = response_payload(m, 0, &res); memcpy(&got, out, 4); CHECK(got == 10, "sub-object command runs"); }
 
+    /* ---- TIPC: type = 16 + command, raw arguments right after the header, result word first in the reply ---- */
+    { uint32_t t[64] = {0}; t[0] = T_TIPC_BASE + 0; t[1] = 1; t[2] = 20;               /* echo_u32(20), no CMIF header */
+      dispatch(s, t); CHECK((t[1] & 0x3ff) == 2 && t[2] == 0 && t[3] == 21, "tipc request: result word then output data (%u words, res %#x, out %u)", t[1] & 0x3ff, t[2], t[3]);
+      memset(t, 0, sizeof t); t[0] = T_TIPC_BASE + 2; t[1] = 0; dispatch(s, t);
+      CHECK((t[1] & 0x3ff) == 1 && t[2] == 0x1234, "tipc result code propagates");
+      memset(t, 0, sizeof t); t[0] = T_TIPC_BASE + 4; dispatch(s, t);
+      CHECK((t[1] >> 31) == 1 && ((t[2] >> 1) & 0xf) == 1 && t[3] == 0xabc && t[4] == 0, "tipc copy handle in the special header");
+      memset(t, 0, sizeof t); t[0] = T_TIPC_BASE + 5; dispatch(s, t);
+      CHECK((t[1] >> 31) == 1 && ((t[2] >> 5) & 0xf) == 1, "tipc sub-object returned as a move handle");
+      memset(t, 0, sizeof t); t[0] = T_TIPC_BASE + 99; dispatch(s, t); CHECK(t[2] == IPC_R_UNKNOWN_COMMAND, "tipc unknown command: error result in lenient mode");
+      memset(t, 0, sizeof t); t[0] = T_TIPC_CLOSE; dispatch(s, t); }
+
+    /* ---- sm over TIPC: a failed GetServiceHandle keeps the success layout (the SDK reads the move handle at word 3 and the result at word 4) ---- */
+    { IpcSession *sm = session_new(sm_open()); uint32_t t[64] = {0}; t[0] = T_TIPC_BASE + 1; t[1] = 2; memcpy(&t[2], "nosuchsv", 8); dispatch(sm, t);
+      CHECK((t[1] >> 31) == 1 && ((t[2] >> 5) & 0xf) == 1 && t[3] == 0 && t[4] == IPC_R_NOT_FOUND(21, 5), "tipc sm error reply: move handle 0 at word 3, result at word 4 (%#x %#x %#x)", t[2], t[3], t[4]); }
+
     /* ---- domain ---- */
     build(m, T_CONTROL, 0, NULL, 0, -1, 0, NULL); dispatch(s, m); out = response_payload(m, 0, &res);
     uint32_t root_id; memcpy(&root_id, out, 4); CHECK(res == 0 && root_id == 1 && s->is_domain, "ConvertCurrentObjectToDomain gives object id 1");

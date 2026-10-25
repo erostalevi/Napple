@@ -1,0 +1,32 @@
+# frontend for iOS / iPadOS 26+: UIKit window, on-screen controller, settings sheet. Build on a Mac with Xcode (see ../docs/ios.md):
+#   make -f Makefile.ios IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+IOS_SDK ?= $(shell xcrun --sdk iphoneos --show-sdk-path)
+CC      := xcrun --sdk iphoneos clang -target arm64-apple-ios26.0 -isysroot $(IOS_SDK)
+OUT     ?= build-ios
+CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -fobjc-arc
+INC     := -Iinclude -Isrc -Isrc/ios -I../input/include -I../audio/include
+OBJ     := $(OUT)/settings.o $(OUT)/ios_logic.o $(OUT)/frontend_ios.o
+
+all: $(OUT)/libnapple_frontend.a
+
+$(OUT)/settings.o: src/settings.c include/napple_frontend.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(INC) -c $< -o $@
+$(OUT)/ios_logic.o: src/ios/ios_logic.c src/ios/ios_logic.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(INC) -c $< -o $@
+$(OUT)/frontend_ios.o: src/ios/frontend_ios.m src/ios/ios_logic.h include/napple_frontend.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(INC) -c $< -o $@
+$(OUT)/libnapple_frontend.a: $(OBJ)
+	@rm -f $@
+	ar rcs $@ $(OBJ)
+
+# portable tests (any host): controller geometry, HID key mapping, settings
+test-host: tests/test_ios_logic.c src/ios/ios_logic.c
+	@mkdir -p $(OUT)
+	cc -std=gnu11 -O1 -Wall -Wextra -Isrc/ios -I../input/include tests/test_ios_logic.c src/ios/ios_logic.c -lm -o $(OUT)/test_ios_logic && $(OUT)/test_ios_logic
+
+clean:
+	rm -rf $(OUT)
+.PHONY: all test-host clean

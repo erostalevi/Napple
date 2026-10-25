@@ -78,7 +78,9 @@ void *nvn_lookup(const char *name);       /* implemented function, unimplemented
 typedef struct nvn_impl { const char *name; void *fn; } nvn_impl;
 /* Register an NVN entry implementation. The prototype is checked against nvnapi/nvn_protos.h at compile time. */
 #include "nvnapi/nvn_protos.h"
+#ifndef NVN_IMPL_SECTION   /* overridable so ELF hosts can build the API files for tests (tests/t_getters_linux.sh) */
 #define NVN_IMPL_SECTION "__DATA,napple_nvn"
+#endif
 #define NVN(name, ret, ...)                                                                              \
     static ret h_##name(__VA_ARGS__);                                                                    \
     static const NVNT_##name chk_##name __attribute__((unused)) = h_##name;                              \

@@ -3,6 +3,7 @@
 use crate::error::{BuildError, Result};
 use napple_core::infrastructure::io::{read_vec, FileSource, Src};
 use napple_core::infrastructure::nca::TitleKeys;
+use napple_core::infrastructure::ncz;
 use napple_core::infrastructure::pfs::parse_pfs0;
 use napple_core::infrastructure::{ticket::parse_ticket, xci::parse_xci};
 use std::collections::HashMap;
@@ -28,6 +29,8 @@ impl Container {
             for en in &fs.entries {
                 if en.name.ends_with(".nca") {
                     ncas.insert(en.name.clone(), fs.open(&en.name)?);
+                } else if en.name.ends_with(".ncz") {
+                    ncas.insert(ncz::nca_name(&en.name), ncz::NczSource::open(fs.open(&en.name)?)?);
                 } else if en.name.ends_with(".tik") {
                     let t = parse_ticket(&fs.read(&en.name)?)?;
                     if t.key_type == 0 {

@@ -461,8 +461,26 @@ static IpcObject *open_host_fs(const char *root, int read_only, int journaled, i
 }
 
 /* ---- IStorage over romfs.bin ------------------------------------------------------------------------------------ */
-typedef struct { int fd; uint64_t size; } StorageFile;
-static void storage_destroy(IpcObject *o) { StorageFile *s = o->state; if (s) { close(s->fd); free(s); } }
+/* A BKTR delta layer (napple build --update-romfs delta): <data-dir>/romfs.delta/{romfs.json, romfs.reloc, patch.bin} over the base build's romfs.bin.
+ * RLC1 reloc: 'RLC1', u32 count, u64 data_size, then {u64 data_offset, u64 source_offset, u32 source (0 base romfs.bin, 1 patch.bin), u32 0};
+ * entry i covers [data_offset_i, data_offset_i+1). Reads are composed through the table. */
+typedef struct { uint64_t data_offset, source_offset; uint32_t source; } DeltaEnt;
+typedef struct { int fd; uint64_t size; int src_fd[2]; DeltaEnt *ents; uint32_t nents; } StorageFile;
+static void storage_destroy(IpcObject *o) {
+    StorageFile *s = o->state; if (!s) return;
+    if (s->ents) { for (int i = 0; i < 2; i++) if (s->src_fd[i] >= 0) close(s->src_fd[i]); free(s->ents); } else close(s->fd);
+    free(s);
+}
+static ssize_t storage_pread(StorageFile *st, void *dst, size_t len, uint64_t off) {
+    if (!st->ents) return pread(st->fd, dst, len, (off_t)off);
+    uint32_t lo = 0, hi = st->nents;   /* last entry with data_offset <= off */
+    while (hi - lo > 1) { uint32_t m = lo + (hi - lo) / 2; if (st->ents[m].data_offset <= off) lo = m; else hi = m; }
+    const DeltaEnt *e = &st->ents[lo];
+    uint64_t end = lo + 1 < st->nents ? st->ents[lo + 1].data_offset : st->size;
+    if (off >= end || e->source > 1) return -1;
+    size_t n = len < end - off ? len : (size_t)(end - off);
+    return pread(st->src_fd[e->source], dst, n, (off_t)(e->source_offset + (off - e->data_offset)));
+}
 static void storage_read(IpcObject *self, IpcCall *c) {
     StorageFile *st = self->state; int64_t off = IPC_IN(c, int64_t, 0), size = IPC_IN(c, int64_t, 8);
     const IpcBuf *b = ipc_out_buf(c, 0);
@@ -473,7 +491,7 @@ static void storage_read(IpcObject *self, IpcCall *c) {
     if (size >= 0x10000 && getenv("NAPPLE_FS_TRACE")) LOG("fs", "RomFS read offset %#llx size %#llx", (unsigned long long)off, (unsigned long long)size);
     guest_write_prepare(b->addr, (size_t)size);
     for (int64_t done = 0; done < size;) {
-        ssize_t n = pread(st->fd, (char *)dst + done, (size_t)(size - done), off + done);
+        ssize_t n = storage_pread(st, (char *)dst + done, (size_t)(size - done), (uint64_t)(off + done));
         if (n <= 0) { c->result = R_FS_UNEXPECTED; return; }
         done += n;
     }
@@ -485,14 +503,71 @@ static const IpcCmd storage_cmds[] = {
     {0, "Read", storage_read, IPC_IMPL}, {1, "Write", storage_write_denied, IPC_IMPL}, {2, "Flush", storage_flush, IPC_IMPL},
     {3, "SetSize", storage_write_denied, IPC_IMPL}, {4, "GetSize", storage_get_size, IPC_IMPL},
 };
-static IpcObject *open_romfs_storage(IpcCall *c) {
-    char path[1200]; snprintf(path, sizeof path, "%s/romfs.bin", g_cfg.data_dir);
+static IpcObject *open_romfs_storage_path(IpcCall *c, const char *path, const char *what) {
     int fd = open(path, O_RDONLY);
-    if (fd < 0) { LOG("fs", "OpenDataStorageByCurrentProcess: %s is missing", path); summary_note("romfs.bin missing"); c->result = R_FS_NOT_FOUND_DATA; return NULL; }
+    if (fd < 0) { LOG("fs", "%s: %s is missing", what, path); c->result = R_FS_NOT_FOUND_DATA; return NULL; }
     struct stat sb; fstat(fd, &sb);
-    StorageFile *st = calloc(1, sizeof *st); st->fd = fd; st->size = (uint64_t)sb.st_size;
+    StorageFile *st = calloc(1, sizeof *st); st->fd = fd; st->src_fd[0] = st->src_fd[1] = -1; st->size = (uint64_t)sb.st_size;
     LOG("fs", "RomFS storage: %s (%llu bytes)", path, (unsigned long long)st->size);
     return IPC_OBJECT("IStorage", storage_cmds, st, storage_destroy);
+}
+/* Opens <data-dir>/romfs.delta; NULL when absent or malformed (logged). The base build dir is the sibling named by romfs.json "base_dir". */
+static IpcObject *open_romfs_delta(IpcCall *c) {
+    char dd[1200], p[1400]; snprintf(dd, sizeof dd, "%s/romfs.delta", g_cfg.data_dir);
+    snprintf(p, sizeof p, "%s/romfs.json", dd);
+    FILE *jf = fopen(p, "r"); if (!jf) return NULL;
+    char js[4096]; size_t jn = fread(js, 1, sizeof js - 1, jf); fclose(jf); js[jn] = 0;
+    char *k = strstr(js, "\"base_dir\""); char base[600] = "";
+    if (k && (k = strchr(k + 10, ':')) && (k = strchr(k, '"'))) { char *e = strchr(++k, '"'); if (e && e - k < (long)sizeof base && !memchr(k, '/', (size_t)(e - k))) { memcpy(base, k, (size_t)(e - k)); base[e - k] = 0; } }
+    if (!base[0]) { LOG("fs", "romfs.delta: romfs.json has no usable base_dir"); return NULL; }
+    StorageFile *st = calloc(1, sizeof *st); st->src_fd[0] = st->src_fd[1] = -1; st->fd = -1;
+    snprintf(p, sizeof p, "%s/../%s/romfs.bin", g_cfg.data_dir, base); st->src_fd[0] = open(p, O_RDONLY);
+    if (st->src_fd[0] < 0) LOG("fs", "romfs.delta: base %s is missing", p);
+    snprintf(p, sizeof p, "%s/patch.bin", dd); st->src_fd[1] = open(p, O_RDONLY);
+    snprintf(p, sizeof p, "%s/romfs.reloc", dd); FILE *rf = fopen(p, "rb");
+    uint8_t h[16];
+    if (st->src_fd[0] >= 0 && st->src_fd[1] >= 0 && rf && fread(h, 1, 16, rf) == 16 && !memcmp(h, "RLC1", 4)) {
+        uint32_t n; uint64_t ds; memcpy(&n, h + 4, 4); memcpy(&ds, h + 8, 8);
+        st->ents = n ? calloc(n, sizeof *st->ents) : NULL;
+        uint8_t r[24]; uint32_t i = 0;
+        for (; st->ents && i < n && fread(r, 1, 24, rf) == 24; i++) { memcpy(&st->ents[i].data_offset, r, 8); memcpy(&st->ents[i].source_offset, r + 8, 8); memcpy(&st->ents[i].source, r + 16, 4); }
+        if (st->ents && i == n && st->ents[0].data_offset == 0) { st->nents = n; st->size = ds; }
+        else { free(st->ents); st->ents = NULL; }
+    }
+    if (rf) fclose(rf);
+    if (!st->ents) {
+        LOG("fs", "romfs.delta: unusable (base/patch/reloc missing or malformed)");
+        for (int i = 0; i < 2; i++) if (st->src_fd[i] >= 0) close(st->src_fd[i]);
+        free(st); c->result = R_FS_NOT_FOUND_DATA; return NULL;
+    }
+    LOG("fs", "RomFS storage: delta layer over %s (%u extents, %llu bytes)", base, st->nents, (unsigned long long)st->size);
+    return IPC_OBJECT("IStorage", storage_cmds, st, storage_destroy);
+}
+static IpcObject *open_romfs_storage(IpcCall *c) {
+    char path[1200]; snprintf(path, sizeof path, "%s/romfs.bin", g_cfg.data_dir);
+    if (access(path, R_OK) != 0) { char d[1300]; snprintf(d, sizeof d, "%s/romfs.delta/romfs.reloc", g_cfg.data_dir); if (access(d, R_OK) == 0) return open_romfs_delta(c); }
+    IpcObject *o = open_romfs_storage_path(c, path, "OpenDataStorageByCurrentProcess");
+    if (!o) summary_note("romfs.bin missing");
+    return o;
+}
+/* OpenDataStorageByDataId(u8 storage id, u64 data id), commands 30 and 202: add-on content (DLC) data ids resolve to the DLC's romfs image
+ * (misc.c, aoc:u); any other id is a system data archive, served when <data-dir>/sysdata/ (or <data-dir>/../sysdata/)<id as 16 hex digits>.bin exists (the console reads
+ * them from the system NAND), else not found. */
+/* weak default (no DLC): the host-only fs tests link fs.c without misc.c; misc.c's definition wins in the runtime. */
+__attribute__((weak)) const char *aoc_data_id_romfs(uint64_t data_id) { (void)data_id; return NULL; }
+static void srv_open_data_storage_by_id(IpcObject *s, IpcCall *c) {
+    (void)s; if (c->in_size < 16) { c->result = R_FS_INVALID_ARGUMENT; return; }
+    uint8_t storage = IPC_IN(c, uint8_t, 0); uint64_t id = IPC_IN(c, uint64_t, 8);
+    const char *p = aoc_data_id_romfs(id); char sys[1300];
+    if (!p) {
+        /* napple build writes them to <title dir>/sysdata, one level above the build-id data dir; a per-build copy wins. */
+        snprintf(sys, sizeof sys, "%s/sysdata/%016llx.bin", g_cfg.data_dir, (unsigned long long)id);
+        if (access(sys, R_OK) != 0) snprintf(sys, sizeof sys, "%s/../sysdata/%016llx.bin", g_cfg.data_dir, (unsigned long long)id);
+        if (access(sys, R_OK) == 0) p = sys;
+    }
+    LOG("fs", "OpenDataStorageByDataId: storage %u data id %016llx%s", storage, (unsigned long long)id, p ? "" : " (no data)");
+    if (!p) { c->result = R_FS_NOT_FOUND_DATA; return; }
+    IpcObject *o = open_romfs_storage_path(c, p, "OpenDataStorageByDataId"); if (o) ipc_out_object(c, o);
 }
 
 /* ---- fsp-srv ------------------------------------------------------------------------------------------------- */
@@ -729,7 +804,9 @@ static const IpcCmd srv_cmds[] = {
     {69, "ReadSaveDataFileSystemExtraDataBySaveDataAttribute", srv_read_extra_by_attr, IPC_IMPL},
     {70, "WriteSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute", srv_write_extra_mask_by_attr, IPC_IMPL},
     {71, "ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute", srv_read_extra_mask_by_attr, IPC_IMPL},
+    {30, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},
     {200, "OpenDataStorageByCurrentProcess", srv_open_data_storage, IPC_IMPL},
+    {202, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},
     {1003, "DisableAutoSaveDataCreation", srv_noop, IPC_STUB},
     {1005, "GetGlobalAccessLogMode", srv_get_log_mode, IPC_STUB},
     {1006, "OutputAccessLogToSdCard", srv_noop, IPC_STUB},

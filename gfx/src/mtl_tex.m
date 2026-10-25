@@ -354,7 +354,11 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
     if (has_view) {
         if (v->set_levels) { l0 = v->base_level; nl = v->nlevels; }
         if (v->set_layers) { s0 = v->min_layer; ns = v->nlayers; }
-        if (v->set_format) { uint32_t m = 0; if (napple_fmt_to_mtl(v->format, &m, NULL) && m) pf = (MTLPixelFormat)m; }
+        if (v->set_format) {
+            uint32_t m = 0, bcpf; int bpp;
+            if (napple_fmt_to_mtl(v->format, &m, NULL) && m) pf = (MTLPixelFormat)m;
+            if (!g_mtl.bc_ok && napple_bc_unpacked((uint32_t)v->format, &bcpf, &bpp)) pf = (MTLPixelFormat)bcpf;   /* BC textures are stored decoded on GPUs without BC (same mapping as mtl_tex_format_info) */
+        }
     }
     if (l0 + nl > t->tex.mipmapLevelCount) { nl = l0 < t->tex.mipmapLevelCount ? t->tex.mipmapLevelCount - l0 : 1; }
     /* swizzle: view swizzle composed with the format component map and the texture-level swizzle */

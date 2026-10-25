@@ -52,6 +52,7 @@ const HostSymbol *gfx_hle_table(size_t *count) {
 int gfx_handle_fault(void *addr, int is_write, void *uc) { return napple_gfx_handle_fault(addr, is_write, uc); }
 void gfx_guest_write_prepare(void *addr, size_t n) { napple_gfx_guest_write_prepare(addr, n); }
 uint64_t gfx_vsync_period_ns(void) { return napple_gfx_vsync_period_ns(); }
+void gfx_set_nvn_version(unsigned major, unsigned minor) { napple_gfx_set_nvn_version(major, minor); }
 void gfx_compile_status(GfxCompileStatus *out) {
     napple_gfx_stats st; st.size = sizeof st; napple_gfx_get_stats(&st);
     out->prewarm_done = st.prewarm_done; out->prewarm_total = st.prewarm_total; out->blocking = st.compiles_blocking; out->pipelines = st.pipelines_compiled;

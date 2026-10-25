@@ -1,5 +1,10 @@
 /* Process shell: the frontend library window (window mode) or a bare process (headless), guest boot thread, life cycle. */
+#include "platform.h"
+#if NAPPLE_IOS
+#import <UIKit/UIKit.h>
+#else
 #import <Cocoa/Cocoa.h>
+#endif
 #import <QuartzCore/CAMetalLayer.h>
 #include "frontend.h"
 #include "gfx.h"
@@ -8,6 +13,7 @@
 #include "napple_input.h"
 #include "napple_audio.h"
 #include "napple_display.h"
+#include "napple_gfx.h"
 #include "timescale.h"
 #include <dirent.h>
 #include <pthread.h>
@@ -105,7 +111,11 @@ static void push_speed(int percent, int mode) {
 static void on_speed(void *u, int percent) { (void)u; if (g_fe) { napple_settings s; napple_frontend_get_settings(g_fe, &s); g_audio_speed_mode = s.audio_speed_mode; push_speed(percent, s.speed_mode); } }
 static void on_resize(void *u, int w, int h, double scale) {
     (void)u; (void)scale;
+#if NAPPLE_IOS
+    double hz = g_fe ? napple_frontend_display_hz(g_fe) : 60;   /* the frontend tracks the refresh rate of the screen the game view is on */
+#else
     double hz = 60; NSScreen *sc = NSApp.keyWindow.screen ?: NSScreen.mainScreen; if (sc) hz = (double)sc.maximumFramesPerSecond;
+#endif
     napple_display_set_window((uint32_t)(w > 0 ? w : 0), (uint32_t)(h > 0 ? h : 0), hz);
 }
 static void on_stats_text(void *u, char *out, size_t cap) { (void)u; napple_display_stats_text(out, (unsigned)cap); }
@@ -147,6 +157,14 @@ static void start_compile_notice(void) {
     dispatch_source_set_event_handler(t, ^{
         static int busy, idle, shown;
         GfxCompileStatus st; gfx_compile_status(&st);
+        /* The game has produced no frame yet: say so honestly. The wait is the game's own start-up, not shader work, unless a compile is blocking it. */
+        static uint64_t t_start; static int no_draw_shown;
+        if (!t_start) t_start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+        double up = (double)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t_start) / 1e9;
+        if (napple_gfx_frame_count() == 0 && up >= 8 && !st.blocking && st.pipelines == 0) {
+            char msg[160]; snprintf(msg, sizeof msg, "Still starting: the game has not drawn its first frame after %.0f s (no shaders needed yet)", up);
+            napple_frontend_boot_status(g_fe, msg, -1); no_draw_shown = 1;
+        } else if (no_draw_shown && napple_gfx_frame_count() > 0) { napple_frontend_boot_status(g_fe, "Starting", -1); no_draw_shown = 0; }
         if (st.blocking) { busy++; idle = 0; } else { idle++; busy = 0; }
         if (busy >= 3) {
             char msg[128];
@@ -168,7 +186,7 @@ void frontend_wait_shader_prewarm(const char *cache_dir) {
     g_first_launch = !cached;
     GfxCompileStatus st; gfx_compile_status(&st);
     if (g_first_launch) {
-        napple_frontend_boot_status(g_fe, "First launch: shaders are compiled as the game needs them, so it can take a minute or two to get going. Later launches are fast.", -1);
+        napple_frontend_boot_status(g_fe, "Starting the game. First launch: shaders are compiled as the game draws them, which can slow the first minutes once the game is running.", -1);
     } else if (st.prewarm_total) {
         uint64_t t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
         while (gfx_compile_status(&st), st.prewarm_done < st.prewarm_total) {
@@ -245,4 +263,19 @@ int frontend_text_input(const char *header, const char *sub, const char *guide, 
     }
     napple_text_request r = {.header = header, .sub = sub, .guide = guide, .initial = initial, .max_length = max_len, .min_length = min_len, .password = password, .numeric = numeric};
     return napple_frontend_text_input_blocking(g_fe, &r, out, cap);
+}
+
+void frontend_alert(const char *title, const char *message) {
+    if (!g_fe) { LOG("applet", "alert (headless): %s: %s", title, message); return; }
+    NSString *t = [NSString stringWithUTF8String:title ? title : ""], *m = [NSString stringWithUTF8String:message ? message : ""];
+    void (^show)(void) = ^{ NSAlert *a = [[NSAlert alloc] init]; a.messageText = t; a.informativeText = m; [a addButtonWithTitle:@"OK"]; [a runModal]; };
+    if ([NSThread isMainThread]) show(); else dispatch_sync(dispatch_get_main_queue(), show);
+}
+
+int frontend_connected_pads(void) {
+    const char *e = getenv("NAPPLE_CONTROLLER_PADS");
+    if (e && atoi(e) > 0) return atoi(e) > 8 ? 8 : atoi(e);
+    if (!g_fe) return 1;
+    napple_input_snapshot s; napple_input_get_snapshot(hid_input_get(), &s);
+    return s.controllers > 0 ? s.controllers : 1;
 }

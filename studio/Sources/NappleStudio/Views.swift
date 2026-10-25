@@ -179,16 +179,15 @@ struct BuildSection: View {
         @Bindable var m = m
         VStack(spacing: 8) {
             HStack {
-                Picker("Target", selection: .constant("macOS")) {
-                    Text("macOS").tag("macOS")
-                    Text("iPhone (coming in V2)").tag("iPhone").disabled(true)
-                    Text("iPad (coming in V2)").tag("iPad").disabled(true)
-                }.pickerStyle(.menu).accessibilityLabel("Build target")
+                Picker("Target", selection: $m.target) {
+                    ForEach(BuildTarget.allCases) { Text($0.label).tag($0) }
+                }.pickerStyle(.menu).accessibilityLabel("Build target").disabled(m.phase == .building)
                 Picker("Keys", selection: $m.selectedSetName) {
                     ForEach(m.sets) { Text($0.name).tag($0.name) }
                 }.pickerStyle(.menu).accessibilityLabel("Key and firmware set")
                     .disabled(m.phase == .building)
             }
+            if m.target.isIOS && m.phase != .building && m.phase != .done { IOSSigningSection() }
             if m.phase == .building, let p = m.progress {
                 VStack(alignment: .leading, spacing: 2) {
                     ProgressView(value: p.percent, total: 100)
@@ -201,12 +200,21 @@ struct BuildSection: View {
                         .font(.headline).foregroundStyle(.green)
                     if let p = m.builtApp { Text(p.path).font(.caption2).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle) }
                     ForEach(m.notes, id: \.self) { Text($0).font(.caption2).foregroundStyle(.orange).lineLimit(3) }
-                    HStack {
-                        Button("Launch", systemImage: "play.fill") { m.launch() }.buttonStyle(.borderedProminent)
-                        Button("Reveal in Finder", systemImage: "folder") { m.reveal() }
-                        Button("Install to /Applications", systemImage: "square.and.arrow.down") { m.installToApplications() }
-                    }.disabled(m.builtApp == nil)
-                    Button("Install to device (V2)", systemImage: "iphone") {}.disabled(true).help("Device install is coming in V2")
+                    if m.target.isIOS {
+                        HStack {
+                            Button("Install on \(m.selectedDevice?.name ?? "device")", systemImage: "iphone") { m.installToDevice() }.buttonStyle(.borderedProminent)
+                                .disabled(m.builtApp == nil || m.selectedDevice == nil || m.installing || m.iosUnsigned)
+                            Button("Reveal in Finder", systemImage: "folder") { m.reveal() }
+                            if let ipa = m.builtIPA { Button(".ipa", systemImage: "shippingbox") { NSWorkspace.shared.activateFileViewerSelecting([ipa]) } }
+                        }
+                        if m.iosUnsigned { Text("Unsigned: sign the .ipa with your own tool (AltStore, Sideloadly, ...) before installing.").font(.caption2).foregroundStyle(.secondary) }
+                    } else {
+                        HStack {
+                            Button("Launch", systemImage: "play.fill") { m.launch() }.buttonStyle(.borderedProminent)
+                            Button("Reveal in Finder", systemImage: "folder") { m.reveal() }
+                            Button("Install to /Applications", systemImage: "square.and.arrow.down") { m.installToApplications() }
+                        }.disabled(m.builtApp == nil)
+                    }
                     if let i = m.installMessage { Text(i).font(.caption).foregroundStyle(.secondary) }
                     Button("Build another game") { m.reset() }.buttonStyle(.borderless).font(.caption)
                 }
@@ -228,6 +236,46 @@ struct BuildSection: View {
                 }.font(.caption)
             }
         }
+    }
+}
+
+/// iOS / iPadOS 26+ signing and device choices (everything local: your Apple ID certificate, a provisioning profile Xcode created, your device).
+struct IOSSigningSection: View {
+    @Environment(AppModel.self) private var m
+    var body: some View {
+        @Bindable var m = m
+        VStack(alignment: .leading, spacing: 6) {
+            if !m.iosUnsigned {
+                Picker("Identity", selection: $m.iosIdentity) {
+                    if m.signing?.identities.isEmpty ?? true { Text("None found").tag("") }
+                    ForEach(m.signing?.identities ?? []) { Text($0.name).tag($0.sha1) }
+                }.pickerStyle(.menu).accessibilityLabel("Code signing identity")
+                Picker("Profile", selection: $m.iosProfilePath) {
+                    if m.signing?.profiles.isEmpty ?? true { Text("None found").tag("") }
+                    ForEach(m.signing?.profiles ?? []) { Text("\($0.name) (\($0.appId))").tag($0.path) }
+                }.pickerStyle(.menu).accessibilityLabel("Provisioning profile")
+                TextField(m.selectedProfile?.explicitBundleId ?? "Bundle id (default com.napple.game.<title id>)", text: $m.iosBundleId)
+                    .textFieldStyle(.roundedBorder).font(.caption).accessibilityLabel("Bundle identifier")
+            }
+            HStack {
+                Picker("Device", selection: $m.iosDeviceId) {
+                    if m.devices.isEmpty { Text("No device found").tag("") }
+                    ForEach(m.devices) { Text($0.summary).tag($0.id) }
+                }.pickerStyle(.menu).accessibilityLabel("Install target device")
+                Button { Task { await m.refreshIOS() } } label: { Image(systemName: "arrow.clockwise") }.help("Rescan identities, profiles and devices")
+            }
+            HStack {
+                Toggle("Install after build", isOn: $m.iosInstallAfterBuild).disabled(m.iosUnsigned)
+                Toggle("Launch", isOn: $m.iosLaunchAfterInstall).disabled(!m.iosInstallAfterBuild || m.iosUnsigned)
+                Toggle("Export .ipa", isOn: $m.iosExportIPA).disabled(m.iosUnsigned)
+                Toggle("Unsigned (own signer)", isOn: $m.iosUnsigned)
+            }.toggleStyle(.checkbox).font(.caption)
+            if let why = m.iosBlocker { Label(why, systemImage: "exclamationmark.triangle").font(.caption2).foregroundStyle(.orange) }
+            Text("Needs iOS or iPadOS 26+, Developer Mode on the device and the game's memory fitting the phone. A free Apple ID profile expires after 7 days.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .padding(8).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .task { if m.signing == nil { await m.refreshIOS() } }
     }
 }
 

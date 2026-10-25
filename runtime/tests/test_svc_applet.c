@@ -11,6 +11,8 @@ void napple_display_game_size(uint32_t w, uint32_t h, uint32_t *gw, uint32_t *gh
 int frontend_text_input(const char *a, const char *b, const char *c, const char *d, unsigned e, unsigned f, int g, int h, char *out, unsigned cap) { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; if (cap) out[0] = 0; return 0; }
 size_t napple_utf16_to_utf8(const uint16_t *u, size_t n, char *out, size_t cap) { size_t k = 0; for (size_t i = 0; i < n && k + 1 < cap; i++) out[k++] = (char)u[i]; if (cap) out[k] = 0; return k; }
 size_t napple_utf8_to_utf16(const char *s, uint16_t *out, size_t cap) { size_t k = 0; for (; s[k] && k < cap; k++) out[k] = (uint8_t)s[k]; return k; }
+void frontend_alert(const char *t, const char *m) { (void)t; (void)m; }
+int frontend_connected_pads(void) { return 1; }
 #endif
 
 static IpcObject *get(IpcObject *proxy, unsigned cmd) { IpcCall c; svc_call(proxy, cmd, NULL, 0, &c); return c.nout_objects ? c.out_objects[0] : NULL; }
@@ -34,6 +36,7 @@ int main(void) {
     svc_call(csg, 1, NULL, 0, &c); CHECK(c.result == R_NO_MESSAGES, "queue empty");
 
     /* ICommonStateGetter */
+    svc_call(csg, 900, NULL, 0, &c); CHECK(c.result == 0, "cmd 900 (request-exit-to-library-applet flag) is accepted");
     svc_call(csg, 50, NULL, 0, &c); CHECK(c.out[0] == 0, "VR mode off");
     uint8_t on = 1; svc_call(csg, 51, &on, 1, &c); svc_call(csg, 50, NULL, 0, &c); CHECK(c.out[0] == 1, "SetVrModeEnabled is read back");
     svc_call(csg, 51, NULL, 0, &c); CHECK(c.result == 0 && AS()->vr_mode == 1, "short request is ignored, not fatal");
@@ -62,6 +65,8 @@ int main(void) {
     CHECK(AS()->home_button_block == 1, "home button block nests");
     uint32_t rec = 2; svc_call(af, 67, &rec, 4, &c); CHECK(AS()->game_play_recording_state == 2, "SetGamePlayRecordingState");
     svc_call(af, 90, &on, 1, &c); CHECK(AS()->crash_report_enabled == 1, "EnableApplicationCrashReport");
+    /* cmd 210 hands the guest a copy handle (an unsignalled event): a reply without one left Animal Crossing spinning on WaitSynchronization(handle 0) */
+    svc_call(af, 210, NULL, 0, &c); CHECK(c.nout_copy == 1 && c.out_copy[0] != 0 && c.nout_objects == 0 && !event_is_signaled(c.out_copy[0]), "cmd 210 returns an event copy handle");
     printf("{\"test\":\"svc_applet\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

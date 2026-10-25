@@ -83,7 +83,7 @@ linear interpolation; Q14 (<=REV14) and float (REV15) per-voice biquads; wave-bu
 pause/flush, loop, end-of-stream, empty buffers); channel resources; splitters (REV11+, dest stride 0x70/0x90/0xa8
 by revision); mixes and submixes (dirty-only mix updates); effects: buffer mix, aux, delay, reverb, reverb3d,
 biquad, limiter, capture, compressor; sinks: device (5.1 -> stereo downmix) and circular; voice drop is not
-implemented (never drops). Performance metrics are not produced (perf area left zero).
+implemented (never drops). Performance metrics are modelled (fixed per-voice/mix/sink costs) into the perf buffer when one is supplied; the layout is unverified.
 
 ## 2. input
 

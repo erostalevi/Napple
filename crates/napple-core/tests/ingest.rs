@@ -271,3 +271,62 @@ fn truncated_and_garbage_inputs_do_not_panic() {
     }
     assert!(ingest(&write("z.bin", &[0u8; 64]), &keys()).is_err());
 }
+
+/// Converts a synthetic single-CTR-section NCA into NCZ form (stream or block), like `nsz` does.
+fn to_ncz(nca: &[u8], block_exp: Option<u8>) -> Vec<u8> {
+    let mut out = nca[..0x4000].to_vec();
+    let mut body = nca[0x4000..].to_vec();
+    let mut iv = [0u8; 16];
+    iv[..8].copy_from_slice(&[8, 7, 6, 5, 4, 3, 2, 1]); // section 0 ctr header [1..8] reversed
+    let mut c = ctr::Ctr128BE::<Aes128>::new(GenericArray::from_slice(&CTR_KEY), GenericArray::from_slice(&iv));
+    c.seek(0x4000u64);
+    c.apply_keystream(&mut body); // CTR is symmetric: this yields the plaintext
+    out.extend(b"NCZSECTN");
+    out.extend(1u64.to_le_bytes());
+    for v in [0x4000u64, body.len() as u64, 3, 0] {
+        out.extend(v.to_le_bytes());
+    }
+    out.extend(CTR_KEY);
+    out.extend(iv);
+    match block_exp {
+        None => out.extend(zstd::encode_all(&body[..], 3).unwrap()),
+        Some(x) => {
+            let blocks: Vec<Vec<u8>> = body.chunks(1 << x).map(|c| zstd::bulk::compress(c, 3).unwrap()).collect();
+            out.extend(b"NCZBLOCK");
+            out.extend([2u8, 1, 0, x]);
+            out.extend((blocks.len() as u32).to_le_bytes());
+            out.extend((body.len() as u64).to_le_bytes());
+            for b in &blocks { out.extend((b.len() as u32).to_le_bytes()); }
+            for b in &blocks { out.extend(b); }
+        }
+    }
+    out
+}
+
+fn big_exefs() -> Vec<u8> {
+    let pad = vec![0x5Au8; 0x6000];
+    pfs0(&[("main", b"MAINCODE"), ("main.npdm", b"npdm"), ("sdk", &pad)], false)
+}
+
+#[test]
+fn nsz_and_xcz_ingest_same_as_nsp() {
+    let nca = build_nca(0, vec![Sec::Pfs0(big_exefs(), false)], None);
+    let want = ingest(&write("n.nsp", &pfs0(&[("p.nca", &nca)], false)), &keys()).unwrap();
+    for exp in [None, Some(14u8)] {
+        let ncz = to_ncz(&nca, exp);
+        let nsz = pfs0(&[("p.ncz", &ncz)], false);
+        let got = ingest(&write("n.nsz", &nsz), &keys()).unwrap();
+        assert_eq!(got.title_id, want.title_id);
+        assert_eq!(got.exefs, want.exefs);
+        assert_eq!(got.ncas[0].name, "p.nca");
+        // XCZ = same HFS0 layout as XCI.
+        let secure = pfs0(&[("p.ncz", &ncz)], true);
+        let root = pfs0(&[("secure", &secure)], true);
+        let mut xcz = vec![0u8; 0x200];
+        xcz[0x100..0x104].copy_from_slice(b"HEAD");
+        xcz[0x138..0x140].copy_from_slice(&0x200u64.to_le_bytes());
+        xcz[0x140..0x148].copy_from_slice(&(root.len() as u64).to_le_bytes());
+        xcz.extend(root);
+        assert_eq!(ingest(&write("n.xcz", &xcz), &keys()).unwrap().exefs, want.exefs);
+    }
+}

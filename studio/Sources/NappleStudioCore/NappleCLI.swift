@@ -41,8 +41,11 @@ public enum ErrorText {
         case "cancelled": return "Build cancelled."
         case "bktr": hint = "Try building without the update (uncheck it)."
         case "runtime": hint = "The runtime or launcher binaries are missing. Rebuild Studio with build_app.sh."
-        case "sign": hint = "Signing failed. Choose an output folder outside Desktop/Documents."
-        case "target": hint = "Only macOS is supported for now."
+        case "sign": hint = "Signing failed. On macOS choose an output folder outside Desktop/Documents; for iPhone/iPad check the signing identity and that the provisioning profile matches the bundle id."
+        case "target": hint = "Choose macOS, iPhone, iPad or iPhone & iPad."
+        case "macho": hint = "A module could not be packed for iOS. Rebuild the game with this version of Studio."
+        case "ipa": hint = "The .ipa could not be written (ditto failed)."
+        case "install": hint = "Unlock the device, trust this Mac, turn on Developer Mode (Settings > Privacy & Security) and, for a free Apple ID, trust the developer in Settings > General > VPN & Device Management."
         case "input", "container", "integrity", "unsupported": hint = "The game file may be damaged or unsupported."
         default: hint = ""
         }
@@ -79,9 +82,10 @@ public struct BuildRequest: Sendable {
     public var target: String = "macos"
     public var output: URL
     public var name: String?
-    public init(files: [URL], keyset: Keyset, updates: [UInt32], dlc: [String], target: String = "macos", output: URL, name: String? = nil) {
+    public var ios: IOSOptions?        // only used when target is ios / iphone / ipad
+    public init(files: [URL], keyset: Keyset, updates: [UInt32], dlc: [String], target: String = "macos", output: URL, name: String? = nil, ios: IOSOptions? = nil) {
         self.files = files; self.keyset = keyset; self.updates = updates; self.dlc = dlc
-        self.target = target; self.output = output; self.name = name
+        self.target = target; self.output = output; self.name = name; self.ios = ios
     }
 }
 
@@ -121,9 +125,20 @@ public struct NappleCLI: Sendable {
         if let n = r.name, !n.isEmpty { args += ["--name", n] }
         // Bundled helper binaries sit next to the CLI; pass them explicitly when present.
         let dir = executable.deletingLastPathComponent()
-        for (flag, file) in [("--runtime", "napple-runtime"), ("--launcher", "napple-launcher")] {
+        let isIOS = BuildTarget(rawValue: r.target)?.isIOS ?? false
+        // iOS apps have no launcher (no exec on iOS) and use the runtime built by tools/build_ios.sh
+        let helpers = isIOS ? [("--runtime", "napple-runtime-ios")] : [("--runtime", "napple-runtime"), ("--launcher", "napple-launcher")]
+        for (flag, file) in helpers {
             let u = dir.appendingPathComponent(file)
             if FileManager.default.isExecutableFile(atPath: u.path) { args += [flag, u.path] }
+        }
+        if isIOS, let o = r.ios {
+            if o.unsigned { args.append("--no-sign") } else {
+                if let i = o.identity { args += ["--signing-identity", i] }
+                if let p = o.profile { args += ["--provisioning-profile", p.path] }
+            }
+            if let b = o.bundleId, !b.isEmpty { args += ["--bundle-id", b] }
+            if o.ipa { args.append("--ipa") }
         }
         let result = LockedBox<String?>(nil)
         _ = try await run(args: args, command: "build") { line in
@@ -139,6 +154,62 @@ public struct NappleCLI: Sendable {
         var args = ["build", "--check", "-k", keyset.keysURL.path]
         if let f = keyset.firmwareURL { args += ["--firmware", f.path] }
         _ = try await run(args: args, command: "build --check")
+    }
+
+    // MARK: iOS signing and devices
+
+    /// Code-signing identities and iOS provisioning profiles found on this Mac (`napple build --list-signing --json`).
+    public func listSigning() async throws -> SigningInfo {
+        let out = try await run(args: ["build", "--list-signing", "--json"], command: "build --list-signing")
+        guard let data = out.stdout.split(separator: "\n").last.map(String.init)?.data(using: .utf8) else { throw CLIError.badOutput("empty signing list") }
+        do { return try SigningInfo.decode(data) } catch { throw CLIError.badOutput("signing list JSON could not be decoded") }
+    }
+
+    /// Phones and tablets known to CoreDevice (`xcrun devicectl list devices`).
+    public static func listDevices() async throws -> [IOSDevice] {
+        let file = FileManager.default.temporaryDirectory.appendingPathComponent("napple-devices-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: file) }
+        _ = try await runTool(URL(fileURLWithPath: "/usr/bin/xcrun"), ["devicectl", "list", "devices", "--json-output", file.path])
+        guard let data = try? Data(contentsOf: file) else { return [] }
+        return DeviceList.parse(data)
+    }
+
+    /// `xcrun devicectl device install app` (and optionally `process launch`). Throws a readable message.
+    public static func installApp(_ app: URL, bundleId: String?, on device: String, launch: Bool) async throws {
+        do { _ = try await runTool(URL(fileURLWithPath: "/usr/bin/xcrun"), ["devicectl", "device", "install", "app", "--device", device, app.path]) }
+        catch { throw CLIError.failed(code: 1, message: ErrorText.humanize("error: [install] \(error.localizedDescription)")) }
+        if launch, let b = bundleId {
+            do { _ = try await runTool(URL(fileURLWithPath: "/usr/bin/xcrun"), ["devicectl", "device", "process", "launch", "--device", device, b]) }
+            catch { throw CLIError.failed(code: 1, message: "Installed, but launching failed: \(error.localizedDescription) Trust the developer in Settings > General > VPN & Device Management, then open the app.") }
+        }
+    }
+
+    /// Reads the bundle id out of a built .app (iOS bundles are flat: Info.plist at the top).
+    public static func bundleId(of app: URL) -> String? {
+        for p in ["Info.plist", "Contents/Info.plist"] {
+            if let d = NSDictionary(contentsOf: app.appendingPathComponent(p)), let b = d["CFBundleIdentifier"] as? String { return b }
+        }
+        return nil
+    }
+
+    static func runTool(_ exe: URL, _ args: [String]) async throws -> Output {
+        let p = Process()
+        p.executableURL = exe; p.arguments = args
+        let o = Pipe(), e = Pipe()
+        p.standardOutput = o; p.standardError = e; p.standardInput = FileHandle.nullDevice
+        do { try p.run() } catch { throw CLIError.failed(code: 127, message: "Could not run \(exe.path): \(error.localizedDescription). Install Xcode and its command line tools.") }
+        let out = LockedBox<[String]>([]), err = LockedBox<[String]>([])
+        await withTaskGroup(of: Void.self) { g in
+            g.addTask { await Self.lines(of: o.fileHandleForReading) { out.append($0) } }
+            g.addTask { await Self.lines(of: e.fileHandleForReading) { err.append($0) } }
+        }
+        p.waitUntilExit()
+        let so = out.value.joined(separator: "\n"), se = err.value.joined(separator: "\n")
+        if p.terminationStatus != 0 {
+            let msg = (se.isEmpty ? so : se).split(separator: "\n").suffix(3).joined(separator: " ")
+            throw CLIError.failed(code: p.terminationStatus, message: msg.isEmpty ? "\(exe.lastPathComponent) exited with code \(p.terminationStatus)" : msg)
+        }
+        return Output(stdout: so, stderr: se)
     }
 
     // MARK: process plumbing

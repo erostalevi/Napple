@@ -21,7 +21,7 @@ pub struct RunOpts {
     pub md: PathBuf,
 }
 
-/// Lists .nsp/.xci files (case-insensitive), recursing up to 16 levels, never following symlinks.
+/// Lists .nsp/.xci/.nsz/.xcz files (case-insensitive), recursing up to 16 levels, never following symlinks.
 pub fn find_games(dir: &Path) -> Vec<PathBuf> {
     fn go(d: &Path, depth: usize, out: &mut Vec<PathBuf>) {
         if depth > 16 {
@@ -33,7 +33,7 @@ pub fn find_games(dir: &Path) -> Vec<PathBuf> {
             let p = e.path();
             if t.is_dir() {
                 go(&p, depth + 1, out);
-            } else if t.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("nsp") || x.eq_ignore_ascii_case("xci")) {
+            } else if t.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(|x| ["nsp", "xci", "nsz", "xcz"].iter().any(|e| x.eq_ignore_ascii_case(e))) {
                 out.push(p);
             }
         }
@@ -190,7 +190,7 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
     let mut m = load_matrix(&o.matrix)?;
     let files = find_games(&o.folder);
     if files.is_empty() {
-        return Err(format!("no .nsp/.xci files under {}", o.folder.display()));
+        return Err(format!("no .nsp/.xci/.nsz/.xcz files under {}", o.folder.display()));
     }
     let mut packs: Vec<Pack> = Vec::new();
     for f in &files {
@@ -350,11 +350,11 @@ mod tests {
         let d = std::env::temp_dir().join(format!("napple-compat-find-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("sub")).unwrap();
-        for f in ["a.nsp", "sub/b.XCI", "c.txt", "d.nsz"] {
+        for f in ["a.nsp", "sub/b.XCI", "c.txt", "d.nsz", "sub/e.XCZ", "f.nsz.bak"] {
             std::fs::write(d.join(f), b"x").unwrap();
         }
         let v = find_games(&d);
-        assert_eq!(v.len(), 2);
+        assert_eq!(v.len(), 4);
         assert!(nso_rank("rtld") < nso_rank("main") && nso_rank("main") < nso_rank("subsdk0") && nso_rank("subsdk2") < nso_rank("subsdk10") && nso_rank("subsdk10") < nso_rank("sdk"));
     }
 

@@ -6,7 +6,10 @@
    again after an underrun; if a device stall lets a backlog build up, everything beyond prefill + 30 ms is dropped. */
 #include "internal.h"
 #include <AudioToolbox/AudioToolbox.h>
+#include <TargetConditionals.h>
+#if !TARGET_OS_IPHONE
 #include <CoreAudio/CoreAudio.h>
+#endif
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,6 +123,11 @@ static void device_close_locked(void) {
 }
 
 /* Ask the default output device for a small buffer (the system may clamp it). Best effort. */
+#if TARGET_OS_IPHONE
+/* iOS has no AudioObject HAL: the AVAudioSession (engine_ios.m) sets the category, the preferred buffer and reports what it granted. */
+unsigned nae_ios_session_start(double sample_rate, double buffer_seconds);
+static UInt32 tune_device_buffer(void) { return nae_ios_session_start(OUT_RATE, 256.0 / OUT_RATE); }
+#else
 static UInt32 tune_device_buffer(void) {
     AudioObjectPropertyAddress a = {kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
     AudioDeviceID dev = 0; UInt32 sz = sizeof dev;
@@ -133,10 +141,15 @@ static UInt32 tune_device_buffer(void) {
     if (AudioObjectGetPropertyData(dev, &fs, 0, NULL, &sz, &cur)) return 512;
     return cur;
 }
+#endif
 
 static int device_open_locked(void) {
     if (!E.device_wanted) return 0;
+#if TARGET_OS_IPHONE
+    AudioComponentDescription d = {kAudioUnitType_Output, kAudioUnitSubType_RemoteIO, kAudioUnitManufacturer_Apple, 0, 0};
+#else
     AudioComponentDescription d = {kAudioUnitType_Output, kAudioUnitSubType_DefaultOutput, kAudioUnitManufacturer_Apple, 0, 0};
+#endif
     AudioComponent c = AudioComponentFindNext(NULL, &d);
     if (!c || AudioComponentInstanceNew(c, &E.unit)) { napple_audio_log(NULL, "no default output device: mixing without sound"); return -1; }
     AudioStreamBasicDescription f = {OUT_RATE, kAudioFormatLinearPCM, kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked, 8, 1, 8, 2, 32, 0};

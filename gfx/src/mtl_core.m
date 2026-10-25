@@ -1,4 +1,5 @@
 /* mtl_core.m - Metal device, memory pool registry, scratch ring, the replay thread, presentation and screenshots. */
+#include <TargetConditionals.h>
 #import <ImageIO/ImageIO.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <pthread.h>
@@ -281,5 +282,9 @@ void gfx_mtl_shutdown(void) {
 void gfx_mtl_settings_changed(void) {
     napple_gfx_settings st;
     gfx_settings_get(&st);
-    if (g_mtl.layer) g_mtl.layer.displaySyncEnabled = st.pacing != NAPPLE_PACING_UNCAPPED;
+#if TARGET_OS_OSX
+    if (g_mtl.layer) g_mtl.layer.displaySyncEnabled = st.pacing != NAPPLE_PACING_UNCAPPED;   /* iOS presents on the display link only (no such property) */
+#else
+    (void)st;
+#endif
 }

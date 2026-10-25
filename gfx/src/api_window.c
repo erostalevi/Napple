@@ -30,11 +30,11 @@ NVN(nvnWindowBuilderSetTextures, void, NVNwindowBuilder *b, int n, NVNtexture *c
 NVN(nvnWindowBuilderSetPresentInterval, void, NVNwindowBuilder *b, int i) { WB(b)->interval = i; }
 NVN(nvnWindowBuilderGetNativeWindow, NVNnativeWindow, const NVNwindowBuilder *b) { return CWB(b)->native; }
 NVN(nvnWindowBuilderGetPresentInterval, int, const NVNwindowBuilder *b) { return CWB(b)->interval; }
-NVN_NOPROTO(nvnWindowBuilderSetNumActiveTextures, void, NVNwindowBuilder *b, int n) { WB(b)->active = n; }
-NVN_NOPROTO(nvnWindowBuilderGetNumActiveTextures, int, const NVNwindowBuilder *b) { return CWB(b)->active; }
-NVN_NOPROTO(nvnWindowBuilderGetDevice, const NVNdevice *, const NVNwindowBuilder *b) { return CWB(b)->dev; }
-NVN_NOPROTO(nvnWindowBuilderGetNumTextures, int, const NVNwindowBuilder *b) { return CWB(b)->ntex; }
-NVN_NOPROTO(nvnWindowBuilderGetTexture, const NVNtexture *, const NVNwindowBuilder *b, int i) { return (i >= 0 && i < CWB(b)->ntex) ? CWB(b)->tex[i] : NULL; }
+NVN(nvnWindowBuilderSetNumActiveTextures, void, NVNwindowBuilder *b, int n) { WB(b)->active = n; }
+NVN(nvnWindowBuilderGetNumActiveTextures, int, const NVNwindowBuilder *b) { return CWB(b)->active; }
+NVN(nvnWindowBuilderGetDevice, const NVNdevice *, const NVNwindowBuilder *b) { return CWB(b)->dev; }
+NVN(nvnWindowBuilderGetNumTextures, int, const NVNwindowBuilder *b) { return CWB(b)->ntex; }
+NVN(nvnWindowBuilderGetTexture, const NVNtexture *, const NVNwindowBuilder *b, int i) { return (i >= 0 && i < CWB(b)->ntex) ? CWB(b)->tex[i] : NULL; }
 
 NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
     win_t *o = WN(w);
@@ -61,9 +61,9 @@ NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return CWN(w)->inter
 NVN(nvnWindowSetPresentInterval, void, NVNwindow *w, int i) { WN(w)->interval = i > 0 ? i : 1; }
 NVN(nvnWindowSetCrop, void, NVNwindow *w, int x, int y, int ww, int h) { int *c = WN(w)->crop; c[0] = x; c[1] = y; c[2] = ww; c[3] = h; }
 NVN(nvnWindowGetCrop, void, const NVNwindow *w, NVNrectangle *r) { const int *c = CWN(w)->crop; r->x = c[0]; r->y = c[1]; r->width = c[2]; r->height = c[3]; }
-NVN_NOPROTO(nvnWindowSetNumActiveTextures, void, NVNwindow *w, int n) { if (n > 0 && n <= WN(w)->ntex) WN(w)->active = n; }
-NVN_NOPROTO(nvnWindowGetNumActiveTextures, int, const NVNwindow *w) { return CWN(w)->active; }
-NVN_NOPROTO(nvnWindowGetNumTextures, int, const NVNwindow *w) { return CWN(w)->ntex; }
+NVN(nvnWindowSetNumActiveTextures, void, NVNwindow *w, int n) { if (n > 0 && n <= WN(w)->ntex) WN(w)->active = n; }
+NVN(nvnWindowGetNumActiveTextures, int, const NVNwindow *w) { return CWN(w)->active; }
+NVN(nvnWindowGetNumTextures, int, const NVNwindow *w) { return CWN(w)->ntex; }
 
 /* Acquire the next image. The image may still be on screen: the sync signals once it was shown (display of its previous present done). */
 NVN(nvnWindowAcquireTexture, NVNwindowAcquireTextureResult, NVNwindow *w, NVNsync *s, int *index) {

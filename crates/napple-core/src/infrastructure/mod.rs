@@ -4,6 +4,7 @@ pub mod nacp;
 pub mod npdm;
 pub mod nso;
 pub mod nca;
+pub mod ncz;
 pub mod pfs;
 pub mod romfs;
 pub mod ticket;

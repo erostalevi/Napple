@@ -48,6 +48,10 @@ static NSMutableArray *g_out_desc;                         /* descriptors in g_o
 static int g_archive_dirty, g_archive_save_queued, g_archive_broken;
 static unsigned g_archive_dropped;
 static void archive_open(void) {
+#if TARGET_OS_SIMULATOR
+    LOGI("binary archive: disabled on the iOS Simulator (its GPU has no target architecture; saving asserts)");
+    return;
+#endif
     if (!g_gfx.cfg.cache_dir || getenv("NAPPLE_GFX_NO_ARCHIVE")) return;
     g_archive_url = [NSURL fileURLWithPath:[NSString stringWithFormat:@"%s/pipelines-v%u.metalar", g_gfx.cfg.cache_dir, TRANSLATOR_VERSION]];
     MTLBinaryArchiveDescriptor *d = [MTLBinaryArchiveDescriptor new];
@@ -97,7 +101,9 @@ static void archive_add(id desc) {        /* every pipeline the run builds (rend
         }
     });
 }
+static void shader_progress_summary(void);
 void mtl_shader_shutdown(void) {
+    shader_progress_summary();
     if (!g_archive) return;
     dispatch_sync(g_archive_q, ^{
         archive_save();
@@ -126,6 +132,47 @@ static void build_pipe(GfxPipe *p, pipe_key k);
 typedef struct { uint32_t magic, version, key_size, pad; } pipe_hdr;
 #define PIPE_MAGIC 0x50495045u
 
+/* Build timing and progress (log only; NAPPLE_GFX_SHADER_LOG=0 silences the periodic line). Every shader variant requested is "queued"; each is "built" when
+ * translate (or the disk cache) and the Metal compile are done. A single step slower than SLOW_STEP_MS is logged on its own. */
+#define SLOW_STEP_MS 1500
+static _Atomic uint64_t g_st_queued, g_st_built, g_st_failed, g_st_disk, g_st_tr_n, g_st_tr_ns, g_st_tr_max, g_st_cmp_n, g_st_cmp_ns, g_st_cmp_max;
+static _Atomic uint64_t g_st_pipe_n, g_st_pipe_ns, g_st_pipe_max, g_st_first_ns, g_st_last_ns;
+static void st_max(_Atomic uint64_t *m, uint64_t v) { uint64_t o = atomic_load(m); while (v > o && !atomic_compare_exchange_weak(m, &o, v)) {} }
+static void st_note_first(void) { uint64_t z = 0; atomic_compare_exchange_strong(&g_st_first_ns, &z, gfx_now_ns()); }
+static void shader_progress_line(const char *tag, uint64_t last_built) {
+    uint64_t q = atomic_load(&g_st_queued), b = atomic_load(&g_st_built), f = atomic_load(&g_st_failed), first = atomic_load(&g_st_first_ns);
+    uint64_t tn = atomic_load(&g_st_tr_n), cn = atomic_load(&g_st_cmp_n), pn = atomic_load(&g_st_pipe_n);
+    uint64_t endt = atomic_load(&g_st_last_ns); if (!endt || endt < first || q > b) endt = gfx_now_ns();
+    double el = first ? (double)(endt - first) / 1e9 : 0, rate = el > 0.5 ? (double)b / el : 0;
+    char eta[48] = "";
+    if (q > b && rate > 0) snprintf(eta, sizeof eta, ", ETA ~%.0f s", (double)(q - b) / rate);
+    uint32_t pw = atomic_load(&g_gfx.prewarm_total), pd = atomic_load(&g_gfx.prewarm_done);
+    char pre[64] = "";
+    if (pw && pd < pw) snprintf(pre, sizeof pre, "; launch prewarm %u of %u", pd, pw);
+    LOGI("%s: shaders built %llu of %llu queued (%llu failed, %llu from disk cache)%s%s | translate %llu avg %.1f ms max %.0f ms | metal compile %llu avg %.1f ms max %.0f ms | pipelines %llu avg %.1f ms max %.0f ms | %.1f s%s",
+         tag, (unsigned long long)b, (unsigned long long)q, (unsigned long long)f, (unsigned long long)atomic_load(&g_st_disk), pre, "",
+         (unsigned long long)tn, tn ? atomic_load(&g_st_tr_ns) / 1e6 / (double)tn : 0, atomic_load(&g_st_tr_max) / 1e6,
+         (unsigned long long)cn, cn ? atomic_load(&g_st_cmp_ns) / 1e6 / (double)cn : 0, atomic_load(&g_st_cmp_max) / 1e6,
+         (unsigned long long)pn, pn ? atomic_load(&g_st_pipe_ns) / 1e6 / (double)pn : 0, atomic_load(&g_st_pipe_max) / 1e6, el, eta);
+    (void)last_built;
+}
+static void shader_progress_summary(void) { if (atomic_load(&g_st_queued) || atomic_load(&g_st_cmp_n)) shader_progress_line("shader summary", 0); }
+static void shader_progress_start(void) {
+    const char *e = getenv("NAPPLE_GFX_SHADER_LOG");
+    if (e && !strcmp(e, "0")) return;
+    dispatch_queue_t q = dispatch_queue_create("napple.gfx.progress", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
+    dispatch_source_t t = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, q);
+    static uint64_t last_b, last_q; static uint32_t last_pd;
+    dispatch_source_set_timer(t, dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), 2 * NSEC_PER_SEC, NSEC_PER_SEC / 4);
+    dispatch_source_set_event_handler(t, ^{
+        uint64_t b = atomic_load(&g_st_built), qd = atomic_load(&g_st_queued); uint32_t pd = atomic_load(&g_gfx.prewarm_done);
+        if (b == last_b && qd == last_q && pd == last_pd) return;          /* nothing moved: stay quiet */
+        last_b = b; last_q = qd; last_pd = pd;
+        shader_progress_line("shader progress", b);
+    });
+    dispatch_resume(t);
+}
+
 static int cache_load(NSString *path, ShaderInfo *info);
 void mtl_shader_init(void) {
     unsigned pc = perf_cores();
@@ -137,6 +184,7 @@ void mtl_shader_init(void) {
     g_prewarm_q = dispatch_queue_create("napple.gfx.prewarm", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_CONCURRENT, QOS_CLASS_USER_INITIATED, 0));
     g_prewarmed = [NSMutableDictionary dictionary];
     archive_open();
+    shader_progress_start();
     LOGI("shader compile: %u background queue(s) (%u performance cores); binary archive %s", g_ncompile_q, pc, g_archive ? "on" : "off");
     g_shaders = [NSMutableDictionary dictionary];
     g_pipes = [NSMutableDictionary dictionary];
@@ -171,9 +219,13 @@ void mtl_shader_init(void) {
             @autoreleasepool {
                 ShaderInfo info;
                 if (cache_load(path, &info)) {
+                    st_note_first();
+                    uint64_t c0 = gfx_now_ns();
                     id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:@(info.msl) options:compile_options() error:nil];
                     id<MTLFunction> fn = [lib newFunctionWithName:@"main0"];
                     free(info.msl);
+                    { uint64_t dt = gfx_now_ns() - c0; atomic_fetch_add(&g_st_cmp_n, 1); atomic_fetch_add(&g_st_cmp_ns, dt); st_max(&g_st_cmp_max, dt);
+                      if (dt > SLOW_STEP_MS * 1000000ull) LOGW("slow shader: prewarm compile of %s took %.0f ms", path.lastPathComponent.UTF8String, dt / 1e6); }
                     if (fn) { pthread_mutex_lock(&g_prewarm_mu); g_prewarmed[path] = fn; pthread_mutex_unlock(&g_prewarm_mu); }
                 }
             }
@@ -228,8 +280,12 @@ static int build_shader(GfxShader *s, const shader_blob *b, ShaderKey key) {
     /* the generated code bakes the global memory window (base, size): it is part of the cache identity */
     uint64_t gm[2] = { maxwell_gmem_base, maxwell_gmem_size };
     NSString *cp = cache_path(b->hash, fnv1a(gm, sizeof gm, key_hash(&key)));
+    st_note_first();
     if (!cache_load(cp, &s->info)) {
+        uint64_t t0 = gfx_now_ns();
         ShaderInfo *t = maxwell_translate(b->code, b->code_size, b->stage, &key);
+        { uint64_t dt = gfx_now_ns() - t0; atomic_fetch_add(&g_st_tr_n, 1); atomic_fetch_add(&g_st_tr_ns, dt); st_max(&g_st_tr_max, dt);
+          if (dt > SLOW_STEP_MS * 1000000ull) LOGW("slow shader: translate of %016llx (stage %d, %zu bytes of Maxwell code) took %.0f ms", (unsigned long long)b->hash, b->stage, (size_t)b->code_size, dt / 1e6); }
         if (!t || !t->msl) {
             { const char *dd = getenv("NAPPLE_SHADER_DUMP"); if (dd) { char fp[1024]; snprintf(fp, sizeof fp, "%s/%016llx_s%d.bin", dd, (unsigned long long)b->hash, b->stage); FILE *f = fopen(fp, "wb"); if (f) { fwrite(b->code, 1, b->code_size, f); fclose(f); } } }
             LOGW("shader %016llx (stage %d) could not be translated: %s", (unsigned long long)b->hash, b->stage, t ? t->error : "out of memory");
@@ -242,7 +298,7 @@ static int build_shader(GfxShader *s, const shader_blob *b, ShaderKey key) {
         maxwell_free(t);
         atomic_fetch_add(&g_gfx.shaders_translated, 1);
         cache_store(cp, &s->info);
-    }
+    } else atomic_fetch_add(&g_st_disk, 1);
     memcpy(s->local, b->local, sizeof s->local);
     s->blob = b;
     if (cp) {                                       /* compiled at launch by the prewarm */
@@ -254,7 +310,10 @@ static int build_shader(GfxShader *s, const shader_blob *b, ShaderKey key) {
     @autoreleasepool {
         NSError *err = nil;
         NSString *src = [NSString stringWithUTF8String:s->info.msl];
+        uint64_t c0 = gfx_now_ns();
         id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:src options:compile_options() error:&err];
+        { uint64_t dt = gfx_now_ns() - c0; atomic_fetch_add(&g_st_cmp_n, 1); atomic_fetch_add(&g_st_cmp_ns, dt); st_max(&g_st_cmp_max, dt);
+          if (dt > SLOW_STEP_MS * 1000000ull) LOGW("slow shader: Metal compile of %016llx (stage %d, %zu bytes of MSL) took %.0f ms", (unsigned long long)b->hash, b->stage, strlen(s->info.msl), dt / 1e6); }
         free(s->info.msl); s->info.msl = NULL;
         if (!lib) { LOGW("shader %016llx: Metal compile failed: %s", (unsigned long long)b->hash, err.localizedDescription.UTF8String); return 2; }
         s->fn = [lib newFunctionWithName:@"main0"];
@@ -266,7 +325,11 @@ static int build_shader(GfxShader *s, const shader_blob *b, ShaderKey key) {
 static void run_shader(GfxShader *s, const shader_blob *b, ShaderKey key) {
     int unclaimed = 0;
     if (!__atomic_compare_exchange_n(&s->claimed, &unclaimed, 1, 0, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) return;
-    __atomic_store_n(&s->state, build_shader(s, b, key), __ATOMIC_RELEASE);
+    int st = build_shader(s, b, key);
+    if (st == 2) atomic_fetch_add(&g_st_failed, 1);
+    atomic_fetch_add(&g_st_built, 1);
+    atomic_store(&g_st_last_ns, gfx_now_ns());
+    __atomic_store_n(&s->state, st, __ATOMIC_RELEASE);
     atomic_fetch_sub(&g_gfx.shaders_pending, 1);
 }
 
@@ -285,6 +348,7 @@ static GfxShader *shader_variant(uint64_t hash, const ShaderKey *key, int wait) 
         if (!b) { s->claimed = 1; __atomic_store_n(&s->state, 2, __ATOMIC_RELEASE); return s; }
         ShaderKey kc = *key;
         atomic_fetch_add(&g_gfx.shaders_pending, 1);
+        atomic_fetch_add(&g_st_queued, 1);
         if (!wait) compile_async(^{ run_shader(s, b, kc); });
     }
     if (wait && __atomic_load_n(&s->state, __ATOMIC_ACQUIRE) == 0) {
@@ -484,6 +548,7 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
         }
         d.vertexDescriptor = vd;
         NSError *err = nil;
+        uint64_t pt0 = gfx_now_ns();
         if (g_archive) {
             d.binaryArchives = @[g_archive];
             p->ps = [g_mtl.dev newRenderPipelineStateWithDescriptor:d options:MTLPipelineOptionFailOnBinaryArchiveMiss reflection:nil error:nil];
@@ -496,6 +561,8 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
              * to save ("expecting 'fragment' stage in pipeline no. N"). They compile on every run. */
             if (p->ps && d.fragmentFunction && writes_colour(&k)) archive_add(d);
         }
+        { uint64_t dt = gfx_now_ns() - pt0; atomic_fetch_add(&g_st_pipe_n, 1); atomic_fetch_add(&g_st_pipe_ns, dt); st_max(&g_st_pipe_max, dt);
+          if (dt > SLOW_STEP_MS * 1000000ull) LOGW("slow pipeline: vs %016llx fs %016llx took %.0f ms", (unsigned long long)k.vs, (unsigned long long)k.fs, dt / 1e6); }
         if (!p->ps) { LOGW("render pipeline creation failed: %s", err.localizedDescription.UTF8String); p->state = 2; return; }
         p->vs = vs; p->fs = fs;
         atomic_fetch_add(&g_gfx.pipelines_compiled, 1);

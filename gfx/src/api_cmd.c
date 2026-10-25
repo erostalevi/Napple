@@ -139,7 +139,7 @@ NVN(nvnCommandBufferSetMemoryCallbackData, void, NVNcommandBuffer *c, void *d) {
 NVN(nvnCommandBufferGetMemoryCallback, PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC, const NVNcommandBuffer *c) { return CBH(c)->cb; }
 NVN(nvnCommandBufferGetMemoryCallbackData, void *, const NVNcommandBuffer *c) { return CBH(c)->cb_data; }
 /* Recordings live in host memory, so command memory never runs out and the out-of-memory callback is never due: enabling it changes nothing. */
-NVN_NOPROTO(nvnCommandBufferSetCommandMemoryCallbackEnabled, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
+NVN(nvnCommandBufferSetCommandMemoryCallbackEnabled, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
 
 /* Command and control memory belong to the game; recordings live in host memory, so the memory is only accounted. Handing a chunk back
  * (the game reusing a ring slot) means recordings made in an overlapping chunk are dead. */
@@ -440,9 +440,9 @@ NVN(nvnCommandBufferSetPatchSize, void, NVNcommandBuffer *c, int s) { (void)c; (
 NVN(nvnCommandBufferSetInnerTessellationLevels, void, NVNcommandBuffer *c, const float *v) { (void)c; (void)v; }
 NVN(nvnCommandBufferSetOuterTessellationLevels, void, NVNcommandBuffer *c, const float *v) { (void)c; (void)v; }
 NVN(nvnCommandBufferBindCoverageModulationTable, void, NVNcommandBuffer *c, const float *v) { (void)c; (void)v; }
-NVN_NOPROTO(nvnCommandBufferSetColorReductionEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
-NVN_NOPROTO(nvnCommandBufferSetColorReductionThresholds, void, NVNcommandBuffer *c, int a, int b) { (void)c; (void)a; (void)b; }
-NVN_NOPROTO(nvnCommandBufferSetStencilCullCriteria, void, NVNcommandBuffer *c, int a, int b, int d) { (void)c; (void)a; (void)b; (void)d; }
+NVN(nvnCommandBufferSetColorReductionEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
+NVN(nvnCommandBufferSetColorReductionThresholds, void, NVNcommandBuffer *c, int a, int b) { (void)c; (void)a; (void)b; }
+NVN(nvnCommandBufferSetStencilCullCriteria, void, NVNcommandBuffer *c, int a, int b, int d) { (void)c; (void)a; (void)b; (void)d; }
 NVN(nvnCommandBufferSetProgramSubroutines, void, NVNcommandBuffer *c, NVNprogram *p, NVNshaderStage s, const int a, const int b, const int *v) { (void)c; (void)p; (void)s; (void)a; (void)b; (void)v; }
 
 /* ---------------------------------------------------------------------------------------------------------------
@@ -599,5 +599,16 @@ NVN(nvnCommandBufferPopDebugGroupId, void, NVNcommandBuffer *c, uint32_t id) { (
 NVN(nvnCommandBufferInsertDebugMarkerStatic, void, NVNcommandBuffer *c, uint32_t id, const char *s) { (void)c; (void)id; (void)s; }
 NVN(nvnCommandBufferInsertDebugMarkerDynamic, void, NVNcommandBuffer *c, uint32_t id, const char *s) { (void)c; (void)id; (void)s; }
 NVN(nvnCommandBufferInsertDebugMarker, void, NVNcommandBuffer *c, const char *s) { (void)c; (void)s; }
-NVN_NOPROTO(nvnCommandBufferInsertCheckpointStatic, void, NVNcommandBuffer *c, uint32_t id, const char *s) { (void)c; (void)id; (void)s; }
-NVN_NOPROTO(nvnCommandBufferInsertCheckpointDynamic, void, NVNcommandBuffer *c, uint32_t id, const char *s) { (void)c; (void)id; (void)s; }
+NVN(nvnCommandBufferInsertCheckpointStatic, void, NVNcommandBuffer *c, uint32_t id, const char *s) { (void)c; (void)id; (void)s; }
+NVN(nvnCommandBufferInsertCheckpointDynamic, void, NVNcommandBuffer *c, uint32_t id, const char *s) { (void)c; (void)id; (void)s; }
+
+/* ---- transform feedback ----
+ * Metal has no transform-feedback stage; the Metal replay would need a vertex-shader capture path. Until then the commands are accepted and
+ * dropped (nothing is recorded, nothing is written to the capture buffers) and one warning is logged per call site. */
+NVN(nvnCommandBufferBindTransformFeedbackBuffer, void, NVNcommandBuffer *c, int i, NVNbufferAddress a, size_t sz) { (void)c; (void)i; (void)a; (void)sz; LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback is not supported: BindTransformFeedbackBuffer ignored"); }
+NVN(nvnCommandBufferBindTransformFeedbackBuffers, void, NVNcommandBuffer *c, int first, int n, const NVNbufferRange *r) { (void)c; (void)first; (void)n; (void)r; LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback is not supported: BindTransformFeedbackBuffers ignored"); }
+NVN(nvnCommandBufferBeginTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress ctl) { (void)c; (void)ctl; LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback is not supported: BeginTransformFeedback ignored"); }
+NVN(nvnCommandBufferEndTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress ctl) { (void)c; (void)ctl; }
+NVN(nvnCommandBufferPauseTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress ctl) { (void)c; (void)ctl; }
+NVN(nvnCommandBufferResumeTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress ctl) { (void)c; (void)ctl; }
+NVN(nvnCommandBufferDrawTransformFeedback, void, NVNcommandBuffer *c, NVNdrawPrimitive m, NVNbufferAddress ctl) { (void)c; (void)m; (void)ctl; LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback is not supported: DrawTransformFeedback ignored"); }

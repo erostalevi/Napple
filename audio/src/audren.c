@@ -202,9 +202,33 @@ static const uint8_t *take(Reader *in, uint32_t n, const char *what) {
 static void need(int cond, const char *msg) { if (!cond) napple_audio_fatal(msg); }
 static uint32_t effect_out_bytes(const AudioRenderer *r) { return revision_number(r->revision) >= 9 ? 0x90u : 0x10u; }
 
+/* Performance metrics. The renderer does no real timing, so the numbers are modelled: a fixed cost per started voice, per mix and per sink,
+ * laid out back to back from start time 0 and capped at 1/4 of the 5 ms frame budget each. The 0x10 block in the update output carries the
+ * byte count of the history written to the performance buffer; the buffer holds a 0x10 header {u32 bytes, u32 entries, u32 details, u32
+ * next history start time} and 0x10-byte entries {s32 node id, u32 start time, u32 processing time, u32 type}. Layout is from the author's
+ * memory of the public description and unverified; a title that never supplies a performance buffer sees only the byte count (0). */
+enum { PERF_VOICE = 1, PERF_SUBMIX = 2, PERF_FINAL_MIX = 3, PERF_SINK = 4 };
+enum { PERF_VOICE_US = 24, PERF_MIX_US = 40, PERF_SINK_US = 16, PERF_HEADER = 0x10, PERF_ENTRY = 0x10 };
+static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t perf_size) {
+    if (!perf || perf_size < PERF_HEADER) return 0;
+    const uint32_t max_entries = (uint32_t)((perf_size - PERF_HEADER) / PERF_ENTRY);
+    uint32_t n = 0, t = 0;
+    uint8_t *w = perf + PERF_HEADER;
+#define PERF_ADD(node, us, kind) do { if (n < max_entries) { \
+        uint32_t e[4] = {(uint32_t)(node), t, (us), (kind)}; memcpy(w, e, sizeof e); w += PERF_ENTRY; n++; t += (us); } } while (0)
+    for (int i = 0; i < r->param.voice_count; i++) if (r->voices[i].state == SV_STARTED && !r->voices[i].dropped) PERF_ADD(i, PERF_VOICE_US, PERF_VOICE);
+    for (int i = 0; i < r->param.submix_count; i++) PERF_ADD(i, PERF_MIX_US, PERF_SUBMIX);
+    PERF_ADD(r->param.submix_count, PERF_MIX_US, PERF_FINAL_MIX);
+    for (int i = 0; i < r->param.sink_count; i++) PERF_ADD(i, PERF_SINK_US, PERF_SINK);
+#undef PERF_ADD
+    uint32_t bytes = PERF_HEADER + n * PERF_ENTRY, hdr[4] = {bytes, n, 0, t};
+    memcpy(perf, hdr, sizeof hdr);
+    return bytes;
+}
+
 /* Body of RequestUpdate; runs under r->lock and the caller's trap. Returns bytes written. */
 static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_size, uint8_t *output, size_t out_size,
-                            int *status) {
+                            int *status, uint8_t *perf, size_t perf_size) {
     need(in_size >= sizeof(AudrenHeader), "update input too small");
     AudrenHeader h; memcpy(&h, input, sizeof h);
     need(h.total <= in_size && h.total >= sizeof h, "update total size");
@@ -296,7 +320,8 @@ static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_si
         if (r->sinks[i].type == SINK_CIRCULAR) so.last_written_offset = mixer_sink_written(r, i);
         memcpy(w, &so, sizeof so); w += sizeof so;
     }
-    w += 0x10;                                            /* performance: nothing written */
+    { uint32_t pb = write_performance(r, perf, perf_size); memcpy(w, &pb, 4); }   /* performance: bytes of history in the perf buffer */
+    w += 0x10;
     w += BEHAVIOR_OUT;                                    /* behavior: no errors */
     if (o.render_info) memcpy(w, &r->elapsed_frames, 8);
     *status = 0;
@@ -305,11 +330,10 @@ static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_si
 
 int napple_audren_request_update(napple_audren *r, const void *in, size_t in_size, void *out, size_t out_size,
                                  size_t *out_written, void *perf, size_t perf_size) {
-    (void)perf; (void)perf_size;
     if (!r || !in || !out) return NAPPLE_AUDIO_E_INVALID;
     jmp_buf jb; int status = NAPPLE_AUDIO_E_PROTOCOL; size_t written = 0;
     pthread_mutex_lock(&r->lock);
-    if (NAPPLE_TRAP_BEGIN(jb) == 0) written = update_locked(r, in, in_size, out, out_size, &status);
+    if (NAPPLE_TRAP_BEGIN(jb) == 0) written = update_locked(r, in, in_size, out, out_size, &status, perf, perf_size);
     NAPPLE_TRAP_END();
     pthread_mutex_unlock(&r->lock);
     if (out_written) *out_written = written;

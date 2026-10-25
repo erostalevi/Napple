@@ -4,6 +4,23 @@
 
 #import <Metal/Metal.h>
 #import <QuartzCore/QuartzCore.h>
+#include <TargetConditionals.h>
+#if TARGET_OS_SIMULATOR
+/* The iOS Simulator SDK headers (Xcode 27) omit MTLDrawable's addPresentedHandler: and the command buffer's presentDrawable:afterMinimumDuration: that the device and macOS SDKs declare (ios 10.3+). */
+@interface NSObject (NappleSimDrawable)
+- (void)addPresentedHandler:(void (^)(id<MTLDrawable>))block;
+- (void)presentDrawable:(id<MTLDrawable>)d afterMinimumDuration:(CFTimeInterval)t;
+@end
+#endif
+static inline void napple_present_after(id<MTLCommandBuffer> cb, id<MTLDrawable> d, CFTimeInterval t) {
+    if ([(id)cb respondsToSelector:@selector(presentDrawable:afterMinimumDuration:)]) [(id)cb presentDrawable:d afterMinimumDuration:t]; else [cb presentDrawable:d];
+}
+/* Runs `block` once the drawable has been presented. The iOS 26 Simulator's CAMetalDrawable does not implement addPresentedHandler: at all
+   (not only the SDK header): there the command buffer's completion stands in (call before `cb` is committed). */
+static inline void napple_drawable_presented(id<MTLCommandBuffer> cb, id<MTLDrawable> d, void (^block)(id<MTLDrawable>)) {
+    if ([(id)d respondsToSelector:@selector(addPresentedHandler:)]) [(id)d addPresentedHandler:block];
+    else [cb addCompletedHandler:^(id<MTLCommandBuffer> c) { (void)c; block(d); }];
+}
 #include "gfx_mtl.h"
 #include "timeline.h"
 #include "shader/blob.h"

@@ -42,6 +42,11 @@ impl RomFs {
         Ok(Self { src, data_off, files: out })
     }
 
+    /// The whole RomFS image (header, tables and file data), as stored in the NCA section.
+    pub fn image(&self) -> &Src {
+        &self.src
+    }
+
     pub fn open(&self, f: &RomFile) -> Result<Src> {
         Slice::new(self.src.clone(), self.data_off + f.offset, f.size)
     }

@@ -4,6 +4,7 @@
 #include "napple_display.h"
 #include "host_info.h"
 #include "applet_core.h"
+#include "applet_lib_core.h"
 #include "../frontend.h"
 #include "napple_frontend.h"
 #include <pthread.h>
@@ -96,12 +97,15 @@ static const IpcCmd csg_cmds[] = {
     {50, "IsVrModeEnabled", csg_is_vr_mode, IPC_IMPL}, {51, "SetVrModeEnabled", csg_set_vr_mode, IPC_IMPL},
     {60, "GetDefaultDisplayResolution", csg_get_resolution, IPC_IMPL}, {61, "GetDefaultDisplayResolutionChangeEvent", csg_get_resolution_event, IPC_STUB},
     {66, "SetCpuBoostMode", csg_set_cpu_boost, IPC_IMPL}, {67, "CancelCpuBoostMode", csg_cancel_cpu_boost, IPC_IMPL}, {68, "GetBuiltInDisplayType", csg_get_builtin_display_type, IPC_IMPL},
+    {900, "SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled", csg_noop, IPC_STUB},
     {90, "SetPerformanceConfigurationChangedNotification", csg_set_perf_notification, IPC_IMPL}, {91, "GetCurrentPerformanceConfiguration", csg_get_current_perf_config, IPC_IMPL},
 };
 
 /* ---- ISelfController ---------------------------------------------------------------------------------------------- */
 static void sc_launchable_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_event(1)); }   /* library applets can always be launched: signalled */
 static void sc_create_managed_layer(IpcObject *s, IpcCall *c) { (void)s; uint64_t id = 1; IPC_OUT(c, id); }
+/* CreateManagedDisplaySeparableLayer (10.0.0+): out display layer id, recording layer id. Layer 1 is the one vi's OpenLayer hands out; the recording layer is unused (no capture). */
+static void sc_create_separable_layer(IpcObject *s, IpcCall *c) { (void)s; uint64_t id[2] = {1, 2}; IPC_OUT(c, id); }
 static void sc_is_auto_sleep_disabled(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = (uint8_t)AS()->auto_sleep_disabled; IPC_OUT(c, v); }
 static void sc_set_auto_sleep_disabled(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->auto_sleep_disabled = IPC_IN(c, uint8_t, 0) != 0; }
 static void sc_set_screenshot_permission(IpcObject *s, IpcCall *c) {
@@ -136,7 +140,7 @@ static const IpcCmd sc_cmds[] = {
     {16, "SetOutOfFocusSuspendingEnabled", csg_noop, IPC_IMPL}, {17, "SetControllerFirmwareUpdateSection", sc_set_fw_update_section, IPC_IMPL},
     {18, "SetRequiresCaptureButtonShortPressedMessage", sc_set_capture_short_press, IPC_IMPL}, {19, "SetScreenShotImageOrientation", sc_set_orientation, IPC_IMPL},
     {20, "SetDesirableKeyboardLayout", sc_set_keyboard_layout, IPC_IMPL},
-    {40, "CreateManagedDisplayLayer", sc_create_managed_layer, IPC_IMPL},
+    {40, "CreateManagedDisplayLayer", sc_create_managed_layer, IPC_IMPL}, {44, "CreateManagedDisplaySeparableLayer", sc_create_separable_layer, IPC_IMPL},
     {50, "SetHandlesRequestToDisplay", csg_noop, IPC_STUB}, {51, "ApproveToDisplay", csg_noop, IPC_STUB},
     {60, "OverrideAutoSleepTimeAndDimmingTime", csg_noop, IPC_STUB}, {61, "SetMediaPlaybackState", sc_set_media_playback, IPC_IMPL},
     {62, "SetIdleTimeDetectionExtension", sc_set_idle_ext, IPC_IMPL}, {63, "GetIdleTimeDetectionExtension", sc_get_idle_ext, IPC_IMPL},
@@ -214,7 +218,7 @@ static IpcObject *storage_new(uint64_t size) {
  * KeyboardConfig fields used (from the SDK's own copy code, keyboardConfig2kbdConfig, and the public format): +4 ok text, +0x1c invalid
  * character flags, +0x24 header (65 u16), +0xA6 sub text (129 u16), +0x1A8 guide text (257 u16), +0x3AC max length, +0x3B0 min length,
  * +0x3B4 password mode, +0x3C0/+0x3C4 initial string offset (bytes) and length (characters) inside the work buffer. */
-enum { APPLET_ID_SWKBD = 0x11, APPLET_ID_CONTROLLER = 0x0c };
+enum { APPLET_ID_SWKBD = LIBAPPLET_ID_SWKBD, APPLET_ID_CONTROLLER = LIBAPPLET_ID_CONTROLLER };
 #define SWKBD_OUT_SIZE 0x800u
 typedef struct { uint32_t applet_id, mode; Storage in[8]; unsigned nin; Storage *out; int started, done; uint32_t result; uint32_t ev_state_w, ev_out_w; int unsupported; } LibApplet;
 static void libapplet_destroy(IpcObject *o) {
@@ -242,7 +246,14 @@ static void libapplet_run_swkbd(LibApplet *a) {
     LOG("applet", "swkbd: header \"%s\" sub \"%s\" guide \"%s\" initial \"%s\" length %u..%u password %u invalid-flags %#x (config %s, work buffer %s)",
         header, sub, guide, initial, min_len, max_len, password, flags, cfg ? "ok" : "missing", wb ? "ok" : "missing");
     { char hx[200]; int n = 0; for (unsigned i = 0x3AC; i < 0x3E0 && n < 190; i++) n += snprintf(hx + n, sizeof hx - (size_t)n, "%02x%s", k[i], (i & 3) == 3 ? " " : ""); LOGV("applet", "swkbd config +0x3ac: %s; +0x4b0: %02x%02x%02x%02x %02x%02x%02x%02x", hx, k[0x4b0], k[0x4b1], k[0x4b2], k[0x4b3], k[0x4b4], k[0x4b5], k[0x4b6], k[0x4b7]); }
-    int ok = frontend_text_input(header, sub, guide, initial, max_len, min_len, password != 0, 0, text, sizeof text);
+    AppletSwkbdConfig sc; applet_swkbd_parse(cfg ? cfg->data : NULL, cfg ? cfg->size : 0, &sc);
+    int ok = frontend_text_input(header, sub, guide, initial, max_len, min_len, password != 0, sc.numeric, text, sizeof text);
+    if (ok) {   /* the applet enforces the limits itself: over-long text is cut, too-short text cannot be confirmed (headless: a cancel) */
+        char fit[1500]; int fits = applet_swkbd_fit(&sc, text, fit, sizeof fit);
+        if (strcmp(fit, text)) LOG("applet", "swkbd: text cut to the %u character limit", sc.max_len);
+        snprintf(text, sizeof text, "%s", fit);
+        if (!fits) { LOG("applet", "swkbd: text shorter than the minimum %u: treated as cancel", sc.min_len); ok = 0; }
+    }
     Storage *o = calloc(1, sizeof *o); o->size = SWKBD_OUT_SIZE; o->data = calloc(1, SWKBD_OUT_SIZE);
     uint32_t close = ok ? 0 : 1; memcpy(o->data, &close, 4);
     /* Encoding of the returned text: Link's Awakening (and so the SDK path it uses: use-UTF-8 byte of the config is 0) reads it as UTF-8 (verified: the
@@ -252,28 +263,51 @@ static void libapplet_run_swkbd(LibApplet *a) {
     LOG("applet", "swkbd: %s%s%s", ok ? "entered \"" : "cancelled", ok ? text : "", ok ? "\"" : "");
 }
 /* Controller support applet (id 0xc, libnx hidShowControllerSupport / nn::hid::ShowControllerSupport): the guest pushes the common args, the private
- * header (0x14) and ControllerSupportArg (player_count_min at +0, player_count_max at +1), then reads ControllerSupportResultInfo
- * { s32 player_count; u32 selected_id } from the output storage. Offline there is one virtual pad: answer as the real applet does when the user
- * confirms (success, the number of players the game asked for at least 1 and at most its maximum, no selected id). */
+ * header (0x14) and ControllerSupportArg, then reads ControllerSupportResultInfo from the output storage. The answer is applet_controller_answer
+ * (applet_lib_core.c): the user confirmed with the one virtual pad. */
 static void libapplet_run_controller(LibApplet *a) {
-    uint32_t pmin = 1, pmax = 4;
+    const uint8_t *arg = NULL; size_t arg_size = 0;
     /* ControllerSupportArg is the large storage (0x21C-ish for 4 players, 0x42C-ish for 8: header, colours, explain texts); the 0x20-byte
-     * storage is the CommonArguments (version, size, ...), whose first bytes are not player counts. Counts are s8; <= 0 means "unset". */
+     * storage is the CommonArguments (version, size, ...), whose first bytes are not player counts. */
     for (unsigned i = 0; i < a->nin; i++) {
         LOG("applet", "controller support: input storage %u size %#llx%s", i, (unsigned long long)a->in[i].size, a->in[i].gaddr ? " (transfer memory)" : "");
-        if (a->in[i].size >= 0x100 && !a->in[i].gaddr && a->in[i].data) {
-            int8_t lo = (int8_t)a->in[i].data[0], hi = (int8_t)a->in[i].data[1];
-            pmin = lo > 0 ? (uint32_t)lo : 1; pmax = hi > 0 ? (uint32_t)hi : 4;
-        }
+        if (a->in[i].size >= 0x100 && !a->in[i].gaddr && a->in[i].data) { arg = a->in[i].data; arg_size = a->in[i].size; }
     }
-    int32_t players = (int32_t)(pmin ? pmin : 1); if (pmax && (uint32_t)players > pmax) players = (int32_t)pmax;
-    uint32_t sel = 0xffffffffu;
-    /* ControllerSupportResultInfo is 0xC bytes: s8 player count + padding, u32 selected npad id, u32 result (0 = success). Readers of the
-     * older 8-byte layout still read the first two fields. */
-    Storage *o = calloc(1, sizeof *o); o->size = 0xC; o->data = calloc(1, 0xC);
-    memcpy(o->data, &players, 4); memcpy(o->data + 4, &sel, 4);
+    AppletControllerAnswer ans; applet_controller_answer(arg, arg_size, frontend_connected_pads(), &ans);
+    Storage *o = calloc(1, sizeof *o); o->size = APPLET_CONTROLLER_OUT_SIZE; o->data = calloc(1, APPLET_CONTROLLER_OUT_SIZE);
+    applet_controller_encode(&ans, o->data);
     a->out = o; a->result = 0;
-    LOG("applet", "controller support: confirmed with %d player(s) (game asked %u..%u)", players, pmin, pmax);
+    LOG("applet", "controller support: confirmed with %d player(s) of %d connected (game asked %u..%u%s%s), selected id %#x", ans.players, ans.connected, ans.min, ans.max, ans.single_mode ? ", single mode" : "", ans.short_of_min ? ", fewer pads than asked" : "", ans.selected_id);
+}
+/* Error applet (id 0xe, libnx errorCodeShow / errorResultShow / the SDK's error viewer): nothing to read back; the guest waits for it to end. The
+ * headless answer is "the user dismissed it" and the request is logged and noted in the run summary, since a game that shows an error screen
+ * is the most important thing for an unattended run to report. A jump-to-settings request is not followed. */
+static void libapplet_run_error(LibApplet *a) {
+    const uint8_t *hdr = NULL, *arg = NULL; size_t hn = 0, an = 0;
+    for (unsigned i = 0; i < a->nin; i++) {
+        if (a->in[i].gaddr || !a->in[i].data) continue;
+        if (a->in[i].size <= 0x20 && !hdr && i > 0) { hdr = a->in[i].data; hn = a->in[i].size; }
+        else if (a->in[i].size > 0x20 && !arg) { arg = a->in[i].data; an = a->in[i].size; }
+    }
+    AppletErrorInfo e; char d[160]; applet_error_parse(hdr, hn, arg, an, &e); applet_error_describe(&e, d, sizeof d);
+    char code[32]; applet_error_code_text(&e, code, sizeof code);
+    LOG("applet", "error applet: %s%s%s (dismissed)", d, code[0] ? ", code " : "", code);
+    { char msg[300]; snprintf(msg, sizeof msg, "The game reported an error%s%s.\n%s", code[0] ? " " : "", code, d); frontend_alert("Napple: error applet", msg); }
+    summary_note("the guest showed the error applet (%s)", d);
+    a->result = 0;
+}
+/* Player select (id 0x10, libnx playerSelectUiShow): answered with the one profile, g_user_id (applet_lib_core.c). */
+extern const uint8_t g_user_id[16];
+static void libapplet_run_player_select(LibApplet *a) {
+    for (unsigned i = 0; i < a->nin; i++) LOG("applet", "player select: input storage %u size %#llx", i, (unsigned long long)a->in[i].size);
+    Storage *o = calloc(1, sizeof *o); o->size = APPLET_PLAYER_SELECT_OUT_SIZE; o->data = calloc(1, APPLET_PLAYER_SELECT_OUT_SIZE);
+    /* NAPPLE_PLAYER_SELECT = <index> | cancel. The profile list is the account service's (one profile today; account.c is ac-games' area). */
+    const char *pe = getenv("NAPPLE_PLAYER_SELECT"); int cancel = pe && !strcmp(pe, "cancel");
+    uint8_t tab[1][16]; memcpy(tab[0], g_user_id, 16);
+    const uint8_t *uid = applet_player_select_pick((const uint8_t (*)[16])tab, 1, pe && !cancel ? atoi(pe) : 0, cancel);
+    applet_player_select_answer(uid, uid == NULL, o->data);
+    a->out = o; a->result = 0;
+    LOG("applet", uid ? "player select: confirmed with the only profile" : "player select: cancelled");
 }
 static void la_state_event(IpcObject *s, IpcCall *c) {
     LibApplet *a = s->state; uint32_t r = 0;
@@ -287,6 +321,8 @@ static void la_start(IpcObject *s, IpcCall *c) {
     a->started = 1;
     if (a->applet_id == APPLET_ID_SWKBD) libapplet_run_swkbd(a);
     else if (a->applet_id == APPLET_ID_CONTROLLER) libapplet_run_controller(a);
+    else if (a->applet_id == LIBAPPLET_ID_ERROR) libapplet_run_error(a);
+    else if (a->applet_id == LIBAPPLET_ID_PLAYER_SELECT) libapplet_run_player_select(a);
     else {   /* unknown library applet: the guest sees it terminate without output (as if the user cancelled), instead of the process dying */
         LOG("applet", "library applet %#x is not implemented: reporting it as cancelled", a->applet_id);
         a->unsupported = 1; a->result = 0x1480;
@@ -387,6 +423,9 @@ static void af_set_recording_state(IpcObject *s, IpcCall *c) { (void)s; if (IN_O
 static void af_enable_crash_report(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->crash_report_enabled = IPC_IN(c, uint8_t, 0) != 0; }
 static void af_set_copyright_visibility(IpcObject *s, IpcCall *c) { (void)s; if (IN_OK(c, 0, uint8_t)) AS()->copyright_visible = IPC_IN(c, uint8_t, 0) != 0; }
 static void af_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_event(0)); }
+/* cmd 210 on IApplicationFunctions returns a copy handle to a system event (the SDK's nn::oe layer polls it with WaitSynchronization(timeout 0) right
+ * after apm OpenSession). An earlier revision answered with an IMovieMaker object: the reply then carried no handle, the guest kept handle 0 and the
+ * boot thread of Animal Crossing 3.0.3 spun on WaitSynchronization(0) forever. Never signalled: no capture or error event is ever raised. */
 static const IpcCmd af_cmds[] = {
     {1, "PopLaunchParameter", af_pop_launch_parameter, IPC_STUB},
     {20, "EnsureSaveData", af_ensure_save_data, IPC_STUB}, {21, "GetDesiredLanguage", af_get_desired_language, IPC_IMPL},
@@ -402,6 +441,7 @@ static const IpcCmd af_cmds[] = {
     {92, "SetApplicationCopyrightImage", csg_noop, IPC_STUB}, {93, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
     {110, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_STUB},
     {120, "GetGpuErrorDetectedSystemEvent", af_event, IPC_STUB}, {130, "GetFriendInvitationStorageChannelEvent", af_event, IPC_STUB},
+    {210, "GetSystemEvent210", af_event, IPC_STUB},
 };
 
 /* ---- IApplicationProxy ------------------------------------------------------------------------------------------------------------ */

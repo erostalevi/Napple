@@ -5,7 +5,7 @@
 #include <execinfo.h>
 #include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include "mach_vm_compat.h"
 #include <setjmp.h>
 #include <sys/mman.h>
 #include <signal.h>

@@ -10,8 +10,10 @@ pub mod container;
 pub mod control;
 pub mod error;
 pub mod firmware;
+pub mod ios;
 pub mod json;
 pub mod legacy;
+pub mod macho;
 pub mod nro;
 pub mod pipeline;
 pub mod stream;
@@ -31,6 +33,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     }
     if has("--dump-exefs") || has("--dump-romfs") {
         return legacy::run(args);
+    }
+    if has("--list-signing") {
+        return ios::list_signing(has("--json")).map_err(|e| e.to_string());
     }
     if has("--check") || has("--list-keys-check") {
         return check::run(args);

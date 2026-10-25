@@ -151,14 +151,25 @@ static IpcObject *csrng_open(void) { return IPC_OBJECT("csrng", csrng_cmds, NULL
 
 /* nfp:user / nfc:user (amiibo, NFC): initialised, no devices ever present. */
 static void ret_i32_0(IpcObject *s, IpcCall *c) { (void)s; int32_t v = 0; IPC_OUT(c, v); }
+/* nfp:user IUser (switchbrew numbering; the guest's GetState is cmd 19, AttachAvailabilityChangeEvent 23): state Initialized (1), no devices. */
+static void ret_u32_5(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = 5; IPC_OUT(c, v); }   /* DeviceState::Unavailable */
 static const IpcCmd nfp_user_cmds[] = {
     {0, "Initialize", noop, IPC_STUB}, {1, "Finalize", noop, IPC_STUB}, {2, "ListDevices", ret_i32_0, IPC_STUB}, {3, "StartDetection", noop, IPC_STUB},
-    {4, "StopDetection", noop, IPC_STUB}, {5, "Mount", noop, IPC_STUB}, {6, "Unmount", noop, IPC_STUB}, {14, "AttachActivateEvent", ret_event, IPC_STUB},
-    {15, "AttachDeactivateEvent", ret_event, IPC_STUB}, {16, "GetState", ret_u32_1_ok, IPC_STUB}, {17, "GetDeviceState", ret_u32_0, IPC_STUB},
-    {19, "AttachAvailabilityChangeEvent", ret_event, IPC_STUB}, {23, "AttachAvailabilityChangeEvent", ret_event, IPC_STUB},
+    {4, "StopDetection", noop, IPC_STUB}, {5, "Mount", noop, IPC_STUB}, {6, "Unmount", noop, IPC_STUB}, {17, "AttachActivateEvent", ret_event, IPC_STUB},
+    {18, "AttachDeactivateEvent", ret_event, IPC_STUB}, {19, "GetState", ret_u32_1_ok, IPC_STUB}, {20, "GetDeviceState", ret_u32_5, IPC_STUB},
+    {23, "AttachAvailabilityChangeEvent", ret_event, IPC_STUB},
 };
 static void nfp_create_user(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("INfpUser", nfp_user_cmds, NULL, NULL)); }
 static const IpcCmd nfp_cmds[] = {{0, "CreateUserInterface", nfp_create_user, IPC_STUB}};
+/* nfc:user INfc: 2 GetState (1 = initialized), 3 IsNfcEnabled, 100 ListDevices, 101 GetDeviceState, 103 AttachAvailabilityChangeEvent, 107/108 activate/deactivate events. */
+static const IpcCmd nfc_user_cmds[] = {
+    {0, "Initialize", noop, IPC_STUB}, {1, "Finalize", noop, IPC_STUB}, {2, "GetState", ret_u32_1_ok, IPC_STUB}, {3, "IsNfcEnabled", ret_u8_0, IPC_STUB},
+    {100, "ListDevices", ret_i32_0, IPC_STUB}, {101, "GetDeviceState", ret_u32_5, IPC_STUB}, {103, "AttachAvailabilityChangeEvent", ret_event, IPC_STUB},
+    {104, "StartDetection", noop, IPC_STUB}, {105, "StopDetection", noop, IPC_STUB}, {107, "AttachActivateEvent", ret_event, IPC_STUB}, {108, "AttachDeactivateEvent", ret_event, IPC_STUB},
+};
+static void nfc_create_user(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("INfc", nfc_user_cmds, NULL, NULL)); }
+static const IpcCmd nfc_cmds[] = {{0, "CreateUserInterface", nfc_create_user, IPC_STUB}};
+static IpcObject *nfc_open(void) { return IPC_OBJECT("nfc:user", nfc_cmds, NULL, NULL); }
 static IpcObject *nfp_open(void) { return IPC_OBJECT("nfp:user", nfp_cmds, NULL, NULL); }
 
 /* prepo:u (play reports): reports are accepted and dropped. */
@@ -192,7 +203,7 @@ static IpcObject *ssl_open(void) { return IPC_OBJECT("ssl", ssl_cmds, NULL, NULL
 void service_register_offline(void) {
     ipc_register_service("prepo:u", prepo_open); ipc_register_service("prepo:a", prepo_open); ipc_register_service("prepo:m", prepo_open); ipc_register_service("prepo:s", prepo_open);
     ipc_register_service("ssl", ssl_open);
-    ipc_register_service("nfp:user", nfp_open); ipc_register_service("nfc:user", nfp_open);
+    ipc_register_service("nfp:user", nfp_open); ipc_register_service("nfc:user", nfc_open);
     ipc_register_service("bsd:u", bsd_open); ipc_register_service("bsd:s", bsd_open); ipc_register_service("bsd:a", bsd_open);
     ipc_register_service("nsd:u", nsd_open); ipc_register_service("nsd:a", nsd_open);
     ipc_register_service("csrng", csrng_open);

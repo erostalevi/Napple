@@ -6,6 +6,7 @@
 #include "ipc.h"
 #include "json.h"
 #include "movie.h"
+#include "ios_platform.h"
 #include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -66,7 +67,7 @@ static void load_game_config(const char *dir) {
 
 /* The NVN API version the game was built against: games compare nvnDeviceGetInteger(API_MAJOR/MINOR) with build-time constants
  * (`cmp w,#major; b.ne fail; ldr w,[sp,..]; cmp w,#minor; b.lt fail`) and skip graphics start-up on a mismatch. When game.json does not say, look for that
- * pattern in the main module (major 40..70, minor 5..40); no match keeps the back end default. */
+ * pattern in the main module (major 40..70, minor 5..1000); no match keeps the back end default. */
 static void detect_nvn_version(void) {
     const Module *m = module_by_name("main");
     if (!m) return;
@@ -78,8 +79,9 @@ static void detect_nvn_version(void) {
         for (int k = 2; k <= 3; k++)
             if ((w[i + k] & 0xffc00000) == 0xb9400000 && (w[i + k + 1] & 0xffc0001f) == 0x7100001f && (w[i + k + 2] & 0xff00001f) == 0x5400000b) {
                 unsigned minor = (w[i + k + 1] >> 10) & 0xfff;
-                if (minor < 5 || minor > 40) continue;
+                if (minor < 5 || minor > 1000) continue;   /* 0x138 = 312 in Animal Crossing (NVN 53.312) */
                 g_cfg.nvn_major = major; g_cfg.nvn_minor = minor;
+                gfx_set_nvn_version(major, minor);   /* gfx_init already ran with the default */
                 LOG("main", "NVN API version %u.%u detected in the main module", major, minor);
                 return;
             }
@@ -146,8 +148,13 @@ int main(int argc, char **argv) {
         else if (!strcmp(a, "--svc-trace")) svc_trace_all = 1;
         else if (!strcmp(a, "-v")) setenv("NAPPLE_VERBOSE", "1", 1);
         else if (a[0] != '-' && !g_cfg.data_dir) g_cfg.data_dir = a;
+        else if (NAPPLE_IOS) continue;   /* UIKit / Xcode / devicectl add launch arguments of their own */
         else { fputs(USAGE, stderr); return 2; }
     }
+#if NAPPLE_IOS
+    if (!g_cfg.data_dir) g_cfg.data_dir = ios_default_data_dir();
+    if (!save_root) save_root = ios_default_save_root();
+#endif
     if (!g_cfg.data_dir) { fputs(USAGE, stderr); return 2; }
     if (trace) setenv("NAPPLE_TRACE", trace, 1);
     log_init();
@@ -157,6 +164,9 @@ int main(int argc, char **argv) {
     static char root[1024];
     if (!save_root) { snprintf(root, sizeof root, "%s/Library/Application Support/Napple", getenv("HOME") ? getenv("HOME") : "."); save_root = root; }
     g_cfg.save_root = save_root;
+#if NAPPLE_IOS
+    ios_install_fonts(g_cfg.data_dir, save_root);
+#endif
     if (sysconf(_SC_PAGESIZE) != 0x4000) runtime_fail("expected 16 KiB host pages");
     load_identity(g_cfg.data_dir);
     load_game_config(g_cfg.data_dir);

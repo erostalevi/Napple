@@ -15,7 +15,7 @@ void gfx_api_link_device(void) {}
 
 NVN(nvnDeviceBuilderSetDefaults, void, NVNdeviceBuilder *b) { memset(b, 0, sizeof(dev_builder_t)); }
 NVN(nvnDeviceBuilderSetFlags, void, NVNdeviceBuilder *b, int f) { ((dev_builder_t *)b)->flags = (uint32_t)f; }
-NVN_NOPROTO(nvnDeviceBuilderGetFlags, int, const NVNdeviceBuilder *b) { return (int)((const dev_builder_t *)b)->flags; }
+NVN(nvnDeviceBuilderGetFlags, int, const NVNdeviceBuilder *b) { return (int)((const dev_builder_t *)b)->flags; }
 
 NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) {
     dev_t_ *o = (dev_t_ *)d;
@@ -27,6 +27,7 @@ NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) {
     LOGD("DeviceInitialize flags=%#x", o->flags);
     return 1;
 }
+void napple_gfx_set_nvn_version(uint32_t major, uint32_t minor) { g_gfx.cfg.nvn_major = major; g_gfx.cfg.nvn_minor = minor; }
 NVN(nvnDeviceFinalize, void, NVNdevice *d) { ((dev_t_ *)d)->magic = 0; }
 NVN(nvnDeviceSetDebugLabel, void, NVNdevice *d, const char *s) { (void)d; (void)s; }
 NVN(nvnDeviceGetProcAddress, PFNNVNGENERICFUNCPTRPROC, const NVNdevice *d, const char *name) {
@@ -110,11 +111,11 @@ void gfx_cmdrec_finalize_handle(uint64_t handle);
 NVN(nvnDeviceFinalizeCommandHandle, void, NVNdevice *d, NVNcommandHandle h) { (void)d; gfx_cmdrec_finalize_handle(h); }
 NVN(nvnDeviceWalkDebugDatabase, void, const NVNdevice *d, NVNdebugObjectType t, PFNNVNWALKDEBUGDATABASECALLBACKPROC cb, void *u) { (void)d; (void)t; (void)cb; (void)u; }
 NVN(nvnDeviceIsExternalDebuggerAttached, NVNboolean, const NVNdevice *d) { (void)d; return 0; }
-NVN_NOPROTO(nvnDeviceSetAutomaticCheckpointsEnable, void, NVNdevice *d, uint32_t e) { (void)d; (void)e; }
-NVN_NOPROTO(nvnDeviceSetAutomaticCheckpointsSamplingInterval, void, NVNdevice *d, int v) { (void)d; (void)v; }
-NVN_NOPROTO(nvnDeviceSetAutomaticCheckpointsByDebugGroup, void, NVNdevice *d, uint32_t e) { (void)d; (void)e; }
-NVN_NOPROTO(nvnDeviceSetCheckpointCallStacksEnable, void, NVNdevice *d, uint32_t e) { (void)d; (void)e; }
-NVN_NOPROTO(nvnDeviceSetCheckpointMaxCallStacksDepth, void, NVNdevice *d, int v) { (void)d; (void)v; }
+NVN(nvnDeviceSetAutomaticCheckpointsEnable, void, NVNdevice *d, uint32_t e) { (void)d; (void)e; }
+NVN(nvnDeviceSetAutomaticCheckpointsSamplingInterval, void, NVNdevice *d, int v) { (void)d; (void)v; }
+NVN(nvnDeviceSetAutomaticCheckpointsByDebugGroup, void, NVNdevice *d, uint32_t e) { (void)d; (void)e; }
+NVN(nvnDeviceSetCheckpointCallStacksEnable, void, NVNdevice *d, uint32_t e) { (void)d; (void)e; }
+NVN(nvnDeviceSetCheckpointMaxCallStacksDepth, void, NVNdevice *d, int v) { (void)d; (void)v; }
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Queue
@@ -138,16 +139,16 @@ NVN(nvnQueueBuilderSetControlMemorySize, void, NVNqueueBuilder *b, size_t n) { Q
 NVN(nvnQueueBuilderGetQueueMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)(CQB(b)->cmd_size + CQB(b)->comp_size + CQB(b)->ctl_size); }
 NVN(nvnQueueBuilderSetQueueMemory, void, NVNqueueBuilder *b, void *m, size_t n) { QB(b)->mem = m; QB(b)->mem_size = n; }
 NVN(nvnQueueBuilderSetCommandFlushThreshold, void, NVNqueueBuilder *b, size_t n) { QB(b)->flush = (uint32_t)n; }
-NVN_NOPROTO(nvnQueueBuilderSetQueuePriority, void, NVNqueueBuilder *b, int p) { QB(b)->priority = (uint32_t)p; }
-NVN_NOPROTO(nvnQueueBuilderGetQueuePriority, int, const NVNqueueBuilder *b) { return (int)CQB(b)->priority; }
-NVN_NOPROTO(nvnQueueBuilderGetDevice, const NVNdevice *, const NVNqueueBuilder *b) { return CQB(b)->dev; }
-NVN_NOPROTO(nvnQueueBuilderGetFlags, int, const NVNqueueBuilder *b) { return (int)CQB(b)->flags; }
-NVN_NOPROTO(nvnQueueBuilderGetCommandMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->cmd_size; }
-NVN_NOPROTO(nvnQueueBuilderGetComputeMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->comp_size; }
-NVN_NOPROTO(nvnQueueBuilderGetControlMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->ctl_size; }
-NVN_NOPROTO(nvnQueueBuilderGetCommandFlushThreshold, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->flush; }
-NVN_NOPROTO(nvnQueueBuilderGetMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->mem_size; }
-NVN_NOPROTO(nvnQueueBuilderGetMemory, void *, const NVNqueueBuilder *b) { return CQB(b)->mem; }
+NVN(nvnQueueBuilderSetQueuePriority, void, NVNqueueBuilder *b, int p) { QB(b)->priority = (uint32_t)p; }
+NVN(nvnQueueBuilderGetQueuePriority, int, const NVNqueueBuilder *b) { return (int)CQB(b)->priority; }
+NVN(nvnQueueBuilderGetDevice, const NVNdevice *, const NVNqueueBuilder *b) { return CQB(b)->dev; }
+NVN(nvnQueueBuilderGetFlags, int, const NVNqueueBuilder *b) { return (int)CQB(b)->flags; }
+NVN(nvnQueueBuilderGetCommandMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->cmd_size; }
+NVN(nvnQueueBuilderGetComputeMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->comp_size; }
+NVN(nvnQueueBuilderGetControlMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->ctl_size; }
+NVN(nvnQueueBuilderGetCommandFlushThreshold, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->flush; }
+NVN(nvnQueueBuilderGetMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->mem_size; }
+NVN(nvnQueueBuilderGetMemory, void *, const NVNqueueBuilder *b) { return CQB(b)->mem; }
 
 NVN(nvnQueueInitialize, NVNboolean, NVNqueue *q, const NVNqueueBuilder *b) {
     queue_t *o = (queue_t *)q;
@@ -250,9 +251,9 @@ NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) {
 #define EVENT_MAGIC MAGIC('E', 'V', 'N', 'T')
 NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }
 NVN(nvnEventBuilderSetStorage, void, NVNeventBuilder *b, const NVNmemoryPool *p, int64_t off) { ((ev_builder_t *)b)->pool = p; ((ev_builder_t *)b)->off = off; }
-NVN_NOPROTO(nvnEventBuilderGetStorage, void, const NVNeventBuilder *b, const NVNmemoryPool **p, int64_t *off) { *p = ((const ev_builder_t *)b)->pool; *off = ((const ev_builder_t *)b)->off; }
-NVN_NOPROTO(nvnEventBuilderGetMemoryPool, const NVNmemoryPool *, const NVNeventBuilder *b) { return ((const ev_builder_t *)b)->pool; }
-NVN_NOPROTO(nvnEventBuilderGetMemoryOffset, int64_t, const NVNeventBuilder *b) { return ((const ev_builder_t *)b)->off; }
+NVN(nvnEventBuilderGetStorage, void, const NVNeventBuilder *b, const NVNmemoryPool **p, int64_t *off) { *p = ((const ev_builder_t *)b)->pool; *off = ((const ev_builder_t *)b)->off; }
+NVN(nvnEventBuilderGetMemoryPool, const NVNmemoryPool *, const NVNeventBuilder *b) { return ((const ev_builder_t *)b)->pool; }
+NVN(nvnEventBuilderGetMemoryOffset, int64_t, const NVNeventBuilder *b) { return ((const ev_builder_t *)b)->off; }
 NVN(nvnEventInitialize, NVNboolean, NVNevent *e, const NVNeventBuilder *b) {
     const ev_builder_t *eb = (const ev_builder_t *)b;
     const pool_t *p = (const pool_t *)eb->pool;
@@ -271,5 +272,9 @@ NVN(nvnEventSignal, void, NVNevent *e, NVNeventSignalMode m, uint32_t v) {
     if (m == NVN_EVENT_SIGNAL_MODE_ADD) __atomic_fetch_add(p, v, __ATOMIC_SEQ_CST); else __atomic_store_n(p, v, __ATOMIC_SEQ_CST);
     gfx_wake();
 }
-NVN_NOPROTO(nvnEventGetMemoryPool, const NVNmemoryPool *, const NVNevent *e) { return (const NVNmemoryPool *)((const ev_t *)e)->pool; }
-NVN_NOPROTO(nvnEventGetMemoryOffset, int64_t, const NVNevent *e) { return ((const ev_t *)e)->off; }
+NVN(nvnEventGetMemoryPool, const NVNmemoryPool *, const NVNevent *e) { return (const NVNmemoryPool *)((const ev_t *)e)->pool; }
+NVN(nvnEventGetMemoryOffset, int64_t, const NVNevent *e) { return ((const ev_t *)e)->off; }
+
+/* ---- GL interop: the Switch NVN driver exposes these for OpenGL-compat titles; there is no GL here, so initialization fails and no GLsync exists. */
+NVN(nvnSyncInitializeFromFencedGLSync, NVNboolean, NVNsync *s, NVNdevice *d, const void *gl_sync) { (void)s; (void)d; (void)gl_sync; LOG_ONCE(NAPPLE_LOG_WARN, "GL sync interop is not supported"); return 0; }
+NVN(nvnSyncCreateGLSync, void *, const NVNsync *s) { (void)s; LOG_ONCE(NAPPLE_LOG_WARN, "GL sync interop is not supported"); return NULL; }

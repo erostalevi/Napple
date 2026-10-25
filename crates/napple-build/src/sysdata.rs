@@ -142,6 +142,35 @@ pub fn write_fonts(fonts: &[Font], firmware_version: Option<&str>, fd: &Path) ->
     Ok(index)
 }
 
+/// System data archive ids written for the runtime: every data title 0100000000000800-0100000000000FFF that has a RomFS (fonts, the
+/// built-in system data games ask `OpenDataStorageByDataId` for, ...). Archives larger than `MAX_ARCHIVE` are skipped.
+const MAX_ARCHIVE: u64 = 64 << 20;
+
+/// Writes each system data archive's RomFS image as `<dir>/<title id, 16 lowercase hex>.bin` (what runtime fs.c serves for
+/// OpenDataStorageByDataId). Returns the ids written.
+pub fn write_system_archives(fw: &Firmware, keys: &KeySet, dir: &Path) -> Result<Vec<u64>> {
+    let mut done = Vec::new();
+    for t in fw.titles(keys)? {
+        let id = t.meta.title_id;
+        if id >> 16 != 0x0100_0000_0000 || !(0x800..0x1000).contains(&(id & 0xFFFF)) || done.contains(&id) {
+            continue;
+        }
+        let Some(romfs) = fw.data_romfs(&t, keys)? else { continue };
+        let img = romfs.image();
+        if img.size() > MAX_ARCHIVE {
+            continue;
+        }
+        std::fs::create_dir_all(dir).map_err(|e| BuildError::io("create sysdata dir", e))?;
+        let data = read_vec(&**img, 0, img.size() as usize)?;
+        let fin = dir.join(format!("{id:016x}.bin"));
+        let tmp = dir.join(format!("{id:016x}.bin.tmp"));
+        std::fs::write(&tmp, &data).map_err(|e| BuildError::io("write sysdata", e))?;
+        std::fs::rename(&tmp, &fin).map_err(|e| BuildError::io("write sysdata", e))?;
+        done.push(id);
+    }
+    Ok(done)
+}
+
 /// `napple build --dump-fonts <firmware zip|dir> -k <prod.keys> -o <dir>`
 pub fn run_dump_fonts(args: &[String]) -> std::result::Result<(), String> {
     run_dump_fonts_inner(args).map_err(|e| e.to_string())

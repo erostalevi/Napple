@@ -12,7 +12,7 @@
 #include "napple.h"
 #include <TargetConditionals.h>
 #include <mach/mach.h>
-#include <mach/mach_vm.h>
+#include "mach_vm_compat.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -27,7 +27,18 @@ void svc_kcode_register(void);
 #define STACK_OFF 0x10000000ULL
 #define STACK_SIZE 0x10000000ULL
 #define HEAP_OFF (STACK_OFF + STACK_SIZE + 0x10000000ULL)
+#if NAPPLE_IOS
+/* Without the extended-virtual-addressing entitlement an iOS app gets one 6 GiB window at 0x70_0000_0000 (measured on an iPhone 16 Pro Max, iOS 26).
+ * Odyssey asks for a 0xc8000000 heap whatever the pool size says, so: a 3.25 GiB heap cap, and an alias region that shrinks from the request down to 1 GiB
+ * in 1 GiB steps (3.25 GiB + 0.75 GiB of stack/gaps + 1 GiB tail + 1 GiB alias = 6 GiB). */
+#define HEAP_CAP (0xD0000000ULL)
+#define ALIAS_STEP (1ULL << 30)
+#define ALIAS_LEAST (1ULL << 30)
+#else
 #define HEAP_CAP (4ULL << 30)
+#define ALIAS_STEP (4ULL << 30)
+#define ALIAS_LEAST (4ULL << 30)
+#endif
 #define LOW_SIZE (HEAP_OFF + HEAP_CAP + (1ULL << 30))
 #define ALIAS_MAX (64ULL << 30)
 #define SEARCH_FROM 0x300000000ULL
@@ -64,12 +75,41 @@ void memory_init(void) {
     if (low_space) { pthread_mutex_unlock(&mem_lock); return; }
     /* The preferred fixed layout (alias at 0x70_0000_0000) works on older macOS; otherwise one reservation in a free
      * hole, with the alias region shrinking in 4 GiB steps from the requested size down to 4 GiB. */
-    uint64_t want = alias_requested(), least = getenv("NAPPLE_ALIAS_GIB") ? want : (4ULL << 30);
+    uint64_t want = alias_requested(), least = getenv("NAPPLE_ALIAS_GIB") ? want : ALIAS_LEAST;
     uint8_t *space = NULL;
-    for (uint64_t g = want; !space; g -= 4ULL << 30) {
+    for (uint64_t g = want; !space; g -= ALIAS_STEP) {
         for (uint64_t at = SEARCH_FROM; at + LOW_SIZE + g <= GUEST_LIMIT && !space; at += 1ULL << 30)
             if ((space = reserve_fixed(at, LOW_SIZE + g))) alias_len = g;
-        if (g < least + (4ULL << 30)) break;
+        if (g < least + ALIAS_STEP) break;
+    }
+    if (!space) {
+        /* Diagnostics for the next person: what this process may actually map (iOS limits user VA without the extended-virtual-addressing entitlement). */
+        mach_vm_address_t hi = 0, ra = 0; uint64_t free_total = 0, best = 0, best_at = 0, prev_end = 0;
+        for (;;) {
+            mach_vm_size_t rs = 0; vm_region_basic_info_data_64_t ri; mach_msg_type_number_t rc = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t ro;
+            if (mach_vm_region(mach_task_self(), &ra, &rs, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&ri, &rc, &ro) != KERN_SUCCESS) break;
+            if (ra > prev_end) { uint64_t hole = ra - prev_end; free_total += hole; if (hole > best) { best = hole; best_at = prev_end; } }
+            if (rs >= (1ULL << 30)) LOG("memory", "  region %#llx..%#llx prot %d/%d share %d reserved %d", (unsigned long long)ra, (unsigned long long)(ra + rs), ri.protection, ri.max_protection, ri.shared, ri.reserved);
+            prev_end = ra + rs; hi = prev_end; ra = prev_end;
+        }
+        LOG("memory", "address space: highest mapped end %#llx, largest hole below it %#llx bytes at %#llx, holes total %#llx", (unsigned long long)hi, (unsigned long long)best, (unsigned long long)best_at, (unsigned long long)free_total);
+        for (uint64_t at = 0x7000000000ULL, step = 1ULL << 30, g = step; g <= (64ULL << 30); g += step) {   /* how far does the window at 0x70_0000_0000 reach? */
+            mach_vm_address_t a = at;
+            if (mach_vm_map(mach_task_self(), &a, g, 0, VM_FLAGS_FIXED, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_ALL, VM_INHERIT_DEFAULT) != KERN_SUCCESS) { LOG("memory", "fixed reservation at %#llx: %llu GiB works, %llu GiB fails", (unsigned long long)at, (unsigned long long)((g - step) >> 30), (unsigned long long)(g >> 30)); break; }
+            mach_vm_deallocate(mach_task_self(), a, g);
+        }
+        for (uint64_t at = 0x100000000ULL, step = 1ULL << 30, g = step; g <= (64ULL << 30); g += step) {   /* and the hole at the bottom */
+            mach_vm_address_t a = at;
+            if (mach_vm_map(mach_task_self(), &a, g, 0, VM_FLAGS_FIXED, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_ALL, VM_INHERIT_DEFAULT) != KERN_SUCCESS) { LOG("memory", "fixed reservation at %#llx: %llu GiB works, %llu GiB fails", (unsigned long long)at, (unsigned long long)((g - step) >> 30), (unsigned long long)(g >> 30)); break; }
+            mach_vm_deallocate(mach_task_self(), a, g);
+        }
+        for (uint64_t g = 64ULL << 30; g >= (1ULL << 30); g >>= 1) {
+            mach_vm_address_t a = 0;
+            if (mach_vm_map(mach_task_self(), &a, g, 0, VM_FLAGS_ANYWHERE, MEMORY_OBJECT_NULL, 0, FALSE, VM_PROT_NONE, VM_PROT_ALL, VM_INHERIT_DEFAULT) == KERN_SUCCESS) {
+                LOG("memory", "an unconstrained %llu GiB PROT_NONE reservation works at %#llx", (unsigned long long)(g >> 30), (unsigned long long)a);
+                mach_vm_deallocate(mach_task_self(), a, g); break;
+            }
+        }
     }
     if (!space) runtime_fail("cannot reserve the guest address space below 2^39 (need %llu GiB)", (unsigned long long)((LOW_SIZE + least) >> 30));
     low_space = space; alias_space = space + LOW_SIZE; heap = space + HEAP_OFF;
@@ -212,6 +252,13 @@ uint32_t memory_code_alias(uint64_t dst, uint64_t src, uint64_t size, unsigned p
         summary_note("code memory alias not host-page aligned");
         return R_INVALID_ADDRESS;
     }
+#if NAPPLE_IOS
+    if (perm & 4) {   /* an executable alias of writable memory is what iOS calls JIT, and it is never available to Napple */
+        LOG("memory", "code memory alias %#llx: executable mapping refused on iOS (no JIT)", (unsigned long long)dst);
+        summary_note("guest asked for executable code memory (needs JIT, unsupported on iOS)");
+        return R_INVALID_MEMORY_PERMISSIONS;
+    }
+#endif
     mach_vm_address_t a = dst; vm_prot_t cur, max;
     kern_return_t kr = mach_vm_remap(mach_task_self(), &a, size, 0, VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE, mach_task_self(), (mach_vm_address_t)src, FALSE, &cur, &max, VM_INHERIT_NONE);
     if (kr != KERN_SUCCESS || a != dst) { LOG("memory", "code memory alias %#llx: remap failed (%d)", (unsigned long long)dst, kr); return R_OUT_OF_RESOURCE; }
