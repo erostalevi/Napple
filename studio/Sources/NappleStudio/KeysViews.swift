@@ -16,7 +16,7 @@ struct WelcomeView: View {
             .scrollIndicators(.hidden)
             LegalFooter()
         }
-        .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, 10)
+        .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, Metrics.bottom)
     }
 }
 
@@ -154,7 +154,7 @@ struct SettingsView: View {
                 if let w = m.outputWarning { Banner(text: w, tone: .warn) }
                 LegalFooter()
             }
-            .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, 10)
+            .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, Metrics.bottom)
         }
         .scrollIndicators(.hidden)
         .sheet(isPresented: $adding) {

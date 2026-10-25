@@ -70,7 +70,7 @@ struct PlanView: View {
             .frame(maxWidth: .infinity, alignment: .topLeading)
             sidebar(plan)
         }
-        .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, 12)
+        .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, Metrics.bottom)
         .disabled(m.phase == .building)
     }
 
@@ -152,8 +152,8 @@ struct PlanView: View {
             CompatCard(entry: m.compat, hasBase: plan.base != nil)
             VStack(alignment: .leading, spacing: 6) {
                 if let e = m.errorText { Banner(text: e, tone: .bad) }
-                if let w = m.destinationBlocker { Banner(text: w, tone: .warn) }
-                else if let d = m.diskWarning, m.errorText == nil { Banner(text: d, tone: .bad) }
+                else if let w = m.destinationBlocker { Banner(text: w, tone: .warn) }
+                else if let d = m.diskWarning { Banner(text: d, tone: .bad) }
                 if m.destination.isIOS {
                     Button { showSigning = true } label: { Label("Signing…", systemImage: "key.horizontal") }
                         .buttonStyle(SecondaryPill(height: 28)).accessibilityLabel("Signing options for iPhone and iPad")

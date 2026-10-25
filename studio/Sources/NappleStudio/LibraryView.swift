@@ -32,7 +32,7 @@ struct LibraryView: View {
             }
             LegalFooter().padding(.bottom, 4)
         }
-        .padding(.top, 6).padding(.bottom, 10)
+        .padding(.top, 6).padding(.bottom, Metrics.bottom)
     }
 
     private var countLine: String {
@@ -179,6 +179,6 @@ struct AddView: View {
             .accessibilityLabel("Drop zone for game files")
             LegalFooter()
         }
-        .padding(.horizontal, Metrics.pad).padding(.top, 6).padding(.bottom, 10)
+        .padding(.horizontal, Metrics.pad).padding(.top, 6).padding(.bottom, Metrics.bottom)
     }
 }

@@ -59,12 +59,12 @@ struct BuildingView: View {
                         .buttonStyle(SecondaryPill(height: 28, fontSize: 11))
                     Spacer()
                     Button("Cancel") { m.cancelBuild() }.buttonStyle(SecondaryPill(height: 32, fontSize: 12))
-                        .disabled(m.cancelling).keyboardShortcut(.cancelAction)
+                        .disabled(m.cancelling)
                 }
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 40).padding(.bottom, 12)
+        .padding(.horizontal, 40).padding(.bottom, Metrics.bottom)
     }
 
     private func chip(_ title: String, index: Int) -> some View {
@@ -112,7 +112,7 @@ struct BuildingView: View {
             }
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 40).padding(.bottom, 12)
+        .padding(.horizontal, 40).padding(.bottom, Metrics.bottom)
     }
 }
 
@@ -123,25 +123,29 @@ struct DoneView: View {
     private var isIOS: Bool { m.target.isIOS }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            hero
-            HStack(spacing: 8) {
-                stat("App size", sizeText)
-                stat("Included", m.builtSummary.isEmpty ? "Base game only" : m.builtSummary)
-                stat("Built for", m.destinationLabel)
-                stat("Build time", durationText)
+        VStack(alignment: .leading, spacing: 10) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    hero
+                    HStack(spacing: 8) {
+                        stat("App size", sizeText)
+                        stat("Included", m.builtSummary.isEmpty ? "Base game only" : m.builtSummary)
+                        stat("Built for", m.destinationLabel)
+                        stat("Build time", durationText)
+                    }
+                    if !m.notes.isEmpty { notesCard }
+                    if isIOS { iosCard } else { installCard }
+                }
             }
-            if !m.notes.isEmpty { notesCard }
-            if isIOS { iosCard } else { installCard }
-            Spacer(minLength: 0)
+            .scrollIndicators(.hidden)
             HStack(alignment: .center) {
                 Button("Build another game") { m.startOver() }.buttonStyle(.plain)
                     .font(.system(size: 13)).foregroundStyle(Palette.secondary).underline()
                 Spacer()
-                LegalFooter().frame(maxWidth: 420)
+                LegalFooter().frame(maxWidth: 380)
             }
         }
-        .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, 10)
+        .padding(.horizontal, Metrics.pad).padding(.top, 4).padding(.bottom, Metrics.bottom)
     }
 
     private var hero: some View {

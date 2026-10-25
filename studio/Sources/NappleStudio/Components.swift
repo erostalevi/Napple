@@ -20,6 +20,8 @@ enum Metrics {
     static let height: CGFloat = 420
     static let header: CGFloat = 44
     static let pad: CGFloat = 24
+    /// Space under the last row of every screen (the window corners are 26 pt round).
+    static let bottom: CGFloat = 16
 }
 
 enum Palette {
