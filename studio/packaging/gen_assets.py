@@ -7,21 +7,27 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter, ImageFont
 HERE = os.path.dirname(os.path.abspath(__file__))
 S = 4  # supersampling
 
-DY = -85  # lifts the silhouette (no leaf) so it sits centred on the canvas
-SC = 0.9  # silhouette scale about the canvas centre
+DY = -59   # centres the silhouette (no leaf) vertically
+SC = 0.95  # silhouette scale about the canvas centre
 T = lambda v: 512 + (v - 512) * SC
+# Apple-logo proportions as cubic beziers (start + 3-point segments), symmetric about x=512: round shoulders,
+# shallow top dip, widest point high, two bottom lobes with a small cleft. No bite, no leaf.
+APPLE = [(512, 445), (522, 345), (580, 296), (650, 298), (745, 302), (822, 395), (814, 520), (806, 630), (742, 805), (650, 822), (598, 832), (535, 830), (512, 765), (489, 830), (426, 832), (374, 822), (282, 805), (218, 630), (210, 520), (202, 395), (279, 302), (374, 298), (444, 296), (502, 345), (512, 445)]
 
 def apple_shape(W, k):
-    """The original apple silhouette (two lobes, top dip, no bite, no leaf) on a 1024 grid, as an L mask of side W."""
-    m = Image.new("L", (W, W), 0); d = ImageDraw.Draw(m)
-    def circ(cx, cy, r, v=255): X, Y, R = T(cx), T(cy + DY), r * SC; d.ellipse([(X - R) * k, (Y - R) * k, (X + R) * k, (Y + R) * k], fill=v)
-    circ(420, 560, 215); circ(604, 560, 215)
-    d.ellipse([T(512 - 290) * k, T(610 + DY - 230) * k, T(512 + 290) * k, T(610 + DY + 235) * k], fill=255)
-    circ(440, 690, 170); circ(584, 690, 170)
-    circ(512, 332, 62, 0)            # top dip
+    """Smooth apple silhouette on a 1024 grid, as an L mask of side W."""
+    poly = []
+    for i in range(0, len(APPLE) - 1, 3):
+        p0, p1, p2, p3 = APPLE[i:i + 4]
+        for j in range(80):
+            t = j / 80; u = 1 - t
+            x = u**3 * p0[0] + 3 * u * u * t * p1[0] + 3 * u * t * t * p2[0] + t**3 * p3[0]
+            y = u**3 * p0[1] + 3 * u * u * t * p1[1] + 3 * u * t * t * p2[1] + t**3 * p3[1]
+            poly.append((T(x) * k, T(y + DY) * k))
+    m = Image.new("L", (W, W), 0); ImageDraw.Draw(m).polygon(poly, fill=255)
     return m
 
-def joycon_apple(size, gap=16):
+def joycon_apple(size, gap=12):
     """Two-tone 'Joy-Con' apple: a black left half with a stick, a white right half with four buttons. Returns (black, white) RGBA layers."""
     k = size / 1024 * S; W = size * S
     def layer(half, ink, face, detail):
