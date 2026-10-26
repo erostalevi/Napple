@@ -82,7 +82,9 @@ pub fn run(spec: &Spec) -> Result<Output, String> {
     for (k, v) in &spec.env {
         cmd.env(k, v);
     }
-    let mut child = cmd.spawn().map_err(|e| format!("cannot start {}: {e}", spec.program.display()))?;
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("cannot start {}: {e}", spec.program.display()))?;
     let out_h = drain(child.stdout.take().unwrap(), spec.max_output);
     let err_h = drain(child.stderr.take().unwrap(), spec.max_output);
     let start = Instant::now();
@@ -92,19 +94,29 @@ pub fn run(spec: &Spec) -> Result<Output, String> {
             Ok(None) => {
                 if start.elapsed() >= spec.timeout {
                     // negative pid = whole group (children of node/java launchers included)
-                    let _ = Command::new("/bin/kill").args(["-KILL", "--", &format!("-{}", child.id())]).status();
+                    let _ = Command::new("/bin/kill")
+                        .args(["-KILL", "--", &format!("-{}", child.id())])
+                        .status();
                     let _ = child.kill();
                     let _ = child.wait();
                     // reader threads end when the pipes close; do not block on stragglers
                     drop((out_h, err_h));
-                    return Err(format!("{} timed out after {}s", spec.program.display(), spec.timeout.as_secs()));
+                    return Err(format!(
+                        "{} timed out after {}s",
+                        spec.program.display(),
+                        spec.timeout.as_secs()
+                    ));
                 }
                 std::thread::sleep(Duration::from_millis(20));
             }
             Err(e) => return Err(format!("wait failed: {e}")),
         }
     };
-    Ok(Output { code: status.code(), stdout: out_h.join().unwrap_or_default(), stderr: err_h.join().unwrap_or_default() })
+    Ok(Output {
+        code: status.code(),
+        stdout: out_h.join().unwrap_or_default(),
+        stderr: err_h.join().unwrap_or_default(),
+    })
 }
 
 /// Finds an executable by name in `PATH` (no shell).
@@ -121,7 +133,9 @@ pub fn which(name: &str) -> Option<PathBuf> {
 
 fn is_exec(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(p).map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0).unwrap_or(false)
+    std::fs::metadata(p)
+        .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+        .unwrap_or(false)
 }
 
 #[cfg(test)]

@@ -38,7 +38,12 @@ pub struct Mark(usize, usize);
 
 impl Patch {
     pub fn new(base: u32, key_page: u32) -> Self {
-        Self { base, key_page, words: Vec::new(), fixups: Vec::new() }
+        Self {
+            base,
+            key_page,
+            words: Vec::new(),
+            fixups: Vec::new(),
+        }
     }
 
     pub fn here(&self) -> u32 {

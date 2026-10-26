@@ -31,13 +31,18 @@ struct Opts {
 }
 
 fn parse(args: &[String]) -> Result<Opts, String> {
-    const VALUE: [&str; 9] = ["--work", "--known", "--remote", "--title", "--build", "--name", "--game", "-k", "--module"];
+    const VALUE: [&str; 9] = [
+        "--work", "--known", "--remote", "--title", "--build", "--name", "--game", "-k", "--module",
+    ];
     const FLAG: [&str; 3] = ["--no-rea", "--dry-run", "--yes"];
     let mut o = Opts::default();
     let mut it = args.iter();
     while let Some(a) = it.next() {
         if VALUE.contains(&a.as_str()) {
-            o.val.insert(a.clone(), it.next().ok_or(format!("{a} needs a value"))?.clone());
+            o.val.insert(
+                a.clone(),
+                it.next().ok_or(format!("{a} needs a value"))?.clone(),
+            );
         } else if FLAG.contains(&a.as_str()) {
             o.flag.push(a.clone());
         } else if a.starts_with('-') && a.len() > 1 {
@@ -67,8 +72,15 @@ struct Env {
 
 fn env(o: &Opts) -> Env {
     let work = PathBuf::from(o.v("--work").map(|s| s.as_str()).unwrap_or("work"));
-    let known = PathBuf::from(o.v("--known").map(|s| s.as_str()).unwrap_or("knownSignatures"));
-    let remote = o.v("--remote").cloned().unwrap_or_else(|| DEFAULT_REMOTE.to_string());
+    let known = PathBuf::from(
+        o.v("--known")
+            .map(|s| s.as_str())
+            .unwrap_or("knownSignatures"),
+    );
+    let remote = o
+        .v("--remote")
+        .cloned()
+        .unwrap_or_else(|| DEFAULT_REMOTE.to_string());
     let sigs = work.join("sigs");
     let view = LayeredRepository::new(
         vec![
@@ -79,10 +91,18 @@ fn env(o: &Opts) -> Env {
         ],
         0,
     );
-    Env { pending: DirRepository::new(sigs.join("pending"), "pending", true), work, view, remote }
+    Env {
+        pending: DirRepository::new(sigs.join("pending"), "pending", true),
+        work,
+        view,
+        remote,
+    }
 }
 
-fn load_modules(o: &Opts, path_arg: Option<&String>) -> Result<(Vec<Module>, Option<TitleId>), String> {
+fn load_modules(
+    o: &Opts,
+    path_arg: Option<&String>,
+) -> Result<(Vec<Module>, Option<TitleId>), String> {
     if let Some(game) = o.v("--game") {
         let keys_path = o.v("-k").ok_or("--game needs -k <prod.keys>")?;
         let keys = KeySet::load(Path::new(keys_path)).map_err(|e| e.to_string())?;
@@ -105,7 +125,10 @@ fn load_modules(o: &Opts, path_arg: Option<&String>) -> Result<(Vec<Module>, Opt
     }
     let p = path_arg.ok_or("missing module path")?;
     let bytes = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
-    let name = o.v("--name").cloned().unwrap_or_else(|| module_name_from_path(Path::new(p)));
+    let name = o
+        .v("--name")
+        .cloned()
+        .unwrap_or_else(|| module_name_from_path(Path::new(p)));
     let title = o.v("--title").map(|t| TitleId::parse(t)).transpose()?;
     let m = if bytes.len() >= 4 && &bytes[..4] == b"NSO0" {
         Module::from_nso(&name, &bytes)?
@@ -137,7 +160,12 @@ fn parse_item(s: &str) -> Result<Item, String> {
         })
         .transpose()
         .map_err(|_| "bad size".to_string())?;
-    Ok(Item { offset, kind, name, size })
+    Ok(Item {
+        offset,
+        kind,
+        name,
+        size,
+    })
 }
 
 fn print_sig(hash: &str, s: &Signature) {
@@ -167,10 +195,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
             };
             match e.view.load(&t, &b)? {
                 None => {
-                    println!("no known signatures for {t}/{b} (layers: {})", e.view.label());
+                    println!(
+                        "no known signatures for {t}/{b} (layers: {})",
+                        e.view.label()
+                    );
                     let others = e.view.builds(&t)?;
                     if !others.is_empty() {
-                        println!("other builds of this title: {}", others.iter().map(|b| b.0.as_str()).collect::<Vec<_>>().join(", "));
+                        println!(
+                            "other builds of this title: {}",
+                            others
+                                .iter()
+                                .map(|b| b.0.as_str())
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
                     }
                 }
                 Some(f) => {
@@ -184,7 +222,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         "match" => {
             let (mods, title) = load_modules(&o, o.pos.first())?;
-            let title = title.ok_or("need --title (raw files and NSOs do not carry the title id)")?;
+            let title =
+                title.ok_or("need --title (raw files and NSOs do not carry the title id)")?;
             for m in &mods {
                 let build = m.build_id.clone().ok_or("raw modules need --build")?;
                 println!("== {title}/{build} module {}", m.name);
@@ -195,18 +234,39 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 let r = match_module(&f, m)?;
                 for h in &r.hits {
                     let offs: Vec<String> = h.offsets.iter().map(|x| format!("{x:#x}")).collect();
-                    let note = if h.offsets.len() > 1 { " AMBIGUOUS" } else if h.in_range { "" } else { " (outside recorded range)" };
-                    println!("hit      {}  {:<12} {}  {}{note}", h.hash, format!("{:?}", h.kind), offs.join(","), h.name.as_deref().unwrap_or("-"));
+                    let note = if h.offsets.len() > 1 {
+                        " AMBIGUOUS"
+                    } else if h.in_range {
+                        ""
+                    } else {
+                        " (outside recorded range)"
+                    };
+                    println!(
+                        "hit      {}  {:<12} {}  {}{note}",
+                        h.hash,
+                        format!("{:?}", h.kind),
+                        offs.join(","),
+                        h.name.as_deref().unwrap_or("-")
+                    );
                 }
                 for u in &r.unknown {
                     println!("unknown  {u}  (signature not found in this module)");
                 }
-                println!("{} hit(s), {} unknown, {} for other modules", r.hits.len(), r.unknown.len(), r.skipped_other_module);
+                println!(
+                    "{} hit(s), {} unknown, {} for other modules",
+                    r.hits.len(),
+                    r.unknown.len(),
+                    r.skipped_other_module
+                );
             }
             Ok(())
         }
         "resolve" => {
-            let (path_arg, items_start) = if o.v("--game").is_some() { (None, 0) } else { (o.pos.first(), 1) };
+            let (path_arg, items_start) = if o.v("--game").is_some() {
+                (None, 0)
+            } else {
+                (o.pos.first(), 1)
+            };
             let (mods, title) = load_modules(&o, path_arg)?;
             if mods.len() != 1 {
                 return Err("resolve needs exactly one module (use --module with --game)".into());
@@ -214,32 +274,66 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let m = &mods[0];
             let title = title.ok_or("need --title")?;
             let build = m.build_id.clone().ok_or("raw modules need --build")?;
-            let items: Vec<Item> = o.pos.iter().skip(items_start).map(|s| parse_item(s)).collect::<Result<_, _>>()?;
+            let items: Vec<Item> = o
+                .pos
+                .iter()
+                .skip(items_start)
+                .map(|s| parse_item(s))
+                .collect::<Result<_, _>>()?;
             if items.is_empty() {
                 return Err("no items given (OFFSET[:KIND[:NAME[:SIZE]]])".into());
             }
             let rea = ReaCliReverser::new(ReaConfig::detect(&e.work));
-            let reverser: Option<&dyn Reverser> = if o.has("--no-rea") || !rea.available() { None } else { Some(&rea) };
+            let reverser: Option<&dyn Reverser> = if o.has("--no-rea") || !rea.available() {
+                None
+            } else {
+                Some(&rea)
+            };
             if reverser.is_none() && !o.has("--no-rea") {
-                println!("note: rea CLI not found under {}; resolving without a Reverser", e.work.display());
+                println!(
+                    "note: rea CLI not found under {}; resolving without a Reverser",
+                    e.work.display()
+                );
             }
             let scratch = e.work.join("rea-in");
-            let ctx = Context { title: &title, build: &build, known: &e.view, pending: &e.pending, reverser, scratch: &scratch };
+            let ctx = Context {
+                title: &title,
+                build: &build,
+                known: &e.view,
+                pending: &e.pending,
+                reverser,
+                scratch: &scratch,
+            };
             let mut failed = 0;
             for it in &items {
                 match resolve_item(&ctx, m, it) {
                     Outcome::Known { hash } => println!("{:#x}  known         {hash}", it.offset),
-                    Outcome::Carried { hash, from_build } => println!("{:#x}  carried       {hash}  (from build {from_build}; stored as pending-share)", it.offset),
-                    Outcome::Learned { hash, via } => println!("{:#x}  learned       {hash}  (via {via}; stored as pending-share)", it.offset),
-                    Outcome::Manual { hash, why } => println!("{:#x}  local         {hash}  (low confidence; {why}; stored as pending-share)", it.offset),
+                    Outcome::Carried { hash, from_build } => println!(
+                        "{:#x}  carried       {hash}  (from build {from_build}; stored as pending-share)",
+                        it.offset
+                    ),
+                    Outcome::Learned { hash, via } => println!(
+                        "{:#x}  learned       {hash}  (via {via}; stored as pending-share)",
+                        it.offset
+                    ),
+                    Outcome::Manual { hash, why } => println!(
+                        "{:#x}  local         {hash}  (low confidence; {why}; stored as pending-share)",
+                        it.offset
+                    ),
                     Outcome::Failed { reason } => {
                         failed += 1;
                         println!("{:#x}  UNRESOLVED    {reason}", it.offset);
                     }
                 }
             }
-            println!("nothing was sent anywhere. Review with `napple sigs pending`; share with `napple sigs share`.");
-            if failed > 0 { Err(format!("{failed} item(s) unresolved")) } else { Ok(()) }
+            println!(
+                "nothing was sent anywhere. Review with `napple sigs pending`; share with `napple sigs share`."
+            );
+            if failed > 0 {
+                Err(format!("{failed} item(s) unresolved"))
+            } else {
+                Ok(())
+            }
         }
         "pending" => {
             let mut n = 0;
@@ -258,7 +352,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     }
                 }
             }
-            println!("{n} pending signature(s) (local only; `napple sigs share` to review and send)");
+            println!(
+                "{n} pending signature(s) (local only; `napple sigs share` to review and send)"
+            );
             Ok(())
         }
         "share" => {
@@ -271,11 +367,20 @@ pub fn run(args: &[String]) -> Result<(), String> {
             }
             if dry {
                 let t = share::Tools::detect();
-                println!("\ndry run complete; gh/git available: {}", if t.is_ok() { "yes" } else { "no (install gh to share)" });
+                println!(
+                    "\ndry run complete; gh/git available: {}",
+                    if t.is_ok() {
+                        "yes"
+                    } else {
+                        "no (install gh to share)"
+                    }
+                );
                 return Ok(());
             }
             if !o.has("--yes") {
-                println!("\nNothing was sent. Review the above, then re-run with --yes to open the pull request.");
+                println!(
+                    "\nNothing was sent. Review the above, then re-run with --yes to open the pull request."
+                );
                 return Ok(());
             }
             let tools = share::Tools::detect()?;
@@ -299,7 +404,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
             let text = std::fs::read_to_string(p).map_err(|e| format!("{p}: {e}"))?;
             match validate::validate_json(&text) {
                 Ok(f) => {
-                    println!("OK: {}/{} with {} signature(s)", f.title_id, f.build_id, f.signatures.len());
+                    println!(
+                        "OK: {}/{} with {} signature(s)",
+                        f.title_id,
+                        f.build_id,
+                        f.signatures.len()
+                    );
                     Ok(())
                 }
                 Err(errs) => {
@@ -312,7 +422,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         "sync" => {
             let c = GitCacheRepository::new(&e.remote, e.work.join("sigcache"));
-            println!("fetching {} into {} (read-only cache)...", c.url, c.cache.display());
+            println!(
+                "fetching {} into {} (read-only cache)...",
+                c.url,
+                c.cache.display()
+            );
             c.sync()?;
             println!("done");
             Ok(())
@@ -328,7 +442,10 @@ mod tests {
     #[test]
     fn item_syntax() {
         let i = parse_item("0x1f0:function:my_fn:0x40").unwrap();
-        assert_eq!((i.offset, i.kind, i.name.as_deref(), i.size), (0x1f0, SigKind::Function, Some("my_fn"), Some(0x40)));
+        assert_eq!(
+            (i.offset, i.kind, i.name.as_deref(), i.size),
+            (0x1f0, SigKind::Function, Some("my_fn"), Some(0x40))
+        );
         assert_eq!(parse_item("32").unwrap().offset, 32);
         assert!(parse_item("zz").is_err());
         assert!(parse_item("0x10:bogus").is_err());
@@ -357,7 +474,8 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let work = d.path().join("work");
         let pend = DirRepository::new(work.join("sigs/pending"), "p", true);
-        pend.save(&crate::validate::fixtures::sample_file()).unwrap();
+        pend.save(&crate::validate::fixtures::sample_file())
+            .unwrap();
         let a = |s: &[&str]| s.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         let w = work.to_string_lossy().to_string();
         assert!(run(&a(&["share", "--dry-run", "--work", &w])).is_ok());

@@ -9,8 +9,17 @@
 #define AOC_MAX 128
 #define AOC_PATH 1200
 
-typedef struct { uint64_t title_id; uint32_t version; uint32_t index; char romfs[AOC_PATH]; } AocEntry;
-typedef struct { AocEntry e[AOC_MAX]; unsigned n; uint64_t base_id; } AocSet;
+typedef struct {
+    uint64_t title_id;
+    uint32_t version;
+    uint32_t index;
+    char romfs[AOC_PATH];
+} AocEntry;
+typedef struct {
+    AocEntry e[AOC_MAX];
+    unsigned n;
+    uint64_t base_id;
+} AocSet;
 
 uint64_t aoc_base_id(uint64_t application_id);
 void aoc_init(AocSet *s, uint64_t application_id);

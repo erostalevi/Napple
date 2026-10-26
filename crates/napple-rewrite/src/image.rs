@@ -61,14 +61,19 @@ fn u64_at(b: &[u8], o: usize) -> Option<u64> {
 impl ModuleImage {
     pub fn from_nso(nso: &Nso) -> Result<Self, RewriteError> {
         if nso.text.mem_offset != 0 {
-            return Err(RewriteError::Layout(format!("text segment at {:#x}, expected 0", nso.text.mem_offset)));
+            return Err(RewriteError::Layout(format!(
+                "text segment at {:#x}, expected 0",
+                nso.text.mem_offset
+            )));
         }
         let segs = [&nso.text, &nso.rodata, &nso.data];
         let mut end = 0usize;
         for s in segs {
             let (o, l) = (s.mem_offset as usize, s.data.len());
             if o < end || o % 4 != 0 {
-                return Err(RewriteError::Layout("segments overlap or are misaligned".into()));
+                return Err(RewriteError::Layout(
+                    "segments overlap or are misaligned".into(),
+                ));
             }
             end = o + l;
         }
@@ -79,7 +84,8 @@ impl ModuleImage {
         let key_page_off = align(image_len, KEY_PAGE_SIZE);
         let mut bytes = vec![0u8; key_page_off + KEY_PAGE_SIZE];
         for s in segs {
-            bytes[s.mem_offset as usize..s.mem_offset as usize + s.data.len()].copy_from_slice(&s.data);
+            bytes[s.mem_offset as usize..s.mem_offset as usize + s.data.len()]
+                .copy_from_slice(&s.data);
         }
         let patch_off = align(bytes.len(), PATCH_ALIGN);
         let layout = Layout {
@@ -91,7 +97,11 @@ impl ModuleImage {
             patch_off: patch_off as u32,
         };
         let mod0 = Self::find_mod0(&bytes);
-        Ok(Self { bytes, layout, mod0 })
+        Ok(Self {
+            bytes,
+            layout,
+            mod0,
+        })
     }
 
     fn find_mod0(img: &[u8]) -> Option<Mod0> {
@@ -120,11 +130,20 @@ impl ModuleImage {
 
     /// Function start addresses from `.eh_frame_hdr`'s binary search table (text only, sorted).
     pub fn function_starts(&self) -> Vec<u32> {
-        let (Some(m), text_end) = (&self.mod0, self.layout.text_end) else { return Vec::new() };
-        let Some(hdr) = m.eh_frame_hdr else { return Vec::new() };
+        let (Some(m), text_end) = (&self.mod0, self.layout.text_end) else {
+            return Vec::new();
+        };
+        let Some(hdr) = m.eh_frame_hdr else {
+            return Vec::new();
+        };
         let img = &self.bytes;
         let hdr = hdr as usize;
-        let (Some(&_ver), Some(&penc), Some(&cenc), Some(&tenc)) = (img.get(hdr), img.get(hdr + 1), img.get(hdr + 2), img.get(hdr + 3)) else {
+        let (Some(&_ver), Some(&penc), Some(&cenc), Some(&tenc)) = (
+            img.get(hdr),
+            img.get(hdr + 1),
+            img.get(hdr + 2),
+            img.get(hdr + 3),
+        ) else {
             return Vec::new();
         };
         // returns (value, size)
@@ -144,13 +163,19 @@ impl ModuleImage {
             Some((v, sz))
         };
         let mut o = hdr + 4;
-        let Some((_, s)) = read(o, penc) else { return Vec::new() };
+        let Some((_, s)) = read(o, penc) else {
+            return Vec::new();
+        };
         o += s;
-        let Some((count, s)) = read(o, cenc) else { return Vec::new() };
+        let Some((count, s)) = read(o, cenc) else {
+            return Vec::new();
+        };
         o += s;
         let mut starts = Vec::new();
         for _ in 0..count.max(0) {
-            let (Some((a, s1)), true) = (read(o, tenc), o < img.len()) else { break };
+            let (Some((a, s1)), true) = (read(o, tenc), o < img.len()) else {
+                break;
+            };
             o += s1;
             let Some((_, s2)) = read(o, tenc) else { break };
             o += s2;
@@ -187,9 +212,18 @@ mod tests {
     pub(crate) fn nso(text: &[u32], ro: usize, data: usize, bss: u32) -> Nso {
         Nso {
             build_id: [0x11; 32],
-            text: Segment { mem_offset: 0, data: text.iter().flat_map(|w| w.to_le_bytes()).collect() },
-            rodata: Segment { mem_offset: 0x1000, data: vec![0; ro] },
-            data: Segment { mem_offset: 0x2000, data: vec![0; data] },
+            text: Segment {
+                mem_offset: 0,
+                data: text.iter().flat_map(|w| w.to_le_bytes()).collect(),
+            },
+            rodata: Segment {
+                mem_offset: 0x1000,
+                data: vec![0; ro],
+            },
+            data: Segment {
+                mem_offset: 0x2000,
+                data: vec![0; data],
+            },
             bss_size: bss,
         }
     }

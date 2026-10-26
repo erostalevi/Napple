@@ -1,5 +1,7 @@
 # frontend: macOS window, overlay, settings, swkbd bar.  make [test|demo|clean]
 CC      ?= clang
+MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
+DEPFLAGS = -MMD -MP
 CFLAGS  ?= -std=gnu11 -O2 -g -Wall -Wextra -Werror -Wno-deprecated-declarations
 INC     := -Iinclude -Isrc -I../input/include -I../audio/include
 CSRC    := $(wildcard src/*.c)
@@ -11,12 +13,12 @@ SFW     := -framework GameController -framework CoreHaptics -framework AudioTool
 
 all: libnapple_frontend.a
 
-build/%.o: src/%.c $(wildcard src/*.h) include/napple_frontend.h
+build/%.o: src/%.c
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(INC) -c $< -o $@
-build/%.o: src/%.m $(wildcard src/*.h) include/napple_frontend.h
+	$(CC) $(CFLAGS) $(DEPFLAGS) $(INC) -c $< -o $@
+build/%.o: src/%.m
 	@mkdir -p build
-	$(CC) $(CFLAGS) -fobjc-arc $(INC) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -fobjc-arc $(INC) -c $< -o $@
 
 libnapple_frontend.a: $(OBJ)
 	@rm -f $@
@@ -39,6 +41,8 @@ test: build/test_settings build/test_window
 	./build/test_window
 demo: build/demo_window
 	./build/demo_window
+-include $(OBJ:.o=.d)
+
 clean:
 	rm -rf build libnapple_frontend.a
 .PHONY: all test demo clean

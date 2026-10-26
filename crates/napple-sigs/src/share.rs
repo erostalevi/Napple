@@ -31,13 +31,27 @@ pub struct SharePlan {
 
 /// `https://github.com/owner/name[.git]` -> `owner/name`.
 pub fn slug(url: &str) -> Result<String, String> {
-    let rest = url.strip_prefix("https://github.com/").ok_or("remote must be an https://github.com/ URL")?;
+    let rest = url
+        .strip_prefix("https://github.com/")
+        .ok_or("remote must be an https://github.com/ URL")?;
     let s = rest.trim_end_matches('/').trim_end_matches(".git");
-    let ok = s.split('/').count() == 2 && s.split('/').all(|p| !p.is_empty() && p.bytes().all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c)));
-    if ok { Ok(s.to_string()) } else { Err(format!("unexpected repository path {s:?}")) }
+    let ok = s.split('/').count() == 2
+        && s.split('/').all(|p| {
+            !p.is_empty()
+                && p.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || b"-_.".contains(&c))
+        });
+    if ok {
+        Ok(s.to_string())
+    } else {
+        Err(format!("unexpected repository path {s:?}"))
+    }
 }
 
-pub fn build_plan(pending: &dyn SignatureRepository, upstream_url: &str) -> Result<SharePlan, String> {
+pub fn build_plan(
+    pending: &dyn SignatureRepository,
+    upstream_url: &str,
+) -> Result<SharePlan, String> {
     let upstream = slug(upstream_url)?;
     let mut files = Vec::new();
     let mut excluded = Vec::new();
@@ -84,12 +98,26 @@ pub fn build_plan(pending: &dyn SignatureRepository, upstream_url: &str) -> Resu
 
 pub fn preview(plan: &SharePlan, dry_run: bool) -> String {
     let mut o = String::new();
-    o.push_str(&format!("{}\n", if dry_run { "DRY RUN: nothing will be sent" } else { "SHARE PREVIEW" }));
-    o.push_str(&format!("target repository : https://github.com/{} (pull request from your fork)\n", plan.upstream));
+    o.push_str(&format!(
+        "{}\n",
+        if dry_run {
+            "DRY RUN: nothing will be sent"
+        } else {
+            "SHARE PREVIEW"
+        }
+    ));
+    o.push_str(&format!(
+        "target repository : https://github.com/{} (pull request from your fork)\n",
+        plan.upstream
+    ));
     o.push_str(&format!("branch            : {}\n", plan.branch));
     o.push_str(&format!("commit identity   : {NEUTRAL_NAME} <{NEUTRAL_EMAIL}> (UTC midnight timestamps, isolated git config)\n"));
     o.push_str(&format!("commit/PR title   : {}\n", plan.pr_title));
-    o.push_str(&format!("signatures        : {} in {} file(s)\n", plan.entries, plan.files.len()));
+    o.push_str(&format!(
+        "signatures        : {} in {} file(s)\n",
+        plan.entries,
+        plan.files.len()
+    ));
     o.push_str("note: the pull request is opened by the GitHub account that `gh` is logged in with; GitHub knows that\n");
     o.push_str("      account. Use a dedicated account if you want to stay unlinked. Commit metadata carries no identity.\n");
     for e in &plan.excluded {
@@ -119,14 +147,23 @@ fn steps_preview(plan: &SharePlan) -> Vec<String> {
         format!("git clone --depth 1 https://github.com/{u} <temp dir inside work/>"),
         format!("git checkout -b {}", plan.branch),
         "(write the files above; git add knownSignatures)".into(),
-        format!("git commit -m \"{}\"   [author/committer: {NEUTRAL_NAME}]", plan.commit_message),
+        format!(
+            "git commit -m \"{}\"   [author/committer: {NEUTRAL_NAME}]",
+            plan.commit_message
+        ),
         "git push <your fork> <branch>".into(),
-        format!("gh pr create --repo {u} --head <login>:{} --title ... --body ...", plan.branch),
+        format!(
+            "gh pr create --repo {u} --head <login>:{} --title ... --body ...",
+            plan.branch
+        ),
     ]
 }
 
 fn day_start_epoch() -> u64 {
-    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
     now - now % 86400
 }
 
@@ -138,7 +175,9 @@ pub struct Tools {
 impl Tools {
     pub fn detect() -> Result<Self, String> {
         Ok(Self {
-            gh: exec::which("gh").ok_or("`gh` is not installed (brew install gh) and authenticated (gh auth login)")?,
+            gh: exec::which("gh").ok_or(
+                "`gh` is not installed (brew install gh) and authenticated (gh auth login)",
+            )?,
             git: exec::which("git").ok_or("git is not installed")?,
         })
     }
@@ -150,23 +189,44 @@ pub fn execute(plan: &SharePlan, tools: &Tools, work_dir: &Path) -> Result<Strin
         return Err("nothing to share".into());
     }
     let real_home = std::env::var("HOME").unwrap_or_default();
-    let gh_cfg = std::env::var("GH_CONFIG_DIR").unwrap_or_else(|_| format!("{real_home}/.config/gh"));
+    let gh_cfg =
+        std::env::var("GH_CONFIG_DIR").unwrap_or_else(|_| format!("{real_home}/.config/gh"));
     let path = std::env::var("PATH").unwrap_or_default();
     let gh = |args: &[&str]| -> Result<String, String> {
         let mut s = Spec::new(&tools.gh, args);
-        s.env = vec![("PATH".into(), path.clone()), ("HOME".into(), real_home.clone()), ("GH_PROMPT_DISABLED".into(), "1".into())];
+        s.env = vec![
+            ("PATH".into(), path.clone()),
+            ("HOME".into(), real_home.clone()),
+            ("GH_PROMPT_DISABLED".into(), "1".into()),
+        ];
         s.timeout = Duration::from_secs(120);
         let o = exec::run(&s)?;
-        if o.ok() { Ok(o.stdout_str()) } else { Err(format!("gh {} failed: {}", args.first().unwrap_or(&""), o.stderr_str().trim())) }
+        if o.ok() {
+            Ok(o.stdout_str())
+        } else {
+            Err(format!(
+                "gh {} failed: {}",
+                args.first().unwrap_or(&""),
+                o.stderr_str().trim()
+            ))
+        }
     };
-    gh(&["auth", "status"]).map_err(|_| "gh is not authenticated; run `gh auth login` yourself, then retry".to_string())?;
+    gh(&["auth", "status"]).map_err(|_| {
+        "gh is not authenticated; run `gh auth login` yourself, then retry".to_string()
+    })?;
     let login = gh(&["api", "user", "--jq", ".login"])?.trim().to_string();
-    if login.is_empty() || !login.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') {
+    if login.is_empty()
+        || !login
+            .bytes()
+            .all(|c| c.is_ascii_alphanumeric() || c == b'-')
+    {
         return Err("unexpected login from gh".into());
     }
     gh(&["repo", "fork", &plan.upstream, "--clone=false"])?;
 
-    let tmp = work_dir.join("sigshare").join(&plan.branch.replace('/', "-"));
+    let tmp = work_dir
+        .join("sigshare")
+        .join(plan.branch.replace('/', "-"));
     let _ = fs::remove_dir_all(&tmp);
     fs::create_dir_all(&tmp).map_err(|e| e.to_string())?;
     let sandbox_home = tmp.join("home");
@@ -193,18 +253,39 @@ pub fn execute(plan: &SharePlan, tools: &Tools, work_dir: &Path) -> Result<Strin
         s.env = git_env.clone();
         s.timeout = Duration::from_secs(300);
         let o = exec::run(&s)?;
-        if o.ok() { Ok(o.stdout_str()) } else { Err(format!("git {} failed: {}", args.first().unwrap_or(&""), o.stderr_str().trim())) }
+        if o.ok() {
+            Ok(o.stdout_str())
+        } else {
+            Err(format!(
+                "git {} failed: {}",
+                args.first().unwrap_or(&""),
+                o.stderr_str().trim()
+            ))
+        }
     };
     let url = format!("https://github.com/{}", plan.upstream);
-    git(&["clone", "--depth", "1", "--quiet", &url, repo.to_str().ok_or("bad path")?], &tmp)?;
-    let base = git(&["rev-parse", "--abbrev-ref", "HEAD"], &repo)?.trim().to_string();
+    git(
+        &[
+            "clone",
+            "--depth",
+            "1",
+            "--quiet",
+            &url,
+            repo.to_str().ok_or("bad path")?,
+        ],
+        &tmp,
+    )?;
+    let base = git(&["rev-parse", "--abbrev-ref", "HEAD"], &repo)?
+        .trim()
+        .to_string();
     git(&["checkout", "-q", "-b", &plan.branch], &repo)?;
     for (rel, content) in &plan.files {
         let dest = repo.join(rel);
         // merge with an existing upstream file; upstream entries win
         let merged = match fs::read_to_string(&dest) {
             Ok(old) => {
-                let mut o = validate::validate_json(&old).map_err(|e| format!("upstream {rel} invalid: {}", e.join("; ")))?;
+                let mut o = validate::validate_json(&old)
+                    .map_err(|e| format!("upstream {rel} invalid: {}", e.join("; ")))?;
                 let n = validate::validate_json(content).map_err(|e| e.join("; "))?;
                 for (k, v) in n.signatures {
                     o.signatures.entry(k).or_insert(v);
@@ -220,12 +301,43 @@ pub fn execute(plan: &SharePlan, tools: &Tools, work_dir: &Path) -> Result<Strin
         fs::write(&dest, merged).map_err(|e| e.to_string())?;
     }
     git(&["add", "knownSignatures"], &repo)?;
-    git(&["commit", "-q", "--no-gpg-sign", "-m", &plan.commit_message], &repo)?;
-    let fork = format!("https://github.com/{login}/{}", plan.upstream.split('/').nth(1).unwrap());
+    git(
+        &["commit", "-q", "--no-gpg-sign", "-m", &plan.commit_message],
+        &repo,
+    )?;
+    let fork = format!(
+        "https://github.com/{login}/{}",
+        plan.upstream.split('/').nth(1).unwrap()
+    );
     git(&["remote", "add", "fork", &fork], &repo)?;
-    git(&["-c", "credential.helper=", "-c", "credential.helper=!gh auth git-credential", "push", "--quiet", "fork", &plan.branch], &repo)?;
+    git(
+        &[
+            "-c",
+            "credential.helper=",
+            "-c",
+            "credential.helper=!gh auth git-credential",
+            "push",
+            "--quiet",
+            "fork",
+            &plan.branch,
+        ],
+        &repo,
+    )?;
     let head = format!("{login}:{}", plan.branch);
-    let out = gh(&["pr", "create", "--repo", &plan.upstream, "--head", &head, "--base", &base, "--title", &plan.pr_title, "--body", &plan.pr_body])?;
+    let out = gh(&[
+        "pr",
+        "create",
+        "--repo",
+        &plan.upstream,
+        "--head",
+        &head,
+        "--base",
+        &base,
+        "--title",
+        &plan.pr_title,
+        "--body",
+        &plan.pr_body,
+    ])?;
     let _ = fs::remove_dir_all(&tmp);
     Ok(out.trim().to_string())
 }
@@ -238,9 +350,18 @@ mod tests {
 
     #[test]
     fn slug_rules() {
-        assert_eq!(slug("https://github.com/erostalevi/Napple").unwrap(), "erostalevi/Napple");
+        assert_eq!(
+            slug("https://github.com/erostalevi/Napple").unwrap(),
+            "erostalevi/Napple"
+        );
         assert_eq!(slug("https://github.com/a/b.git/").unwrap(), "a/b");
-        for bad in ["http://github.com/a/b", "https://evil.example/a/b", "https://github.com/a/b/c", "https://github.com/a/b c", "git@github.com:a/b"] {
+        for bad in [
+            "http://github.com/a/b",
+            "https://evil.example/a/b",
+            "https://github.com/a/b/c",
+            "https://github.com/a/b c",
+            "git@github.com:a/b",
+        ] {
             assert!(slug(bad).is_err(), "{bad}");
         }
     }
@@ -254,7 +375,10 @@ mod tests {
         let plan = build_plan(&pending, "https://github.com/erostalevi/Napple").unwrap();
         assert_eq!(plan.entries, 1);
         assert_eq!(plan.files.len(), 1);
-        assert_eq!(plan.files[0].0, format!("knownSignatures/{}/{}.json", f.title_id, f.build_id));
+        assert_eq!(
+            plan.files[0].0,
+            format!("knownSignatures/{}/{}.json", f.title_id, f.build_id)
+        );
         let out = preview(&plan, true);
         assert!(out.starts_with("DRY RUN: nothing will be sent"));
         assert!(out.contains(&plan.files[0].1), "exact bytes must be shown");
@@ -263,7 +387,12 @@ mod tests {
         let home = std::env::var("HOME").unwrap_or_default();
         assert!(!plan.files[0].1.contains(&home) && !plan.pr_body.contains(&home));
         // deterministic branch name derived from content only
-        assert_eq!(plan.branch, build_plan(&pending, "https://github.com/erostalevi/Napple").unwrap().branch);
+        assert_eq!(
+            plan.branch,
+            build_plan(&pending, "https://github.com/erostalevi/Napple")
+                .unwrap()
+                .branch
+        );
         assert!(plan.branch.starts_with("signatures/"));
     }
 
@@ -288,7 +417,14 @@ mod tests {
         let d = tempfile::tempdir().unwrap();
         let pending = DirRepository::new(d.path(), "pending", true);
         let plan = build_plan(&pending, "https://github.com/erostalevi/Napple").unwrap();
-        let tools = Tools { gh: "/nonexistent/gh".into(), git: "/nonexistent/git".into() };
-        assert!(execute(&plan, &tools, d.path()).unwrap_err().contains("nothing"));
+        let tools = Tools {
+            gh: "/nonexistent/gh".into(),
+            git: "/nonexistent/git".into(),
+        };
+        assert!(
+            execute(&plan, &tools, d.path())
+                .unwrap_err()
+                .contains("nothing")
+        );
     }
 }

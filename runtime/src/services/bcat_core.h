@@ -4,8 +4,15 @@
 
 #define BCAT_NAME_SIZE 0x20u
 #define BCAT_PROGRESS_SIZE 0x200u
-enum { BCAT_STATUS_NONE = 0, BCAT_STATUS_QUEUED = 1, BCAT_STATUS_CONNECTING = 2, BCAT_STATUS_PROCESSING_DATA_LIST = 3, BCAT_STATUS_DOWNLOADING = 4,
-       BCAT_STATUS_COMMITTING = 5, BCAT_STATUS_DONE = 6 };
+enum {
+    BCAT_STATUS_NONE = 0,
+    BCAT_STATUS_QUEUED = 1,
+    BCAT_STATUS_CONNECTING = 2,
+    BCAT_STATUS_PROCESSING_DATA_LIST = 3,
+    BCAT_STATUS_DOWNLOADING = 4,
+    BCAT_STATUS_COMMITTING = 5,
+    BCAT_STATUS_DONE = 6
+};
 
 /* A directory name is 1..31 characters of [A-Za-z0-9_-], NUL padded. A file name additionally allows '.'. */
 int bcat_valid_directory_name(const char name[BCAT_NAME_SIZE]);

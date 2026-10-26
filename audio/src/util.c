@@ -10,10 +10,14 @@ _Thread_local jmp_buf *napple_audio_trap;
 void napple_audio_log(const napple_audio_host *host, const char *fmt, ...) {
     char line[512];
     int n = snprintf(line, sizeof line, "[napple] audio: ");
-    va_list ap; va_start(ap, fmt);
+    va_list ap;
+    va_start(ap, fmt);
     vsnprintf(line + n, sizeof line - (size_t)n, fmt, ap);
     va_end(ap);
-    if (host && host->log) { host->log(host->user, line); return; }
+    if (host && host->log) {
+        host->log(host->user, line);
+        return;
+    }
     fprintf(stderr, "%s\n", line);
 }
 

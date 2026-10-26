@@ -144,7 +144,9 @@ pub fn is_bl(word: u32) -> bool {
     word & 0xFC00_0000 == 0x9400_0000
 }
 pub fn is_cond_branch(word: u32) -> bool {
-    word & 0xFF00_0010 == 0x5400_0000 || word & 0x7E00_0000 == 0x3400_0000 || word & 0x7E00_0000 == 0x3600_0000
+    word & 0xFF00_0010 == 0x5400_0000
+        || word & 0x7E00_0000 == 0x3400_0000
+        || word & 0x7E00_0000 == 0x3600_0000
 }
 /// `br`, `blr`, `ret` and the pointer-authenticated register branches.
 pub fn is_indirect_branch(word: u32) -> bool {
@@ -170,7 +172,10 @@ pub fn is_excl_store(word: u32) -> bool {
 }
 /// Any instruction that ends a straight-line sequence or transfers control.
 pub fn is_control_flow(word: u32) -> bool {
-    direct_target(word, 0).is_some() || is_bl(word) || is_indirect_branch(word) || word & 0xFFE0_001F == 0xD400_0001
+    direct_target(word, 0).is_some()
+        || is_bl(word)
+        || is_indirect_branch(word)
+        || word & 0xFFE0_001F == 0xD400_0001
 }
 
 /// Replaces the branch displacement of a direct branch so it lands on `new_target`.
@@ -203,7 +208,12 @@ pub fn retarget(word: u32, pc: u64, new_target: u64) -> Enc {
 
 /// The four 5-bit register fields (Rd/Rt, Rn, Ra/Rt2, Rm) of a word, whatever the instruction means.
 pub fn reg_fields(word: u32) -> [u32; 4] {
-    [word & 31, (word >> 5) & 31, (word >> 10) & 31, (word >> 16) & 31]
+    [
+        word & 31,
+        (word >> 5) & 31,
+        (word >> 10) & 31,
+        (word >> 16) & 31,
+    ]
 }
 
 /// Cheap prefilter: could this word name register 18 in any operand position?
@@ -218,7 +228,11 @@ pub fn adr_target(word: u32, pc: u64) -> Option<u64> {
     }
     let imm = (((word >> 5) & 0x7_FFFF) << 2) | ((word >> 29) & 3);
     let imm = ((imm << 11) as i32 >> 11) as i64;
-    Some(if word & 0x8000_0000 != 0 { ((pc & !0xFFF) as i64 + (imm << 12)) as u64 } else { (pc as i64 + imm) as u64 })
+    Some(if word & 0x8000_0000 != 0 {
+        ((pc & !0xFFF) as i64 + (imm << 12)) as u64
+    } else {
+        (pc as i64 + imm) as u64
+    })
 }
 
 /// Target of a pc-relative literal load.
@@ -242,7 +256,9 @@ pub struct Text {
 
 pub fn disasm(word: u32) -> Option<Text> {
     let bytes = word.to_le_bytes();
-    let inst = InstDecoder::default().decode(&mut U8Reader::new(&bytes)).ok()?;
+    let inst = InstDecoder::default()
+        .decode(&mut U8Reader::new(&bytes))
+        .ok()?;
     let full = inst.to_string();
     let (m, rest) = full.split_once(' ').unwrap_or((full.as_str(), ""));
     let ops = rest
@@ -251,7 +267,11 @@ pub fn disasm(word: u32) -> Option<Text> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
-    Some(Text { mnemonic: m.to_string(), ops, full: full.clone() })
+    Some(Text {
+        mnemonic: m.to_string(),
+        ops,
+        full: full.clone(),
+    })
 }
 
 fn tokens(text: &str) -> impl Iterator<Item = &str> {
@@ -284,7 +304,10 @@ pub fn uses_reg18(word: u32) -> Option<bool> {
 pub fn subst_reg18(word: u32, s: u32) -> Option<u32> {
     let orig = disasm(word)?;
     let want = replace_reg18(&orig.full, s);
-    let positions: Vec<u32> = [0u32, 5, 10, 16].into_iter().filter(|p| (word >> p) & 31 == 18).collect();
+    let positions: Vec<u32> = [0u32, 5, 10, 16]
+        .into_iter()
+        .filter(|p| (word >> p) & 31 == 18)
+        .collect();
     for k in (1..=positions.len()).rev() {
         for mask in 1u32..(1 << positions.len()) {
             if mask.count_ones() as usize != k {
@@ -310,7 +333,11 @@ fn replace_reg18(text: &str, s: u32) -> String {
     let b = text.as_bytes();
     while let Some((i, c)) = chars.next() {
         let boundary_before = i == 0 || !b[i - 1].is_ascii_alphanumeric();
-        if boundary_before && (c == 'x' || c == 'w') && text[i + 1..].starts_with("18") && !text[i + 3..].starts_with(|ch: char| ch.is_ascii_alphanumeric()) {
+        if boundary_before
+            && (c == 'x' || c == 'w')
+            && text[i + 1..].starts_with("18")
+            && !text[i + 3..].starts_with(|ch: char| ch.is_ascii_alphanumeric())
+        {
             out.push(c);
             out.push_str(&s.to_string());
             chars.next();
@@ -352,11 +379,20 @@ mod tests {
         assert!(b(0, 1 << 28).is_err());
         let cbz = 0xB400_0052u32; // cbz x18, +8
         assert_eq!(direct_target(cbz, 0x100), Some(0x108));
-        assert_eq!(direct_target(retarget(cbz, 0x100, 0x200).unwrap(), 0x100), Some(0x200));
+        assert_eq!(
+            direct_target(retarget(cbz, 0x100, 0x200).unwrap(), 0x100),
+            Some(0x200)
+        );
         let tbz = 0x3600_0052u32; // tbz w18, #0, +8
-        assert_eq!(direct_target(retarget(tbz, 0x100, 0x80).unwrap(), 0x100), Some(0x80));
+        assert_eq!(
+            direct_target(retarget(tbz, 0x100, 0x80).unwrap(), 0x100),
+            Some(0x80)
+        );
         let bne = 0x5400_0041u32;
-        assert_eq!(direct_target(retarget(bne, 0x100, 0x1100).unwrap(), 0x100), Some(0x1100));
+        assert_eq!(
+            direct_target(retarget(bne, 0x100, 0x1100).unwrap(), 0x100),
+            Some(0x1100)
+        );
     }
 
     #[test]

@@ -50,7 +50,13 @@ const CNTFRQ_EL0: u32 = sysreg(3, 3, 14, 0, 0);
 const CNTPCT_EL0: u32 = sysreg(3, 3, 14, 0, 1);
 const CNTVCT_EL0: u32 = sysreg(3, 3, 14, 0, 2);
 /// Registers EL0 code may use directly on Apple silicon: ctr_el0, dczid_el0, fpcr, fpsr, nzcv.
-const NATIVE_SYSREGS: [u32; 5] = [sysreg(3, 3, 0, 0, 1), sysreg(3, 3, 0, 0, 7), sysreg(3, 3, 4, 4, 0), sysreg(3, 3, 4, 4, 1), sysreg(3, 3, 4, 2, 0)];
+const NATIVE_SYSREGS: [u32; 5] = [
+    sysreg(3, 3, 0, 0, 1),
+    sysreg(3, 3, 0, 0, 7),
+    sysreg(3, 3, 4, 4, 0),
+    sysreg(3, 3, 4, 4, 1),
+    sysreg(3, 3, 4, 2, 0),
+];
 
 #[derive(Debug, Default)]
 pub struct ScanResult {
@@ -176,7 +182,12 @@ pub fn scan(img: &ModuleImage) -> ScanResult {
         out.undecodable.extend(p.undecodable);
     }
     let data = data_words(img);
-    let moved: Vec<u32> = out.sites.keys().copied().filter(|o| data.contains(o)).collect();
+    let moved: Vec<u32> = out
+        .sites
+        .keys()
+        .copied()
+        .filter(|o| data.contains(o))
+        .collect();
     for o in moved {
         let k = out.sites.remove(&o).unwrap();
         out.data_matches.push((o, k));
@@ -195,9 +206,18 @@ pub(crate) mod tests {
     pub(crate) fn module(words: &[u32]) -> ModuleImage {
         let nso = Nso {
             build_id: [1; 32],
-            text: Segment { mem_offset: 0, data: words.iter().flat_map(|w| w.to_le_bytes()).collect() },
-            rodata: Segment { mem_offset: 0x1000, data: vec![0; 0x100] },
-            data: Segment { mem_offset: 0x2000, data: vec![0; 0x100] },
+            text: Segment {
+                mem_offset: 0,
+                data: words.iter().flat_map(|w| w.to_le_bytes()).collect(),
+            },
+            rodata: Segment {
+                mem_offset: 0x1000,
+                data: vec![0; 0x100],
+            },
+            data: Segment {
+                mem_offset: 0x2000,
+                data: vec![0; 0x100],
+            },
             bss_size: 0x100,
         };
         ModuleImage::from_nso(&nso).unwrap()
@@ -240,7 +260,14 @@ pub(crate) mod tests {
     #[test]
     fn inline_literals_are_not_rewritten() {
         // bl .+8 ; <data word that looks like mov x18, x0> ; ret ; ldr x1, lit ; ... ; lit: mov x18,x0
-        let img = module(&[0x9400_0002, 0xAA00_03F2, 0xD65F_03C0, 0x5800_0041, 0xD503_201F, 0xAA00_03F2]);
+        let img = module(&[
+            0x9400_0002,
+            0xAA00_03F2,
+            0xD65F_03C0,
+            0x5800_0041,
+            0xD503_201F,
+            0xAA00_03F2,
+        ]);
         let r = scan(&img);
         assert!(r.sites.is_empty(), "{:?}", r.sites);
         assert_eq!(r.data_matches.len(), 2);

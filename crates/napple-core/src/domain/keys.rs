@@ -1,7 +1,7 @@
 //! The user's prod.keys. Held in memory only, zeroized on drop, redacted in Debug.
 use super::error::{Error, Result};
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit};
 use aes::Aes128;
+use aes::cipher::{BlockDecrypt, KeyInit, generic_array::GenericArray};
 use std::collections::HashMap;
 use zeroize::Zeroize;
 
@@ -18,7 +18,9 @@ impl KeySet {
             if line.is_empty() || line.starts_with('#') || line.starts_with(';') {
                 continue;
             }
-            let Some((k, v)) = line.split_once('=') else { continue };
+            let Some((k, v)) = line.split_once('=') else {
+                continue;
+            };
             let (k, v) = (k.trim().to_ascii_lowercase(), v.trim());
             if v.is_empty() || v.len() % 2 != 0 || !v.bytes().all(|b| b.is_ascii_hexdigit()) {
                 continue; // tolerate unrelated lines; never echo them
@@ -44,36 +46,48 @@ impl KeySet {
         let dec = |key: &[u8], data: &[u8]| -> Vec<u8> {
             let c = Aes128::new(GenericArray::from_slice(key));
             let mut out = data.to_vec();
-            for b in out.chunks_exact_mut(16) {
+            for b in out.as_chunks_mut::<16>().0 {
                 c.decrypt_block(GenericArray::from_mut_slice(b));
             }
             out
         };
-        let g = |m: &HashMap<String, Vec<u8>>, n: &str| m.get(n).filter(|v| v.len() % 16 == 0).cloned();
-        let (kek_seed, key_seed) = (g(&self.0, "aes_kek_generation_source"), g(&self.0, "aes_key_generation_source"));
+        let g =
+            |m: &HashMap<String, Vec<u8>>, n: &str| m.get(n).filter(|v| v.len() % 16 == 0).cloned();
+        let (kek_seed, key_seed) = (
+            g(&self.0, "aes_kek_generation_source"),
+            g(&self.0, "aes_key_generation_source"),
+        );
         let generate_kek = |src: &[u8], master: &[u8]| -> Option<Vec<u8>> {
             let kek = dec(master, kek_seed.as_ref()?);
             Some(dec(&dec(&kek, src), key_seed.as_ref()?))
         };
         let mut add: Vec<(String, Vec<u8>)> = Vec::new();
-        if !self.0.contains_key("header_key") {
-            if let (Some(m0), Some(ks), Some(kk), Some(src)) = (
-                g(&self.0, "master_key_00"), g(&self.0, "header_kek_source"), kek_seed.as_ref(), g(&self.0, "header_key_source"),
-            ) {
-                let kek = dec(&dec(&dec(&m0, kk), &ks), key_seed.as_ref().unwrap_or(&vec![0; 16]));
-                add.push(("header_key".into(), dec(&kek, &src)));
-            }
+        if !self.0.contains_key("header_key")
+            && let (Some(m0), Some(ks), Some(kk), Some(src)) = (
+                g(&self.0, "master_key_00"),
+                g(&self.0, "header_kek_source"),
+                kek_seed.as_ref(),
+                g(&self.0, "header_key_source"),
+            )
+        {
+            let kek = dec(
+                &dec(&dec(&m0, kk), &ks),
+                key_seed.as_ref().unwrap_or(&vec![0; 16]),
+            );
+            add.push(("header_key".into(), dec(&kek, &src)));
         }
         for n in 0..=0xFFu8 {
-            let Some(master) = g(&self.0, &format!("master_key_{n:02x}")) else { continue };
+            let Some(master) = g(&self.0, &format!("master_key_{n:02x}")) else {
+                continue;
+            };
             if let Some(src) = g(&self.0, "titlekek_source") {
                 add.push((format!("titlekek_{n:02x}"), dec(&master, &src)));
             }
             for kind in ["application", "ocean", "system"] {
-                if let Some(src) = g(&self.0, &format!("key_area_key_{kind}_source")) {
-                    if let Some(k) = generate_kek(&src, &master) {
-                        add.push((format!("key_area_key_{kind}_{n:02x}"), k));
-                    }
+                if let Some(src) = g(&self.0, &format!("key_area_key_{kind}_source"))
+                    && let Some(k) = generate_kek(&src, &master)
+                {
+                    add.push((format!("key_area_key_{kind}_{n:02x}"), k));
                 }
             }
         }
@@ -92,8 +106,13 @@ impl KeySet {
     }
 
     pub fn get<const N: usize>(&self, name: &str) -> Result<[u8; N]> {
-        let v = self.0.get(&name.to_ascii_lowercase()).ok_or_else(|| Error::MissingKey(name.into()))?;
-        v.as_slice().try_into().map_err(|_| Error::KeyFile(format!("key {name} has wrong length")))
+        let v = self
+            .0
+            .get(&name.to_ascii_lowercase())
+            .ok_or_else(|| Error::MissingKey(name.into()))?;
+        v.as_slice()
+            .try_into()
+            .map_err(|_| Error::KeyFile(format!("key {name} has wrong length")))
     }
 
     pub fn has(&self, name: &str) -> bool {
@@ -121,7 +140,10 @@ mod tests {
 
     #[test]
     fn parses_and_redacts() {
-        let k = KeySet::parse("# c\nheader_key = 00112233445566778899aabbccddeeff\nbad line\nodd=abc\n").unwrap();
+        let k = KeySet::parse(
+            "# c\nheader_key = 00112233445566778899aabbccddeeff\nbad line\nodd=abc\n",
+        )
+        .unwrap();
         assert!(k.has("HEADER_KEY"));
         assert_eq!(k.get::<16>("header_key").unwrap()[1], 0x11);
         assert!(!format!("{k:?}").contains("0011"));

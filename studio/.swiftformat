@@ -1,0 +1,10 @@
+# swiftformat config for Napple Studio (applies to studio/ only). Run: swiftformat Sources Tests
+--swiftversion 6.0
+--indent 4
+--maxwidth 160
+--wraparguments before-first
+--wrapcollections before-first
+--self remove
+--stripunusedargs closure-only
+--disable redundantSelf,trailingCommas,wrapMultilineStatementBraces,blankLinesAtStartOfScope,blankLinesAtEndOfScope
+--exclude .build

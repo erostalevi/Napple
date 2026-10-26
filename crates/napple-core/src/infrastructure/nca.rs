@@ -1,9 +1,11 @@
 //! NCA3 reader: AES-XTS header, key-area / titlekey derivation, AES-CTR section decryption.
-use super::io::{check, read_vec, Slice, Source, Src};
+use super::io::{Slice, Source, Src, check, read_vec};
 use crate::domain::error::{Error, Result};
 use crate::domain::keys::KeySet;
-use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit, KeyIvInit, StreamCipher, StreamCipherSeek};
 use aes::Aes128;
+use aes::cipher::{
+    BlockDecrypt, KeyInit, KeyIvInit, StreamCipher, StreamCipherSeek, generic_array::GenericArray,
+};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -70,7 +72,7 @@ fn u64le(b: &[u8], o: usize) -> u64 {
 
 fn aes_ecb_decrypt(key: &[u8; 16], data: &mut [u8]) {
     let c = Aes128::new(GenericArray::from_slice(key));
-    for blk in data.chunks_exact_mut(16) {
+    for blk in data.as_chunks_mut::<16>().0 {
         c.decrypt_block(GenericArray::from_mut_slice(blk));
     }
 }
@@ -88,7 +90,7 @@ impl Nca {
             Aes128::new(GenericArray::from_slice(&hk[..16])),
             Aes128::new(GenericArray::from_slice(&hk[16..])),
         );
-        for (i, sector) in h.chunks_exact_mut(SECTOR).enumerate() {
+        for (i, sector) in h.as_chunks_mut::<SECTOR>().0.iter_mut().enumerate() {
             xts.decrypt_sector(sector, (i as u128).to_be_bytes());
         }
         match &h[0x200..0x204] {
@@ -158,12 +160,26 @@ impl Nca {
             ctr_hi.reverse();
             check(s, en - s, src.size())?;
             sections.push(Section {
-                index: i, start: s, end: en, fs_type, hash_type: fh[3], enc,
-                hash_data: fh[8..0x100].to_vec(), ctr_hi,
+                index: i,
+                start: s,
+                end: en,
+                fs_type,
+                hash_type: fh[3],
+                enc,
+                hash_data: fh[8..0x100].to_vec(),
+                ctr_hi,
             });
         }
-        Ok(Self { src, content_type, program_id: u64le(&h, 0x210), content_size: u64le(&h, 0x208),
-                  rights_id, sections, key_gen, ctr_key })
+        Ok(Self {
+            src,
+            content_type,
+            program_id: u64le(&h, 0x210),
+            content_size: u64le(&h, 0x208),
+            rights_id,
+            sections,
+            key_gen,
+            ctr_key,
+        })
     }
 
     pub fn master_key_generation(&self) -> u8 {
@@ -172,13 +188,24 @@ impl Nca {
 
     /// Decrypted view of a section's bytes (offsets relative to section start).
     pub fn section(&self, idx: usize) -> Result<Src> {
-        let s = self.sections.iter().find(|s| s.index == idx).ok_or_else(|| Error::Container("no such section".into()))?;
+        let s = self
+            .sections
+            .iter()
+            .find(|s| s.index == idx)
+            .ok_or_else(|| Error::Container("no such section".into()))?;
         let raw = Slice::new(self.src.clone(), s.start, s.end - s.start)?;
         match s.enc {
             Enc::None => Ok(raw),
-            Enc::Ctr => Ok(Arc::new(CtrSource { raw, key: self.ctr_key.unwrap(), hi: s.ctr_hi, base: s.start })),
+            Enc::Ctr => Ok(Arc::new(CtrSource {
+                raw,
+                key: self.ctr_key.unwrap(),
+                hi: s.ctr_hi,
+                base: s.start,
+            })),
             Enc::Xts => Err(Error::Unsupported("AES-XTS sections".into())),
-            Enc::Bktr => Err(Error::Unsupported("BKTR (update patch) sections: not yet".into())),
+            Enc::Bktr => Err(Error::Unsupported(
+                "BKTR (update patch) sections: not yet".into(),
+            )),
         }
     }
 }
@@ -203,14 +230,18 @@ impl Source for CtrSource {
         self.raw.read_at(offset - pre as u64, &mut tmp)?;
         let mut iv = [0u8; 16];
         iv[..8].copy_from_slice(&self.hi);
-        let mut c = ctr::Ctr128BE::<Aes128>::new(GenericArray::from_slice(&self.key), GenericArray::from_slice(&iv));
+        let mut c = ctr::Ctr128BE::<Aes128>::new(
+            GenericArray::from_slice(&self.key),
+            GenericArray::from_slice(&iv),
+        );
         c.seek(abs - pre as u64);
         c.apply_keystream(&mut tmp);
         buf.copy_from_slice(&tmp[pre..]);
         Ok(())
     }
     fn map(&self, offset: u64, len: u64, out: &mut Vec<super::io::MapExt>) -> bool {
-        check(offset, len, self.raw.size()).is_ok() && super::io::map_ctr(&*self.raw, offset, len, self.key, self.hi, self.base, out)
+        check(offset, len, self.raw.size()).is_ok()
+            && super::io::map_ctr(&*self.raw, offset, len, self.key, self.hi, self.base, out)
     }
 }
 

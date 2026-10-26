@@ -1,4 +1,4 @@
-# frontend for iOS / iPadOS 26+: UIKit window, on-screen controller, settings sheet. Build on a Mac with Xcode (see ../docs/ios.md):
+# frontend for iOS / iPadOS 26+: UIKit window, on-screen controller, settings sheet. Build on a Mac with Xcode (see ../docs/architecture/ios.md):
 #   make -f Makefile.ios IOS_SDK=$(xcrun --sdk iphoneos --show-sdk-path)
 IOS_SDK ?= $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC      := xcrun --sdk iphoneos clang -target arm64-apple-ios26.0 -isysroot $(IOS_SDK)

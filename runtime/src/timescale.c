@@ -9,14 +9,15 @@
 #include <stdlib.h>
 #include <time.h>
 
-#define Q 32   /* fixed point fraction bits of the factor */
+#define Q 32 /* fixed point fraction bits of the factor */
 
 static struct {
-    _Atomic uint32_t seq;            /* odd while a writer updates */
-    uint64_t real0, guest0, f_q;     /* f_q = clock factor * 2^Q */
+    _Atomic uint32_t seq;        /* odd while a writer updates */
+    uint64_t real0, guest0, f_q; /* f_q = clock factor * 2^Q */
 } C = {0, 0, 0, 1ull << Q};
 static pthread_mutex_t W = PTHREAD_MUTEX_INITIALIZER;
-static double g_speed = 1.0; static int g_mode = TS_MODE_CLOCK_AND_VSYNC;
+static double g_speed = 1.0;
+static int g_mode = TS_MODE_CLOCK_AND_VSYNC;
 static _Atomic uint64_t g_vsync_q = 1ull << Q;
 static void (*g_observer)(double, int);
 static _Atomic uint64_t g_presents, g_vsyncs;
@@ -28,12 +29,16 @@ static void *time_logger(void *arg) {
     double period = *(double *)arg;
     uint64_t r0 = runtime_now_ns(), g0 = timescale_guest_ns(), p0 = 0, v0 = 0;
     for (;;) {
-        struct timespec ts = {(time_t)period, (long)((period - (time_t)period) * 1e9)}; nanosleep(&ts, NULL);
+        struct timespec ts = {(time_t)period, (long)((period - (time_t)period) * 1e9)};
+        nanosleep(&ts, NULL);
         uint64_t r1 = runtime_now_ns(), g1 = timescale_guest_ns(), p1 = atomic_load(&g_presents), v1 = atomic_load(&g_vsyncs);
         double dr = (double)(r1 - r0) / 1e9;
-        LOG("time", "guest %.3f s per real second (speed %.2fx) | presents %.1f/s | vsync ticks %.1f/s | guest elapsed %.2f s, real %.2f s", (double)(g1 - g0) / 1e9 / dr, g_speed,
-            (double)(p1 - p0) / dr, (double)(v1 - v0) / dr, (double)g1 / 1e9, (double)r1 / 1e9);
-        r0 = r1; g0 = g1; p0 = p1; v0 = v1;
+        LOG("time", "guest %.3f s per real second (speed %.2fx) | presents %.1f/s | vsync ticks %.1f/s | guest elapsed %.2f s, real %.2f s",
+            (double)(g1 - g0) / 1e9 / dr, g_speed, (double)(p1 - p0) / dr, (double)(v1 - v0) / dr, (double)g1 / 1e9, (double)r1 / 1e9);
+        r0 = r1;
+        g0 = g1;
+        p0 = p1;
+        v0 = v1;
     }
     return NULL;
 }
@@ -46,7 +51,7 @@ static uint64_t guest_at(uint64_t real) {
         uint64_t r0 = C.real0, g0 = C.guest0, f = C.f_q;
         atomic_thread_fence(memory_order_acquire);
         if (atomic_load_explicit(&C.seq, memory_order_relaxed) != s0) continue;
-        if (real < r0) return g0;     /* never earlier than the base: a caller racing a re-base */
+        if (real < r0) return g0; /* never earlier than the base: a caller racing a re-base */
         return g0 + (uint64_t)(((__uint128_t)(real - r0) * f) >> Q);
     }
 }
@@ -61,18 +66,30 @@ void timescale_set(double speed, int mode) {
     pthread_mutex_lock(&W);
     double fc = mode == TS_MODE_VSYNC_ONLY ? 1.0 : speed, fv = mode == TS_MODE_CLOCK_ONLY ? 1.0 : speed;
     uint64_t now = runtime_now_ns(), g = guest_at(now);
-    atomic_fetch_add_explicit(&C.seq, 1, memory_order_release);          /* odd: readers retry */
-    C.real0 = now; C.guest0 = g; C.f_q = (uint64_t)(fc * (double)(1ull << Q) + 0.5);
+    atomic_fetch_add_explicit(&C.seq, 1, memory_order_release); /* odd: readers retry */
+    C.real0 = now;
+    C.guest0 = g;
+    C.f_q = (uint64_t)(fc * (double)(1ull << Q) + 0.5);
     atomic_fetch_add_explicit(&C.seq, 1, memory_order_release);
     atomic_store(&g_vsync_q, (uint64_t)(fv * (double)(1ull << Q) + 0.5));
-    static int logger_started; static double logger_period;
-    if (!logger_started && getenv("NAPPLE_TIME_LOG") && atof(getenv("NAPPLE_TIME_LOG")) > 0) { logger_started = 1; logger_period = atof(getenv("NAPPLE_TIME_LOG")); pthread_t t; if (!pthread_create(&t, NULL, time_logger, &logger_period)) pthread_detach(t); }
+    static int logger_started;
+    static double logger_period;
+    if (!logger_started && getenv("NAPPLE_TIME_LOG") && atof(getenv("NAPPLE_TIME_LOG")) > 0) {
+        logger_started = 1;
+        logger_period = atof(getenv("NAPPLE_TIME_LOG"));
+        pthread_t t;
+        if (!pthread_create(&t, NULL, time_logger, &logger_period)) pthread_detach(t);
+    }
     int changed = speed != g_speed || mode != g_mode;
-    g_speed = speed; g_mode = mode;
+    g_speed = speed;
+    g_mode = mode;
     void (*obs)(double, int) = g_observer;
     pthread_mutex_unlock(&W);
     if (changed) {
-        LOG("time", "game speed %.2fx (%s)", speed, mode == TS_MODE_CLOCK_AND_VSYNC ? "game clock and vsync" : mode == TS_MODE_VSYNC_ONLY ? "vsync only, clocks real" : "game clock only, vsync unchanged");
+        LOG("time", "game speed %.2fx (%s)", speed,
+            mode == TS_MODE_CLOCK_AND_VSYNC ? "game clock and vsync"
+            : mode == TS_MODE_VSYNC_ONLY    ? "vsync only, clocks real"
+                                            : "game clock only, vsync unchanged");
         if (obs) obs(speed, mode);
     }
 }

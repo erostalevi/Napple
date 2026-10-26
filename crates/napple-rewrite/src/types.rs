@@ -26,7 +26,16 @@ pub enum Key {
 }
 
 impl Key {
-    pub const ALL: [Key; 8] = [Key::K18, Key::Ktls, Key::Ktlr, Key::Kgate, Key::Kres0, Key::Kres1, Key::Kaspect, Key::Kaspectui];
+    pub const ALL: [Key; 8] = [
+        Key::K18,
+        Key::Ktls,
+        Key::Ktlr,
+        Key::Kgate,
+        Key::Kres0,
+        Key::Kres1,
+        Key::Kaspect,
+        Key::Kaspectui,
+    ];
 
     /// Entry number inside the key page (the `ldr` immediate is `index * 8` bytes).
     pub fn index(self) -> u32 {
@@ -109,7 +118,10 @@ pub struct RewriteOptions {
 
 impl Default for RewriteOptions {
     fn default() -> Self {
-        Self { max_jump_pads: 1 << 17, max_window_len: 16 }
+        Self {
+            max_jump_pads: 1 << 17,
+            max_window_len: 16,
+        }
     }
 }
 

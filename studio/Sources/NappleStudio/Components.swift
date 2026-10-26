@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import NappleStudioCore
 
 /// Open panel helper (files and/or folders). Returns nothing when cancelled.
-func pick(files: Bool, dirs: Bool, multiple: Bool = false, message: String, types: [UTType] = []) -> [URL] {
+@MainActor func pick(files: Bool, dirs: Bool, multiple: Bool = false, message: String, types: [UTType] = []) -> [URL] {
     let p = NSOpenPanel()
     p.canChooseFiles = files; p.canChooseDirectories = dirs; p.allowsMultipleSelection = multiple
     p.message = message

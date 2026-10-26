@@ -1,13 +1,13 @@
 //! Legacy single-purpose subcommands used by tools/prepare_game.sh: `--dump-exefs` and `--dump-romfs`.
 use napple_core::application::ingest::ingest;
 use napple_core::domain::error::Error as CoreError;
+use napple_core::domain::keys::KeySet;
 use napple_core::infrastructure::io::{FileSource, Src};
 use napple_core::infrastructure::nca::{self, ContentType, FsType, Nca, TitleKeys};
 use napple_core::infrastructure::pfs::parse_pfs0;
 use napple_core::infrastructure::{ticket::parse_ticket, xci::parse_xci};
 use std::io::Write;
-use napple_core::domain::keys::KeySet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub(crate) const USAGE: &str = "usage:
   napple build --dump-romfs <game.nsp|xci> -k <prod.keys> -o <file>  stream the decrypted RomFS image (romfs.bin) to <file>
@@ -21,10 +21,19 @@ pub(crate) struct Opts {
 }
 
 pub(crate) fn parse(args: &[String]) -> Result<Opts, String> {
-    let mut o = Opts { dump_exefs: None, dump_romfs: None, keys: None, out: None };
+    let mut o = Opts {
+        dump_exefs: None,
+        dump_romfs: None,
+        keys: None,
+        out: None,
+    };
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        let mut val = |n: &str| it.next().map(PathBuf::from).ok_or_else(|| format!("{n} needs a value"));
+        let mut val = |n: &str| {
+            it.next()
+                .map(PathBuf::from)
+                .ok_or_else(|| format!("{n} needs a value"))
+        };
         match a.as_str() {
             "--dump-exefs" => o.dump_exefs = Some(val("--dump-exefs")?),
             "--dump-romfs" => o.dump_romfs = Some(val("--dump-romfs")?),
@@ -44,29 +53,53 @@ fn safe_name(n: &str) -> bool {
     !n.is_empty() && !n.contains(['/', '\\', '\0']) && n != "." && n != ".."
 }
 
-fn dump_romfs(game: &PathBuf, keys: &KeySet, out: &PathBuf) -> Result<(), String> {
+fn dump_romfs(game: &Path, keys: &KeySet, out: &Path) -> Result<(), String> {
     let e = |x: CoreError| x.to_string();
     progress("romfs", 0, "reading container");
     let src = FileSource::open(game).map_err(e)?;
     let magic = napple_core::infrastructure::io::read_vec(&*src, 0, 4).map_err(e)?;
     let mut parts = Vec::new();
-    if magic == b"PFS0" { parts.push(parse_pfs0(src).map_err(e)?); }
-    else { parts.extend(parse_xci(src).map_err(e)?.into_iter().filter(|(n, _)| n != "logo").map(|(_, f)| f)); }
+    if magic == b"PFS0" {
+        parts.push(parse_pfs0(src).map_err(e)?);
+    } else {
+        parts.extend(
+            parse_xci(src)
+                .map_err(e)?
+                .into_iter()
+                .filter(|(n, _)| n != "logo")
+                .map(|(_, f)| f),
+        );
+    }
     let (mut ncas, mut tks): (Vec<(String, Src)>, TitleKeys) = (Vec::new(), TitleKeys::new());
     for fs in &parts {
         for en in &fs.entries {
-            if en.name.ends_with(".nca") { ncas.push((en.name.clone(), fs.open(&en.name).map_err(e)?)); }
-            else if en.name.ends_with(".ncz") { ncas.push((napple_core::infrastructure::ncz::nca_name(&en.name), napple_core::infrastructure::ncz::NczSource::open(fs.open(&en.name).map_err(e)?).map_err(e)?)); }
-            else if en.name.ends_with(".tik") {
+            if en.name.ends_with(".nca") {
+                ncas.push((en.name.clone(), fs.open(&en.name).map_err(e)?));
+            } else if en.name.ends_with(".ncz") {
+                ncas.push((
+                    napple_core::infrastructure::ncz::nca_name(&en.name),
+                    napple_core::infrastructure::ncz::NczSource::open(
+                        fs.open(&en.name).map_err(e)?,
+                    )
+                    .map_err(e)?,
+                ));
+            } else if en.name.ends_with(".tik") {
                 let t = parse_ticket(&fs.read(&en.name).map_err(e)?).map_err(e)?;
-                if t.key_type == 0 { tks.insert(t.rights_id, t.encrypted_title_key); }
+                if t.key_type == 0 {
+                    tks.insert(t.rights_id, t.encrypted_title_key);
+                }
             }
         }
     }
     for (_, s) in ncas {
-        let n = match Nca::open(s, keys, &tks) { Ok(n) => n, Err(_) => continue };
-        if n.content_type != ContentType::Program { continue; }
-        for sec in n.sections.iter().filter(|x| x.fs_type == FsType::RomFs) {
+        let n = match Nca::open(s, keys, &tks) {
+            Ok(n) => n,
+            Err(_) => continue,
+        };
+        if n.content_type != ContentType::Program {
+            continue;
+        }
+        if let Some(sec) = n.sections.iter().find(|x| x.fs_type == FsType::RomFs) {
             let section = n.section(sec.index).map_err(e)?;
             let data = nca::romfs_data(&section, sec).map_err(e)?;
             let total = data.size();
@@ -81,7 +114,10 @@ fn dump_romfs(game: &PathBuf, keys: &KeySet, out: &PathBuf) -> Result<(), String
                 f.write_all(&buf[..n]).map_err(|x| x.to_string())?;
                 off += n as u64;
                 let pct = (off * 100 / total.max(1)) as u32;
-                if pct != last { progress("romfs", pct, "writing romfs.bin"); last = pct; }
+                if pct != last {
+                    progress("romfs", pct, "writing romfs.bin");
+                    last = pct;
+                }
             }
             f.flush().map_err(|x| x.to_string())?;
             std::fs::rename(&tmp, out).map_err(|x| x.to_string())?;

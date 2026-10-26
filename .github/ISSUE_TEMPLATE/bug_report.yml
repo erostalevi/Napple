@@ -1,0 +1,43 @@
+name: Bug report
+description: Something in Napple (CLI, runtime, Studio, build) does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never attach game files, keys or firmware**, here or anywhere else. Logs and metadata only.
+        For how a specific game behaves, use the *Compatibility report* form instead. Security problems: see SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+      placeholder: "1. napple build ...\n2. ..."
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Napple build
+      description: Release name or commit, e.g. "v0.1.42 (a1b2c3d)"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Machine
+      placeholder: "M2 Pro, macOS 26.0"
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Relevant output (runtime log, crash report). Remove personal paths and anything derived from keys.
+      render: text

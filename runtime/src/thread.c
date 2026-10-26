@@ -9,13 +9,22 @@
 pthread_key_t runtime_keys[8];
 static pthread_key_t environment_key;
 #define SIGNAL_STACK_SIZE (256u << 10)
-typedef struct { void *tls, *tlr, *dummy, *signal_stack; } ThreadEnvironment;
+typedef struct {
+    void *tls, *tlr, *dummy, *signal_stack;
+} ThreadEnvironment;
 
 static void environment_destroy(void *p) {
     ThreadEnvironment *e = p;
     if (!e) return;
-    if (e->signal_stack) { stack_t off = {.ss_flags = SS_DISABLE}; sigaltstack(&off, NULL); free(e->signal_stack); }
-    free(e->dummy); free(e->tlr); free(e->tls); free(e);
+    if (e->signal_stack) {
+        stack_t off = {.ss_flags = SS_DISABLE};
+        sigaltstack(&off, NULL);
+        free(e->signal_stack);
+    }
+    free(e->dummy);
+    free(e->tlr);
+    free(e->tls);
+    free(e);
 }
 
 void thread_env_init_keys(void) {
@@ -29,20 +38,23 @@ void runtime_thread_init(void) {
     if (pthread_getspecific(environment_key)) runtime_fail("duplicate guest thread environment");
     ThreadEnvironment *e = calloc(1, sizeof *e);
     if (!e) runtime_fail("thread environment");
-    e->tls = calloc(1, 8192); e->tlr = calloc(1, 0x200); e->dummy = calloc(1, 0x400);
+    e->tls = calloc(1, 8192);
+    e->tlr = calloc(1, 0x200);
+    e->dummy = calloc(1, 0x400);
     e->signal_stack = malloc(SIGNAL_STACK_SIZE);
     if (!e->tls || !e->tlr || !e->dummy || !e->signal_stack) runtime_fail("thread environment allocation");
     stack_t ss = {.ss_sp = e->signal_stack, .ss_size = SIGNAL_STACK_SIZE, .ss_flags = 0};
     if (sigaltstack(&ss, NULL)) runtime_fail("cannot install signal stack");
     memcpy((uint8_t *)e->tlr + 0x1f8, &e->dummy, 8);
-    if (pthread_setspecific(environment_key, e) || pthread_setspecific(runtime_keys[0], NULL) ||
-        pthread_setspecific(runtime_keys[1], e->tls) || pthread_setspecific(runtime_keys[2], e->tlr) ||
-        pthread_setspecific(runtime_keys[3], (void *)runtime_gate))
+    if (pthread_setspecific(environment_key, e) || pthread_setspecific(runtime_keys[0], NULL) || pthread_setspecific(runtime_keys[1], e->tls) ||
+        pthread_setspecific(runtime_keys[2], e->tlr) || pthread_setspecific(runtime_keys[3], (void *)runtime_gate))
         runtime_fail("thread slots");
-    uintptr_t tp; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tp));
+    uintptr_t tp;
+    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tp));
     if (tp & 7) runtime_fail("raw Darwin TSD base is not 8-byte aligned (rewritten code indexes it directly)");
     for (unsigned i = 0; i < 4; i++) {
-        void *raw; memcpy(&raw, (void *)(tp + runtime_keys[i] * 8), 8);
+        void *raw;
+        memcpy(&raw, (void *)(tp + runtime_keys[i] * 8), 8);
         if (raw != pthread_getspecific(runtime_keys[i])) runtime_fail("Darwin TSD layout differs from the raw slot assumption (key %u)", i);
     }
 }

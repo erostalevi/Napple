@@ -7,7 +7,7 @@
 //! into a window are linked into one group so the loop stays inside a single copy.
 use crate::a64;
 use crate::image::ModuleImage;
-use crate::patch::{Reason, R};
+use crate::patch::{R, Reason};
 use crate::rewrite::Rewriter;
 use crate::scan::SiteKind;
 use crate::templates::SPILL;
@@ -29,7 +29,10 @@ impl Seg {
         (self.lo..self.hi()).contains(&a)
     }
     fn insns(&self) -> impl Iterator<Item = (u32, u32)> + '_ {
-        self.words.iter().enumerate().map(|(i, w)| (self.lo + 4 * i as u32, *w))
+        self.words
+            .iter()
+            .enumerate()
+            .map(|(i, w)| (self.lo + 4 * i as u32, *w))
     }
 }
 
@@ -49,7 +52,8 @@ pub fn find(img: &ModuleImage, sites: &BTreeMap<u32, SiteKind>, max_len: usize) 
             continue;
         }
         let mut j = i + 1;
-        while j < n && !(a64::is_excl_store(img.word(j * 4)) || a64::is_excl_load(img.word(j * 4))) {
+        while j < n && !(a64::is_excl_store(img.word(j * 4)) || a64::is_excl_load(img.word(j * 4)))
+        {
             j += 1;
         }
         if j < n && (j - i) < max_len as u32 && a64::is_excl_store(img.word(j * 4)) {
@@ -58,7 +62,10 @@ pub fn find(img: &ModuleImage, sites: &BTreeMap<u32, SiteKind>, max_len: usize) 
             }
             let (lo, hi) = (i * 4, (j + 1) * 4);
             if sites.range(lo..hi).next().is_some() {
-                out.push(Seg { lo, words: (i..=j).map(|k| img.word(k * 4)).collect() });
+                out.push(Seg {
+                    lo,
+                    words: (i..=j).map(|k| img.word(k * 4)).collect(),
+                });
             }
         }
         i += 1;
@@ -90,13 +97,21 @@ fn retry_body_ok(frag: &[u32]) -> bool {
 pub fn group(img: &ModuleImage, windows: Vec<Seg>) -> Grouped {
     let n = img.layout.text_end / 4;
     let by_lo: BTreeMap<u32, usize> = windows.iter().enumerate().map(|(k, w)| (w.lo, k)).collect();
-    let owner_of = |t: u32| by_lo.range(..=t).next_back().map(|(_, &k)| k).filter(|&k| windows[k].contains(t));
+    let owner_of = |t: u32| {
+        by_lo
+            .range(..=t)
+            .next_back()
+            .map(|(_, &k)| k)
+            .filter(|&k| windows[k].contains(t))
+    };
     let mut frags: Vec<Vec<Seg>> = vec![Vec::new(); windows.len()];
     let mut frag_owner: HashMap<u32, usize> = HashMap::new();
     let mut rejected: HashMap<usize, String> = HashMap::new();
     for i in 0..n {
         let (a, w) = (i * 4, img.word(i * 4));
-        let Some(t) = a64::direct_target(w, a as u64).map(|t| t as u32) else { continue };
+        let Some(t) = a64::direct_target(w, a as u64).map(|t| t as u32) else {
+            continue;
+        };
         let Some(o) = owner_of(t) else { continue };
         if t == windows[o].lo || windows[o].contains(a) {
             continue; // a normal entry at the head, or an edge internal to the window
@@ -114,7 +129,9 @@ pub fn group(img: &ModuleImage, windows: Vec<Seg>) -> Grouped {
             k -= 1;
         }
         if !a64::is_excl_load(img.word(k * 4)) {
-            reject(format!("branch at {a:#x} enters the window but its retry fragment has no load-exclusive"));
+            reject(format!(
+                "branch at {a:#x} enters the window but its retry fragment has no load-exclusive"
+            ));
             continue;
         }
         let frag: Vec<u32> = (k..=i).map(|x| img.word(x * 4)).collect();
@@ -150,7 +167,10 @@ pub fn group(img: &ModuleImage, windows: Vec<Seg>) -> Grouped {
             }
         }
     }
-    Grouped { groups, rejected: bad }
+    Grouped {
+        groups,
+        rejected: bad,
+    }
 }
 
 impl Rewriter<'_> {
@@ -161,7 +181,9 @@ impl Rewriter<'_> {
             for (a, w) in s.insns() {
                 busy |= a64::busy_regs(w);
                 if matches!(self.sites.get(&a), Some(k) if *k != SiteKind::X18) {
-                    return Err(Reason(format!("non-x18 site at {a:#x} inside an exclusive window")));
+                    return Err(Reason(format!(
+                        "non-x18 site at {a:#x} inside an exclusive window"
+                    )));
                 }
             }
         }
@@ -194,7 +216,11 @@ impl Rewriter<'_> {
                 }
             }
         }
-        let exit_at: HashMap<u32, u32> = exits.iter().enumerate().map(|(i, t)| (*t, cursor + 16 * i as u32)).collect();
+        let exit_at: HashMap<u32, u32> = exits
+            .iter()
+            .enumerate()
+            .map(|(i, t)| (*t, cursor + 16 * i as u32))
+            .collect();
 
         let mut heads = Vec::new();
         for seg in group {
@@ -212,32 +238,49 @@ impl Rewriter<'_> {
                 let here = self.patch.here();
                 debug_assert_eq!(here, copied[&a]);
                 let nw = if matches!(self.sites.get(&a), Some(SiteKind::X18)) {
-                    a64::subst_reg18(w, s).ok_or_else(|| Reason(format!("cannot substitute x18 at {a:#x}")))?
+                    a64::subst_reg18(w, s)
+                        .ok_or_else(|| Reason(format!("cannot substitute x18 at {a:#x}")))?
                 } else {
                     w
                 };
                 // `bl` matches direct_target too, but a call cannot leave through an exit stub: it would return into
                 // the copy with the scratch registers already restored
                 if a64::is_bl(w) {
-                    return Err(Reason(format!("instruction at {a:#x} cannot be relocated into a window")));
+                    return Err(Reason(format!(
+                        "instruction at {a:#x} cannot be relocated into a window"
+                    )));
                 }
                 let out = if w & 0x9F00_0000 == 0x9000_0000 {
                     // adrp: same target page from the copy's address (x18 already replaced by the scratch register in `nw`)
                     let page = a64::adr_target(w, a as u64).ok_or("adrp target")?;
                     a64::adrp(nw & 31, here as u64, page)?
                 } else if let Some(tgt) = a64::direct_target(w, a as u64) {
-                    let dest = copied.get(&(tgt as u32)).or_else(|| exit_at.get(&(tgt as u32))).copied().ok_or("window exit missing")?;
+                    let dest = copied
+                        .get(&(tgt as u32))
+                        .or_else(|| exit_at.get(&(tgt as u32)))
+                        .copied()
+                        .ok_or("window exit missing")?;
                     a64::retarget(nw, here as u64, dest as u64)?
                 } else {
-                    if a64::is_indirect_branch(w) || a64::is_adr_like(w) || a64::is_literal_load(w) || w & 0xFFE0_001F == 0xD400_0001 {
-                        return Err(Reason(format!("instruction at {a:#x} cannot be relocated into a window")));
+                    if a64::is_indirect_branch(w)
+                        || a64::is_adr_like(w)
+                        || a64::is_literal_load(w)
+                        || w & 0xFFE0_001F == 0xD400_0001
+                    {
+                        return Err(Reason(format!(
+                            "instruction at {a:#x} cannot be relocated into a window"
+                        )));
                     }
                     nw
                 };
                 self.patch.emit(out);
             }
             let hi = seg.hi();
-            let dest = copied.get(&hi).or_else(|| exit_at.get(&hi)).copied().ok_or("window fallthrough missing")?;
+            let dest = copied
+                .get(&hi)
+                .or_else(|| exit_at.get(&hi))
+                .copied()
+                .ok_or("window fallthrough missing")?;
             self.patch.emit_b(dest)?;
         }
         for tgt in &exits {
@@ -254,6 +297,9 @@ impl Rewriter<'_> {
 
 /// Addresses covered by a set of segments.
 pub fn covered(groups: &[Vec<Seg>]) -> BTreeSet<u32> {
-    groups.iter().flatten().flat_map(|s| (s.lo..s.hi()).step_by(4)).collect()
+    groups
+        .iter()
+        .flatten()
+        .flat_map(|s| (s.lo..s.hi()).step_by(4))
+        .collect()
 }
-

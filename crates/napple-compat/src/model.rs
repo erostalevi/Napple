@@ -4,7 +4,18 @@ use std::collections::BTreeMap;
 
 /// Fixed pipeline order. The kebab-case name is the stage-file name and the JSON key.
 pub const STAGES: [&str; 13] = [
-    "ingest", "build-plan", "nso-load", "site-scan", "rewrite", "rewrite-verify", "runtime-boot", "video", "audio", "input", "saves", "title-screen",
+    "ingest",
+    "build-plan",
+    "nso-load",
+    "site-scan",
+    "rewrite",
+    "rewrite-verify",
+    "runtime-boot",
+    "video",
+    "audio",
+    "input",
+    "saves",
+    "title-screen",
     "ingame",
 ];
 
@@ -219,21 +230,28 @@ pub struct Matrix {
 
 impl Matrix {
     pub fn new() -> Self {
-        Self { schema: 1, ..Default::default() }
+        Self {
+            schema: 1,
+            ..Default::default()
+        }
     }
 
     pub fn game_mut(&mut self, title_id: &str) -> &mut GameEntry {
         if let Some(i) = self.games.iter().position(|g| g.title_id == title_id) {
             return &mut self.games[i];
         }
-        self.games.push(GameEntry { title_id: title_id.to_string(), ..Default::default() });
+        self.games.push(GameEntry {
+            title_id: title_id.to_string(),
+            ..Default::default()
+        });
         self.games.last_mut().unwrap()
     }
 
     pub fn sort(&mut self) {
         self.games.sort_by(|a, b| a.title_id.cmp(&b.title_id));
         for g in &mut self.games {
-            g.versions.sort_by(|a, b| (a.version, &a.build_id).cmp(&(b.version, &b.build_id)));
+            g.versions
+                .sort_by(|a, b| (a.version, &a.build_id).cmp(&(b.version, &b.build_id)));
         }
     }
 }
@@ -241,10 +259,18 @@ impl Matrix {
 impl GameEntry {
     /// Version entry for (version, build id), created if missing.
     pub fn version_mut(&mut self, version: u32, build_id: &str) -> &mut VersionEntry {
-        if let Some(i) = self.versions.iter().position(|v| v.version == version && v.build_id == build_id) {
+        if let Some(i) = self
+            .versions
+            .iter()
+            .position(|v| v.version == version && v.build_id == build_id)
+        {
             return &mut self.versions[i];
         }
-        self.versions.push(VersionEntry { version, build_id: build_id.to_string(), ..Default::default() });
+        self.versions.push(VersionEntry {
+            version,
+            build_id: build_id.to_string(),
+            ..Default::default()
+        });
         self.versions.last_mut().unwrap()
     }
 }
@@ -261,7 +287,12 @@ pub fn iso(t: u64) -> String {
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", rem / 3600, rem % 3600 / 60, rem % 60)
+    format!(
+        "{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z",
+        rem / 3600,
+        rem % 3600 / 60,
+        rem % 60
+    )
 }
 
 #[cfg(test)]
@@ -284,8 +315,15 @@ mod tests {
 
     #[test]
     fn counters_merge_dedups() {
-        let mut a = Counters { missing_ipc: vec!["a".into()], ..Default::default() };
-        a.merge(&Counters { missing_ipc: vec!["a".into(), "b".into()], unsupported_svcs: vec![7], ..Default::default() });
+        let mut a = Counters {
+            missing_ipc: vec!["a".into()],
+            ..Default::default()
+        };
+        a.merge(&Counters {
+            missing_ipc: vec!["a".into(), "b".into()],
+            unsupported_svcs: vec![7],
+            ..Default::default()
+        });
         assert_eq!((a.missing_ipc.len(), a.unsupported_svcs.len()), (2, 1));
     }
 

@@ -1,4 +1,4 @@
-/* t_pipekey.c - first-use stutter work (G11, docs/changes/2026-10-25-nx-shader.md):
+/* t_pipekey.c - first-use stutter work (G11, docs/archive/changes/2026-10-25-nx-shader.md):
  *  1. pipeline key normalisation: draws that differ only in state that cannot change the Metal pipeline (blend factors with blending off, the write
  *     mask of an absent render target, the format of an attribute the vertex program never reads, the stride of a stream only that attribute uses)
  *     build ONE pipeline; enabling blending (a real difference) builds a second.

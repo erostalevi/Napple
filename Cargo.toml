@@ -8,6 +8,7 @@ edition = "2024"
 license = "MIT"
 
 [profile.release]
-lto = "thin"
 codegen-units = 1
 panic = "abort"
+strip = "none"
+lto = "fat"

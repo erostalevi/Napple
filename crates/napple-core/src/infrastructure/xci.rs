@@ -1,6 +1,6 @@
-use super::io::{read_vec, Slice, Src};
-use super::pfs::{parse_hfs0, Fs};
-use crate::domain::error::{container, Result};
+use super::io::{Slice, Src, read_vec};
+use super::pfs::{Fs, parse_hfs0};
+use crate::domain::error::{Result, container};
 
 /// Returns XCI partitions (update / normal / secure / logo) as HFS0 file systems.
 pub fn parse_xci(src: Src) -> Result<Vec<(String, Fs)>> {

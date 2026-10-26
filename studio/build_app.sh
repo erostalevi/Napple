@@ -59,5 +59,7 @@ cat > "$APP/Contents/Info.plist" <<P
 </dict></plist>
 P
 xattr -cr "$APP" 2>/dev/null || true
+# Release bundle: drop local symbols (the debug builds in target/ and runtime/build keep them; no dSYM is shipped).
+for f in "$APP/Contents/MacOS/NappleStudio" "$APP/Contents/Resources/napple" "$APP/Contents/Resources/napple-runtime" "$APP/Contents/Resources/napple-launcher"; do strip -x "$f"; done
 codesign --force --sign - --timestamp=none "$APP"
 echo "Built $APP"

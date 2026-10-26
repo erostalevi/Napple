@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stopgap module-table writer (replaced by the Rust rewriter, see docs/runtime-modules.md).
+"""Stopgap module-table writer (replaced by the Rust rewriter, see docs/architecture/module-format.md).
 
 Reads the files the rewriter produces for each module in <modules-dir>:
     <name>.patched.bin  <name>.fixups.tsv  <name>.gates.tsv   (+ <name>.sites.tsv, not needed at run time)

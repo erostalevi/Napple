@@ -1,7 +1,7 @@
 #!/bin/bash
 # tools/boot_test.sh <titleid> [seconds] [extra runtime args...]
 # Runs the runtime on work/games/<titleid>/<newest build> headless for N seconds (default 20), logging to work/logs and
-# writing the compat stage file work/compat/<titleid>/<buildid>/runtime-boot.json (docs/compat-format.md).
+# writing the compat stage file work/compat/<titleid>/<buildid>/runtime-boot.json (docs/architecture/compat-format.md).
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TID="${1:?usage: boot_test.sh <titleid> [seconds]}"; SECS="${2:-20}"; shift; shift 2>/dev/null || true

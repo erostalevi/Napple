@@ -15,15 +15,29 @@ static void session_get_config(IpcObject *self, IpcCall *c) {
     uint32_t mode = IPC_IN(c, uint32_t, 0), v = mode < 2 ? performance_config[mode] : 0;
     IPC_OUT(c, v);
 }
-static void session_set_cpu_overclock(IpcObject *self, IpcCall *c) { (void)self; (void)c; }
+static void session_set_cpu_overclock(IpcObject *self, IpcCall *c) {
+    (void)self;
+    (void)c;
+}
 static const IpcCmd session_cmds[] = {
     {0, "SetPerformanceConfiguration", session_set_config, IPC_IMPL},
     {1, "GetPerformanceConfiguration", session_get_config, IPC_IMPL},
     {2, "SetCpuOverclockEnabled", session_set_cpu_overclock, IPC_STUB},
 };
-static void apm_open_session(IpcObject *self, IpcCall *c) { (void)self; ipc_out_object(c, IPC_OBJECT("apm::ISession", session_cmds, NULL, NULL)); }
-static void apm_get_performance_mode(IpcObject *self, IpcCall *c) { (void)self; uint32_t m = g_cfg.op_mode_handheld ? 0 : 1; IPC_OUT(c, m); }
-static void apm_is_cpu_overclock(IpcObject *self, IpcCall *c) { (void)self; uint8_t v = 0; IPC_OUT(c, v); }
+static void apm_open_session(IpcObject *self, IpcCall *c) {
+    (void)self;
+    ipc_out_object(c, IPC_OBJECT("apm::ISession", session_cmds, NULL, NULL));
+}
+static void apm_get_performance_mode(IpcObject *self, IpcCall *c) {
+    (void)self;
+    uint32_t m = g_cfg.op_mode_handheld ? 0 : 1;
+    IPC_OUT(c, m);
+}
+static void apm_is_cpu_overclock(IpcObject *self, IpcCall *c) {
+    (void)self;
+    uint8_t v = 0;
+    IPC_OUT(c, v);
+}
 static const IpcCmd apm_cmds[] = {
     {0, "OpenSession", apm_open_session, IPC_IMPL},
     {1, "GetPerformanceMode", apm_get_performance_mode, IPC_IMPL},

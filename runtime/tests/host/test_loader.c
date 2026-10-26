@@ -1,7 +1,7 @@
 /* Host unit tests: NRO / NRR validation (nro.c), the ldr:ro / ro:1 service (ro.c, included for its static handlers), run-time module
  * loading in module.c (relocation against a static module and a host override, weak imports, slot reuse) and the dispatch index growing
  * and shrinking with the NRO's gates (dispatch.c). The data directory, the static module and the rewritten NRO are synthesized here in
- * the NTB1 layout of docs/runtime-modules.md. */
+ * the NTB1 layout of docs/architecture/module-format.md. */
 #include "../../src/ro.c"
 #include "host_stubs.h"
 #include "../check.h"

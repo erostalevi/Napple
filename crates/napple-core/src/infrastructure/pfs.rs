@@ -1,6 +1,6 @@
 //! PFS0 (NSP, ExeFS) and HFS0 (XCI partitions).
-use super::io::{read_vec, Slice, Src};
-use crate::domain::error::{container, Result};
+use super::io::{Slice, Src, read_vec};
+use crate::domain::error::{Result, container};
 
 const MAX_FILES: u32 = 1 << 16;
 const MAX_STRTAB: u32 = 1 << 24;
@@ -57,7 +57,10 @@ fn parse(src: Src, magic: &[u8; 4], esz: usize) -> Result<Fs> {
     for i in 0..count as usize {
         let e = &table[i * esz..];
         let (off, size, so) = (u64le(e, 0), u64le(e, 8), u32le(e, 16) as usize);
-        let end = match strtab.get(so..).and_then(|s| s.iter().position(|&c| c == 0)) {
+        let end = match strtab
+            .get(so..)
+            .and_then(|s| s.iter().position(|&c| c == 0))
+        {
             Some(p) => so + p,
             None => return container("bad string table"),
         };
@@ -65,9 +68,17 @@ fn parse(src: Src, magic: &[u8; 4], esz: usize) -> Result<Fs> {
         if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\']) {
             return container("unsafe file name in container");
         }
-        let abs = data_start.checked_add(off).filter(|a| a.checked_add(size).is_some_and(|e| e <= src.size()));
-        let Some(abs) = abs else { return container("file extends past container") };
-        entries.push(Entry { name: name.to_string(), offset: abs, size });
+        let abs = data_start
+            .checked_add(off)
+            .filter(|a| a.checked_add(size).is_some_and(|e| e <= src.size()));
+        let Some(abs) = abs else {
+            return container("file extends past container");
+        };
+        entries.push(Entry {
+            name: name.to_string(),
+            offset: abs,
+            size,
+        });
     }
     Ok(Fs { src, entries })
 }

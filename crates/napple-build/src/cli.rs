@@ -35,7 +35,15 @@ pub fn parse_updates(v: &str) -> Result<Choice> {
         "all" => Choice::All,
         "latest" => Choice::Latest,
         "none" => Choice::None,
-        v => Choice::Only(v.split(',').map(|s| s.trim().parse().map_err(|_| BuildError::usage(format!("--updates: {s:?} is not a version number")))).collect::<Result<_>>()?),
+        v => Choice::Only(
+            v.split(',')
+                .map(|s| {
+                    s.trim().parse().map_err(|_| {
+                        BuildError::usage(format!("--updates: {s:?} is not a version number"))
+                    })
+                })
+                .collect::<Result<_>>()?,
+        ),
     })
 }
 
@@ -43,7 +51,15 @@ pub fn parse_dlc(v: &str) -> Result<DlcChoice> {
     Ok(match v {
         "all" => DlcChoice::All,
         "none" => DlcChoice::None,
-        v => DlcChoice::Only(v.split(',').map(|s| u64::from_str_radix(s.trim().trim_start_matches("0x"), 16).map_err(|_| BuildError::usage(format!("--dlc: {s:?} is not a hex title id")))).collect::<Result<_>>()?),
+        v => DlcChoice::Only(
+            v.split(',')
+                .map(|s| {
+                    u64::from_str_radix(s.trim().trim_start_matches("0x"), 16).map_err(|_| {
+                        BuildError::usage(format!("--dlc: {s:?} is not a hex title id"))
+                    })
+                })
+                .collect::<Result<_>>()?,
+        ),
     })
 }
 
@@ -71,7 +87,11 @@ pub fn parse(args: &[String]) -> Result<Opts> {
     let (mut have_keys, mut have_out) = (false, false);
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        let mut val = || it.next().cloned().ok_or_else(|| BuildError::usage(format!("{a} needs a value\n{USAGE}")));
+        let mut val = || {
+            it.next()
+                .cloned()
+                .ok_or_else(|| BuildError::usage(format!("{a} needs a value\n{USAGE}")))
+        };
         match a.as_str() {
             "-k" => {
                 o.keys = val()?.into();
@@ -99,7 +119,9 @@ pub fn parse(args: &[String]) -> Result<Opts> {
             "--bundle-id" => {
                 let b = val()?;
                 if !crate::ios::valid_bundle_id(&b) {
-                    return Err(BuildError::usage(format!("--bundle-id: {b:?} is not a reverse-DNS identifier like com.example.game")));
+                    return Err(BuildError::usage(format!(
+                        "--bundle-id: {b:?} is not a reverse-DNS identifier like com.example.game"
+                    )));
                 }
                 o.signing.bundle_id = Some(b);
             }
@@ -111,24 +133,48 @@ pub fn parse(args: &[String]) -> Result<Opts> {
                     "materialize" => UpdateRomfs::Materialize,
                     "delta" => UpdateRomfs::Delta,
                     "in-place" => UpdateRomfs::InPlace,
-                    x => return Err(BuildError::usage(format!("--update-romfs: expected materialize|delta|in-place, got {x:?}"))),
+                    x => {
+                        return Err(BuildError::usage(format!(
+                            "--update-romfs: expected materialize|delta|in-place, got {x:?}"
+                        )));
+                    }
                 }
             }
             "-h" | "--help" => return Err(BuildError::usage(USAGE)),
-            x if x.starts_with('-') && x.len() > 1 => return Err(BuildError::usage(format!("unknown option {x}\n{USAGE}"))),
+            x if x.starts_with('-') && x.len() > 1 => {
+                return Err(BuildError::usage(format!("unknown option {x}\n{USAGE}")));
+            }
             f => o.files.push(f.into()),
         }
     }
     o.files = o.files.iter().flat_map(|f| expand_dir(f)).collect();
     if crate::ios::Target::parse(&o.target).is_none() {
-        return Err(BuildError::usage(format!("--target: expected macos|ios|iphone|ipad|ios-sim, got {:?}", o.target)));
+        return Err(BuildError::usage(format!(
+            "--target: expected macos|ios|iphone|ipad|ios-sim, got {:?}",
+            o.target
+        )));
     }
     let tgt = crate::ios::Target::parse(&o.target).unwrap();
-    if tgt.is_sim() && (o.signing.identity.is_some() || o.signing.profile.is_some() || o.signing.ipa || o.signing.install.is_some()) {
-        return Err(BuildError::usage("--target ios-sim is ad-hoc signed and installed with `xcrun simctl`: --signing-identity/--provisioning-profile/--ipa/--install do not apply"));
+    if tgt.is_sim()
+        && (o.signing.identity.is_some()
+            || o.signing.profile.is_some()
+            || o.signing.ipa
+            || o.signing.install.is_some())
+    {
+        return Err(BuildError::usage(
+            "--target ios-sim is ad-hoc signed and installed with `xcrun simctl`: --signing-identity/--provisioning-profile/--ipa/--install do not apply",
+        ));
     }
-    if !tgt.is_ios() && (o.signing.ipa || o.signing.install.is_some() || o.signing.identity.is_some() || o.signing.profile.is_some() || o.signing.bundle_id.is_some()) {
-        return Err(BuildError::usage("--signing-identity/--provisioning-profile/--bundle-id/--ipa/--install need --target ios, iphone or ipad"));
+    if !tgt.is_ios()
+        && (o.signing.ipa
+            || o.signing.install.is_some()
+            || o.signing.identity.is_some()
+            || o.signing.profile.is_some()
+            || o.signing.bundle_id.is_some())
+    {
+        return Err(BuildError::usage(
+            "--signing-identity/--provisioning-profile/--bundle-id/--ipa/--install need --target ios, iphone or ipad",
+        ));
     }
     if o.files.is_empty() || !have_keys || !have_out {
         return Err(BuildError::usage(USAGE));
@@ -143,12 +189,16 @@ fn expand_dir(p: &std::path::Path) -> Vec<PathBuf> {
         return vec![p.to_path_buf()];
     }
     let mut out = Vec::new();
-    let mut ents: Vec<_> = std::fs::read_dir(p).map(|d| d.flatten().map(|e| e.path()).collect()).unwrap_or_default();
+    let mut ents: Vec<_> = std::fs::read_dir(p)
+        .map(|d| d.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
     ents.sort();
     for e in ents {
         if e.is_dir() {
             out.extend(expand_dir(&e));
-        } else if e.extension().and_then(|x| x.to_str()).is_some_and(|x| ["nsp", "xci", "nsz", "xcz"].contains(&x.to_ascii_lowercase().as_str())) {
+        } else if e.extension().and_then(|x| x.to_str()).is_some_and(|x| {
+            ["nsp", "xci", "nsz", "xcz"].contains(&x.to_ascii_lowercase().as_str())
+        }) {
             out.push(e);
         }
     }
@@ -165,7 +215,25 @@ mod tests {
 
     #[test]
     fn parses_studio_invocation() {
-        let o = parse(&s(&["a.nsp", "b.nsp", "-k", "prod.keys", "--title-keys", "t.keys", "--firmware", "fw.zip", "--updates", "65536,131072", "--dlc", "0100000000001001,none".split(',').next().unwrap(), "--target", "macos", "-o", "out"])).unwrap();
+        let o = parse(&s(&[
+            "a.nsp",
+            "b.nsp",
+            "-k",
+            "prod.keys",
+            "--title-keys",
+            "t.keys",
+            "--firmware",
+            "fw.zip",
+            "--updates",
+            "65536,131072",
+            "--dlc",
+            "0100000000001001,none".split(',').next().unwrap(),
+            "--target",
+            "macos",
+            "-o",
+            "out",
+        ]))
+        .unwrap();
         assert_eq!(o.files.len(), 2);
         assert!(matches!(o.updates, Choice::Only(ref v) if *v == [65536, 131072]));
         assert!(matches!(o.dlc, DlcChoice::Only(ref v) if *v == [0x0100000000001001]));
@@ -182,15 +250,100 @@ mod tests {
         assert!(parse(&s(&["a", "-k", "k", "-o", "o", "--bogus"])).is_err());
         assert!(parse(&s(&["a", "-k", "k", "-o"])).is_err());
         assert!(parse(&s(&["a", "-k", "k", "-o", "o", "--update-romfs", "x"])).is_err());
-        let o = parse(&s(&["a", "-k", "k", "-o", "o", "--target", "ios", "--signing-identity", "Apple Development: x", "--provisioning-profile", "p.mobileprovision", "--bundle-id", "com.me.g", "--ipa", "--install", "my-iphone", "--launch"])).unwrap();
-        assert_eq!((o.target.as_str(), o.signing.bundle_id.as_deref(), o.signing.ipa, o.signing.install.as_deref(), o.launch), ("ios", Some("com.me.g"), true, Some("my-iphone"), true));
+        let o = parse(&s(&[
+            "a",
+            "-k",
+            "k",
+            "-o",
+            "o",
+            "--target",
+            "ios",
+            "--signing-identity",
+            "Apple Development: x",
+            "--provisioning-profile",
+            "p.mobileprovision",
+            "--bundle-id",
+            "com.me.g",
+            "--ipa",
+            "--install",
+            "my-iphone",
+            "--launch",
+        ]))
+        .unwrap();
+        assert_eq!(
+            (
+                o.target.as_str(),
+                o.signing.bundle_id.as_deref(),
+                o.signing.ipa,
+                o.signing.install.as_deref(),
+                o.launch
+            ),
+            ("ios", Some("com.me.g"), true, Some("my-iphone"), true)
+        );
         assert!(parse(&s(&["a", "-k", "k", "-o", "o", "--target", "tvos"])).is_err());
-        let o = parse(&s(&["a", "-k", "k", "-o", "o", "--target", "ios-sim", "--bundle-id", "com.me.sim"])).unwrap();
-        assert_eq!((o.target.as_str(), o.signing.bundle_id.as_deref()), ("ios-sim", Some("com.me.sim")));
-        assert!(parse(&s(&["a", "-k", "k", "-o", "o", "--target", "ios-sim", "--signing-identity", "x"])).is_err());
+        let o = parse(&s(&[
+            "a",
+            "-k",
+            "k",
+            "-o",
+            "o",
+            "--target",
+            "ios-sim",
+            "--bundle-id",
+            "com.me.sim",
+        ]))
+        .unwrap();
+        assert_eq!(
+            (o.target.as_str(), o.signing.bundle_id.as_deref()),
+            ("ios-sim", Some("com.me.sim"))
+        );
+        assert!(
+            parse(&s(&[
+                "a",
+                "-k",
+                "k",
+                "-o",
+                "o",
+                "--target",
+                "ios-sim",
+                "--signing-identity",
+                "x"
+            ]))
+            .is_err()
+        );
         assert!(parse(&s(&["a", "-k", "k", "-o", "o", "--ipa"])).is_err()); // ipa needs an iOS target
-        assert!(parse(&s(&["a", "-k", "k", "-o", "o", "--target", "ios", "--bundle-id", "nodots"])).is_err());
-        let o = parse(&s(&["a", "-k", "k", "-o", "o", "--updates", "none", "--dlc", "none", "--update-romfs", "delta"])).unwrap();
-        assert!(matches!(o.updates, Choice::None) && matches!(o.dlc, DlcChoice::None) && o.update_romfs == UpdateRomfs::Delta);
+        assert!(
+            parse(&s(&[
+                "a",
+                "-k",
+                "k",
+                "-o",
+                "o",
+                "--target",
+                "ios",
+                "--bundle-id",
+                "nodots"
+            ]))
+            .is_err()
+        );
+        let o = parse(&s(&[
+            "a",
+            "-k",
+            "k",
+            "-o",
+            "o",
+            "--updates",
+            "none",
+            "--dlc",
+            "none",
+            "--update-romfs",
+            "delta",
+        ]))
+        .unwrap();
+        assert!(
+            matches!(o.updates, Choice::None)
+                && matches!(o.dlc, DlcChoice::None)
+                && o.update_romfs == UpdateRomfs::Delta
+        );
     }
 }

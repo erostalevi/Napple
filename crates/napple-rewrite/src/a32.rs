@@ -27,35 +27,76 @@ fn io(e: std::io::Error) -> RewriteError {
 
 fn clang(args: &[&str]) -> Result<(), RewriteError> {
     let out = Command::new("clang").args(args).output().map_err(io)?;
-    if out.status.success() { Ok(()) } else { Err(RewriteError::Usage(format!("clang {}: {}", args.join(" "), String::from_utf8_lossy(&out.stderr)))) }
+    if out.status.success() {
+        Ok(())
+    } else {
+        Err(RewriteError::Usage(format!(
+            "clang {}: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&out.stderr)
+        )))
+    }
 }
 
 /// Lifts the modules in `modules` and returns the assembly files written under `work`.
 pub fn lift(modules: &Path, work: &Path) -> Result<Vec<PathBuf>, RewriteError> {
     std::fs::create_dir_all(work).map_err(io)?;
     let prefix = work.join("j");
-    let dir = CString::new(modules.to_string_lossy().as_bytes()).map_err(|e| RewriteError::Usage(e.to_string()))?;
-    let pre = CString::new(prefix.to_string_lossy().as_bytes()).map_err(|e| RewriteError::Usage(e.to_string()))?;
+    let dir = CString::new(modules.to_string_lossy().as_bytes())
+        .map_err(|e| RewriteError::Usage(e.to_string()))?;
+    let pre = CString::new(prefix.to_string_lossy().as_bytes())
+        .map_err(|e| RewriteError::Usage(e.to_string()))?;
     // SAFETY: both pointers are valid NUL-terminated strings for the duration of the call; the lifter keeps no reference to them.
     let rc = unsafe { a32lift_tool(dir.as_ptr(), pre.as_ptr()) };
     if rc != 0 {
-        return Err(RewriteError::Usage(format!("the A32 lifter failed (code {rc}) on {}", modules.display())));
+        return Err(RewriteError::Usage(format!(
+            "the A32 lifter failed (code {rc}) on {}",
+            modules.display()
+        )));
     }
     let list = std::fs::read_to_string(work.join("j.files")).map_err(io)?;
-    Ok(list.lines().filter(|l| !l.is_empty()).map(PathBuf::from).collect())
+    Ok(list
+        .lines()
+        .filter(|l| !l.is_empty())
+        .map(PathBuf::from)
+        .collect())
 }
 
 /// Assembles `files` in parallel and links them into `dylib`.
 pub fn build_image(files: &[PathBuf], dylib: &Path) -> Result<(), RewriteError> {
-    let objs: Vec<PathBuf> = files.iter().map(|f| PathBuf::from(format!("{}.o", f.display()))).collect();
-    files.par_iter().zip(objs.par_iter()).try_for_each(|(s, o)| {
-        clang(&["-c", "-target", TARGET, "-march=armv8.4-a", &s.to_string_lossy(), "-o", &o.to_string_lossy()])
-    })?;
-    let mut args: Vec<String> = ["-dynamiclib", "-target", TARGET, "-Wl,-x", "-o"].iter().map(|s| s.to_string()).collect();
+    let objs: Vec<PathBuf> = files
+        .iter()
+        .map(|f| PathBuf::from(format!("{}.o", f.display())))
+        .collect();
+    files
+        .par_iter()
+        .zip(objs.par_iter())
+        .try_for_each(|(s, o)| {
+            clang(&[
+                "-c",
+                "-target",
+                TARGET,
+                "-march=armv8.4-a",
+                &s.to_string_lossy(),
+                "-o",
+                &o.to_string_lossy(),
+            ])
+        })?;
+    let mut args: Vec<String> = ["-dynamiclib", "-target", TARGET, "-Wl,-x", "-o"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
     args.push(dylib.to_string_lossy().into());
     // the object list goes through a response file: there are hundreds of them
     let rsp = dylib.with_extension("objs");
-    std::fs::write(&rsp, objs.iter().map(|o| o.to_string_lossy().to_string()).collect::<Vec<_>>().join("\n")).map_err(io)?;
+    std::fs::write(
+        &rsp,
+        objs.iter()
+            .map(|o| o.to_string_lossy().to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .map_err(io)?;
     args.push(format!("@{}", rsp.display()));
     let a: Vec<&str> = args.iter().map(String::as_str).collect();
     clang(&a)?;
@@ -83,7 +124,11 @@ pub fn run(args: &[String]) -> Result<(), RewriteError> {
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
-            "-o" => work = Some(PathBuf::from(it.next().ok_or_else(|| RewriteError::Usage(USAGE.into()))?)),
+            "-o" => {
+                work = Some(PathBuf::from(
+                    it.next().ok_or_else(|| RewriteError::Usage(USAGE.into()))?,
+                ))
+            }
             "-h" | "--help" => return Err(RewriteError::Usage(USAGE.into())),
             d => modules = Some(PathBuf::from(d)),
         }
@@ -91,6 +136,10 @@ pub fn run(args: &[String]) -> Result<(), RewriteError> {
     let modules = modules.ok_or_else(|| RewriteError::Usage(USAGE.into()))?;
     let work = work.unwrap_or_else(|| std::env::temp_dir().join("napple-a32jit"));
     let out = recompile(&modules, &work)?;
-    println!("a32: wrote {} ({} bytes)", out.display(), std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0));
+    println!(
+        "a32: wrote {} ({} bytes)",
+        out.display(),
+        std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0)
+    );
     Ok(())
 }

@@ -39,14 +39,20 @@ const CNTFRQ: u32 = id(3, 3, 14, 0, 0);
 const CNTPCT: u32 = id(3, 3, 14, 0, 1);
 const CNTVCT: u32 = id(3, 3, 14, 0, 2);
 // System registers EL0 code may legitimately read on Apple silicon; not rewrite targets.
-const ALLOWED: [u32; 5] = [id(3, 3, 4, 4, 0), id(3, 3, 4, 4, 1), id(3, 3, 0, 0, 1), id(3, 3, 0, 0, 7), id(3, 3, 4, 2, 0)];
+const ALLOWED: [u32; 5] = [
+    id(3, 3, 4, 4, 0),
+    id(3, 3, 4, 4, 1),
+    id(3, 3, 0, 0, 1),
+    id(3, 3, 0, 0, 7),
+    id(3, 3, 4, 2, 0),
+];
 
 /// Scans a code segment. `base` is only used to label offsets (module-relative).
 pub fn scan(code: &[u8], base: u32) -> Report {
     let mut rep = Report::default();
     let dec = InstDecoder::default();
-    for (i, w) in code.chunks_exact(4).enumerate() {
-        let word = u32::from_le_bytes(w.try_into().unwrap());
+    for (i, w) in code.as_chunks::<4>().0.iter().enumerate() {
+        let word = u32::from_le_bytes(*w);
         let off = base + (i as u32) * 4;
         rep.words += 1;
         if word & 0xFFE0_001F == 0xD400_0001 {
@@ -71,20 +77,26 @@ pub fn scan(code: &[u8], base: u32) -> Report {
             continue;
         }
         // Cheap prefilter on every 5-bit register field before the (slower) full decode.
-        let has18 = [word & 31, (word >> 5) & 31, (word >> 10) & 31, (word >> 16) & 31].contains(&18);
-        if has18 {
-            if let Ok(inst) = dec.decode(&mut U8Reader::new(w)) {
-                if uses_x18(&inst.to_string()) {
-                    rep.sites.entry(SiteKind::X18).or_default().push(off);
-                }
-            }
+        let has18 = [
+            word & 31,
+            (word >> 5) & 31,
+            (word >> 10) & 31,
+            (word >> 16) & 31,
+        ]
+        .contains(&18);
+        if has18
+            && let Ok(inst) = dec.decode(&mut U8Reader::new(w))
+            && uses_x18(&inst.to_string())
+        {
+            rep.sites.entry(SiteKind::X18).or_default().push(off);
         }
     }
     rep
 }
 
 fn uses_x18(text: &str) -> bool {
-    text.split(|c: char| !c.is_ascii_alphanumeric()).any(|t| t == "x18" || t == "w18")
+    text.split(|c: char| !c.is_ascii_alphanumeric())
+        .any(|t| t == "x18" || t == "w18")
 }
 
 #[cfg(test)]
@@ -99,7 +111,19 @@ mod tests {
     fn finds_known_encodings() {
         // svc #0x1d ; mrs x0, tpidr_el0 ; msr tpidr_el0, x1 ; mrs x2, cntvct_el0 ; mrs x3, tpidrro_el0
         // mov x18, x0 (orr x18, xzr, x0) ; add x1, x2, x3 (no hit) ; mrs x4, fpcr (allowed)
-        let r = scan(&w(&[0xD400_03A1, 0xD53B_D040, 0xD51B_D041, 0xD53B_E042, 0xD53B_D063, 0xAA00_03F2, 0x8B03_0041, 0xD53B_4404]), 0);
+        let r = scan(
+            &w(&[
+                0xD400_03A1,
+                0xD53B_D040,
+                0xD51B_D041,
+                0xD53B_E042,
+                0xD53B_D063,
+                0xAA00_03F2,
+                0x8B03_0041,
+                0xD53B_4404,
+            ]),
+            0,
+        );
         assert_eq!(r.count(SiteKind::Svc), 1);
         assert_eq!(r.count(SiteKind::MrsTpidrEl0), 1);
         assert_eq!(r.count(SiteKind::MsrTpidrEl0), 1);

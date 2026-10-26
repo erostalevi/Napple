@@ -2,7 +2,7 @@
 use crate::error::{BuildError, Result};
 use crate::zipread::ZipArchive;
 use napple_core::domain::keys::KeySet;
-use napple_core::infrastructure::cnmt::{parse_cnmt, Cnmt};
+use napple_core::infrastructure::cnmt::{Cnmt, parse_cnmt};
 use napple_core::infrastructure::io::{FileSource, Src};
 use napple_core::infrastructure::nca::{self, ContentType, FsType, Nca, TitleKeys};
 use napple_core::infrastructure::pfs::parse_pfs0;
@@ -19,7 +19,8 @@ pub struct SystemTitle {
 
 impl Firmware {
     pub fn open(path: &Path) -> Result<Self> {
-        let md = std::fs::metadata(path).map_err(|e| BuildError::new("firmware", format!("{}: {e}", path.display())))?;
+        let md = std::fs::metadata(path)
+            .map_err(|e| BuildError::new("firmware", format!("{}: {e}", path.display())))?;
         let mut ncas = Vec::new();
         if md.is_dir() {
             let mut stack = vec![(path.to_path_buf(), 0)];
@@ -44,7 +45,13 @@ impl Firmware {
             }
         }
         if ncas.is_empty() {
-            return Err(BuildError::new("firmware", format!("{}: no NCA files found (expected a firmware zip or a directory of .nca files)", path.display())));
+            return Err(BuildError::new(
+                "firmware",
+                format!(
+                    "{}: no NCA files found (expected a firmware zip or a directory of .nca files)",
+                    path.display()
+                ),
+            ));
         }
         ncas.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(Self { ncas })
@@ -70,7 +77,9 @@ impl Firmware {
             for sec in n.sections.iter().filter(|s| s.fs_type == FsType::Pfs0) {
                 let fs = parse_pfs0(nca::pfs0_data(&n.section(sec.index)?, sec)?)?;
                 for e in fs.entries.iter().filter(|e| e.name.ends_with(".cnmt")) {
-                    out.push(SystemTitle { meta: parse_cnmt(&fs.read(&e.name)?)? });
+                    out.push(SystemTitle {
+                        meta: parse_cnmt(&fs.read(&e.name)?)?,
+                    });
                 }
             }
         }
@@ -82,10 +91,15 @@ impl Firmware {
     pub fn data_romfs(&self, title: &SystemTitle, keys: &KeySet) -> Result<Option<RomFs>> {
         let tks = TitleKeys::new();
         for rec in title.meta.contents.iter().filter(|c| c.ctype == 2) {
-            let Some((_, src)) = self.ncas.iter().find(|(n, _)| *n == rec.nca_name()) else { continue };
+            let Some((_, src)) = self.ncas.iter().find(|(n, _)| *n == rec.nca_name()) else {
+                continue;
+            };
             let n = Nca::open(src.clone(), keys, &tks)?;
-            for sec in n.sections.iter().filter(|s| s.fs_type == FsType::RomFs) {
-                return Ok(Some(RomFs::parse(nca::romfs_data(&n.section(sec.index)?, sec)?)?));
+            if let Some(sec) = n.sections.iter().find(|s| s.fs_type == FsType::RomFs) {
+                return Ok(Some(RomFs::parse(nca::romfs_data(
+                    &n.section(sec.index)?,
+                    sec,
+                )?)?));
             }
         }
         Ok(None)

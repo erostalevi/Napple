@@ -10,36 +10,80 @@
 #define HZ_DESC(r) (((uint32_t)(r) >> 9) & 0x1fff)
 
 enum {
-    HZ_MOD_NCM = 5, HZ_MOD_NS = 16, HZ_MOD_SETTINGS = 105, HZ_MOD_NIFM = 110, HZ_MOD_TIME = 116, HZ_MOD_NSD = 117,
-    HZ_MOD_FRIENDS = 121, HZ_MOD_BCAT = 122, HZ_MOD_SSL = 123, HZ_MOD_APPLET = 128, HZ_MOD_MII = 148, HZ_MOD_HID = 202,
-    HZ_MOD_LDN = 203, HZ_MOD_BTM = 143, HZ_MOD_AUDIO = 153, HZ_MOD_AUDIO_IN = HZ_MOD_AUDIO, HZ_MOD_IRSENSOR = 205, HZ_MOD_CAPTURE = 206,
+    HZ_MOD_NCM = 5,
+    HZ_MOD_NS = 16,
+    HZ_MOD_SETTINGS = 105,
+    HZ_MOD_NIFM = 110,
+    HZ_MOD_TIME = 116,
+    HZ_MOD_NSD = 117,
+    HZ_MOD_FRIENDS = 121,
+    HZ_MOD_BCAT = 122,
+    HZ_MOD_SSL = 123,
+    HZ_MOD_APPLET = 128,
+    HZ_MOD_MII = 148,
+    HZ_MOD_HID = 202,
+    HZ_MOD_LDN = 203,
+    HZ_MOD_BTM = 143,
+    HZ_MOD_AUDIO = 153,
+    HZ_MOD_AUDIO_IN = HZ_MOD_AUDIO,
+    HZ_MOD_IRSENSOR = 205,
+    HZ_MOD_CAPTURE = 206,
 };
 
 /* Results the offline answers use. */
 #define HZ_R_OK 0u
-#define HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED HZ_RESULT(HZ_MOD_NIFM, 1111)   /* [unverified] what GetResult reports when no connection can be made */
+#define HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED HZ_RESULT(HZ_MOD_NIFM, 1111) /* [unverified] what GetResult reports when no connection can be made */
 #define HZ_R_NIFM_PENDING_CONNECTION HZ_RESULT(HZ_MOD_NIFM, 111)
-#define HZ_R_NCM_CONTENT_META_NOT_FOUND HZ_RESULT(HZ_MOD_NCM, 250)              /* [unverified] */
-#define HZ_R_NCM_CONTENT_NOT_FOUND HZ_RESULT(HZ_MOD_NCM, 310)                   /* [unverified] */
-#define HZ_R_NS_APPLICATION_NOT_FOUND HZ_RESULT(HZ_MOD_NS, 400)                 /* [unverified] */
-#define HZ_R_BCAT_NOT_FOUND HZ_RESULT(HZ_MOD_BCAT, 20)                          /* [unverified] */
-#define HZ_R_CAPTURE_NOT_FOUND HZ_RESULT(HZ_MOD_CAPTURE, 5)                     /* [unverified] */
-#define HZ_R_CAPTURE_SCREENSHOT_NOT_PERMITTED HZ_RESULT(HZ_MOD_CAPTURE, 1052)   /* [unverified] */
-#define HZ_R_LDN_NETWORK_NOT_AVAILABLE HZ_RESULT(HZ_MOD_LDN, 22)                /* [unverified] */
-#define HZ_R_IRSENSOR_NOT_CONNECTED HZ_RESULT(HZ_MOD_IRSENSOR, 3)               /* [unverified] */
-#define HZ_R_AUDREC_BUFFER_COUNT_LIMIT HZ_RESULT(HZ_MOD_AUDIO, 8)               /* [unverified] AppendFinalOutputRecorderBuffer past the queue limit */
-#define HZ_R_AUDREC_BUFFER_NOT_FOUND HZ_RESULT(HZ_MOD_AUDIO, 8)                 /* [unverified] a tag that is not queued */
-#define HZ_R_HID_NOT_CONNECTED HZ_RESULT(HZ_MOD_HID, 7)                         /* [unverified] */
-#define HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE HZ_RESULT(HZ_MOD_FRIENDS, 15)   /* [unverified] */
-#define HZ_R_SSL_NOT_CONNECTED HZ_RESULT(HZ_MOD_SSL, 205)                       /* [unverified] */
+#define HZ_R_NCM_CONTENT_META_NOT_FOUND HZ_RESULT(HZ_MOD_NCM, 250)                     /* [unverified] */
+#define HZ_R_NCM_CONTENT_NOT_FOUND HZ_RESULT(HZ_MOD_NCM, 310)                          /* [unverified] */
+#define HZ_R_NS_APPLICATION_NOT_FOUND HZ_RESULT(HZ_MOD_NS, 400)                        /* [unverified] */
+#define HZ_R_BCAT_NOT_FOUND HZ_RESULT(HZ_MOD_BCAT, 20)                                 /* [unverified] */
+#define HZ_R_CAPTURE_NOT_FOUND HZ_RESULT(HZ_MOD_CAPTURE, 5)                            /* [unverified] */
+#define HZ_R_CAPTURE_SCREENSHOT_NOT_PERMITTED HZ_RESULT(HZ_MOD_CAPTURE, 1052)          /* [unverified] */
+#define HZ_R_LDN_NETWORK_NOT_AVAILABLE HZ_RESULT(HZ_MOD_LDN, 22)                       /* [unverified] */
+#define HZ_R_IRSENSOR_NOT_CONNECTED HZ_RESULT(HZ_MOD_IRSENSOR, 3)                      /* [unverified] */
+#define HZ_R_AUDREC_BUFFER_COUNT_LIMIT HZ_RESULT(HZ_MOD_AUDIO, 8)                      /* [unverified] AppendFinalOutputRecorderBuffer past the queue limit */
+#define HZ_R_AUDREC_BUFFER_NOT_FOUND HZ_RESULT(HZ_MOD_AUDIO, 8)                        /* [unverified] a tag that is not queued */
+#define HZ_R_HID_NOT_CONNECTED HZ_RESULT(HZ_MOD_HID, 7)                                /* [unverified] */
+#define HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE HZ_RESULT(HZ_MOD_FRIENDS, 15) /* [unverified] */
+#define HZ_R_SSL_NOT_CONNECTED HZ_RESULT(HZ_MOD_SSL, 205)                              /* [unverified] */
 
 /* BSD errno values as the Horizon socket service reports them (FreeBSD numbering). */
 enum {
-    HZ_EPERM = 1, HZ_ENOENT = 2, HZ_EINTR = 4, HZ_EIO = 5, HZ_EBADF = 9, HZ_ENOMEM = 12, HZ_EACCES = 13, HZ_EFAULT = 14, HZ_EINVAL = 22, HZ_EMFILE = 24,
-    HZ_EPIPE = 32, HZ_EAGAIN = 35, HZ_EINPROGRESS = 36, HZ_EALREADY = 37, HZ_ENOTSOCK = 38, HZ_EDESTADDRREQ = 39, HZ_EMSGSIZE = 40, HZ_EPROTOTYPE = 41,
-    HZ_ENOPROTOOPT = 42, HZ_EPROTONOSUPPORT = 43, HZ_EOPNOTSUPP = 45, HZ_EAFNOSUPPORT = 47, HZ_EADDRINUSE = 48, HZ_EADDRNOTAVAIL = 49,
-    HZ_ENETDOWN = 50, HZ_ENETUNREACH = 51, HZ_ECONNABORTED = 53, HZ_ECONNRESET = 54, HZ_ENOBUFS = 55, HZ_EISCONN = 56, HZ_ENOTCONN = 57,
-    HZ_ETIMEDOUT = 60, HZ_ECONNREFUSED = 61, HZ_EHOSTUNREACH = 65,
+    HZ_EPERM = 1,
+    HZ_ENOENT = 2,
+    HZ_EINTR = 4,
+    HZ_EIO = 5,
+    HZ_EBADF = 9,
+    HZ_ENOMEM = 12,
+    HZ_EACCES = 13,
+    HZ_EFAULT = 14,
+    HZ_EINVAL = 22,
+    HZ_EMFILE = 24,
+    HZ_EPIPE = 32,
+    HZ_EAGAIN = 35,
+    HZ_EINPROGRESS = 36,
+    HZ_EALREADY = 37,
+    HZ_ENOTSOCK = 38,
+    HZ_EDESTADDRREQ = 39,
+    HZ_EMSGSIZE = 40,
+    HZ_EPROTOTYPE = 41,
+    HZ_ENOPROTOOPT = 42,
+    HZ_EPROTONOSUPPORT = 43,
+    HZ_EOPNOTSUPP = 45,
+    HZ_EAFNOSUPPORT = 47,
+    HZ_EADDRINUSE = 48,
+    HZ_EADDRNOTAVAIL = 49,
+    HZ_ENETDOWN = 50,
+    HZ_ENETUNREACH = 51,
+    HZ_ECONNABORTED = 53,
+    HZ_ECONNRESET = 54,
+    HZ_ENOBUFS = 55,
+    HZ_EISCONN = 56,
+    HZ_ENOTCONN = 57,
+    HZ_ETIMEDOUT = 60,
+    HZ_ECONNREFUSED = 61,
+    HZ_EHOSTUNREACH = 65,
 };
 /* getaddrinfo / netdb error numbers (FreeBSD numbering) */
 enum { HZ_EAI_AGAIN = 2, HZ_EAI_FAIL = 4, HZ_EAI_NONAME = 8 };

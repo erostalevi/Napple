@@ -6,15 +6,20 @@
 //! path; per extent 64 bytes: u64 image offset, u64 length, u64 file offset, u64 counter offset, u32 file index,
 //! u32 flags (bit 0: AES-CTR), u8 iv_hi[8], u8 key[16]. Extents are sorted, contiguous and start at 0.
 use crate::error::{BuildError, Result};
-use aes::cipher::{generic_array::GenericArray, KeyIvInit, StreamCipher, StreamCipherSeek};
 use aes::Aes128;
+use aes::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek, generic_array::GenericArray};
 use napple_core::infrastructure::io::{MapExt, Src};
 use std::io::Write;
 use std::os::unix::fs::FileExt;
 use std::path::Path;
 
 /// Reads `[off, off+buf.len())` of the image through the extents (the runtime's algorithm; used to verify a map).
-pub fn read_through(exts: &[MapExt], starts: &[u64], off: u64, buf: &mut [u8]) -> std::io::Result<()> {
+pub fn read_through(
+    exts: &[MapExt],
+    starts: &[u64],
+    off: u64,
+    buf: &mut [u8],
+) -> std::io::Result<()> {
     let (mut pos, mut done) = (off, 0usize);
     while done < buf.len() {
         let i = starts.partition_point(|&s| s <= pos) - 1;
@@ -32,7 +37,10 @@ pub fn read_through(exts: &[MapExt], starts: &[u64], off: u64, buf: &mut [u8]) -
                 f.read_exact_at(&mut tmp, e.file_off + skip - pre as u64)?;
                 let mut iv = [0u8; 16];
                 iv[..8].copy_from_slice(hi);
-                let mut k = ctr::Ctr128BE::<Aes128>::new(GenericArray::from_slice(key), GenericArray::from_slice(&iv));
+                let mut k = ctr::Ctr128BE::<Aes128>::new(
+                    GenericArray::from_slice(key),
+                    GenericArray::from_slice(&iv),
+                );
                 k.seek(c - pre as u64);
                 k.apply_keystream(&mut tmp);
                 dst.copy_from_slice(&tmp[pre..]);
@@ -50,7 +58,10 @@ pub fn write_map(src: &Src, path: &Path) -> Result<usize> {
     let size = src.size();
     let mut exts = Vec::new();
     if !src.map(0, size, &mut exts) {
-        return Err(BuildError::new("romfs", "this RomFS cannot be read in place (compressed or in-memory container layer); use --update-romfs materialize"));
+        return Err(BuildError::new(
+            "romfs",
+            "this RomFS cannot be read in place (compressed or in-memory container layer); use --update-romfs materialize",
+        ));
     }
     let mut starts = Vec::with_capacity(exts.len());
     let mut at = 0u64;
@@ -59,11 +70,18 @@ pub fn write_map(src: &Src, path: &Path) -> Result<usize> {
         at += e.len;
     }
     if at != size {
-        return Err(BuildError::new("romfs", format!("in-place map covers {at} of {size} bytes")));
+        return Err(BuildError::new(
+            "romfs",
+            format!("in-place map covers {at} of {size} bytes"),
+        ));
     }
     // verification: the RomFS header, extent boundaries and pseudo-random ranges, compared with the source
     let mut probes: Vec<u64> = vec![0];
-    for (i, s) in starts.iter().enumerate().step_by((starts.len() / 64).max(1)) {
+    for (i, s) in starts
+        .iter()
+        .enumerate()
+        .step_by((starts.len() / 64).max(1))
+    {
         probes.push(s.saturating_sub(7));
         let _ = i;
     }
@@ -77,14 +95,21 @@ pub fn write_map(src: &Src, path: &Path) -> Result<usize> {
     for p in probes {
         let n = (size - p).min(0x3000) as usize;
         let (mut a, mut b) = (vec![0u8; n], vec![0u8; n]);
-        src.read_at(p, &mut a).map_err(|e| BuildError::new("romfs", format!("verify read: {e}")))?;
-        read_through(&exts, &starts, p, &mut b).map_err(|e| BuildError::io("verify romfs.map", e))?;
+        src.read_at(p, &mut a)
+            .map_err(|e| BuildError::new("romfs", format!("verify read: {e}")))?;
+        read_through(&exts, &starts, p, &mut b)
+            .map_err(|e| BuildError::io("verify romfs.map", e))?;
         if a != b {
-            return Err(BuildError::new("romfs", format!("in-place map differs from the RomFS at offset {p:#x}")));
+            return Err(BuildError::new(
+                "romfs",
+                format!("in-place map differs from the RomFS at offset {p:#x}"),
+            ));
         }
     }
     let mut files: Vec<std::sync::Arc<std::path::PathBuf>> = Vec::new();
-    let mut f = std::io::BufWriter::new(std::fs::File::create(path).map_err(|e| BuildError::io("create romfs.map", e))?);
+    let mut f = std::io::BufWriter::new(
+        std::fs::File::create(path).map_err(|e| BuildError::io("create romfs.map", e))?,
+    );
     let mut idx = Vec::with_capacity(exts.len());
     for e in &exts {
         let i = match files.iter().position(|p| p == &e.file) {
@@ -129,7 +154,7 @@ pub fn write_map(src: &Src, path: &Path) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::bktr::CtrSource;
-    use napple_core::infrastructure::io::{FileSource, Slice, Source};
+    use napple_core::infrastructure::io::{FileSource, Slice};
     use std::sync::Arc;
 
     #[test]
@@ -140,7 +165,12 @@ mod tests {
         let data: Vec<u8> = (0..0x9000u32).map(|i| (i * 7 + (i >> 8)) as u8).collect();
         std::fs::write(&file, &data).unwrap();
         let raw = Slice::new(FileSource::open(&file).unwrap(), 0x1000, 0x7000).unwrap();
-        let ctr: Src = Arc::new(CtrSource::new(raw, [7u8; 16], [1, 2, 3, 4, 5, 6, 7, 8], 0x1000));
+        let ctr: Src = Arc::new(CtrSource::new(
+            raw,
+            [7u8; 16],
+            [1, 2, 3, 4, 5, 6, 7, 8],
+            0x1000,
+        ));
         let view = Slice::new(ctr, 0x123, 0x5000).unwrap();
         let out = dir.join("romfs.map");
         assert_eq!(write_map(&view, &out).unwrap(), 1);

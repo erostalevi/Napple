@@ -5,7 +5,7 @@ use crate::error::RewriteError;
 use crate::image::ModuleImage;
 use crate::rewrite::rewrite_module;
 use crate::types::RewriteOptions;
-use napple_core::application::package::{scan, BuildPlan, Choice};
+use napple_core::application::package::{BuildPlan, Choice, scan};
 use napple_core::domain::keys::KeySet;
 use napple_core::infrastructure::nso::Nso;
 use rayon::prelude::*;
@@ -61,7 +61,13 @@ fn process(job: &Job) -> Result<Vec<String>, RewriteError> {
         all_ok &= ok;
         lines.push(l);
     }
-    if all_ok { Ok(lines) } else { Err(RewriteError::Usage(lines.join("\n") + "\nrewrite incomplete: unhandled sites or failed structural check")) }
+    if all_ok {
+        Ok(lines)
+    } else {
+        Err(RewriteError::Usage(
+            lines.join("\n") + "\nrewrite incomplete: unhandled sites or failed structural check",
+        ))
+    }
 }
 
 pub fn run(args: &[String]) -> Result<(), String> {
@@ -72,11 +78,16 @@ pub fn run(args: &[String]) -> Result<(), String> {
 }
 
 fn run_inner(args: &[String]) -> Result<(), RewriteError> {
-    let (mut files, mut keys, mut out, mut updates) = (Vec::<PathBuf>::new(), None, None, Choice::None);
+    let (mut files, mut keys, mut out, mut updates) =
+        (Vec::<PathBuf>::new(), None, None, Choice::None);
     let mut survey: Option<bool> = None; // Some(exact)
     let mut it = args.iter();
     while let Some(a) = it.next() {
-        let mut val = || it.next().cloned().ok_or_else(|| RewriteError::Usage(USAGE.into()));
+        let mut val = || {
+            it.next()
+                .cloned()
+                .ok_or_else(|| RewriteError::Usage(USAGE.into()))
+        };
         match a.as_str() {
             "-k" => keys = Some(PathBuf::from(val()?)),
             "-o" => out = Some(PathBuf::from(val()?)),
@@ -85,7 +96,15 @@ fn run_inner(args: &[String]) -> Result<(), RewriteError> {
                     "all" => Choice::All,
                     "latest" => Choice::Latest,
                     "none" => Choice::None,
-                    v => Choice::Only(v.split(',').map(|s| s.trim().parse().map_err(|_| RewriteError::Usage(USAGE.into()))).collect::<Result<_, _>>()?),
+                    v => Choice::Only(
+                        v.split(',')
+                            .map(|s| {
+                                s.trim()
+                                    .parse()
+                                    .map_err(|_| RewriteError::Usage(USAGE.into()))
+                            })
+                            .collect::<Result<_, _>>()?,
+                    ),
                 }
             }
             "--survey" => survey = Some(false),
@@ -103,25 +122,55 @@ fn run_inner(args: &[String]) -> Result<(), RewriteError> {
     }
     let io = |e: std::io::Error| RewriteError::Io(e.to_string());
     let mut jobs = Vec::new();
-    let raw: Vec<&PathBuf> = files.iter().filter(|f| std::fs::read(f).map(|b| b.starts_with(b"NSO0")).unwrap_or(false)).collect();
+    let raw: Vec<&PathBuf> = files
+        .iter()
+        .filter(|f| {
+            std::fs::read(f)
+                .map(|b| b.starts_with(b"NSO0"))
+                .unwrap_or(false)
+        })
+        .collect();
     if !raw.is_empty() {
-        let modules = raw.iter().map(|f| Ok((f.file_stem().unwrap().to_string_lossy().to_string(), std::fs::read(f).map_err(io)?))).collect::<Result<Vec<_>, RewriteError>>()?;
-        jobs.push(Job { dir: out.clone(), modules });
+        let modules = raw
+            .iter()
+            .map(|f| {
+                Ok((
+                    f.file_stem().unwrap().to_string_lossy().to_string(),
+                    std::fs::read(f).map_err(io)?,
+                ))
+            })
+            .collect::<Result<Vec<_>, RewriteError>>()?;
+        jobs.push(Job {
+            dir: out.clone(),
+            modules,
+        });
     } else {
-        let keys = KeySet::load(&keys.ok_or_else(|| RewriteError::Usage(USAGE.into()))?).map_err(|e| RewriteError::Io(e.to_string()))?;
+        let keys = KeySet::load(&keys.ok_or_else(|| RewriteError::Usage(USAGE.into()))?)
+            .map_err(|e| RewriteError::Io(e.to_string()))?;
         let mut packs = Vec::new();
         for f in &files {
             packs.extend(scan(f, &keys).map_err(|e| RewriteError::Io(e.to_string()))?);
         }
         let plan = BuildPlan::from_packs(packs);
-        let base = plan.base.ok_or_else(|| RewriteError::Usage("no base game among the supplied files".into()))?;
+        let base = plan
+            .base
+            .ok_or_else(|| RewriteError::Usage("no base game among the supplied files".into()))?;
         let mut targets = vec![(base, out.clone())];
         for i in plan.pick_updates(&updates) {
-            targets.push((i, out.join(format!("update-v{}", plan.packs[i].meta.version))));
+            targets.push((
+                i,
+                out.join(format!("update-v{}", plan.packs[i].meta.version)),
+            ));
         }
         for (i, dir) in targets {
-            let prog = plan.packs[i].program(&keys).map_err(|e| RewriteError::Io(e.to_string()))?;
-            let modules = prog.exefs.into_iter().filter(|(n, _)| is_module(n)).collect();
+            let prog = plan.packs[i]
+                .program(&keys)
+                .map_err(|e| RewriteError::Io(e.to_string()))?;
+            let modules = prog
+                .exefs
+                .into_iter()
+                .filter(|(n, _)| is_module(n))
+                .collect();
             jobs.push(Job { dir, modules });
         }
     }
@@ -137,48 +186,93 @@ fn run_inner(args: &[String]) -> Result<(), RewriteError> {
             Err(e) => return Err(e),
         }
     }
-    if failed { Err(RewriteError::Usage("rewrite failed".into())) } else { Ok(()) }
+    if failed {
+        Err(RewriteError::Usage("rewrite failed".into()))
+    } else {
+        Ok(())
+    }
 }
 
 /// `--survey`: prints facts per program and fails (exit 1) with a clear message when a build cannot work.
-fn run_survey(files: &[PathBuf], keys: Option<PathBuf>, updates: &Choice, exact: bool) -> Result<(), RewriteError> {
+fn run_survey(
+    files: &[PathBuf],
+    keys: Option<PathBuf>,
+    updates: &Choice,
+    exact: bool,
+) -> Result<(), RewriteError> {
     use crate::survey::{survey_module, survey_program};
     if files.is_empty() {
         return Err(RewriteError::Usage(USAGE.into()));
     }
     let io = |e: std::io::Error| RewriteError::Io(e.to_string());
     let mut surveys = Vec::new();
-    let raw: Vec<&PathBuf> = files.iter().filter(|f| std::fs::read(f).map(|b| b.starts_with(b"NSO0")).unwrap_or(false)).collect();
+    let raw: Vec<&PathBuf> = files
+        .iter()
+        .filter(|f| {
+            std::fs::read(f)
+                .map(|b| b.starts_with(b"NSO0"))
+                .unwrap_or(false)
+        })
+        .collect();
     if !raw.is_empty() {
-        let mut s = crate::survey::Survey { label: "raw NSO files".into(), ..Default::default() };
+        let mut s = crate::survey::Survey {
+            label: "raw NSO files".into(),
+            ..Default::default()
+        };
         for f in raw {
-            s.modules.push(survey_module(&f.file_stem().unwrap().to_string_lossy(), &std::fs::read(f).map_err(io)?, exact));
+            s.modules.push(survey_module(
+                &f.file_stem().unwrap().to_string_lossy(),
+                &std::fs::read(f).map_err(io)?,
+                exact,
+            ));
         }
         surveys.push(s);
     } else {
-        let keys = KeySet::load(&keys.ok_or_else(|| RewriteError::Usage(USAGE.into()))?).map_err(|e| RewriteError::Io(e.to_string()))?;
+        let keys = KeySet::load(&keys.ok_or_else(|| RewriteError::Usage(USAGE.into()))?)
+            .map_err(|e| RewriteError::Io(e.to_string()))?;
         let mut packs = Vec::new();
         for f in files {
             packs.extend(scan(f, &keys).map_err(|e| RewriteError::Io(e.to_string()))?);
         }
         let plan = BuildPlan::from_packs(packs);
-        let base = plan.base.ok_or_else(|| RewriteError::Usage("no base game among the supplied files: a build needs the base container".into()))?;
+        let base = plan.base.ok_or_else(|| {
+            RewriteError::Usage(
+                "no base game among the supplied files: a build needs the base container".into(),
+            )
+        })?;
         let mut targets = vec![base];
         targets.extend(plan.pick_updates(updates));
         for i in targets {
             let p = &plan.packs[i];
-            let prog = p.program(&keys).map_err(|e| RewriteError::Io(e.to_string()))?;
-            surveys.push(survey_program(&format!("{:016X} {}", p.meta.title_id, napple_core::application::package::version_label(p.meta.version)), &prog.exefs, exact));
+            let prog = p
+                .program(&keys)
+                .map_err(|e| RewriteError::Io(e.to_string()))?;
+            surveys.push(survey_program(
+                &format!(
+                    "{:016X} {}",
+                    p.meta.title_id,
+                    napple_core::application::package::version_label(p.meta.version)
+                ),
+                &prog.exefs,
+                exact,
+            ));
         }
     }
     let mut blocking = Vec::new();
     for s in &surveys {
         print!("{}", s.render());
-        blocking.extend(s.blocking().into_iter().map(|b| format!("{}: {b}", s.label)));
+        blocking.extend(
+            s.blocking()
+                .into_iter()
+                .map(|b| format!("{}: {b}", s.label)),
+        );
     }
     if blocking.is_empty() {
         Ok(())
     } else {
-        Err(RewriteError::Usage(format!("survey: this title cannot be built as is:\n  {}", blocking.join("\n  "))))
+        Err(RewriteError::Usage(format!(
+            "survey: this title cannot be built as is:\n  {}",
+            blocking.join("\n  ")
+        )))
     }
 }

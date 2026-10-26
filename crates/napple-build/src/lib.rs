@@ -1,7 +1,7 @@
 //! napple-build: packaging. `napple build` turns a base game (+ updates + DLC) into a locally signed macOS `.app`.
 //! Pipeline in process (no Python): ingest -> rewrite -> NTB1 tables -> RomFS streaming (BKTR for updates, DLC layers)
 //! -> system fonts from the firmware -> bundle -> ad-hoc codesign -> atomic publish. Progress lines follow
-//! docs/studio-protocol.md: `PROGRESS <stage> <percent> <message>` and a final `RESULT <path>`.
+//! docs/architecture/studio-protocol.md: `PROGRESS <stage> <percent> <message>` and a final `RESULT <path>`.
 pub mod bktr;
 pub mod bundle;
 pub mod check;

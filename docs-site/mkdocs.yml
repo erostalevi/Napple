@@ -1,0 +1,80 @@
+# Builds Napple/docs into a static site served under /docs/ of the GitHub Pages site (see .github/workflows/pages.yml).
+# Local build: python3 -m venv .venv && .venv/bin/pip install -r docs-site/requirements.txt && .venv/bin/mkdocs build --strict -f docs-site/mkdocs.yml
+site_name: Napple documentation
+site_description: Documentation of Napple, a Switch to macOS decompiler and runtime.
+docs_dir: ../docs
+site_dir: ../build/docs-site
+use_directory_urls: true
+hooks:
+  - hooks.py
+
+theme:
+  name: material
+  language: en
+  features:
+    - navigation.sections
+    - navigation.top
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle: { icon: material/weather-sunny, name: Light mode }
+
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+  - admonition
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+validation:
+  omitted_files: info
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+nav:
+  - Home: index.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Module and data formats: architecture/module-format.md
+      - Rewriter output: architecture/rewrite-format.md
+      - Compatibility format: architecture/compat-format.md
+      - Runtime services: architecture/runtime-services.md
+      - Graphics: architecture/gfx.md
+      - Audio, input, frontend: architecture/audio-input-frontend.md
+      - AArch32: architecture/aarch32.md
+      - iOS: architecture/ios.md
+      - Studio protocol: architecture/studio-protocol.md
+  - Guides:
+      - guides/README.md
+      - Add an IPC service: guides/add-ipc-service.md
+      - Add an svc: guides/add-svc.md
+      - Add an NVN function: guides/add-nvn-function.md
+      - Add a Maxwell shader op: guides/add-maxwell-shader-op.md
+      - Add game support: guides/add-game-support.md
+      - Add signatures: guides/add-signatures.md
+      - Debugging: guides/debugging.md
+      - Testing: guides/testing.md
+  - Reference:
+      - Subsystem map: reference/subsystems.md
+      - CLI: reference/cli.md
+      - Environment variables: reference/environment-variables.md
+      - Glossary: reference/glossary.md
+      - Tooling: reference/tooling.md
+  - Titles:
+      - titles/README.md
+      - Link's Awakening: titles/01006BB00C6F0000.md
+      - Super Mario Odyssey: titles/0100000000010000.md
+      - Animal Crossing: titles/01006F8002326000.md
+      - Mario Kart 8 Deluxe: titles/0100152000022000.md
+      - Symptoms: symptoms.md
+  - Process: process/README.md
+  - Change archive: archive/changes/README.md

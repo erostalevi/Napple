@@ -35,26 +35,49 @@ struct Ins {
 }
 
 const NO_DEST: [&str; 22] = [
-    "cmp", "cmn", "tst", "ccmp", "ccmn", "b", "bl", "br", "blr", "ret", "nop", "prfm", "prfum", "clrex", "svc", "msr", "fcmp", "fcmpe", "fccmp", "fccmpe", "dmb", "dsb",
+    "cmp", "cmn", "tst", "ccmp", "ccmn", "b", "bl", "br", "blr", "ret", "nop", "prfm", "prfum",
+    "clrex", "svc", "msr", "fcmp", "fcmpe", "fccmp", "fccmpe", "dmb", "dsb",
 ];
 
 fn is_flag_setter(m: &str) -> bool {
-    ["cmp", "cmn", "tst", "adds", "subs", "ands", "bics", "adcs", "sbcs", "ccmp", "ccmn", "fcmp", "fcmpe", "fccmp", "fccmpe", "negs", "ngcs"].contains(&m)
+    [
+        "cmp", "cmn", "tst", "adds", "subs", "ands", "bics", "adcs", "sbcs", "ccmp", "ccmn",
+        "fcmp", "fcmpe", "fccmp", "fccmpe", "negs", "ngcs",
+    ]
+    .contains(&m)
 }
 
 /// Does `i` write general register `r` (as the first operand)? Stores and compares do not.
 fn writes(i: &Ins, r: Option<u32>) -> bool {
-    let (Some(r), Some(t)) = (r, &i.text) else { return false };
+    let (Some(r), Some(t)) = (r, &i.text) else {
+        return false;
+    };
     let m = t.mnemonic.as_str();
-    let store = m.starts_with("st") && !["stxr", "stlxr", "stxp", "stlxp", "stxrb", "stlxrb", "stxrh", "stlxrh"].contains(&m);
-    if store || NO_DEST.contains(&m) || m.starts_with("b.") || m.starts_with("cb") || m.starts_with("tb") {
+    let store = m.starts_with("st")
+        && ![
+            "stxr", "stlxr", "stxp", "stlxp", "stxrb", "stlxrb", "stxrh", "stlxrh",
+        ]
+        .contains(&m);
+    if store
+        || NO_DEST.contains(&m)
+        || m.starts_with("b.")
+        || m.starts_with("cb")
+        || m.starts_with("tb")
+    {
         return false;
     }
     t.ops.first().and_then(|o| a64::gpr_number(o)) == Some(r)
 }
 
 fn decode_range(img: &ModuleImage, from: u32, to: u32) -> Vec<Ins> {
-    (from..to).step_by(4).map(|a| Ins { addr: a, word: img.word(a), text: a64::disasm(img.word(a)) }).collect()
+    (from..to)
+        .step_by(4)
+        .map(|a| Ins {
+            addr: a,
+            word: img.word(a),
+            text: a64::disasm(img.word(a)),
+        })
+        .collect()
 }
 
 fn op_num(t: &Text, k: usize) -> Option<u32> {
@@ -70,8 +93,15 @@ fn imm_of(op: &str) -> Option<i64> {
 }
 
 /// Table extent for the `br x18` at `br_at`; `func` is the enclosing function `[start, end)` if known.
-pub fn analyze(img: &ModuleImage, br_at: u32, func: Option<(u32, u32)>, max_pads: u32) -> Result<JumpTable, String> {
-    let lo = func.map_or(br_at.saturating_sub(4 * 48), |(f, _)| f.max(br_at.saturating_sub(4 * 48)));
+pub fn analyze(
+    img: &ModuleImage,
+    br_at: u32,
+    func: Option<(u32, u32)>,
+    max_pads: u32,
+) -> Result<JumpTable, String> {
+    let lo = func.map_or(br_at.saturating_sub(4 * 48), |(f, _)| {
+        f.max(br_at.saturating_sub(4 * 48))
+    });
     let ctx = decode_range(img, lo, br_at);
     if let Some(j) = adr_byte_half(img, &ctx) {
         return Ok(j);
@@ -84,32 +114,50 @@ pub fn analyze(img: &ModuleImage, br_at: u32, func: Option<(u32, u32)>, max_pads
     }
     // No exact shape: accept only if the dispatch is recognisably a table walk, then bound by the function.
     if !looks_like_table_dispatch(&ctx) {
-        return Err("br x18 is not a recognisable jump-table dispatch (tail call or unknown pattern)".into());
+        return Err(
+            "br x18 is not a recognisable jump-table dispatch (tail call or unknown pattern)"
+                .into(),
+        );
     }
     let (fa, fb) = func.ok_or("jump table base not visible and function bounds unknown")?;
     let count = (fb - fa) / 4;
     if count == 0 || count > max_pads {
-        return Err(format!("function span of {count} slots exceeds the pad budget {max_pads}"));
+        return Err(format!(
+            "function span of {count} slots exceeds the pad budget {max_pads}"
+        ));
     }
-    Ok(JumpTable { base: fa, count, how: Shape::FunctionSpan })
+    Ok(JumpTable {
+        base: fa,
+        count,
+        how: Shape::FunctionSpan,
+    })
 }
 
 /// `ldrsw E,[T,I,lsl #2]` feeding `add x18, E, T` somewhere before the branch, in straight-line code.
 fn looks_like_table_dispatch(ctx: &[Ins]) -> bool {
-    let Some(d) = last_x18_def(ctx) else { return false };
+    let Some(d) = last_x18_def(ctx) else {
+        return false;
+    };
     let Some(t) = &ctx[d].text else { return false };
     if t.mnemonic != "add" || t.ops.len() != 3 || t.ops[0] != "x18" {
         return false;
     }
     let (a, b) = (op_num(t, 1), op_num(t, 2));
-    ctx[..d].iter().rev().take_while(|i| !a64::is_control_flow(i.word)).any(|i| {
-        i.text.as_ref().is_some_and(|x| {
-            x.mnemonic == "ldrsw" && x.ops.len() == 4 && x.ops[3] == "lsl #2" && {
-                let (e, tt) = (op_num(x, 0), op_num(x, 1));
-                e.is_some() && tt.is_some() && e != tt && [e, tt].iter().all(|r| *r == a || *r == b)
-            }
+    ctx[..d]
+        .iter()
+        .rev()
+        .take_while(|i| !a64::is_control_flow(i.word))
+        .any(|i| {
+            i.text.as_ref().is_some_and(|x| {
+                x.mnemonic == "ldrsw" && x.ops.len() == 4 && x.ops[3] == "lsl #2" && {
+                    let (e, tt) = (op_num(x, 0), op_num(x, 1));
+                    e.is_some()
+                        && tt.is_some()
+                        && e != tt
+                        && [e, tt].iter().all(|r| *r == a || *r == b)
+                }
+            })
         })
-    })
 }
 
 /// Index of the last instruction before the branch that writes x18; control flow in between aborts.
@@ -126,9 +174,15 @@ fn last_x18_def(ctx: &[Ins]) -> Option<usize> {
 }
 
 fn adr_byte_half(img: &ModuleImage, ctx: &[Ins]) -> Option<JumpTable> {
-    let base = ctx.iter().rev().find(|i| i.word & 0x9F00_001F == 0x1000_0012).and_then(|i| a64::adr_target(i.word, i.addr as u64))?;
+    let base = ctx
+        .iter()
+        .rev()
+        .find(|i| i.word & 0x9F00_001F == 0x1000_0012)
+        .and_then(|i| a64::adr_target(i.word, i.addr as u64))?;
     // add x18, x18, xK, lsl #2
-    let add = ctx.iter().rposition(|i| i.word & 0xFFE0_FFFF == 0x8B00_0A52)?;
+    let add = ctx
+        .iter()
+        .rposition(|i| i.word & 0xFFE0_FFFF == 0x8B00_0A52)?;
     let idx = (ctx[add].word >> 16) & 31;
     let (k, width) = ctx[..add].iter().enumerate().rev().find_map(|(k, i)| {
         let t = i.text.as_ref()?;
@@ -142,12 +196,20 @@ fn adr_byte_half(img: &ModuleImage, ctx: &[Ins]) -> Option<JumpTable> {
         }
     })?;
     let base = u32::try_from(base).ok()?;
-    if width == 65536 {
-        if let Some(n) = half_count(img, ctx, k) {
-            return Some(JumpTable { base, count: n, how: Shape::AdrHalfTable });
-        }
+    if width == 65536
+        && let Some(n) = half_count(img, ctx, k)
+    {
+        return Some(JumpTable {
+            base,
+            count: n,
+            how: Shape::AdrHalfTable,
+        });
     }
-    Some(JumpTable { base, count: width, how: Shape::AdrByteHalf })
+    Some(JumpTable {
+        base,
+        count: width,
+        how: Shape::AdrByteHalf,
+    })
 }
 
 /// Table base `adrp T; add T,T,#lo` feeding the load at `k` (register `tr`), and the `cmp idx,#n; b.hi/hs` entry count.
@@ -157,7 +219,8 @@ fn table_base_and_bound(ctx: &[Ins], k2: usize, tr: u32, ir: u32) -> Option<(i64
         k3 = k3.checked_sub(1)?;
     }
     let add = ctx[k3].text.as_ref()?;
-    if add.mnemonic != "add" || add.ops.len() != 3 || op_num(add, 0)? != tr || op_num(add, 1)? != tr {
+    if add.mnemonic != "add" || add.ops.len() != 3 || op_num(add, 0)? != tr || op_num(add, 1)? != tr
+    {
         return None;
     }
     let lo = imm_of(&add.ops[2])?;
@@ -184,10 +247,10 @@ fn table_base_and_bound(ctx: &[Ins], k2: usize, tr: u32, ir: u32) -> Option<(i64
         }
         if m == "mov" {
             let x = p.text.as_ref()?;
-            if let (Some(dst), Some(srcr)) = (op_num(x, 0), op_num(x, 1)) {
-                if src.contains(&dst) {
-                    src = vec![srcr];
-                }
+            if let (Some(dst), Some(srcr)) = (op_num(x, 0), op_num(x, 1))
+                && src.contains(&dst)
+            {
+                src = vec![srcr];
             }
         } else if src.iter().any(|r| writes(p, Some(*r))) {
             return None;
@@ -196,8 +259,17 @@ fn table_base_and_bound(ctx: &[Ins], k2: usize, tr: u32, ir: u32) -> Option<(i64
     }
     let hi = ctx[k5].text.as_ref()?.mnemonic == "b.hi";
     let mut k6 = k5.checked_sub(1)?;
-    while !ctx[k6].text.as_ref().is_some_and(|x| is_flag_setter(&x.mnemonic)) {
-        if src.iter().any(|r| writes(&ctx[k6], Some(*r))) || ctx[k6].text.as_ref().is_some_and(|x| x.mnemonic.starts_with('b')) {
+    while !ctx[k6]
+        .text
+        .as_ref()
+        .is_some_and(|x| is_flag_setter(&x.mnemonic))
+    {
+        if src.iter().any(|r| writes(&ctx[k6], Some(*r)))
+            || ctx[k6]
+                .text
+                .as_ref()
+                .is_some_and(|x| x.mnemonic.starts_with('b'))
+        {
             return None;
         }
         k6 = k6.checked_sub(1)?;
@@ -238,7 +310,13 @@ fn adr_relative(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Opt
         return None;
     }
     let (a, b) = (op_num(t, 1)?, op_num(t, 2)?);
-    let e = if a == 18 { b } else if b == 18 { a } else { return None };
+    let e = if a == 18 {
+        b
+    } else if b == 18 {
+        a
+    } else {
+        return None;
+    };
     // adr x18 is the last other writer of x18 before the add
     let ka = (0..d).rev().find(|&k| writes(&ctx[k], Some(18)))?;
     if ctx[ka].word & 0x9F00_001F != 0x1000_0012 {
@@ -246,9 +324,17 @@ fn adr_relative(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Opt
     }
     let rel = a64::adr_target(ctx[ka].word, ctx[ka].addr as u64)? as i64;
     let k2 = (0..d).rev().find(|&k| {
-        ctx[k].text.as_ref().is_some_and(|x| x.mnemonic == "ldrsw" && x.ops.len() == 4 && x.ops[3] == "lsl #2" && op_num(x, 0) == Some(e))
+        ctx[k].text.as_ref().is_some_and(|x| {
+            x.mnemonic == "ldrsw"
+                && x.ops.len() == 4
+                && x.ops[3] == "lsl #2"
+                && op_num(x, 0) == Some(e)
+        })
     })?;
-    if ctx[k2 + 1..d].iter().any(|p| a64::is_control_flow(p.word) || writes(p, Some(e))) {
+    if ctx[k2 + 1..d]
+        .iter()
+        .any(|p| a64::is_control_flow(p.word) || writes(p, Some(e)))
+    {
         return None;
     }
     let lx = ctx[k2].text.as_ref()?;
@@ -261,7 +347,14 @@ fn adr_relative(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Opt
 }
 
 /// Reads `n` signed 32-bit entries at `table`, adds `rel` and requires every target to be an instruction (of `func` if known).
-fn targets_extent(img: &ModuleImage, table: i64, n: i64, rel: i64, func: Option<(u32, u32)>, how: Shape) -> Option<JumpTable> {
+fn targets_extent(
+    img: &ModuleImage,
+    table: i64,
+    n: i64,
+    rel: i64,
+    func: Option<(u32, u32)>,
+    how: Shape,
+) -> Option<JumpTable> {
     let mut targets = Vec::with_capacity(n as usize);
     for e in 0..n as u32 {
         let off = (table as u32).checked_add(4 * e)?;
@@ -276,7 +369,11 @@ fn targets_extent(img: &ModuleImage, table: i64, n: i64, rel: i64, func: Option<
         targets.push(t as u32);
     }
     let (mn, mx) = (*targets.iter().min()?, *targets.iter().max()?);
-    Some(JumpTable { base: mn, count: (mx - mn) / 4 + 1, how })
+    Some(JumpTable {
+        base: mn,
+        count: (mx - mn) / 4 + 1,
+        how,
+    })
 }
 
 /// Reference-compatible analysis of old-clang signed-offset tables (see module docs).
@@ -291,13 +388,19 @@ fn signed_word(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Opti
     let mut l = None;
     for k in (0..d).rev() {
         let p = &ctx[k];
-        if let Some(x) = &p.text {
-            if x.mnemonic == "ldrsw" && x.ops.len() == 4 && x.ops[3] == "lsl #2" {
-                let (e, tb) = (op_num(x, 0), op_num(x, 1));
-                if e.is_some() && tb.is_some() && e != tb && [e.unwrap(), tb.unwrap()].iter().all(|r| *r == a || *r == b) {
-                    l = Some(k);
-                    break;
-                }
+        if let Some(x) = &p.text
+            && x.mnemonic == "ldrsw"
+            && x.ops.len() == 4
+            && x.ops[3] == "lsl #2"
+        {
+            let (e, tb) = (op_num(x, 0), op_num(x, 1));
+            if e.is_some()
+                && tb.is_some()
+                && e != tb
+                && [e.unwrap(), tb.unwrap()].iter().all(|r| *r == a || *r == b)
+            {
+                l = Some(k);
+                break;
             }
         }
         if a64::is_control_flow(p.word) || writes(p, Some(a)) || writes(p, Some(b)) {
@@ -307,7 +410,10 @@ fn signed_word(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Opti
     let k2 = l?;
     let lx = ctx[k2].text.as_ref()?;
     let (tr, ir) = (op_num(lx, 1)?, op_num(lx, 2)?);
-    if ctx[k2 + 1..d].iter().any(|p| writes(p, Some(tr)) || writes(p, Some(ir))) {
+    if ctx[k2 + 1..d]
+        .iter()
+        .any(|p| writes(p, Some(tr)) || writes(p, Some(ir)))
+    {
         return None;
     }
     let (table, n) = table_base_and_bound(ctx, k2, tr, ir)?;

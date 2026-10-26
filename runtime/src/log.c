@@ -1,4 +1,4 @@
-/* Logging, the JSON-lines trace and the compatibility summary (see docs/compat-format.md). */
+/* Logging, the JSON-lines trace and the compatibility summary (see docs/architecture/compat-format.md). */
 #include "napple.h"
 #include "timescale.h"
 #include <errno.h>
@@ -43,7 +43,10 @@ static double since_start(void) { return (double)(runtime_now_ns() - t0_ns) / 1e
 
 void log_line(const char *tag, const char *fmt, ...) {
     char buf[1024];
-    va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
     pthread_mutex_lock(&log_lock);
     fprintf(stderr, "[napple %8.3f] %s: %s\n", since_start(), tag, buf);
     pthread_mutex_unlock(&log_lock);
@@ -52,18 +55,29 @@ void log_line(const char *tag, const char *fmt, ...) {
 void trace_event(const char *kind, const char *fmt, ...) {
     if (!trace_file) return;
     char buf[1024];
-    va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
     pthread_mutex_lock(&log_lock);
     fprintf(trace_file, "{\"t\":%.6f,\"k\":\"%s\"%s%s}\n", since_start(), kind, *buf ? "," : "", buf);
     pthread_mutex_unlock(&log_lock);
 }
 
 /* ---- summary ------------------------------------------------------------------------------------------------ */
-typedef struct { char service[16]; unsigned cmd; int status; unsigned count, max_bytes; } IpcSeen;
+typedef struct {
+    char service[16];
+    unsigned cmd;
+    int status;
+    unsigned count, max_bytes;
+} IpcSeen;
 #define MAX_IPC_SEEN 1024
 static IpcSeen ipc_seen[MAX_IPC_SEEN];
 static unsigned nipc_seen;
-static struct { unsigned count; const char *name; } svc_miss[256];
+static struct {
+    unsigned count;
+    const char *name;
+} svc_miss[256];
 static char nvn_missing[256][96];
 static unsigned nnvn_missing;
 static char notes[64][200];
@@ -80,7 +94,10 @@ void summary_set_title(const char *title_id, const char *build_id) {
     snprintf(g_build, sizeof g_build, "%s", build_id);
     filelog_set_title(title_id);
 }
-void summary_stage(const char *stage) { snprintf(stage_name, sizeof stage_name, "%s", stage); trace_event("stage", "\"stage\":\"%s\"", stage); }
+void summary_stage(const char *stage) {
+    snprintf(stage_name, sizeof stage_name, "%s", stage);
+    trace_event("stage", "\"stage\":\"%s\"", stage);
+}
 
 void summary_svc_unsupported(unsigned num, const char *name) {
     if (num > 255) return;
@@ -93,92 +110,155 @@ void summary_ipc(const char *service, unsigned cmd, int status, unsigned request
     pthread_mutex_lock(&log_lock);
     IpcSeen *e = NULL;
     for (unsigned i = 0; i < nipc_seen; i++)
-        if (ipc_seen[i].cmd == cmd && !strncmp(ipc_seen[i].service, service, 15)) { e = &ipc_seen[i]; break; }
+        if (ipc_seen[i].cmd == cmd && !strncmp(ipc_seen[i].service, service, 15)) {
+            e = &ipc_seen[i];
+            break;
+        }
     if (!e && nipc_seen < MAX_IPC_SEEN) {
         e = &ipc_seen[nipc_seen++];
-        snprintf(e->service, sizeof e->service, "%s", service); e->cmd = cmd; e->status = status;
+        snprintf(e->service, sizeof e->service, "%s", service);
+        e->cmd = cmd;
+        e->status = status;
     }
-    if (e) { e->count++; if (request_bytes > e->max_bytes) e->max_bytes = request_bytes; if (status > e->status) e->status = status; }
+    if (e) {
+        e->count++;
+        if (request_bytes > e->max_bytes) e->max_bytes = request_bytes;
+        if (status > e->status) e->status = status;
+    }
     pthread_mutex_unlock(&log_lock);
 }
 void summary_nvn_missing(const char *name) {
     pthread_mutex_lock(&log_lock);
-    for (unsigned i = 0; i < nnvn_missing; i++) if (!strcmp(nvn_missing[i], name)) { pthread_mutex_unlock(&log_lock); return; }
+    for (unsigned i = 0; i < nnvn_missing; i++)
+        if (!strcmp(nvn_missing[i], name)) {
+            pthread_mutex_unlock(&log_lock);
+            return;
+        }
     if (nnvn_missing < 256) snprintf(nvn_missing[nnvn_missing++], sizeof nvn_missing[0], "%s", name);
     pthread_mutex_unlock(&log_lock);
 }
 void summary_note(const char *fmt, ...) {
     pthread_mutex_lock(&log_lock);
-    if (nnotes < 64) { va_list ap; va_start(ap, fmt); vsnprintf(notes[nnotes++], sizeof notes[0], fmt, ap); va_end(ap); }
+    if (nnotes < 64) {
+        va_list ap;
+        va_start(ap, fmt);
+        vsnprintf(notes[nnotes++], sizeof notes[0], fmt, ap);
+        va_end(ap);
+    }
     pthread_mutex_unlock(&log_lock);
 }
 void summary_crash(int sig, uint64_t pc, const char *note) {
-    crash_signal = sig; crash_pc = pc;
+    crash_signal = sig;
+    crash_pc = pc;
     snprintf(crash_note, sizeof crash_note, "%s", note ? note : "");
 }
 
 static void jstr(FILE *f, const char *s) {
     fputc('"', f);
     for (; *s; s++) {
-        if (*s == '"' || *s == '\\') { fputc('\\', f); fputc(*s, f); }
-        else if ((unsigned char)*s < 0x20) fputc(' ', f);
+        if (*s == '"' || *s == '\\') {
+            fputc('\\', f);
+            fputc(*s, f);
+        } else if ((unsigned char)*s < 0x20) fputc(' ', f);
         else fputc(*s, f);
     }
     fputc('"', f);
 }
 static void mkdirs(const char *path) {
-    char tmp[1024]; snprintf(tmp, sizeof tmp, "%s", path);
-    for (char *p = tmp + 1; *p; p++) if (*p == '/') { *p = 0; mkdir(tmp, 0755); *p = '/'; }
+    char tmp[1024];
+    snprintf(tmp, sizeof tmp, "%s", path);
+    for (char *p = tmp + 1; *p; p++)
+        if (*p == '/') {
+            *p = 0;
+            mkdir(tmp, 0755);
+            *p = '/';
+        }
 }
 
-/* Writes the runtime-boot stage file of docs/compat-format.md (atomically) when a summary path is configured. */
+/* Writes the runtime-boot stage file of docs/architecture/compat-format.md (atomically) when a summary path is configured. */
 void summary_write(const char *status, const char *reason) {
     if (!summary_path || summary_done) return;
     summary_done = 1;
-    char tmp[1100]; snprintf(tmp, sizeof tmp, "%s.tmp", summary_path);
+    char tmp[1100];
+    snprintf(tmp, sizeof tmp, "%s.tmp", summary_path);
     mkdirs(summary_path);
     FILE *f = fopen(tmp, "w");
     if (!f) return;
-    fprintf(f, "{\"stage\":\"runtime-boot\",\"status\":"); jstr(f, status);
-    fprintf(f, ",\"reason\":"); jstr(f, reason);
-    fprintf(f, ",\"evidence\":"); jstr(f, getenv("NAPPLE_EVIDENCE") ? getenv("NAPPLE_EVIDENCE") : "");
-    fprintf(f, ",\"time\":%lld,\"tool\":\"runtime\",\"title_id\":", (long long)time(NULL)); jstr(f, g_title);
-    fprintf(f, ",\"build_id\":"); jstr(f, g_build);
-    fprintf(f, ",\"last_stage\":"); jstr(f, stage_name);
+    fprintf(f, "{\"stage\":\"runtime-boot\",\"status\":");
+    jstr(f, status);
+    fprintf(f, ",\"reason\":");
+    jstr(f, reason);
+    fprintf(f, ",\"evidence\":");
+    jstr(f, getenv("NAPPLE_EVIDENCE") ? getenv("NAPPLE_EVIDENCE") : "");
+    fprintf(f, ",\"time\":%lld,\"tool\":\"runtime\",\"title_id\":", (long long)time(NULL));
+    jstr(f, g_title);
+    fprintf(f, ",\"build_id\":");
+    jstr(f, g_build);
+    fprintf(f, ",\"last_stage\":");
+    jstr(f, stage_name);
     fprintf(f, ",\"counters\":{\"unsupported_svcs\":[");
     int first = 1;
-    for (unsigned i = 0; i < 256; i++) if (svc_miss[i].count) { fprintf(f, "%s%u", first ? "" : ",", i); first = 0; }
+    for (unsigned i = 0; i < 256; i++)
+        if (svc_miss[i].count) {
+            fprintf(f, "%s%u", first ? "" : ",", i);
+            first = 0;
+        }
     fprintf(f, "],\"missing_ipc\":[");
     first = 1;
-    for (unsigned i = 0; i < nipc_seen; i++) if (ipc_seen[i].status == 2) {
-        fprintf(f, "%s", first ? "" : ","); first = 0;
-        char b[64]; snprintf(b, sizeof b, "%s:%u", ipc_seen[i].service, ipc_seen[i].cmd); jstr(f, b);
-    }
+    for (unsigned i = 0; i < nipc_seen; i++)
+        if (ipc_seen[i].status == 2) {
+            fprintf(f, "%s", first ? "" : ",");
+            first = 0;
+            char b[64];
+            snprintf(b, sizeof b, "%s:%u", ipc_seen[i].service, ipc_seen[i].cmd);
+            jstr(f, b);
+        }
     fprintf(f, "],\"stubbed_ipc\":[");
     first = 1;
-    for (unsigned i = 0; i < nipc_seen; i++) if (ipc_seen[i].status == 1) {
-        fprintf(f, "%s", first ? "" : ","); first = 0;
-        char b[64]; snprintf(b, sizeof b, "%s:%u", ipc_seen[i].service, ipc_seen[i].cmd); jstr(f, b);
-    }
+    for (unsigned i = 0; i < nipc_seen; i++)
+        if (ipc_seen[i].status == 1) {
+            fprintf(f, "%s", first ? "" : ",");
+            first = 0;
+            char b[64];
+            snprintf(b, sizeof b, "%s:%u", ipc_seen[i].service, ipc_seen[i].cmd);
+            jstr(f, b);
+        }
     fprintf(f, "],\"implemented_ipc\":[");
     first = 1;
-    for (unsigned i = 0; i < nipc_seen; i++) if (ipc_seen[i].status == 0) {
-        fprintf(f, "%s", first ? "" : ","); first = 0;
-        char b[64]; snprintf(b, sizeof b, "%s:%u x%u", ipc_seen[i].service, ipc_seen[i].cmd, ipc_seen[i].count); jstr(f, b);
-    }
+    for (unsigned i = 0; i < nipc_seen; i++)
+        if (ipc_seen[i].status == 0) {
+            fprintf(f, "%s", first ? "" : ",");
+            first = 0;
+            char b[64];
+            snprintf(b, sizeof b, "%s:%u x%u", ipc_seen[i].service, ipc_seen[i].cmd, ipc_seen[i].count);
+            jstr(f, b);
+        }
     fprintf(f, "],\"missing_nvn\":[");
-    for (unsigned i = 0; i < nnvn_missing; i++) { fprintf(f, "%s", i ? "," : ""); jstr(f, nvn_missing[i]); }
+    for (unsigned i = 0; i < nnvn_missing; i++) {
+        fprintf(f, "%s", i ? "," : "");
+        jstr(f, nvn_missing[i]);
+    }
     fprintf(f, "],\"crashes\":[");
-    if (crash_signal) { fprintf(f, "{\"signal\":%d,\"pc\":\"0x%016llx\",\"note\":", crash_signal, (unsigned long long)crash_pc); jstr(f, crash_note); fputc('}', f); }
+    if (crash_signal) {
+        fprintf(f, "{\"signal\":%d,\"pc\":\"0x%016llx\",\"note\":", crash_signal, (unsigned long long)crash_pc);
+        jstr(f, crash_note);
+        fputc('}', f);
+    }
     fprintf(f, "],\"notes\":[");
-    for (unsigned i = 0; i < nnotes; i++) { fprintf(f, "%s", i ? "," : ""); jstr(f, notes[i]); }
+    for (unsigned i = 0; i < nnotes; i++) {
+        fprintf(f, "%s", i ? "," : "");
+        jstr(f, notes[i]);
+    }
     fprintf(f, "]}}\n");
     if (fclose(f) == 0) rename(tmp, summary_path);
 }
 
 _Noreturn void runtime_fail(const char *fmt, ...) {
     char buf[1024];
-    va_list ap; va_start(ap, fmt); vsnprintf(buf, sizeof buf, fmt, ap); va_end(ap);
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(buf, sizeof buf, fmt, ap);
+    va_end(ap);
     pthread_mutex_lock(&log_lock);
     fprintf(stderr, "[napple %8.3f] FAIL: %s\n", since_start(), buf);
     pthread_mutex_unlock(&log_lock);

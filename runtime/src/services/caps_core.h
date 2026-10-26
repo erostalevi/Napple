@@ -4,8 +4,13 @@
 #include <stdint.h>
 
 #define CAPS_ALBUM_MAX 64u
-typedef struct { uint64_t saved; uint64_t shim_version; uint8_t album[CAPS_ALBUM_MAX][0x20]; unsigned count; } CapsState;
-#define CAPS_ENTRY_SIZE 0x20u                       /* nn::capsrv ApplicationAlbumEntry */
+typedef struct {
+    uint64_t saved;
+    uint64_t shim_version;
+    uint8_t album[CAPS_ALBUM_MAX][0x20];
+    unsigned count;
+} CapsState;
+#define CAPS_ENTRY_SIZE 0x20u /* nn::capsrv ApplicationAlbumEntry */
 enum { CAPS_CONTENT_SCREENSHOT = 0, CAPS_CONTENT_MOVIE = 1 };
 
 /* Fills a 0x20-byte ApplicationAlbumEntry for a screenshot "saved" at the given civil time and counts it. size/hash are 0: there is no file. */
@@ -18,4 +23,4 @@ unsigned caps_album_count(const CapsState *s);
 unsigned caps_album_list(const CapsState *s, int content, unsigned offset, unsigned max, uint8_t *out);
 /* Index of the entry whose datetime/unique id match entry[0x10..0x17], or -1. */
 int caps_album_find(const CapsState *s, const uint8_t *entry);
-int caps_album_delete(CapsState *s, const uint8_t *entry);   /* 0 on success, -1 when absent */
+int caps_album_delete(CapsState *s, const uint8_t *entry); /* 0 on success, -1 when absent */

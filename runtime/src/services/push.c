@@ -9,7 +9,10 @@
 
 #define PUSH_RANGE 32
 static IpcCmd g_tables[5][PUSH_RANGE];
-static void ok(IpcObject *s, IpcCall *c) { (void)s; (void)c; }
+static void ok(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+}
 static void fill(IpcCmd *t, unsigned event_a, unsigned event_b) {
     for (unsigned i = 0; i < PUSH_RANGE; i++) t[i] = (IpcCmd){i, "OfflineNoop", (i == event_a || i == event_b) ? svc_ret_event : ok, IPC_STUB};
 }
@@ -19,7 +22,11 @@ static IpcObject *open_mnpp(void) { return IPC_OBJECT("mnpp:app", g_tables[2], N
 static IpcObject *open_ngct(void) { return IPC_OBJECT("ngct:u", g_tables[3], NULL, NULL); }
 static IpcObject *open_nim_eca(void) { return IPC_OBJECT("nim:eca", g_tables[4], NULL, NULL); }
 void service_register_push(void) {
-    fill(g_tables[0], 5, 7); for (int i = 1; i < 5; i++) fill(g_tables[i], PUSH_RANGE, PUSH_RANGE);
-    ipc_register_service("npns:u", open_npns); ipc_register_service("notif:a", open_notif); ipc_register_service("mnpp:app", open_mnpp);
-    ipc_register_service("ngct:u", open_ngct); ipc_register_service("nim:eca", open_nim_eca);
+    fill(g_tables[0], 5, 7);
+    for (int i = 1; i < 5; i++) fill(g_tables[i], PUSH_RANGE, PUSH_RANGE);
+    ipc_register_service("npns:u", open_npns);
+    ipc_register_service("notif:a", open_notif);
+    ipc_register_service("mnpp:app", open_mnpp);
+    ipc_register_service("ngct:u", open_ngct);
+    ipc_register_service("nim:eca", open_nim_eca);
 }

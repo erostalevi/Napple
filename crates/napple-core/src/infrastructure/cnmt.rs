@@ -1,5 +1,5 @@
 //! CNMT (content meta) parsing: identifies Application / Patch (update) / AddOnContent (DLC) packs.
-use crate::domain::error::{container, Result};
+use crate::domain::error::{Result, container};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TitleKind {
@@ -19,7 +19,11 @@ pub struct ContentRecord {
 
 impl ContentRecord {
     pub fn nca_name(&self) -> String {
-        self.id.iter().map(|b| format!("{b:02x}")).collect::<String>() + ".nca"
+        self.id
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>()
+            + ".nca"
     }
 }
 
@@ -76,10 +80,22 @@ pub fn parse_cnmt(d: &[u8]) -> Result<Cnmt> {
             let r = &d[start + i * 0x38..start + (i + 1) * 0x38];
             let mut size = [0u8; 8];
             size[..6].copy_from_slice(&r[0x30..0x36]);
-            ContentRecord { id: r[0x20..0x30].try_into().unwrap(), size: u64::from_le_bytes(size), ctype: r[0x36] }
+            ContentRecord {
+                id: r[0x20..0x30].try_into().unwrap(),
+                size: u64::from_le_bytes(size),
+                ctype: r[0x36],
+            }
         })
         .collect();
-    Ok(Cnmt { title_id, version, kind, application_id, required_system_version: rsv, required_application_version: rav, contents })
+    Ok(Cnmt {
+        title_id,
+        version,
+        kind,
+        application_id,
+        required_system_version: rsv,
+        required_application_version: rav,
+        contents,
+    })
 }
 
 #[cfg(test)]
@@ -103,12 +119,24 @@ mod tests {
 
     #[test]
     fn kinds_and_contents() {
-        let p = parse_cnmt(&cnmt(0x81, 0x0100_0000_0000_0800, 0x0100_0000_0000_0000, 65536)).unwrap();
-        assert_eq!((p.kind, p.application_id, p.version), (TitleKind::Patch, 0x0100_0000_0000_0000, 65536));
+        let p = parse_cnmt(&cnmt(
+            0x81,
+            0x0100_0000_0000_0800,
+            0x0100_0000_0000_0000,
+            65536,
+        ))
+        .unwrap();
+        assert_eq!(
+            (p.kind, p.application_id, p.version),
+            (TitleKind::Patch, 0x0100_0000_0000_0000, 65536)
+        );
         assert_eq!((p.contents[0].size, p.contents[0].ctype), (0x1000, 1));
         assert_eq!(p.contents[0].nca_name(), "a".repeat(32) + ".nca");
         let d = parse_cnmt(&cnmt(0x82, 0x0100_0000_0000_1001, 0x0100_0000_0000_0000, 0)).unwrap();
-        assert_eq!((d.kind, d.application_id), (TitleKind::AddOn, 0x0100_0000_0000_0000));
+        assert_eq!(
+            (d.kind, d.application_id),
+            (TitleKind::AddOn, 0x0100_0000_0000_0000)
+        );
         let a = parse_cnmt(&cnmt(0x80, 0x0100_0000_0000_0000, 0, 0)).unwrap();
         assert_eq!(a.application_id, a.title_id);
     }

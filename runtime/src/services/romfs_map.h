@@ -4,6 +4,6 @@
 #include <stdint.h>
 #include <sys/types.h>
 typedef struct RomfsMap RomfsMap;
-RomfsMap *romfs_map_open(const char *path, uint64_t *size);   /* NULL when absent or malformed */
+RomfsMap *romfs_map_open(const char *path, uint64_t *size); /* NULL when absent or malformed */
 ssize_t romfs_map_pread(RomfsMap *m, void *dst, size_t len, uint64_t off);
 void romfs_map_close(RomfsMap *m);

@@ -1,4 +1,4 @@
-/* t_pipe_stress.c - pipeline-build hang regression (docs/changes/2026-10-24-nvn-pipeline.md): many persisted pipelines, prewarm running while the
+/* t_pipe_stress.c - pipeline-build hang regression (docs/archive/changes/2026-10-24-nvn-pipeline.md): many persisted pipelines, prewarm running while the
  * game draws, GCD's shared worker pool flooded with blocked work. Pass 1 (T_STRESS_PASS=1) draws NFS fragment programs x NBLEND blend modes into a
  * fresh cache so pipelines.bin lists them all. Pass 2 (T_STRESS_PASS=2) starts with that cache, floods the global queues with sleeping blocks,
  * registers the programs (which queues every persisted pipeline for prewarm) and draws the combinations in reverse queue order, from T_STRESS_THREADS

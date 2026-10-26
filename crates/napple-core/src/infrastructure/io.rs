@@ -1,5 +1,5 @@
 //! Bounded random-access sources. Every read is range-checked.
-use crate::domain::error::{container, Result};
+use crate::domain::error::{Result, container};
 use std::os::unix::fs::FileExt;
 use std::sync::Arc;
 
@@ -47,7 +47,15 @@ pub fn push_ext(out: &mut Vec<MapExt>, e: MapExt) {
 
 /// Maps `src[offset..offset+len)` and applies AES-CTR (`key`, `hi`, counter offset `ctr_base + offset`) to the
 /// plaintext extents found (the layer under a CTR layer must be unencrypted).
-pub fn map_ctr(src: &dyn Source, offset: u64, len: u64, key: [u8; 16], hi: [u8; 8], ctr_base: u64, out: &mut Vec<MapExt>) -> bool {
+pub fn map_ctr(
+    src: &dyn Source,
+    offset: u64,
+    len: u64,
+    key: [u8; 16],
+    hi: [u8; 8],
+    ctr_base: u64,
+    out: &mut Vec<MapExt>,
+) -> bool {
     let mut tmp = Vec::new();
     if !src.map(offset, len, &mut tmp) {
         return false;
@@ -106,7 +114,15 @@ impl Source for FileSource {
         if check(offset, len, self.size).is_err() {
             return false;
         }
-        push_ext(out, MapExt { len, file: self.path.clone(), file_off: offset, ctr: None });
+        push_ext(
+            out,
+            MapExt {
+                len,
+                file: self.path.clone(),
+                file_off: offset,
+                ctr: None,
+            },
+        );
         true
     }
 }
@@ -131,6 +147,8 @@ pub struct Slice {
 }
 
 impl Slice {
+    // Hands back the shared `Src` handle, which is how every caller holds a source.
+    #[allow(clippy::new_ret_no_self)]
     pub fn new(parent: Src, off: u64, len: u64) -> Result<Src> {
         check(off, len, parent.size())?;
         Ok(Arc::new(Self { parent, off, len }))

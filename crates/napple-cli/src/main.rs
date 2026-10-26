@@ -1,6 +1,8 @@
+mod clean;
+
 use napple_core::application::decomp;
 use napple_core::application::ingest::ingest;
-use napple_core::application::package::{scan, version_label, BuildPlan, Choice, DlcChoice};
+use napple_core::application::package::{BuildPlan, Choice, DlcChoice, scan, version_label};
 use napple_core::domain::error::{Error, Result};
 use napple_core::domain::keys::KeySet;
 use napple_core::infrastructure::cnmt::TitleKind;
@@ -9,6 +11,7 @@ use std::path::PathBuf;
 const USAGE: &str = "usage:
   napple ingest <game> -k <prod.keys>
   napple plan   <files...> -k <prod.keys> [--updates all|latest|none|<v,v>] [--dlc all|none|<id,id>] [--json]
+  napple clean  [--shader-cache] [--build-cache <dir>] [--engine <dir>] [--dry-run]   (removes rebuildable artifacts)
   napple decomp <files...> -k <prod.keys> [--updates ...] [--dlc ...] [-o <dir>] [--json]
 files: base game, updates and DLC (XCI/NSP), any order, one or several files.";
 
@@ -24,7 +27,15 @@ struct Args {
 
 fn parse() -> Option<Args> {
     let mut it = std::env::args().skip(1);
-    let mut a = Args { cmd: it.next()?, files: vec![], keys: None, updates: Choice::Latest, dlc: DlcChoice::All, out: None, json: false };
+    let mut a = Args {
+        cmd: it.next()?,
+        files: vec![],
+        keys: None,
+        updates: Choice::Latest,
+        dlc: DlcChoice::All,
+        out: None,
+        json: false,
+    };
     while let Some(x) = it.next() {
         match x.as_str() {
             "-k" => a.keys = Some(it.next()?.into()),
@@ -35,14 +46,22 @@ fn parse() -> Option<Args> {
                     "all" => Choice::All,
                     "latest" => Choice::Latest,
                     "none" => Choice::None,
-                    v => Choice::Only(v.split(',').map(|s| s.trim().parse().ok()).collect::<Option<_>>()?),
+                    v => Choice::Only(
+                        v.split(',')
+                            .map(|s| s.trim().parse().ok())
+                            .collect::<Option<_>>()?,
+                    ),
                 }
             }
             "--dlc" => {
                 a.dlc = match it.next()?.as_str() {
                     "all" => DlcChoice::All,
                     "none" => DlcChoice::None,
-                    v => DlcChoice::Only(v.split(',').map(|s| u64::from_str_radix(s.trim(), 16).ok()).collect::<Option<_>>()?),
+                    v => DlcChoice::Only(
+                        v.split(',')
+                            .map(|s| u64::from_str_radix(s.trim(), 16).ok())
+                            .collect::<Option<_>>()?,
+                    ),
                 }
             }
             f => a.files.push(f.into()),
@@ -67,15 +86,32 @@ fn print_plan(plan: &BuildPlan, upd: &[usize], dlc: &[usize]) {
     let mark = |sel: bool| if sel { "[x]" } else { "[ ]" };
     if let Some(b) = plan.base {
         let p = &plan.packs[b];
-        println!("Base    [x] {:016X}  {}  {}", p.meta.title_id, version_label(p.meta.version), gb(p.size()));
+        println!(
+            "Base    [x] {:016X}  {}  {}",
+            p.meta.title_id,
+            version_label(p.meta.version),
+            gb(p.size())
+        );
     }
     for &i in &plan.updates {
         let p = &plan.packs[i];
-        println!("Update  {} {:016X}  {}  {}", mark(upd.contains(&i)), p.meta.title_id, version_label(p.meta.version), gb(p.size()));
+        println!(
+            "Update  {} {:016X}  {}  {}",
+            mark(upd.contains(&i)),
+            p.meta.title_id,
+            version_label(p.meta.version),
+            gb(p.size())
+        );
     }
     for &i in &plan.dlcs {
         let p = &plan.packs[i];
-        println!("DLC     {} {:016X}  {}  {}", mark(dlc.contains(&i)), p.meta.title_id, version_label(p.meta.version), gb(p.size()));
+        println!(
+            "DLC     {} {:016X}  {}  {}",
+            mark(dlc.contains(&i)),
+            p.meta.title_id,
+            version_label(p.meta.version),
+            gb(p.size())
+        );
     }
     for w in &plan.warnings {
         println!("warning: {w}");
@@ -103,15 +139,35 @@ fn plan_json(plan: &BuildPlan, upd: &[usize], dlc: &[usize]) -> String {
         let p = &plan.packs[i];
         format!(
             "{{\"title_id\":\"{:016X}\",\"version\":{},\"version_label\":{},\"size\":{},\"selected\":{},\"path\":{}}}",
-            p.meta.title_id, p.meta.version, jstr(&version_label(p.meta.version)), p.size(), sel,
+            p.meta.title_id,
+            p.meta.version,
+            jstr(&version_label(p.meta.version)),
+            p.size(),
+            sel,
             jstr(&p.path.to_string_lossy())
         )
     };
-    let base = plan.base.map(|b| item(b, true)).unwrap_or_else(|| "null".into());
-    let u: Vec<String> = plan.updates.iter().map(|&i| item(i, upd.contains(&i))).collect();
-    let d: Vec<String> = plan.dlcs.iter().map(|&i| item(i, dlc.contains(&i))).collect();
+    let base = plan
+        .base
+        .map(|b| item(b, true))
+        .unwrap_or_else(|| "null".into());
+    let u: Vec<String> = plan
+        .updates
+        .iter()
+        .map(|&i| item(i, upd.contains(&i)))
+        .collect();
+    let d: Vec<String> = plan
+        .dlcs
+        .iter()
+        .map(|&i| item(i, dlc.contains(&i)))
+        .collect();
     let w: Vec<String> = plan.warnings.iter().map(|x| jstr(x)).collect();
-    format!("{{\"base\":{base},\"updates\":[{}],\"dlc\":[{}],\"warnings\":[{}]}}", u.join(","), d.join(","), w.join(","))
+    format!(
+        "{{\"base\":{base},\"updates\":[{}],\"dlc\":[{}],\"warnings\":[{}]}}",
+        u.join(","),
+        d.join(","),
+        w.join(",")
+    )
 }
 
 fn run(a: Args) -> Result<()> {
@@ -148,14 +204,25 @@ fn run(a: Args) -> Result<()> {
             let reports = decomp::run(&plan, &upd, &keys)?;
             if a.json {
                 let body: Vec<String> = reports.iter().map(|r| r.to_json()).collect();
-                println!("{{\"plan\":{},\"reports\":[{}]}}", plan_json(&plan, &upd, &dlc), body.join(","));
+                println!(
+                    "{{\"plan\":{},\"reports\":[{}]}}",
+                    plan_json(&plan, &upd, &dlc),
+                    body.join(",")
+                );
                 return Ok(());
             }
             for r in &reports {
                 println!("\n== {:016X} {}", r.title_id, r.label);
                 for m in &r.modules {
-                    let s: Vec<String> = m.sites.iter().map(|(k, n)| format!("{k:?}={n}")).collect();
-                    println!("{:<8} build {}  text {:>9} B  {}", m.name, &m.build_id[..16], m.text_bytes, s.join(" "));
+                    let s: Vec<String> =
+                        m.sites.iter().map(|(k, n)| format!("{k:?}={n}")).collect();
+                    println!(
+                        "{:<8} build {}  text {:>9} B  {}",
+                        m.name,
+                        &m.build_id[..16],
+                        m.text_bytes,
+                        s.join(" ")
+                    );
                 }
                 match (r.romfs_files, &r.romfs_note) {
                     (Some(n), _) => println!("romfs: {n} files"),
@@ -166,8 +233,14 @@ fn run(a: Args) -> Result<()> {
             if let Some(dir) = &a.out {
                 std::fs::create_dir_all(dir)?;
                 let body: Vec<String> = reports.iter().map(|r| r.to_json()).collect();
-                std::fs::write(dir.join("decomp-report.json"), format!("[{}]\n", body.join(",")))?;
-                println!("\nreport written to {}", dir.join("decomp-report.json").display());
+                std::fs::write(
+                    dir.join("decomp-report.json"),
+                    format!("[{}]\n", body.join(",")),
+                )?;
+                println!(
+                    "\nreport written to {}",
+                    dir.join("decomp-report.json").display()
+                );
             }
         }
         _ => {
@@ -181,11 +254,13 @@ fn run(a: Args) -> Result<()> {
 fn main() {
     // Subcommands owned by other crates take the raw args (each crate parses its own flags).
     let raw: Vec<String> = std::env::args().skip(1).collect();
-    let ext: Option<fn(&[String]) -> std::result::Result<(), String>> = match raw.first().map(|s| s.as_str()) {
+    type Subcommand = fn(&[String]) -> std::result::Result<(), String>;
+    let ext: Option<Subcommand> = match raw.first().map(|s| s.as_str()) {
         Some("rewrite") => Some(napple_rewrite::run),
         Some("compat") => Some(napple_compat::run),
         Some("sigs") => Some(napple_sigs::run),
         Some("build") => Some(napple_build::run),
+        Some("clean") => Some(clean::run),
         _ => None,
     };
     if let Some(f) = ext {

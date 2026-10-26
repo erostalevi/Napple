@@ -1,5 +1,5 @@
 //! On-disk formats (`<module>.fixups.tsv`, `.gates.tsv`, `.sites.tsv`, `.patched.bin`); see
-//! `docs/rewrite-format.md` for the specification.
+//! `docs/architecture/rewrite-format.md` for the specification.
 use crate::error::RewriteError;
 use crate::types::{Key, RewriteOutput, SiteRow};
 use std::fmt::Write as _;
@@ -26,7 +26,14 @@ impl RewriteOutput {
     pub fn gates_tsv(&self) -> String {
         let mut s = String::new();
         for g in &self.gates {
-            let _ = writeln!(s, "{:#x}\t{}\t{}\t{:#x}", g.ret, g.kind.label(), g.arg, g.orig);
+            let _ = writeln!(
+                s,
+                "{:#x}\t{}\t{}\t{:#x}",
+                g.ret,
+                g.kind.label(),
+                g.arg,
+                g.orig
+            );
         }
         s
     }
@@ -39,7 +46,9 @@ impl RewriteOutput {
                 SiteRow::Single { addr, label } => writeln!(s, "{addr:#x}\t{label}"),
                 SiteRow::Window { lo, hi } => writeln!(s, "{lo:#x}\tW\t{hi:#x}"),
                 SiteRow::Call { addr, ret } => writeln!(s, "{addr:#x}\tC\t{ret:#x}"),
-                SiteRow::Jump { addr, base, count } => writeln!(s, "{addr:#x}\tJ\t{base:#x}\t{count}"),
+                SiteRow::Jump { addr, base, count } => {
+                    writeln!(s, "{addr:#x}\tJ\t{base:#x}\t{count}")
+                }
             };
         }
         s
@@ -62,7 +71,10 @@ impl RewriteOutput {
         std::fs::write(p("fixups.tsv"), self.fixups_tsv()).map_err(io)?;
         std::fs::write(p("gates.tsv"), self.gates_tsv()).map_err(io)?;
         std::fs::write(p("sites.tsv"), self.sites_tsv()).map_err(io)?;
-        for (ext, body) in [("unhandled.tsv", self.unhandled_tsv()), ("warnings.txt", self.warnings.join("\n"))] {
+        for (ext, body) in [
+            ("unhandled.tsv", self.unhandled_tsv()),
+            ("warnings.txt", self.warnings.join("\n")),
+        ] {
             let path = p(ext);
             if body.is_empty() {
                 let _ = std::fs::remove_file(path);

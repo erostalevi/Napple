@@ -27,10 +27,13 @@ pub fn shannon(s: &[u8]) -> f64 {
         c[*b as usize] += 1;
     }
     let n = s.len() as f64;
-    c.iter().filter(|x| **x > 0).map(|x| {
-        let p = *x as f64 / n;
-        -p * p.log2()
-    }).sum()
+    c.iter()
+        .filter(|x| **x > 0)
+        .map(|x| {
+            let p = *x as f64 / n;
+            -p * p.log2()
+        })
+        .sum()
 }
 
 fn longest_run(s: &str, f: impl Fn(u8) -> bool) -> usize {
@@ -52,14 +55,23 @@ fn check_text(what: &str, s: &str, max: usize, errs: &mut Vec<String>) {
         errs.push(format!("{what}: length must be 1..={max}"));
         return;
     }
-    if !s.bytes().all(|c| c.is_ascii_alphanumeric() || b"_:.<>~$-*&,[]()".contains(&c)) {
-        errs.push(format!("{what}: characters outside the identifier set (spaces, paths, text are not allowed)"));
+    if !s
+        .bytes()
+        .all(|c| c.is_ascii_alphanumeric() || b"_:.<>~$-*&,[]()".contains(&c))
+    {
+        errs.push(format!(
+            "{what}: characters outside the identifier set (spaces, paths, text are not allowed)"
+        ));
     }
     if longest_run(s, |c| c.is_ascii_hexdigit()) > MAX_HEX_RUN {
-        errs.push(format!("{what}: contains a long hex run (looks like a data blob)"));
+        errs.push(format!(
+            "{what}: contains a long hex run (looks like a data blob)"
+        ));
     }
     if s.len() >= ENTROPY_MIN_LEN && shannon(s.as_bytes()) > ENTROPY_LIMIT {
-        errs.push(format!("{what}: high-entropy string (looks like encoded data)"));
+        errs.push(format!(
+            "{what}: high-entropy string (looks like encoded data)"
+        ));
     }
     let low = s.to_ascii_lowercase();
     if low.contains("/users/") || low.contains("\\users\\") || s.contains('@') {
@@ -77,7 +89,10 @@ fn check_pattern(key: &str, e: &Signature, errs: &mut Vec<String>) {
         return errs.push(at("pattern and mask differ in length"));
     }
     if b.len() > MAX_PATTERN_BYTES {
-        return errs.push(at(&format!("{} bytes exceeds the {MAX_PATTERN_BYTES}-byte limit (no game dumps)", b.len())));
+        return errs.push(at(&format!(
+            "{} bytes exceeds the {MAX_PATTERN_BYTES}-byte limit (no game dumps)",
+            b.len()
+        )));
     }
     if b.is_empty() {
         return errs.push(at("empty"));
@@ -86,11 +101,18 @@ fn check_pattern(key: &str, e: &Signature, errs: &mut Vec<String>) {
         errs.push(at("code patterns must be whole A64 words"));
     }
     if b.iter().zip(&m).any(|(x, y)| x & !y != 0) {
-        errs.push(at("pattern has bits set under the wildcard mask (not canonical)"));
+        errs.push(at(
+            "pattern has bits set under the wildcard mask (not canonical)",
+        ));
     }
-    let p = Pattern { bytes: b.clone(), mask: m.clone() };
+    let p = Pattern {
+        bytes: b.clone(),
+        mask: m.clone(),
+    };
     if p.fixed_bytes() < MIN_FIXED_BYTES {
-        errs.push(at(&format!("fewer than {MIN_FIXED_BYTES} fully pinned bytes (not identifying)")));
+        errs.push(at(&format!(
+            "fewer than {MIN_FIXED_BYTES} fully pinned bytes (not identifying)"
+        )));
     }
     // A run of printable ASCII in the pinned bytes means a string dump, never code.
     let mut run = 0;
@@ -107,7 +129,10 @@ fn check_pattern(key: &str, e: &Signature, errs: &mut Vec<String>) {
         errs.push(at("long printable-ASCII run (string data)"));
     }
     if p.hash() != key {
-        errs.push(at(&format!("key does not equal the pattern hash {}", p.hash())));
+        errs.push(at(&format!(
+            "key does not equal the pattern hash {}",
+            p.hash()
+        )));
     }
 }
 
@@ -116,10 +141,16 @@ pub fn validate(f: &SignatureFile) -> Vec<String> {
     if f.schema_version != SCHEMA_VERSION {
         errs.push(format!("schema_version must be {SCHEMA_VERSION}"));
     }
-    if TitleId::parse(&f.title_id).map(|t| t.0 != f.title_id).unwrap_or(true) {
+    if TitleId::parse(&f.title_id)
+        .map(|t| t.0 != f.title_id)
+        .unwrap_or(true)
+    {
         errs.push("title_id must be 16 upper-case hex digits".into());
     }
-    if BuildId::parse(&f.build_id).map(|t| t.0 != f.build_id).unwrap_or(true) {
+    if BuildId::parse(&f.build_id)
+        .map(|t| t.0 != f.build_id)
+        .unwrap_or(true)
+    {
         errs.push("build_id must be 16..64 lower-case hex digits".into());
     }
     if f.signatures.len() > MAX_ENTRIES {
@@ -127,16 +158,24 @@ pub fn validate(f: &SignatureFile) -> Vec<String> {
     }
     for (key, e) in &f.signatures {
         let at = |m: &str| format!("signatures[{key}]: {m}");
-        if key.len() != HASH_HEX_LEN || !key.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')) {
-            errs.push(at(&format!("key must be {HASH_HEX_LEN} lower-case hex digits")));
+        if key.len() != HASH_HEX_LEN || !key.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f'))
+        {
+            errs.push(at(&format!(
+                "key must be {HASH_HEX_LEN} lower-case hex digits"
+            )));
         }
         check_pattern(key, e, &mut errs);
         check_text(&at("module"), &e.module, 32, &mut errs);
         if let Some(n) = &e.name {
             check_text(&at("name"), n, MAX_NAME, &mut errs);
         }
-        if e.offset_end <= e.offset_start || e.offset_end - e.offset_start > MAX_RANGE || e.offset_end > u32::MAX as u64 {
-            errs.push(at(&format!("offset range must be non-empty, within 32 bits and at most {MAX_RANGE:#x} bytes")));
+        if e.offset_end <= e.offset_start
+            || e.offset_end - e.offset_start > MAX_RANGE
+            || e.offset_end > u32::MAX as u64
+        {
+            errs.push(at(&format!(
+                "offset range must be non-empty, within 32 bits and at most {MAX_RANGE:#x} bytes"
+            )));
         }
         if e.kind == SigKind::Struct && e.layout.is_none() {
             errs.push(at("kind struct requires a layout"));
@@ -148,7 +187,13 @@ pub fn validate(f: &SignatureFile) -> Vec<String> {
             for fl in &l.fields {
                 check_text(&at("layout field name"), &fl.name, 64, &mut errs);
                 check_text(&at("layout field type"), &fl.ty, 16, &mut errs);
-                if fl.size == 0 || fl.offset.checked_add(fl.size).map(|x| x > l.size).unwrap_or(true) {
+                if fl.size == 0
+                    || fl
+                        .offset
+                        .checked_add(fl.size)
+                        .map(|x| x > l.size)
+                        .unwrap_or(true)
+                {
                     errs.push(at(&format!("field {} exceeds the struct size", fl.name)));
                 }
             }
@@ -161,9 +206,15 @@ pub fn validate(f: &SignatureFile) -> Vec<String> {
             check_text(&at(&format!("param {k}")), v, MAX_PARAM_VALUE, &mut errs);
         }
         match (e.resolution.action, ["target", "recipe", "value"]) {
-            (ResolutionAction::Hook, _) if !e.resolution.params.contains_key("target") => errs.push(at("hook needs params.target")),
-            (ResolutionAction::Rewrite, _) if !e.resolution.params.contains_key("recipe") => errs.push(at("rewrite needs params.recipe")),
-            (ResolutionAction::Stub, _) if !e.resolution.params.contains_key("value") => errs.push(at("stub needs params.value")),
+            (ResolutionAction::Hook, _) if !e.resolution.params.contains_key("target") => {
+                errs.push(at("hook needs params.target"))
+            }
+            (ResolutionAction::Rewrite, _) if !e.resolution.params.contains_key("recipe") => {
+                errs.push(at("rewrite needs params.recipe"))
+            }
+            (ResolutionAction::Stub, _) if !e.resolution.params.contains_key("value") => {
+                errs.push(at("stub needs params.value"))
+            }
             _ => {}
         }
     }
@@ -175,7 +226,8 @@ pub fn validate_json(text: &str) -> Result<SignatureFile, Vec<String>> {
     if text.len() > MAX_FILE_BYTES {
         return Err(vec![format!("file larger than {MAX_FILE_BYTES} bytes")]);
     }
-    let f: SignatureFile = serde_json::from_str(text).map_err(|e| vec![format!("parse error: {e}")])?;
+    let f: SignatureFile =
+        serde_json::from_str(text).map_err(|e| vec![format!("parse error: {e}")])?;
     let errs = validate(&f);
     if errs.is_empty() { Ok(f) } else { Err(errs) }
 }
@@ -186,7 +238,13 @@ pub(crate) mod fixtures {
     use std::collections::BTreeMap;
 
     pub fn sample_pattern() -> Pattern {
-        let w = [0xA9BF7BFDu32, 0x9100_03FD, 0xAA0003F3, 0x9400_0001, 0xD65F03C0];
+        let w = [
+            0xA9BF7BFDu32,
+            0x9100_03FD,
+            0xAA0003F3,
+            0x9400_0001,
+            0xD65F03C0,
+        ];
         Pattern::from_a64(&w.iter().flat_map(|x| x.to_le_bytes()).collect::<Vec<_>>()).unwrap()
     }
 
@@ -200,7 +258,10 @@ pub(crate) mod fixtures {
             mask: p.mask_hex(),
             name: Some("nn::os::Example".into()),
             layout: None,
-            resolution: Resolution { action: ResolutionAction::Annotate, params: BTreeMap::new() },
+            resolution: Resolution {
+                action: ResolutionAction::Annotate,
+                params: BTreeMap::new(),
+            },
             provenance: Provenance::Local,
             confidence: Confidence::Medium,
         }
@@ -208,7 +269,10 @@ pub(crate) mod fixtures {
 
     pub fn sample_file() -> SignatureFile {
         let p = sample_pattern();
-        let mut f = SignatureFile::new(&TitleId("0100AAAA00000000".into()), &BuildId("ab".repeat(16)));
+        let mut f = SignatureFile::new(
+            &TitleId("0100AAAA00000000".into()),
+            &BuildId("ab".repeat(16)),
+        );
         f.signatures.insert(p.hash(), sample_sig(&p));
         f
     }
@@ -221,11 +285,21 @@ mod tests {
 
     #[test]
     fn committed_examples_validate() {
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../knownSignatures/_examples");
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../knownSignatures/_examples");
         let mut n = 0;
-        let visible = |e: &std::io::Result<std::fs::DirEntry>| !e.as_ref().unwrap().file_name().to_string_lossy().starts_with('.');
+        let visible = |e: &std::io::Result<std::fs::DirEntry>| {
+            !e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with('.')
+        };
         for t in std::fs::read_dir(dir).unwrap().filter(visible) {
-            for f in std::fs::read_dir(t.unwrap().path()).unwrap().filter(visible) {
+            for f in std::fs::read_dir(t.unwrap().path())
+                .unwrap()
+                .filter(visible)
+            {
                 let text = std::fs::read_to_string(f.unwrap().path()).unwrap();
                 let f = validate_json(&text).unwrap_or_else(|e| panic!("{e:?}"));
                 assert!(f.signatures.len() >= 3);
@@ -256,7 +330,9 @@ mod tests {
         let e = bad(|f| {
             let key = f.signatures.keys().next().unwrap().clone();
             let mut s = f.signatures.remove(&key).unwrap();
-            let code: Vec<u8> = (0..32u32).flat_map(|i| (0xD503201Fu32 ^ (i << 8)).to_le_bytes()).collect();
+            let code: Vec<u8> = (0..32u32)
+                .flat_map(|i| (0xD503201Fu32 ^ (i << 8)).to_le_bytes())
+                .collect();
             let p = Pattern::from_a64(&code).unwrap();
             s.pattern = p.bytes_hex();
             s.mask = p.mask_hex();
@@ -277,7 +353,11 @@ mod tests {
             let s = first_mut(f);
             s.mask = "00".repeat(20);
         });
-        assert!(e.iter().any(|m| m.contains("fully pinned") || m.contains("wildcard")), "{e:?}");
+        assert!(
+            e.iter()
+                .any(|m| m.contains("fully pinned") || m.contains("wildcard")),
+            "{e:?}"
+        );
     }
 
     #[test]
@@ -303,7 +383,12 @@ mod tests {
         let e = bad(|f| first_mut(f).name = Some("some prose with spaces".into()));
         assert!(e.iter().any(|m| m.contains("characters")));
         let mut v: serde_json::Value = serde_json::from_str(&sample_file().to_json()).unwrap();
-        v["signatures"].as_object_mut().unwrap().values_mut().next().unwrap()["raw_dump"] = "AAAA".into();
+        v["signatures"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+            .next()
+            .unwrap()["raw_dump"] = "AAAA".into();
         assert!(validate_json(&v.to_string()).unwrap_err()[0].contains("unknown field"));
     }
 

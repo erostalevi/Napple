@@ -7,10 +7,10 @@
 //! then either one zstd stream, or `NCZBLOCK` (block-compressed, random access) + blocks.
 //! Streaming form is decoded forward only: a backward seek restarts the decoder, a forward seek
 //! discards. The block form decodes one block per read (the last block is cached).
-use super::io::{check, read_vec, Source, Src};
-use crate::domain::error::{container, Error, Result};
-use aes::cipher::{generic_array::GenericArray, KeyIvInit, StreamCipher, StreamCipherSeek};
+use super::io::{Source, Src, check, read_vec};
+use crate::domain::error::{Error, Result, container};
 use aes::Aes128;
+use aes::cipher::{KeyIvInit, StreamCipher, StreamCipherSeek, generic_array::GenericArray};
 use std::io::Read;
 use std::sync::{Arc, Mutex};
 
@@ -50,15 +50,23 @@ impl Read for SrcReader {
         if n == 0 {
             return Ok(0);
         }
-        self.src.read_at(self.pos, &mut buf[..n]).map_err(|e| std::io::Error::other(e.to_string()))?;
+        self.src
+            .read_at(self.pos, &mut buf[..n])
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
         self.pos += n as u64;
         Ok(n)
     }
 }
 
 enum Mode {
-    Stream { data_start: u64, st: Mutex<StreamState> },
-    Blocks { blk: Block, cache: Mutex<Option<(u64, Vec<u8>)>> },
+    Stream {
+        data_start: u64,
+        st: Mutex<StreamState>,
+    },
+    Blocks {
+        blk: Block,
+        cache: Mutex<Option<(u64, Vec<u8>)>>,
+    },
 }
 
 pub struct NczSource {
@@ -137,11 +145,23 @@ impl NczSource {
             if o > src.size() {
                 return container("NCZ blocks extend past file");
             }
-            Mode::Blocks { blk: Block { bs, offs }, cache: Mutex::new(None) }
+            Mode::Blocks {
+                blk: Block { bs, offs },
+                cache: Mutex::new(None),
+            }
         } else {
-            Mode::Stream { data_start: after, st: Mutex::new(StreamState { dec: None, pos: 0 }) }
+            Mode::Stream {
+                data_start: after,
+                st: Mutex::new(StreamState { dec: None, pos: 0 }),
+            }
         };
-        Ok(Arc::new(Self { src, sections, body_start, size: end, mode }))
+        Ok(Arc::new(Self {
+            src,
+            sections,
+            body_start,
+            size: end,
+            mode,
+        }))
     }
 
     /// Decompressed (decrypted) body bytes at `off` relative to `body_start`.
@@ -150,7 +170,10 @@ impl NczSource {
             Mode::Stream { data_start, st } => {
                 let mut st = st.lock().unwrap();
                 if st.dec.is_none() || off < st.pos {
-                    let r = SrcReader { src: self.src.clone(), pos: *data_start };
+                    let r = SrcReader {
+                        src: self.src.clone(),
+                        pos: *data_start,
+                    };
                     st.dec = Some(zstd::stream::Decoder::new(r)?);
                     st.pos = 0;
                 }
@@ -164,7 +187,8 @@ impl NczSource {
                     }
                     skip -= n as u64;
                 }
-                dec.read_exact(buf).map_err(|_| Error::Container("NCZ stream ended early".into()))?;
+                dec.read_exact(buf)
+                    .map_err(|_| Error::Container("NCZ stream ended early".into()))?;
                 st.pos = off + buf.len() as u64;
                 Ok(())
             }
@@ -181,7 +205,8 @@ impl NczSource {
                         let data = if raw.len() == dlen {
                             raw
                         } else {
-                            zstd::bulk::decompress(&raw, dlen).map_err(|e| Error::Container(format!("NCZ block: {e}")))?
+                            zstd::bulk::decompress(&raw, dlen)
+                                .map_err(|e| Error::Container(format!("NCZ block: {e}")))?
                         };
                         if data.len() != dlen {
                             return container("NCZ block has wrong size");
@@ -224,7 +249,10 @@ impl Source for NczSource {
             if a >= b || !matches!(s.crypto_type, 3 | 4) {
                 continue;
             }
-            let mut c = ctr::Ctr128BE::<Aes128>::new(GenericArray::from_slice(&s.key), GenericArray::from_slice(&s.counter));
+            let mut c = ctr::Ctr128BE::<Aes128>::new(
+                GenericArray::from_slice(&s.key),
+                GenericArray::from_slice(&s.counter),
+            );
             c.seek(a);
             c.apply_keystream(&mut body[(a - from) as usize..(b - from) as usize]);
         }
@@ -256,13 +284,20 @@ mod tests {
                 x ^= x << 13;
                 x ^= x >> 17;
                 x ^= x << 5;
-                if i < n / 2 { ((i * 31 + i / 251) % 251) as u8 } else { x as u8 }
+                if i < n / 2 {
+                    ((i * 31 + i / 251) % 251) as u8
+                } else {
+                    x as u8
+                }
             })
             .collect()
     }
 
     fn encrypt(buf: &mut [u8], key: &[u8; 16], ctr: &[u8; 16], abs: u64) {
-        let mut c = ctr::Ctr128BE::<Aes128>::new(GenericArray::from_slice(key), GenericArray::from_slice(ctr));
+        let mut c = ctr::Ctr128BE::<Aes128>::new(
+            GenericArray::from_slice(key),
+            GenericArray::from_slice(ctr),
+        );
         c.seek(abs);
         c.apply_keystream(buf);
     }
@@ -281,7 +316,13 @@ mod tests {
         ncz.extend(2u64.to_le_bytes());
         for (off, size, ty, key, ctr) in [
             (NCZ_HEADER, split as u64, 3u64, K, CTR),
-            (NCZ_HEADER + split as u64, (body_len - split) as u64, 1, [0; 16], [0; 16]),
+            (
+                NCZ_HEADER + split as u64,
+                (body_len - split) as u64,
+                1,
+                [0; 16],
+                [0; 16],
+            ),
         ] {
             ncz.extend(off.to_le_bytes());
             ncz.extend(size.to_le_bytes());
@@ -323,13 +364,24 @@ mod tests {
         s.read_at(0, &mut all).unwrap();
         assert!(all == nca, "full read differs");
         // Unaligned, backward, crossing header/section/block edges.
-        for (o, l) in [(0x3ff0u64, 0x40usize), (0x4001, 17), (nca.len() as u64 - 5, 5), (0x4000 + 16383, 20000), (10, 3), (0x4000 + 3333, 1)] {
+        for (o, l) in [
+            (0x3ff0u64, 0x40usize),
+            (0x4001, 17),
+            (nca.len() as u64 - 5, 5),
+            (0x4000 + 16383, 20000),
+            (10, 3),
+            (0x4000 + 3333, 1),
+        ] {
             if o as usize + l > nca.len() {
                 continue;
             }
             let mut b = vec![0u8; l];
             s.read_at(o, &mut b).unwrap();
-            assert_eq!(&b[..], &nca[o as usize..o as usize + l], "read at {o:#x}+{l}");
+            assert_eq!(
+                &b[..],
+                &nca[o as usize..o as usize + l],
+                "read at {o:#x}+{l}"
+            );
         }
         assert!(s.read_at(nca.len() as u64 - 1, &mut [0u8; 2]).is_err());
     }
@@ -352,7 +404,10 @@ mod tests {
     fn incompressible_block_stored_raw() {
         // Noise blocks do not shrink and are stored raw by the encoder above (len == block size).
         let (z, n) = synth(1 << 16, Some(14));
-        let raw_blocks = z[0x4000 + 16 + 2 * 0x40 + 0x18..][..16].chunks(4).filter(|c| u32::from_le_bytes((*c).try_into().unwrap()) == 1 << 14).count();
+        let raw_blocks = z[0x4000 + 16 + 2 * 0x40 + 0x18..][..16]
+            .chunks(4)
+            .filter(|c| u32::from_le_bytes((*c).try_into().unwrap()) == 1 << 14)
+            .count();
         assert!(raw_blocks >= 1);
         check_all(z, &n);
     }

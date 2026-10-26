@@ -19,7 +19,7 @@ static int svc_call(IpcObject *o, unsigned cmd, const void *in, uint32_t n, IpcC
     return 1;
 }
 /* Same, but for a call the test prepared itself (buffers, handles): only the object, command and result are set. */
-static int svc_call_c(IpcObject *o, unsigned cmd, IpcCall *c) {
+static inline int svc_call_c(IpcObject *o, unsigned cmd, IpcCall *c) {
     const IpcCmd *e = svc_find(o, cmd);
     c->object = o; c->cmd = cmd; c->result = 0;
     CHECK(e != NULL, "%s: command %u is not in the table", o->iface, cmd);
@@ -28,6 +28,6 @@ static int svc_call_c(IpcObject *o, unsigned cmd, IpcCall *c) {
     return 1;
 }
 #define SVC_OUT(c, T, off) (*(const T *)((c)->out + (off)))
-static void svc_set_out_buf(IpcCall *c, void *p, uint64_t n) { c->b[c->nb++] = (IpcBuf){(uint64_t)(uintptr_t)p, n, 0}; }
-static void svc_set_in_buf(IpcCall *c, const void *p, uint64_t n) { c->a[c->na++] = (IpcBuf){(uint64_t)(uintptr_t)p, n, 0}; }
+static inline void svc_set_out_buf(IpcCall *c, void *p, uint64_t n) { c->b[c->nb++] = (IpcBuf){(uint64_t)(uintptr_t)p, n, 0}; }
+static inline void svc_set_in_buf(IpcCall *c, const void *p, uint64_t n) { c->a[c->na++] = (IpcBuf){(uint64_t)(uintptr_t)p, n, 0}; }
 #endif

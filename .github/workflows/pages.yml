@@ -1,10 +1,10 @@
-# Publishes ./site to GitHub Pages. One-time setup: repo Settings > Pages > Build and deployment > Source: "GitHub Actions".
+# Publishes ./site (landing page, at the root) and the documentation built from ./docs with mkdocs (under /docs/) to GitHub Pages. One-time setup: repo Settings > Pages > Build and deployment > Source: "GitHub Actions".
 name: pages
 
 on:
   push:
     branches: [main]
-    paths: ["site/**", ".github/workflows/pages.yml"]
+    paths: ["site/**", "docs/**", "docs-site/**", ".github/workflows/pages.yml"]
   workflow_dispatch:
 
 permissions:
@@ -25,8 +25,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the docs (links, anchors, orphans)
+        run: python3 tools/check_docs.py
+      - name: Build the documentation
+        env:
+          DOCS_REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -r docs-site/requirements.txt
+          .venv/bin/mkdocs build --strict -f docs-site/mkdocs.yml
+      - name: Assemble the Pages artifact (landing page at /, docs at /docs/)
+        run: |
+          mkdir -p build/pages
+          cp -R site/. build/pages/
+          cp -R build/docs-site build/pages/docs
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: site
+          path: build/pages
       - id: deployment
         uses: actions/deploy-pages@v4

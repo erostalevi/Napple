@@ -4,7 +4,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define IOS_DYLIB_HEADER_PAGE 0x4000ULL   /* guest image offset 0 sits this far past the Mach-O header */
+#define IOS_DYLIB_HEADER_PAGE 0x4000ULL /* guest image offset 0 sits this far past the Mach-O header */
 
 /* Path of the dylib for module `file` (a module name, or an NRO's module id) whose images dir is `<data>/modules` or `<data>/nro`:
  * `<data>/../../Frameworks/<basename(data)>.<file>.dylib`, `<basename(data)>.nro.<file>.dylib` for NROs. 0, or -1 when it does not fit. */

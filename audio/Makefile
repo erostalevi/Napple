@@ -1,5 +1,7 @@
 # audio: Horizon audio renderer / audout / hwopus host library.  make [test|demo|clean]
 CC      ?= clang
+MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
+DEPFLAGS = -MMD -MP
 OPUS    ?= /opt/homebrew/opt/opus
 CFLAGS  ?= -std=gnu11 -O2 -g -Wall -Wextra -Werror -Wno-deprecated-declarations
 INC     := -Iinclude -Isrc -I$(OPUS)/include/opus
@@ -10,9 +12,9 @@ LIBOPUS := $(OPUS)/lib/libopus.a
 
 all: libnapple_audio.a
 
-build/%.o: src/%.c $(wildcard src/*.h) include/napple_audio.h
+build/%.o: src/%.c
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(INC) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) $(INC) -c $< -o $@
 
 libnapple_audio.a: $(OBJ)
 	@rm -f $@
@@ -29,6 +31,8 @@ build/demo_sine: tests/demo_sine.c libnapple_audio.a
 	$(CC) $(CFLAGS) $(INC) $< libnapple_audio.a $(LIBOPUS) $(FW) -o $@
 demo: build/demo_sine
 	./build/demo_sine
+
+-include $(OBJ:.o=.d)
 
 clean:
 	rm -rf build libnapple_audio.a

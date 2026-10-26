@@ -7,11 +7,11 @@
 typedef enum { PAD_BUTTON, PAD_STICK } pad_kind;
 typedef struct {
     pad_kind kind;
-    int button;            /* PAD_BUTTON: NAPPLE_BTN_* index (input/include/napple_input.h) */
-    int stick;             /* PAD_STICK: 0 left, 1 right */
-    float cx, cy, r;       /* centre and radius in points, origin top-left */
+    int button;      /* PAD_BUTTON: NAPPLE_BTN_* index (input/include/napple_input.h) */
+    int stick;       /* PAD_STICK: 0 left, 1 right */
+    float cx, cy, r; /* centre and radius in points, origin top-left */
     char label[8];
-    int pill;              /* shoulder / system buttons are drawn as pills (wide), hit-tested as circles of radius r */
+    int pill; /* shoulder / system buttons are drawn as pills (wide), hit-tested as circles of radius r */
 } pad_ctl;
 
 #define PAD_MAX_CTLS 24

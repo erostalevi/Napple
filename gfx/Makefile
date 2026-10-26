@@ -2,6 +2,8 @@
 # Requires Xcode command line tools (Metal framework). Metal validation: tests run with MTL_DEBUG_LAYER=1.
 
 OUT    := build
+MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
+DEPFLAGS = -MMD -MP
 CC     := xcrun clang
 AR     := xcrun ar
 ARCH   := -arch arm64
@@ -19,19 +21,20 @@ OBJS   := $(patsubst src/%.c,$(OUT)/obj/%.o,$(C_SRC)) $(patsubst src/%.m,$(OUT)/
 LIB    := libnapple_gfx.a
 
 .PHONY: all lib clean test tests
+-include $(OBJS:.o=.d)
 all lib: $(LIB)
 
 $(LIB): $(OBJS)
 	@rm -f $@
 	$(AR) rcs $@ $^
 
-$(OUT)/obj/%.o: src/%.c $(wildcard src/*.h) $(wildcard src/*/*.h) include/napple_gfx.h
+$(OUT)/obj/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(OUT)/obj/%.o: src/%.m $(wildcard src/*.h) $(wildcard src/*/*.h) include/napple_gfx.h
+$(OUT)/obj/%.o: src/%.m
 	@mkdir -p $(dir $@)
-	$(CC) $(OFLAGS) -c $< -o $@
+	$(CC) $(OFLAGS) $(DEPFLAGS) -c $< -o $@
 
 # NVN name table and the per-name "unimplemented" stubs are generated from the API name list.
 $(OUT)/gen/nvn_names.c: src/nvnapi/names.txt tools/gen_nvn_tables.sh
@@ -69,9 +72,10 @@ test: tests
 clean:
 	rm -rf $(OUT) $(LIB)
 
-# ---- runtime adapter: replaces runtime/src/gfx_stub.c (see docs/gfx-interface.md, section 9) ----------------------------------
-$(OUT)/obj/adapter/gfx_napple.o: adapter/gfx_napple.c include/napple_gfx.h ../runtime/src/gfx.h ../runtime/src/napple.h
+# ---- runtime adapter: replaces runtime/src/gfx_stub.c (see docs/architecture/gfx.md, section 9) ----------------------------------
+$(OUT)/obj/adapter/gfx_napple.o: adapter/gfx_napple.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -I../runtime/src -I../input/include -I../audio/include -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -I../runtime/src -I../input/include -I../audio/include -c $< -o $@
 adapter: $(OUT)/obj/adapter/gfx_napple.o
+-include $(OUT)/obj/adapter/gfx_napple.d
 .PHONY: adapter

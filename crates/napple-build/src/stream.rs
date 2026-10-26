@@ -23,21 +23,28 @@ pub fn stream_to_file(src: &Src, dst: &Path, mut report: impl FnMut(u64, u64)) -
         std::fs::create_dir_all(d).map_err(|e| BuildError::io("create dir", e))?;
     }
     let mut run = || -> Result<Streamed> {
-        let mut f = std::io::BufWriter::with_capacity(1 << 20, std::fs::File::create(&part).map_err(|e| BuildError::io("create romfs file", e))?);
+        let mut f = std::io::BufWriter::with_capacity(
+            1 << 20,
+            std::fs::File::create(&part).map_err(|e| BuildError::io("create romfs file", e))?,
+        );
         let (mut buf, mut off, mut h) = (vec![0u8; CHUNK], 0u64, Sha256::new());
         while off < total {
             check_cancel()?;
             let n = ((total - off) as usize).min(CHUNK);
             src.read_at(off, &mut buf[..n])?;
             h.update(&buf[..n]);
-            f.write_all(&buf[..n]).map_err(|e| BuildError::io("write romfs", e))?;
+            f.write_all(&buf[..n])
+                .map_err(|e| BuildError::io("write romfs", e))?;
             off += n as u64;
             report(off, total);
         }
         f.flush().map_err(|e| BuildError::io("write romfs", e))?;
         drop(f);
         std::fs::rename(&part, dst).map_err(|e| BuildError::io("rename romfs", e))?;
-        Ok(Streamed { size: total, sha256: crate::json::hex(&h.finalize()) })
+        Ok(Streamed {
+            size: total,
+            sha256: crate::json::hex(&h.finalize()),
+        })
     };
     let r = run();
     if r.is_err() {
@@ -57,11 +64,20 @@ pub fn cache_lookup(file: &Path, expect_size: u64) -> Option<Streamed> {
     for l in side.lines() {
         match l.split_once('=') {
             Some(("size", v)) => size = v.parse::<u64>().ok(),
-            Some(("sha256", v)) if v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()) => sha = Some(v.to_string()),
+            Some(("sha256", v)) if v.len() == 64 && v.bytes().all(|b| b.is_ascii_hexdigit()) => {
+                sha = Some(v.to_string())
+            }
             _ => {}
         }
     }
-    if size == Some(expect_size) { sha.map(|sha256| Streamed { size: expect_size, sha256 }) } else { None }
+    if size == Some(expect_size) {
+        sha.map(|sha256| Streamed {
+            size: expect_size,
+            sha256,
+        })
+    } else {
+        None
+    }
 }
 
 fn sidecar(file: &Path) -> PathBuf {
@@ -71,9 +87,20 @@ fn sidecar(file: &Path) -> PathBuf {
 }
 
 /// Streams into the cache unless a complete entry with the expected size exists. Returns (info, reused).
-pub fn cached_stream(src: &Src, file: &Path, stage: &str, label: &str, lo: f64, hi: f64) -> Result<(Streamed, bool)> {
+pub fn cached_stream(
+    src: &Src,
+    file: &Path,
+    stage: &str,
+    label: &str,
+    lo: f64,
+    hi: f64,
+) -> Result<(Streamed, bool)> {
     if let Some(s) = cache_lookup(file, src.size()) {
-        progress(stage, hi, &format!("{label}: reusing cached copy ({} bytes)", s.size));
+        progress(
+            stage,
+            hi,
+            &format!("{label}: reusing cached copy ({} bytes)", s.size),
+        );
         return Ok((s, true));
     }
     let _ = std::fs::remove_file(sidecar(file));
@@ -82,10 +109,18 @@ pub fn cached_stream(src: &Src, file: &Path, stage: &str, label: &str, lo: f64, 
         let pct = lo + (hi - lo) * d as f64 / t.max(1) as f64;
         if (pct * 2.0) as i64 != last {
             last = (pct * 2.0) as i64;
-            progress(stage, pct, &format!("{label}: {} / {} MB", d >> 20, t >> 20));
+            progress(
+                stage,
+                pct,
+                &format!("{label}: {} / {} MB", d >> 20, t >> 20),
+            );
         }
     })?;
-    std::fs::write(sidecar(file), format!("size={}\nsha256={}\n", s.size, s.sha256)).map_err(|e| BuildError::io("write cache marker", e))?;
+    std::fs::write(
+        sidecar(file),
+        format!("size={}\nsha256={}\n", s.size, s.sha256),
+    )
+    .map_err(|e| BuildError::io("write cache marker", e))?;
     Ok((s, false))
 }
 
@@ -115,7 +150,12 @@ mod tests {
         assert!(cache_lookup(&f, data.len() as u64).is_none());
         let (_, reused) = cached_stream(&src, &f, "romfs", "t", 0.0, 100.0).unwrap();
         assert!(!reused);
-        assert!(std::fs::read_dir(f.parent().unwrap()).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains(".part")));
+        assert!(
+            std::fs::read_dir(f.parent().unwrap())
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().contains(".part"))
+        );
         let _ = std::fs::remove_dir_all(dir);
     }
 }

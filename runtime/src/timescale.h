@@ -13,26 +13,26 @@
 #include <stdint.h>
 
 enum {
-    TS_MODE_CLOCK_AND_VSYNC = 0,   /* default: all clocks and the vsync run at s (smooth speed-up of tick-driven AND vsync-stepped games) */
-    TS_MODE_VSYNC_ONLY = 1,        /* frame-skip turbo: clocks stay real, only the virtual vsync runs at s (vsync-stepped games speed up, delta-time games do not) */
-    TS_MODE_CLOCK_ONLY = 2,        /* clocks at s, vsync stays at the game's rate (tick-driven games speed up without presenting more frames) */
+    TS_MODE_CLOCK_AND_VSYNC = 0, /* default: all clocks and the vsync run at s (smooth speed-up of tick-driven AND vsync-stepped games) */
+    TS_MODE_VSYNC_ONLY = 1, /* frame-skip turbo: clocks stay real, only the virtual vsync runs at s (vsync-stepped games speed up, delta-time games do not) */
+    TS_MODE_CLOCK_ONLY = 2, /* clocks at s, vsync stays at the game's rate (tick-driven games speed up without presenting more frames) */
 };
 #define TS_MIN_SPEED 0.1
 #define TS_MAX_SPEED 10.0
 
-void timescale_set(double speed, int mode);       /* thread-safe; speed is clamped to 0.1..10 */
-double timescale_speed(void);                     /* the requested speed (1.0 = normal) */
+void timescale_set(double speed, int mode); /* thread-safe; speed is clamped to 0.1..10 */
+double timescale_speed(void);               /* the requested speed (1.0 = normal) */
 int timescale_mode(void);
-double timescale_clock_factor(void);              /* factor applied to guest clocks (1 when the mode leaves the clocks alone) */
-double timescale_vsync_factor(void);              /* factor applied to the virtual vsync rate */
+double timescale_clock_factor(void); /* factor applied to guest clocks (1 when the mode leaves the clocks alone) */
+double timescale_vsync_factor(void); /* factor applied to the virtual vsync rate */
 
-uint64_t timescale_guest_ns(void);                /* guest monotonic clock in ns (continuous across changes of s) */
-uint64_t timescale_guest_ns_at(uint64_t real_ns); /* same for an explicit real time (tests) */
-int64_t timescale_real_wait_ns(int64_t guest_ns); /* real time needed for a guest duration at the current clock factor (>= 1 for guest_ns > 0) */
-uint64_t timescale_vsync_period_ns(uint64_t guest_period_ns);   /* real period of a guest-rate event */
-int64_t timescale_wall_skew_ns(void);             /* guest clock minus real clock: added to the wall clock the time services return */
+uint64_t timescale_guest_ns(void);                            /* guest monotonic clock in ns (continuous across changes of s) */
+uint64_t timescale_guest_ns_at(uint64_t real_ns);             /* same for an explicit real time (tests) */
+int64_t timescale_real_wait_ns(int64_t guest_ns);             /* real time needed for a guest duration at the current clock factor (>= 1 for guest_ns > 0) */
+uint64_t timescale_vsync_period_ns(uint64_t guest_period_ns); /* real period of a guest-rate event */
+int64_t timescale_wall_skew_ns(void);                         /* guest clock minus real clock: added to the wall clock the time services return */
 /* Called when the settings change (runtime pushes them to gfx and audio from here). */
 void timescale_set_observer(void (*fn)(double speed, int mode));
 
-void timescale_count_present(void);   /* measurement counters for NAPPLE_TIME_LOG */
+void timescale_count_present(void); /* measurement counters for NAPPLE_TIME_LOG */
 void timescale_count_vsync(void);

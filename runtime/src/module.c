@@ -2,7 +2,7 @@
  * across modules and against host overrides, and keeps the per-page permission state the SDK asks the kernel for.
  * Everything about a module (layout, symbols, relocations, svc gates) comes from <name>.tables (tools/prepare_tables.py
  * today, napple-rewrite later); nothing is compiled in per game. */
-#define _GNU_SOURCE   /* dladdr on non-Apple hosts (runtime/tests/host) */
+#define _GNU_SOURCE /* dladdr on non-Apple hosts (runtime/tests/host) */
 #include "napple.h"
 #include "json.h"
 #include "sha256.h"
@@ -24,20 +24,25 @@
 Module *g_modules;
 unsigned g_nmodules;
 
-#define NTB_HEADER 152u  /* bytes before the sym array: 24 + 48 + 48 + 32 */
+#define NTB_HEADER 152u /* bytes before the sym array: 24 + 48 + 48 + 32 */
 static pthread_mutex_t perm_lock = PTHREAD_MUTEX_INITIALIZER;
-static unsigned char *page_perm[MAX_MODULES];   /* per module: one byte per 4 KiB data page: bits 0-2 permission, bit 4 locked */
-static pthread_mutex_t load_lock = PTHREAD_MUTEX_INITIALIZER;   /* run-time loads and unloads (NROs) */
+static unsigned char *page_perm[MAX_MODULES];                 /* per module: one byte per 4 KiB data page: bits 0-2 permission, bit 4 locked */
+static pthread_mutex_t load_lock = PTHREAD_MUTEX_INITIALIZER; /* run-time loads and unloads (NROs) */
 void dispatch_modules_changed(void);
 
 static size_t page_up(size_t x) { return (x + PAGE_16K - 1) & ~(size_t)(PAGE_16K - 1); }
-static unsigned fnv(const char *s) { unsigned h = 2166136261u; for (; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u; return h; }
+static unsigned fnv(const char *s) {
+    unsigned h = 2166136261u;
+    for (; *s; s++) h = (h ^ (uint8_t)*s) * 16777619u;
+    return h;
+}
 const char *module_sym_name(const Module *m, unsigned i) { return m->strtab + m->syms[i].name; }
 
 static void make_hash(Module *m) {
     unsigned cap = 16;
     while (cap < m->nsym * 2) cap <<= 1;
-    m->hash = calloc(cap, sizeof(unsigned)); m->hash_mask = cap - 1;
+    m->hash = calloc(cap, sizeof(unsigned));
+    m->hash_mask = cap - 1;
     if (!m->hash) runtime_fail("symbol hash allocation");
     for (unsigned i = 1; i < m->nsym; i++) {
         if (!m->syms[i].defined) continue;
@@ -57,11 +62,16 @@ static void *module_symbol(const Module *m, const char *name) {
     return NULL;
 }
 void *module_find_symbol(const char *name) {
-    for (unsigned i = 0; i < g_nmodules; i++) { if (g_modules[i].gone) continue; void *p = module_symbol(&g_modules[i], name); if (p) return p; }
+    for (unsigned i = 0; i < g_nmodules; i++) {
+        if (g_modules[i].gone) continue;
+        void *p = module_symbol(&g_modules[i], name);
+        if (p) return p;
+    }
     return NULL;
 }
 const Module *module_by_name(const char *name) {
-    for (unsigned i = 0; i < g_nmodules; i++) if (!g_modules[i].gone && !strcmp(g_modules[i].name, name)) return &g_modules[i];
+    for (unsigned i = 0; i < g_nmodules; i++)
+        if (!g_modules[i].gone && !strcmp(g_modules[i].name, name)) return &g_modules[i];
     return NULL;
 }
 const Module *module_for_address(uint64_t a) {
@@ -77,23 +87,31 @@ int module_pc_is_guest_code(uint64_t pc) {
 }
 uint64_t module_image_bytes(void) {
     uint64_t total = 0;
-    for (unsigned i = 0; i < g_nmodules; i++) if (!g_modules[i].gone) total += g_modules[i].key_off;
+    for (unsigned i = 0; i < g_nmodules; i++)
+        if (!g_modules[i].gone) total += g_modules[i].key_off;
     return page_up(total);
 }
 void module_describe(uint64_t a, char *out, size_t n) {
     const Module *m = module_for_address(a);
-    if (m) { snprintf(out, n, "%s+0x%llx", m->name, (unsigned long long)(a - (uintptr_t)m->base)); return; }
+    if (m) {
+        snprintf(out, n, "%s+0x%llx", m->name, (unsigned long long)(a - (uintptr_t)m->base));
+        return;
+    }
     Dl_info di;
     if (dladdr((void *)(uintptr_t)a, &di) && di.dli_sname) snprintf(out, n, "%s+0x%llx", di.dli_sname, (unsigned long long)(a - (uintptr_t)di.dli_saddr));
     else snprintf(out, n, "0x%llx", (unsigned long long)a);
 }
 
 /* ---- host symbol overrides ----------------------------------------------------------------------------------- */
-static struct { const HostSymbol *table; size_t count; } host_tables[16];
+static struct {
+    const HostSymbol *table;
+    size_t count;
+} host_tables[16];
 static unsigned nhost_tables;
 void host_symbols_register(const HostSymbol *table, size_t count) {
     if (nhost_tables == 16) runtime_fail("too many host symbol tables");
-    host_tables[nhost_tables].table = table; host_tables[nhost_tables++].count = count;
+    host_tables[nhost_tables].table = table;
+    host_tables[nhost_tables++].count = count;
 }
 void *host_symbol_lookup(const char *name) {
     for (unsigned t = 0; t < nhost_tables; t++)
@@ -107,28 +125,58 @@ static void *read_whole(const char *path, size_t *size) {
     int fd = open(path, O_RDONLY);
     if (fd < 0) return NULL;
     struct stat st;
-    if (fstat(fd, &st) || st.st_size <= 0) { close(fd); return NULL; }
+    if (fstat(fd, &st) || st.st_size <= 0) {
+        close(fd);
+        return NULL;
+    }
     void *buf = malloc((size_t)st.st_size + 1);
     size_t got = 0;
-    while (buf && got < (size_t)st.st_size) { ssize_t n = read(fd, (char *)buf + got, (size_t)st.st_size - got); if (n <= 0) break; got += (size_t)n; }
+    while (buf && got < (size_t)st.st_size) {
+        ssize_t n = read(fd, (char *)buf + got, (size_t)st.st_size - got);
+        if (n <= 0) break;
+        got += (size_t)n;
+    }
     close(fd);
-    if (!buf || got != (size_t)st.st_size) { free(buf); return NULL; }
-    ((char *)buf)[got] = 0; *size = got;
+    if (!buf || got != (size_t)st.st_size) {
+        free(buf);
+        return NULL;
+    }
+    ((char *)buf)[got] = 0;
+    *size = got;
     return buf;
 }
 
-static void hex(const uint8_t *d, size_t n, char *out) { for (size_t i = 0; i < n; i++) snprintf(out + 2 * i, 3, "%02x", d[i]); }
+static void hex(const uint8_t *d, size_t n, char *out) {
+    for (size_t i = 0; i < n; i++) snprintf(out + 2 * i, 3, "%02x", d[i]);
+}
 
 /* <dir>/<file>.tables; file is the module name, or the module id of an NRO */
 static void load_tables(Module *m, const char *dir, const char *file) {
-    char path[4096]; snprintf(path, sizeof path, "%s/%s.tables", dir, file);
-    size_t size; uint8_t *d = read_whole(path, &size);
+    char path[4096];
+    snprintf(path, sizeof path, "%s/%s.tables", dir, file);
+    size_t size;
+    uint8_t *d = read_whole(path, &size);
     if (!d || size < NTB_HEADER || memcmp(d, "NTB1", 4)) runtime_fail("module tables %s missing or not NTB1", path);
-    uint32_t u32[6]; memcpy(u32, d, sizeof u32);
-    m->nsym = u32[2]; m->nrel = u32[3]; m->ngate = u32[4]; uint32_t strsz = u32[5];
-    uint64_t h[12]; memcpy(h, d + 24, sizeof h);
-    m->file_size = h[0]; m->text_end = h[1]; m->ro_off = h[2]; m->data_off = h[3]; m->patch_off = h[4]; m->key_off = h[5];
-    m->dt_init = h[6]; m->dt_fini = h[7]; m->init_array = h[8]; m->init_array_size = h[9]; m->fini_array = h[10]; m->fini_array_size = h[11];
+    uint32_t u32[6];
+    memcpy(u32, d, sizeof u32);
+    m->nsym = u32[2];
+    m->nrel = u32[3];
+    m->ngate = u32[4];
+    uint32_t strsz = u32[5];
+    uint64_t h[12];
+    memcpy(h, d + 24, sizeof h);
+    m->file_size = h[0];
+    m->text_end = h[1];
+    m->ro_off = h[2];
+    m->data_off = h[3];
+    m->patch_off = h[4];
+    m->key_off = h[5];
+    m->dt_init = h[6];
+    m->dt_fini = h[7];
+    m->init_array = h[8];
+    m->init_array_size = h[9];
+    m->fini_array = h[10];
+    m->fini_array_size = h[11];
     memcpy(m->build_id, d + 120, 32);
     size_t need = NTB_HEADER + (size_t)(m->nsym + m->nrel + m->ngate) * 24 + strsz;
     if (need != size) runtime_fail("module tables %s: size %zu, expected %zu", path, size, need);
@@ -138,7 +186,8 @@ static void load_tables(Module *m, const char *dir, const char *file) {
     m->gates = (const Gate *)(m->rels + m->nrel);
     m->strtab = (const char *)(m->gates + m->ngate);
     if (m->nsym == 0 || m->strtab[strsz - 1] != 0) runtime_fail("module tables %s: malformed", path);
-    for (unsigned i = 0; i < m->nsym; i++) if (m->syms[i].name >= strsz) runtime_fail("module tables %s: bad symbol name", path);
+    for (unsigned i = 0; i < m->nsym; i++)
+        if (m->syms[i].name >= strsz) runtime_fail("module tables %s: bad symbol name", path);
 }
 
 /* Layout check and the key page: shared by the anonymous-memory path (macOS) and the dylib path (iOS). */
@@ -167,7 +216,10 @@ static void map_dylib(Module *m, const char *dir, const char *file) {
     char path[4096];
     if (ios_dylib_path(path, sizeof path, dir, file)) runtime_fail("%s: cannot derive the module dylib path from %s", m->name, dir);
     m->dl = dlopen(path, RTLD_NOW | RTLD_LOCAL);
-    if (!m->dl) runtime_fail("cannot load %s: %s (the dylib must be code-signed with the app's identity; rebuild with napple build --target ios and a valid provisioning profile)", path, dlerror());
+    if (!m->dl)
+        runtime_fail(
+            "cannot load %s: %s (the dylib must be code-signed with the app's identity; rebuild with napple build --target ios and a valid provisioning profile)",
+            path, dlerror());
     const void *hdr = find_image_header(path);
     if (!hdr) runtime_fail("%s: loaded, but dyld does not list it", path);
     const char *bad = ios_dylib_check(hdr, m->text_end, m->data_off, m->key_off, m->patch_off, m->file_size);
@@ -180,11 +232,12 @@ static void map_dylib(Module *m, const char *dir, const char *file) {
 
 static void map_image(Module *m, const char *dir, const char *file, const char *expect_sha) {
 #if NAPPLE_IOS
-    (void)expect_sha;                       /* the code signature covers the dylib */
+    (void)expect_sha; /* the code signature covers the dylib */
     map_dylib(m, dir, file);
     return;
 #else
-    char path[4096]; snprintf(path, sizeof path, "%s/%s.patched.bin", dir, file);
+    char path[4096];
+    snprintf(path, sizeof path, "%s/%s.patched.bin", dir, file);
     int fd = open(path, O_RDONLY);
     if (fd < 0) runtime_fail("cannot open %s", path);
     struct stat st;
@@ -199,8 +252,10 @@ static void map_image(Module *m, const char *dir, const char *file, const char *
     }
     close(fd);
     if (expect_sha && *expect_sha && !getenv("NAPPLE_SKIP_VERIFY")) {
-        uint8_t digest[32]; char text[65];
-        sha256(m->base, m->file_size, digest); hex(digest, 32, text);
+        uint8_t digest[32];
+        char text[65];
+        sha256(m->base, m->file_size, digest);
+        hex(digest, 32, text);
         if (strcmp(text, expect_sha)) runtime_fail("%s: image sha256 differs from the manifest", path);
     }
     finish_image(m);
@@ -218,20 +273,27 @@ static void relocate(Module *m) {
         uint64_t v;
         if (r->kind == 1027) {
             if (r->addend < 0 || (uint64_t)r->addend >= m->key_off) runtime_fail("%s: relative addend", m->name);
-            v = (uintptr_t)m->base + (uint64_t)r->addend; m->relative++;
+            v = (uintptr_t)m->base + (uint64_t)r->addend;
+            m->relative++;
         } else {
             if (r->kind != 257 && r->kind != 1025 && r->kind != 1026) runtime_fail("%s: relocation kind %u", m->name, r->kind);
-            const Sym *s = &m->syms[r->symbol]; const char *name = m->strtab + s->name;
+            const Sym *s = &m->syms[r->symbol];
+            const char *name = m->strtab + s->name;
             void *p = host_symbol_lookup(name);
-            if (p) { LOGV("loader", "%s: %s bound to a host override", m->name, name); p = runtime_hle_wrap_named(p, name); }
+            if (p) {
+                LOGV("loader", "%s: %s bound to a host override", m->name, name);
+                p = runtime_hle_wrap_named(p, name);
+            }
             if (!p) p = s->defined ? (s->value < m->key_off ? (void *)(m->base + s->value) : NULL) : module_find_symbol(name);
-            if (!p && s->binding != 2) {      /* strong undefined: bind to a trap that names the import when called */
-                p = runtime_hle_wrap_trap(name); unresolved_count++;
+            if (!p && s->binding != 2) { /* strong undefined: bind to a trap that names the import when called */
+                p = runtime_hle_wrap_trap(name);
+                unresolved_count++;
                 trace_event("unresolved_import", "\"module\":\"%s\",\"symbol\":\"%s\"", m->name, name);
             }
             if (!p) m->weak++;
             if (p && !s->defined) m->cross++;
-            v = (uintptr_t)p + (r->kind == 1026 ? 0 : (uint64_t)r->addend); m->symbolic++;
+            v = (uintptr_t)p + (r->kind == 1026 ? 0 : (uint64_t)r->addend);
+            m->symbolic++;
         }
         memcpy(m->base + r->where, &v, 8);
     }
@@ -255,8 +317,10 @@ static void seal(Module *m) {
 }
 
 void modules_load(const char *dir) {
-    char path[4096]; snprintf(path, sizeof path, "%s/manifest.json", dir);
-    size_t size; char *text = read_whole(path, &size);
+    char path[4096];
+    snprintf(path, sizeof path, "%s/manifest.json", dir);
+    size_t size;
+    char *text = read_whole(path, &size);
     if (!text) runtime_fail("cannot read %s", path);
     JsonNode *root = json_parse(text, size);
     const JsonNode *order = json_get(root, "load_order"), *mods = json_get(root, "modules");
@@ -264,7 +328,8 @@ void modules_load(const char *dir) {
     unsigned n = 0;
     for (const JsonNode *o = order->child; o; o = o->next) n++;
     if (!n || n > MAX_MODULES / 2) runtime_fail("%s: unreasonable module count %u", path, n);
-    g_modules = calloc(MAX_MODULES, sizeof *g_modules); g_nmodules = n;
+    g_modules = calloc(MAX_MODULES, sizeof *g_modules);
+    g_nmodules = n;
     if (!g_modules) runtime_fail("module table");
     unsigned i = 0;
     for (const JsonNode *o = order->child; o; o = o->next, i++) {
@@ -272,13 +337,18 @@ void modules_load(const char *dir) {
         if (o->type != J_STR || strlen(o->str) > 15 || strchr(o->str, '/')) runtime_fail("%s: bad module name", path);
         snprintf(m->name, sizeof m->name, "%s", o->str);
         const char *sha = NULL;
-        for (const JsonNode *e = mods->child; e; e = e->next) if (!strcmp(json_str(e, "name", ""), m->name)) sha = json_str(e, "sha256", NULL);
-        char mdir[4096]; snprintf(mdir, sizeof mdir, "%s/modules", dir);
-        load_tables(m, mdir, m->name); map_image(m, mdir, m->name, sha);
-        char id[65]; hex(m->build_id, 20, id);
+        for (const JsonNode *e = mods->child; e; e = e->next)
+            if (!strcmp(json_str(e, "name", ""), m->name)) sha = json_str(e, "sha256", NULL);
+        char mdir[4096];
+        snprintf(mdir, sizeof mdir, "%s/modules", dir);
+        load_tables(m, mdir, m->name);
+        map_image(m, mdir, m->name, sha);
+        char id[65];
+        hex(m->build_id, 20, id);
         LOG("loader", "mapped %-8s %p size=%#zx symbols=%u relocs=%u gates=%u build=%.16s", m->name, m->base, m->size, m->nsym, m->nrel, m->ngate, id);
     }
-    json_free(root); free(text);
+    json_free(root);
+    free(text);
     for (i = 0; i < g_nmodules; i++) relocate(&g_modules[i]);
     for (i = 0; i < g_nmodules; i++) seal(&g_modules[i]);
     for (i = 0; i < g_nmodules; i++) {
@@ -292,21 +362,34 @@ void modules_load(const char *dir) {
 /* ---- run-time modules (NROs, ro.c) --------------------------------------------------------------------------------
  * The guest hands ldr:ro the NRO bytes; what runs is the image `napple build` rewrote ahead of time from the same file (found by module id),
  * mapped at a fresh host address like the static modules. Its imports bind like theirs (host overrides first, then every loaded module in
- * load order); the guest's own nn::ro relocation pass runs over the mapped image afterwards (see docs/runtime-services.md). */
+ * load order); the guest's own nn::ro relocation pass runs over the mapped image afterwards (see docs/architecture/runtime-services.md). */
 Module *module_load_nro(const char *data_dir, const uint8_t module_id[32], const char **why) {
     char id[65], dir[4096], probe[4200];
     hex(module_id, 32, id);
     snprintf(dir, sizeof dir, "%s/nro", data_dir);
     snprintf(probe, sizeof probe, "%s/%s.tables", dir, id);
-    if (access(probe, R_OK)) { *why = "no ahead-of-time rewrite of this NRO in the data directory (rebuild the game with napple build)"; return NULL; }
+    if (access(probe, R_OK)) {
+        *why = "no ahead-of-time rewrite of this NRO in the data directory (rebuild the game with napple build)";
+        return NULL;
+    }
     pthread_mutex_lock(&load_lock);
     unsigned slot = g_nmodules;
-    for (unsigned i = 0; i < g_nmodules; i++) if (g_modules[i].gone) { slot = i; break; }
-    if (slot == MAX_MODULES) { pthread_mutex_unlock(&load_lock); *why = "too many modules"; return NULL; }
+    for (unsigned i = 0; i < g_nmodules; i++)
+        if (g_modules[i].gone) {
+            slot = i;
+            break;
+        }
+    if (slot == MAX_MODULES) {
+        pthread_mutex_unlock(&load_lock);
+        *why = "too many modules";
+        return NULL;
+    }
     Module *m = &g_modules[slot];
-    Module fresh = {0}; fresh.gone = 1; fresh.dynamic = 1;
+    Module fresh = {0};
+    fresh.gone = 1;
+    fresh.dynamic = 1;
     snprintf(fresh.name, sizeof fresh.name, "nro-%.11s", id);
-    *m = fresh;                                     /* readers skip it while gone is set */
+    *m = fresh; /* readers skip it while gone is set */
     load_tables(m, dir, id);
     if (memcmp(m->build_id, module_id, 32)) runtime_fail("%s/%s.tables: build id differs from the NRO's module id", dir, id);
     map_image(m, dir, id, NULL);
@@ -316,22 +399,33 @@ Module *module_load_nro(const char *data_dir, const uint8_t module_id[32], const
     if (slot == g_nmodules) __atomic_store_n(&g_nmodules, g_nmodules + 1, __ATOMIC_RELEASE);
     dispatch_modules_changed();
     pthread_mutex_unlock(&load_lock);
-    LOG("loader", "NRO %s mapped at %p size=%#zx relative=%u symbolic=%u cross-module=%u gates=%u", m->name, m->base, m->size, m->relative, m->symbolic, m->cross, m->ngate);
+    LOG("loader", "NRO %s mapped at %p size=%#zx relative=%u symbolic=%u cross-module=%u gates=%u", m->name, m->base, m->size, m->relative, m->symbolic,
+        m->cross, m->ngate);
     return m;
 }
 void module_unload(Module *m) {
     pthread_mutex_lock(&load_lock);
-    if (!m->dynamic || m->gone) { pthread_mutex_unlock(&load_lock); return; }
+    if (!m->dynamic || m->gone) {
+        pthread_mutex_unlock(&load_lock);
+        return;
+    }
     __atomic_store_n(&m->gone, 1, __ATOMIC_RELEASE);
     dispatch_modules_changed();
     unsigned i = (unsigned)(m - g_modules);
-    pthread_mutex_lock(&perm_lock); free(page_perm[i]); page_perm[i] = NULL; pthread_mutex_unlock(&perm_lock);
+    pthread_mutex_lock(&perm_lock);
+    free(page_perm[i]);
+    page_perm[i] = NULL;
+    pthread_mutex_unlock(&perm_lock);
 #if NAPPLE_IOS
-    if (m->dl) { dlclose(m->dl); m->dl = NULL; }
+    if (m->dl) {
+        dlclose(m->dl);
+        m->dl = NULL;
+    }
 #else
     munmap(m->base, m->size);
 #endif
-    free(m->hash); m->hash = NULL;                  /* tables_blob stays: replaced gate indexes may still point into it */
+    free(m->hash);
+    m->hash = NULL; /* tables_blob stays: replaced gate indexes may still point into it */
     LOG("loader", "NRO %s unmapped", m->name);
     pthread_mutex_unlock(&load_lock);
 }
@@ -363,9 +457,13 @@ uint64_t module_set_permission(uint64_t address, uint64_t size, unsigned permiss
         Module *m = &g_modules[i];
         if (!in_data(m, address, size)) continue;
         uint64_t off = address - (uintptr_t)m->base;
-        pthread_mutex_lock(&perm_lock); ensure_perm(i);
+        pthread_mutex_lock(&perm_lock);
+        ensure_perm(i);
         for (uint64_t p = 0; p < size / PAGE_4K; p++)
-            if (page_perm[i][(off - m->data_off) / PAGE_4K + p] & 16) { pthread_mutex_unlock(&perm_lock); return R_INVALID_CURRENT_MEMORY; }
+            if (page_perm[i][(off - m->data_off) / PAGE_4K + p] & 16) {
+                pthread_mutex_unlock(&perm_lock);
+                return R_INVALID_CURRENT_MEMORY;
+            }
         memset(page_perm[i] + (off - m->data_off) / PAGE_4K, (int)permission, size / PAGE_4K);
         /* A 16 KiB host page gets the union of its four guest pages' permissions, so protecting an edge never removes
          * access from a neighbour; interior pages really become read-only. */
@@ -384,12 +482,13 @@ uint64_t module_set_permission(uint64_t address, uint64_t size, unsigned permiss
 uint64_t module_set_attribute(uint64_t address, uint64_t size, unsigned mask, unsigned attribute) {
     if (address & 4095) return R_INVALID_ADDRESS;
     if (!size || (size & 4095)) return R_INVALID_SIZE;
-    if (mask != 16 || attribute != 16) return R_INVALID_MEMORY_PERMISSIONS;   /* the SDK only uses the irreversible RELRO lock */
+    if (mask != 16 || attribute != 16) return R_INVALID_MEMORY_PERMISSIONS; /* the SDK only uses the irreversible RELRO lock */
     for (unsigned i = 0; i < g_nmodules; i++) {
         if (g_modules[i].gone) continue;
         Module *m = &g_modules[i];
         if (!in_data(m, address, size)) continue;
-        pthread_mutex_lock(&perm_lock); ensure_perm(i);
+        pthread_mutex_lock(&perm_lock);
+        ensure_perm(i);
         size_t first = (address - (uintptr_t)m->base - m->data_off) / PAGE_4K;
         for (uint64_t p = 0; p < size / PAGE_4K; p++) page_perm[i][first + p] |= 16;
         pthread_mutex_unlock(&perm_lock);
@@ -405,12 +504,17 @@ int module_query(uint64_t address, uint64_t *base, uint64_t *size, unsigned *sta
         if (address < start || address - start >= m->key_off) continue;
         uint64_t off = (address - start) & ~4095ULL, lo = off, hi = off + 4096;
         pthread_mutex_lock(&perm_lock);
-        unsigned perm = data_page_perm(i, off); int data = off >= m->data_off;
+        unsigned perm = data_page_perm(i, off);
+        int data = off >= m->data_off;
         uint64_t limit = data ? m->data_off : 0, end = data ? m->key_off : m->data_off;
         while (lo > limit && data_page_perm(i, lo - 4096) == perm) lo -= 4096;
         while (hi < end && data_page_perm(i, hi) == perm) hi += 4096;
         pthread_mutex_unlock(&perm_lock);
-        *base = start + lo; *size = hi - lo; *state = data ? 4 : 3; *permission = perm & 7; *attribute = perm & 16;
+        *base = start + lo;
+        *size = hi - lo;
+        *state = data ? 4 : 3;
+        *permission = perm & 7;
+        *attribute = perm & 16;
         return 1;
     }
     return 0;

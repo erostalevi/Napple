@@ -48,7 +48,11 @@ impl Target {
     }
     /// LC_BUILD_VERSION platform of the module dylibs.
     pub fn platform(self) -> macho::Platform {
-        if self.is_sim() { macho::Platform::IosSimulator } else { macho::Platform::Ios }
+        if self.is_sim() {
+            macho::Platform::IosSimulator
+        } else {
+            macho::Platform::Ios
+        }
     }
     pub fn name(self) -> &'static str {
         match self {
@@ -91,18 +95,34 @@ fn esc(s: &str) -> String {
 }
 
 pub fn bundle_id_for(title_id: u64, over: Option<&str>) -> String {
-    over.map(str::to_string).unwrap_or_else(|| format!("com.napple.game.{title_id:016x}"))
+    over.map(str::to_string)
+        .unwrap_or_else(|| format!("com.napple.game.{title_id:016x}"))
 }
 
 /// Valid reverse-DNS bundle identifier (letters, digits, `-`, `.`; at least one dot; no empty component).
 pub fn valid_bundle_id(s: &str) -> bool {
-    s.len() <= 155 && s.contains('.') && s.split('.').all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+    s.len() <= 155
+        && s.contains('.')
+        && s.split('.')
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
 }
 
-pub fn info_plist(title_id: u64, bundle_id: &str, name: &str, version: &str, target: Target, icon_files: &[String]) -> String {
+pub fn info_plist(
+    title_id: u64,
+    bundle_id: &str,
+    name: &str,
+    version: &str,
+    target: Target,
+    icon_files: &[String],
+) -> String {
     let v = crate::bundle::plist_version(version);
     let s = |x: &str| format!("<string>{}</string>", esc(x));
-    let strs = |xs: &[&str]| format!("<array>{}</array>", xs.iter().map(|x| s(x)).collect::<String>());
+    let strs = |xs: &[&str]| {
+        format!(
+            "<array>{}</array>",
+            xs.iter().map(|x| s(x)).collect::<String>()
+        )
+    };
     let mut kv: Vec<(&str, String)> = vec![
         ("CFBundleDevelopmentRegion", s("en")),
         ("CFBundleExecutable", s(RUNTIME_NAME)),
@@ -144,12 +164,22 @@ pub fn info_plist(title_id: u64, bundle_id: &str, name: &str, version: &str, tar
         let files: String = icon_files.iter().map(|f| s(f)).collect();
         kv.push(("CFBundleIcons", format!("<dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconFiles</key><array>{files}</array></dict></dict>")));
     }
-    let body: String = kv.iter().map(|(k, v)| format!("\t<key>{k}</key>\n\t{v}\n")).collect();
-    format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n{body}</dict>\n</plist>\n")
+    let body: String = kv
+        .iter()
+        .map(|(k, v)| format!("\t<key>{k}</key>\n\t{v}\n"))
+        .collect();
+    format!(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n{body}</dict>\n</plist>\n"
+    )
 }
 
 /// Icon sizes written from the game's JPEG (name, pixels): the legacy loose-PNG set iOS still reads without an asset catalog.
-pub const ICON_SIZES: &[(&str, u32)] = &[("AppIcon60x60@2x.png", 120), ("AppIcon60x60@3x.png", 180), ("AppIcon76x76@2x~ipad.png", 152), ("AppIcon83.5x83.5@2x~ipad.png", 167)];
+pub const ICON_SIZES: &[(&str, u32)] = &[
+    ("AppIcon60x60@2x.png", 120),
+    ("AppIcon60x60@3x.png", 180),
+    ("AppIcon76x76@2x~ipad.png", 152),
+    ("AppIcon83.5x83.5@2x~ipad.png", 167),
+];
 
 pub fn make_icons(jpeg: &[u8], work: &Path, app: &Path) -> Result<Vec<String>> {
     std::fs::create_dir_all(work).map_err(|e| BuildError::io("create icon dir", e))?;
@@ -157,7 +187,19 @@ pub fn make_icons(jpeg: &[u8], work: &Path, app: &Path) -> Result<Vec<String>> {
     std::fs::write(&src, jpeg).map_err(|e| BuildError::io("write icon", e))?;
     let mut names = vec![];
     for (name, px) in ICON_SIZES {
-        let out = Command::new("sips").args(["-s", "format", "png", "-z", &px.to_string(), &px.to_string()]).arg(&src).arg("--out").arg(app.join(name)).output();
+        let out = Command::new("sips")
+            .args([
+                "-s",
+                "format",
+                "png",
+                "-z",
+                &px.to_string(),
+                &px.to_string(),
+            ])
+            .arg(&src)
+            .arg("--out")
+            .arg(app.join(name))
+            .output();
         if !matches!(out, Ok(ref o) if o.status.success()) {
             for n in &names {
                 let _ = std::fs::remove_file(app.join(n));
@@ -167,7 +209,11 @@ pub fn make_icons(jpeg: &[u8], work: &Path, app: &Path) -> Result<Vec<String>> {
         // CFBundleIconFiles lists the base name without scale/idiom suffix
         names.push(name.to_string());
     }
-    Ok(vec!["AppIcon60x60".into(), "AppIcon76x76".into(), "AppIcon83.5x83.5".into()])
+    Ok(vec![
+        "AppIcon60x60".into(),
+        "AppIcon76x76".into(),
+        "AppIcon83.5x83.5".into(),
+    ])
 }
 
 // ---- module dylibs ------------------------------------------------------------------------------------------------------
@@ -177,26 +223,42 @@ pub fn make_icons(jpeg: &[u8], work: &Path, app: &Path) -> Result<Vec<String>> {
 pub fn dylibize(game: &Path, frameworks: &Path, platform: macho::Platform) -> Result<usize> {
     std::fs::create_dir_all(frameworks).map_err(|e| BuildError::io("create Frameworks", e))?;
     let mut n = 0;
-    for ver in std::fs::read_dir(game).map_err(|e| BuildError::io("read game dir", e))?.flatten() {
+    for ver in std::fs::read_dir(game)
+        .map_err(|e| BuildError::io("read game dir", e))?
+        .flatten()
+    {
         if !ver.path().join("manifest.json").is_file() {
             continue;
         }
         let vname = ver.file_name().to_string_lossy().to_string();
         for (sub, tag) in [("modules", ""), ("nro", "nro.")] {
             let dir = ver.path().join(sub);
-            let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+            let Ok(rd) = std::fs::read_dir(&dir) else {
+                continue;
+            };
             for f in rd.flatten() {
                 let p = f.path();
-                let Some(stem) = p.file_name().and_then(|s| s.to_str()).and_then(|s| s.strip_suffix(".patched.bin")).map(str::to_string) else { continue };
-                let image = std::fs::read(&p).map_err(|e| BuildError::io("read module image", e))?;
-                let tables = std::fs::read(dir.join(format!("{stem}.tables"))).map_err(|e| BuildError::io(&format!("read {stem}.tables"), e))?;
+                let Some(stem) = p
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .and_then(|s| s.strip_suffix(".patched.bin"))
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                let image =
+                    std::fs::read(&p).map_err(|e| BuildError::io("read module image", e))?;
+                let tables = std::fs::read(dir.join(format!("{stem}.tables")))
+                    .map_err(|e| BuildError::io(&format!("read {stem}.tables"), e))?;
                 if tables.starts_with(b"NTB2") {
-                    continue;   // AArch32 title (interpreter): the image is read as data, no executable pages to wrap
+                    continue; // AArch32 title (interpreter): the image is read as data, no executable pages to wrap
                 }
                 let layout = macho::layout_from_ntb1(&tables)?;
                 let name = format!("{vname}.{tag}{stem}.dylib");
-                let dylib = macho::build_dylib(&image, &layout, &format!("@rpath/{name}"), platform)?;
-                std::fs::write(frameworks.join(&name), dylib).map_err(|e| BuildError::io("write module dylib", e))?;
+                let dylib =
+                    macho::build_dylib(&image, &layout, &format!("@rpath/{name}"), platform)?;
+                std::fs::write(frameworks.join(&name), dylib)
+                    .map_err(|e| BuildError::io("write module dylib", e))?;
                 std::fs::remove_file(&p).map_err(|e| BuildError::io("remove module image", e))?;
                 n += 1;
             }
@@ -209,7 +271,9 @@ pub fn dylibize(game: &Path, frameworks: &Path, platform: macho::Platform) -> Re
 
 /// Does a profile's `application-identifier` (`TEAMID.com.example.app` or `TEAMID.*` / `TEAMID.com.example.*`) cover this bundle id?
 pub fn profile_covers(app_identifier: &str, bundle_id: &str) -> bool {
-    let Some((_, pat)) = app_identifier.split_once('.') else { return false };
+    let Some((_, pat)) = app_identifier.split_once('.') else {
+        return false;
+    };
     match pat.strip_suffix('*') {
         Some(prefix) => bundle_id.starts_with(prefix),
         None => pat == bundle_id,
@@ -227,13 +291,32 @@ fn run_out(c: &mut Command) -> std::result::Result<String, String> {
 /// Decodes a `.mobileprovision` (CMS) to a plist file with `security cms -D`.
 fn decode_profile(profile: &Path, work: &Path) -> Result<PathBuf> {
     let out = work.join("profile.plist");
-    let xml = run_out(Command::new("security").args(["cms", "-D", "-i"]).arg(profile)).map_err(|e| BuildError::new("sign", format!("cannot read the provisioning profile {}: {e}", profile.display())))?;
+    let xml = run_out(
+        Command::new("security")
+            .args(["cms", "-D", "-i"])
+            .arg(profile),
+    )
+    .map_err(|e| {
+        BuildError::new(
+            "sign",
+            format!(
+                "cannot read the provisioning profile {}: {e}",
+                profile.display()
+            ),
+        )
+    })?;
     std::fs::write(&out, xml).map_err(|e| BuildError::io("write decoded profile", e))?;
     Ok(out)
 }
 
 fn plutil_raw(plist: &Path, key: &str) -> Option<String> {
-    run_out(Command::new("plutil").args(["-extract", key, "raw", "-o", "-"]).arg(plist)).ok().map(|s| s.trim().to_string())
+    run_out(
+        Command::new("plutil")
+            .args(["-extract", key, "raw", "-o", "-"])
+            .arg(plist),
+    )
+    .ok()
+    .map(|s| s.trim().to_string())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -255,14 +338,18 @@ fn profile_info(path: &Path, work: &Path) -> Option<ProfileInfo> {
         team: plutil_raw(&plist, "TeamIdentifier.0")?,
         app_id: plutil_raw(&plist, "Entitlements.application-identifier")?,
         expires: plutil_raw(&plist, "ExpirationDate").unwrap_or_default(),
-        devices: plutil_raw(&plist, "ProvisionedDevices").and_then(|s| s.parse().ok()).unwrap_or(0),
+        devices: plutil_raw(&plist, "ProvisionedDevices")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0),
         platform: plutil_raw(&plist, "Platform.0").unwrap_or_default(),
     })
 }
 
 /// `napple build --list-signing [--json]`: code-signing identities and the iOS provisioning profiles Xcode keeps on this Mac.
 pub fn list_signing(json: bool) -> Result<()> {
-    let idents = run_out(Command::new("security").args(["find-identity", "-v", "-p", "codesigning"])).unwrap_or_default();
+    let idents =
+        run_out(Command::new("security").args(["find-identity", "-v", "-p", "codesigning"]))
+            .unwrap_or_default();
     let identities: Vec<(String, String)> = idents
         .lines()
         .filter_map(|l| {
@@ -278,79 +365,170 @@ pub fn list_signing(json: bool) -> Result<()> {
     for dir in profile_dirs() {
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for f in rd.flatten() {
-                if f.path().extension().and_then(|e| e.to_str()) == Some("mobileprovision") {
-                    if let Some(p) = profile_info(&f.path(), &work) {
-                        if p.platform == "iOS" || p.platform.is_empty() {
-                            profiles.push(p);
-                        }
-                    }
+                if f.path().extension().and_then(|e| e.to_str()) == Some("mobileprovision")
+                    && let Some(p) = profile_info(&f.path(), &work)
+                    && (p.platform == "iOS" || p.platform.is_empty())
+                {
+                    profiles.push(p);
                 }
             }
         }
     }
     let _ = std::fs::remove_dir_all(&work);
     if json {
-        let ids: Vec<String> = identities.iter().map(|(sha, name)| obj(&[("sha1", jstr(sha)), ("name", jstr(name))], false)).collect();
+        let ids: Vec<String> = identities
+            .iter()
+            .map(|(sha, name)| obj(&[("sha1", jstr(sha)), ("name", jstr(name))], false))
+            .collect();
         let pr: Vec<String> = profiles
             .iter()
-            .map(|p| obj(&[("path", jstr(&p.path.to_string_lossy())), ("name", jstr(&p.name)), ("team", jstr(&p.team)), ("app_id", jstr(&p.app_id)), ("expires", jstr(&p.expires)), ("devices", p.devices.to_string())], false))
+            .map(|p| {
+                obj(
+                    &[
+                        ("path", jstr(&p.path.to_string_lossy())),
+                        ("name", jstr(&p.name)),
+                        ("team", jstr(&p.team)),
+                        ("app_id", jstr(&p.app_id)),
+                        ("expires", jstr(&p.expires)),
+                        ("devices", p.devices.to_string()),
+                    ],
+                    false,
+                )
+            })
             .collect();
-        println!("{}", obj(&[("identities", arr(&ids)), ("profiles", arr(&pr))], false));
+        println!(
+            "{}",
+            obj(&[("identities", arr(&ids)), ("profiles", arr(&pr))], false)
+        );
     } else {
         for (sha, name) in &identities {
             println!("identity {sha} {name}");
         }
         for p in &profiles {
-            println!("profile  {} app-id {} team {} devices {} expires {} ({})", p.name, p.app_id, p.team, p.devices, p.expires, p.path.display());
+            println!(
+                "profile  {} app-id {} team {} devices {} expires {} ({})",
+                p.name,
+                p.app_id,
+                p.team,
+                p.devices,
+                p.expires,
+                p.path.display()
+            );
         }
         if identities.is_empty() {
-            println!("no code-signing identities found: open Xcode > Settings > Accounts, add your Apple ID and create an Apple Development certificate");
+            println!(
+                "no code-signing identities found: open Xcode > Settings > Accounts, add your Apple ID and create an Apple Development certificate"
+            );
         }
     }
     Ok(())
 }
 
 pub fn profile_dirs() -> Vec<PathBuf> {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_default();
-    vec![home.join("Library/Developer/Xcode/UserData/Provisioning Profiles"), home.join("Library/MobileDevice/Provisioning Profiles")]
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_default();
+    vec![
+        home.join("Library/Developer/Xcode/UserData/Provisioning Profiles"),
+        home.join("Library/MobileDevice/Provisioning Profiles"),
+    ]
 }
 
 // ---- signing --------------------------------------------------------------------------------------------------------------
 
 fn codesign(args: &[&str], path: &Path) -> Result<()> {
-    run_out(Command::new("codesign").args(args).arg(path)).map(|_| ()).map_err(|e| BuildError::new("sign", format!("codesign {}: {e}", path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default())))
+    run_out(Command::new("codesign").args(args).arg(path))
+        .map(|_| ())
+        .map_err(|e| {
+            BuildError::new(
+                "sign",
+                format!(
+                    "codesign {}: {e}",
+                    path.file_name()
+                        .map(|n| n.to_string_lossy())
+                        .unwrap_or_default()
+                ),
+            )
+        })
 }
 
 /// Embeds the profile, signs every module dylib, then the app with the profile's own entitlements (what Xcode does), then verifies.
 /// Returns notes for the build report.
 pub fn sign(app: &Path, work: &Path, s: &Signing, bundle_id: &str) -> Result<Vec<String>> {
     let (Some(identity), Some(profile)) = (&s.identity, &s.profile) else {
-        return Err(BuildError::new("sign", "iOS signing needs --signing-identity and --provisioning-profile (see `napple build --list-signing`), or pass --no-sign to build an unsigned app/IPA for an external signer"));
+        return Err(BuildError::new(
+            "sign",
+            "iOS signing needs --signing-identity and --provisioning-profile (see `napple build --list-signing`), or pass --no-sign to build an unsigned app/IPA for an external signer",
+        ));
     };
     let mut notes = vec![];
     let plist = decode_profile(profile, work)?;
-    let app_id = plutil_raw(&plist, "Entitlements.application-identifier").ok_or_else(|| BuildError::new("sign", "the provisioning profile has no application-identifier"))?;
+    let app_id = plutil_raw(&plist, "Entitlements.application-identifier").ok_or_else(|| {
+        BuildError::new(
+            "sign",
+            "the provisioning profile has no application-identifier",
+        )
+    })?;
     if !profile_covers(&app_id, bundle_id) {
-        return Err(BuildError::new("sign", format!("the profile is for {app_id}, not for the bundle id {bundle_id}; pass --bundle-id with the id the profile was made for")));
+        return Err(BuildError::new(
+            "sign",
+            format!(
+                "the profile is for {app_id}, not for the bundle id {bundle_id}; pass --bundle-id with the id the profile was made for"
+            ),
+        ));
     }
     if let Some(exp) = plutil_raw(&plist, "ExpirationDate") {
         notes.push(format!("provisioning profile {:?} expires {exp}; free Apple ID profiles last 7 days, then the app stops launching until it is rebuilt/re-signed", plutil_raw(&plist, "Name").unwrap_or_default()));
     }
     let ent = work.join("entitlements.plist");
-    let xml = run_out(Command::new("plutil").args(["-extract", "Entitlements", "xml1", "-o", "-"]).arg(&plist)).map_err(|e| BuildError::new("sign", format!("cannot read the profile's entitlements: {e}")))?;
+    let xml = run_out(
+        Command::new("plutil")
+            .args(["-extract", "Entitlements", "xml1", "-o", "-"])
+            .arg(&plist),
+    )
+    .map_err(|e| {
+        BuildError::new(
+            "sign",
+            format!("cannot read the profile's entitlements: {e}"),
+        )
+    })?;
     std::fs::write(&ent, xml).map_err(|e| BuildError::io("write entitlements", e))?;
-    if !std::fs::read_to_string(&ent).unwrap_or_default().contains("increased-memory-limit") {
+    if !std::fs::read_to_string(&ent)
+        .unwrap_or_default()
+        .contains("increased-memory-limit")
+    {
         notes.push("the profile does not grant com.apple.developer.kernel.increased-memory-limit (paid account only): the app runs with the default iOS memory limit, large games may be terminated".into());
     }
-    std::fs::copy(profile, app.join("embedded.mobileprovision")).map_err(|e| BuildError::io("embed the profile", e))?;
+    std::fs::copy(profile, app.join("embedded.mobileprovision"))
+        .map_err(|e| BuildError::io("embed the profile", e))?;
     crate::bundle::clear_xattrs(app);
     if let Ok(rd) = std::fs::read_dir(app.join("Frameworks")) {
         for f in rd.flatten() {
-            codesign(&["--force", "--sign", identity, "--timestamp=none", "--generate-entitlement-der"], &f.path())?;
+            codesign(
+                &[
+                    "--force",
+                    "--sign",
+                    identity,
+                    "--timestamp=none",
+                    "--generate-entitlement-der",
+                ],
+                &f.path(),
+            )?;
         }
     }
     let ent_s = ent.to_string_lossy().to_string();
-    codesign(&["--force", "--sign", identity, "--timestamp=none", "--generate-entitlement-der", "--entitlements", &ent_s], app)?;
+    codesign(
+        &[
+            "--force",
+            "--sign",
+            identity,
+            "--timestamp=none",
+            "--generate-entitlement-der",
+            "--entitlements",
+            &ent_s,
+        ],
+        app,
+    )?;
     codesign(&["--verify", "--deep", "--strict"], app)?;
     Ok(notes)
 }
@@ -374,7 +552,21 @@ pub fn sign_sim(app: &Path) -> Result<Vec<String>> {
 /// `ditto -c -k --keepParent <payload_dir>`: payload_dir must be a directory named `Payload` containing the .app (ditto writes zip64, so multi-GB RomFS images work).
 pub fn export_ipa(payload_dir: &Path, ipa: &Path) -> Result<()> {
     let _ = std::fs::remove_file(ipa);
-    run_out(Command::new("ditto").args(["-c", "-k", "--keepParent", "--norsrc", "--noextattr", "--noacl"]).arg(payload_dir).arg(ipa)).map(|_| ()).map_err(|e| BuildError::new("ipa", format!("ditto failed: {e}")))
+    run_out(
+        Command::new("ditto")
+            .args([
+                "-c",
+                "-k",
+                "--keepParent",
+                "--norsrc",
+                "--noextattr",
+                "--noacl",
+            ])
+            .arg(payload_dir)
+            .arg(ipa),
+    )
+    .map(|_| ())
+    .map_err(|e| BuildError::new("ipa", format!("ditto failed: {e}")))
 }
 
 /// Installs (and optionally launches) with Xcode's `devicectl`.
@@ -396,7 +588,9 @@ mod tests {
         assert_eq!(Target::parse("ipad"), Some(Target::Ipad));
         assert_eq!(Target::parse("ios").unwrap().families(), &[1, 2]);
         assert_eq!(Target::parse("iphone").unwrap().families(), &[1]);
-        assert!(Target::parse("tvos").is_none() && !Target::Macos.is_ios() && Target::Iphone.is_ios());
+        assert!(
+            Target::parse("tvos").is_none() && !Target::Macos.is_ios() && Target::Iphone.is_ios()
+        );
     }
 
     #[test]
@@ -406,29 +600,73 @@ mod tests {
         }
         let t = Target::IosSim;
         assert!(t.is_ios() && t.is_sim() && !Target::Ios.is_sim());
-        assert_eq!((t.platform(), Target::Ios.platform()), (macho::Platform::IosSimulator, macho::Platform::Ios));
+        assert_eq!(
+            (t.platform(), Target::Ios.platform()),
+            (macho::Platform::IosSimulator, macho::Platform::Ios)
+        );
         assert_eq!(t.families(), &[1, 2]);
         let p = info_plist(1, "a.b", "x", "1", t, &[]);
-        assert!(p.contains("iPhoneSimulator") && !p.contains("<string>iPhoneOS</string>") && p.contains("<string>ios-sim</string>"));
-        assert!(info_plist(1, "a.b", "x", "1", Target::Ios, &[]).contains("<string>iPhoneOS</string>"));
+        assert!(
+            p.contains("iPhoneSimulator")
+                && !p.contains("<string>iPhoneOS</string>")
+                && p.contains("<string>ios-sim</string>")
+        );
+        assert!(
+            info_plist(1, "a.b", "x", "1", Target::Ios, &[]).contains("<string>iPhoneOS</string>")
+        );
     }
 
     #[test]
     fn plist_is_a_flat_ios_26_bundle() {
-        let p = info_plist(0x0100000000010000, "com.me.napple", "Tom & Jerry", "1.0", Target::Ios, &["AppIcon60x60".into()]);
-        for k in ["<string>napple-runtime</string>", "MinimumOSVersion", "<string>26.0</string>", "UIDeviceFamily", "<integer>2</integer>", "UIRequiredDeviceCapabilities", "metal", "UIApplicationSceneManifest", "NappleSceneDelegate", "UIFileSharingEnabled", "CFBundleIconFiles", "AppIcon60x60", "Tom &amp; Jerry", "com.me.napple", "UIInterfaceOrientationLandscapeLeft", "CADisableMinimumFrameDurationOnPhone"] {
+        let p = info_plist(
+            0x0100000000010000,
+            "com.me.napple",
+            "Tom & Jerry",
+            "1.0",
+            Target::Ios,
+            &["AppIcon60x60".into()],
+        );
+        for k in [
+            "<string>napple-runtime</string>",
+            "MinimumOSVersion",
+            "<string>26.0</string>",
+            "UIDeviceFamily",
+            "<integer>2</integer>",
+            "UIRequiredDeviceCapabilities",
+            "metal",
+            "UIApplicationSceneManifest",
+            "NappleSceneDelegate",
+            "UIFileSharingEnabled",
+            "CFBundleIconFiles",
+            "AppIcon60x60",
+            "Tom &amp; Jerry",
+            "com.me.napple",
+            "UIInterfaceOrientationLandscapeLeft",
+            "CADisableMinimumFrameDurationOnPhone",
+        ] {
             assert!(p.contains(k), "missing {k}");
         }
         assert!(!p.contains("LSMinimumSystemVersion") && !p.contains("NSPrincipalClass"));
         assert!(!info_plist(1, "a.b", "x", "1", Target::Iphone, &[]).contains("CFBundleIcons"));
-        assert!(!info_plist(1, "a.b", "x", "1", Target::Iphone, &[]).contains("<integer>2</integer>"));
+        assert!(
+            !info_plist(1, "a.b", "x", "1", Target::Iphone, &[]).contains("<integer>2</integer>")
+        );
     }
 
     #[test]
     fn bundle_ids() {
-        assert_eq!(bundle_id_for(0x0100000000010000, None), "com.napple.game.0100000000010000");
+        assert_eq!(
+            bundle_id_for(0x0100000000010000, None),
+            "com.napple.game.0100000000010000"
+        );
         assert_eq!(bundle_id_for(1, Some("com.me.x")), "com.me.x");
-        assert!(valid_bundle_id("com.me.napple-1") && !valid_bundle_id("nodots") && !valid_bundle_id("a..b") && !valid_bundle_id("a.b_c") && !valid_bundle_id("a.b/c"));
+        assert!(
+            valid_bundle_id("com.me.napple-1")
+                && !valid_bundle_id("nodots")
+                && !valid_bundle_id("a..b")
+                && !valid_bundle_id("a.b_c")
+                && !valid_bundle_id("a.b/c")
+        );
     }
 
     #[test]
@@ -455,7 +693,14 @@ mod tests {
         // NTB1 header order: file_size, text_end, ro_off, data_off, patch_off, key_off
         let mut t = b"NTB1".to_vec();
         t.resize(24, 0);
-        for v in [size as u64, 0x3f00, 0x8000, 0x8080, 5 * page as u64, 4 * page as u64] {
+        for v in [
+            size as u64,
+            0x3f00,
+            0x8000,
+            0x8080,
+            5 * page as u64,
+            4 * page as u64,
+        ] {
             t.extend_from_slice(&v.to_le_bytes());
         }
         for (sub, stem) in [("modules", "main"), ("nro", "abcd")] {
@@ -463,8 +708,14 @@ mod tests {
             std::fs::write(ver.join(sub).join(format!("{stem}.tables")), &t).unwrap();
         }
         assert_eq!(dylibize(&game, &fw, macho::Platform::Ios).unwrap(), 2);
-        assert!(fw.join("0123456789abcdef.main.dylib").is_file() && fw.join("0123456789abcdef.nro.abcd.dylib").is_file());
-        assert!(!ver.join("modules/main.patched.bin").exists(), "image must live in the dylib only");
+        assert!(
+            fw.join("0123456789abcdef.main.dylib").is_file()
+                && fw.join("0123456789abcdef.nro.abcd.dylib").is_file()
+        );
+        assert!(
+            !ver.join("modules/main.patched.bin").exists(),
+            "image must live in the dylib only"
+        );
         assert!(ver.join("modules/main.tables").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }

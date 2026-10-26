@@ -17,16 +17,17 @@
 #include <unistd.h>
 
 #define OUT_RATE 48000
-#define RING_FRAMES 16384            /* stereo frames per source, ~340 ms */
+#define RING_FRAMES 16384 /* stereo frames per source, ~340 ms */
 #define MAX_SOURCES 16
 
 struct nae_source {
     float ring[RING_FRAMES * 2];
     _Atomic uint64_t wr, rd;
     _Atomic int active, flush_req;
-    int ready;                        /* callback thread only */
+    int ready; /* callback thread only */
     int rate;
-    double phase; float last[2];      /* push-side resampler state (producer thread only) */
+    double phase;
+    float last[2]; /* push-side resampler state (producer thread only) */
     _Atomic uint64_t underruns, overruns, missing, trims;
     _Atomic uint64_t fill_hint;
 };
@@ -36,38 +37,50 @@ static struct {
     int refs, prefill_ms, device_wanted, device_ok;
     AudioComponentInstance unit;
     nae_source *_Atomic src[MAX_SOURCES];
-    _Atomic uint32_t cb_gen;          /* odd while the callback runs */
-    _Atomic float master; _Atomic int paused;
+    _Atomic uint32_t cb_gen; /* odd while the callback runs */
+    _Atomic float master;
+    _Atomic int paused;
     _Atomic uint64_t cb_frames, underruns, missing, overruns, trims;
     _Atomic double latency_ms;
     UInt32 device_frames;
 } E = {.lock = PTHREAD_MUTEX_INITIALIZER, .master = 1.0f};
 
 /* ---- game speed ---- */
-static _Atomic double g_speed = 1.0; static _Atomic int g_speed_mute;
+static _Atomic double g_speed = 1.0;
+static _Atomic int g_speed_mute;
 double nae_speed(void) { return atomic_load_explicit(&g_speed, memory_order_relaxed); }
 int nae_speed_muted(void) { return atomic_load_explicit(&g_speed_mute, memory_order_relaxed); }
-long long nae_scaled_ns(long long ns) { double v = (double)ns / nae_speed(); return v < 1 ? 1 : (long long)v; }
+long long nae_scaled_ns(long long ns) {
+    double v = (double)ns / nae_speed();
+    return v < 1 ? 1 : (long long)v;
+}
 double napple_audio_get_speed(void) { return nae_speed(); }
 void napple_audio_set_speed(double speed, int mode) {
     if (!(speed >= 0.1)) speed = 0.1;
     if (speed > 10.0) speed = 10.0;
     int mute = mode == NAPPLE_AUDIO_SPEED_MUTE || (mode == NAPPLE_AUDIO_SPEED_AUTO && (speed > 2.0 || speed < 0.5));
-    atomic_store(&g_speed, speed); atomic_store(&g_speed_mute, mute);
+    atomic_store(&g_speed, speed);
+    atomic_store(&g_speed_mute, mute);
 }
 
 static int env_int(const char *name, int fallback, int lo, int hi) {
     const char *e = getenv(name);
     if (!e || !*e) return fallback;
-    char *end; long v = strtol(e, &end, 10);
-    if (*end || v < lo || v > hi) { napple_audio_log(NULL, "%s=%s ignored (want %d..%d)", name, e, lo, hi); return fallback; }
+    char *end;
+    long v = strtol(e, &end, 10);
+    if (*end || v < lo || v > hi) {
+        napple_audio_log(NULL, "%s=%s ignored (want %d..%d)", name, e, lo, hi);
+        return fallback;
+    }
     return (int)v;
 }
 
 /* ---- device callback ---- */
-static OSStatus pull(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames,
-                     AudioBufferList *io) {
-    (void)ctx; (void)flags; (void)ts; (void)bus;
+static OSStatus pull(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *io) {
+    (void)ctx;
+    (void)flags;
+    (void)ts;
+    (void)bus;
     float *out = io->mBuffers[0].mData;
     memset(out, 0, (size_t)frames * 2 * sizeof(float));
     atomic_fetch_add_explicit(&E.cb_gen, 1, memory_order_acq_rel);
@@ -81,27 +94,40 @@ static OSStatus pull(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTi
         uint64_t rd = atomic_load_explicit(&s->rd, memory_order_relaxed);
         uint64_t wr = atomic_load_explicit(&s->wr, memory_order_acquire);
         if (!atomic_load_explicit(&s->active, memory_order_acquire) || paused) {
-            atomic_store_explicit(&s->rd, wr, memory_order_release); s->ready = 0; continue;
+            atomic_store_explicit(&s->rd, wr, memory_order_release);
+            s->ready = 0;
+            continue;
         }
-        if (atomic_exchange_explicit(&s->flush_req, 0, memory_order_acq_rel)) { rd = wr; s->ready = 0; }
+        if (atomic_exchange_explicit(&s->flush_req, 0, memory_order_acq_rel)) {
+            rd = wr;
+            s->ready = 0;
+        }
         uint64_t have = wr - rd;
         if (!s->ready) {
-            if (have < prefill) { atomic_store_explicit(&s->rd, rd, memory_order_release); continue; }
+            if (have < prefill) {
+                atomic_store_explicit(&s->rd, rd, memory_order_release);
+                continue;
+            }
             s->ready = 1;
         }
         const uint64_t max_backlog = prefill + (uint64_t)(OUT_RATE * 30 / 1000);
         if (have > max_backlog) {
-            atomic_fetch_add(&s->trims, 1); atomic_fetch_add(&E.trims, 1);
-            rd = wr - prefill; have = prefill;
+            atomic_fetch_add(&s->trims, 1);
+            atomic_fetch_add(&E.trims, 1);
+            rd = wr - prefill;
+            have = prefill;
         }
         UInt32 n = frames < have ? frames : (UInt32)have;
         for (UInt32 k = 0; k < n; k++) {
             uint64_t at = (rd + k) % RING_FRAMES;
-            out[2 * k] += s->ring[2 * at]; out[2 * k + 1] += s->ring[2 * at + 1];
+            out[2 * k] += s->ring[2 * at];
+            out[2 * k + 1] += s->ring[2 * at + 1];
         }
-        if (n < frames) {   /* underrun: output what we have, wait for a fresh prefill */
-            atomic_fetch_add(&s->underruns, 1); atomic_fetch_add(&E.underruns, 1);
-            atomic_fetch_add(&E.missing, frames - n); s->ready = 0;
+        if (n < frames) { /* underrun: output what we have, wait for a fresh prefill */
+            atomic_fetch_add(&s->underruns, 1);
+            atomic_fetch_add(&E.underruns, 1);
+            atomic_fetch_add(&E.missing, frames - n);
+            s->ready = 0;
         }
         atomic_store_explicit(&s->rd, rd + n, memory_order_release);
         if (have - n > max_fill) max_fill = have - n;
@@ -119,7 +145,9 @@ static OSStatus pull(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTi
 static void device_close_locked(void) {
     if (!E.device_ok) return;
     E.device_ok = 0;
-    AudioOutputUnitStop(E.unit); AudioUnitUninitialize(E.unit); AudioComponentInstanceDispose(E.unit);
+    AudioOutputUnitStop(E.unit);
+    AudioUnitUninitialize(E.unit);
+    AudioComponentInstanceDispose(E.unit);
 }
 
 /* Ask the default output device for a small buffer (the system may clamp it). Best effort. */
@@ -130,13 +158,19 @@ static UInt32 tune_device_buffer(void) { return nae_ios_session_start(OUT_RATE, 
 #else
 static UInt32 tune_device_buffer(void) {
     AudioObjectPropertyAddress a = {kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
-    AudioDeviceID dev = 0; UInt32 sz = sizeof dev;
+    AudioDeviceID dev = 0;
+    UInt32 sz = sizeof dev;
     if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &a, 0, NULL, &sz, &dev) || !dev) return 512;
     AudioObjectPropertyAddress fs = {kAudioDevicePropertyBufferFrameSize, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
-    UInt32 want = 256, cur = 0; sz = sizeof cur;
+    UInt32 want = 256, cur = 0;
+    sz = sizeof cur;
     AudioObjectPropertyAddress range = {kAudioDevicePropertyBufferFrameSizeRange, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
-    AudioValueRange r; UInt32 rs = sizeof r;
-    if (!AudioObjectGetPropertyData(dev, &range, 0, NULL, &rs, &r)) { if (want < r.mMinimum) want = (UInt32)r.mMinimum; if (want > r.mMaximum) want = (UInt32)r.mMaximum; }
+    AudioValueRange r;
+    UInt32 rs = sizeof r;
+    if (!AudioObjectGetPropertyData(dev, &range, 0, NULL, &rs, &r)) {
+        if (want < r.mMinimum) want = (UInt32)r.mMinimum;
+        if (want > r.mMaximum) want = (UInt32)r.mMaximum;
+    }
     AudioObjectSetPropertyData(dev, &fs, 0, NULL, sizeof want, &want);
     if (AudioObjectGetPropertyData(dev, &fs, 0, NULL, &sz, &cur)) return 512;
     return cur;
@@ -151,15 +185,19 @@ static int device_open_locked(void) {
     AudioComponentDescription d = {kAudioUnitType_Output, kAudioUnitSubType_DefaultOutput, kAudioUnitManufacturer_Apple, 0, 0};
 #endif
     AudioComponent c = AudioComponentFindNext(NULL, &d);
-    if (!c || AudioComponentInstanceNew(c, &E.unit)) { napple_audio_log(NULL, "no default output device: mixing without sound"); return -1; }
+    if (!c || AudioComponentInstanceNew(c, &E.unit)) {
+        napple_audio_log(NULL, "no default output device: mixing without sound");
+        return -1;
+    }
     AudioStreamBasicDescription f = {OUT_RATE, kAudioFormatLinearPCM, kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked, 8, 1, 8, 2, 32, 0};
     AURenderCallbackStruct cb = {pull, NULL};
     E.device_frames = tune_device_buffer();
     if (AudioUnitSetProperty(E.unit, kAudioUnitProperty_StreamFormat, kAudioUnitScope_Input, 0, &f, sizeof f) ||
-        AudioUnitSetProperty(E.unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof cb) ||
-        AudioUnitInitialize(E.unit) || AudioOutputUnitStart(E.unit)) {
+        AudioUnitSetProperty(E.unit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &cb, sizeof cb) || AudioUnitInitialize(E.unit) ||
+        AudioOutputUnitStart(E.unit)) {
         napple_audio_log(NULL, "Core Audio output setup failed: mixing without sound");
-        AudioComponentInstanceDispose(E.unit); return -1;
+        AudioComponentInstanceDispose(E.unit);
+        return -1;
     }
     E.device_ok = 1;
     napple_audio_log(NULL, "Core Audio output %d Hz stereo, device buffer %u frames, prefill %d ms", OUT_RATE, (unsigned)E.device_frames, E.prefill_ms);
@@ -203,17 +241,26 @@ void napple_audio_set_paused(int p) { atomic_store_explicit(&E.paused, p != 0, m
 void napple_audio_output_restart(int recreate) {
     pthread_mutex_lock(&E.lock);
     if (E.refs > 0 && E.device_wanted) {
-        if (E.device_ok && !recreate && !AudioOutputUnitStart(E.unit)) { napple_audio_log(NULL, "output started again"); }
-        else { device_close_locked(); device_open_locked(); napple_audio_log(NULL, "output rebuilt: %s", E.device_ok ? "playing" : "no sound"); }
+        if (E.device_ok && !recreate && !AudioOutputUnitStart(E.unit)) {
+            napple_audio_log(NULL, "output started again");
+        } else {
+            device_close_locked();
+            device_open_locked();
+            napple_audio_log(NULL, "output rebuilt: %s", E.device_ok ? "playing" : "no sound");
+        }
     }
     pthread_mutex_unlock(&E.lock);
 }
 
 void napple_audio_get_stats(napple_audio_stats *o) {
     memset(o, 0, sizeof *o);
-    o->callback_frames = atomic_load(&E.cb_frames); o->underruns = atomic_load(&E.underruns);
-    o->missing_frames = atomic_load(&E.missing); o->overruns = atomic_load(&E.overruns); o->trims = atomic_load(&E.trims);
-    o->latency_ms = atomic_load(&E.latency_ms); o->device_open = E.device_ok;
+    o->callback_frames = atomic_load(&E.cb_frames);
+    o->underruns = atomic_load(&E.underruns);
+    o->missing_frames = atomic_load(&E.missing);
+    o->overruns = atomic_load(&E.overruns);
+    o->trims = atomic_load(&E.trims);
+    o->latency_ms = atomic_load(&E.latency_ms);
+    o->device_open = E.device_ok;
 }
 
 /* ---- sources ---- */
@@ -221,20 +268,29 @@ nae_source *nae_source_create(int rate) {
     if (!nae_engine_acquire() || rate < 4000 || rate > 192000) return NULL;
     nae_source *s = calloc(1, sizeof *s);
     if (!s) return NULL;
-    s->rate = rate; atomic_store(&s->active, 1);
+    s->rate = rate;
+    atomic_store(&s->active, 1);
     pthread_mutex_lock(&E.lock);
     int placed = 0;
     for (int i = 0; i < MAX_SOURCES && !placed; i++)
-        if (!atomic_load(&E.src[i])) { atomic_store_explicit(&E.src[i], s, memory_order_release); placed = 1; }
+        if (!atomic_load(&E.src[i])) {
+            atomic_store_explicit(&E.src[i], s, memory_order_release);
+            placed = 1;
+        }
     pthread_mutex_unlock(&E.lock);
-    if (!placed) { free(s); napple_audio_log(NULL, "too many audio sources"); return NULL; }
+    if (!placed) {
+        free(s);
+        napple_audio_log(NULL, "too many audio sources");
+        return NULL;
+    }
     return s;
 }
 
 void nae_source_destroy(nae_source *s) {
     if (!s) return;
     pthread_mutex_lock(&E.lock);
-    for (int i = 0; i < MAX_SOURCES; i++) if (atomic_load(&E.src[i]) == s) atomic_store_explicit(&E.src[i], NULL, memory_order_release);
+    for (int i = 0; i < MAX_SOURCES; i++)
+        if (atomic_load(&E.src[i]) == s) atomic_store_explicit(&E.src[i], NULL, memory_order_release);
     pthread_mutex_unlock(&E.lock);
     /* wait for a callback that may still be reading the source */
     if (E.device_ok) {
@@ -253,40 +309,53 @@ void nae_source_set_active(nae_source *s, int active) {
 static void ring_put(nae_source *s, const float *lr, int frames) {
     uint64_t wr = atomic_load_explicit(&s->wr, memory_order_relaxed);
     uint64_t rd = atomic_load_explicit(&s->rd, memory_order_acquire);
-    if (E.device_ok && wr + (uint64_t)frames - rd > RING_FRAMES) {   /* device stalled: drop this block */
-        atomic_fetch_add(&s->overruns, 1); atomic_fetch_add(&E.overruns, 1); return;
+    if (E.device_ok && wr + (uint64_t)frames - rd > RING_FRAMES) { /* device stalled: drop this block */
+        atomic_fetch_add(&s->overruns, 1);
+        atomic_fetch_add(&E.overruns, 1);
+        return;
     }
     for (int i = 0; i < frames; i++) {
         uint64_t k = (wr + (uint64_t)i) % RING_FRAMES;
-        s->ring[2 * k] = lr[2 * i]; s->ring[2 * k + 1] = lr[2 * i + 1];
+        s->ring[2 * k] = lr[2 * i];
+        s->ring[2 * k + 1] = lr[2 * i + 1];
     }
     atomic_store_explicit(&s->wr, wr + (uint64_t)frames, memory_order_release);
-    if (!E.device_ok) atomic_store_explicit(&s->rd, wr + (uint64_t)frames, memory_order_release);   /* no device: keep only the latest */
+    if (!E.device_ok) atomic_store_explicit(&s->rd, wr + (uint64_t)frames, memory_order_release); /* no device: keep only the latest */
 }
 
 void nae_source_push(nae_source *s, const float *lr, int frames) {
     if (!s || frames <= 0) return;
     const double speed = nae_speed();
-    if (nae_speed_muted()) return;                                   /* turbo without sound: the callback drops the ring anyway */
-    if (s->rate == OUT_RATE && speed == 1.0) { ring_put(s, lr, frames); return; }
+    if (nae_speed_muted()) return; /* turbo without sound: the callback drops the ring anyway */
+    if (s->rate == OUT_RATE && speed == 1.0) {
+        ring_put(s, lr, frames);
+        return;
+    }
     /* linear resampler to 48 kHz, state carried across pushes; at game speed s the source is consumed s times faster (pitch shifts with it) */
-    float tmp[2 * 1024]; int n = 0;
+    float tmp[2 * 1024];
+    int n = 0;
     const double step = (double)s->rate / OUT_RATE * speed;
     /* position p in input samples, relative to this block, may start negative (between last and lr[0]) */
     double p = s->phase;
     while (p < frames) {
-        int i0 = (int)floor(p); double f = p - i0;
+        int i0 = (int)floor(p);
+        double f = p - i0;
         float a0 = i0 < 0 ? s->last[0] : lr[2 * i0], a1 = i0 < 0 ? s->last[1] : lr[2 * i0 + 1];
         int i1 = i0 + 1;
         if (i1 >= frames) break;
         float b0 = lr[2 * i1], b1 = lr[2 * i1 + 1];
-        tmp[2 * n] = (float)(a0 + (b0 - a0) * f); tmp[2 * n + 1] = (float)(a1 + (b1 - a1) * f);
-        if (++n == 1024) { ring_put(s, tmp, n); n = 0; }
+        tmp[2 * n] = (float)(a0 + (b0 - a0) * f);
+        tmp[2 * n + 1] = (float)(a1 + (b1 - a1) * f);
+        if (++n == 1024) {
+            ring_put(s, tmp, n);
+            n = 0;
+        }
         p += step;
     }
     if (n) ring_put(s, tmp, n);
-    s->phase = p - frames;                      /* may be in [-1, step) relative to the next block */
-    s->last[0] = lr[2 * (frames - 1)]; s->last[1] = lr[2 * (frames - 1) + 1];
+    s->phase = p - frames; /* may be in [-1, step) relative to the next block */
+    s->last[0] = lr[2 * (frames - 1)];
+    s->last[1] = lr[2 * (frames - 1) + 1];
 }
 
 int nae_source_peek(nae_source *s, float *lr, int frames) {
@@ -294,7 +363,8 @@ int nae_source_peek(nae_source *s, float *lr, int frames) {
     if (!s || (uint64_t)frames > wr || frames > RING_FRAMES) return 0;
     for (int i = 0; i < frames; i++) {
         uint64_t k = (wr - (uint64_t)frames + (uint64_t)i) % RING_FRAMES;
-        lr[2 * i] = s->ring[2 * k]; lr[2 * i + 1] = s->ring[2 * k + 1];
+        lr[2 * i] = s->ring[2 * k];
+        lr[2 * i + 1] = s->ring[2 * k + 1];
     }
     return frames;
 }

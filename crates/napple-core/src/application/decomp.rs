@@ -1,6 +1,6 @@
 //! Decomp stage: for each selected version (base + chosen updates) load every NSO and scan rewrite sites.
 use super::ingest::Ingested;
-use super::package::{version_label, BuildPlan};
+use super::package::{BuildPlan, version_label};
 use crate::analysis::a64::{self, SiteKind};
 use crate::domain::error::Result;
 use crate::domain::keys::KeySet;
@@ -56,7 +56,11 @@ pub fn run(plan: &BuildPlan, updates: &[usize], keys: &KeySet) -> Result<Vec<Ver
     for i in targets {
         let p = &plan.packs[i];
         let prog = p.program(keys)?;
-        out.push(analyze_program(version_label(p.meta.version), p.meta.title_id, &prog)?);
+        out.push(analyze_program(
+            version_label(p.meta.version),
+            p.meta.title_id,
+            &prog,
+        )?);
     }
     Ok(out)
 }
@@ -68,16 +72,25 @@ impl VersionReport {
             .modules
             .iter()
             .map(|m| {
-                let sites: Vec<String> = m.sites.iter().map(|(k, n)| format!("\"{k:?}\":{n}")).collect();
+                let sites: Vec<String> = m
+                    .sites
+                    .iter()
+                    .map(|(k, n)| format!("\"{k:?}\":{n}"))
+                    .collect();
                 format!(
                     "{{\"name\":\"{}\",\"build_id\":\"{}\",\"text_bytes\":{},\"sites\":{{{}}}}}",
-                    m.name, m.build_id, m.text_bytes, sites.join(",")
+                    m.name,
+                    m.build_id,
+                    m.text_bytes,
+                    sites.join(",")
                 )
             })
             .collect();
         format!(
             "{{\"title_id\":\"{:016X}\",\"version\":\"{}\",\"modules\":[{}]}}",
-            self.title_id, self.label, mods.join(",")
+            self.title_id,
+            self.label,
+            mods.join(",")
         )
     }
 }

@@ -12,10 +12,14 @@
 #include <stdint.h>
 
 #define KMSG_MAX_RECV 13
-typedef struct { unsigned mode, n; uint64_t addr[KMSG_MAX_RECV], size[KMSG_MAX_RECV]; } KRecvList;
+typedef struct {
+    unsigned mode, n;
+    uint64_t addr[KMSG_MAX_RECV], size[KMSG_MAX_RECV];
+} KRecvList;
 typedef struct {
     unsigned type, nx, na, nb, nw, ndata, recv_mode, nrecv;
-    int special, has_pid; unsigned ncopy, nmove;
+    int special, has_pid;
+    unsigned ncopy, nmove;
     unsigned pid_word, handle_word, x_word, abw_word, data_word, recv_word, total_words;
 } KMsgLayout;
 /* Validated host pointer for guest [addr, addr+size), or NULL. */

@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 const MAX_FILE: u64 = 4 << 20;
 
 pub fn now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Tolerant on-disk form: status is a case-insensitive string, everything else optional.
@@ -31,7 +33,9 @@ pub fn is_build_id(s: &str) -> bool {
 }
 
 pub fn stage_path(root: &Path, title_id: &str, build_id: &str, stage: &str) -> PathBuf {
-    root.join(title_id.to_ascii_uppercase()).join(build_id.to_ascii_lowercase()).join(format!("{stage}.json"))
+    root.join(title_id.to_ascii_uppercase())
+        .join(build_id.to_ascii_lowercase())
+        .join(format!("{stage}.json"))
 }
 
 pub fn read_stage(path: &Path) -> Result<StageResult, String> {
@@ -40,9 +44,15 @@ pub fn read_stage(path: &Path) -> Result<StageResult, String> {
         return Err(format!("{}: stage file too large", path.display()));
     }
     let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let raw: RawStage = serde_json::from_str(&text).map_err(|e| format!("{}: invalid JSON: {e}", path.display()))?;
-    let status = Status::parse(&raw.status).ok_or_else(|| format!("{}: unknown status '{}'", path.display(), raw.status))?;
-    let mtime = md.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+    let raw: RawStage = serde_json::from_str(&text)
+        .map_err(|e| format!("{}: invalid JSON: {e}", path.display()))?;
+    let status = Status::parse(&raw.status)
+        .ok_or_else(|| format!("{}: unknown status '{}'", path.display(), raw.status))?;
+    let mtime = md
+        .modified()
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map_or(0, |d| d.as_secs());
     Ok(StageResult {
         status,
         reason: raw.reason,
@@ -53,12 +63,21 @@ pub fn read_stage(path: &Path) -> Result<StageResult, String> {
     })
 }
 
-pub fn write_stage(root: &Path, title_id: &str, build_id: &str, stage: &str, r: &StageResult) -> Result<(), String> {
+pub fn write_stage(
+    root: &Path,
+    title_id: &str,
+    build_id: &str,
+    stage: &str,
+    r: &StageResult,
+) -> Result<(), String> {
     let p = stage_path(root, title_id, build_id, stage);
     fs::create_dir_all(p.parent().unwrap()).map_err(|e| e.to_string())?;
     let mut v = serde_json::to_value(r).map_err(|e| e.to_string())?;
     v["stage"] = stage.into();
-    atomic_write(&p, &(serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n"))
+    atomic_write(
+        &p,
+        &(serde_json::to_string_pretty(&v).map_err(|e| e.to_string())? + "\n"),
+    )
 }
 
 pub fn atomic_write(p: &Path, text: &str) -> Result<(), String> {
@@ -79,7 +98,10 @@ pub fn load_matrix(p: &Path) -> Result<Matrix, String> {
 }
 
 pub fn save_matrix(p: &Path, m: &Matrix) -> Result<(), String> {
-    atomic_write(p, &(serde_json::to_string_pretty(m).map_err(|e| e.to_string())? + "\n"))
+    atomic_write(
+        p,
+        &(serde_json::to_string_pretty(m).map_err(|e| e.to_string())? + "\n"),
+    )
 }
 
 fn subdirs(p: &Path) -> Vec<(String, PathBuf)> {
@@ -117,9 +139,20 @@ pub fn overlay_stage_files(m: &mut Matrix, root: &Path) -> Vec<String> {
                         let g = m.game_mut(&tid);
                         // Update-agnostic: apply to the version(s) carrying this build id; a build id that
                         // is unknown to the matrix gets a stub entry (e.g. runtime ran before `compat run`).
-                        let idxs: Vec<usize> = g.versions.iter().enumerate().filter(|(_, v)| v.build_id == bid).map(|(i, _)| i).collect();
+                        let idxs: Vec<usize> = g
+                            .versions
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, v)| v.build_id == bid)
+                            .map(|(i, _)| i)
+                            .collect();
                         let idxs = if idxs.is_empty() {
-                            g.versions.push(VersionEntry { kind: "base".into(), title_id: tid.clone(), build_id: bid.clone(), ..Default::default() });
+                            g.versions.push(VersionEntry {
+                                kind: "base".into(),
+                                title_id: tid.clone(),
+                                build_id: bid.clone(),
+                                ..Default::default()
+                            });
                             vec![g.versions.len() - 1]
                         } else {
                             idxs
@@ -156,7 +189,15 @@ mod tests {
         let p = d.join("runtime-boot.json");
         fs::write(&p, r#"{"stage":"runtime-boot","status":"PARTIAL","reason":"x","time":5,"counters":{"crashes":[{"signal":11,"pc":4096}],"unsupported_svcs":[26]},"extra":1}"#).unwrap();
         let r = read_stage(&p).unwrap();
-        assert_eq!((r.status, r.time, r.counters.crashes[0].pc.as_str(), r.counters.unsupported_svcs.clone()), (Status::Partial, 5, "4096", vec![26]));
+        assert_eq!(
+            (
+                r.status,
+                r.time,
+                r.counters.crashes[0].pc.as_str(),
+                r.counters.unsupported_svcs.clone()
+            ),
+            (Status::Partial, 5, "4096", vec![26])
+        );
         fs::write(&p, r#"{"status":"maybe"}"#).unwrap();
         assert!(read_stage(&p).is_err());
         fs::write(&p, "{").unwrap();
@@ -168,10 +209,50 @@ mod tests {
         let d = tmp("overlay");
         let (tid, bid) = ("0100000000010000", "abcd");
         let mut m = Matrix::new();
-        m.game_mut(tid).version_mut(0, bid).stages.insert("video".into(), StageResult { status: Status::Fail, time: 100, ..Default::default() });
-        write_stage(&d, tid, bid, "video", &StageResult { status: Status::Pass, time: 50, ..Default::default() }).unwrap();
-        write_stage(&d, tid, bid, "audio", &StageResult { status: Status::Pass, time: 50, ..Default::default() }).unwrap();
-        write_stage(&d, "0100000000020000", "ff", "input", &StageResult { status: Status::Blocked, time: 1, ..Default::default() }).unwrap();
+        m.game_mut(tid).version_mut(0, bid).stages.insert(
+            "video".into(),
+            StageResult {
+                status: Status::Fail,
+                time: 100,
+                ..Default::default()
+            },
+        );
+        write_stage(
+            &d,
+            tid,
+            bid,
+            "video",
+            &StageResult {
+                status: Status::Pass,
+                time: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        write_stage(
+            &d,
+            tid,
+            bid,
+            "audio",
+            &StageResult {
+                status: Status::Pass,
+                time: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        write_stage(
+            &d,
+            "0100000000020000",
+            "ff",
+            "input",
+            &StageResult {
+                status: Status::Blocked,
+                time: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
         fs::create_dir_all(d.join("not-a-title")).unwrap();
         assert!(overlay_stage_files(&mut m, &d).is_empty());
         let v = &m.games[0].versions[0];

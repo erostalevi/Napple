@@ -18,7 +18,7 @@
 extern char runtime_hle_thunks[];
 void *runtime_hle_targets[HLE_THUNKS];
 uint64_t runtime_hle_tsd_off;
-int runtime_hle_trace;                                   /* read by hle_stack.S on every wrapped call */
+int runtime_hle_trace; /* read by hle_stack.S on every wrapped call */
 extern void runtime_unresolved_entry(void);
 static const char *names[HLE_THUNKS];
 static unsigned char is_trap[HLE_THUNKS];
@@ -48,10 +48,14 @@ void *runtime_hle_wrap_named(void *fn, const char *name) {
 void *runtime_hle_wrap_trap(const char *name) {
     pthread_mutex_lock(&lock);
     for (unsigned i = 0; i < used; i++)
-        if (is_trap[i] && !strcmp(names[i], name)) { pthread_mutex_unlock(&lock); return runtime_hle_thunks + (size_t)i * HLE_THUNK_BYTES; }
+        if (is_trap[i] && !strcmp(names[i], name)) {
+            pthread_mutex_unlock(&lock);
+            return runtime_hle_thunks + (size_t)i * HLE_THUNK_BYTES;
+        }
     if (used == HLE_THUNKS) runtime_fail("host-stack wrapper table full");
     unsigned i = used++;
-    names[i] = strdup(name); is_trap[i] = 1;
+    names[i] = strdup(name);
+    is_trap[i] = 1;
     __atomic_store_n(&runtime_hle_targets[i], (void *)runtime_unresolved_entry, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&lock);
     return runtime_hle_thunks + (size_t)i * HLE_THUNK_BYTES;
@@ -59,8 +63,12 @@ void *runtime_hle_wrap_trap(const char *name) {
 
 static int demangle_name(const char *n, char *out, size_t cap) {
     typedef char *(*demangle_t)(const char *, char *, size_t *, int *);
-    static demangle_t demangle; static int looked;
-    if (!looked) { demangle = (demangle_t)dlsym(RTLD_DEFAULT, "__cxa_demangle"); looked = 1; }
+    static demangle_t demangle;
+    static int looked;
+    if (!looked) {
+        demangle = (demangle_t)dlsym(RTLD_DEFAULT, "__cxa_demangle");
+        looked = 1;
+    }
     int status = -1;
     char *d = demangle && n[0] == '_' && n[1] == 'Z' ? demangle(n, NULL, NULL, &status) : NULL;
     snprintf(out, cap, "%s", d && !status ? d : n);
@@ -68,8 +76,12 @@ static int demangle_name(const char *n, char *out, size_t cap) {
     return 1;
 }
 static void name_of(unsigned i, char *out, size_t cap) {
-    if (i < HLE_THUNKS && names[i]) { demangle_name(names[i], out, cap); return; }
-    Dl_info info; void *fn = i < HLE_THUNKS ? runtime_hle_targets[i] : NULL;
+    if (i < HLE_THUNKS && names[i]) {
+        demangle_name(names[i], out, cap);
+        return;
+    }
+    Dl_info info;
+    void *fn = i < HLE_THUNKS ? runtime_hle_targets[i] : NULL;
     if (fn && dladdr(fn, &info) && info.dli_sname) snprintf(out, cap, "%s (host)", info.dli_sname);
     else snprintf(out, cap, "wrapper %u -> %p", i, fn);
 }
@@ -86,11 +98,13 @@ int (*runtime_trap_hook)(const char *name);
 
 /* Called through runtime_unresolved_entry (hle_stack.S) with the wrapper index. */
 _Noreturn void runtime_unresolved_call(uint64_t index) {
-    char text[512]; name_of((unsigned)index, text, sizeof text);
+    char text[512];
+    name_of((unsigned)index, text, sizeof text);
     if (runtime_trap_hook && names[index] && runtime_trap_hook(names[index])) runtime_fail("trap hook returned");
     uint64_t *frame = __builtin_frame_address(0), link[2] = {0, 0}, outer[2] = {0, 0};
     if (safe_read((uint64_t)(uintptr_t)frame, link, 16) && safe_read(link[0], outer, 16)) {
-        char where[96]; module_describe(outer[1], where, sizeof where);
+        char where[96];
+        module_describe(outer[1], where, sizeof where);
         LOG("hle", "guest called unresolved import %s from %s", text, where);
         runtime_trace_guest(outer[0], outer[1]);
     }
@@ -104,25 +118,31 @@ void runtime_hle_note(uint64_t i) {
     if (i >= HLE_THUNKS) return;
     atomic_fetch_add_explicit(&counts[i], 1, memory_order_relaxed);
     if (runtime_hle_trace != 2 || atomic_exchange_explicit(&seen[i], 1, memory_order_relaxed)) return;
-    char text[256]; name_of((unsigned)i, text, sizeof text);
+    char text[256];
+    name_of((unsigned)i, text, sizeof text);
     LOG("hle", "first call of %s", text);
 }
 
 void runtime_hle_trace_set(int mode) {
     if (mode < 0 || mode > 2) runtime_fail("hle trace mode must be 0, 1 or 2");
-    if (mode) { __atomic_store_n(&runtime_hle_trace, mode, __ATOMIC_RELEASE); return; }
+    if (mode) {
+        __atomic_store_n(&runtime_hle_trace, mode, __ATOMIC_RELEASE);
+        return;
+    }
     __atomic_store_n(&runtime_hle_trace, 0, __ATOMIC_RELEASE);
     for (unsigned i = 0; i < used; i++) {
         uint64_t n = atomic_load_explicit(&counts[i], memory_order_relaxed);
         if (!n) continue;
-        char text[256]; name_of(i, text, sizeof text);
+        char text[256];
+        name_of(i, text, sizeof text);
         LOG("hle", "%10llu calls  %s", (unsigned long long)n, text);
     }
 }
 
 /* Called on a guest thread's own host stack before it enters guest code; `top` must leave room for the caller's frame. */
 void runtime_hle_stack_set(uintptr_t top) {
-    uintptr_t tp; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tp));
+    uintptr_t tp;
+    __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tp));
     if (!runtime_hle_tsd_off) runtime_fail("host-stack slot not initialised");
     *(volatile uintptr_t *)(tp + runtime_hle_tsd_off) = top & ~(uintptr_t)15;
 }

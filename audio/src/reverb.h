@@ -2,10 +2,11 @@
 #define NAPPLE_AUDIO_REVERB_H
 #include <stdint.h>
 typedef struct {
-    uint8_t input[6], output[6]; uint16_t channel_max, channels;
+    uint8_t input[6], output[6];
+    uint16_t channel_max, channels;
     uint32_t reserved, sample_rate;
-    float room_hf, hf_reference, decay_time, hf_decay_ratio, room_gain, reflections_gain,
-          reverb_gain, diffusion, reflection_delay, reverb_delay, density, dry_gain;
+    float room_hf, hf_reference, decay_time, hf_decay_ratio, room_gain, reflections_gain, reverb_gain, diffusion, reflection_delay, reverb_delay, density,
+        dry_gain;
     uint8_t status;
 } Reverb3dParam;
 _Static_assert(__builtin_offsetof(Reverb3dParam, status) == 72, "reverb3d wire layout");

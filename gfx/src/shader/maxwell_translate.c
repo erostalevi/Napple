@@ -6,7 +6,7 @@
 // branches become a `switch (pc)` state machine with explicit SSY/PBK/PCNT stacks.
 //
 #if defined(_WIN32)
-#include <malloc.h>  // alloca
+#include <malloc.h>   // alloca
 #endif
 #include <math.h>
 #include <stdarg.h>
@@ -19,7 +19,7 @@
 uint64_t maxwell_gmem_base, maxwell_gmem_size;
 
 #define RZ 255
-#define LMEM_WORDS 256  // local memory per invocation (1 KB)
+#define LMEM_WORDS 256   // local memory per invocation (1 KB)
 #define PT 7
 
 typedef struct {
@@ -54,21 +54,22 @@ typedef struct {
     uint32_t in_attr_mask, out_attr_mask;
     uint32_t vs_in_comp[32];
     bool uses_branches, uses_cc, uses_local, uses_vid, uses_iid, uses_frag_coord, uses_front_facing, uses_lane, uses_point_coord, uses_attr_arr;
-    bool uses_rscale;  // resolution-scale table (fragment/compute only)
-    uint32_t flat_mask;           // fragment inputs using constant (flat) interpolation
-    uint32_t noperspective_mask;  // fragment inputs using pass (linear) interpolation
+    bool uses_rscale;              // resolution-scale table (fragment/compute only)
+    uint32_t flat_mask;            // fragment inputs using constant (flat) interpolation
+    uint32_t noperspective_mask;   // fragment inputs using pass (linear) interpolation
     uint32_t omap_target, omap_depth;
-    int tex_slot[8192];           // texture index -> Metal slot + 1
-    bool tex_weak[64];            // slot type only guessed (from a size query): the next sample decides
+    int tex_slot[8192];   // texture index -> Metal slot + 1
+    bool tex_weak[64];    // slot type only guessed (from a size query): the next sample decides
     bool fail;
-    bool branchy;  // program uses the pc state machine
-    int ipa_mode;  // interpolation mode of the IPA being translated (-1 for plain loads)
-    int ipa_mul;   // its multiplier register (mode 1: the result is the "pass" value attr/w times this register)
-    bool uses_gmem_store;    // STG/ATOM/RED present: the gmem buffer is written
-    bool uses_smem, smem_dyn, atom_dev, atom_tg, uses_vattr_arr;   // shared memory in use / addressed through a register / atomics / vertex inputs read through a register
-    uint32_t smem_need;      // highest statically addressed shared byte + 1
-    uint32_t cbuf_need[18];  // highest constant vec4 index + 1 per cbuf
-    int reg_cb[256];         // register -> (cbuf << 24 | byte offset) it was last loaded from (-1 = unknown): resolves bindless (.B) texture handles
+    bool branchy;           // program uses the pc state machine
+    int ipa_mode;           // interpolation mode of the IPA being translated (-1 for plain loads)
+    int ipa_mul;            // its multiplier register (mode 1: the result is the "pass" value attr/w times this register)
+    bool uses_gmem_store;   // STG/ATOM/RED present: the gmem buffer is written
+    bool uses_smem, smem_dyn, atom_dev, atom_tg,
+        uses_vattr_arr;       // shared memory in use / addressed through a register / atomics / vertex inputs read through a register
+    uint32_t smem_need;       // highest statically addressed shared byte + 1
+    uint32_t cbuf_need[18];   // highest constant vec4 index + 1 per cbuf
+    int reg_cb[256];          // register -> (cbuf << 24 | byte offset) it was last loaded from (-1 = unknown): resolves bindless (.B) texture handles
     int bl_n, bl_cb[64], bl_off[64], bl_slot[64];   // bindless handles read from user uniform buffers (index 8192 + n in tex_slot)
 } Ctx;
 
@@ -103,7 +104,10 @@ static const char *reg(Ctx *c, int r, char *buf) {
 
 #define R(r) reg(c, (r), alloca(16))
 #define F(expr) fmt_f(alloca(512), (expr))
-static char *fmt_f(char *b, const char *e) { sprintf(b, "as_type<float>(%s)", e); return b; }
+static char *fmt_f(char *b, const char *e) {
+    sprintf(b, "as_type<float>(%s)", e);
+    return b;
+}
 
 static const char *pred(Ctx *c, int p, bool neg, char *buf) {
     if (p == PT) return neg ? "false" : "true";
@@ -135,15 +139,15 @@ static BForm b_form(uint64_t w) {
 
 static const char *operand_b(Ctx *c, uint64_t w, bool float_imm, char *buf) {
     switch (b_form(w)) {
-    case B_REG: return reg(c, (int)bits(w, 20, 8), buf);
-    case B_CBUF: return cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, buf);
-    default: {
-        uint32_t v = (uint32_t)bits(w, 20, 19) | ((uint32_t)bits(w, 56, 1) << 19);
-        if (float_imm) v <<= 12;
-        else if (v & 0x80000u) v |= 0xFFF00000u;  // sign-extend 20 bits
-        sprintf(buf, "0x%08xu", v);
-        return buf;
-    }
+        case B_REG: return reg(c, (int)bits(w, 20, 8), buf);
+        case B_CBUF: return cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, buf);
+        default: {
+            uint32_t v = (uint32_t)bits(w, 20, 19) | ((uint32_t)bits(w, 56, 1) << 19);
+            if (float_imm) v <<= 12;
+            else if (v & 0x80000u) v |= 0xFFF00000u;   // sign-extend 20 bits
+            sprintf(buf, "0x%08xu", v);
+            return buf;
+        }
     }
 }
 #define B(fi) operand_b(c, w, (fi), alloca(128))
@@ -151,7 +155,7 @@ static const char *operand_b(Ctx *c, uint64_t w, bool float_imm, char *buf) {
 // The "C" operand of three-source ops: REG_39, or the cbuf/reg swap form (0x51/0x53/... classes).
 static const char *operand_c_for_ffma(Ctx *c, uint64_t w, char *buf, const char **b_out, char *bbuf) {
     uint64_t op8 = w >> 56;
-    if ((op8 & 0xF8) == 0x50 && (op8 & 7) != 0) {  // e.g. 0x51: B = REG_39, C = cbuf
+    if ((op8 & 0xF8) == 0x50 && (op8 & 7) != 0) {   // e.g. 0x51: B = REG_39, C = cbuf
         *b_out = reg(c, (int)bits(w, 39, 8), bbuf);
         return cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, buf);
     }
@@ -183,22 +187,21 @@ static const char *fresult(const char *e, bool sat, char *buf) {
 #define FRES(e, sat) fresult((e), (sat), alloca(700))
 
 static const char *cmp_op(int op) {
-    static const char *const ops[] = {"false", "<", "==", "<=", ">", "!=", ">=", "num", "nan",
-                                      "<", "==", "<=", ">", "!=", ">=", "true"};
+    static const char *const ops[] = {"false", "<", "==", "<=", ">", "!=", ">=", "num", "nan", "<", "==", "<=", ">", "!=", ">=", "true"};
     return ops[op & 15];
 }
 
 // float comparison including unordered variants
 static void fcmp_expr(char *out, int op, const char *a, const char *b) {
     switch (op) {
-    case 0: strcpy(out, "false"); break;
-    case 15: strcpy(out, "true"); break;
-    case 7: sprintf(out, "(!isnan(%s) && !isnan(%s))", a, b); break;
-    case 8: sprintf(out, "(isnan(%s) || isnan(%s))", a, b); break;
-    case 5: sprintf(out, "((%s < %s) || (%s > %s))", a, b, a, b); break;    // ordered NE: false when either is NaN (MSL `!=` is true then)
-    default:
-        if (op < 7) sprintf(out, "(%s %s %s)", a, cmp_op(op), b);
-        else sprintf(out, "((%s %s %s) || isnan(%s) || isnan(%s))", a, cmp_op(op), b, a, b);
+        case 0: strcpy(out, "false"); break;
+        case 15: strcpy(out, "true"); break;
+        case 7: sprintf(out, "(!isnan(%s) && !isnan(%s))", a, b); break;
+        case 8: sprintf(out, "(isnan(%s) || isnan(%s))", a, b); break;
+        case 5: sprintf(out, "((%s < %s) || (%s > %s))", a, b, a, b); break;   // ordered NE: false when either is NaN (MSL `!=` is true then)
+        default:
+            if (op < 7) sprintf(out, "(%s %s %s)", a, cmp_op(op), b);
+            else sprintf(out, "((%s %s %s) || isnan(%s) || isnan(%s))", a, cmp_op(op), b, a, b);
     }
 }
 
@@ -228,13 +231,19 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
             set_reg(c, dst, e);
             return;
         }
-        if (c->stage != STAGE_FRAGMENT) { fail(c, "indexed attribute load outside the vertex and fragment stages"); return; }
-        c->in_attr_mask |= (c->key && c->key->vs_out_mask) ? c->key->vs_out_mask : 0xffffffffu; c->uses_attr_arr = true;      /* mask 0 = unknown: every varying */
+        if (c->stage != STAGE_FRAGMENT) {
+            fail(c, "indexed attribute load outside the vertex and fragment stages");
+            return;
+        }
+        c->in_attr_mask |= (c->key && c->key->vs_out_mask) ? c->key->vs_out_mask : 0xffffffffu;
+        c->uses_attr_arr = true; /* mask 0 = unknown: every varying */
         char el[200];
         sprintf(el, "attr_arr[min((%s - 0x80u) >> 2, 127u)]", idx);
         if (c->ipa_mode == 0) sprintf(e, "as_type<uint>(%s * in.pos.w)", el);
-        else if (c->ipa_mode == 1 && c->ipa_mul != RZ) { char mb[16]; sprintf(e, "as_type<uint>(%s * in.pos.w * as_type<float>(%s))", el, reg(c, c->ipa_mul, mb)); }
-        else sprintf(e, "as_type<uint>(%s)", el);
+        else if (c->ipa_mode == 1 && c->ipa_mul != RZ) {
+            char mb[16];
+            sprintf(e, "as_type<uint>(%s * in.pos.w * as_type<float>(%s))", el, reg(c, c->ipa_mul, mb));
+        } else sprintf(e, "as_type<uint>(%s)", el);
         set_reg(c, dst, e);
         return;
     }
@@ -246,14 +255,20 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
             int kind = c->key ? c->key->attr_kind[a] : 0;
             if (kind == 0) sprintf(e, "as_type<uint>(in.a%d[%d])", a, comp);
             else sprintf(e, "as_type<uint>(in.a%d[%d])", a, comp);
-        } else if (addr == 0x2F8) { c->uses_iid = true; strcpy(e, "iid"); }
-        else if (addr == 0x2FC) { c->uses_vid = true; strcpy(e, "vid"); }
-        else { sprintf(e, "0u /* attr %#x */", addr); }
+        } else if (addr == 0x2F8) {
+            c->uses_iid = true;
+            strcpy(e, "iid");
+        } else if (addr == 0x2FC) {
+            c->uses_vid = true;
+            strcpy(e, "vid");
+        } else {
+            sprintf(e, "0u /* attr %#x */", addr);
+        }
     } else if (c->stage == STAGE_FRAGMENT) {
         if (addr >= 0x70 && addr < 0x80) {
             c->uses_frag_coord = true;
             int comp = (addr >> 2) & 3;
-            if (comp < 2) {  // guest pixel units: the render target may be allocated larger
+            if (comp < 2) {   // guest pixel units: the render target may be allocated larger
                 c->uses_rscale = true;
                 sprintf(e, "as_type<uint>((in.pos[%d] - rscale[0][%d]) / rscale[0][%d])", comp, comp + 2, comp);
             } else {
@@ -261,11 +276,11 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
             }
         } else if (addr >= 0x80 && addr < 0x280) {
             int a = (addr - 0x80) >> 4, comp = (addr >> 2) & 3;
-            c->info->attr_read_mask |= 1u << a;      /* read whether or not the vertex shader provides it (pipeline key normalisation, mtl_shader.m) */
+            c->info->attr_read_mask |= 1u << a; /* read whether or not the vertex shader provides it (pipeline key normalisation, mtl_shader.m) */
             // (MSL: a mask of 0 means unknown. GLSL: the renderer always passes the vertex shader's outputs, and
             // Vulkan requires every fragment input to be a vertex output, so 0 means none.)
             if (c->key && c->key->vs_out_mask && !(c->key->vs_out_mask & (1u << a))) {
-                strcpy(e, comp == 3 ? "0x3f800000u" : "0u");  // not provided by the vertex shader
+                strcpy(e, comp == 3 ? "0x3f800000u" : "0u");   // not provided by the vertex shader
             } else {
                 c->in_attr_mask |= 1u << a;
                 // IPA "pass" yields attr/w (the shader multiplies by w itself); Metal gives attr. "multiply" is the
@@ -277,9 +292,15 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
                     sprintf(e, "as_type<uint>(in.v%d[%d] * in.pos.w * as_type<float>(%s))", a, comp, reg(c, c->ipa_mul, mb));
                 } else sprintf(e, "as_type<uint>(in.v%d[%d])", a, comp);
             }
-        } else if (addr == 0x3FC) { c->uses_front_facing = true; strcpy(e, "(front_facing ? 0xFFFFFFFFu : 0u)"); }
-        else if (addr == 0x2E0 || addr == 0x2E4) { c->uses_point_coord = true; sprintf(e, "as_type<uint>(point_coord[%d])", (addr >> 2) & 1); }
-        else { sprintf(e, "0u /* attr %#x */", addr); }
+        } else if (addr == 0x3FC) {
+            c->uses_front_facing = true;
+            strcpy(e, "(front_facing ? 0xFFFFFFFFu : 0u)");
+        } else if (addr == 0x2E0 || addr == 0x2E4) {
+            c->uses_point_coord = true;
+            sprintf(e, "as_type<uint>(point_coord[%d])", (addr >> 2) & 1);
+        } else {
+            sprintf(e, "0u /* attr %#x */", addr);
+        }
     } else {
         sprintf(e, "0u /* attr %#x */", addr);
     }
@@ -296,7 +317,7 @@ static void attr_store(Ctx *c, int src, uint32_t addr) {
         c->out_attr_mask |= 1u << a;
         sp(&c->body, "    out.v%d[%d] = as_type<float>(%s);\n", a, (addr >> 2) & 3, v);
     } else if (addr == 0x6C) {
-        if (c->key && c->key->point_prim) {      // Metal rejects [[point_size]] in pipelines whose topology class is not point
+        if (c->key && c->key->point_prim) {   // Metal rejects [[point_size]] in pipelines whose topology class is not point
             c->info->writes_point_size = true;
             sp(&c->body, "    out.psize = as_type<float>(%s);\n", v);
         }
@@ -323,7 +344,8 @@ static const char *hsrc(Ctx *c, const char *v, int swz, bool neg, bool abs_, cha
 
 static void hstore(Ctx *c, int d, const char *expr, int merge, bool sat) {
     char t[2048], e[1700];
-    if (sat) sprintf(e, "saturate(%s)", expr); else strcpy(e, expr);
+    if (sat) sprintf(e, "saturate(%s)", expr);
+    else strcpy(e, expr);
     if (d == RZ) return;
     c->reg_used[d] = 1;
     sprintf(t, "hpack(%s, %du, r%d)", e, merge, d);
@@ -342,37 +364,71 @@ static bool emit_half(Ctx *c, uint64_t w) {
     char t[1800], ib[32], cb[256];
     uint16_t op = (uint16_t)(w >> 48);
     // ---- HADD2 / HMUL2 (reg 5d10/5d08, cbuf 7a8x/788x, imm 7a0x/780x, 32I 2c/2a)
-    int kind = -1;  // 0 add, 1 mul
-    int form = -1;  // 0 reg, 1 cbuf, 2 imm, 3 32i
-    if ((op & 0xfff8) == 0x5d10) { kind = 0; form = 0; }
-    else if ((op & 0xfff8) == 0x5d08) { kind = 1; form = 0; }
-    else if ((op & 0xfe80) == 0x7a80) { kind = 0; form = 1; }
-    else if ((op & 0xfe80) == 0x7a00) { kind = 0; form = 2; }
-    else if ((op & 0xfe80) == 0x7880) { kind = 1; form = 1; }
-    else if ((op & 0xfe80) == 0x7800) { kind = 1; form = 2; }
-    else if ((op & 0xfe00) == 0x2c00) { kind = 0; form = 3; }
-    else if ((op & 0xfe00) == 0x2a00) { kind = 1; form = 3; }
+    int kind = -1;   // 0 add, 1 mul
+    int form = -1;   // 0 reg, 1 cbuf, 2 imm, 3 32i
+    if ((op & 0xfff8) == 0x5d10) {
+        kind = 0;
+        form = 0;
+    } else if ((op & 0xfff8) == 0x5d08) {
+        kind = 1;
+        form = 0;
+    } else if ((op & 0xfe80) == 0x7a80) {
+        kind = 0;
+        form = 1;
+    } else if ((op & 0xfe80) == 0x7a00) {
+        kind = 0;
+        form = 2;
+    } else if ((op & 0xfe80) == 0x7880) {
+        kind = 1;
+        form = 1;
+    } else if ((op & 0xfe80) == 0x7800) {
+        kind = 1;
+        form = 2;
+    } else if ((op & 0xfe00) == 0x2c00) {
+        kind = 0;
+        form = 3;
+    } else if ((op & 0xfe00) == 0x2a00) {
+        kind = 1;
+        form = 3;
+    }
     if (kind >= 0) {
         int merge, swa, swb = 0;
         bool sat, nega, absa = false, negb = false, absb = false;
         const char *bv;
         if (form == 3) {
-            merge = 0; sat = bits(w, 52, 1); swa = (int)bits(w, 53, 2); nega = kind == 0 ? bits(w, 56, 1) : false;
-            sprintf(ib, "0x%08xu", (uint32_t)bits(w, 20, 32)); bv = ib;
+            merge = 0;
+            sat = bits(w, 52, 1);
+            swa = (int)bits(w, 53, 2);
+            nega = kind == 0 ? bits(w, 56, 1) : false;
+            sprintf(ib, "0x%08xu", (uint32_t)bits(w, 20, 32));
+            bv = ib;
         } else {
             // field layout per Ryujinx's InstDecoders (InstHadd2*/InstHmul2*)
-            merge = (int)bits(w, 49, 2); swa = (int)bits(w, 47, 2); nega = bits(w, 43, 1); absa = bits(w, 44, 1);
+            merge = (int)bits(w, 49, 2);
+            swa = (int)bits(w, 47, 2);
+            nega = bits(w, 43, 1);
+            absa = bits(w, 44, 1);
             if (form == 0) {
-                sat = bits(w, 32, 1); absb = bits(w, 30, 1); swb = (int)bits(w, 28, 2);
+                sat = bits(w, 32, 1);
+                absb = bits(w, 30, 1);
+                swb = (int)bits(w, 28, 2);
                 if (kind == 0) negb = bits(w, 31, 1);
-                else { nega = bits(w, 31, 1); negb = false; }  // HMUL2 reg: the negate bit is A's at 31
+                else {
+                    nega = bits(w, 31, 1);
+                    negb = false;
+                }   // HMUL2 reg: the negate bit is A's at 31
                 bv = R((int)bits(w, 20, 8));
             } else if (form == 1) {
-                sat = bits(w, 52, 1); negb = kind == 0 ? bits(w, 56, 1) : false; absb = bits(w, 54, 1); swb = 1;
+                sat = bits(w, 52, 1);
+                negb = kind == 0 ? bits(w, 56, 1) : false;
+                absb = bits(w, 54, 1);
+                swb = 1;
                 bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
             } else {
-                sat = bits(w, 52, 1); swb = 0;
-                sprintf(ib, "0x%08xu", himm(w)); bv = ib;
+                sat = bits(w, 52, 1);
+                swb = 0;
+                sprintf(ib, "0x%08xu", himm(w));
+                bv = ib;
             }
         }
         sprintf(t, kind == 0 ? "(%s + %s)" : "(%s * %s)", HS(R(a), swa, nega, absa), HS(bv, swb, negb, absb));
@@ -382,41 +438,69 @@ static bool emit_half(Ctx *c, uint64_t w) {
     // ---- HFMA2 (reg 5d00, cr 70xx|0x80, rc 60xx|0x80, imm 70xx, 32I 28)
     form = -1;
     if ((op & 0xfff8) == 0x5d00) form = 0;
-    else if ((op & 0xf880) == 0x7080) form = 1;  // b = cbuf, c = reg
-    else if ((op & 0xf880) == 0x6080) form = 2;  // b = reg, c = cbuf
-    else if ((op & 0xf880) == 0x7000) form = 3;  // b = imm, c = reg
-    else if ((op & 0xfe00) == 0x2800) form = 4;  // 32I: c = d
+    else if ((op & 0xf880) == 0x7080) form = 1;   // b = cbuf, c = reg
+    else if ((op & 0xf880) == 0x6080) form = 2;   // b = reg, c = cbuf
+    else if ((op & 0xf880) == 0x7000) form = 3;   // b = imm, c = reg
+    else if ((op & 0xfe00) == 0x2800) form = 4;   // 32I: c = d
     if (form >= 0) {
         int merge, swa = (int)bits(w, 47, 2), swb = 0, swc = 0;
         bool sat, negb, negc;
         const char *bv, *cv;
         char cb2[256];
-        switch (form) {  // field layout per Ryujinx's InstDecoders (InstHfma2*); NegA is applied to B (same product)
-        case 0:
-            merge = (int)bits(w, 49, 2); sat = bits(w, 32, 1); negb = bits(w, 31, 1); negc = bits(w, 30, 1);
-            swb = (int)bits(w, 28, 2); swc = (int)bits(w, 35, 2);
-            bv = R((int)bits(w, 20, 8)); cv = R((int)bits(w, 39, 8));
-            break;
-        case 1:  // b = cbuf, c = reg
-            merge = (int)bits(w, 49, 2); sat = bits(w, 52, 1); negb = bits(w, 56, 1); negc = bits(w, 51, 1);
-            swb = 1; swc = (int)bits(w, 53, 2);
-            bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb); cv = R((int)bits(w, 39, 8));
-            break;
-        case 2:  // b = reg (field at 39), c = cbuf
-            merge = (int)bits(w, 49, 2); sat = bits(w, 52, 1); negb = bits(w, 56, 1); negc = bits(w, 51, 1);
-            swb = (int)bits(w, 53, 2); swc = 1;
-            bv = R((int)bits(w, 39, 8)); cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb2);
-            break;
-        case 3:  // b = imm, c = reg
-            merge = (int)bits(w, 49, 2); sat = bits(w, 52, 1); negb = false; negc = bits(w, 51, 1);
-            swb = 0; swc = (int)bits(w, 53, 2);
-            sprintf(ib, "0x%08xu", himm(w)); bv = ib; cv = R((int)bits(w, 39, 8));
-            break;
-        default:  // 32I: c = d
-            merge = 0; sat = false; negb = false; negc = bits(w, 51, 1);
-            swa = (int)bits(w, 47, 2); swb = 0; swc = 0;
-            sprintf(ib, "0x%08xu", (uint32_t)bits(w, 20, 32)); bv = ib; cv = R(d);
-            break;
+        switch (form) {   // field layout per Ryujinx's InstDecoders (InstHfma2*); NegA is applied to B (same product)
+            case 0:
+                merge = (int)bits(w, 49, 2);
+                sat = bits(w, 32, 1);
+                negb = bits(w, 31, 1);
+                negc = bits(w, 30, 1);
+                swb = (int)bits(w, 28, 2);
+                swc = (int)bits(w, 35, 2);
+                bv = R((int)bits(w, 20, 8));
+                cv = R((int)bits(w, 39, 8));
+                break;
+            case 1:   // b = cbuf, c = reg
+                merge = (int)bits(w, 49, 2);
+                sat = bits(w, 52, 1);
+                negb = bits(w, 56, 1);
+                negc = bits(w, 51, 1);
+                swb = 1;
+                swc = (int)bits(w, 53, 2);
+                bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+                cv = R((int)bits(w, 39, 8));
+                break;
+            case 2:   // b = reg (field at 39), c = cbuf
+                merge = (int)bits(w, 49, 2);
+                sat = bits(w, 52, 1);
+                negb = bits(w, 56, 1);
+                negc = bits(w, 51, 1);
+                swb = (int)bits(w, 53, 2);
+                swc = 1;
+                bv = R((int)bits(w, 39, 8));
+                cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb2);
+                break;
+            case 3:   // b = imm, c = reg
+                merge = (int)bits(w, 49, 2);
+                sat = bits(w, 52, 1);
+                negb = false;
+                negc = bits(w, 51, 1);
+                swb = 0;
+                swc = (int)bits(w, 53, 2);
+                sprintf(ib, "0x%08xu", himm(w));
+                bv = ib;
+                cv = R((int)bits(w, 39, 8));
+                break;
+            default:   // 32I: c = d
+                merge = 0;
+                sat = false;
+                negb = false;
+                negc = bits(w, 51, 1);
+                swa = (int)bits(w, 47, 2);
+                swb = 0;
+                swc = 0;
+                sprintf(ib, "0x%08xu", (uint32_t)bits(w, 20, 32));
+                bv = ib;
+                cv = R(d);
+                break;
         }
         sprintf(t, "fma(%s, %s, %s)", HS(R(a), swa, false, false), HS(bv, swb, negb, false), HS(cv, swc, negc, false));
         hstore(c, d, t, merge, sat);
@@ -425,22 +509,42 @@ static bool emit_half(Ctx *c, uint64_t w) {
     // ---- HSETP2 / HSET2 (reg forms)
     // forms: reg (5d20 / 5d18), immediate (7e00 / 7c00), constant buffer (7e80 / 7c80); the immediate and cbuf forms move cond to bit 49 and the
     // AND-both / BF flag to bit 53, negate/abs of B to bits 56/54 (layout checked against the LAS bezel_pbr shaders: cond LE, B = 1.0 in both halves)
-    int hform = -1; bool setp;
-    if ((op & 0xfff8) == 0x5d20) { hform = 0; setp = true; }
-    else if ((op & 0xfff8) == 0x5d18) { hform = 0; setp = false; }
-    else if ((op & 0xff80) == 0x7e00) { hform = 1; setp = true; }
-    else if ((op & 0xff80) == 0x7c00) { hform = 1; setp = false; }
-    else if ((op & 0xff80) == 0x7e80) { hform = 2; setp = true; }
-    else if ((op & 0xff80) == 0x7c80) { hform = 2; setp = false; }
+    int hform = -1;
+    bool setp;
+    if ((op & 0xfff8) == 0x5d20) {
+        hform = 0;
+        setp = true;
+    } else if ((op & 0xfff8) == 0x5d18) {
+        hform = 0;
+        setp = false;
+    } else if ((op & 0xff80) == 0x7e00) {
+        hform = 1;
+        setp = true;
+    } else if ((op & 0xff80) == 0x7c00) {
+        hform = 1;
+        setp = false;
+    } else if ((op & 0xff80) == 0x7e80) {
+        hform = 2;
+        setp = true;
+    } else if ((op & 0xff80) == 0x7c80) {
+        hform = 2;
+        setp = false;
+    }
     if (hform >= 0) {
         const char *x = HS(R(a), (int)bits(w, 47, 2), bits(w, 43, 1), bits(w, 44, 1));
         const char *y;
         int cop, hand_bit;
-        if (hform == 0) { y = HS(R((int)bits(w, 20, 8)), (int)bits(w, 28, 2), bits(w, 31, 1), bits(w, 30, 1)); cop = (int)bits(w, 35, 4); hand_bit = 49; }
-        else {
-            cop = (int)bits(w, 49, 4); hand_bit = 53;
-            if (hform == 1) { sprintf(ib, "0x%08xu", himm(w)); y = HS(ib, 0, bits(w, 56, 1), bits(w, 54, 1)); }
-            else y = HS(cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb), 1, bits(w, 56, 1), bits(w, 54, 1));
+        if (hform == 0) {
+            y = HS(R((int)bits(w, 20, 8)), (int)bits(w, 28, 2), bits(w, 31, 1), bits(w, 30, 1));
+            cop = (int)bits(w, 35, 4);
+            hand_bit = 49;
+        } else {
+            cop = (int)bits(w, 49, 4);
+            hand_bit = 53;
+            if (hform == 1) {
+                sprintf(ib, "0x%08xu", himm(w));
+                y = HS(ib, 0, bits(w, 56, 1), bits(w, 54, 1));
+            } else y = HS(cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb), 1, bits(w, 56, 1), bits(w, 54, 1));
         }
         int bop = (int)bits(w, 45, 2);
         const char *pp = P((int)bits(w, 39, 3), bits(w, 42, 1));
@@ -453,15 +557,21 @@ static bool emit_half(Ctx *c, uint64_t w) {
             int pa = (int)bits(w, 3, 3), pb = (int)bits(w, 0, 3);
             bool hand = bits(w, hand_bit, 1);
             if (hand) sp(&c->body, "      l = l && h; h = !l;\n");
-            if (pa != PT) { c->pred_used[pa] = 1; sp(&c->body, "      p%d = l %s pp;\n", pa, bool_op(bop)); }
-            if (pb != PT) { c->pred_used[pb] = 1; sp(&c->body, "      p%d = h %s pp;\n", pb, bool_op(bop)); }
+            if (pa != PT) {
+                c->pred_used[pa] = 1;
+                sp(&c->body, "      p%d = l %s pp;\n", pa, bool_op(bop));
+            }
+            if (pb != PT) {
+                c->pred_used[pb] = 1;
+                sp(&c->body, "      p%d = h %s pp;\n", pb, bool_op(bop));
+            }
         } else {
             bool bf = bits(w, hand_bit, 1);
             if (d != RZ) {
                 c->reg_used[d] = 1;
                 sp(&c->body, "      l = l %s pp; h = h %s pp;\n", bool_op(bop), bool_op(bop));
-                sp(&c->body, bf ? "      r%d = (l ? 0x3c00u : 0u) | (h ? 0x3c000000u : 0u);\n"
-                                : "      r%d = (l ? 0xFFFFu : 0u) | (h ? 0xFFFF0000u : 0u);\n", d);
+                sp(&c->body, bf ? "      r%d = (l ? 0x3c00u : 0u) | (h ? 0x3c000000u : 0u);\n" : "      r%d = (l ? 0xFFFFu : 0u) | (h ? 0xFFFF0000u : 0u);\n",
+                   d);
             }
         }
         sp(&c->body, "    }\n");
@@ -475,23 +585,46 @@ static bool emit_half(Ctx *c, uint64_t w) {
 // the ordinary slot, user-buffer handles get a pseudo index (8192 + n) and are resolved from the bound buffer's contents at draw time.
 static uint32_t bindless_index(Ctx *c, int cb, int off) {
     if (cb == 2) return (uint32_t)off / 4;
-    for (int i = 0; i < c->bl_n; i++) if (c->bl_cb[i] == cb && c->bl_off[i] == off) return 8192u + (uint32_t)i;
-    if (c->bl_n >= 64) { fail(c, "too many bindless texture handles"); return 8192u; }
-    c->bl_cb[c->bl_n] = cb; c->bl_off[c->bl_n] = off;
+    for (int i = 0; i < c->bl_n; i++)
+        if (c->bl_cb[i] == cb && c->bl_off[i] == off) return 8192u + (uint32_t)i;
+    if (c->bl_n >= 64) {
+        fail(c, "too many bindless texture handles");
+        return 8192u;
+    }
+    c->bl_cb[c->bl_n] = cb;
+    c->bl_off[c->bl_n] = off;
     return 8192u + (uint32_t)c->bl_n++;
 }
 static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
     if (index >= 8192) {
         int n = (int)(index - 8192);
         if (n >= c->bl_n) return 0;
-        if (c->bl_slot[n]) { int s = c->bl_slot[n] - 1; if (type >= 0 && c->tex_weak[s]) { ShaderTexture *t = &c->info->tex[s]; t->type = (uint8_t)type; t->shadow = shadow; t->is_array = array; c->tex_weak[s] = false; } return s; }
+        if (c->bl_slot[n]) {
+            int s = c->bl_slot[n] - 1;
+            if (type >= 0 && c->tex_weak[s]) {
+                ShaderTexture *t = &c->info->tex[s];
+                t->type = (uint8_t)type;
+                t->shadow = shadow;
+                t->is_array = array;
+                c->tex_weak[s] = false;
+            }
+            return s;
+        }
         bool weak = type < 0;
         int s = c->info->ntex++;
-        if (s >= 63) { fail(c, "too many textures"); return 0; }
-        c->bl_slot[n] = s + 1; c->tex_weak[s] = weak;
+        if (s >= 63) {
+            fail(c, "too many textures");
+            return 0;
+        }
+        c->bl_slot[n] = s + 1;
+        c->tex_weak[s] = weak;
         ShaderTexture *t = &c->info->tex[s];
-        t->bindless = true; t->bindless_cbuf = (uint32_t)c->bl_cb[n]; t->bindless_offset = (uint32_t)c->bl_off[n];
-        t->type = (uint8_t)(weak ? TEXTYPE_2D : type); t->shadow = shadow; t->is_array = array;
+        t->bindless = true;
+        t->bindless_cbuf = (uint32_t)c->bl_cb[n];
+        t->bindless_offset = (uint32_t)c->bl_off[n];
+        t->type = (uint8_t)(weak ? TEXTYPE_2D : type);
+        t->shadow = shadow;
+        t->is_array = array;
         return s;
     }
     if (c->tex_slot[index]) {
@@ -508,7 +641,10 @@ static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
     bool weak = type < 0;
     if (weak) type = TEXTYPE_2D;
     int s = c->info->ntex++;
-    if (s >= 63) { fail(c, "too many textures"); return 0; }
+    if (s >= 63) {
+        fail(c, "too many textures");
+        return 0;
+    }
     c->tex_slot[index] = s + 1;
     c->tex_weak[s] = weak;
     ShaderTexture *t = &c->info->tex[s];
@@ -522,13 +658,13 @@ static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
 
 static const char *tex_type_name(int t) {
     switch (t) {
-    case TEXTYPE_1D: return "1d";
-    case TEXTYPE_3D: return "3d";
-    case TEXTYPE_CUBE: return "cube";
-    case TEXTYPE_2D_ARRAY: return "2d_array";
-    case TEXTYPE_CUBE_ARRAY: return "cube_array";
-    case TEXTYPE_1D_ARRAY: return "1d_array";
-    default: return "2d";
+        case TEXTYPE_1D: return "1d";
+        case TEXTYPE_3D: return "3d";
+        case TEXTYPE_CUBE: return "cube";
+        case TEXTYPE_2D_ARRAY: return "2d_array";
+        case TEXTYPE_CUBE_ARRAY: return "cube_array";
+        case TEXTYPE_1D_ARRAY: return "1d_array";
+        default: return "2d";
     }
 }
 
@@ -536,17 +672,26 @@ static const char *tex_type_name(int t) {
 static void write_tex_result(Ctx *c, int slot, const char *call, uint32_t mask, int d0, int d1, bool texs, bool f16) {
     if (c->info->tex[slot].depth && !c->info->tex[slot].shadow && !strstr(call, ".gather("))
         sp(&c->body, "    { float4 t = float4(%s, 0.0f, 0.0f, 1.0f);\n", call);   // a depth texture sampled as colour: (d, 0, 0, 1)
-    else
-        sp(&c->body, "    { float4 t = %s;\n", call);
+    else sp(&c->body, "    { float4 t = %s;\n", call);
     if (f16) {
         // TEXS/TLDS .F16: components (in mask order) packed as half pairs into d0 (lo, hi) and d1 (lo, hi)
         int comps[4], n = 0;
-        for (int comp = 0; comp < 4; comp++) if (mask & (1u << comp)) comps[n++] = comp;
+        for (int comp = 0; comp < 4; comp++)
+            if (mask & (1u << comp)) comps[n++] = comp;
         char v[4][16];
-        for (int i = 0; i < 4; i++) { if (i < n) sprintf(v[i], "t[%d]", comps[i]); else strcpy(v[i], "0.0f"); }
+        for (int i = 0; i < 4; i++) {
+            if (i < n) sprintf(v[i], "t[%d]", comps[i]);
+            else strcpy(v[i], "0.0f");
+        }
         const char *pk = "      r%d = as_type<uint>(half2(half(%s), half(%s)));\n";
-        if (d0 != RZ) { c->reg_used[d0] = 1; sp(&c->body, pk, d0, v[0], v[1]); }
-        if (d1 != RZ) { c->reg_used[d1] = 1; sp(&c->body, pk, d1, v[2], v[3]); }
+        if (d0 != RZ) {
+            c->reg_used[d0] = 1;
+            sp(&c->body, pk, d0, v[0], v[1]);
+        }
+        if (d1 != RZ) {
+            c->reg_used[d1] = 1;
+            sp(&c->body, pk, d1, v[2], v[3]);
+        }
         sp(&c->body, "    }\n");
         return;
     }
@@ -561,7 +706,10 @@ static void write_tex_result(Ctx *c, int slot, const char *call, uint32_t mask, 
     for (int comp = 0; comp < 4; comp++) {
         if (!(mask & (1u << comp))) continue;
         int r = regs[n++];
-        if (r != RZ) { c->reg_used[r] = 1; sp(&c->body, "      r%d = as_type<uint>(t[%d]);\n", r, comp); }
+        if (r != RZ) {
+            c->reg_used[r] = 1;
+            sp(&c->body, "      r%d = as_type<uint>(t[%d]);\n", r, comp);
+        }
     }
     sp(&c->body, "    }\n");
 }
@@ -576,7 +724,10 @@ static const char *RSC2(Ctx *c, int slot, const char *fmt, ...) {
     va_start(ap, fmt);
     vsnprintf(inner, sizeof inner, fmt, ap);
     va_end(ap);
-    if (c->stage == STAGE_VERTEX) { snprintf(o, 1024, "%s", inner); return o; }
+    if (c->stage == STAGE_VERTEX) {
+        snprintf(o, 1024, "%s", inner);
+        return o;
+    }
     c->uses_rscale = true;
     snprintf(o, 1024, "rsc(%s, rscale[%d])", inner, slot + 1);
     return o;
@@ -584,6 +735,7 @@ static const char *RSC2(Ctx *c, int slot, const char *fmt, ...) {
 
 // TEXS / TLDS: texture_info selects target and coordinate layout
 static const char *alayer(Ctx *c, const char *r, int slot, char *buf) {
+    (void)c;
     sprintf(buf, "min(%s, t%d.get_array_size() - 1u)", r, slot);
     return buf;
 }
@@ -605,91 +757,146 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
         mask = m4[msel];
     }
     char ra[16], ra1[16], rb[16], rb1[16];
-    const char *A = reg(c, a, ra), *A1 = reg(c, a == RZ ? RZ : a + 1, ra1), *Bv = reg(c, b, rb),
-               *B1 = reg(c, b == RZ ? RZ : b + 1, rb1);
+    const char *A = reg(c, a, ra), *A1 = reg(c, a == RZ ? RZ : a + 1, ra1), *Bv = reg(c, b, rb), *B1 = reg(c, b == RZ ? RZ : b + 1, rb1);
     char call[1024];
     int slot;
     if (!fetch) {
         switch (info) {
-        case 0: slot = tex_slot(c, index, TEXTYPE_1D, false, false);
-            sprintf(call, "t%d.sample(s%d, %s)", slot, slot, F(A)); break;
-        case 1: slot = tex_slot(c, index, TEXTYPE_2D, false, false);
-            sprintf(call, "t%d.sample(s%d, float2(%s, %s))", slot, slot, F(A), F(Bv)); break;
-        case 2: slot = tex_slot(c, index, TEXTYPE_2D, false, false);
-            sprintf(call, "t%d.sample(s%d, float2(%s, %s), level(0))", slot, slot, F(A), F(Bv)); break;
-        case 3: slot = tex_slot(c, index, TEXTYPE_2D, false, false);
-            sprintf(call, "t%d.sample(s%d, float2(%s, %s), level(%s))", slot, slot, F(A), F(A1), F(Bv)); break;
-        case 4: slot = tex_slot(c, index, TEXTYPE_2D, true, false);
-            sprintf(call, "float4(t%d.sample_compare(s%d, float2(%s, %s), %s))", slot, slot, F(A), F(A1), F(Bv)); break;
-        case 5: slot = tex_slot(c, index, TEXTYPE_2D, true, false);
-            sprintf(call, "float4(t%d.sample_compare(s%d, float2(%s, %s), %s, level(%s)))", slot, slot, F(A), F(A1), F(B1), F(Bv)); break;
-        case 6: slot = tex_slot(c, index, TEXTYPE_2D, true, false);
-            sprintf(call, "float4(t%d.sample_compare(s%d, float2(%s, %s), %s, level(0)))", slot, slot, F(A), F(A1), F(Bv)); break;
-        case 7: slot = tex_slot(c, index, TEXTYPE_2D_ARRAY, false, true);
-            sprintf(call, "t%d.sample(s%d, float2(%s, %s), %s)", slot, slot, F(A1), F(Bv), ALAYER(A, slot)); break;
-        case 8: slot = tex_slot(c, index, TEXTYPE_2D_ARRAY, false, true);
-            sprintf(call, "t%d.sample(s%d, float2(%s, %s), %s, level(0))", slot, slot, F(A1), F(Bv), ALAYER(A, slot)); break;
-        case 9: slot = tex_slot(c, index, TEXTYPE_2D_ARRAY, true, true);
-            sprintf(call, "float4(t%d.sample_compare(s%d, float2(%s, %s), %s, %s, level(0)))", slot, slot, F(A1), F(Bv), A, F(B1)); break;
-        case 10: slot = tex_slot(c, index, TEXTYPE_3D, false, false);
-            sprintf(call, "t%d.sample(s%d, float3(%s, %s, %s))", slot, slot, F(A), F(A1), F(Bv)); break;
-        case 11: slot = tex_slot(c, index, TEXTYPE_3D, false, false);
-            sprintf(call, "t%d.sample(s%d, float3(%s, %s, %s), level(0))", slot, slot, F(A), F(A1), F(Bv)); break;
-        case 12: slot = tex_slot(c, index, TEXTYPE_CUBE, false, false);
-            sprintf(call, "t%d.sample(s%d, float3(%s, %s, %s))", slot, slot, F(A), F(A1), F(Bv)); break;
-        case 13: slot = tex_slot(c, index, TEXTYPE_CUBE, false, false);
-            sprintf(call, "t%d.sample(s%d, float3(%s, %s, %s), level(%s))", slot, slot, F(A), F(A1), F(Bv), F(B1)); break;
-        default: fail(c, "texs info %d", info); return;
+            case 0:
+                slot = tex_slot(c, index, TEXTYPE_1D, false, false);
+                sprintf(call, "t%d.sample(s%d, %s)", slot, slot, F(A));
+                break;
+            case 1:
+                slot = tex_slot(c, index, TEXTYPE_2D, false, false);
+                sprintf(call, "t%d.sample(s%d, float2(%s, %s))", slot, slot, F(A), F(Bv));
+                break;
+            case 2:
+                slot = tex_slot(c, index, TEXTYPE_2D, false, false);
+                sprintf(call, "t%d.sample(s%d, float2(%s, %s), level(0))", slot, slot, F(A), F(Bv));
+                break;
+            case 3:
+                slot = tex_slot(c, index, TEXTYPE_2D, false, false);
+                sprintf(call, "t%d.sample(s%d, float2(%s, %s), level(%s))", slot, slot, F(A), F(A1), F(Bv));
+                break;
+            case 4:
+                slot = tex_slot(c, index, TEXTYPE_2D, true, false);
+                sprintf(call, "float4(t%d.sample_compare(s%d, float2(%s, %s), %s))", slot, slot, F(A), F(A1), F(Bv));
+                break;
+            case 5:
+                slot = tex_slot(c, index, TEXTYPE_2D, true, false);
+                sprintf(call, "float4(t%d.sample_compare(s%d, float2(%s, %s), %s, level(%s)))", slot, slot, F(A), F(A1), F(B1), F(Bv));
+                break;
+            case 6:
+                slot = tex_slot(c, index, TEXTYPE_2D, true, false);
+                sprintf(call, "float4(t%d.sample_compare(s%d, float2(%s, %s), %s, level(0)))", slot, slot, F(A), F(A1), F(Bv));
+                break;
+            case 7:
+                slot = tex_slot(c, index, TEXTYPE_2D_ARRAY, false, true);
+                sprintf(call, "t%d.sample(s%d, float2(%s, %s), %s)", slot, slot, F(A1), F(Bv), ALAYER(A, slot));
+                break;
+            case 8:
+                slot = tex_slot(c, index, TEXTYPE_2D_ARRAY, false, true);
+                sprintf(call, "t%d.sample(s%d, float2(%s, %s), %s, level(0))", slot, slot, F(A1), F(Bv), ALAYER(A, slot));
+                break;
+            case 9:
+                slot = tex_slot(c, index, TEXTYPE_2D_ARRAY, true, true);
+                sprintf(call, "float4(t%d.sample_compare(s%d, float2(%s, %s), %s, %s, level(0)))", slot, slot, F(A1), F(Bv), A, F(B1));
+                break;
+            case 10:
+                slot = tex_slot(c, index, TEXTYPE_3D, false, false);
+                sprintf(call, "t%d.sample(s%d, float3(%s, %s, %s))", slot, slot, F(A), F(A1), F(Bv));
+                break;
+            case 11:
+                slot = tex_slot(c, index, TEXTYPE_3D, false, false);
+                sprintf(call, "t%d.sample(s%d, float3(%s, %s, %s), level(0))", slot, slot, F(A), F(A1), F(Bv));
+                break;
+            case 12:
+                slot = tex_slot(c, index, TEXTYPE_CUBE, false, false);
+                sprintf(call, "t%d.sample(s%d, float3(%s, %s, %s))", slot, slot, F(A), F(A1), F(Bv));
+                break;
+            case 13:
+                slot = tex_slot(c, index, TEXTYPE_CUBE, false, false);
+                sprintf(call, "t%d.sample(s%d, float3(%s, %s, %s), level(%s))", slot, slot, F(A), F(A1), F(Bv), F(B1));
+                break;
+            default: fail(c, "texs info %d", info); return;
         }
     } else {
         switch (info) {
-        case 0: slot = tex_slot(c, index, TEXTYPE_1D, false, false);
-            sprintf(call, "t%d.read(uint(%s))", slot, A); break;
-        case 1: slot = tex_slot(c, index, TEXTYPE_1D, false, false);
-            sprintf(call, "t%d.read(uint(%s), uint(%s))", slot, A, Bv); break;
-        case 2: slot = tex_slot(c, index, TEXTYPE_2D, false, false);
-            sprintf(call, "t%d.read(%s)", slot, RSC2(c, slot, "uint2(%s, %s)", A, Bv)); break;
-        case 4: slot = tex_slot(c, index, TEXTYPE_2D, false, false);
-            sprintf(call, "t%d.read(%s)", slot, RSC2(c, slot, "uint2(int2(%s, %s) + int2(int(%s << 28) >> 28, int(%s << 24) >> 28))", A, A1, Bv, Bv)); break;
-        case 5: slot = tex_slot(c, index, TEXTYPE_2D, false, false);
-            sprintf(call, "t%d.read(%s, uint(%s))", slot, RSC2(c, slot, "uint2(%s, %s)", A, A1), Bv); break;
-        case 7: slot = tex_slot(c, index, TEXTYPE_3D, false, false);
-            sprintf(call, "t%d.read(uint3(%s, %s, %s))", slot, A, A1, Bv); break;
-        case 8: slot = tex_slot(c, index, TEXTYPE_2D_ARRAY, false, true);
-            sprintf(call, "t%d.read(%s, uint(%s))", slot, RSC2(c, slot, "uint2(%s, %s)", A1, Bv), A); break;
-        case 12: slot = tex_slot(c, index, TEXTYPE_2D, false, false);
-            sprintf(call, "t%d.read(%s, uint(%s))", slot, RSC2(c, slot, "uint2(int2(%s, %s) + int2(int(%s << 28) >> 28, int(%s << 24) >> 28))", A, A1, B1, B1), Bv); break;
-        default: fail(c, "tlds info %d", info); return;
+            case 0:
+                slot = tex_slot(c, index, TEXTYPE_1D, false, false);
+                sprintf(call, "t%d.read(uint(%s))", slot, A);
+                break;
+            case 1:
+                slot = tex_slot(c, index, TEXTYPE_1D, false, false);
+                sprintf(call, "t%d.read(uint(%s), uint(%s))", slot, A, Bv);
+                break;
+            case 2:
+                slot = tex_slot(c, index, TEXTYPE_2D, false, false);
+                sprintf(call, "t%d.read(%s)", slot, RSC2(c, slot, "uint2(%s, %s)", A, Bv));
+                break;
+            case 4:
+                slot = tex_slot(c, index, TEXTYPE_2D, false, false);
+                sprintf(call, "t%d.read(%s)", slot, RSC2(c, slot, "uint2(int2(%s, %s) + int2(int(%s << 28) >> 28, int(%s << 24) >> 28))", A, A1, Bv, Bv));
+                break;
+            case 5:
+                slot = tex_slot(c, index, TEXTYPE_2D, false, false);
+                sprintf(call, "t%d.read(%s, uint(%s))", slot, RSC2(c, slot, "uint2(%s, %s)", A, A1), Bv);
+                break;
+            case 7:
+                slot = tex_slot(c, index, TEXTYPE_3D, false, false);
+                sprintf(call, "t%d.read(uint3(%s, %s, %s))", slot, A, A1, Bv);
+                break;
+            case 8:
+                slot = tex_slot(c, index, TEXTYPE_2D_ARRAY, false, true);
+                sprintf(call, "t%d.read(%s, uint(%s))", slot, RSC2(c, slot, "uint2(%s, %s)", A1, Bv), A);
+                break;
+            case 12:
+                slot = tex_slot(c, index, TEXTYPE_2D, false, false);
+                sprintf(call, "t%d.read(%s, uint(%s))", slot,
+                        RSC2(c, slot, "uint2(int2(%s, %s) + int2(int(%s << 28) >> 28, int(%s << 24) >> 28))", A, A1, B1, B1), Bv);
+                break;
+            default: fail(c, "tlds info %d", info); return;
         }
     }
-    write_tex_result(c, slot, call, mask, d0, d1, true, !bits(w, 59, 1));  // 0xd0/0xd2: .F16 results
+    write_tex_result(c, slot, call, mask, d0, d1, true, !bits(w, 59, 1));   // 0xd0/0xd2: .F16 results
 }
 
 // TEX (full form): coordinates from consecutive registers at gpr8, extra parameters at gpr20.
 static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     uint32_t index = (uint32_t)bits(w, 36, 13);
-    if (bindless) { int v = b == RZ ? -1 : c->reg_cb[b]; if (v < 0) { fail(c, "bindless texture handle is not a constant buffer load"); return; } index = bindless_index(c, v >> 24, v & 0xffffff); }
+    if (bindless) {
+        int v = b == RZ ? -1 : c->reg_cb[b];
+        if (v < 0) {
+            fail(c, "bindless texture handle is not a constant buffer load");
+            return;
+        }
+        index = bindless_index(c, v >> 24, v & 0xffffff);
+    }
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), dc = bits(w, 50, 1), aoffi = bindless ? bits(w, 36, 1) : bits(w, 54, 1);
     uint32_t mask = (uint32_t)bits(w, 31, 4);
-    int lod_mode = bindless ? (int)bits(w, 37, 3) : (int)bits(w, 55, 3);  // 0 none, 1 lz, 2 lb, 3 ll, 6 lba, 7 lla
-    int type = target == 0 ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D)
-             : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D)
-             : target == 2 ? TEXTYPE_3D
-                           : (array ? TEXTYPE_CUBE_ARRAY : TEXTYPE_CUBE);
+    int lod_mode = bindless ? (int)bits(w, 37, 3) : (int)bits(w, 55, 3);   // 0 none, 1 lz, 2 lb, 3 ll, 6 lba, 7 lla
+    int type = target == 0   ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D)
+               : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D)
+               : target == 2 ? TEXTYPE_3D
+                             : (array ? TEXTYPE_CUBE_ARRAY : TEXTYPE_CUBE);
     int ncoord = target == 0 ? 1 : target == 1 ? 2 : 3;
     int slot = tex_slot(c, index, type, dc, array);
     char coords[256] = "", layer[64] = "", tmp[64];
     int ar = a;
     // the hardware clamps the array index to the layer count
-    if (array) { sprintf(layer, "min(uint(r%d), t%d.get_array_size() - 1u)", a, slot); c->reg_used[a] = 1; ar = a + 1; }
+    if (array) {
+        sprintf(layer, "min(uint(r%d), t%d.get_array_size() - 1u)", a, slot);
+        c->reg_used[a] = 1;
+        ar = a + 1;
+    }
     for (int i = 0; i < ncoord; i++) {
         sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", ar + i);
         c->reg_used[ar + i] = 1;
         strcat(coords, tmp);
     }
-    int pr = bindless ? b + 1 : b;      // bindless: Rb holds the handle, the extra parameters follow it
+    int pr = bindless ? b + 1 : b;   // bindless: Rb holds the handle, the extra parameters follow it
     char lod[96] = "", dref[64] = "", off[128] = "";
     if (lod_mode == 2 || lod_mode == 3 || lod_mode == 6 || lod_mode == 7) {
         c->reg_used[pr] = 1;
@@ -703,14 +910,15 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
         sprintf(off, ", int2(int(r%d << 28) >> 28, int(r%d << 24) >> 28)", pr, pr);
         pr++;
     }
-    if (dc) { c->reg_used[pr] = 1; sprintf(dref, "as_type<float>(r%d)", pr); pr++; }
+    if (dc) {
+        c->reg_used[pr] = 1;
+        sprintf(dref, "as_type<float>(r%d)", pr);
+        pr++;
+    }
     const char *vec = ncoord == 1 ? "" : ncoord == 2 ? "float2" : "float3";
     char call[1024];
-    if (dc)
-        sprintf(call, "float4(t%d.sample_compare(s%d, %s(%s)%s%s, %s%s%s))", slot, slot, vec, coords, array ? ", " : "",
-                layer, dref, lod, off);
-    else
-        sprintf(call, "t%d.sample(s%d, %s(%s)%s%s%s%s)", slot, slot, vec, coords, array ? ", " : "", layer, lod, off);
+    if (dc) sprintf(call, "float4(t%d.sample_compare(s%d, %s(%s)%s%s, %s%s%s))", slot, slot, vec, coords, array ? ", " : "", layer, dref, lod, off);
+    else sprintf(call, "t%d.sample(s%d, %s(%s)%s%s%s%s)", slot, slot, vec, coords, array ? ", " : "", layer, lod, off);
     write_tex_result(c, slot, call, mask, d, RZ, false, false);
 }
 
@@ -718,22 +926,49 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
 static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     uint32_t index = (uint32_t)bits(w, 36, 13);
-    if (bindless) { int v = b == RZ ? -1 : c->reg_cb[b]; if (v < 0) { fail(c, "bindless texture handle is not a constant buffer load"); return; } index = bindless_index(c, v >> 24, v & 0xffffff); }
+    if (bindless) {
+        int v = b == RZ ? -1 : c->reg_cb[b];
+        if (v < 0) {
+            fail(c, "bindless texture handle is not a constant buffer load");
+            return;
+        }
+        index = bindless_index(c, v >> 24, v & 0xffffff);
+    }
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), dc = !tmml && bits(w, 50, 1);
     uint32_t mask = (uint32_t)bits(w, 31, 4);
     int comp = tmml ? 0 : (int)bits(w, 56, 2);
     int aoff = tmml ? 0 : (int)bits(w, 54, 2);
-    if (aoff == 2) { fail(c, "texture gather with per-texel offsets (PTP: Metal needs constant offsets)"); return; }
-    if (aoff == 3) { fail(c, "texture gather with reserved offset mode"); return; }
-    int type = target == 0 ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D) : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D) : target == 2 ? TEXTYPE_3D : (array ? TEXTYPE_CUBE_ARRAY : TEXTYPE_CUBE);
-    if (!tmml && (type == TEXTYPE_1D || type == TEXTYPE_1D_ARRAY || type == TEXTYPE_3D)) { fail(c, "texture gather of target %d", target); return; }
+    if (aoff == 2) {
+        fail(c, "texture gather with per-texel offsets (PTP: Metal needs constant offsets)");
+        return;
+    }
+    if (aoff == 3) {
+        fail(c, "texture gather with reserved offset mode");
+        return;
+    }
+    int type = target == 0   ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D)
+               : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D)
+               : target == 2 ? TEXTYPE_3D
+                             : (array ? TEXTYPE_CUBE_ARRAY : TEXTYPE_CUBE);
+    if (!tmml && (type == TEXTYPE_1D || type == TEXTYPE_1D_ARRAY || type == TEXTYPE_3D)) {
+        fail(c, "texture gather of target %d", target);
+        return;
+    }
     int ncoord = target == 0 ? 1 : target == 1 ? 2 : 3;
     int slot = tex_slot(c, index, type, dc, array);
     char coords[256] = "", layer[96] = "", tmp[64];
     int ar = a;
-    if (array) { sprintf(layer, "min(uint(r%d), t%d.get_array_size() - 1u)", a, slot); c->reg_used[a] = 1; ar = a + 1; }
-    for (int i = 0; i < ncoord; i++) { sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", ar + i); c->reg_used[ar + i] = 1; strcat(coords, tmp); }
+    if (array) {
+        sprintf(layer, "min(uint(r%d), t%d.get_array_size() - 1u)", a, slot);
+        c->reg_used[a] = 1;
+        ar = a + 1;
+    }
+    for (int i = 0; i < ncoord; i++) {
+        sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", ar + i);
+        c->reg_used[ar + i] = 1;
+        strcat(coords, tmp);
+    }
     const char *vec = ncoord == 1 ? "" : ncoord == 2 ? "float2" : "float3";
     int pr = bindless ? b + 1 : b;
     char call[1024];
@@ -743,26 +978,44 @@ static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
     if (aoff == 1 && !tmml) {
         /* AOFFI: a per-thread texel offset in Rpr (4-bit signed x, y). Metal only takes constant gather offsets, but a whole-texel offset keeps the
          * fractional position, so gathering at coord + offset / size selects exactly the shifted 2x2 footprint (the sampler's wrap/clamp still applies) */
-        if (ncoord != 2) { fail(c, "texture gather offset on target %d", target); return; }
+        if (ncoord != 2) {
+            fail(c, "texture gather offset on target %d", target);
+            return;
+        }
         c->reg_used[pr] = 1;
         char gs[200];
         if (c->stage == STAGE_VERTEX) sprintf(gs, "float2(t%d.get_width(), t%d.get_height())", slot, slot);
-        else { c->uses_rscale = true; sprintf(gs, "(float2(t%d.get_width(), t%d.get_height()) / rscale[%d].xy)", slot, slot, slot + 1); }
+        else {
+            c->uses_rscale = true;
+            sprintf(gs, "(float2(t%d.get_width(), t%d.get_height()) / rscale[%d].xy)", slot, slot, slot + 1);
+        }
         sprintf(cexpr, "float2(%s) + float2(int2(int(r%d << 28) >> 28, int(r%d << 24) >> 28)) / %s", coords, pr, pr, gs);
         pr++;
     }
     if (tmml) {
         // fixed point result: 8 fractional bits, x = clamped level, y = unclamped lambda (the guest converts with I2F)
-        sprintf(call, "int2(float2(t%d.calculate_clamped_lod(s%d, %s(%s)), t%d.calculate_unclamped_lod(s%d, %s(%s))) * 256.0f)", slot, slot, vec, coords, slot, slot, vec, coords);
+        sprintf(call, "int2(float2(t%d.calculate_clamped_lod(s%d, %s(%s)), t%d.calculate_unclamped_lod(s%d, %s(%s))) * 256.0f)", slot, slot, vec, coords, slot,
+                slot, vec, coords);
         int n = 0;
         sp(&c->body, "    { int2 q = %s;\n", call);
         for (int i = 0; i < 2; i++)
-            if (mask & (1u << i)) { int r = d == RZ ? RZ : d + n; n++; if (r != RZ) { c->reg_used[r] = 1; c->reg_cb[r] = -1; sp(&c->body, "      r%d = uint(q[%d]);\n", r, i); } }
+            if (mask & (1u << i)) {
+                int r = d == RZ ? RZ : d + n;
+                n++;
+                if (r != RZ) {
+                    c->reg_used[r] = 1;
+                    c->reg_cb[r] = -1;
+                    sp(&c->body, "      r%d = uint(q[%d]);\n", r, i);
+                }
+            }
         sp(&c->body, "    }\n");
         return;
     }
-    if (dc) { c->reg_used[pr] = 1; sprintf(call, "float4(t%d.gather_compare(s%d, %s%s%s, as_type<float>(r%d)))", slot, slot, cexpr, array ? ", " : "", layer, pr); }
-    else if (c->info->tex[slot].depth || c->info->tex[slot].shadow) sprintf(call, "float4(t%d.gather(s%d, %s%s%s))", slot, slot, cexpr, array ? ", " : "", layer);    // depth textures gather the depth only
+    if (dc) {
+        c->reg_used[pr] = 1;
+        sprintf(call, "float4(t%d.gather_compare(s%d, %s%s%s, as_type<float>(r%d)))", slot, slot, cexpr, array ? ", " : "", layer, pr);
+    } else if (c->info->tex[slot].depth || c->info->tex[slot].shadow)
+        sprintf(call, "float4(t%d.gather(s%d, %s%s%s))", slot, slot, cexpr, array ? ", " : "", layer);   // depth textures gather the depth only
     else sprintf(call, "t%d.gather(s%d, %s%s%s, int2(0), component::%s)", slot, slot, cexpr, array ? ", " : "", layer, cn[comp]);
     write_tex_result(c, slot, call, mask, d, RZ, false, false);
 }
@@ -774,7 +1027,10 @@ static void emit_tld4s(Ctx *c, uint64_t w) {
     uint32_t index = (uint32_t)bits(w, 36, 13);
     bool dc = bits(w, 50, 1), aoffi = bits(w, 51, 1), f16 = bits(w, 55, 1);
     int comp = (int)bits(w, 52, 2);
-    if (aoffi && dc) { fail(c, "tld4s with both a depth reference and offsets"); return; }
+    if (aoffi && dc) {
+        fail(c, "tld4s with both a depth reference and offsets");
+        return;
+    }
     char ra[16], ra1[16], rb[16];
     const char *A = reg(c, a, ra), *A1 = reg(c, a == RZ ? RZ : a + 1, ra1), *Bv = reg(c, b, rb);
     int slot = tex_slot(c, index, TEXTYPE_2D, dc, false);
@@ -783,7 +1039,10 @@ static void emit_tld4s(Ctx *c, uint64_t w) {
     if (aoffi) {
         char gs[200];
         if (c->stage == STAGE_VERTEX) sprintf(gs, "float2(t%d.get_width(), t%d.get_height())", slot, slot);
-        else { c->uses_rscale = true; sprintf(gs, "(float2(t%d.get_width(), t%d.get_height()) / rscale[%d].xy)", slot, slot, slot + 1); }
+        else {
+            c->uses_rscale = true;
+            sprintf(gs, "(float2(t%d.get_width(), t%d.get_height()) / rscale[%d].xy)", slot, slot, slot + 1);
+        }
         sprintf(cxy, "float2(%s, %s) + float2(int2(int(%s << 28) >> 28, int(%s << 24) >> 28)) / %s", F(A), F(A1), Bv, Bv, gs);
     } else if (dc) sprintf(cxy, "float2(%s, %s)", F(A), F(A1));
     else sprintf(cxy, "float2(%s, %s)", F(A), F(Bv));
@@ -801,23 +1060,40 @@ static void emit_tld(Ctx *c, uint64_t w) {
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), aoffi = bits(w, 35, 1), ms = bits(w, 50, 1), has_lod = bits(w, 55, 1);
     uint32_t mask = (uint32_t)bits(w, 31, 4);
-    if (ms) { fail(c, "tld of a multisampled texture"); return; }
-    if (target == 3) { fail(c, "tld of a cube texture"); return; }
+    if (ms) {
+        fail(c, "tld of a multisampled texture");
+        return;
+    }
+    if (target == 3) {
+        fail(c, "tld of a cube texture");
+        return;
+    }
     int type = target == 0 ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D) : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D) : TEXTYPE_3D;
     if (type == TEXTYPE_3D) array = false;
     int ncoord = target == 0 ? 1 : target == 1 ? 2 : 3;
     int slot = tex_slot(c, index, type, false, array);
     int ar = a, pr = b;
     char layer[96] = "", off[3][48] = {"", "", ""}, lv[48] = "0u";
-    if (array) { sprintf(layer, "min(uint(r%d), t%d.get_array_size() - 1u)", a, slot); c->reg_used[a] = 1; ar = a + 1; }
-    if (has_lod) { c->reg_used[pr] = 1; sprintf(lv, "uint(r%d)", pr); pr++; }
+    if (array) {
+        sprintf(layer, "min(uint(r%d), t%d.get_array_size() - 1u)", a, slot);
+        c->reg_used[a] = 1;
+        ar = a + 1;
+    }
+    if (has_lod) {
+        c->reg_used[pr] = 1;
+        sprintf(lv, "uint(r%d)", pr);
+        pr++;
+    }
     if (aoffi) {
         c->reg_used[pr] = 1;
-        for (int i = 0; i < ncoord; i++) sprintf(off[i], " + (int(r%d << %d) >> 28)", pr, 28 - 4 * i);     /* 4-bit signed fields: x, y, z */
+        for (int i = 0; i < ncoord; i++) sprintf(off[i], " + (int(r%d << %d) >> 28)", pr, 28 - 4 * i); /* 4-bit signed fields: x, y, z */
         pr++;
     }
     char x[3][96];
-    for (int i = 0; i < ncoord; i++) { c->reg_used[ar + i] = 1; sprintf(x[i], "uint(int(r%d)%s)", ar + i, off[i]); }
+    for (int i = 0; i < ncoord; i++) {
+        c->reg_used[ar + i] = 1;
+        sprintf(x[i], "uint(int(r%d)%s)", ar + i, off[i]);
+    }
     char call[900];
     const char *comma = array ? ", " : "";
     /* Metal 1D textures have a single level and their read() only takes a constant 0 lod, so the lod register is consumed but not passed. */
@@ -835,20 +1111,35 @@ static void emit_txd(Ctx *c, uint64_t w) {
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1);
     uint32_t mask = (uint32_t)bits(w, 31, 4);
-    if (bits(w, 35, 1)) { fail(c, "txd with offsets"); return; }
-    if (target == 0) { fail(c, "txd of a 1D texture (Metal has no 1D gradients)"); return; }
+    if (bits(w, 35, 1)) {
+        fail(c, "txd with offsets");
+        return;
+    }
+    if (target == 0) {
+        fail(c, "txd of a 1D texture (Metal has no 1D gradients)");
+        return;
+    }
     int type = target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D) : target == 2 ? TEXTYPE_3D : (array ? TEXTYPE_CUBE_ARRAY : TEXTYPE_CUBE);
     if (type == TEXTYPE_3D) array = false;
     int ncoord = target == 1 ? 2 : 3;
     int slot = tex_slot(c, index, type, false, array);
     char coords[256] = "", dx[200] = "", dy[200] = "", layer[96] = "", tmp[64];
     int ar = a;
-    if (array) { sprintf(layer, "min(uint(r%d), t%d.get_array_size() - 1u)", a, slot); c->reg_used[a] = 1; ar = a + 1; }
+    if (array) {
+        sprintf(layer, "min(uint(r%d), t%d.get_array_size() - 1u)", a, slot);
+        c->reg_used[a] = 1;
+        ar = a + 1;
+    }
     for (int i = 0; i < ncoord; i++) {
-        c->reg_used[ar + i] = 1; c->reg_used[b + i] = 1; c->reg_used[b + ncoord + i] = 1;
-        sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", ar + i); strcat(coords, tmp);
-        sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", b + i); strcat(dx, tmp);
-        sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", b + ncoord + i); strcat(dy, tmp);
+        c->reg_used[ar + i] = 1;
+        c->reg_used[b + i] = 1;
+        c->reg_used[b + ncoord + i] = 1;
+        sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", ar + i);
+        strcat(coords, tmp);
+        sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", b + i);
+        strcat(dx, tmp);
+        sprintf(tmp, "%sas_type<float>(r%d)", i ? ", " : "", b + ncoord + i);
+        strcat(dy, tmp);
     }
     const char *vec = ncoord == 2 ? "float2" : "float3";
     const char *grad = type == TEXTYPE_3D ? "gradient3d" : (type == TEXTYPE_CUBE || type == TEXTYPE_CUBE_ARRAY) ? "gradientcube" : "gradient2d";
@@ -863,43 +1154,42 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
     int pr = (int)bits(w, 16, 3);
     bool prn = bits(w, 19, 1);
-    uint16_t op13 = (uint16_t)(w >> 51);  // top 13 bits
+    uint16_t op13 = (uint16_t)(w >> 51);   // top 13 bits
     // predicate guard. SSY/PBK/PCNT/PRET take no predicate: those bits are zero in the encoding,
     // which would otherwise read as @P0.
     uint64_t top12 = w & 0xfff0000000000000ull;
-    if (top12 == 0xe290000000000000ull || top12 == 0xe2a0000000000000ull || top12 == 0xe2b0000000000000ull ||
-        top12 == 0xe270000000000000ull) {
+    if (top12 == 0xe290000000000000ull || top12 == 0xe2a0000000000000ull || top12 == 0xe2b0000000000000ull || top12 == 0xe270000000000000ull) {
         pr = PT;
         prn = false;
     }
     bool guarded = !(pr == PT && !prn);
-    if (pr == PT && prn) return;  // @!pt: never executes
+    if (pr == PT && prn) return;   // @!pt: never executes
     if (guarded) sp(&c->body, "  if (%s) {\n", P(pr, prn));
 
 #define OPM(val, mask) ((w & (uint64_t)(mask)) == (uint64_t)(val))
-    if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {  // EXIT
+    if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {   // EXIT
         sp(&c->body, c->branchy ? "    exit_now = true; break;\n" : "    break;\n");
-    } else if (OPM(0xe330000000000000ull, 0xfff0000000000000ull)) {  // KIL
+    } else if (OPM(0xe330000000000000ull, 0xfff0000000000000ull)) {   // KIL
         c->info->uses_discard = true;
         sp(&c->body, "    discard_fragment();\n");
-    } else if (OPM(0xe240000000000000ull, 0xfff0000000000020ull)) {  // BRA
+    } else if (OPM(0xe240000000000000ull, 0xfff0000000000020ull)) {   // BRA
         uint32_t target = norm_target((int64_t)pc + 8 + sbits(w, 20, 24));
         c->uses_branches = true;
         sp(&c->body, "    pc = %uu; continue;\n", target);
-    } else if (OPM(0xe290000000000000ull, 0xfff0000000000020ull)) {  // SSY
+    } else if (OPM(0xe290000000000000ull, 0xfff0000000000020ull)) {   // SSY
         c->uses_branches = true;
         sp(&c->body, "    ssy[ssy_n++] = %uu;\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));
-    } else if (OPM(0xe2a0000000000000ull, 0xfff0000000000020ull)) {  // PBK
+    } else if (OPM(0xe2a0000000000000ull, 0xfff0000000000020ull)) {   // PBK
         c->uses_branches = true;
         sp(&c->body, "    pbk[pbk_n++] = %uu;\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));
-    } else if (OPM(0xe2b0000000000000ull, 0xfff0000000000020ull)) {  // PCNT
+    } else if (OPM(0xe2b0000000000000ull, 0xfff0000000000020ull)) {   // PCNT
         c->uses_branches = true;
         sp(&c->body, "    pcnt[pcnt_n++] = %uu;\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));
-    } else if (OPM(0xf0f8000000000000ull, 0xfff8000000000000ull)) {  // SYNC
+    } else if (OPM(0xf0f8000000000000ull, 0xfff8000000000000ull)) {   // SYNC
         sp(&c->body, "    pc = ssy[--ssy_n]; continue;\n");
-    } else if (OPM(0xe340000000000000ull, 0xfff0000000000000ull)) {  // BRK
+    } else if (OPM(0xe340000000000000ull, 0xfff0000000000000ull)) {   // BRK
         sp(&c->body, "    pc = pbk[--pbk_n]; continue;\n");
-    } else if (OPM(0xe350000000000000ull, 0xfff0000000000000ull)) {  // CONT
+    } else if (OPM(0xe350000000000000ull, 0xfff0000000000000ull)) {   // CONT
         sp(&c->body, "    pc = pcnt[pcnt_n - 1]; continue;\n");
     } else if (OPM(0xf0f0000000000000ull, 0xfff8000000000000ull) || OPM(0x50b0000000000000ull, 0xfff8000000000000ull) ||
                OPM(0xef98000000000000ull, 0xfff8000000000000ull)) {
@@ -908,10 +1198,12 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         // IPA: interpolate fragment input
         bool idx = bits(w, 38, 1);
         uint32_t addr = (uint32_t)bits(w, 28, 10);
-        int mode = (int)bits(w, 54, 2);  // 0 pass, 1 multiply, 2 constant, 3 sc
+        int mode = (int)bits(w, 54, 2);   // 0 pass, 1 multiply, 2 constant, 3 sc
         if (idx) {
-            c->ipa_mode = mode; c->ipa_mul = (int)bits(w, 20, 8);
-            char rb[16]; attr_load(c, d, 0, reg(c, a, rb));
+            c->ipa_mode = mode;
+            c->ipa_mul = (int)bits(w, 20, 8);
+            char rb[16];
+            attr_load(c, d, 0, reg(c, a, rb));
             c->ipa_mode = -1;
             if (bits(w, 51, 1) && d != RZ) sp(&c->body, "    r%d = as_type<uint>(saturate(as_type<float>(r%d)));\n", d, d);
             goto ipa_done;
@@ -926,27 +1218,32 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         c->ipa_mode = -1;
         if (bits(w, 51, 1) && d != RZ) sp(&c->body, "    r%d = as_type<uint>(saturate(as_type<float>(r%d)));\n", d, d);
     ipa_done:;
-    } else if (OPM(0xefa0000000000000ull, 0xfff8000000000000ull)) {  // AL2P: physical attribute address = Ra + imm
-        char t2[64]; sprintf(t2, "(%s + 0x%xu)", R(a), (uint32_t)bits(w, 20, 11));
+    } else if (OPM(0xefa0000000000000ull, 0xfff8000000000000ull)) {   // AL2P: physical attribute address = Ra + imm
+        char t2[64];
+        sprintf(t2, "(%s + 0x%xu)", R(a), (uint32_t)bits(w, 20, 11));
         set_reg(c, d, t2);
-    } else if (OPM(0xefd8000000000000ull, 0xfff8000000000000ull)) {  // LD attribute
+    } else if (OPM(0xefd8000000000000ull, 0xfff8000000000000ull)) {   // LD attribute
         int n = 1 + (int)bits(w, 47, 2);
         uint32_t addr = (uint32_t)bits(w, 20, 10);
         int ia = (int)bits(w, 8, 8);
         if (ia != RZ) {
             /* a[Ra + imm]: the index is latched first, the destination may overlap Ra */
             sp(&c->body, "    { uint ix = %s;\n", R(ia));
-            for (int i = 0; i < n; i++) { char ib[48]; sprintf(ib, "(ix + %uu)", addr + 4 * i); attr_load(c, d + i, 0, ib); }
+            for (int i = 0; i < n; i++) {
+                char ib[48];
+                sprintf(ib, "(ix + %uu)", addr + 4 * i);
+                attr_load(c, d + i, 0, ib);
+            }
             sp(&c->body, "    }\n");
         } else
-        for (int i = 0; i < n; i++) attr_load(c, d + i, addr + 4 * i, NULL);
-    } else if (OPM(0xeff0000000000000ull, 0xfff8000000000000ull)) {  // ST attribute
+            for (int i = 0; i < n; i++) attr_load(c, d + i, addr + 4 * i, NULL);
+    } else if (OPM(0xeff0000000000000ull, 0xfff8000000000000ull)) {   // ST attribute
         int n = 1 + (int)bits(w, 47, 2);
         uint32_t addr = (uint32_t)bits(w, 20, 10);
         for (int i = 0; i < n; i++) attr_store(c, d + i, addr + 4 * i);
-    } else if (OPM(0xef90000000000000ull, 0xfff8000000000000ull)) {  // LD c[idx][reg + imm]
+    } else if (OPM(0xef90000000000000ull, 0xfff8000000000000ull)) {   // LD c[idx][reg + imm]
         int idx = (int)bits(w, 36, 5);
-        int64_t off = (int64_t)bits(w, 20, 16);  // unsigned (Ryujinx InstLdc.CbufOffset)
+        int64_t off = (int64_t)bits(w, 20, 16);   // unsigned (Ryujinx InstLdc.CbufOffset)
         int sz = (int)bits(w, 48, 3);
         int n = sz == 5 ? 2 : 1;
         char rb[16];
@@ -965,115 +1262,128 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         /* A texture handle loaded from the texture/sampler handle table (c2). With a register index the handle is only known at run time (an array of
          * textures selected per pixel, water_uber / bezel_pbr): bindless sampling then resolves to the table's first entry (offset + 0), a documented
          * approximation that keeps the draw alive instead of skipping it. */
-        if (idx >= 2 && d != RZ && n == 1) { c->reg_cb[d] = (idx << 24) | (int)off; if (dyn) c->info->bindless_approx = true; }
-    } else if (OPM(0xd000000000000000ull, 0xf600000000000000ull)) {  // TEXS
+        if (idx >= 2 && d != RZ && n == 1) {
+            c->reg_cb[d] = (idx << 24) | (int)off;
+            if (dyn) c->info->bindless_approx = true;
+        }
+    } else if (OPM(0xd000000000000000ull, 0xf600000000000000ull)) {   // TEXS
         emit_texs(c, w, false);
-    } else if (OPM(0xd200000000000000ull, 0xf600000000000000ull)) {  // TLDS
+    } else if (OPM(0xd200000000000000ull, 0xf600000000000000ull)) {   // TLDS
         emit_texs(c, w, true);
-    } else if (OPM(0xc038000000000000ull, 0xfc38000000000000ull)) {  // TEX
+    } else if (OPM(0xc038000000000000ull, 0xfc38000000000000ull)) {   // TEX
         emit_tex(c, w, false);
-    } else if (OPM(0xdc38000000000000ull, 0xff38000000000000ull)) {  // TLD
+    } else if (OPM(0xdc38000000000000ull, 0xff38000000000000ull)) {   // TLD
         emit_tld(c, w);
-    } else if (OPM(0xde38000000000000ull, 0xfff8000000000000ull)) {  // TXD
+    } else if (OPM(0xde38000000000000ull, 0xfff8000000000000ull)) {   // TXD
         emit_txd(c, w);
-    } else if (OPM(0xdeb8000000000000ull, 0xfff8000000000000ull)) {  // TEX.B (bindless)
+    } else if (OPM(0xdeb8000000000000ull, 0xfff8000000000000ull)) {   // TEX.B (bindless)
         emit_tex(c, w, true);
-    } else if (OPM(0xc838000000000000ull, 0xfc38000000000000ull)) {  // TLD4
+    } else if (OPM(0xc838000000000000ull, 0xfc38000000000000ull)) {   // TLD4
         emit_tld4_tmml(c, w, false, false);
-    } else if (OPM(0xdef8000000000000ull, 0xfff8000000000000ull)) {  // TLD4.B
+    } else if (OPM(0xdef8000000000000ull, 0xfff8000000000000ull)) {   // TLD4.B
         emit_tld4_tmml(c, w, true, false);
-    } else if (OPM(0xdf58000000000000ull, 0xfff8000000000000ull)) {  // TMML
+    } else if (OPM(0xdf58000000000000ull, 0xfff8000000000000ull)) {   // TMML
         emit_tld4_tmml(c, w, false, true);
-    } else if (OPM(0xdf60000000000000ull, 0xfff8000000000000ull)) {  // TMML.B
+    } else if (OPM(0xdf60000000000000ull, 0xfff8000000000000ull)) {   // TMML.B
         emit_tld4_tmml(c, w, true, true);
-    } else if (OPM(0xdf00000000000000ull, 0xff40000000000000ull)) {  // TLD4S
+    } else if (OPM(0xdf00000000000000ull, 0xff40000000000000ull)) {   // TLD4S
         emit_tld4s(c, w);
-    } else if (OPM(0xdf48000000000000ull, 0xfff8000000000000ull)) {  // TXQ
+    } else if (OPM(0xdf48000000000000ull, 0xfff8000000000000ull)) {   // TXQ
         uint32_t index = (uint32_t)bits(w, 36, 13);
         int qt = (int)bits(w, 22, 6);
         uint32_t mask = (uint32_t)bits(w, 31, 4);
-        int slot = tex_slot(c, index, -1, false, false);  // the type comes from a sample, if any
-        if (qt == 1) {  // dimension
-            if (c->stage != STAGE_VERTEX) {  // report the guest size of scaled allocations
+        int slot = tex_slot(c, index, -1, false, false);   // the type comes from a sample, if any
+        if (qt == 1) {                                     // dimension
+            if (c->stage != STAGE_VERTEX) {                // report the guest size of scaled allocations
                 c->uses_rscale = true;
-                sp(&c->body, "    { uint lv = %s; uint4 q = uint4(uint(round(float(t%d.get_width(lv)) / rscale[%d].x)), "
+                sp(&c->body,
+                   "    { uint lv = %s; uint4 q = uint4(uint(round(float(t%d.get_width(lv)) / rscale[%d].x)), "
                    "uint(round(float(t%d.get_height(lv)) / rscale[%d].y)), 1, t%d.get_num_mip_levels());\n",
                    R(a), slot, slot + 1, slot, slot + 1, slot);
             } else {
-                sp(&c->body, "    { uint lv = %s; uint4 q = uint4(t%d.get_width(lv), t%d.get_height(lv), 1, t%d.get_num_mip_levels());\n",
-                   R(a), slot, slot, slot);
+                sp(&c->body, "    { uint lv = %s; uint4 q = uint4(t%d.get_width(lv), t%d.get_height(lv), 1, t%d.get_num_mip_levels());\n", R(a), slot, slot,
+                   slot);
             }
             int n = 0;
             for (int i = 0; i < 4; i++)
-                if (mask & (1u << i)) { c->reg_used[d + n] = 1; sp(&c->body, "      r%d = q[%d];\n", d + n, i); n++; }
+                if (mask & (1u << i)) {
+                    c->reg_used[d + n] = 1;
+                    sp(&c->body, "      r%d = q[%d];\n", d + n, i);
+                    n++;
+                }
             sp(&c->body, "    }\n");
         } else {
             fail(c, "txq type %d", qt);
         }
-    } else if (OPM(0x5080000000000000ull, 0xfff8000000000000ull)) {  // MUFU
+    } else if (OPM(0x5080000000000000ull, 0xfff8000000000000ull)) {   // MUFU
         int fn = (int)bits(w, 20, 4);
         const char *x = NA(F(R(a)), bits(w, 48, 1), bits(w, 46, 1));
         switch (fn) {
-        case 0: sprintf(t, "cos(%s)", x); break;
-        case 1: sprintf(t, "sin(%s)", x); break;
-        case 2: sprintf(t, "exp2(%s)", x); break;
-        case 3: sprintf(t, "log2(%s)", x); break;
-        case 4: sprintf(t, "(1.0f / %s)", x); break;
-        case 5: sprintf(t, "rsqrt(%s)", x); break;
-        case 8: sprintf(t, "sqrt(%s)", x); break;
-        default: fail(c, "mufu %d", fn); return;
+            case 0: sprintf(t, "cos(%s)", x); break;
+            case 1: sprintf(t, "sin(%s)", x); break;
+            case 2: sprintf(t, "exp2(%s)", x); break;
+            case 3: sprintf(t, "log2(%s)", x); break;
+            case 4: sprintf(t, "(1.0f / %s)", x); break;
+            case 5: sprintf(t, "rsqrt(%s)", x); break;
+            case 8: sprintf(t, "sqrt(%s)", x); break;
+            default: fail(c, "mufu %d", fn); return;
         }
         set_reg(c, d, FRES(t, bits(w, 50, 1)));
     } else if (OPM(0x5c90000000000000ull, 0xfff8000000000000ull) || OPM(0x4c90000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3890000000000000ull, 0xfef8000000000000ull)) {  // RRO: range reduction (no-op for us)
+               OPM(0x3890000000000000ull, 0xfef8000000000000ull)) {   // RRO: range reduction (no-op for us)
         const char *x = NA(F(B(true)), bits(w, 45, 1), bits(w, 49, 1));
         set_reg(c, d, FRES(x, false));
     } else if (OPM(0x5c58000000000000ull, 0xfff8000000000000ull) || OPM(0x4c58000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3858000000000000ull, 0xfef8000000000000ull)) {  // FADD
+               OPM(0x3858000000000000ull, 0xfef8000000000000ull)) {   // FADD
         sprintf(t, "(%s + %s)", NA(F(R(a)), bits(w, 48, 1), bits(w, 46, 1)), NA(F(B(true)), bits(w, 45, 1), bits(w, 49, 1)));
         set_reg(c, d, FRES(t, bits(w, 50, 1)));
-    } else if (OPM(0x0800000000000000ull, 0xfc00000000000000ull)) {  // FADD32I
+    } else if (OPM(0x0800000000000000ull, 0xfc00000000000000ull)) {   // FADD32I
         sprintf(u, "as_type<float>(0x%08xu)", (uint32_t)bits(w, 20, 32));
         sprintf(t, "(%s + %s)", NA(F(R(a)), bits(w, 56, 1), bits(w, 54, 1)), NA(u, bits(w, 53, 1), bits(w, 57, 1)));
         set_reg(c, d, FRES(t, false));
     } else if (OPM(0x5c68000000000000ull, 0xfff8000000000000ull) || OPM(0x4c68000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3868000000000000ull, 0xfef8000000000000ull)) {  // FMUL
+               OPM(0x3868000000000000ull, 0xfef8000000000000ull)) {   // FMUL
         static const char *const scale[] = {"", " * 0.5f", " * 0.25f", " * 0.125f", " * 8.0f", " * 4.0f", " * 2.0f", ""};
         sprintf(t, "(%s * %s%s)", F(R(a)), NA(F(B(true)), bits(w, 48, 1), false), scale[bits(w, 41, 3)]);
         set_reg(c, d, FRES(t, bits(w, 50, 1)));
-    } else if (OPM(0x1e00000000000000ull, 0xff00000000000000ull)) {  // FMUL32I
+    } else if (OPM(0x1e00000000000000ull, 0xff00000000000000ull)) {   // FMUL32I
         sprintf(t, "(%s * as_type<float>(0x%08xu))", F(R(a)), (uint32_t)bits(w, 20, 32));
         set_reg(c, d, FRES(t, bits(w, 55, 1)));
     } else if (OPM(0x5980000000000000ull, 0xff80000000000000ull) || OPM(0x4980000000000000ull, 0xff80000000000000ull) ||
-               OPM(0x5180000000000000ull, 0xff80000000000000ull) || OPM(0x3280000000000000ull, 0xfe80000000000000ull)) {  // FFMA
+               OPM(0x5180000000000000ull, 0xff80000000000000ull) || OPM(0x3280000000000000ull, 0xfe80000000000000ull)) {   // FFMA
         const char *bv;
         char cbuf_c[256], bbuf[256];
         const char *cv = operand_c_for_ffma(c, w, cbuf_c, &bv, bbuf);
         sprintf(t, "fma(%s, %s, %s)", F(R(a)), NA(F(bv), bits(w, 48, 1), false), NA(F(cv), bits(w, 49, 1), false));
         set_reg(c, d, FRES(t, bits(w, 50, 1)));
-    } else if (OPM(0x0c00000000000000ull, 0xfc00000000000000ull)) {  // FFMA32I
+    } else if (OPM(0x0c00000000000000ull, 0xfc00000000000000ull)) {   // FFMA32I
         sprintf(u, "as_type<float>(0x%08xu)", (uint32_t)bits(w, 20, 32));
         sprintf(t, "fma(%s, %s, %s)", NA(F(R(a)), bits(w, 56, 1), false), u, NA(F(R(d)), bits(w, 57, 1), false));
         set_reg(c, d, FRES(t, bits(w, 55, 1)));
     } else if (OPM(0x5c60000000000000ull, 0xfff8000000000000ull) || OPM(0x4c60000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3860000000000000ull, 0xfef8000000000000ull)) {  // FMNMX
+               OPM(0x3860000000000000ull, 0xfef8000000000000ull)) {   // FMNMX
         const char *x = NA(F(R(a)), bits(w, 48, 1), bits(w, 46, 1)), *y = NA(F(B(true)), bits(w, 45, 1), bits(w, 49, 1));
         /* precise:: so the non-NaN operand wins (Maxwell FMNMX) whatever math mode the library is compiled with (NAPPLE_GFX_MATH, mtl_shader.m) */
         sprintf(t, "(%s ? precise::fmin(%s, %s) : precise::fmax(%s, %s))", P((int)bits(w, 39, 3), bits(w, 42, 1)), x, y, x, y);
         set_reg(c, d, FRES(t, false));
     } else if (OPM(0x5bb0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bb0000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0x36b0000000000000ull, 0xfef0000000000000ull)) {  // FSETP
+               OPM(0x36b0000000000000ull, 0xfef0000000000000ull)) {   // FSETP
         const char *x = NA(F(R(a)), bits(w, 43, 1), bits(w, 7, 1)), *y = NA(F(B(true)), bits(w, 6, 1), bits(w, 44, 1));
         char cmp[512];
         fcmp_expr(cmp, (int)bits(w, 48, 4), x, y);
         int p = (int)bits(w, 3, 3), q = (int)bits(w, 0, 3), bo = (int)bits(w, 45, 2);
         const char *pc_ = P((int)bits(w, 39, 3), bits(w, 42, 1));
-        if (p != PT) { c->pred_used[p] = 1; sp(&c->body, "    { bool cmp = %s; bool pp = %s;\n      p%d = cmp %s pp;\n", cmp, pc_, p, bool_op(bo)); }
-        else sp(&c->body, "    { bool cmp = %s; bool pp = %s;\n", cmp, pc_);
-        if (q != PT) { c->pred_used[q] = 1; sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo)); }
+        if (p != PT) {
+            c->pred_used[p] = 1;
+            sp(&c->body, "    { bool cmp = %s; bool pp = %s;\n      p%d = cmp %s pp;\n", cmp, pc_, p, bool_op(bo));
+        } else sp(&c->body, "    { bool cmp = %s; bool pp = %s;\n", cmp, pc_);
+        if (q != PT) {
+            c->pred_used[q] = 1;
+            sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo));
+        }
         sp(&c->body, "    }\n");
     } else if (OPM(0x5800000000000000ull, 0xff00000000000000ull) || OPM(0x4800000000000000ull, 0xfe00000000000000ull) ||
-               OPM(0x3000000000000000ull, 0xfe00000000000000ull)) {  // FSET
+               OPM(0x3000000000000000ull, 0xfe00000000000000ull)) {   // FSET
         const char *x = NA(F(R(a)), bits(w, 43, 1), bits(w, 54, 1)), *y = NA(F(B(true)), bits(w, 53, 1), bits(w, 44, 1));
         char cmp[512];
         fcmp_expr(cmp, (int)bits(w, 48, 4), x, y);
@@ -1081,7 +1391,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sprintf(u, bits(w, 52, 1) ? "(%s ? 0x3f800000u : 0u)" : "(%s ? 0xFFFFFFFFu : 0u)", t);
         set_reg(c, d, u);
     } else if (OPM(0x5ba0000000000000ull, 0xfff0000000000000ull) || OPM(0x4ba0000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0x36a0000000000000ull, 0xfef0000000000000ull) || OPM(0x53a0000000000000ull, 0xfff0000000000000ull)) {  // FCMP
+               OPM(0x36a0000000000000ull, 0xfef0000000000000ull) || OPM(0x53a0000000000000ull, 0xfff0000000000000ull)) {   // FCMP
         char cmp[512], cb[256], bb[256];
         const char *bv, *cv;
         if (OPM(0x53a0000000000000ull, 0xfff0000000000000ull)) {
@@ -1095,18 +1405,19 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sprintf(t, "(%s ? %s : %s)", cmp, R(a), bv);
         set_reg(c, d, t);
     } else if (OPM(0x5c98000000000000ull, 0xfff8000000000000ull) || OPM(0x4c98000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3898000000000000ull, 0xfef8000000000000ull)) {  // MOV
+               OPM(0x3898000000000000ull, 0xfef8000000000000ull)) {   // MOV
         set_reg(c, d, B(false));
-        if (d != RZ && (w >> 60) == 0x4 && bits(w, 34, 5) >= 2) c->reg_cb[d] = (int)(bits(w, 34, 5) << 24) | (int)(bits(w, 20, 14) * 4);     // a texture handle loaded from c2 or a user uniform buffer
-    } else if (OPM(0x0100000000000000ull, 0xfff0000000000000ull)) {  // MOV32I
+        if (d != RZ && (w >> 60) == 0x4 && bits(w, 34, 5) >= 2)
+            c->reg_cb[d] = (int)(bits(w, 34, 5) << 24) | (int)(bits(w, 20, 14) * 4);   // a texture handle loaded from c2 or a user uniform buffer
+    } else if (OPM(0x0100000000000000ull, 0xfff0000000000000ull)) {                    // MOV32I
         sprintf(t, "0x%08xu", (uint32_t)bits(w, 20, 32));
         set_reg(c, d, t);
     } else if (OPM(0x5ca0000000000000ull, 0xfff8000000000000ull) || OPM(0x4ca0000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x38a0000000000000ull, 0xfef8000000000000ull)) {  // SEL
+               OPM(0x38a0000000000000ull, 0xfef8000000000000ull)) {   // SEL
         sprintf(t, "(%s ? %s : %s)", P((int)bits(w, 39, 3), bits(w, 42, 1)), R(a), B(false));
         set_reg(c, d, t);
     } else if (OPM(0x5cb0000000000000ull, 0xfff8000000000000ull) || OPM(0x4cb0000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x38b0000000000000ull, 0xfef8000000000000ull)) {  // F2I (src fmt bits 10-11: 1 F16; dst size bits 8-9)
+               OPM(0x38b0000000000000ull, 0xfef8000000000000ull)) {   // F2I (src fmt bits 10-11: 1 F16; dst size bits 8-9)
         char srcv[512];
         if (bits(w, 10, 2) == 1) sprintf(srcv, "float(as_type<half2>(%s)[%d])", B(false), (int)bits(w, 41, 1));
         else strcpy(srcv, F(B(true)));
@@ -1114,13 +1425,11 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         int rnd = (int)bits(w, 39, 2);
         bool sgn = bits(w, 12, 1), i16 = bits(w, 8, 2) == 1;
         static const char *const rf[] = {"rint", "floor", "ceil", "trunc"};
-        if (i16)
-            sprintf(t, sgn ? "uint(int(clamp(%s(%s), -32768.0f, 32767.0f)))" : "uint(clamp(%s(%s), 0.0f, 65535.0f))", rf[rnd], x);
-        else
-            sprintf(t, sgn ? "uint(int(clamp(%s(%s), -2147483648.0f, 2147483520.0f)))" : "uint(clamp(%s(%s), 0.0f, 4294967040.0f))", rf[rnd], x);
+        if (i16) sprintf(t, sgn ? "uint(int(clamp(%s(%s), -32768.0f, 32767.0f)))" : "uint(clamp(%s(%s), 0.0f, 65535.0f))", rf[rnd], x);
+        else sprintf(t, sgn ? "uint(int(clamp(%s(%s), -2147483648.0f, 2147483520.0f)))" : "uint(clamp(%s(%s), 0.0f, 4294967040.0f))", rf[rnd], x);
         set_reg(c, d, t);
     } else if (OPM(0x5cb8000000000000ull, 0xfff8000000000000ull) || OPM(0x4cb8000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x38b8000000000000ull, 0xfef8000000000000ull)) {  // I2F
+               OPM(0x38b8000000000000ull, 0xfef8000000000000ull)) {   // I2F
         bool sgn = bits(w, 13, 1);
         int sz = (int)bits(w, 10, 2), sel = (int)bits(w, 41, 2);
         char src[256];
@@ -1129,16 +1438,15 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         else if (sz == 1) sprintf(src, sgn ? "int(short((%s >> %d) & 0xFFFF))" : "((%s >> %d) & 0xFFFFu)", bv, sel * 8);
         else sprintf(src, sgn ? "int(%s)" : "%s", bv);
         sprintf(u, "float(%s)", src);
-        if (bits(w, 8, 2) == 1) {  // F16 result in the low half
+        if (bits(w, 8, 2) == 1) {   // F16 result in the low half
             char h[700];
-            snprintf(h, sizeof h, "(uint(as_type<ushort>(half(%s))))",
-                     NA(u, bits(w, 45, 1), bits(w, 49, 1)));
+            snprintf(h, sizeof h, "(uint(as_type<ushort>(half(%s))))", NA(u, bits(w, 45, 1), bits(w, 49, 1)));
             set_reg(c, d, h);
         } else {
             set_reg(c, d, FRES(NA(u, bits(w, 45, 1), bits(w, 49, 1)), false));
         }
     } else if (OPM(0x5ca8000000000000ull, 0xfff8000000000000ull) || OPM(0x4ca8000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x38a8000000000000ull, 0xfef8000000000000ull)) {  // F2F (formats: 1 F16, 2 F32; bit 41 = high half)
+               OPM(0x38a8000000000000ull, 0xfef8000000000000ull)) {   // F2F (formats: 1 F16, 2 F32; bit 41 = high half)
         int dfmt = (int)bits(w, 8, 2), sfmt = (int)bits(w, 10, 2);
         char srcv[512];
         if (sfmt == 1) sprintf(srcv, "float(as_type<half2>(%s)[%d])", B(false), (int)bits(w, 41, 1));
@@ -1146,92 +1454,110 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         const char *x = NA(srcv, bits(w, 45, 1), bits(w, 49, 1));
         int mode = (int)((bits(w, 39, 2)) | (bits(w, 42, 1) << 2));
         switch (mode) {
-        case 4: sprintf(t, "rint(%s)", x); break;
-        case 5: sprintf(t, "floor(%s)", x); break;
-        case 6: sprintf(t, "ceil(%s)", x); break;
-        case 7: sprintf(t, "trunc(%s)", x); break;
-        default: sprintf(t, "%s", x);
+            case 4: sprintf(t, "rint(%s)", x); break;
+            case 5: sprintf(t, "floor(%s)", x); break;
+            case 6: sprintf(t, "ceil(%s)", x); break;
+            case 7: sprintf(t, "trunc(%s)", x); break;
+            default: sprintf(t, "%s", x);
         }
-        if (dfmt == 1) {  // F16 result in the low half, high half zero
+        if (dfmt == 1) {   // F16 result in the low half, high half zero
             char h[2200];
-            snprintf(h, sizeof h, "(uint(as_type<ushort>(half(%s))))",
-                     bits(w, 50, 1) ? (sprintf(u, "saturate(%s)", t), u) : t);
+            snprintf(h, sizeof h, "(uint(as_type<ushort>(half(%s))))", bits(w, 50, 1) ? (sprintf(u, "saturate(%s)", t), u) : t);
             set_reg(c, d, h);
         } else {
             set_reg(c, d, FRES(t, bits(w, 50, 1)));
         }
     } else if (OPM(0x5c10000000000000ull, 0xfff8000000000000ull) || OPM(0x4c10000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3810000000000000ull, 0xfef8000000000000ull)) {  // IADD
+               OPM(0x3810000000000000ull, 0xfef8000000000000ull)) {   // IADD
         if (bits(w, 43, 1) || bits(w, 47, 1)) c->uses_cc = true;
-        sprintf(t, "(%s%s + %s%s%s)", bits(w, 49, 1) ? "-" : "", R(a), bits(w, 48, 1) ? "-" : "", B(false),
-                bits(w, 43, 1) ? " + cc" : "");
+        sprintf(t, "(%s%s + %s%s%s)", bits(w, 49, 1) ? "-" : "", R(a), bits(w, 48, 1) ? "-" : "", B(false), bits(w, 43, 1) ? " + cc" : "");
         if (bits(w, 47, 1)) {
-            sp(&c->body, "    { uint s = %s%s; uint t2 = %s%s; uint res = s + t2%s; cc = (res < s) ? 1u : 0u;\n", bits(w, 49, 1) ? "-" : "",
-               R(a), bits(w, 48, 1) ? "-" : "", B(false), bits(w, 43, 1) ? " + cc" : "");
-            if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = res;\n", d); }
+            sp(&c->body, "    { uint s = %s%s; uint t2 = %s%s; uint res = s + t2%s; cc = (res < s) ? 1u : 0u;\n", bits(w, 49, 1) ? "-" : "", R(a),
+               bits(w, 48, 1) ? "-" : "", B(false), bits(w, 43, 1) ? " + cc" : "");
+            if (d != RZ) {
+                c->reg_used[d] = 1;
+                sp(&c->body, "      r%d = res;\n", d);
+            }
             sp(&c->body, "    }\n");
         } else {
             set_reg(c, d, t);
         }
-    } else if (OPM(0x1c00000000000000ull, 0xfe00000000000000ull)) {  // IADD32I (CC bit 52, X bit 53)
+    } else if (OPM(0x1c00000000000000ull, 0xfe00000000000000ull)) {   // IADD32I (CC bit 52, X bit 53)
         bool wcc = bits(w, 52, 1), x = bits(w, 53, 1);
         if (wcc || x) c->uses_cc = true;
         sp(&c->body, "    { ulong sum = ulong(%s%s) + ulong(0x%08xu)%s;%s\n", bits(w, 56, 1) ? "-" : "", R(a), (uint32_t)bits(w, 20, 32),
            x ? " + ulong(cc)" : "", wcc ? " cc = uint(sum >> 32) & 1u;" : "");
-        if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = uint(sum);\n", d); }
+        if (d != RZ) {
+            c->reg_used[d] = 1;
+            sp(&c->body, "      r%d = uint(sum);\n", d);
+        }
         sp(&c->body, "    }\n");
     } else if (OPM(0x5cc0000000000000ull, 0xfff0000000000000ull) || OPM(0x4cc0000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0x38c0000000000000ull, 0xfef0000000000000ull)) {  // IADD3
+               OPM(0x38c0000000000000ull, 0xfef0000000000000ull)) {   // IADD3
         bool wcc3 = bits(w, 47, 1), x3 = bits(w, 48, 1);
-        if (wcc3 || x3) {  // carry in/out (64-bit address math)
+        if (wcc3 || x3) {   // carry in/out (64-bit address math)
             c->uses_cc = true;
-            sp(&c->body, "    { ulong sum = ulong(%s%s) + ulong(%s%s) + ulong(%s%s)%s;\n", bits(w, 51, 1) ? "-" : "", R(a),
-               bits(w, 50, 1) ? "-" : "", B(false), bits(w, 49, 1) ? "-" : "", R((int)bits(w, 39, 8)), x3 ? " + ulong(cc)" : "");
+            sp(&c->body, "    { ulong sum = ulong(%s%s) + ulong(%s%s) + ulong(%s%s)%s;\n", bits(w, 51, 1) ? "-" : "", R(a), bits(w, 50, 1) ? "-" : "", B(false),
+               bits(w, 49, 1) ? "-" : "", R((int)bits(w, 39, 8)), x3 ? " + ulong(cc)" : "");
             if (wcc3) sp(&c->body, "      cc = uint(sum >> 32) & 1u;\n");
-            if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = uint(sum);\n", d); }
+            if (d != RZ) {
+                c->reg_used[d] = 1;
+                sp(&c->body, "      r%d = uint(sum);\n", d);
+            }
             sp(&c->body, "    }\n");
         } else {
-            sprintf(t, "(%s%s + %s%s + %s%s)", bits(w, 51, 1) ? "-" : "", R(a), bits(w, 50, 1) ? "-" : "", B(false),
-                    bits(w, 49, 1) ? "-" : "", R((int)bits(w, 39, 8)));
+            sprintf(t, "(%s%s + %s%s + %s%s)", bits(w, 51, 1) ? "-" : "", R(a), bits(w, 50, 1) ? "-" : "", B(false), bits(w, 49, 1) ? "-" : "",
+                    R((int)bits(w, 39, 8)));
             set_reg(c, d, t);
         }
     } else if (OPM(0x5c18000000000000ull, 0xfff8000000000000ull) || OPM(0x4c18000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3818000000000000ull, 0xfef8000000000000ull)) {  // ISCADD
-        sprintf(t, "((%s%s << %du) + %s%s)", bits(w, 49, 1) ? "-" : "", R(a), (int)bits(w, 39, 5), bits(w, 48, 1) ? "-" : "",
-                B(false));
-        if (bits(w, 47, 1)) {  // .CC: carry out for a following IADD.X (64-bit address math)
+               OPM(0x3818000000000000ull, 0xfef8000000000000ull)) {   // ISCADD
+        sprintf(t, "((%s%s << %du) + %s%s)", bits(w, 49, 1) ? "-" : "", R(a), (int)bits(w, 39, 5), bits(w, 48, 1) ? "-" : "", B(false));
+        if (bits(w, 47, 1)) {   // .CC: carry out for a following IADD.X (64-bit address math)
             c->uses_cc = true;
-            sp(&c->body, "    { uint s = %s%s << %du; uint t2 = %s%s; uint res = s + t2; cc = (res < s) ? 1u : 0u;\n",
-               bits(w, 49, 1) ? "-" : "", R(a), (int)bits(w, 39, 5), bits(w, 48, 1) ? "-" : "", B(false));
-            if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = res;\n", d); }
+            sp(&c->body, "    { uint s = %s%s << %du; uint t2 = %s%s; uint res = s + t2; cc = (res < s) ? 1u : 0u;\n", bits(w, 49, 1) ? "-" : "", R(a),
+               (int)bits(w, 39, 5), bits(w, 48, 1) ? "-" : "", B(false));
+            if (d != RZ) {
+                c->reg_used[d] = 1;
+                sp(&c->body, "      r%d = res;\n", d);
+            }
             sp(&c->body, "    }\n");
         } else {
             set_reg(c, d, t);
         }
-    } else if (OPM(0x1400000000000000ull, 0xfc00000000000000ull)) {  // ISCADD32I
+    } else if (OPM(0x1400000000000000ull, 0xfc00000000000000ull)) {   // ISCADD32I
         sprintf(t, "((%s << %du) + 0x%08xu)", R(a), (int)bits(w, 53, 5), (uint32_t)bits(w, 20, 32));
         set_reg(c, d, t);
     } else if (OPM(0x5a00000000000000ull, 0xff80000000000000ull) || OPM(0x5200000000000000ull, 0xff80000000000000ull) ||
-               OPM(0x4a00000000000000ull, 0xff80000000000000ull) || OPM(0x3400000000000000ull, 0xfe00000000000000ull)) {  // IMAD
-        /* Bit layout from memory; no real word in the LAS or SMO corpora (docs/changes/2026-10-24-audio-small.md). d = [0,8), a = [8,16), B by the
+               OPM(0x4a00000000000000ull, 0xff80000000000000ull) || OPM(0x3400000000000000ull, 0xfe00000000000000ull)) {   // IMAD
+        /* Bit layout from memory; no real word in the LAS or SMO corpora (docs/archive/changes/2026-10-24-audio-small.md). d = [0,8), a = [8,16), B by the
          * opcode class (reg 0x5a, cbuf 0x4a, imm 0x34) and c = REG_39; the 0x52 form has B = REG_39 and c = a cbuf. Bit 48 signed, 49 negate c,
          * 51 negate the product, 53 .HI (high word of the 64-bit product, plus c). The carry forms (.CC bit 47, .X bit 54) fail cleanly. */
         char cb[128], pr[256], cs[160];
         const char *bv, *cv;
-        if ((w >> 56) == 0x52) { bv = R((int)bits(w, 39, 8)); cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb); }
-        else { bv = B(false); cv = R((int)bits(w, 39, 8)); }
+        if ((w >> 56) == 0x52) {
+            bv = R((int)bits(w, 39, 8));
+            cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+        } else {
+            bv = B(false);
+            cv = R((int)bits(w, 39, 8));
+        }
         bool sgn = bits(w, 48, 1), negc = bits(w, 49, 1), negp = bits(w, 51, 1), hi = bits(w, 53, 1);
-        if (bits(w, 47, 1) || bits(w, 54, 1)) { fail(c, "imad carry forms (.CC/.X)"); return; }
+        if (bits(w, 47, 1) || bits(w, 54, 1)) {
+            fail(c, "imad carry forms (.CC/.X)");
+            return;
+        }
         sprintf(cs, negc ? "(0u - %s)" : "%s", cv);
         if (hi) {
-            if (sgn) sprintf(pr, "ulong(long(int(%s)) * long(int(%s)))", R(a), bv); else sprintf(pr, "(ulong(%s) * ulong(%s))", R(a), bv);
+            if (sgn) sprintf(pr, "ulong(long(int(%s)) * long(int(%s)))", R(a), bv);
+            else sprintf(pr, "(ulong(%s) * ulong(%s))", R(a), bv);
             sprintf(t, "(uint(%s%s%s >> 32) + %s)", negp ? "(0ul - " : "", pr, negp ? ")" : "", cs);
         } else {
             sprintf(t, negp ? "((0u - %s * %s) + %s)" : "(%s * %s + %s)", R(a), bv, cs);
         }
         set_reg(c, d, t);
     } else if (OPM(0x5bd0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bd0000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0x36d0000000000000ull, 0xfef8000000000000ull)) {  // LEA (.LO, and .HI in the reg and cbuf forms)
+               OPM(0x36d0000000000000ull, 0xfef8000000000000ull)) {   // LEA (.LO, and .HI in the reg and cbuf forms)
         /* Bit layout from memory; no real word in the corpora. B by the opcode class, bit 45 negates B. .LO (opcode bit 51 clear): d = (a << scale) + B,
          * scale = [39,44), .CC bit 47 writes the carry out, .X bit 48 adds the carry in. .HI (bit 51 set, not in the imm class): the high word of the
          * 64-bit value {c:a} << scale, plus B, with scale = [28,33), c = REG_39 and .X at bit 48 (as in .LO). They build 64-bit address arithmetic with IADD.X. */
@@ -1239,19 +1565,25 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         char bn[160];
         sprintf(bn, negb ? "(0u - %s)" : "%s", B(false));
         if (hi) {
-            int sc = (int)bits(w, 28, 5); bool x = bits(w, 48, 1);
+            int sc = (int)bits(w, 28, 5);
+            bool x = bits(w, 48, 1);
             const char *cv = R((int)bits(w, 39, 8));
             if (x) c->uses_cc = true;
             if (sc) sprintf(t, "(((%s << %du) | (%s >> %du)) + %s%s)", cv, sc, R(a), 32 - sc, bn, x ? " + cc" : "");
             else sprintf(t, "(%s + %s%s)", cv, bn, x ? " + cc" : "");
             set_reg(c, d, t);
         } else {
-            int sc = (int)bits(w, 39, 5); bool wcc = bits(w, 47, 1), x = bits(w, 48, 1);
+            int sc = (int)bits(w, 39, 5);
+            bool wcc = bits(w, 47, 1), x = bits(w, 48, 1);
             if (wcc || x) {
                 c->uses_cc = true;
                 sp(&c->body, "    { ulong sum = ulong(%s << %du) + ulong(%s)%s;\n", R(a), sc, bn, x ? " + ulong(cc)" : "");
                 if (wcc) sp(&c->body, "      cc = uint(sum >> 32) & 1u;\n");
-                if (d != RZ) { c->reg_used[d] = 1; c->reg_cb[d] = -1; sp(&c->body, "      r%d = uint(sum);\n", d); }
+                if (d != RZ) {
+                    c->reg_used[d] = 1;
+                    c->reg_cb[d] = -1;
+                    sp(&c->body, "      r%d = uint(sum);\n", d);
+                }
                 sp(&c->body, "    }\n");
             } else {
                 sprintf(t, "((%s << %du) + %s)", R(a), sc, bn);
@@ -1259,44 +1591,50 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             }
         }
     } else if (OPM(0x5b60000000000000ull, 0xfff0000000000000ull) || OPM(0x4b60000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0x3660000000000000ull, 0xfef0000000000000ull)) {  // ISETP
+               OPM(0x3660000000000000ull, 0xfef0000000000000ull)) {   // ISETP
         char cmp[512];
         icmp_expr(cmp, (int)bits(w, 49, 3), R(a), B(false), bits(w, 48, 1));
         int p = (int)bits(w, 3, 3), q = (int)bits(w, 0, 3), bo = (int)bits(w, 45, 2);
         const char *pp = P((int)bits(w, 39, 3), bits(w, 42, 1));
         sp(&c->body, "    { bool cmp = %s; bool pp = %s;\n", cmp, pp);
-        if (p != PT) { c->pred_used[p] = 1; sp(&c->body, "      p%d = cmp %s pp;\n", p, bool_op(bo)); }
-        if (q != PT) { c->pred_used[q] = 1; sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo)); }
+        if (p != PT) {
+            c->pred_used[p] = 1;
+            sp(&c->body, "      p%d = cmp %s pp;\n", p, bool_op(bo));
+        }
+        if (q != PT) {
+            c->pred_used[q] = 1;
+            sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo));
+        }
         sp(&c->body, "    }\n");
     } else if (OPM(0x5b50000000000000ull, 0xfff0000000000000ull) || OPM(0x4b50000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0x3650000000000000ull, 0xfef0000000000000ull)) {  // ISET
+               OPM(0x3650000000000000ull, 0xfef0000000000000ull)) {   // ISET
         char cmp[512];
         icmp_expr(cmp, (int)bits(w, 49, 3), R(a), B(false), bits(w, 48, 1));
         sprintf(t, "((%s) %s %s)", cmp, bool_op((int)bits(w, 45, 2)), P((int)bits(w, 39, 3), bits(w, 42, 1)));
         sprintf(u, bits(w, 44, 1) ? "(%s ? 0x3f800000u : 0u)" : "(%s ? 0xFFFFFFFFu : 0u)", t);
         set_reg(c, d, u);
     } else if (OPM(0x5c20000000000000ull, 0xfff8000000000000ull) || OPM(0x4c20000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3820000000000000ull, 0xfef8000000000000ull)) {  // IMNMX
+               OPM(0x3820000000000000ull, 0xfef8000000000000ull)) {   // IMNMX
         bool sgn = bits(w, 48, 1);
         const char *x = R(a), *y = B(false), *p = P((int)bits(w, 39, 3), bits(w, 42, 1));
         if (sgn) sprintf(t, "uint(%s ? min(int(%s), int(%s)) : max(int(%s), int(%s)))", p, x, y, x, y);
         else sprintf(t, "(%s ? min(%s, %s) : max(%s, %s))", p, x, y, x, y);
         set_reg(c, d, t);
     } else if (OPM(0x5c48000000000000ull, 0xfff8000000000000ull) || OPM(0x4c48000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3848000000000000ull, 0xfef8000000000000ull)) {  // SHL
+               OPM(0x3848000000000000ull, 0xfef8000000000000ull)) {   // SHL
         const char *bv = B(false);
         if (bits(w, 39, 1)) sprintf(t, "(%s << (%s & 31u))", R(a), bv);
         else sprintf(t, "((%s) >= 32u ? 0u : (%s << (%s)))", bv, R(a), bv);
         set_reg(c, d, t);
     } else if (OPM(0x5c28000000000000ull, 0xfff8000000000000ull) || OPM(0x4c28000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3828000000000000ull, 0xfef8000000000000ull)) {  // SHR
+               OPM(0x3828000000000000ull, 0xfef8000000000000ull)) {   // SHR
         const char *bv = B(false);
         bool sgn = bits(w, 48, 1);
         if (sgn) sprintf(t, "uint(int(%s) >> min(%s, 31u))", R(a), bv);
         else sprintf(t, "((%s) >= 32u ? 0u : (%s >> (%s)))", bv, R(a), bv);
         set_reg(c, d, t);
     } else if (OPM(0x5c40000000000000ull, 0xfff8000000000000ull) || OPM(0x4c40000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3840000000000000ull, 0xfef8000000000000ull)) {  // LOP
+               OPM(0x3840000000000000ull, 0xfef8000000000000ull)) {   // LOP
         char x[64], y[256];
         sprintf(x, bits(w, 39, 1) ? "(~%s)" : "%s", R(a));
         sprintf(y, bits(w, 40, 1) ? "(~%s)" : "%s", B(false));
@@ -1309,12 +1647,15 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             c->pred_used[pd] = 1;
             int pop = (int)bits(w, 44, 2);
             sp(&c->body, "    { uint res = %s;\n", t);
-            if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = res;\n", d); }
+            if (d != RZ) {
+                c->reg_used[d] = 1;
+                sp(&c->body, "      r%d = res;\n", d);
+            }
             sp(&c->body, "      p%d = %s; }\n", pd, pop == 2 ? "(res == 0u)" : pop == 3 ? "(res != 0u)" : pop == 1 ? "true" : "false");
         } else {
             set_reg(c, d, t);
         }
-    } else if (OPM(0x0400000000000000ull, 0xfc00000000000000ull)) {  // LOP32I
+    } else if (OPM(0x0400000000000000ull, 0xfc00000000000000ull)) {   // LOP32I
         char x[64], y[64];
         sprintf(x, bits(w, 55, 1) ? "(~%s)" : "%s", R(a));
         sprintf(y, bits(w, 56, 1) ? "(~0x%08xu)" : "0x%08xu", (uint32_t)bits(w, 20, 32));
@@ -1324,13 +1665,24 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         else sprintf(t, "(%s %s %s)", x, ops[op], y);
         set_reg(c, d, t);
     } else if (OPM(0x5be0000000000000ull, 0xfff8000000000000ull) || OPM(0x3c00000000000000ull, 0xfc00000000000000ull) ||
-               OPM(0x0200000000000000ull, 0xfe00000000000000ull)) {  // LOP3
+               OPM(0x0200000000000000ull, 0xfe00000000000000ull)) {   // LOP3
         uint32_t lut;
         const char *bv, *cv;
         char bb[256];
-        if ((w >> 56) == 0x5b) { lut = (uint32_t)bits(w, 28, 8); bv = R((int)bits(w, 20, 8)); cv = R((int)bits(w, 39, 8)); }
-        else if ((w >> 58) == 0xf) { lut = (uint32_t)bits(w, 48, 8); sprintf(bb, "0x%08xu", (uint32_t)((uint32_t)bits(w, 20, 19) | ((uint32_t)bits(w, 56, 1) << 19) | (bits(w, 56, 1) ? 0xFFF00000u : 0))); bv = bb; cv = R((int)bits(w, 39, 8)); }
-        else { lut = (uint32_t)bits(w, 48, 8); bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, bb); cv = R((int)bits(w, 39, 8)); }
+        if ((w >> 56) == 0x5b) {
+            lut = (uint32_t)bits(w, 28, 8);
+            bv = R((int)bits(w, 20, 8));
+            cv = R((int)bits(w, 39, 8));
+        } else if ((w >> 58) == 0xf) {
+            lut = (uint32_t)bits(w, 48, 8);
+            sprintf(bb, "0x%08xu", (uint32_t)((uint32_t)bits(w, 20, 19) | ((uint32_t)bits(w, 56, 1) << 19) | (bits(w, 56, 1) ? 0xFFF00000u : 0)));
+            bv = bb;
+            cv = R((int)bits(w, 39, 8));
+        } else {
+            lut = (uint32_t)bits(w, 48, 8);
+            bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, bb);
+            cv = R((int)bits(w, 39, 8));
+        }
         char e[1024] = "0u";
         // sum of minterms
         int first = 1;
@@ -1338,13 +1690,18 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (!(lut & (1u << i))) continue;
             char term[256];
             sprintf(term, "(%s%s & %s%s & %s%s)", (i & 4) ? "" : "~", R(a), (i & 2) ? "" : "~", bv, (i & 1) ? "" : "~", cv);
-            if (first) { strcpy(e, term); first = 0; }
-            else { strcat(e, " | "); strcat(e, term); }
+            if (first) {
+                strcpy(e, term);
+                first = 0;
+            } else {
+                strcat(e, " | ");
+                strcat(e, term);
+            }
         }
         sprintf(t, "(%s)", e);
         set_reg(c, d, t);
     } else if (OPM(0x5c00000000000000ull, 0xfff8000000000000ull) || OPM(0x4c00000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3800000000000000ull, 0xfef8000000000000ull)) {  // BFE
+               OPM(0x3800000000000000ull, 0xfef8000000000000ull)) {   // BFE
         const char *bv = B(false);
         bool sgn = bits(w, 48, 1);
         /* .BREV: the source is bit-reversed before the field is extracted */
@@ -1352,39 +1709,62 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         else sprintf(t, sgn ? "bfe_s(%s, %s)" : "bfe_u(%s, %s)", R(a), bv);
         set_reg(c, d, t);
     } else if (OPM(0x5bf0000000000000ull, 0xfff8000000000000ull) || OPM(0x4bf0000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x36f0000000000000ull, 0xfef8000000000000ull) || OPM(0x53f0000000000000ull, 0xfff8000000000000ull)) {  // BFI
+               OPM(0x36f0000000000000ull, 0xfef8000000000000ull) || OPM(0x53f0000000000000ull, 0xfff8000000000000ull)) {   // BFI
         const char *bv, *cv;
         char cb[256];
         if (OPM(0x53f0000000000000ull, 0xfff8000000000000ull)) {
-            bv = R((int)bits(w, 39, 8)); cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
-            sprintf(t, "bfi(%s, %s, %s)", R(a), cv, bv);  // insert a into base (cbuf) with b = position/length
+            bv = R((int)bits(w, 39, 8));
+            cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+            sprintf(t, "bfi(%s, %s, %s)", R(a), cv, bv);   // insert a into base (cbuf) with b = position/length
             // bfi with cbuf form: B = REG_39 as position/length, C = cbuf as base
             sprintf(t, "bfi(%s, %s, %s)", R(a), bv, cv);
         } else {
-            bv = B(false); cv = R((int)bits(w, 39, 8));
+            bv = B(false);
+            cv = R((int)bits(w, 39, 8));
             sprintf(t, "bfi(%s, %s, %s)", R(a), bv, cv);
         }
         set_reg(c, d, t);
     } else if (OPM(0x5b00000000000000ull, 0xffc0000000000000ull) || OPM(0x4e00000000000000ull, 0xfe00000000000000ull) ||
-               OPM(0x3600000000000000ull, 0xfec0000000000000ull) || OPM(0x5100000000000000ull, 0xff80000000000000ull)) {  // XMAD
+               OPM(0x3600000000000000ull, 0xfec0000000000000ull) || OPM(0x5100000000000000ull, 0xff80000000000000ull)) {   // XMAD
         // per Ryujinx's InstXmad* decoders and EmitXmad
         const char *bv, *cv;
         char cb[256], bb[256];
         bool hb, psl, mrg, ext, ha = bits(w, 53, 1);
         int cmode;
         uint64_t top = w >> 56;
-        if (top == 0x5b) {  // reg, reg
-            bv = R((int)bits(w, 20, 8)); cv = R((int)bits(w, 39, 8));
-            hb = bits(w, 35, 1); psl = bits(w, 36, 1); mrg = bits(w, 37, 1); ext = bits(w, 38, 1); cmode = (int)bits(w, 50, 3);
-        } else if ((top & 0xfe) == 0x4e) {  // cbuf B
-            bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb); cv = R((int)bits(w, 39, 8));
-            hb = bits(w, 52, 1); psl = bits(w, 55, 1); mrg = bits(w, 56, 1); ext = bits(w, 54, 1); cmode = (int)bits(w, 50, 2);
-        } else if ((top & 0xfe) == 0x36) {  // imm16 B
-            sprintf(bb, "0x%xu", (uint32_t)bits(w, 20, 16)); bv = bb; cv = R((int)bits(w, 39, 8));
-            hb = false; psl = bits(w, 36, 1); mrg = bits(w, 37, 1); ext = bits(w, 38, 1); cmode = (int)bits(w, 50, 3);
-        } else {  // 0x51: B = reg39, C = cbuf
-            bv = R((int)bits(w, 39, 8)); cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
-            hb = bits(w, 52, 1); psl = false; mrg = false; ext = bits(w, 54, 1); cmode = (int)bits(w, 50, 2);
+        if (top == 0x5b) {   // reg, reg
+            bv = R((int)bits(w, 20, 8));
+            cv = R((int)bits(w, 39, 8));
+            hb = bits(w, 35, 1);
+            psl = bits(w, 36, 1);
+            mrg = bits(w, 37, 1);
+            ext = bits(w, 38, 1);
+            cmode = (int)bits(w, 50, 3);
+        } else if ((top & 0xfe) == 0x4e) {   // cbuf B
+            bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+            cv = R((int)bits(w, 39, 8));
+            hb = bits(w, 52, 1);
+            psl = bits(w, 55, 1);
+            mrg = bits(w, 56, 1);
+            ext = bits(w, 54, 1);
+            cmode = (int)bits(w, 50, 2);
+        } else if ((top & 0xfe) == 0x36) {   // imm16 B
+            sprintf(bb, "0x%xu", (uint32_t)bits(w, 20, 16));
+            bv = bb;
+            cv = R((int)bits(w, 39, 8));
+            hb = false;
+            psl = bits(w, 36, 1);
+            mrg = bits(w, 37, 1);
+            ext = bits(w, 38, 1);
+            cmode = (int)bits(w, 50, 3);
+        } else {   // 0x51: B = reg39, C = cbuf
+            bv = R((int)bits(w, 39, 8));
+            cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+            hb = bits(w, 52, 1);
+            psl = false;
+            mrg = false;
+            ext = bits(w, 54, 1);
+            cmode = (int)bits(w, 50, 2);
         }
         bool sa = bits(w, 48, 1), sb = bits(w, 49, 1), wcc = bits(w, 47, 1);
         if (ext || wcc) c->uses_cc = true;
@@ -1393,67 +1773,75 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (sb) sp(&c->body, "      xb = uint(int(short(xb)));\n");
         sp(&c->body, "      uint prod = xa * xb;%s\n", psl ? " prod <<= 16;" : "");
         switch (cmode) {
-        case 1: sp(&c->body, "      uint cc_ = %s & 0xFFFFu;\n", cv); break;                                  // clo
-        case 2: sp(&c->body, "      uint cc_ = %s >> 16;\n", cv); break;                                      // chi
-        case 3: sp(&c->body, "      uint cc_ = %s - (((xa >> 31) << 16) + ((xb >> 31) << 16));\n", cv); break;  // csfu
-        case 4: sp(&c->body, "      uint cc_ = %s + (xbu << 16);\n", cv); break;                              // cbcc
-        default: sp(&c->body, "      uint cc_ = %s;\n", cv);                                                  // cfull
+            case 1: sp(&c->body, "      uint cc_ = %s & 0xFFFFu;\n", cv); break;                                     // clo
+            case 2: sp(&c->body, "      uint cc_ = %s >> 16;\n", cv); break;                                         // chi
+            case 3: sp(&c->body, "      uint cc_ = %s - (((xa >> 31) << 16) + ((xb >> 31) << 16));\n", cv); break;   // csfu
+            case 4: sp(&c->body, "      uint cc_ = %s + (xbu << 16);\n", cv); break;                                 // cbcc
+            default: sp(&c->body, "      uint cc_ = %s;\n", cv);                                                     // cfull
         }
         if (ext) sp(&c->body, "      uint res = prod + (cc & 1u);\n");
         else sp(&c->body, "      uint res = prod + cc_;\n");
         if (wcc) sp(&c->body, "      cc = (res < prod) ? 1u : 0u;\n");
         if (mrg) sp(&c->body, "      res = (res & 0xFFFFu) | (xbu << 16);\n");
-        if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = res;\n", d); }
+        if (d != RZ) {
+            c->reg_used[d] = 1;
+            sp(&c->body, "      r%d = res;\n", d);
+        }
         sp(&c->body, "    }\n");
-    } else if (OPM(0x5090000000000000ull, 0xfff8000000000000ull)) {  // PSETP
+    } else if (OPM(0x5090000000000000ull, 0xfff8000000000000ull)) {   // PSETP
         const char *pa = P((int)bits(w, 12, 3), bits(w, 15, 1)), *pb = P((int)bits(w, 29, 3), bits(w, 32, 1));
         const char *pcc = P((int)bits(w, 39, 3), bits(w, 42, 1));
         int bo1 = (int)bits(w, 24, 2), bo2 = (int)bits(w, 45, 2);
         int p = (int)bits(w, 3, 3), q = (int)bits(w, 0, 3);
         sp(&c->body, "    { bool v = (%s %s %s); bool pp = %s;\n", pa, bool_op(bo1), pb, pcc);
-        if (p != PT) { c->pred_used[p] = 1; sp(&c->body, "      p%d = v %s pp;\n", p, bool_op(bo2)); }
-        if (q != PT) { c->pred_used[q] = 1; sp(&c->body, "      p%d = !v %s pp;\n", q, bool_op(bo2)); }
+        if (p != PT) {
+            c->pred_used[p] = 1;
+            sp(&c->body, "      p%d = v %s pp;\n", p, bool_op(bo2));
+        }
+        if (q != PT) {
+            c->pred_used[q] = 1;
+            sp(&c->body, "      p%d = !v %s pp;\n", q, bool_op(bo2));
+        }
         sp(&c->body, "    }\n");
-    } else if (OPM(0x5088000000000000ull, 0xfff8000000000000ull)) {  // PSET
+    } else if (OPM(0x5088000000000000ull, 0xfff8000000000000ull)) {   // PSET
         const char *pa = P((int)bits(w, 12, 3), bits(w, 15, 1)), *pb = P((int)bits(w, 29, 3), bits(w, 32, 1));
-        sprintf(t, "(((%s %s %s)) %s %s)", pa, bool_op((int)bits(w, 24, 2)), pb, bool_op((int)bits(w, 45, 2)),
-                P((int)bits(w, 39, 3), bits(w, 42, 1)));
+        sprintf(t, "(((%s %s %s)) %s %s)", pa, bool_op((int)bits(w, 24, 2)), pb, bool_op((int)bits(w, 45, 2)), P((int)bits(w, 39, 3), bits(w, 42, 1)));
         sprintf(u, bits(w, 44, 1) ? "(%s ? 0x3f800000u : 0u)" : "(%s ? 0xFFFFFFFFu : 0u)", t);
         set_reg(c, d, u);
-    } else if (OPM(0xf0c8000000000000ull, 0xfff8000000000000ull)) {  // S2R
+    } else if (OPM(0xf0c8000000000000ull, 0xfff8000000000000ull)) {   // S2R
         int sr = (int)bits(w, 20, 8);
         switch (sr) {
-        /* SR_Y_DIRECTION: -1 under the lower-left window origin (NVN's default; LASRecomp answers -1 for LAS, nxnative LAS notes), +1 under upper-left
+            /* SR_Y_DIRECTION: -1 under the lower-left window origin (NVN's default; LASRecomp answers -1 for LAS, nxnative LAS notes), +1 under upper-left
          * (Ryujinx's constant, right for the upper-left titles it runs). The origin is the guest's, from the pipeline key. */
-        case 0x12: set_reg(c, d, c->key && c->key->upper_left ? "0x3f800000u" : "0xbf800000u"); break;
-        case 0x21: set_reg(c, d, "tid.x"); break;
-        case 0x22: set_reg(c, d, "tid.y"); break;
-        case 0x23: set_reg(c, d, "tid.z"); break;
-        case 0x25: set_reg(c, d, "ctaid.x"); break;
-        case 0x26: set_reg(c, d, "ctaid.y"); break;
-        case 0x27: set_reg(c, d, "ctaid.z"); break;
-        case 0x00: set_reg(c, d, "0u"); break;
-        default: sprintf(t, "0u /* sr %#x */", sr); set_reg(c, d, t);
+            case 0x12: set_reg(c, d, c->key && c->key->upper_left ? "0x3f800000u" : "0xbf800000u"); break;
+            case 0x21: set_reg(c, d, "tid.x"); break;
+            case 0x22: set_reg(c, d, "tid.y"); break;
+            case 0x23: set_reg(c, d, "tid.z"); break;
+            case 0x25: set_reg(c, d, "ctaid.x"); break;
+            case 0x26: set_reg(c, d, "ctaid.y"); break;
+            case 0x27: set_reg(c, d, "ctaid.z"); break;
+            case 0x00: set_reg(c, d, "0u"); break;
+            default: sprintf(t, "0u /* sr %#x */", sr); set_reg(c, d, t);
         }
     } else if (OPM(0x5c30000000000000ull, 0xfff8000000000000ull) || OPM(0x4c30000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3830000000000000ull, 0xfef8000000000000ull)) {  // FLO
+               OPM(0x3830000000000000ull, 0xfef8000000000000ull)) {   // FLO
         const char *bv = B(false);
         sprintf(t, bits(w, 48, 1) ? "(int(%s) < 0 ? (31u - clz(~%s)) : (31u - clz(%s)))" : "(31u - clz(%s))", bv, bv, bv);
         set_reg(c, d, t);
     } else if (OPM(0x5c08000000000000ull, 0xfff8000000000000ull) || OPM(0x4c08000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3808000000000000ull, 0xfef8000000000000ull)) {  // POPC
+               OPM(0x3808000000000000ull, 0xfef8000000000000ull)) {   // POPC
         sprintf(t, bits(w, 40, 1) ? "popcount(~%s)" : "popcount(%s)", B(false));
         set_reg(c, d, t);
     } else if (OPM(0x5c38000000000000ull, 0xfff8000000000000ull) || OPM(0x4c38000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3838000000000000ull, 0xfef8000000000000ull)) {  // IMUL
+               OPM(0x3838000000000000ull, 0xfef8000000000000ull)) {   // IMUL
         if (bits(w, 39, 1)) sprintf(t, bits(w, 40, 1) ? "uint(mulhi(int(%s), int(%s)))" : "mulhi(%s, %s)", R(a), B(false));
         else sprintf(t, "(%s * %s)", R(a), B(false));
         set_reg(c, d, t);
-    } else if (OPM(0x1f00000000000000ull, 0xff00000000000000ull)) {  // IMUL32I
+    } else if (OPM(0x1f00000000000000ull, 0xff00000000000000ull)) {   // IMUL32I
         sprintf(t, "(%s * 0x%08xu)", R(a), (uint32_t)bits(w, 20, 32));
         set_reg(c, d, t);
     } else if (OPM(0x5ce0000000000000ull, 0xfff8000000000000ull) || OPM(0x4ce0000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x38e0000000000000ull, 0xfef8000000000000ull)) {  // I2I
+               OPM(0x38e0000000000000ull, 0xfef8000000000000ull)) {   // I2I
         int dt = (int)((bits(w, 8, 2)) | (bits(w, 12, 1) << 2)), st = (int)((bits(w, 10, 2)) | (bits(w, 13, 1) << 2));
         int sel = (int)bits(w, 41, 2);
         char src[256];
@@ -1463,38 +1851,52 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (ssz == 0) sprintf(src, ssg ? "int(char((%s >> %d) & 0xFFu))" : "int((%s >> %d) & 0xFFu)", bv, sel * 8);
         else if (ssz == 1) sprintf(src, ssg ? "int(short((%s >> %d) & 0xFFFFu))" : "int((%s >> %d) & 0xFFFFu)", bv, sel * 8);
         else sprintf(src, "int(%s)", bv);
-        if (bits(w, 49, 1)) { sprintf(u, "abs(%s)", src); strcpy(src, u); }
-        if (bits(w, 45, 1)) { sprintf(u, "(-%s)", src); strcpy(src, u); }
+        if (bits(w, 49, 1)) {
+            sprintf(u, "abs(%s)", src);
+            strcpy(src, u);
+        }
+        if (bits(w, 45, 1)) {
+            sprintf(u, "(-%s)", src);
+            strcpy(src, u);
+        }
         int dsz = dt & 3;
         bool dsg = dt & 4, sat = bits(w, 50, 1);
         if (dsz == 0) sprintf(t, sat ? (dsg ? "uint(clamp(%s, -128, 127))" : "uint(clamp(%s, 0, 255))") : "(uint(%s) & 0xFFu)", src);
         else if (dsz == 1) sprintf(t, sat ? (dsg ? "uint(clamp(%s, -32768, 32767))" : "uint(clamp(%s, 0, 65535))") : "(uint(%s) & 0xFFFFu)", src);
         else sprintf(t, "uint(%s)", src);
         set_reg(c, d, t);
-        if (bits(w, 47, 1)) {  // .CC: zero/sign flags of the result
+        if (bits(w, 47, 1)) {   // .CC: zero/sign flags of the result
             c->uses_cc = true;
             sp(&c->body, "    { uint ccv = %s; ccz = ccv == 0u; ccs = int(ccv) < 0; }\n", t);
         }
     } else if (OPM(0x5bc0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bc0000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0x36c0000000000000ull, 0xfef0000000000000ull) || OPM(0x53c0000000000000ull, 0xfff0000000000000ull)) {  // PRMT
+               OPM(0x36c0000000000000ull, 0xfef0000000000000ull) || OPM(0x53c0000000000000ull, 0xfff0000000000000ull)) {   // PRMT
         const char *bv, *cv;
         char cb[256];
-        if (OPM(0x53c0000000000000ull, 0xfff0000000000000ull)) { bv = R((int)bits(w, 39, 8)); cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb); }
-        else { bv = B(false); cv = R((int)bits(w, 39, 8)); }
-        int pmode = (int)bits(w, 48, 4);     // 0 default, 1 F4E, 2 B4E, 3 RC8, 4 ECL, 5 ECR, 6 RC16
-        if (pmode > 6) { fail(c, "prmt mode %d", pmode); return; }
+        if (OPM(0x53c0000000000000ull, 0xfff0000000000000ull)) {
+            bv = R((int)bits(w, 39, 8));
+            cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+        } else {
+            bv = B(false);
+            cv = R((int)bits(w, 39, 8));
+        }
+        int pmode = (int)bits(w, 48, 4);   // 0 default, 1 F4E, 2 B4E, 3 RC8, 4 ECL, 5 ECR, 6 RC16
+        if (pmode > 6) {
+            fail(c, "prmt mode %d", pmode);
+            return;
+        }
         if (pmode) sprintf(t, "prmt_m(%s, %s, %s, %uu)", R(a), cv, bv, pmode);
         else sprintf(t, "prmt(%s, %s, %s)", R(a), cv, bv);
         set_reg(c, d, t);
     } else if (OPM(0x5cf8000000000000ull, 0xfff8000000000000ull) || OPM(0x38f8000000000000ull, 0xfef8000000000000ull) ||
-               OPM(0x5bf8000000000000ull, 0xfff8000000000000ull) || OPM(0x36f8000000000000ull, 0xfef8000000000000ull)) {  // SHF
+               OPM(0x5bf8000000000000ull, 0xfff8000000000000ull) || OPM(0x36f8000000000000ull, 0xfef8000000000000ull)) {   // SHF
         bool right = (w >> 56) == 0x5c || (w >> 57) == (0x38 >> 1);
         const char *sh = ((w >> 60) == 3) ? B(false) : R((int)bits(w, 20, 8));
         const char *hi = R((int)bits(w, 39, 8));
         if (right) sprintf(t, "uint((((ulong(%s) << 32) | ulong(%s)) >> (%s & 31u)))", hi, R(a), sh);
         else sprintf(t, "uint((((ulong(%s) << 32) | ulong(%s)) << (%s & 31u)) >> 32)", hi, R(a), sh);
         set_reg(c, d, t);
-    } else if (OPM(0xeed0000000000000ull, 0xfff8000000000000ull) || OPM(0xeed8000000000000ull, 0xfff8000000000000ull)) {  // LDG / STG
+    } else if (OPM(0xeed0000000000000ull, 0xfff8000000000000ull) || OPM(0xeed8000000000000ull, 0xfff8000000000000ull)) {   // LDG / STG
         bool store = bits(w, 51, 1);
         bool wide = bits(w, 45, 1);
         int size = (int)bits(w, 48, 3);
@@ -1509,28 +1911,33 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             // GPU-address mode: the address is a Metal GPU virtual address (driver constants hold it); `gmem` becomes that pointer and `ga` the byte offset
             sp(&c->body, "    { ulong ga0 = %s; bool ok = ga0 != 0ul; device uchar *gmem = (device uchar *)ga0; const ulong ga = 0ul;\n", addr);
         } else
-        sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul;\n", addr,
-           (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
-        static const char *const ld_small[] = {"uint(gmem[ga])", "uint(int(char(gmem[ga])))",
-                                               "uint(*(device ushort *)(gmem + ga))", "uint(int(*(device short *)(gmem + ga)))"};
+            sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga < 0x%llxul;\n", addr, (unsigned long long)maxwell_gmem_base,
+               (unsigned long long)maxwell_gmem_size);
+        static const char *const ld_small[] = {"uint(gmem[ga])", "uint(int(char(gmem[ga])))", "uint(*(device ushort *)(gmem + ga))",
+                                               "uint(int(*(device short *)(gmem + ga)))"};
         int nw = size == 5 ? 2 : size >= 6 ? 4 : 1;
         if (!store) {
             if (size < 4) {
-                if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = ok ? %s : 0u;\n", d, ld_small[size]); }
+                if (d != RZ) {
+                    c->reg_used[d] = 1;
+                    sp(&c->body, "      r%d = ok ? %s : 0u;\n", d, ld_small[size]);
+                }
             } else {
                 for (int k = 0; k < nw; k++)
-                    if (d != RZ && d + k < RZ) { c->reg_used[d + k] = 1; sp(&c->body, "      r%d = ok ? *(device uint *)(gmem + ga + %du) : 0u;\n", d + k, k * 4); }
+                    if (d != RZ && d + k < RZ) {
+                        c->reg_used[d + k] = 1;
+                        sp(&c->body, "      r%d = ok ? *(device uint *)(gmem + ga + %du) : 0u;\n", d + k, k * 4);
+                    }
             }
         } else {
             if (size == 0 || size == 1) sp(&c->body, "      if (ok) gmem[ga] = uchar(%s);\n", R(d));
             else if (size == 2 || size == 3) sp(&c->body, "      if (ok) *(device ushort *)(gmem + ga) = ushort(%s);\n", R(d));
             else
-                for (int k = 0; k < nw; k++)
-                    sp(&c->body, "      if (ok) *(device uint *)(gmem + ga + %du) = %s;\n", k * 4, R(d == RZ ? RZ : d + k));
+                for (int k = 0; k < nw; k++) sp(&c->body, "      if (ok) *(device uint *)(gmem + ga + %du) = %s;\n", k * 4, R(d == RZ ? RZ : d + k));
         }
         sp(&c->body, "    }\n");
     } else if (emit_half(c, w)) {
-    } else if (OPM(0x50f8000000000000ull, 0xfff8000000000000ull)) {  // FSWZADD
+    } else if (OPM(0x50f8000000000000ull, 0xfff8000000000000ull)) {   // FSWZADD
         // per quad lane (laneid & 3), 2 bits of the swizzle pick: a+b, b-a, a-b, b
         uint32_t swz = (uint32_t)bits(w, 28, 8);
         if (c->stage != STAGE_FRAGMENT) {
@@ -1541,7 +1948,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         }
         set_reg(c, d, t);
     } else if (OPM(0x5b40000000000000ull, 0xfff0000000000000ull) || OPM(0x4b40000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0x3640000000000000ull, 0xfef0000000000000ull) || OPM(0x5340000000000000ull, 0xfff0000000000000ull)) {  // ICMP
+               OPM(0x3640000000000000ull, 0xfef0000000000000ull) || OPM(0x5340000000000000ull, 0xfff0000000000000ull)) {   // ICMP
         char cmp[512], cb[256], bb[256];
         const char *bv, *cv;
         if (OPM(0x5340000000000000ull, 0xfff0000000000000ull)) {
@@ -1554,7 +1961,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         icmp_expr(cmp, (int)bits(w, 49, 3), cv, "0u", bits(w, 48, 1));
         sprintf(t, "(%s ? %s : %s)", cmp, R(a), bv);
         set_reg(c, d, t);
-    } else if (OPM(0xef40000000000000ull, 0xfff8000000000000ull) || OPM(0xef50000000000000ull, 0xfff8000000000000ull)) {  // LDL / STL
+    } else if (OPM(0xef40000000000000ull, 0xfff8000000000000ull) || OPM(0xef50000000000000ull, 0xfff8000000000000ull)) {   // LDL / STL
         // thread-private local memory, modelled as a word array (byte/short accesses within a word)
         bool store = bits(w, 52, 1);
         int size = (int)bits(w, 48, 3);
@@ -1569,10 +1976,16 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (size < 4) {
                 static const char *const ext[] = {"(v >> sh) & 0xFFu", "uint(int(char((v >> sh) & 0xFFu)))", "(v >> sh) & 0xFFFFu",
                                                   "uint(int(short((v >> sh) & 0xFFFFu)))"};
-                if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      uint v = lmem[(la >> 2) & %du]; uint sh = (la & 3u) * 8u; r%d = %s;\n", LMEM_WORDS - 1, d, ext[size]); }
+                if (d != RZ) {
+                    c->reg_used[d] = 1;
+                    sp(&c->body, "      uint v = lmem[(la >> 2) & %du]; uint sh = (la & 3u) * 8u; r%d = %s;\n", LMEM_WORDS - 1, d, ext[size]);
+                }
             } else {
                 for (int k = 0; k < nw; k++)
-                    if (d != RZ && d + k < RZ) { c->reg_used[d + k] = 1; sp(&c->body, "      r%d = lmem[((la >> 2) + %du) & %du];\n", d + k, k, LMEM_WORDS - 1); }
+                    if (d != RZ && d + k < RZ) {
+                        c->reg_used[d + k] = 1;
+                        sp(&c->body, "      r%d = lmem[((la >> 2) + %du) & %du];\n", d + k, k, LMEM_WORDS - 1);
+                    }
             }
         } else {
             if (size < 4) {
@@ -1580,18 +1993,17 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                 sp(&c->body, "      uint sh = (la & 3u) * 8u; uint i = (la >> 2) & %du; lmem[i] = (lmem[i] & ~(0x%xu << sh)) | ((%s & 0x%xu) << sh);\n",
                    LMEM_WORDS - 1, m, R(d), m);
             } else {
-                for (int k = 0; k < nw; k++)
-                    sp(&c->body, "      lmem[((la >> 2) + %du) & %du] = %s;\n", k, LMEM_WORDS - 1, R(d == RZ ? RZ : d + k));
+                for (int k = 0; k < nw; k++) sp(&c->body, "      lmem[((la >> 2) + %du) & %du] = %s;\n", k, LMEM_WORDS - 1, R(d == RZ ? RZ : d + k));
             }
         }
         sp(&c->body, "    }\n");
-    } else if (OPM(0xef10000000000000ull, 0xfff8000000000000ull)) {  // SHFL
+    } else if (OPM(0xef10000000000000ull, 0xfff8000000000000ull)) {   // SHFL
         int mode = (int)bits(w, 30, 2);
         char bb[32];
         const char *bv = bits(w, 28, 1) ? (sprintf(bb, "%uu", (unsigned)bits(w, 20, 5)), bb) : R((int)bits(w, 20, 8));
         int pd = (int)bits(w, 48, 3);
         if (c->stage == STAGE_VERTEX) {
-            set_reg(c, d, R(a));  // no SIMD-group functions in vertex functions: lane-local value
+            set_reg(c, d, R(a));   // no SIMD-group functions in vertex functions: lane-local value
         } else if (mode == 3) {
             bool quad = bits(w, 28, 1) && bits(w, 20, 5) < 4;
             sprintf(t, quad ? "quad_shuffle_xor(%s, ushort(%s))" : "simd_shuffle_xor(%s, ushort(%s))", R(a), bv);
@@ -1601,15 +2013,19 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             sprintf(t, "%s(%s, ushort(%s))", fn[mode], R(a), bv);
             set_reg(c, d, t);
         }
-        if (pd != PT) { c->pred_used[pd] = 1; sp(&c->body, "    p%d = true;\n", pd); }
+        if (pd != PT) {
+            c->pred_used[pd] = 1;
+            sp(&c->body, "    p%d = true;\n", pd);
+        }
     } else if (OPM(0x38f0000000000000ull, 0xfef8000000000000ull) || OPM(0x5cf0000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x4cf0000000000000ull, 0xfff8000000000000ull)) {  // R2P
+               OPM(0x4cf0000000000000ull, 0xfff8000000000000ull)) {   // R2P
         int shift = (int)bits(w, 41, 2) * 8;
         const char *mask = B(false);
-        if (bits(w, 40, 1)) {  // .CC: the flags Z, S, C (bits 0-2; overflow isn't tracked) take bits of Ra where the mask selects them
+        if (bits(w, 40, 1)) {   // .CC: the flags Z, S, C (bits 0-2; overflow isn't tracked) take bits of Ra where the mask selects them
             c->uses_cc = true;
             sp(&c->body, "    { uint rv = %s >> %du, rm = %s;\n", R(a), shift, mask);
-            sp(&c->body, "      if (rm & 1u) ccz = (rv & 1u) != 0u;\n      if (rm & 2u) ccs = (rv & 2u) != 0u;\n      if (rm & 4u) cc = (rv >> 2) & 1u;\n    }\n");
+            sp(&c->body,
+               "      if (rm & 1u) ccz = (rv & 1u) != 0u;\n      if (rm & 2u) ccs = (rv & 2u) != 0u;\n      if (rm & 4u) cc = (rv >> 2) & 1u;\n    }\n");
             goto r2p_done;
         }
         for (int i = 0; i < 7; i++) {
@@ -1618,96 +2034,150 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         }
     r2p_done:;
     } else if (OPM(0x38e8000000000000ull, 0xfef8000000000000ull) || OPM(0x5ce8000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x4ce8000000000000ull, 0xfff8000000000000ull)) {  // P2R
+               OPM(0x4ce8000000000000ull, 0xfff8000000000000ull)) {   // P2R
         int shift = (int)bits(w, 41, 2) * 8;
         const char *mask = B(false);
-        if (bits(w, 40, 1)) {  // .CC: the flags Z, S, C, O as bits 0-3 (overflow isn't tracked: 0)
+        if (bits(w, 40, 1)) {   // .CC: the flags Z, S, C, O as bits 0-3 (overflow isn't tracked: 0)
             c->uses_cc = true;
             sp(&c->body, "    { uint pr = (ccz ? 1u : 0u) | (ccs ? 2u : 0u) | ((cc & 1u) << 2);\n");
             sp(&c->body, "      uint m = (%s & 0xFu) << %du;\n", mask, shift);
-            if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = (%s & ~m) | ((pr << %du) & m);\n", d, R(a), shift); }
+            if (d != RZ) {
+                c->reg_used[d] = 1;
+                sp(&c->body, "      r%d = (%s & ~m) | ((pr << %du) & m);\n", d, R(a), shift);
+            }
             sp(&c->body, "    }\n");
             goto p2r_done;
         }
         sp(&c->body, "    { uint pr = 0u;\n");
-        for (int i = 0; i < 7; i++) { c->pred_used[i] = 1; sp(&c->body, "      pr |= (p%d ? 1u : 0u) << %du;\n", i, i); }
+        for (int i = 0; i < 7; i++) {
+            c->pred_used[i] = 1;
+            sp(&c->body, "      pr |= (p%d ? 1u : 0u) << %du;\n", i, i);
+        }
         sp(&c->body, "      uint m = (%s & 0x7Fu) << %du;\n", mask, shift);
-        if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = (%s & ~m) | ((pr << %du) & m);\n", d, R(a), shift); }
+        if (d != RZ) {
+            c->reg_used[d] = 1;
+            sp(&c->body, "      r%d = (%s & ~m) | ((pr << %du) & m);\n", d, R(a), shift);
+        }
         sp(&c->body, "    }\n");
     p2r_done:;
-    } else if (OPM(0xe250000000000000ull, 0xfff0000000000020ull)) {  // BRX reg + imm (relative)
+    } else if (OPM(0xe250000000000000ull, 0xfff0000000000020ull)) {   // BRX reg + imm (relative)
         // computed targets can name a scheduling word; execution continues at the next slot (as for BRA)
-        sp(&c->body, "    { uint t = %uu + %s + 0x%08xu; if (((t >> 3) & 3u) == 0u) t += 8u; pc = t; continue; }\n", pc + 8, R(a),
-           (uint32_t)sbits(w, 20, 24));
-    } else if (OPM(0x50a0000000000000ull, 0xfff8000000000000ull)) {  // CSETP (zero/sign flags only)
+        sp(&c->body, "    { uint t = %uu + %s + 0x%08xu; if (((t >> 3) & 3u) == 0u) t += 8u; pc = t; continue; }\n", pc + 8, R(a), (uint32_t)sbits(w, 20, 24));
+    } else if (OPM(0x50a0000000000000ull, 0xfff8000000000000ull)) {   // CSETP (zero/sign flags only)
         int test = (int)bits(w, 8, 5);
         const char *cond;
         switch (test) {
-        case 0: cond = "false"; break;
-        case 15: cond = "true"; break;
-        case 2: case 10: cond = "ccz"; break;
-        case 5: case 13: cond = "!ccz"; break;
-        case 1: case 9: cond = "ccs"; break;
-        case 6: case 14: cond = "!ccs"; break;
-        case 4: case 12: cond = "(!ccz && !ccs)"; break;
-        case 3: case 11: cond = "(ccz || ccs)"; break;
-        default: cond = "false"; fail(c, "csetp test %d", test);
+            case 0: cond = "false"; break;
+            case 15: cond = "true"; break;
+            case 2:
+            case 10: cond = "ccz"; break;
+            case 5:
+            case 13: cond = "!ccz"; break;
+            case 1:
+            case 9: cond = "ccs"; break;
+            case 6:
+            case 14: cond = "!ccs"; break;
+            case 4:
+            case 12: cond = "(!ccz && !ccs)"; break;
+            case 3:
+            case 11: cond = "(ccz || ccs)"; break;
+            default: cond = "false"; fail(c, "csetp test %d", test);
         }
         c->uses_cc = true;
         int p = (int)bits(w, 3, 3), q = (int)bits(w, 0, 3), bo = (int)bits(w, 45, 2);
         const char *pc_ = P((int)bits(w, 39, 3), bits(w, 42, 1));
         sp(&c->body, "    { bool cmp = %s; bool pp = %s;\n", cond, pc_);
-        if (p != PT) { c->pred_used[p] = 1; sp(&c->body, "      p%d = cmp %s pp;\n", p, bool_op(bo)); }
-        if (q != PT) { c->pred_used[q] = 1; sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo)); }
+        if (p != PT) {
+            c->pred_used[p] = 1;
+            sp(&c->body, "      p%d = cmp %s pp;\n", p, bool_op(bo));
+        }
+        if (q != PT) {
+            c->pred_used[q] = 1;
+            sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo));
+        }
         sp(&c->body, "    }\n");
-    } else if (OPM(0x5098000000000000ull, 0xfff8000000000000ull)) {  // CSET
+    } else if (OPM(0x5098000000000000ull, 0xfff8000000000000ull)) {   // CSET
         fail(c, "cset");
-    } else if (OPM(0xef48000000000000ull, 0xfff8000000000000ull) || OPM(0xef58000000000000ull, 0xfff8000000000000ull)) {  // LDS / STS
+    } else if (OPM(0xef48000000000000ull, 0xfff8000000000000ull) || OPM(0xef58000000000000ull, 0xfff8000000000000ull)) {   // LDS / STS
         // threadgroup (shared) memory: a byte array over `threadgroup uint smem_w[]`. Out-of-range accesses read 0 / are dropped (the hardware faults).
         bool store = bits(w, 52, 1);
         int size = (int)bits(w, 48, 3);
         int32_t off = (int32_t)sbits(w, 20, 24);
-        if (c->stage != STAGE_COMPUTE) { fail(c, "shared memory (LDS/STS) outside a compute shader"); return; }
+        if (c->stage != STAGE_COMPUTE) {
+            fail(c, "shared memory (LDS/STS) outside a compute shader");
+            return;
+        }
         c->uses_smem = true;
         int nw = size == 5 ? 2 : size >= 6 ? 4 : 1;
         int nbytes = size < 2 ? 1 : size < 4 ? 2 : nw * 4;
         char addr[128];
-        if (a == RZ) { sprintf(addr, "%uu", (uint32_t)off); if (off >= 0 && (uint32_t)off + nbytes > c->smem_need) c->smem_need = (uint32_t)off + nbytes; }
-        else { sprintf(addr, "(%s + %uu)", R(a), (uint32_t)off); c->smem_dyn = true; }
+        if (a == RZ) {
+            sprintf(addr, "%uu", (uint32_t)off);
+            if (off >= 0 && (uint32_t)off + nbytes > c->smem_need) c->smem_need = (uint32_t)off + nbytes;
+        } else {
+            sprintf(addr, "(%s + %uu)", R(a), (uint32_t)off);
+            c->smem_dyn = true;
+        }
         sp(&c->body, "    { uint sa = %s; bool ok = sa + %uu <= SMEM_BYTES;\n", addr, (unsigned)nbytes);
         if (!store) {
             static const char *const ld_small[] = {"uint(smem[sa])", "uint(int(char(smem[sa])))", "uint(*(threadgroup ushort *)(smem + sa))",
                                                    "uint(int(*(threadgroup short *)(smem + sa)))"};
             if (size < 4) {
-                if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = ok ? %s : 0u;\n", d, ld_small[size]); c->reg_cb[d] = -1; }
+                if (d != RZ) {
+                    c->reg_used[d] = 1;
+                    sp(&c->body, "      r%d = ok ? %s : 0u;\n", d, ld_small[size]);
+                    c->reg_cb[d] = -1;
+                }
             } else {
                 for (int k = 0; k < nw; k++)
-                    if (d != RZ && d + k < RZ) { c->reg_used[d + k] = 1; c->reg_cb[d + k] = -1; sp(&c->body, "      r%d = ok ? *(threadgroup uint *)(smem + sa + %uu) : 0u;\n", d + k, k * 4); }
+                    if (d != RZ && d + k < RZ) {
+                        c->reg_used[d + k] = 1;
+                        c->reg_cb[d + k] = -1;
+                        sp(&c->body, "      r%d = ok ? *(threadgroup uint *)(smem + sa + %uu) : 0u;\n", d + k, k * 4);
+                    }
             }
         } else {
             if (size < 2) sp(&c->body, "      if (ok) smem[sa] = uchar(%s);\n", R(d));
             else if (size < 4) sp(&c->body, "      if (ok) *(threadgroup ushort *)(smem + sa) = ushort(%s);\n", R(d));
             else
-                for (int k = 0; k < nw; k++)
-                    sp(&c->body, "      if (ok) *(threadgroup uint *)(smem + sa + %uu) = %s;\n", k * 4, R(d == RZ ? RZ : d + k));
+                for (int k = 0; k < nw; k++) sp(&c->body, "      if (ok) *(threadgroup uint *)(smem + sa + %uu) = %s;\n", k * 4, R(d == RZ ? RZ : d + k));
         }
         sp(&c->body, "    }\n");
-    } else if (OPM(0xec00000000000000ull, 0xff00000000000000ull)) {  // ATOMS (shared memory atomic)
+    } else if (OPM(0xec00000000000000ull, 0xff00000000000000ull)) {   // ATOMS (shared memory atomic)
         // layout from the Maxwell tables, unverified against real shaders: Rd old value, Ra address, Rb operand, offset 30-51, size 28-29, op 52-55
         int op = (int)bits(w, 52, 4), size = (int)bits(w, 28, 2), rb = (int)bits(w, 20, 8);
         int32_t off = (int32_t)sbits(w, 30, 22);
-        if (c->stage != STAGE_COMPUTE) { fail(c, "shared memory atomic outside a compute shader"); return; }
-        if (op > 8) { fail(c, "atoms op %d (CAS and float forms are not translated)", op); return; }
-        if (size > 1) { fail(c, "atoms 64-bit"); return; }
-        c->uses_smem = true; c->atom_tg = true;
+        if (c->stage != STAGE_COMPUTE) {
+            fail(c, "shared memory atomic outside a compute shader");
+            return;
+        }
+        if (op > 8) {
+            fail(c, "atoms op %d (CAS and float forms are not translated)", op);
+            return;
+        }
+        if (size > 1) {
+            fail(c, "atoms 64-bit");
+            return;
+        }
+        c->uses_smem = true;
+        c->atom_tg = true;
         char addr[128];
-        if (a == RZ) { sprintf(addr, "%uu", (uint32_t)off); if (off >= 0 && (uint32_t)off + 4 > c->smem_need) c->smem_need = (uint32_t)off + 4; }
-        else { sprintf(addr, "(%s + %uu)", R(a), (uint32_t)off); c->smem_dyn = true; }
+        if (a == RZ) {
+            sprintf(addr, "%uu", (uint32_t)off);
+            if (off >= 0 && (uint32_t)off + 4 > c->smem_need) c->smem_need = (uint32_t)off + 4;
+        } else {
+            sprintf(addr, "(%s + %uu)", R(a), (uint32_t)off);
+            c->smem_dyn = true;
+        }
         sp(&c->body, "    { uint sa = %s; bool ok = sa + 4u <= SMEM_BYTES;\n", addr);
         sp(&c->body, "      uint old = ok ? atom_tg((threadgroup atomic_uint *)(smem + sa), %uu, %s, %s) : 0u;\n", op, R(rb), size == 1 ? "true" : "false");
-        if (d != RZ) { c->reg_used[d] = 1; c->reg_cb[d] = -1; sp(&c->body, "      r%d = old;\n", d); }
+        if (d != RZ) {
+            c->reg_used[d] = 1;
+            c->reg_cb[d] = -1;
+            sp(&c->body, "      r%d = old;\n", d);
+        }
         sp(&c->body, "    }\n");
-    } else if (OPM(0xed00000000000000ull, 0xff00000000000000ull) || OPM(0xebf8000000000000ull, 0xfff8000000000000ull)) {  // ATOM / RED (global memory atomic)
+    } else if (OPM(0xed00000000000000ull, 0xff00000000000000ull) || OPM(0xebf8000000000000ull, 0xfff8000000000000ull)) {   // ATOM / RED (global memory atomic)
         // layout from the Maxwell tables, unverified against real shaders. ATOM: Rd old value, Ra address, Rb operand, offset 28-47, E 48, size 49-51, op 52-55.
         // RED: no result; operand in the Rd field, size 20-22, op 23-25.
         bool red = (w >> 56) == 0xeb;
@@ -1715,9 +2185,16 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         int rb = red ? d : (int)bits(w, 20, 8);
         bool wide = bits(w, 48, 1);
         int64_t off = sbits(w, 28, 20);
-        if (op > 8) { fail(c, "%s op %d (CAS and float forms are not translated)", red ? "red" : "atom", op); return; }
-        if (size > 1) { fail(c, "%s of size %d (only 32-bit integer forms are translated)", red ? "red" : "atom", size); return; }
-        c->info->uses_gmem = true; c->info->uses_gmem_store = true;
+        if (op > 8) {
+            fail(c, "%s op %d (CAS and float forms are not translated)", red ? "red" : "atom", op);
+            return;
+        }
+        if (size > 1) {
+            fail(c, "%s of size %d (only 32-bit integer forms are translated)", red ? "red" : "atom", size);
+            return;
+        }
+        c->info->uses_gmem = true;
+        c->info->uses_gmem_store = true;
         char addr[256];
         if (a == RZ) sprintf(addr, "ulong(%lld)", (long long)off);
         else if (wide) sprintf(addr, "((ulong(%s) << 32 | ulong(%s)) + ulong(%lld))", R(a + 1), R(a), (long long)off);
@@ -1726,49 +2203,81 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         if (maxwell_gmem_size == ~0ull)
             sp(&c->body, "    { ulong ga0 = %s; bool ok = ga0 != 0ul; device uchar *gmem = (device uchar *)ga0; const ulong ga = 0ul;\n", addr);
         else
-            sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga + 4ul <= 0x%llxul;\n", addr, (unsigned long long)maxwell_gmem_base, (unsigned long long)maxwell_gmem_size);
+            sp(&c->body, "    { ulong ga = %s - 0x%llxul; bool ok = ga + 4ul <= 0x%llxul;\n", addr, (unsigned long long)maxwell_gmem_base,
+               (unsigned long long)maxwell_gmem_size);
         sp(&c->body, "      uint old = ok ? atom_dev((device atomic_uint *)(gmem + ga), %uu, %s, %s) : 0u;\n", op, R(rb), size == 1 ? "true" : "false");
-        if (!red && d != RZ) { c->reg_used[d] = 1; c->reg_cb[d] = -1; sp(&c->body, "      r%d = old;\n", d); }
-        else sp(&c->body, "      (void)old;\n");
+        if (!red && d != RZ) {
+            c->reg_used[d] = 1;
+            c->reg_cb[d] = -1;
+            sp(&c->body, "      r%d = old;\n", d);
+        } else sp(&c->body, "      (void)old;\n");
         sp(&c->body, "    }\n");
-    } else if (OPM(0x50d8000000000000ull, 0xfff8000000000000ull)) {  // VOTE
+    } else if (OPM(0x50d8000000000000ull, 0xfff8000000000000ull)) {   // VOTE
         // Rd = ballot of the active lanes' predicate, Pd (bits 45-47) = ALL / ANY / EQ (bits 48-49) of it. Vertex functions have no SIMD-group
         // operations: one lane votes alone.
         int vop = (int)bits(w, 48, 2), pd = (int)bits(w, 45, 3);
-        if (vop > 2) { fail(c, "vote mode %d", vop); return; }
+        if (vop > 2) {
+            fail(c, "vote mode %d", vop);
+            return;
+        }
         sp(&c->body, "    { bool vp = %s;\n", P((int)bits(w, 39, 3), bits(w, 42, 1)));
         if (c->stage == STAGE_VERTEX) {
-            if (d != RZ) { c->reg_used[d] = 1; c->reg_cb[d] = -1; sp(&c->body, "      r%d = vp ? 1u : 0u;\n", d); }
-            if (pd != PT) { c->pred_used[pd] = 1; sp(&c->body, "      p%d = %s;\n", pd, vop == 2 ? "true" : "vp"); }
-        } else {
-            if (d != RZ) { c->reg_used[d] = 1; c->reg_cb[d] = -1; sp(&c->body, "      r%d = uint(static_cast<ulong>(simd_ballot(vp)));\n", d); }
+            if (d != RZ) {
+                c->reg_used[d] = 1;
+                c->reg_cb[d] = -1;
+                sp(&c->body, "      r%d = vp ? 1u : 0u;\n", d);
+            }
             if (pd != PT) {
                 c->pred_used[pd] = 1;
-                sp(&c->body, vop == 0 ? "      p%d = simd_all(vp);\n" : vop == 1 ? "      p%d = simd_any(vp);\n" : "      p%d = simd_all(vp) || !simd_any(vp);\n", pd);
+                sp(&c->body, "      p%d = %s;\n", pd, vop == 2 ? "true" : "vp");
+            }
+        } else {
+            if (d != RZ) {
+                c->reg_used[d] = 1;
+                c->reg_cb[d] = -1;
+                sp(&c->body, "      r%d = uint(static_cast<ulong>(simd_ballot(vp)));\n", d);
+            }
+            if (pd != PT) {
+                c->pred_used[pd] = 1;
+                sp(&c->body,
+                   vop == 0   ? "      p%d = simd_all(vp);\n"
+                   : vop == 1 ? "      p%d = simd_any(vp);\n"
+                              : "      p%d = simd_all(vp) || !simd_any(vp);\n",
+                   pd);
             }
         }
         sp(&c->body, "    }\n");
-    } else if (OPM(0x50c8000000000000ull, 0xfff8000000000000ull)) {  // CS2R: 64-bit special register read (SRZ / clock counters)
+    } else if (OPM(0x50c8000000000000ull, 0xfff8000000000000ull)) {   // CS2R: 64-bit special register read (SRZ / clock counters)
         // no clock source is exposed to the shader: the pair reads 0 (SRZ is 0 by definition)
-        for (int k = 0; k < 2; k++) if (d != RZ && d + k < RZ) { c->reg_used[d + k] = 1; c->reg_cb[d + k] = -1; sp(&c->body, "    r%d = 0u;\n", d + k); }
-    } else if (OPM(0xf0a8000000000000ull, 0xfff8000000000000ull)) {  // BAR
+        for (int k = 0; k < 2; k++)
+            if (d != RZ && d + k < RZ) {
+                c->reg_used[d + k] = 1;
+                c->reg_cb[d + k] = -1;
+                sp(&c->body, "    r%d = 0u;\n", d + k);
+            }
+    } else if (OPM(0xf0a8000000000000ull, 0xfff8000000000000ull)) {   // BAR
         sp(&c->body, "    threadgroup_barrier(mem_flags::mem_threadgroup);\n");
-    } else if (OPM(0x5c70000000000000ull, 0xfff8000000000000ull) || OPM(0x4c70000000000000ull, 0xfff8000000000000ull) || OPM(0x3870000000000000ull, 0xfef8000000000000ull)) {
+    } else if (OPM(0x5c70000000000000ull, 0xfff8000000000000ull) || OPM(0x4c70000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0x3870000000000000ull, 0xfef8000000000000ull)) {
         fail(c, "DADD: double precision is not supported (Metal has no f64)");
-    } else if (OPM(0x5c80000000000000ull, 0xfff8000000000000ull) || OPM(0x4c80000000000000ull, 0xfff8000000000000ull) || OPM(0x3880000000000000ull, 0xfef8000000000000ull)) {
+    } else if (OPM(0x5c80000000000000ull, 0xfff8000000000000ull) || OPM(0x4c80000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0x3880000000000000ull, 0xfef8000000000000ull)) {
         fail(c, "DMUL: double precision is not supported (Metal has no f64)");
-    } else if (OPM(0x5b70000000000000ull, 0xfff8000000000000ull) || OPM(0x4b70000000000000ull, 0xfff8000000000000ull) || OPM(0x3670000000000000ull, 0xfef8000000000000ull) ||
-               OPM(0x5370000000000000ull, 0xfff8000000000000ull)) {
+    } else if (OPM(0x5b70000000000000ull, 0xfff8000000000000ull) || OPM(0x4b70000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0x3670000000000000ull, 0xfef8000000000000ull) || OPM(0x5370000000000000ull, 0xfff8000000000000ull)) {
         fail(c, "DFMA: double precision is not supported (Metal has no f64)");
-    } else if (OPM(0x5b80000000000000ull, 0xfff8000000000000ull) || OPM(0x4b80000000000000ull, 0xfff8000000000000ull) || OPM(0x3680000000000000ull, 0xfef8000000000000ull)) {
+    } else if (OPM(0x5b80000000000000ull, 0xfff8000000000000ull) || OPM(0x4b80000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0x3680000000000000ull, 0xfef8000000000000ull)) {
         fail(c, "DSETP: double precision is not supported (Metal has no f64)");
-    } else if (OPM(0x5c50000000000000ull, 0xfff8000000000000ull) || OPM(0x4c50000000000000ull, 0xfff8000000000000ull) || OPM(0x3850000000000000ull, 0xfef8000000000000ull)) {
+    } else if (OPM(0x5c50000000000000ull, 0xfff8000000000000ull) || OPM(0x4c50000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0x3850000000000000ull, 0xfef8000000000000ull)) {
         fail(c, "DMNMX: double precision is not supported (Metal has no f64)");
     } else if (OPM(0xfbe0000000000000ull, 0xfff8000000000000ull)) {
         fail(c, "OUT: geometry shader output is not supported (Metal has no geometry stage)");
     } else if ((w >> 56) == 0xea || (w >> 56) == 0xeb) {   // (RED, 0xebf8, is matched above)
-        fail(c, "surface access (SULD/SUST/SUATOM/SURED family, opcode %03x) is not supported: no image binding in the translator contract", (unsigned)(w >> 52));
-    } else if (OPM(0x3a00000000000000ull, 0xfe00000000000000ull)) {  // VMNMX: video (byte/half/word) integer min/max, then a second op with Rc
+        fail(c, "surface access (SULD/SUST/SUATOM/SURED family, opcode %03x) is not supported: no image binding in the translator contract",
+             (unsigned)(w >> 52));
+    } else if (OPM(0x3a00000000000000ull, 0xfe00000000000000ull)) {   // VMNMX: video (byte/half/word) integer min/max, then a second op with Rc
         /* Field layout as Ryujinx's InstVmnmx decoder (MIT; MacNativeGames/vendor/ryujinx InstDecoders.cs): selects A bits 36..38 + sign 48, B 28..30 + sign 49,
          * B from a register when bit 50 else imm16 at 20, MX (max) bit 56, D-format (signed second op) 54, SAT 55, video op 51..53, CC 47.
          * Unlike Ryujinx the mixed-signedness case is computed exactly in 64 bits. Found in Animal Crossing (fragment 23e43e94e45bb1d5 @0x3e8: 3-way max). */
@@ -1776,33 +2285,42 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         int asel = (int)bits(w, 36, 3), bsel = (int)bits(w, 28, 3), asg = (int)bits(w, 48, 1), bsg = (int)bits(w, 49, 1);
         bool mx = bits(w, 56, 1), dfmt = bits(w, 54, 1), sat = bits(w, 55, 1), bvid = bits(w, 50, 1);
         int vop = (int)bits(w, 51, 3), rc = (int)bits(w, 39, 8);
-        static const int sh[] = { 0, 8, 16, 24, 0, 16, 0, 0 };
-        static const char *const ux[] = { "0xFFu", "0xFFu", "0xFFu", "0xFFu", "0xFFFFu", "0xFFFFu", "0xFFFFFFFFu", "0xFFFFFFFFu" };
-        static const int nb[] = { 8, 8, 8, 8, 16, 16, 32, 32 };
+        static const int sh[] = {0, 8, 16, 24, 0, 16, 0, 0};
+        static const char *const ux[] = {"0xFFu", "0xFFu", "0xFFu", "0xFFu", "0xFFFFu", "0xFFFFu", "0xFFFFFFFFu", "0xFFFFFFFFu"};
+        static const int nb[] = {8, 8, 8, 8, 16, 16, 32, 32};
         char ea[160], eb[160];
-#define VSEL(out, src, sel, sg) do { if (nb[sel] == 32) sprintf(out, (sg) ? "long(int(%s))" : "long(%s)", src); \
-            else if (sg) sprintf(out, "long(int(%s << %du) >> %d)", src, 32 - nb[sel] - sh[sel], 32 - nb[sel]); \
-            else sprintf(out, "long((%s >> %du) & %s)", src, sh[sel], ux[sel]); } while (0)
+#define VSEL(out, src, sel, sg)                                                                                                                                \
+    do {                                                                                                                                                       \
+        if (nb[sel] == 32) sprintf(out, (sg) ? "long(int(%s))" : "long(%s)", src);                                                                             \
+        else if (sg) sprintf(out, "long(int(%s << %du) >> %d)", src, 32 - nb[sel] - sh[sel], 32 - nb[sel]);                                                    \
+        else sprintf(out, "long((%s >> %du) & %s)", src, sh[sel], ux[sel]);                                                                                    \
+    } while (0)
         VSEL(ea, R(a), asel, asg);
         if (bvid) VSEL(eb, R((int)bits(w, 20, 8)), bsel, bsg);
-        else { uint32_t im = (uint32_t)bits(w, 20, 16); sprintf(eb, "long(%d)", bsg ? (int)(int16_t)im : (int)im); }
+        else {
+            uint32_t im = (uint32_t)bits(w, 20, 16);
+            sprintf(eb, "long(%d)", bsg ? (int)(int16_t)im : (int)im);
+        }
 #undef VSEL
-        bool rsg = asg == bsg ? asg : !mx;     /* mixed signedness: a max fits u32, a min fits s32 */
+        bool rsg = asg == bsg ? asg : !mx; /* mixed signedness: a max fits u32, a min fits s32 */
         sp(&c->body, "    { long va = %s, vb = %s; long vr = %s(va, vb);\n", ea, eb, mx ? "max" : "min");
         if (sat && dfmt && !rsg) sp(&c->body, "      vr = min(vr, 2147483647l);\n");
         else if (sat && !dfmt && rsg) sp(&c->body, "      vr = max(vr, 0l);\n");
         sp(&c->body, "      uint res = uint(vr); uint vc = %s;\n", R(rc));
         switch (vop) {
-        case 0: sp(&c->body, "      res = insert_bits(vc, res, 16u, 16u);\n"); break;
-        case 1: sp(&c->body, "      res = insert_bits(vc, res, 0u, 16u);\n"); break;
-        case 2: sp(&c->body, "      res = insert_bits(vc, res, 0u, 8u);\n"); break;
-        case 3: sp(&c->body, "      res = insert_bits(vc, res, 16u, 8u);\n"); break;
-        case 4: sp(&c->body, "      res = res + vc;\n"); break;
-        case 5: sp(&c->body, dfmt ? "      res = uint(min(int(res), int(vc)));\n" : "      res = min(res, vc);\n"); break;
-        case 6: sp(&c->body, dfmt ? "      res = uint(max(int(res), int(vc)));\n" : "      res = max(res, vc);\n"); break;
-        default: break;
+            case 0: sp(&c->body, "      res = insert_bits(vc, res, 16u, 16u);\n"); break;
+            case 1: sp(&c->body, "      res = insert_bits(vc, res, 0u, 16u);\n"); break;
+            case 2: sp(&c->body, "      res = insert_bits(vc, res, 0u, 8u);\n"); break;
+            case 3: sp(&c->body, "      res = insert_bits(vc, res, 16u, 8u);\n"); break;
+            case 4: sp(&c->body, "      res = res + vc;\n"); break;
+            case 5: sp(&c->body, dfmt ? "      res = uint(min(int(res), int(vc)));\n" : "      res = min(res, vc);\n"); break;
+            case 6: sp(&c->body, dfmt ? "      res = uint(max(int(res), int(vc)));\n" : "      res = max(res, vc);\n"); break;
+            default: break;
         }
-        if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = res;\n", d); }
+        if (d != RZ) {
+            c->reg_used[d] = 1;
+            sp(&c->body, "      r%d = res;\n", d);
+        }
         sp(&c->body, "    }\n");
     } else {
         fail(c, "unknown instruction %016llx at %#x", (unsigned long long)w, pc);
@@ -1812,9 +2330,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
 }
 
 // ------------------------------------------------------------------ program assembly
-static bool is_branch_target_op(uint64_t w) {
-    return ((w & 0xfff0000000000020ull) == 0xe240000000000000ull);
-}
+static bool is_branch_target_op(uint64_t w) { return ((w & 0xfff0000000000020ull) == 0xe240000000000000ull); }
 
 ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, const ShaderKey *key) {
     ShaderInfo *info = calloc(1, sizeof *info);
@@ -1840,7 +2356,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     for (size_t i = 0; i < n; i++) {
         uint64_t w = ((const uint64_t *)code)[i];
         if (i % 4 == 0) continue;
-        if ((w & 0xfff0000000000000ull) == 0xe240000000000000ull && sbits(w, 20, 24) == -8 && end) break;  // bra self
+        if ((w & 0xfff0000000000000ull) == 0xe240000000000000ull && sbits(w, 20, 24) == -8 && end) break;   // bra self
         if (w == 0 && i > 4) break;
         end = i + 1;
     }
@@ -1852,16 +2368,14 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (i % 4 == 0) continue;
         uint64_t w = ((const uint64_t *)code)[i];
         uint32_t pc = (uint32_t)(i * 8);
-        bool is_flow = (w & 0xfff0000000000020ull) == 0xe240000000000000ull ||
-                       (w & 0xfff0000000000020ull) == 0xe290000000000000ull ||
-                       (w & 0xfff0000000000020ull) == 0xe2a0000000000000ull ||
-                       (w & 0xfff0000000000020ull) == 0xe2b0000000000000ull;
+        bool is_flow = (w & 0xfff0000000000020ull) == 0xe240000000000000ull || (w & 0xfff0000000000020ull) == 0xe290000000000000ull ||
+                       (w & 0xfff0000000000020ull) == 0xe2a0000000000000ull || (w & 0xfff0000000000020ull) == 0xe2b0000000000000ull;
         if (is_flow) {
             int64_t t = norm_target((int64_t)pc + 8 + sbits(w, 20, 24));
             if (t >= 0 && (size_t)(t / 8) < end) label[t / 8] = 1;
             any_branch = true;
         }
-        if ((w & 0xfff0000000000000ull) == 0xe250000000000000ull) {  // BRX: any instruction may be a target
+        if ((w & 0xfff0000000000000ull) == 0xe250000000000000ull) {   // BRX: any instruction may be a target
             any_branch = true;
             memset(label, 1, end);
         }
@@ -1881,8 +2395,9 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (annotate) sp(&c->body, "    // pc %x: %016llx\n", pc, (unsigned long long)((const uint64_t *)code)[i]);
         emit_insn(c, ((const uint64_t *)code)[i], pc);
         info->num_insts++;
-        if (key && key->probe_pc && key->probe_pc == pc && stage == STAGE_FRAGMENT)       /* NAPPLE_SHADER_PROBE: show intermediate registers as the colour */
-            sp(&c->body, "    r0 = as_type<uint>(as_type<float>(r%u) * %.9gf); r1 = as_type<uint>(as_type<float>(r%u) * %.9gf); r2 = as_type<uint>(as_type<float>(r%u) * %.9gf); r3 = 0x3f800000u; exit_now = true; break;\n",
+        if (key && key->probe_pc && key->probe_pc == pc && stage == STAGE_FRAGMENT) /* NAPPLE_SHADER_PROBE: show intermediate registers as the colour */
+            sp(&c->body,
+               "    r0 = as_type<uint>(as_type<float>(r%u) * %.9gf); r1 = as_type<uint>(as_type<float>(r%u) * %.9gf); r2 = as_type<uint>(as_type<float>(r%u) * %.9gf); r3 = 0x3f800000u; exit_now = true; break;\n",
                key->probe_reg[0], key->probe_scale, key->probe_reg[1], key->probe_scale, key->probe_reg[2], key->probe_scale);
     }
     free(label);
@@ -1894,41 +2409,55 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (sz > 32768u) fail(c, "shared memory of %u bytes exceeds Metal's 32 KB threadgroup limit", sz);
         info->shared_mem = sz;
     }
-    if (c->fail) { free(c->body.buf); free(c); return info; }
+    if (c->fail) {
+        free(c->body.buf);
+        free(c);
+        return info;
+    }
 
     // ---------------------------------------------------------- MSL source
     Str s = {0};
     sp(&s, "#include <metal_stdlib>\nusing namespace metal;\n");
     sp(&s, "static inline uint cbr(constant uint4 *cb, uint sz, uint off) { return off < sz ? cb[off >> 4][(off >> 2) & 3] : 0u; }\n");
-    sp(&s, "static inline uint bfe_u(uint v, uint ctl) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u) return 0u; if (pos >= 32u) return 0u; return extract_bits(v, pos, min(len, 32u - pos)); }\n");
-    sp(&s, "static inline uint bfe_s(uint v, uint ctl) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u) return 0u; if (pos >= 32u) return (int(v) < 0) ? 0xFFFFFFFFu : 0u; return uint(extract_bits(int(v), pos, min(len, 32u - pos))); }\n");
-    sp(&s, "static inline uint bfi(uint ins, uint ctl, uint base) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u || pos >= 32u) return base; return insert_bits(base, ins, pos, min(len, 32u - pos)); }\n");
-    sp(&s, "static inline float fswzadd(float a, float b, uint swz, uint lane) { uint m = (swz >> ((lane & 3u) * 2u)) & 3u; float ma = m == 1u ? -1.0f : (m == 3u ? 0.0f : 1.0f); float mb = m == 2u ? -1.0f : 1.0f; return a * ma + b * mb; }\n");
+    sp(&s,
+       "static inline uint bfe_u(uint v, uint ctl) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u) return 0u; if (pos >= 32u) return 0u; return extract_bits(v, pos, min(len, 32u - pos)); }\n");
+    sp(&s,
+       "static inline uint bfe_s(uint v, uint ctl) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u) return 0u; if (pos >= 32u) return (int(v) < 0) ? 0xFFFFFFFFu : 0u; return uint(extract_bits(int(v), pos, min(len, 32u - pos))); }\n");
+    sp(&s,
+       "static inline uint bfi(uint ins, uint ctl, uint base) { uint pos = ctl & 0xFFu, len = (ctl >> 8) & 0xFFu; if (len == 0u || pos >= 32u) return base; return insert_bits(base, ins, pos, min(len, 32u - pos)); }\n");
+    sp(&s,
+       "static inline float fswzadd(float a, float b, uint swz, uint lane) { uint m = (swz >> ((lane & 3u) * 2u)) & 3u; float ma = m == 1u ? -1.0f : (m == 3u ? 0.0f : 1.0f); float mb = m == 2u ? -1.0f : 1.0f; return a * ma + b * mb; }\n");
     sp(&s, "static inline uint2 rsc(uint2 c, float4 s) { return (s.x == 1.0f && s.y == 1.0f) ? c : uint2(floor((float2(c) + 0.5f) * s.xy)); }\n");
-    sp(&s, "static inline float2 hx(uint v, uint swz) { if (swz == 1u) return float2(as_type<float>(v)); float2 h = float2(as_type<half2>(v)); return swz == 2u ? h.xx : swz == 3u ? h.yy : h; }\n");
+    sp(&s,
+       "static inline float2 hx(uint v, uint swz) { if (swz == 1u) return float2(as_type<float>(v)); float2 h = float2(as_type<half2>(v)); return swz == 2u ? h.xx : swz == 3u ? h.yy : h; }\n");
     // merges on half2 lanes rather than with integer masks: on an M1 (macOS 15.0.1) the Metal compiler miscompiled
     // (old & 0xFFFF0000u) | lo in Link's body shader - the merged low half read back as a constant 512.0 and Link
     // rendered white. Same bits either way.
-    sp(&s, "static inline uint hpack(float2 r, uint merge, uint old) { if (merge == 1u) return as_type<uint>(r.x); half2 o = as_type<half2>(old), n = half2(r); if (merge == 2u) o.x = n.x; else if (merge == 3u) o.y = n.y; else o = n; return as_type<uint>(o); }\n");
-    sp(&s, "static inline uint prmt(uint a, uint b, uint sel) { uint r = 0; for (uint i = 0; i < 4; i++) { uint n = (sel >> (i * 4)) & 15u; uint s = n & 7u; uint byte = s < 4 ? (a >> (s * 8)) & 0xFFu : (b >> ((s - 4) * 8)) & 0xFFu; if (n & 8u) byte = (byte & 0x80u) ? 0xFFu : 0u; r |= byte << (i * 8); } return r; }\n");
+    sp(&s,
+       "static inline uint hpack(float2 r, uint merge, uint old) { if (merge == 1u) return as_type<uint>(r.x); half2 o = as_type<half2>(old), n = half2(r); if (merge == 2u) o.x = n.x; else if (merge == 3u) o.y = n.y; else o = n; return as_type<uint>(o); }\n");
+    sp(&s,
+       "static inline uint prmt(uint a, uint b, uint sel) { uint r = 0; for (uint i = 0; i < 4; i++) { uint n = (sel >> (i * 4)) & 15u; uint s = n & 7u; uint byte = s < 4 ? (a >> (s * 8)) & 0xFFu : (b >> ((s - 4) * 8)) & 0xFFu; if (n & 8u) byte = (byte & 0x80u) ? 0xFFu : 0u; r |= byte << (i * 8); } return r; }\n");
     /* PRMT modes: the selector is the low two bits of the selector operand, expanded to the default nibble form (F4E, B4E, RC8, ECL, ECR, RC16) */
-    sp(&s, "static inline uint prmt_m(uint a, uint b, uint sel, uint mode) { uint c = sel & 3u; uint n = 0; for (uint i = 0; i < 4; i++) { uint v; "
-           "switch (mode) { case 1u: v = c + i; break; case 2u: v = 4u + ((c + 4u - i) & 3u); break; case 3u: v = c; break; case 4u: v = i <= c ? i : 3u; break; case 5u: v = min(i, c); break; default: v = (c & 1u) * 2u + (i & 1u); break; } "
-           "n |= (v & 7u) << (i * 4); } return prmt(a, b, n); }\n");
+    sp(&s,
+       "static inline uint prmt_m(uint a, uint b, uint sel, uint mode) { uint c = sel & 3u; uint n = 0; for (uint i = 0; i < 4; i++) { uint v; "
+       "switch (mode) { case 1u: v = c + i; break; case 2u: v = 4u + ((c + 4u - i) & 3u); break; case 3u: v = c; break; case 4u: v = i <= c ? i : 3u; break; case 5u: v = min(i, c); break; default: v = (c & 1u) * 2u + (i & 1u); break; } "
+       "n |= (v & 7u) << (i * 4); } return prmt(a, b, n); }\n");
 
     if (c->atom_dev || c->atom_tg) {
         /* integer atomics; op: 0 add, 1 min, 2 max, 3 inc (wraps at the operand), 4 dec (wraps to the operand), 5 and, 6 or, 7 xor, 8 exchange. All return the old value. */
         static const char *const as[2][2] = {{"atom_dev", "device"}, {"atom_tg", "threadgroup"}};
         for (int k = 0; k < 2; k++) {
             if (!(k == 0 ? c->atom_dev : c->atom_tg)) continue;
-            sp(&s, "static inline uint %s(%s atomic_uint *p, uint op, uint v, bool sgn) {\n  switch (op) {\n"
-                   "  case 0u: return atomic_fetch_add_explicit(p, v, memory_order_relaxed);\n  case 5u: return atomic_fetch_and_explicit(p, v, memory_order_relaxed);\n"
-                   "  case 6u: return atomic_fetch_or_explicit(p, v, memory_order_relaxed);\n  case 7u: return atomic_fetch_xor_explicit(p, v, memory_order_relaxed);\n"
-                   "  case 8u: return atomic_exchange_explicit(p, v, memory_order_relaxed);\n  default: break;\n  }\n"
-                   "  uint old = atomic_load_explicit(p, memory_order_relaxed);\n  for (;;) {\n    uint nv;\n"
-                   "    if (op == 1u) nv = sgn ? uint(min(int(old), int(v))) : min(old, v);\n    else if (op == 2u) nv = sgn ? uint(max(int(old), int(v))) : max(old, v);\n"
-                   "    else if (op == 3u) nv = old >= v ? 0u : old + 1u;\n    else nv = (old == 0u || old > v) ? v : old - 1u;\n"
-                   "    if (atomic_compare_exchange_weak_explicit(p, &old, nv, memory_order_relaxed, memory_order_relaxed)) return old;\n  }\n}\n", as[k][0], as[k][1]);
+            sp(&s,
+               "static inline uint %s(%s atomic_uint *p, uint op, uint v, bool sgn) {\n  switch (op) {\n"
+               "  case 0u: return atomic_fetch_add_explicit(p, v, memory_order_relaxed);\n  case 5u: return atomic_fetch_and_explicit(p, v, memory_order_relaxed);\n"
+               "  case 6u: return atomic_fetch_or_explicit(p, v, memory_order_relaxed);\n  case 7u: return atomic_fetch_xor_explicit(p, v, memory_order_relaxed);\n"
+               "  case 8u: return atomic_exchange_explicit(p, v, memory_order_relaxed);\n  default: break;\n  }\n"
+               "  uint old = atomic_load_explicit(p, memory_order_relaxed);\n  for (;;) {\n    uint nv;\n"
+               "    if (op == 1u) nv = sgn ? uint(min(int(old), int(v))) : min(old, v);\n    else if (op == 2u) nv = sgn ? uint(max(int(old), int(v))) : max(old, v);\n"
+               "    else if (op == 3u) nv = old >= v ? 0u : old + 1u;\n    else nv = (old == 0u || old > v) ? v : old - 1u;\n"
+               "    if (atomic_compare_exchange_weak_explicit(p, &old, nv, memory_order_relaxed, memory_order_relaxed)) return old;\n  }\n}\n",
+               as[k][0], as[k][1]);
         }
     }
     if (c->uses_smem) sp(&s, "constant uint SMEM_BYTES = %uu;\n", info->shared_mem);
@@ -1942,7 +2471,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             sp(&s, "  %s4 a%d [[attribute(%d)]];\n", kind == 1 ? "int" : kind == 2 ? "uint" : "float", i, i);
         }
         sp(&s, "};\n");
-        sp(&s, "struct VOut {\n  float4 pos [[position, invariant]];\n");  // depth pre-pass + EQUAL test needs identical positions
+        sp(&s, "struct VOut {\n  float4 pos [[position, invariant]];\n");   // depth pre-pass + EQUAL test needs identical positions
         for (int i = 0; i < 32; i++)
             if (c->out_attr_mask & (1u << i)) sp(&s, "  float4 v%d [[user(locn%d)]];\n", i, i);
         if (info->writes_point_size) sp(&s, "  float psize [[point_size]];\n");
@@ -1961,7 +2490,10 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             int kind = key ? key->rt_kind[rt] : 0;
             sp(&s, "  %s4 c%d [[color(%d)]];\n", kind == 1 ? "int" : kind == 2 ? "uint" : "float", rt, rt);
         }
-        if (c->omap_depth) { sp(&s, "  float depth [[depth(any)]];\n"); info->writes_depth = true; }
+        if (c->omap_depth) {
+            sp(&s, "  float depth [[depth(any)]];\n");
+            info->writes_depth = true;
+        }
         sp(&s, "};\n");
     }
 
@@ -1969,11 +2501,12 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     Str args = {0};
     for (int i = 0; i < 18; i++)
         if (info->cbuf_mask & (1u << i)) sp(&args, ", constant uint4 *cb%d [[buffer(%d)]]", i, i);
-    if (info->cbuf_dynamic) sp(&args, ", constant uint *cbsz [[buffer(%d)]]", CBSZ_BUFFER_INDEX);       /* bound sizes: a read past the end returns 0 like the hardware */
+    if (info->cbuf_dynamic)
+        sp(&args, ", constant uint *cbsz [[buffer(%d)]]", CBSZ_BUFFER_INDEX); /* bound sizes: a read past the end returns 0 like the hardware */
     if (info->uses_gmem) {
         if (info->cbuf_mask & (1u << GMEM_BUFFER_INDEX)) {
             free(args.buf);
-            args = (Str){0};  // (was a use after free + double free of args.buf)
+            args = (Str){0};   // (was a use after free + double free of args.buf)
             fail(c, "cbuf %d clashes with gmem", GMEM_BUFFER_INDEX);
         }
         if (maxwell_gmem_size != ~0ull) sp(&args, ", device uchar *gmem [[buffer(%d)]]", GMEM_BUFFER_INDEX);
@@ -1991,18 +2524,16 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (i < 16) sp(&args, ", sampler s%d [[sampler(%d)]]", i, i);
     }
     if (stage == STAGE_VERTEX) {
-        sp(&s, "vertex VOut main0(VIn in [[stage_in]], uint vid [[vertex_id]], uint iid [[instance_id]]%s%s) {\n",
-           "",
-           args.buf ? args.buf : "");
+        sp(&s, "vertex VOut main0(VIn in [[stage_in]], uint vid [[vertex_id]], uint iid [[instance_id]]%s%s) {\n", "", args.buf ? args.buf : "");
         sp(&s, "  VOut out = {};\n  out.pos = float4(0, 0, 0, 1);\n");
         for (int i = 0; i < 32; i++)
             if (c->out_attr_mask & (1u << i)) sp(&s, "  out.v%d = float4(0, 0, 0, 1);\n", i);
     } else if (stage == STAGE_FRAGMENT) {
         sp(&s, "fragment FOut main0(FIn in [[stage_in]], bool front_facing [[front_facing]]%s%s%s) {\n",
-           c->uses_lane ? ", uint lane [[thread_index_in_simdgroup]]" : "", c->uses_point_coord ? ", float2 point_coord [[point_coord]]" : "", args.buf ? args.buf : "");
-    } else {
-        sp(&s, "kernel void main0(uint3 tid [[thread_position_in_threadgroup]], uint3 ctaid [[threadgroup_position_in_grid]]%s) {\n",
+           c->uses_lane ? ", uint lane [[thread_index_in_simdgroup]]" : "", c->uses_point_coord ? ", float2 point_coord [[point_coord]]" : "",
            args.buf ? args.buf : "");
+    } else {
+        sp(&s, "kernel void main0(uint3 tid [[thread_position_in_threadgroup]], uint3 ctaid [[threadgroup_position_in_grid]]%s) {\n", args.buf ? args.buf : "");
     }
     free(args.buf);
     if (c->uses_smem) sp(&s, "  threadgroup uint smem_w[%u];\n  threadgroup uchar *smem = (threadgroup uchar *)smem_w;\n", info->shared_mem / 4);
@@ -2014,14 +2545,20 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (c->uses_attr_arr) {
         sp(&s, "  float attr_arr[128];\n");
         for (int i = 0; i < 32; i++) {
-            if (!(c->in_attr_mask & (1u << i))) { sp(&s, "  for (uint k = 0; k < 4; k++) attr_arr[%d + k] = 0.0f;\n", i * 4); continue; }
+            if (!(c->in_attr_mask & (1u << i))) {
+                sp(&s, "  for (uint k = 0; k < 4; k++) attr_arr[%d + k] = 0.0f;\n", i * 4);
+                continue;
+            }
             sp(&s, "  for (uint k = 0; k < 4; k++) attr_arr[%d + k] = in.v%d[k];\n", i * 4, i);
         }
     }
     if (c->uses_vattr_arr) {
         sp(&s, "  uint vattr_arr[128];\n");
         for (int i = 0; i < 32; i++) {
-            if (!(c->in_attr_mask & (1u << i))) { sp(&s, "  for (uint k = 0; k < 4; k++) vattr_arr[%d + k] = 0u;\n", i * 4); continue; }
+            if (!(c->in_attr_mask & (1u << i))) {
+                sp(&s, "  for (uint k = 0; k < 4; k++) vattr_arr[%d + k] = 0u;\n", i * 4);
+                continue;
+            }
             sp(&s, "  for (uint k = 0; k < 4; k++) vattr_arr[%d + k] = as_type<uint>(in.a%d[k]);\n", i * 4, i);
         }
     }
@@ -2079,8 +2616,4 @@ void maxwell_free(ShaderInfo *s) {
     if (!s) return;
     free(s->msl);
     free(s);
-}
-
-void maxwell_disassemble(const uint8_t *code, size_t max_size, int stage, void *file) {
-    (void)code; (void)max_size; (void)stage; (void)file;
 }

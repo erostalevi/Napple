@@ -151,10 +151,13 @@ impl Pattern {
     }
 
     pub fn matches_at(&self, hay: &[u8], at: usize) -> bool {
-        let Some(win) = hay.get(at..at.checked_add(self.len()).unwrap_or(usize::MAX)) else {
+        let Some(win) = hay.get(at..at.saturating_add(self.len())) else {
             return false;
         };
-        win.iter().zip(&self.bytes).zip(&self.mask).all(|((h, b), m)| h & m == *b)
+        win.iter()
+            .zip(&self.bytes)
+            .zip(&self.mask)
+            .all(|((h, b), m)| h & m == *b)
     }
 
     /// All match offsets in `hay` (`step` 4 for code, 1 otherwise), capped at `limit`.
@@ -189,7 +192,7 @@ impl Pattern {
         let mut bytes = Vec::with_capacity(words * 4);
         let mut mask = Vec::with_capacity(words * 4);
         let mut prev: Option<u32> = None;
-        for c in code.chunks_exact(4) {
+        for c in code.as_chunks::<4>().0 {
             let w = u32::from_le_bytes([c[0], c[1], c[2], c[3]]);
             let m = a64_fixed_mask(w, prev);
             bytes.extend_from_slice(&(w & m).to_le_bytes());
@@ -238,15 +241,15 @@ pub fn a64_fixed_mask(w: u32, prev: Option<u32>) -> u32 {
         return 0xFFF8_001F;
     }
     // imm12 low-half of a symbol address: ADD (imm) / LDR/STR (unsigned imm) based on the ADRP result.
-    if let Some(p) = prev {
-        if p & 0x9F00_0000 == 0x9000_0000 {
-            let adrp_rd = p & 0x1F;
-            let (rn, _) = rd_rn(w);
-            let add_imm = w & 0x7F80_0000 == 0x1100_0000;
-            let ldst_uimm = w & 0x3B00_0000 == 0x3900_0000;
-            if rn == adrp_rd && (add_imm || ldst_uimm) {
-                return 0xFFC0_03FF;
-            }
+    if let Some(p) = prev
+        && p & 0x9F00_0000 == 0x9000_0000
+    {
+        let adrp_rd = p & 0x1F;
+        let (rn, _) = rd_rn(w);
+        let add_imm = w & 0x7F80_0000 == 0x1100_0000;
+        let ldst_uimm = w & 0x3B00_0000 == 0x3900_0000;
+        if rn == adrp_rd && (add_imm || ldst_uimm) {
+            return 0xFFC0_03FF;
         }
     }
     0xFFFF_FFFF
@@ -261,10 +264,13 @@ pub fn hex(b: &[u8]) -> String {
 }
 
 pub fn unhex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 || !s.bytes().all(|c| c.is_ascii_hexdigit()) {
+    if !s.len().is_multiple_of(2) || !s.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err("not an even-length hex string".into());
     }
-    Ok((0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect())
+    Ok((0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect())
 }
 
 /// Entry as stored in JSON (`pattern`/`mask` as hex).
@@ -345,7 +351,10 @@ impl TitleId {
 impl BuildId {
     pub fn parse(s: &str) -> Result<Self, String> {
         let t = s.trim();
-        if (16..=64).contains(&t.len()) && t.len() % 2 == 0 && t.bytes().all(|c| c.is_ascii_hexdigit()) {
+        if (16..=64).contains(&t.len())
+            && t.len().is_multiple_of(2)
+            && t.bytes().all(|c| c.is_ascii_hexdigit())
+        {
             Ok(Self(t.to_ascii_lowercase()))
         } else {
             Err(format!("invalid build id (need 16..64 hex digits): {t:?}"))
@@ -376,7 +385,10 @@ mod tests {
     fn bl_target_is_wildcarded_so_hash_is_stable() {
         let a: Vec<u8> = [le(0xA9BF7BFD), le(0x9400_0010), le(0xD65F03C0)].concat();
         let b: Vec<u8> = [le(0xA9BF7BFD), le(0x9400_0FF0), le(0xD65F03C0)].concat();
-        let (pa, pb) = (Pattern::from_a64(&a).unwrap(), Pattern::from_a64(&b).unwrap());
+        let (pa, pb) = (
+            Pattern::from_a64(&a).unwrap(),
+            Pattern::from_a64(&b).unwrap(),
+        );
         assert_eq!(pa.hash(), pb.hash());
         assert_eq!(pa.fixed_bytes(), 8); // 2 full words; BL keeps only its opcode bits
     }
@@ -406,7 +418,13 @@ mod tests {
 
     #[test]
     fn matching_honours_mask_and_alignment() {
-        let code: Vec<u8> = [le(0xD503201F), le(0x9400_0010), le(0xA9BF7BFD), le(0xD65F03C0)].concat();
+        let code: Vec<u8> = [
+            le(0xD503201F),
+            le(0x9400_0010),
+            le(0xA9BF7BFD),
+            le(0xD65F03C0),
+        ]
+        .concat();
         let pat = Pattern::from_a64(&[le(0x9400_0999), le(0xA9BF7BFD)].concat()).unwrap();
         assert_eq!(pat.find_all(&code, 4, 10), vec![4]);
         // different opcode in the pinned part: no hit

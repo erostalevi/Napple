@@ -1,6 +1,8 @@
 # napple-runtime: native Horizon host for rewritten Switch games.   make -C runtime [debug=1]
 CC ?= clang
 BUILD := build
+MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
+DEPFLAGS = -MMD -MP
 SRC := $(wildcard src/*.c src/services/*.c src/a32/*.c) src/a32jit/a32jit.c
 MSRC := $(wildcard src/*.m)
 ASM := $(wildcard src/*.S)
@@ -9,14 +11,16 @@ OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC)) $(patsubst src/%.m,$(BUILD)/%.o,$
 GFX ?= napple
 ifeq ($(GFX),napple)
 OBJ := $(filter-out $(BUILD)/gfx_stub.o,$(OBJ))
-GFX_LIBS := ../gfx/build/obj/adapter/gfx_napple.o ../gfx/libnapple_gfx.a -framework Metal -framework ImageIO -framework UniformTypeIdentifiers -framework CoreGraphics
+GFX_LIBS := ../gfx/build/obj/adapter/gfx_napple.o ../gfx/libnapple_gfx.a -framework UniformTypeIdentifiers -framework CoreGraphics
 $(BUILD)/napple-runtime: ../gfx/libnapple_gfx.a ../gfx/build/obj/adapter/gfx_napple.o
 endif
-OPT := $(if $(debug),-O0,-O2)
+OPT ?= $(if $(debug),-O0,-O2)
 ROOT := ..
 INCS := -I$(ROOT)/input/include -I$(ROOT)/audio/include -I$(ROOT)/gfx/include -I$(ROOT)/frontend/include
 CFLAGS := -std=gnu11 $(INCS) $(OPT) -g -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -I/opt/homebrew/opt/libvpx/include -Isrc -Isrc/services
 FRAMEWORKS := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Metal -framework Foundation -framework CoreFoundation -framework AudioToolbox -framework CoreAudio -framework GameController
+# Release link: drop unreferenced code and local symbols (the build is always -g for the object files, but no dSYM is produced).
+LDFLAGS ?= -Wl,-dead_strip -Wl,-x
 OPUS ?= /opt/homebrew/opt/opus/lib/libopus.a
 VPX ?= /opt/homebrew/opt/libvpx/lib/libvpx.a
 FRAMEWORKS += -framework VideoToolbox -framework CoreMedia -framework ImageIO
@@ -25,15 +29,15 @@ EXTRA_LIBS ?= -L$(ROOT)/frontend -lnapple_frontend -L$(ROOT)/input -lnapple_inpu
 all: $(BUILD)/napple-runtime
 
 $(BUILD)/napple-runtime: $(OBJ) $(ROOT)/frontend/libnapple_frontend.a $(ROOT)/input/libnapple_input.a $(ROOT)/audio/libnapple_audio.a
-	$(CC) $(OBJ) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
+	$(CC) $(OBJ) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) $(LDFLAGS) -o $@
 
-$(BUILD)/%.o: src/%.c $(wildcard src/*.h) $(wildcard src/services/*.h)
+$(BUILD)/%.o: src/%.c
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(BUILD)/%.o: src/%.m $(wildcard src/*.h)
+$(BUILD)/%.o: src/%.m
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -fobjc-arc -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -fobjc-arc -c $< -o $@
 
 $(BUILD)/%.o: src/%.S
 	@mkdir -p $(dir $@)
@@ -101,6 +105,9 @@ clean:
 	rm -rf $(BUILD)
 
 .PHONY: all clean test test-host
+
+# Header dependency tracking: touching a header rebuilds only the objects that include it.
+-include $(OBJ:.o=.d)
 
 # Service unit tests (services-2026-10-24): `make test-services`
 -include tests/services.mk

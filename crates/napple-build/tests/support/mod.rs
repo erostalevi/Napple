@@ -1,8 +1,10 @@
 //! Synthetic fixtures only (random keys, no game data): NSP containers with NCAs, NSOs, a BKTR update and DLC.
 //! They prove internal consistency of the pipeline, NOT compatibility with retail files.
 #![allow(dead_code)]
-use aes::cipher::{generic_array::GenericArray, BlockEncrypt, KeyInit, KeyIvInit, StreamCipher, StreamCipherSeek};
 use aes::Aes128;
+use aes::cipher::{
+    BlockEncrypt, KeyInit, KeyIvInit, StreamCipher, StreamCipherSeek, generic_array::GenericArray,
+};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use xts_mode::Xts128;
@@ -18,18 +20,23 @@ pub fn hex(b: &[u8]) -> String {
 }
 
 pub fn keys_text() -> String {
-    format!("header_key = {}\nkey_area_key_application_02 = {}\ntitlekek_02 = {}\n", hex(&HEADER_KEY), hex(&KAK), hex(&TKEK))
+    format!(
+        "header_key = {}\nkey_area_key_application_02 = {}\ntitlekek_02 = {}\n",
+        hex(&HEADER_KEY),
+        hex(&KAK),
+        hex(&TKEK)
+    )
 }
 
 fn ecb_enc(key: &[u8; 16], data: &mut [u8]) {
     let c = Aes128::new(GenericArray::from_slice(key));
-    for b in data.chunks_exact_mut(16) {
+    for b in data.as_chunks_mut::<16>().0 {
         c.encrypt_block(GenericArray::from_mut_slice(b));
     }
 }
 
 pub fn pad(v: &mut Vec<u8>, to: usize) {
-    while v.len() % to != 0 {
+    while !v.len().is_multiple_of(to) {
         v.push(0);
     }
 }
@@ -70,7 +77,11 @@ pub fn romfs_flat(files: &[(&str, &[u8])]) -> Vec<u8> {
     for (i, (name, d)) in files.iter().enumerate() {
         let nl = name.len();
         let entry_len = 0x20 + ((nl + 3) & !3);
-        let sibling = if i + 1 < files.len() { (fmeta.len() + entry_len) as u32 } else { none };
+        let sibling = if i + 1 < files.len() {
+            (fmeta.len() + entry_len) as u32
+        } else {
+            none
+        };
         for v in [0u32, sibling] {
             fmeta.extend(v.to_le_bytes());
         }
@@ -92,7 +103,18 @@ pub fn romfs_flat(files: &[(&str, &[u8])]) -> Vec<u8> {
     let fm = dm + dirs.len() as u64;
     let data_off = (fm + fmeta.len() as u64 + 0x1F) & !0x1F;
     let mut h = Vec::new();
-    for v in [0x50u64, 0, 0, dm, dirs.len() as u64, 0, 0, fm, fmeta.len() as u64, data_off] {
+    for v in [
+        0x50u64,
+        0,
+        0,
+        dm,
+        dirs.len() as u64,
+        0,
+        0,
+        fm,
+        fmeta.len() as u64,
+        data_off,
+    ] {
         h.extend(v.to_le_bytes());
     }
     h.extend(dirs);
@@ -128,7 +150,10 @@ fn ctr_apply(buf: &mut [u8], hi: [u8; 8], generation: Option<u32>, abs: u64) {
     if let Some(g) = generation {
         iv[4..8].copy_from_slice(&g.to_be_bytes());
     }
-    let mut c = ctr::Ctr128BE::<Aes128>::new(GenericArray::from_slice(&CTR_KEY), GenericArray::from_slice(&iv));
+    let mut c = ctr::Ctr128BE::<Aes128>::new(
+        GenericArray::from_slice(&CTR_KEY),
+        GenericArray::from_slice(&iv),
+    );
     c.seek(abs);
     c.apply_keystream(buf);
 }
@@ -205,15 +230,52 @@ pub fn build_nca(program_id: u64, ctype: u8, secs: Vec<Sec>) -> Vec<u8> {
             }
             Sec::Bktr(b) => {
                 let p = b.patch.len() as u64;
-                let reloc_entries: Vec<Vec<u8>> = b.relocs.iter().map(|(v, ph, s)| [v.to_le_bytes().to_vec(), ph.to_le_bytes().to_vec(), s.to_le_bytes().to_vec()].concat()).collect();
-                let mut sub_entries: Vec<Vec<u8>> = b.subs.iter().map(|(o, g)| [o.to_le_bytes().to_vec(), 0u32.to_le_bytes().to_vec(), g.to_le_bytes().to_vec()].concat()).collect();
-                sub_entries.push([p.to_le_bytes().to_vec(), 0u32.to_le_bytes().to_vec(), 0u32.to_le_bytes().to_vec()].concat()); // sentinel
-                let (rt, st) = (tree(&reloc_entries, 0x14, b.total), tree(&sub_entries, 0x10, p));
+                let reloc_entries: Vec<Vec<u8>> = b
+                    .relocs
+                    .iter()
+                    .map(|(v, ph, s)| {
+                        [
+                            v.to_le_bytes().to_vec(),
+                            ph.to_le_bytes().to_vec(),
+                            s.to_le_bytes().to_vec(),
+                        ]
+                        .concat()
+                    })
+                    .collect();
+                let mut sub_entries: Vec<Vec<u8>> = b
+                    .subs
+                    .iter()
+                    .map(|(o, g)| {
+                        [
+                            o.to_le_bytes().to_vec(),
+                            0u32.to_le_bytes().to_vec(),
+                            g.to_le_bytes().to_vec(),
+                        ]
+                        .concat()
+                    })
+                    .collect();
+                sub_entries.push(
+                    [
+                        p.to_le_bytes().to_vec(),
+                        0u32.to_le_bytes().to_vec(),
+                        0u32.to_le_bytes().to_vec(),
+                    ]
+                    .concat(),
+                ); // sentinel
+                let (rt, st) = (
+                    tree(&reloc_entries, 0x14, b.total),
+                    tree(&sub_entries, 0x10, p),
+                );
                 // encrypt: patch storage per subsection generation, tables with the plain counter
                 let mut patch = b.patch.clone();
                 for (k, (off, g)) in b.subs.iter().enumerate() {
                     let end = b.subs.get(k + 1).map(|n| n.0).unwrap_or(p);
-                    ctr_apply(&mut patch[*off as usize..end as usize], hi, Some(*g), start as u64 + off);
+                    ctr_apply(
+                        &mut patch[*off as usize..end as usize],
+                        hi,
+                        Some(*g),
+                        start as u64 + off,
+                    );
                 }
                 let (mut rt_e, mut st_e) = (rt.clone(), st.clone());
                 ctr_apply(&mut rt_e, hi, None, start as u64 + p);
@@ -228,7 +290,9 @@ pub fn build_nca(program_id: u64, ctype: u8, secs: Vec<Sec>) -> Vec<u8> {
                 fh[0x108..0x110].copy_from_slice(&(rt.len() as u64).to_le_bytes());
                 fh[0x110..0x114].copy_from_slice(b"BKTR");
                 fh[0x114..0x118].copy_from_slice(&1u32.to_le_bytes());
-                fh[0x118..0x11C].copy_from_slice(&(reloc_entries.len() as u32 + b.corrupt as u32).to_le_bytes());
+                fh[0x118..0x11C].copy_from_slice(
+                    &(reloc_entries.len() as u32 + b.corrupt as u32).to_le_bytes(),
+                );
                 fh[0x120..0x128].copy_from_slice(&(p + rt.len() as u64).to_le_bytes());
                 fh[0x128..0x130].copy_from_slice(&(st.len() as u64).to_le_bytes());
                 fh[0x130..0x134].copy_from_slice(b"BKTR");
@@ -247,8 +311,11 @@ pub fn build_nca(program_id: u64, ctype: u8, secs: Vec<Sec>) -> Vec<u8> {
     area[0x20..0x30].copy_from_slice(&CTR_KEY);
     ecb_enc(&KAK, &mut area);
     h[0x300..0x340].copy_from_slice(&area);
-    let xts = Xts128::<Aes128>::new(Aes128::new(GenericArray::from_slice(&HEADER_KEY[..16])), Aes128::new(GenericArray::from_slice(&HEADER_KEY[16..])));
-    for (i, s) in h.chunks_exact_mut(0x200).enumerate() {
+    let xts = Xts128::<Aes128>::new(
+        Aes128::new(GenericArray::from_slice(&HEADER_KEY[..16])),
+        Aes128::new(GenericArray::from_slice(&HEADER_KEY[16..])),
+    );
+    for (i, s) in h.as_chunks_mut::<0x200>().0.iter_mut().enumerate() {
         xts.encrypt_sector(s, (i as u128).to_be_bytes());
     }
     h.extend(body);
@@ -266,7 +333,28 @@ pub fn nso(build_tag: u8) -> Vec<u8> {
     p32(&mut img, 0x84, 0x1000 - 0x80);
     p32(&mut img, 0x100, 0xD400_0021); // svc #1
     p32(&mut img, 0x104, 0xD65F_03C0); // ret
-    let tags: [(i64, u64); 20] = [(4, 0x1200), (5, 0x1300), (6, 0x1180), (10, 0x40), (11, 24), (7, 0x1500), (8, 48), (9, 24), (23, 0x1540), (2, 24), (20, 7), (12, 0x100), (13, 0x104), (25, 0x2100), (27, 16), (26, 0x2110), (28, 8), (36, 0x1400), (35, 16), (37, 8)];
+    let tags: [(i64, u64); 20] = [
+        (4, 0x1200),
+        (5, 0x1300),
+        (6, 0x1180),
+        (10, 0x40),
+        (11, 24),
+        (7, 0x1500),
+        (8, 48),
+        (9, 24),
+        (23, 0x1540),
+        (2, 24),
+        (20, 7),
+        (12, 0x100),
+        (13, 0x104),
+        (25, 0x2100),
+        (27, 16),
+        (26, 0x2110),
+        (28, 8),
+        (36, 0x1400),
+        (35, 16),
+        (37, 8),
+    ];
     for (i, (t, v)) in tags.iter().enumerate() {
         p64(&mut img, 0x1000 + i * 16, *t as u64);
         p64(&mut img, 0x1000 + i * 16 + 8, *v);
@@ -295,7 +383,11 @@ pub fn nso(build_tag: u8) -> Vec<u8> {
     rela(&mut img, 0x1518, 0x2208, 257, 1);
     rela(&mut img, 0x1540, 0x2210, 1026, 2);
     // NSO file: three uncompressed segments with SHA-256 flags
-    let segs: [(&[u8], u32); 3] = [(&img[..0x1000], 0), (&img[0x1000..0x2000], 0x1000), (&img[0x2000..0x2300], 0x2000)];
+    let segs: [(&[u8], u32); 3] = [
+        (&img[..0x1000], 0),
+        (&img[0x1000..0x2000], 0x1000),
+        (&img[0x2000..0x2300], 0x2000),
+    ];
     let mut f = vec![0u8; 0x100];
     f[..4].copy_from_slice(b"NSO0");
     let (mut flags, mut body) = (0u32, Vec::<u8>::new());
@@ -318,7 +410,11 @@ pub fn nso(build_tag: u8) -> Vec<u8> {
 }
 
 pub fn exefs(tag: u8) -> Vec<u8> {
-    pfs0(&[("main", &nso(tag)), ("subsdk0", &nso(tag.wrapping_add(100))), ("main.npdm", b"NPDMDATA")])
+    pfs0(&[
+        ("main", &nso(tag)),
+        ("subsdk0", &nso(tag.wrapping_add(100))),
+        ("main.npdm", b"NPDMDATA"),
+    ])
 }
 
 pub fn nacp(name: &str, version: &str) -> Vec<u8> {
@@ -381,7 +477,11 @@ pub struct Game {
 }
 
 pub fn base_files() -> Vec<(&'static str, Vec<u8>)> {
-    vec![("a.bin", b"HELLO".to_vec()), ("b.bin", (0..3000u32).map(|i| (i * 7) as u8).collect()), ("c.txt", b"third file".to_vec())]
+    vec![
+        ("a.bin", b"HELLO".to_vec()),
+        ("b.bin", (0..3000u32).map(|i| (i * 7) as u8).collect()),
+        ("c.txt", b"third file".to_vec()),
+    ]
 }
 
 pub fn make_game(dir: &Path, mode_bktr: bool) -> Game {
@@ -401,11 +501,46 @@ pub fn make_game_full(dir: &Path, mode_bktr: bool, base_data_space: bool, corrup
     let bf = base_files();
     let refs: Vec<(&str, &[u8])> = bf.iter().map(|(n, d)| (*n, d.as_slice())).collect();
     let base_romfs = romfs_flat(&refs);
-    let prog = build_nca(APP_ID, 0, vec![Sec::Pfs0(exefs(1)), Sec::Rom(base_romfs.clone())]);
-    let control = build_nca(APP_ID, 2, vec![Sec::Rom(romfs_flat(&[("control.nacp", &nacp("Test Game", "1.0.0")), ("icon_AmericanEnglish.dat", &[0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3])]))]);
-    let cn = cnmt(0x80, APP_ID, APP_ID, 0, &[Rec { id: id(1), size: prog.len() as u64, ctype: 1 }, Rec { id: id(2), size: control.len() as u64, ctype: 3 }]);
+    let prog = build_nca(
+        APP_ID,
+        0,
+        vec![Sec::Pfs0(exefs(1)), Sec::Rom(base_romfs.clone())],
+    );
+    let control = build_nca(
+        APP_ID,
+        2,
+        vec![Sec::Rom(romfs_flat(&[
+            ("control.nacp", &nacp("Test Game", "1.0.0")),
+            (
+                "icon_AmericanEnglish.dat",
+                &[0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3],
+            ),
+        ]))],
+    );
+    let cn = cnmt(
+        0x80,
+        APP_ID,
+        APP_ID,
+        0,
+        &[
+            Rec {
+                id: id(1),
+                size: prog.len() as u64,
+                ctype: 1,
+            },
+            Rec {
+                id: id(2),
+                size: control.len() as u64,
+                ctype: 3,
+            },
+        ],
+    );
     let meta = meta_nca(APP_ID, &cn);
-    let base = pfs0(&[(&nca_name(&id(1)), &prog), (&nca_name(&id(2)), &control), ("m.cnmt.nca", &meta)]);
+    let base = pfs0(&[
+        (&nca_name(&id(1)), &prog),
+        (&nca_name(&id(2)), &control),
+        ("m.cnmt.nca", &meta),
+    ]);
     let base_nsp = dir.join("base.nsp");
     std::fs::write(&base_nsp, base).unwrap();
     // ---- update: a.bin becomes "WORLD" (same size), everything else is shared with the base
@@ -423,7 +558,12 @@ pub fn make_game_full(dir: &Path, mode_bktr: bool, base_data_space: bool, corrup
     let sh = if base_data_space { 0x200 } else { 0 };
     let spec = BktrSpec {
         patch,
-        relocs: vec![(0, 0, 1), (0x200, 0x200 - sh, 0), (v0, 0x200, 1), (v1, v1 - sh, 0)],
+        relocs: vec![
+            (0, 0, 1),
+            (0x200, 0x200 - sh, 0),
+            (v0, 0x200, 1),
+            (v1, v1 - sh, 0),
+        ],
         subs: vec![(0, 1), (0x200, 5)],
         total,
         level: (0x200, update_romfs.len() as u64),
@@ -432,20 +572,65 @@ pub fn make_game_full(dir: &Path, mode_bktr: bool, base_data_space: bool, corrup
     let update_version = 0x10000;
     let mut spec = spec;
     spec.corrupt = corrupt;
-    let sec_romfs = if mode_bktr { Sec::Bktr(spec) } else { Sec::Rom(update_romfs.clone()) };
+    let sec_romfs = if mode_bktr {
+        Sec::Bktr(spec)
+    } else {
+        Sec::Rom(update_romfs.clone())
+    };
     let uprog = build_nca(APP_ID, 0, vec![Sec::Pfs0(exefs(50)), sec_romfs]);
-    let ucn = cnmt(0x81, APP_ID + 0x800, APP_ID, update_version, &[Rec { id: id(11), size: uprog.len() as u64, ctype: 1 }]);
+    let ucn = cnmt(
+        0x81,
+        APP_ID + 0x800,
+        APP_ID,
+        update_version,
+        &[Rec {
+            id: id(11),
+            size: uprog.len() as u64,
+            ctype: 1,
+        }],
+    );
     let umeta = meta_nca(APP_ID + 0x800, &ucn);
     let update_nsp = dir.join("update.nsp");
-    std::fs::write(&update_nsp, pfs0(&[(&nca_name(&id(11)), &uprog), ("m.cnmt.nca", &umeta)])).unwrap();
+    std::fs::write(
+        &update_nsp,
+        pfs0(&[(&nca_name(&id(11)), &uprog), ("m.cnmt.nca", &umeta)]),
+    )
+    .unwrap();
     // ---- DLC
-    let dlc_romfs = romfs_flat(&[("dlc.dat", &(0..1500u32).map(|i| (i * 3) as u8).collect::<Vec<u8>>())]);
+    let dlc_romfs = romfs_flat(&[(
+        "dlc.dat",
+        &(0..1500u32).map(|i| (i * 3) as u8).collect::<Vec<u8>>(),
+    )]);
     let ddata = build_nca(APP_ID + 0x1001, 5, vec![Sec::Rom(dlc_romfs.clone())]);
-    let dcn = cnmt(0x82, APP_ID + 0x1001, APP_ID, 0, &[Rec { id: id(21), size: ddata.len() as u64, ctype: 2 }]);
+    let dcn = cnmt(
+        0x82,
+        APP_ID + 0x1001,
+        APP_ID,
+        0,
+        &[Rec {
+            id: id(21),
+            size: ddata.len() as u64,
+            ctype: 2,
+        }],
+    );
     let dmeta = meta_nca(APP_ID + 0x1001, &dcn);
     let dlc_nsp = dir.join("dlc.nsp");
-    std::fs::write(&dlc_nsp, pfs0(&[(&nca_name(&id(21)), &ddata), ("m.cnmt.nca", &dmeta)])).unwrap();
-    Game { dir: dir.to_path_buf(), keys, base_nsp, update_nsp, dlc_nsp, base_romfs, update_romfs, dlc_romfs, update_version }
+    std::fs::write(
+        &dlc_nsp,
+        pfs0(&[(&nca_name(&id(21)), &ddata), ("m.cnmt.nca", &dmeta)]),
+    )
+    .unwrap();
+    Game {
+        dir: dir.to_path_buf(),
+        keys,
+        base_nsp,
+        update_nsp,
+        dlc_nsp,
+        base_romfs,
+        update_romfs,
+        dlc_romfs,
+        update_version,
+    }
 }
 
 /// Temporary directory removed on drop.

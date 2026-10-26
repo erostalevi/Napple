@@ -25,25 +25,56 @@ impl Module {
     pub fn from_nso(name: &str, file: &[u8]) -> Result<Self, String> {
         let n = Nso::parse(file).map_err(|e| format!("NSO: {e}"))?;
         let build = BuildId::parse(&n.build_id_hex())?;
-        let seg = |name, s: &napple_core::infrastructure::nso::Segment| Segment { name, base: s.mem_offset as u64, bytes: s.data.clone() };
-        Ok(Self { name: name.into(), build_id: Some(build), segments: vec![seg("text", &n.text), seg("rodata", &n.rodata), seg("data", &n.data)] })
+        let seg = |name, s: &napple_core::infrastructure::nso::Segment| Segment {
+            name,
+            base: s.mem_offset as u64,
+            bytes: s.data.clone(),
+        };
+        Ok(Self {
+            name: name.into(),
+            build_id: Some(build),
+            segments: vec![
+                seg("text", &n.text),
+                seg("rodata", &n.rodata),
+                seg("data", &n.data),
+            ],
+        })
     }
 
     /// Raw code (e.g. a patched `.bin`): one text segment at base 0.
     pub fn from_raw(name: &str, bytes: Vec<u8>, build_id: Option<BuildId>) -> Self {
-        Self { name: name.into(), build_id, segments: vec![Segment { name: "text", base: 0, bytes }] }
+        Self {
+            name: name.into(),
+            build_id,
+            segments: vec![Segment {
+                name: "text",
+                base: 0,
+                bytes,
+            }],
+        }
     }
 
     pub fn text(&self) -> Result<&Segment, String> {
-        self.segments.iter().find(|s| s.name == "text").ok_or_else(|| "module has no text segment".into())
+        self.segments
+            .iter()
+            .find(|s| s.name == "text")
+            .ok_or_else(|| "module has no text segment".into())
     }
 }
 
 /// Module name from a file name: `main`, `sdk`, `subsdk0` (extension stripped; sanitised).
 pub fn module_name_from_path(p: &Path) -> String {
     let stem = p.file_stem().and_then(|s| s.to_str()).unwrap_or("main");
-    let clean: String = stem.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '_').take(32).collect();
-    if clean.is_empty() { "main".into() } else { clean.to_ascii_lowercase() }
+    let clean: String = stem
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+        .take(32)
+        .collect();
+    if clean.is_empty() {
+        "main".into()
+    } else {
+        clean.to_ascii_lowercase()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -89,8 +120,15 @@ pub fn match_module(file: &SignatureFile, m: &Module) -> Result<MatchReport, Str
         if offsets.is_empty() {
             rep.unknown.push(hash.clone());
         } else {
-            let in_range = offsets.len() == 1 && (s.offset_start..s.offset_end).contains(&offsets[0]);
-            rep.hits.push(Hit { hash: hash.clone(), name: s.name.clone(), kind: s.kind, offsets, in_range });
+            let in_range =
+                offsets.len() == 1 && (s.offset_start..s.offset_end).contains(&offsets[0]);
+            rep.hits.push(Hit {
+                hash: hash.clone(),
+                name: s.name.clone(),
+                kind: s.kind,
+                offsets,
+                in_range,
+            });
         }
     }
     Ok(rep)
@@ -98,8 +136,11 @@ pub fn match_module(file: &SignatureFile, m: &Module) -> Result<MatchReport, Str
 
 /// Shortest masked pattern at `offset` (module-relative, inside the text segment) that occurs exactly once in the text.
 pub fn derive_pattern(text: &Segment, offset: u64) -> Result<Pattern, String> {
-    let at = offset.checked_sub(text.base).filter(|o| (*o as usize) < text.bytes.len()).ok_or("offset is outside the text segment")? as usize;
-    if at % 4 != 0 {
+    let at = offset
+        .checked_sub(text.base)
+        .filter(|o| (*o as usize) < text.bytes.len())
+        .ok_or("offset is outside the text segment")? as usize;
+    if !at.is_multiple_of(4) {
         return Err("offset is not 4-byte aligned".into());
     }
     let avail = (text.bytes.len() - at).min(MAX_PATTERN_BYTES);
@@ -114,7 +155,9 @@ pub fn derive_pattern(text: &Segment, offset: u64) -> Result<Pattern, String> {
         }
         n += 4;
     }
-    Err(format!("no unique pattern of up to {MAX_PATTERN_BYTES} bytes at this offset (duplicated or too generic code)"))
+    Err(format!(
+        "no unique pattern of up to {MAX_PATTERN_BYTES} bytes at this offset (duplicated or too generic code)"
+    ))
 }
 
 #[derive(Clone, Debug)]
@@ -149,7 +192,18 @@ pub struct Context<'a> {
 
 const SLICE_BYTES: usize = 64 << 10;
 
-fn new_sig(item: &Item, m: &Module, p: &Pattern, start: u64, end: u64, name: Option<String>, prov: Provenance, conf: Confidence) -> Signature {
+// A signature is built from exactly these facts; a parameter struct would only restate them.
+#[allow(clippy::too_many_arguments)]
+fn new_sig(
+    item: &Item,
+    m: &Module,
+    p: &Pattern,
+    start: u64,
+    end: u64,
+    name: Option<String>,
+    prov: Provenance,
+    conf: Confidence,
+) -> Signature {
     Signature {
         kind: item.kind,
         module: m.name.clone(),
@@ -159,7 +213,10 @@ fn new_sig(item: &Item, m: &Module, p: &Pattern, start: u64, end: u64, name: Opt
         mask: p.mask_hex(),
         name,
         layout: None,
-        resolution: Resolution { action: ResolutionAction::Annotate, params: BTreeMap::new() },
+        resolution: Resolution {
+            action: ResolutionAction::Annotate,
+            params: BTreeMap::new(),
+        },
         provenance: prov,
         confidence: conf,
     }
@@ -178,7 +235,10 @@ fn store(ctx: &Context, hash: &str, sig: Signature) -> Result<(), String> {
 pub fn resolve_item(ctx: &Context, m: &Module, item: &Item) -> Outcome {
     let fail = |r: String| Outcome::Failed { reason: r };
     if !item.kind.is_code() {
-        return fail(format!("kind {:?} cannot be derived from code; add it by hand or via a patch table", item.kind));
+        return fail(format!(
+            "kind {:?} cannot be derived from code; add it by hand or via a patch table",
+            item.kind
+        ));
     }
     let text = match m.text() {
         Ok(t) => t,
@@ -196,17 +256,29 @@ pub fn resolve_item(ctx: &Context, m: &Module, item: &Item) -> Outcome {
         Err(e) => return fail(e),
     }
     // 2. same pattern in another build of the title: carry it over (still validated + pending)
-    if let Ok(found) = ctx.known.find_by_hash(ctx.title, &hash) {
-        if let Some((b, s)) = found.into_iter().find(|(b, _)| b != ctx.build) {
-            let len = s.offset_end - s.offset_start;
-            let mut ns = new_sig(item, m, &pattern, item.offset, item.offset + len, s.name.clone(), Provenance::Local, s.confidence.min(Confidence::Medium));
-            ns.layout = s.layout.clone();
-            ns.resolution = s.resolution.clone();
-            return match store(ctx, &hash, ns) {
-                Ok(()) => Outcome::Carried { hash, from_build: b },
-                Err(e) => fail(e),
-            };
-        }
+    if let Ok(found) = ctx.known.find_by_hash(ctx.title, &hash)
+        && let Some((b, s)) = found.into_iter().find(|(b, _)| b != ctx.build)
+    {
+        let len = s.offset_end - s.offset_start;
+        let mut ns = new_sig(
+            item,
+            m,
+            &pattern,
+            item.offset,
+            item.offset + len,
+            s.name.clone(),
+            Provenance::Local,
+            s.confidence.min(Confidence::Medium),
+        );
+        ns.layout = s.layout.clone();
+        ns.resolution = s.resolution.clone();
+        return match store(ctx, &hash, ns) {
+            Ok(()) => Outcome::Carried {
+                hash,
+                from_build: b,
+            },
+            Err(e) => fail(e),
+        };
     }
     // 3. Reverser
     let mut why = String::from("no reverser configured");
@@ -214,7 +286,16 @@ pub fn resolve_item(ctx: &Context, m: &Module, item: &Item) -> Outcome {
         match reverse(ctx, r, m, text, item) {
             Ok((start, end, name, tool)) => {
                 let name = name.or_else(|| item.name.clone());
-                let sig = new_sig(item, m, &pattern, start, end, name, Provenance::Rea, Confidence::Medium);
+                let sig = new_sig(
+                    item,
+                    m,
+                    &pattern,
+                    start,
+                    end,
+                    name,
+                    Provenance::Rea,
+                    Confidence::Medium,
+                );
                 return match store(ctx, &hash, sig) {
                     Ok(()) => Outcome::Learned { hash, via: tool },
                     Err(e) => fail(e),
@@ -226,28 +307,62 @@ pub fn resolve_item(ctx: &Context, m: &Module, item: &Item) -> Outcome {
     // 4. user-supplied size: local, low confidence
     match item.size {
         Some(sz) if sz > 0 && sz <= validate::MAX_RANGE => {
-            let sig = new_sig(item, m, &pattern, item.offset, item.offset + sz, item.name.clone(), Provenance::Local, Confidence::Low);
+            let sig = new_sig(
+                item,
+                m,
+                &pattern,
+                item.offset,
+                item.offset + sz,
+                item.name.clone(),
+                Provenance::Local,
+                Confidence::Low,
+            );
             match store(ctx, &hash, sig) {
                 Ok(()) => Outcome::Manual { hash, why },
                 Err(e) => fail(e),
             }
         }
-        _ => fail(format!("{why}; give a size (OFFSET:KIND:NAME:SIZE) to record it locally")),
+        _ => fail(format!(
+            "{why}; give a size (OFFSET:KIND:NAME:SIZE) to record it locally"
+        )),
     }
 }
 
-fn reverse(ctx: &Context, r: &dyn Reverser, m: &Module, text: &Segment, item: &Item) -> Result<(u64, u64, Option<String>, String), String> {
+fn reverse(
+    ctx: &Context,
+    r: &dyn Reverser,
+    m: &Module,
+    text: &Segment,
+    item: &Item,
+) -> Result<(u64, u64, Option<String>, String), String> {
     let at = (item.offset - text.base) as usize;
     let end = (at + SLICE_BYTES).min(text.bytes.len());
     std::fs::create_dir_all(ctx.scratch).map_err(|e| e.to_string())?;
-    let file = ctx.scratch.join(format!("{}-{}-{:x}.bin", &ctx.build.0[..16], m.name, item.offset));
+    let file = ctx.scratch.join(format!(
+        "{}-{}-{:x}.bin",
+        &ctx.build.0[..16],
+        m.name,
+        item.offset
+    ));
     {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&file).map_err(|e| e.to_string())?;
-        f.write_all(&text.bytes[at..end]).map_err(|e| e.to_string())?;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&file)
+            .map_err(|e| e.to_string())?;
+        f.write_all(&text.bytes[at..end])
+            .map_err(|e| e.to_string())?;
     }
-    let res = r.analyze(&ReverseRequest { module: m.name.clone(), image: file.clone(), load_address: item.offset, kind: item.kind });
+    let res = r.analyze(&ReverseRequest {
+        module: m.name.clone(),
+        image: file.clone(),
+        load_address: item.offset,
+        kind: item.kind,
+    });
     let _ = std::fs::remove_file(&file); // game bytes never linger in scratch
     let f = res?;
     // Validate: the finding must start at the item and stay in the text segment.
@@ -271,9 +386,13 @@ mod tests {
     /// Synthetic module: padding, then two distinct functions.
     fn module() -> Module {
         let mut code = le(&[0xD503201F; 8]);
-        code.extend(le(&[0xA9BF7BFD, 0x910003FD, 0xAA0003F3, 0x94000010, 0x2A0003E0, 0xA8C17BFD, 0xD65F03C0])); // @0x20
+        code.extend(le(&[
+            0xA9BF7BFD, 0x910003FD, 0xAA0003F3, 0x94000010, 0x2A0003E0, 0xA8C17BFD, 0xD65F03C0,
+        ])); // @0x20
         code.extend(le(&[0xD503201F; 4]));
-        code.extend(le(&[0xA9BF7BFD, 0x910003FD, 0xAA0103F3, 0x94000FF0, 0x2A0103E0, 0xA8C17BFD, 0xD65F03C0])); // @0x4c, differs in 3rd/5th word
+        code.extend(le(&[
+            0xA9BF7BFD, 0x910003FD, 0xAA0103F3, 0x94000FF0, 0x2A0103E0, 0xA8C17BFD, 0xD65F03C0,
+        ])); // @0x4c, differs in 3rd/5th word
         Module::from_raw("main", code, Some(BuildId("ab".repeat(16))))
     }
 
@@ -293,11 +412,21 @@ mod tests {
         }
     }
     fn finding() -> ReverseFinding {
-        ReverseFinding { start: 0, end: 0, name: Some("nn::Thing".into()), evidence_id: None, tool: "fake".into() }
+        ReverseFinding {
+            start: 0,
+            end: 0,
+            name: Some("nn::Thing".into()),
+            evidence_id: None,
+            tool: "fake".into(),
+        }
     }
 
     fn setup() -> (tempfile::TempDir, TitleId, BuildId) {
-        (tempfile::tempdir().unwrap(), TitleId("0100AAAA00000000".into()), BuildId("ab".repeat(16)))
+        (
+            tempfile::tempdir().unwrap(),
+            TitleId("0100AAAA00000000".into()),
+            BuildId("ab".repeat(16)),
+        )
     }
 
     #[test]
@@ -318,20 +447,46 @@ mod tests {
         let known = DirRepository::new(d.path().join("known"), "known", false);
         let pending = DirRepository::new(d.path().join("pending"), "pending", true);
         let fake = Fake(Cell::new(0), Ok(finding()));
-        let ctx = Context { title: &t, build: &b, known: &known, pending: &pending, reverser: Some(&fake), scratch: &d.path().join("scratch") };
+        let ctx = Context {
+            title: &t,
+            build: &b,
+            known: &known,
+            pending: &pending,
+            reverser: Some(&fake),
+            scratch: &d.path().join("scratch"),
+        };
         let m = module();
-        let item = Item { offset: 0x20, kind: SigKind::Function, name: None, size: None };
-        let Outcome::Learned { hash, .. } = resolve_item(&ctx, &m, &item) else { panic!() };
+        let item = Item {
+            offset: 0x20,
+            kind: SigKind::Function,
+            name: None,
+            size: None,
+        };
+        let Outcome::Learned { hash, .. } = resolve_item(&ctx, &m, &item) else {
+            panic!()
+        };
         assert_eq!(fake.0.get(), 1);
         let f = pending.load(&t, &b).unwrap().unwrap();
         let s = &f.signatures[&hash];
-        assert_eq!((s.provenance, s.confidence, s.offset_end), (Provenance::Rea, Confidence::Medium, 0x3c));
+        assert_eq!(
+            (s.provenance, s.confidence, s.offset_end),
+            (Provenance::Rea, Confidence::Medium, 0x3c)
+        );
         assert_eq!(s.name.as_deref(), Some("nn::Thing"));
         // scratch image removed
-        assert_eq!(std::fs::read_dir(d.path().join("scratch")).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_dir(d.path().join("scratch")).unwrap().count(),
+            0
+        );
         // once pending is part of the known view the reverser is no longer consulted
-        let ctx2 = Context { known: &pending, ..ctx };
-        assert!(matches!(resolve_item(&ctx2, &m, &item), Outcome::Known { .. }));
+        let ctx2 = Context {
+            known: &pending,
+            ..ctx
+        };
+        assert!(matches!(
+            resolve_item(&ctx2, &m, &item),
+            Outcome::Known { .. }
+        ));
         assert_eq!(fake.0.get(), 1);
     }
 
@@ -341,16 +496,39 @@ mod tests {
         let known = DirRepository::new(d.path().join("known"), "known", false);
         let pending = DirRepository::new(d.path().join("pending"), "pending", true);
         let fake = Fake(Cell::new(0), Err("boom".into()));
-        let ctx = Context { title: &t, build: &b, known: &known, pending: &pending, reverser: Some(&fake), scratch: &d.path().join("s") };
+        let ctx = Context {
+            title: &t,
+            build: &b,
+            known: &known,
+            pending: &pending,
+            reverser: Some(&fake),
+            scratch: &d.path().join("s"),
+        };
         let m = module();
-        let no_size = Item { offset: 0x20, kind: SigKind::Function, name: None, size: None };
-        let Outcome::Failed { reason } = resolve_item(&ctx, &m, &no_size) else { panic!() };
+        let no_size = Item {
+            offset: 0x20,
+            kind: SigKind::Function,
+            name: None,
+            size: None,
+        };
+        let Outcome::Failed { reason } = resolve_item(&ctx, &m, &no_size) else {
+            panic!()
+        };
         assert!(reason.contains("boom"));
         assert!(pending.load(&t, &b).unwrap().is_none());
-        let with_size = Item { size: Some(0x1c), name: Some("my_fn".into()), ..no_size };
-        let Outcome::Manual { hash, .. } = resolve_item(&ctx, &m, &with_size) else { panic!() };
+        let with_size = Item {
+            size: Some(0x1c),
+            name: Some("my_fn".into()),
+            ..no_size
+        };
+        let Outcome::Manual { hash, .. } = resolve_item(&ctx, &m, &with_size) else {
+            panic!()
+        };
         let s = pending.load(&t, &b).unwrap().unwrap().signatures[&hash].clone();
-        assert_eq!((s.provenance, s.confidence), (Provenance::Local, Confidence::Low));
+        assert_eq!(
+            (s.provenance, s.confidence),
+            (Provenance::Local, Confidence::Low)
+        );
     }
 
     #[test]
@@ -361,16 +539,54 @@ mod tests {
         let other = BuildId("cd".repeat(16));
         let known = DirRepository::new(d.path().join("known"), "known", true);
         let mut f = SignatureFile::new(&t, &other);
-        let mut s = new_sig(&Item { offset: 0x500, kind: SigKind::Function, name: None, size: None }, &m, &p, 0x500, 0x520, Some("nn::Old".into()), Provenance::Community, Confidence::High);
-        s.resolution = Resolution { action: ResolutionAction::Hook, params: [("target".to_string(), "hle_old".to_string())].into() };
+        let mut s = new_sig(
+            &Item {
+                offset: 0x500,
+                kind: SigKind::Function,
+                name: None,
+                size: None,
+            },
+            &m,
+            &p,
+            0x500,
+            0x520,
+            Some("nn::Old".into()),
+            Provenance::Community,
+            Confidence::High,
+        );
+        s.resolution = Resolution {
+            action: ResolutionAction::Hook,
+            params: [("target".to_string(), "hle_old".to_string())].into(),
+        };
         f.signatures.insert(p.hash(), s);
         known.save(&f).unwrap();
         let pending = DirRepository::new(d.path().join("pending"), "pending", true);
-        let ctx = Context { title: &t, build: &b, known: &known, pending: &pending, reverser: None, scratch: &d.path().join("s") };
-        let Outcome::Carried { hash, from_build } = resolve_item(&ctx, &m, &Item { offset: 0x20, kind: SigKind::Function, name: None, size: None }) else { panic!() };
+        let ctx = Context {
+            title: &t,
+            build: &b,
+            known: &known,
+            pending: &pending,
+            reverser: None,
+            scratch: &d.path().join("s"),
+        };
+        let Outcome::Carried { hash, from_build } = resolve_item(
+            &ctx,
+            &m,
+            &Item {
+                offset: 0x20,
+                kind: SigKind::Function,
+                name: None,
+                size: None,
+            },
+        ) else {
+            panic!()
+        };
         assert_eq!(from_build, other);
         let n = &pending.load(&t, &b).unwrap().unwrap().signatures[&hash];
-        assert_eq!((n.offset_start, n.offset_end, n.confidence, n.provenance), (0x20, 0x40, Confidence::Medium, Provenance::Local));
+        assert_eq!(
+            (n.offset_start, n.offset_end, n.confidence, n.provenance),
+            (0x20, 0x40, Confidence::Medium, Provenance::Local)
+        );
         assert_eq!(n.resolution.action, ResolutionAction::Hook);
     }
 
@@ -379,8 +595,27 @@ mod tests {
         let (d, t, b) = setup();
         let known = DirRepository::new(d.path().join("k"), "k", false);
         let pending = DirRepository::new(d.path().join("p"), "p", true);
-        let ctx = Context { title: &t, build: &b, known: &known, pending: &pending, reverser: None, scratch: d.path() };
-        assert!(matches!(resolve_item(&ctx, &module(), &Item { offset: 0x20, kind: SigKind::Struct, name: None, size: None }), Outcome::Failed { .. }));
+        let ctx = Context {
+            title: &t,
+            build: &b,
+            known: &known,
+            pending: &pending,
+            reverser: None,
+            scratch: d.path(),
+        };
+        assert!(matches!(
+            resolve_item(
+                &ctx,
+                &module(),
+                &Item {
+                    offset: 0x20,
+                    kind: SigKind::Struct,
+                    name: None,
+                    size: None
+                }
+            ),
+            Outcome::Failed { .. }
+        ));
     }
 
     #[test]
@@ -388,15 +623,56 @@ mod tests {
         let m = module();
         let (t, b) = (TitleId("0100AAAA00000000".into()), BuildId("ab".repeat(16)));
         let mut f = SignatureFile::new(&t, &b);
-        let item = Item { offset: 0x20, kind: SigKind::Function, name: None, size: None };
+        let item = Item {
+            offset: 0x20,
+            kind: SigKind::Function,
+            name: None,
+            size: None,
+        };
         let p = derive_pattern(m.text().unwrap(), 0x20).unwrap();
-        f.signatures.insert(p.hash(), new_sig(&item, &m, &p, 0x20, 0x3c, Some("a".into()), Provenance::Local, Confidence::Low));
+        f.signatures.insert(
+            p.hash(),
+            new_sig(
+                &item,
+                &m,
+                &p,
+                0x20,
+                0x3c,
+                Some("a".into()),
+                Provenance::Local,
+                Confidence::Low,
+            ),
+        );
         // second signature: moved (range wrong) but still found
         let p2 = derive_pattern(m.text().unwrap(), 0x4c).unwrap();
-        f.signatures.insert(p2.hash(), new_sig(&item, &m, &p2, 0x900, 0x920, None, Provenance::Local, Confidence::Low));
+        f.signatures.insert(
+            p2.hash(),
+            new_sig(
+                &item,
+                &m,
+                &p2,
+                0x900,
+                0x920,
+                None,
+                Provenance::Local,
+                Confidence::Low,
+            ),
+        );
         // third: not in the module
         let p3 = Pattern::from_a64(&le(&[0x12345678, 0x9ABCDEF0, 0x0F1E2D3C])).unwrap();
-        f.signatures.insert(p3.hash(), new_sig(&item, &m, &p3, 0, 0x10, None, Provenance::Local, Confidence::Low));
+        f.signatures.insert(
+            p3.hash(),
+            new_sig(
+                &item,
+                &m,
+                &p3,
+                0,
+                0x10,
+                None,
+                Provenance::Local,
+                Confidence::Low,
+            ),
+        );
         // fourth: another module
         let mut s4 = f.signatures[&p.hash()].clone();
         s4.module = "sdk".into();

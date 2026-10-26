@@ -1,0 +1,21 @@
+# swiftlint config for Napple Studio (applies to studio/ only). Run: swiftlint lint --strict
+included:
+  - Sources
+  - Tests
+excluded:
+  - .build
+disabled_rules:
+  - line_length        # lines follow the swiftformat width (160)
+  - identifier_name
+  - type_body_length
+  - file_length
+  - function_body_length
+  - cyclomatic_complexity
+  - nesting
+  - todo
+opt_in_rules:
+  - empty_count
+  - explicit_init
+  - first_where
+  - sorted_first_last
+  - unused_import

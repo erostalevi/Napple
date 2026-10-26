@@ -1,5 +1,5 @@
 //! NSO0 executables (main, rtld, sdk, subsdk*): segment decompression and integrity checks.
-use crate::domain::error::{container, Error, Result};
+use crate::domain::error::{Error, Result, container};
 use sha2::{Digest, Sha256};
 
 const MAX_SEG: usize = 1 << 29;
@@ -32,24 +32,37 @@ impl Nso {
         let mut segs = Vec::new();
         for i in 0..3usize {
             let h = 0x10 + i * 0x10;
-            let (file_off, mem_off, dsz) = (u32le(f, h) as usize, u32le(f, h + 4), u32le(f, h + 8) as usize);
+            let (file_off, mem_off, dsz) = (
+                u32le(f, h) as usize,
+                u32le(f, h + 4),
+                u32le(f, h + 8) as usize,
+            );
             let csz = u32le(f, 0x60 + i * 4) as usize;
-            if dsz > MAX_SEG || csz > MAX_SEG || file_off.checked_add(csz).is_none_or(|e| e > f.len()) {
+            if dsz > MAX_SEG
+                || csz > MAX_SEG
+                || file_off.checked_add(csz).is_none_or(|e| e > f.len())
+            {
                 return container("NSO segment out of range");
             }
             let raw = &f[file_off..file_off + csz];
             let data = if flags & (1 << i) != 0 {
-                lz4_flex::block::decompress(raw, dsz).map_err(|_| Error::Container("NSO LZ4 decompression failed".into()))?
+                lz4_flex::block::decompress(raw, dsz)
+                    .map_err(|_| Error::Container("NSO LZ4 decompression failed".into()))?
             } else {
                 raw.to_vec()
             };
             if data.len() != dsz {
                 return container("NSO segment size mismatch");
             }
-            if flags & (8 << i) != 0 && Sha256::digest(&data)[..] != f[0xA0 + i * 0x20..0xC0 + i * 0x20] {
+            if flags & (8 << i) != 0
+                && Sha256::digest(&data)[..] != f[0xA0 + i * 0x20..0xC0 + i * 0x20]
+            {
                 return Err(Error::Integrity(format!("NSO segment {i} hash")));
             }
-            segs.push(Segment { mem_offset: mem_off, data });
+            segs.push(Segment {
+                mem_offset: mem_off,
+                data,
+            });
         }
         let mut it = segs.into_iter();
         Ok(Self {
@@ -77,8 +90,14 @@ mod tests {
         let mut flags = 0u32;
         let mut body = Vec::new();
         for (i, s) in segs.iter().enumerate() {
-            let stored = if compress { lz4_flex::block::compress(s) } else { s.to_vec() };
-            if compress { flags |= 1 << i; }
+            let stored = if compress {
+                lz4_flex::block::compress(s)
+            } else {
+                s.to_vec()
+            };
+            if compress {
+                flags |= 1 << i;
+            }
             flags |= 8 << i;
             let h = 0x10 + i * 0x10;
             f[h..h + 4].copy_from_slice(&((0x100 + body.len()) as u32).to_le_bytes());
@@ -86,7 +105,9 @@ mod tests {
             f[h + 8..h + 12].copy_from_slice(&(s.len() as u32).to_le_bytes());
             f[0x60 + i * 4..0x64 + i * 4].copy_from_slice(&(stored.len() as u32).to_le_bytes());
             let mut d = Sha256::digest(s).to_vec();
-            if tamper && i == 0 { d[0] ^= 1; }
+            if tamper && i == 0 {
+                d[0] ^= 1;
+            }
             f[0xA0 + i * 0x20..0xC0 + i * 0x20].copy_from_slice(&d);
             body.extend(stored);
         }
@@ -109,7 +130,10 @@ mod tests {
 
     #[test]
     fn rejects_tampered_and_garbage() {
-        assert!(matches!(Nso::parse(&build(&[0; 8], true, true)), Err(Error::Integrity(_))));
+        assert!(matches!(
+            Nso::parse(&build(&[0; 8], true, true)),
+            Err(Error::Integrity(_))
+        ));
         assert!(Nso::parse(&[0u8; 0x200]).is_err());
         let mut f = build(&[0; 8], false, false);
         f.truncate(0x108);

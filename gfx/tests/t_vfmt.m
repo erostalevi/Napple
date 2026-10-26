@@ -5,8 +5,10 @@
 #include "mtl_priv.h"
 
 static void expect(int nvn, MTLVertexFormat want, int want_kind, const char *name) {
-    int kind = -1; uint32_t got = mtl_vertex_format(nvn, &kind);
-    CHECK(got == (uint32_t)want && kind == want_kind, "%s (%#x): got format %u kind %d, want %lu kind %d", name, nvn, got, kind, (unsigned long)want, want_kind);
+    int kind = -1;
+    uint32_t got = mtl_vertex_format(nvn, &kind);
+    CHECK(got == (uint32_t)want && kind == want_kind, "%s (%#x): got format %u kind %d, want %lu kind %d", name, nvn, got, kind, (unsigned long)want,
+          want_kind);
 }
 int main(void) {
     expect(0x22, MTLVertexFormatFloat3, 0, "RGB32F");

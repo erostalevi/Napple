@@ -16,7 +16,7 @@ public enum CLIError: Error, LocalizedError, Equatable {
     }
 }
 
-/// One parsed `PROGRESS <stage> <percent> <message>` line (see docs/studio-protocol.md).
+/// One parsed `PROGRESS <stage> <percent> <message>` line (see docs/architecture/studio-protocol.md).
 public struct ProgressEvent: Equatable, Sendable {
     public var stage: String
     public var percent: Double  // 0...100
@@ -251,7 +251,7 @@ public struct NappleCLI: Sendable {
         p.standardInput = FileHandle.nullDevice
         do { try p.run() } catch { throw CLIError.notFound }
         let out = LockedBox<[String]>([]), err = LockedBox<[String]>([])
-        try await withTaskCancellationHandler {
+        await withTaskCancellationHandler {
             await withTaskGroup(of: Void.self) { g in
                 g.addTask { await Self.lines(of: o.fileHandleForReading) { l in out.append(l); onStdoutLine?(l) } }
                 g.addTask { await Self.lines(of: e.fileHandleForReading) { l in err.append(l); onStdoutLine?(l) } }

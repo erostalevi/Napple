@@ -5,12 +5,12 @@
 //! * Borrowed registers are spilled at `[sp, #-144]`: just below the 128-byte red zone that leaf
 //!   functions of the guest may use for live locals (LLVM/AArch64 does), and restored before
 //!   control returns to the original code stream. Runtimes must therefore run signal handlers
-//!   for guest threads on an alternate stack (see `docs/rewrite-format.md`).
+//!   for guest threads on an alternate stack (see `docs/architecture/rewrite-format.md`).
 //! * Scratch registers are chosen from x0..x15 and never collide with a register the rewritten
 //!   instruction names; flags (NZCV) are never touched.
 //! * Virtual x18 lives in thread slot `K18`; the slot address is `tpidrro_el0 + key-page[K18]`.
 use crate::a64::{self, Text};
-use crate::patch::{Reason, R};
+use crate::patch::{R, Reason};
 use crate::rewrite::Rewriter;
 use crate::types::{Gate, GateKind, Key};
 
@@ -37,19 +37,25 @@ fn sp_delta(t: &Text) -> R<i64> {
     if let Some(p) = full.find("[sp, #") {
         let rest = &full[p + 5..];
         if let Some(end) = rest.find("]!") {
-            return parse_imm(&rest[..end]).ok_or_else(|| Reason(format!("unparsable sp writeback in `{full}`")));
+            return parse_imm(&rest[..end])
+                .ok_or_else(|| Reason(format!("unparsable sp writeback in `{full}`")));
         }
         // plain `[sp, #imm]`: accesses deeper than the red zone would collide with the spill slot
-        if let Some(end) = rest.find(']') {
-            if parse_imm(&rest[..end]).is_some_and(|v| v < -128) {
-                return Err(Reason(format!("sp-relative access below the red zone in `{full}`")));
-            }
+        if let Some(end) = rest.find(']')
+            && parse_imm(&rest[..end]).is_some_and(|v| v < -128)
+        {
+            return Err(Reason(format!(
+                "sp-relative access below the red zone in `{full}`"
+            )));
         }
     }
     if let Some(p) = full.find("[sp],") {
-        return parse_imm(&full[p + 5..]).ok_or_else(|| Reason(format!("register post-index on sp in `{full}`")));
+        return parse_imm(&full[p + 5..])
+            .ok_or_else(|| Reason(format!("register post-index on sp in `{full}`")));
     }
-    if matches!(t.ops.first().map(String::as_str), Some("sp" | "wsp")) && !t.mnemonic.starts_with("st") {
+    if matches!(t.ops.first().map(String::as_str), Some("sp" | "wsp"))
+        && !t.mnemonic.starts_with("st")
+    {
         return Err(Reason(format!("instruction writes sp: `{full}`")));
     }
     Ok(0)
@@ -57,7 +63,8 @@ fn sp_delta(t: &Text) -> R<i64> {
 
 impl Rewriter<'_> {
     fn scratch2(&self, w: u32, extra_busy: u32) -> R<(u32, u32)> {
-        let v = a64::pick_scratch(a64::busy_regs(w) | extra_busy, 2).ok_or("no free scratch registers")?;
+        let v = a64::pick_scratch(a64::busy_regs(w) | extra_busy, 2)
+            .ok_or("no free scratch registers")?;
         Ok((v[0], v[1]))
     }
 
@@ -69,7 +76,8 @@ impl Rewriter<'_> {
         let text = a64::disasm(w).ok_or("undecodable instruction")?;
         let dlt = sp_delta(&text)?;
         let (s, t) = self.scratch2(w, 0)?;
-        let nw = a64::subst_reg18(w, s).ok_or_else(|| Reason(format!("cannot substitute x18 in `{}`", text.full)))?;
+        let nw = a64::subst_reg18(w, s)
+            .ok_or_else(|| Reason(format!("cannot substitute x18 in `{}`", text.full)))?;
         // a push writes between the new sp and the old one: keep the spill clear of that range
         let save: i32 = if dlt < -128 { dlt as i32 - 16 } else { SPILL };
         if !(-368..=368).contains(&dlt) {
@@ -173,7 +181,9 @@ impl Rewriter<'_> {
     /// `mrs xN, tpidr_el0` / `mrs xN, tpidrro_el0` -> xN = thread slot.
     pub(crate) fn site_sysreg_read(&mut self, a: u32, n: u32, key: Key) -> R<u32> {
         if n >= 29 {
-            return Err(Reason(format!("destination x{n} is reserved by the rewrite sequence")));
+            return Err(Reason(format!(
+                "destination x{n} is reserved by the rewrite sequence"
+            )));
         }
         let tmp = if n != 16 { 16 } else { 17 };
         let p = &mut self.patch;
@@ -189,10 +199,15 @@ impl Rewriter<'_> {
     /// `msr tpidr_el0, xN` -> thread slot = xN.
     pub(crate) fn site_tpidr_write(&mut self, a: u32, n: u32) -> R<u32> {
         if n == 18 || n == 31 {
-            return Err(Reason(format!("source register {n} unsupported for msr tpidr_el0")));
+            return Err(Reason(format!(
+                "source register {n} unsupported for msr tpidr_el0"
+            )));
         }
         let t = a64::pick_scratch(1 << n, 1).ok_or("no scratch")?[0];
-        let tmp = [16u32, 17].into_iter().find(|x| *x != n && *x != t).unwrap();
+        let tmp = [16u32, 17]
+            .into_iter()
+            .find(|x| *x != n && *x != t)
+            .unwrap();
         let p = &mut self.patch;
         let start = p.here();
         p.emit(a64::stur(t, 31, SPILL)?);
@@ -220,7 +235,9 @@ impl Rewriter<'_> {
     /// `svc #n`, `mrs xN, cntpct_el0` and friends: enter the host, then continue after the site.
     pub(crate) fn site_gate(&mut self, a: u32, kind: GateKind, arg: u32) -> R<u32> {
         if kind != GateKind::Svc && (arg == 18 || arg >= 29) {
-            return Err(Reason(format!("counter destination x{arg} cannot be written by the host gate")));
+            return Err(Reason(format!(
+                "counter destination x{arg} cannot be written by the host gate"
+            )));
         }
         let p = &mut self.patch;
         let start = p.here();
@@ -233,7 +250,12 @@ impl Rewriter<'_> {
         p.emit(a64::ldp_post(29, 30, 31, 16)?);
         p.emit(a64::add_imm(31, 31, (-SPILL) as u32, false));
         p.emit_b(a + 4)?;
-        self.gates.push(Gate { ret, kind, arg, orig: a });
+        self.gates.push(Gate {
+            ret,
+            kind,
+            arg,
+            orig: a,
+        });
         Ok(start)
     }
 }

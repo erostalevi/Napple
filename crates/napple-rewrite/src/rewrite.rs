@@ -3,10 +3,10 @@ use crate::a64;
 use crate::error::{RewriteError, Unhandled};
 use crate::image::ModuleImage;
 use crate::jumptab::{self, Shape};
-use crate::patch::{Patch, Reason, R};
+use crate::patch::{Patch, R, Reason};
 use crate::scan::{self, SiteKind};
-use crate::types::{Gate, GateKind, Key, RewriteOptions, RewriteOutput, SiteRow, Stats};
 use crate::templates::SPILL;
+use crate::types::{Gate, GateKind, Key, RewriteOptions, RewriteOutput, SiteRow, Stats};
 use crate::windows;
 use napple_core::infrastructure::nso::Nso;
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,7 +32,12 @@ pub(crate) struct Rewriter<'a> {
 }
 
 impl<'a> Rewriter<'a> {
-    fn new(orig: &'a ModuleImage, sites: BTreeMap<u32, SiteKind>, starts: Vec<u32>, opts: &'a RewriteOptions) -> Self {
+    fn new(
+        orig: &'a ModuleImage,
+        sites: BTreeMap<u32, SiteKind>,
+        starts: Vec<u32>,
+        opts: &'a RewriteOptions,
+    ) -> Self {
         let l = orig.layout;
         Self {
             orig,
@@ -58,7 +63,11 @@ impl<'a> Rewriter<'a> {
     }
 
     fn fail(&mut self, addr: u32, reason: impl Into<String>) {
-        self.unhandled.push(Unhandled { addr, word: self.orig.word(addr), reason: reason.into() });
+        self.unhandled.push(Unhandled {
+            addr,
+            word: self.orig.word(addr),
+            reason: reason.into(),
+        });
     }
 
     /// Replaces the original word at `at` with a branch into the patch area.
@@ -71,7 +80,11 @@ impl<'a> Rewriter<'a> {
     /// Enclosing function `[start, end)` from the unwind table, if the address is covered.
     fn function_of(&self, a: u32) -> Option<(u32, u32)> {
         let i = self.starts.partition_point(|s| *s <= a).checked_sub(1)?;
-        let end = self.starts.get(i + 1).copied().unwrap_or(self.orig.layout.text_end);
+        let end = self
+            .starts
+            .get(i + 1)
+            .copied()
+            .unwrap_or(self.orig.layout.text_end);
         Some((self.starts[i], end))
     }
 
@@ -84,7 +97,10 @@ impl<'a> Rewriter<'a> {
         }
         for group in grouped.groups {
             let mark = self.patch.mark();
-            let addrs: Vec<u32> = group.iter().flat_map(|s| (s.lo..s.hi()).step_by(4)).collect();
+            let addrs: Vec<u32> = group
+                .iter()
+                .flat_map(|s| (s.lo..s.hi()).step_by(4))
+                .collect();
             let result = self.site_window_group(&group).and_then(|heads| {
                 for (head, entry) in &heads {
                     self.put_branch(*head, *entry)?;
@@ -94,7 +110,10 @@ impl<'a> Rewriter<'a> {
             match result {
                 Ok(()) => {
                     for s in &group {
-                        self.window_rows.push(SiteRow::Window { lo: s.lo, hi: s.hi() });
+                        self.window_rows.push(SiteRow::Window {
+                            lo: s.lo,
+                            hi: s.hi(),
+                        });
                         self.stat("window");
                     }
                 }
@@ -131,16 +150,25 @@ impl<'a> Rewriter<'a> {
             SiteKind::X18 => {
                 if w == a64::BR_X18 {
                     let (jt, start) = self.site_br(a)?;
-                    self.jump_rows.push(SiteRow::Jump { addr: a, base: jt.0, count: jt.1 });
+                    self.jump_rows.push(SiteRow::Jump {
+                        addr: a,
+                        base: jt.0,
+                        count: jt.1,
+                    });
                     return Ok((start, "br"));
                 }
                 if w == a64::BLR_X18 {
                     let start = self.site_call(a)?;
-                    self.call_rows.push(SiteRow::Call { addr: a, ret: a + 4 });
+                    self.call_rows.push(SiteRow::Call {
+                        addr: a,
+                        ret: a + 4,
+                    });
                     return Ok((start, "call_window"));
                 }
                 if self.inside_open_exclusive(a) {
-                    return Err("x18 instruction inside a ldxr/stxr sequence that no window covers".into());
+                    return Err(
+                        "x18 instruction inside a ldxr/stxr sequence that no window covers".into(),
+                    );
                 }
                 if a64::is_literal_load(w) && (w & 31) == 18 {
                     return Ok((self.site_literal(a, w)?, "literal"));
@@ -148,11 +176,17 @@ impl<'a> Rewriter<'a> {
                 if a64::is_adr_like(w) && (w & 31) == 18 {
                     return Ok((self.site_pcrel(a, w)?, "pcrel"));
                 }
-                if a64::is_cond_branch(w) && !a64::is_adr_like(w) && a64::direct_target(w, 0).is_some() && !a64::is_uncond_b(w) {
+                if a64::is_cond_branch(w)
+                    && !a64::is_adr_like(w)
+                    && a64::direct_target(w, 0).is_some()
+                    && !a64::is_uncond_b(w)
+                {
                     return Ok((self.site_cond(a, w)?, "cond"));
                 }
                 if a64::is_indirect_branch(w) || a64::is_uncond_b(w) || a64::is_bl(w) {
-                    return Err(Reason(format!("unsupported branch form with x18 ({w:08x})")));
+                    return Err(Reason(format!(
+                        "unsupported branch form with x18 ({w:08x})"
+                    )));
                 }
                 Ok((self.site_plain(a, w)?, "plain"))
             }
@@ -181,18 +215,33 @@ impl<'a> Rewriter<'a> {
         p.emit(a64::ldr_slot(16, 16, 0)?); // x16 = virtual x18 = base + 4*i
         p.emit(a64::ldur(17, 31, SPILL - 8)?);
         const STUB_WORDS: u32 = 24;
-        let pad_base = self.pads.get(&key).copied().unwrap_or(start + 4 * STUB_WORDS);
+        let pad_base = self
+            .pads
+            .get(&key)
+            .copied()
+            .unwrap_or(start + 4 * STUB_WORDS);
         let delta = pad_base as i64 - base as i64;
-        let (hi, lo) = ((delta.unsigned_abs() >> 12) as u32, (delta.unsigned_abs() & 0xFFF) as u32);
+        let (hi, lo) = (
+            (delta.unsigned_abs() >> 12) as u32,
+            (delta.unsigned_abs() & 0xFFF) as u32,
+        );
         let mut ops = Vec::new();
         let mut rest = hi;
         while rest > 0 {
             let h = rest.min(0xFFF);
-            ops.push(if delta >= 0 { a64::add_imm(16, 16, h, true) } else { a64::sub_imm(16, 16, h, true) });
+            ops.push(if delta >= 0 {
+                a64::add_imm(16, 16, h, true)
+            } else {
+                a64::sub_imm(16, 16, h, true)
+            });
             rest -= h;
         }
         if lo != 0 {
-            ops.push(if delta >= 0 { a64::add_imm(16, 16, lo, false) } else { a64::sub_imm(16, 16, lo, false) });
+            ops.push(if delta >= 0 {
+                a64::add_imm(16, 16, lo, false)
+            } else {
+                a64::sub_imm(16, 16, lo, false)
+            });
         }
         if ops.len() > 12 {
             return Err("landing pads too far from the table base".into());
@@ -244,7 +293,10 @@ impl<'a> Rewriter<'a> {
                 Ok(stat) => {
                     self.stat(stat);
                     if stat != "call_window" {
-                        self.rows.push(SiteRow::Single { addr: a, label: kind.label() });
+                        self.rows.push(SiteRow::Single {
+                            addr: a,
+                            label: kind.label(),
+                        });
                     }
                 }
                 Err(Reason(why)) => {
@@ -264,19 +316,32 @@ impl<'a> Rewriter<'a> {
 
 /// Rewrites one NSO module. `build_id` is the hex build id recorded in the outputs (the first 32
 /// hex digits, as in the reference tool, identify the build).
-pub fn rewrite_module(nso: &Nso, build_id: &str, opts: &RewriteOptions) -> Result<RewriteOutput, RewriteError> {
+pub fn rewrite_module(
+    nso: &Nso,
+    build_id: &str,
+    opts: &RewriteOptions,
+) -> Result<RewriteOutput, RewriteError> {
     let orig = ModuleImage::from_nso(nso)?;
     let scanned = scan::scan(&orig);
     let starts = orig.function_starts();
     let mut warnings = Vec::new();
     for (a, k) in &scanned.data_matches {
-        warnings.push(format!("{a:#x}: data word in the code segment decodes as {}; left untouched", k.label()));
+        warnings.push(format!(
+            "{a:#x}: data word in the code segment decodes as {}; left untouched",
+            k.label()
+        ));
     }
     for a in &scanned.undecodable {
-        warnings.push(format!("{a:#x}: undecodable word with a register-18 field ({:08x}); left untouched", orig.word(*a)));
+        warnings.push(format!(
+            "{a:#x}: undecodable word with a register-18 field ({:08x}); left untouched",
+            orig.word(*a)
+        ));
     }
     for (a, id, read) in &scanned.other_sysregs {
-        warnings.push(format!("{a:#x}: {} of system register {id:#x} is not rewritten", if *read { "mrs" } else { "msr" }));
+        warnings.push(format!(
+            "{a:#x}: {} of system register {id:#x} is not rewritten",
+            if *read { "mrs" } else { "msr" }
+        ));
     }
     let mut rw = Rewriter::new(&orig, scanned.sites, starts, opts);
     rw.run();

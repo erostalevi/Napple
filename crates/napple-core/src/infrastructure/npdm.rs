@@ -1,7 +1,7 @@
 //! NPDM (main.npdm) parser: META header, ACI0 (granted) and ACID (policy) sections.
 //! Extracts the process flags, thread/stack parameters, service access control (SAC) and kernel
 //! capabilities (allowed SVCs, handle table size, kernel version, memory/IO mappings, ...).
-use crate::domain::error::{container, Result};
+use crate::domain::error::{Result, container};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceAccess {
@@ -61,7 +61,7 @@ fn cstr(b: &[u8]) -> String {
 }
 
 /// Slice `[off, off+len)` of `d`, bounds-checked.
-fn sub<'a>(d: &'a [u8], off: u32, len: u32) -> Result<&'a [u8]> {
+fn sub(d: &[u8], off: u32, len: u32) -> Result<&[u8]> {
     let end = (off as usize).checked_add(len as usize);
     match end.and_then(|e| d.get(off as usize..e)) {
         Some(s) => Ok(s),
@@ -74,11 +74,16 @@ pub fn parse_sac(b: &[u8]) -> Result<Vec<ServiceAccess>> {
     while i < b.len() {
         let c = b[i];
         let len = (c & 7) as usize + 1;
-        let Some(n) = b.get(i + 1..i + 1 + len) else { return container("truncated SAC entry") };
+        let Some(n) = b.get(i + 1..i + 1 + len) else {
+            return container("truncated SAC entry");
+        };
         if !n.iter().all(|&x| x.is_ascii_graphic()) {
             return container("non-printable SAC service name");
         }
-        out.push(ServiceAccess { name: String::from_utf8_lossy(n).into_owned(), host: c & 0x80 != 0 });
+        out.push(ServiceAccess {
+            name: String::from_utf8_lossy(n).into_owned(),
+            host: c & 0x80 != 0,
+        });
         i += 1 + len;
     }
     Ok(out)
@@ -86,7 +91,12 @@ pub fn parse_sac(b: &[u8]) -> Result<Vec<ServiceAccess>> {
 
 pub fn parse_kac(b: &[u8]) -> KernelCaps {
     let mut k = KernelCaps::default();
-    let words: Vec<u32> = b.chunks_exact(4).map(|c| u32::from_le_bytes(c.try_into().unwrap())).collect();
+    let words: Vec<u32> = b
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|c| u32::from_le_bytes(*c))
+        .collect();
     let mut i = 0;
     while i < words.len() {
         let d = words[i];
@@ -96,7 +106,14 @@ pub fn parse_kac(b: &[u8]) -> KernelCaps {
         }
         let ones = d.trailing_ones();
         match ones {
-            3 => k.thread_info = Some((((d >> 4) & 0x3F) as u8, ((d >> 10) & 0x3F) as u8, ((d >> 16) & 0xFF) as u8, ((d >> 24) & 0xFF) as u8)),
+            3 => {
+                k.thread_info = Some((
+                    ((d >> 4) & 0x3F) as u8,
+                    ((d >> 10) & 0x3F) as u8,
+                    ((d >> 16) & 0xFF) as u8,
+                    ((d >> 24) & 0xFF) as u8,
+                ))
+            }
             4 => {
                 let (mask, idx) = ((d >> 5) & 0xFF_FFFF, d >> 29);
                 for bit in 0..24 {
@@ -107,11 +124,15 @@ pub fn parse_kac(b: &[u8]) -> KernelCaps {
             }
             6 => {
                 // Memory map: pair of descriptors (begin address + permission, size + type).
-                let Some(&d2) = words.get(i) else { k.unknown.push(d); break };
+                let Some(&d2) = words.get(i) else {
+                    k.unknown.push(d);
+                    break;
+                };
                 i += 1;
                 let addr = ((d >> 7) & 0x00FF_FFFF) as u64 * 0x1000;
                 let size = ((d2 >> 7) & 0x000F_FFFF) as u64 * 0x1000;
-                k.memory_maps.push((addr, size, d >> 31 != 0, (d2 >> 31) != 0));
+                k.memory_maps
+                    .push((addr, size, d >> 31 != 0, (d2 >> 31) != 0));
             }
             7 => k.io_maps.push(((d >> 8) & 0x00FF_FFFF) as u64 * 0x1000),
             // Descriptor type = number of trailing ones; payload starts at bit (ones + 1).
@@ -151,7 +172,12 @@ pub fn parse_npdm(d: &[u8]) -> Result<Npdm> {
         return container("not an NPDM");
     }
     let flags = d[0xC];
-    let (aci_off, aci_len, acid_off, acid_len) = (u32le(d, 0x70).unwrap(), u32le(d, 0x74).unwrap(), u32le(d, 0x78).unwrap(), u32le(d, 0x7C).unwrap());
+    let (aci_off, aci_len, acid_off, acid_len) = (
+        u32le(d, 0x70).unwrap(),
+        u32le(d, 0x74).unwrap(),
+        u32le(d, 0x78).unwrap(),
+        u32le(d, 0x7C).unwrap(),
+    );
     let aci = sub(d, aci_off, aci_len)?;
     let acid = sub(d, acid_off, acid_len)?;
     if aci.len() < 0x40 || &aci[..4] != b"ACI0" {
@@ -205,9 +231,11 @@ mod tests {
         s
     }
 
+    // One commented push per capability descriptor reads better than a single vec! literal.
+    #[allow(clippy::vec_init_then_push)]
     fn kac() -> Vec<u8> {
         let mut w: Vec<u32> = vec![];
-        w.push(0x7 | (59 << 4) | (28 << 10) | (0 << 16) | (3 << 24)); // threads
+        w.push((0x7 | (59 << 4) | (28 << 10)) | (3 << 24)); // threads
         w.push(0xF | (0b11 << 5) | (1 << 29)); // svc 24, 25
         w.push(0xFFFF_FFFF);
         w.push(0x3F | (0x1234 << 7)); // memory map, start
@@ -266,12 +294,28 @@ mod tests {
     #[test]
     fn parses_synthetic() {
         let n = parse_npdm(&synthetic()).unwrap();
-        assert_eq!((n.name.as_str(), n.is_64bit, n.address_space, n.main_thread_priority, n.main_thread_core), ("Application", true, 3, 44, 3));
-        assert_eq!((n.main_thread_stack_size, n.system_resource_size, n.title_id), (0x100000, 0x1000, 0x0100_0000_0000_1234));
+        assert_eq!(
+            (
+                n.name.as_str(),
+                n.is_64bit,
+                n.address_space,
+                n.main_thread_priority,
+                n.main_thread_core
+            ),
+            ("Application", true, 3, 44, 3)
+        );
+        assert_eq!(
+            (n.main_thread_stack_size, n.system_resource_size, n.title_id),
+            (0x100000, 0x1000, 0x0100_0000_0000_1234)
+        );
         assert!(n.acid_production);
         assert_eq!(n.memory_region, 1);
         assert_eq!(n.fs_permissions, 7);
-        let s: Vec<(&str, bool)> = n.services.iter().map(|s| (s.name.as_str(), s.host)).collect();
+        let s: Vec<(&str, bool)> = n
+            .services
+            .iter()
+            .map(|s| (s.name.as_str(), s.host))
+            .collect();
         assert_eq!(s, [("fsp-srv", false), ("sm:", false), ("hid", true)]);
         let k = &n.kernel;
         assert_eq!(k.allowed_svcs, [24, 25]);

@@ -1,6 +1,6 @@
 /* Boot harness for AArch32 titles: maps the modules of a data directory into the guest window, sets up a stack and the thread registers and runs
  * nn::init::Start on the interpreter with a minimal svc layer that logs every distinct svc. Dev tool for finding what the real runtime integration needs:
- *   cc -std=gnu11 -O2 -Isrc/a32 -o a32_boot tests/a32/a32_boot.c src/a32/*.c , then   a32_boot <data dir> [max million instructions] */
+ *   cc -std=gnu11 -O2 -Isrc/a32 -o a32_boot tests/a32/a32_boot.c src/a32/ sources , then   a32_boot <data dir> [max million instructions] */
 #include "../../src/a32/a32.h"
 #include "../../src/a32/a32_module.h"
 #include <stdio.h>

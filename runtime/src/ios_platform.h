@@ -6,6 +6,6 @@
 const char *ios_default_data_dir(void);
 /* <app container>/Documents/Napple: visible in the Files app (UIFileSharingEnabled), so saves can be backed up. */
 const char *ios_default_save_root(void);
-/* The launcher's job on macOS: copy game/system/fonts/*.ttf to <save-root>/system/fonts where pl:u reads them. */
+/* The launcher's job on macOS: copy the .ttf files in game/system/fonts to <save-root>/system/fonts where pl:u reads them. */
 void ios_install_fonts(const char *data_dir, const char *save_root);
 #endif

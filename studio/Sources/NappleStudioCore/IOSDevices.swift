@@ -1,6 +1,6 @@
 import Foundation
 
-/// Build targets of `napple build --target` (docs/ios.md). iOS and iPadOS 26 or later only.
+/// Build targets of `napple build --target` (docs/architecture/ios.md). iOS and iPadOS 26 or later only.
 public enum BuildTarget: String, CaseIterable, Identifiable, Sendable {
     case macos, ios, iphone, ipad
     public var id: String { rawValue }

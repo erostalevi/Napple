@@ -12,13 +12,20 @@ pub type Result<T> = std::result::Result<T, BuildError>;
 
 impl BuildError {
     pub fn new(code: &'static str, msg: impl Into<String>) -> Self {
-        Self { code, msg: msg.into() }
+        Self {
+            code,
+            msg: msg.into(),
+        }
     }
     pub fn usage(msg: impl Into<String>) -> Self {
         Self::new("usage", msg)
     }
     pub fn io(ctx: &str, e: std::io::Error) -> Self {
-        let code = if e.raw_os_error() == Some(libc::ENOSPC) { "disk-space" } else { "io" };
+        let code = if e.raw_os_error() == Some(libc::ENOSPC) {
+            "disk-space"
+        } else {
+            "io"
+        };
         Self::new(code, format!("{ctx}: {e}"))
     }
     pub fn cancelled() -> Self {

@@ -2,9 +2,9 @@
 use crate::domain::error::{Error, Result};
 use crate::domain::keys::KeySet;
 use crate::infrastructure::io::{FileSource, Src};
-use crate::infrastructure::ncz;
 use crate::infrastructure::nca::{self, ContentType, FsType, Nca, TitleKeys};
-use crate::infrastructure::pfs::{parse_pfs0, Fs};
+use crate::infrastructure::ncz;
+use crate::infrastructure::pfs::{Fs, parse_pfs0};
 use crate::infrastructure::romfs::RomFs;
 use crate::infrastructure::{ticket::parse_ticket, xci::parse_xci};
 use std::path::Path;
@@ -33,7 +33,12 @@ pub(crate) fn collect(src: Src) -> Result<(Vec<(String, Src)>, TitleKeys)> {
         parts.push(parse_pfs0(src)?);
     } else {
         // XCI: the secure partition holds the game; update/normal are read too if present.
-        parts.extend(parse_xci(src)?.into_iter().filter(|(n, _)| n != "logo").map(|(_, f)| f));
+        parts.extend(
+            parse_xci(src)?
+                .into_iter()
+                .filter(|(n, _)| n != "logo")
+                .map(|(_, f)| f),
+        );
     }
     let (mut ncas, mut tks) = (Vec::new(), TitleKeys::new());
     for fs in &parts {
@@ -42,7 +47,10 @@ pub(crate) fn collect(src: Src) -> Result<(Vec<(String, Src)>, TitleKeys)> {
                 ncas.push((e.name.clone(), fs.open(&e.name)?));
             } else if e.name.ends_with(".ncz") {
                 // NSZ/XCZ member: presented as the original NCA.
-                ncas.push((ncz::nca_name(&e.name), ncz::NczSource::open(fs.open(&e.name)?)?));
+                ncas.push((
+                    ncz::nca_name(&e.name),
+                    ncz::NczSource::open(fs.open(&e.name)?)?,
+                ));
             } else if e.name.ends_with(".tik") {
                 let t = parse_ticket(&fs.read(&e.name)?)?;
                 if t.key_type == 0 {
@@ -60,7 +68,8 @@ pub fn ingest(path: &Path, keys: &KeySet) -> Result<Ingested> {
 }
 
 pub fn ingest_sources(ncas: Vec<(String, Src)>, tks: TitleKeys, keys: &KeySet) -> Result<Ingested> {
-    let (mut infos, mut exefs, mut romfs, mut title_id, mut romfs_note) = (Vec::new(), Vec::new(), None, None, None);
+    let (mut infos, mut exefs, mut romfs, mut title_id, mut romfs_note) =
+        (Vec::new(), Vec::new(), None, None, None);
     for (name, src) in ncas {
         let n = match Nca::open(src, keys, &tks) {
             Ok(n) => n,
@@ -70,7 +79,11 @@ pub fn ingest_sources(ncas: Vec<(String, Src)>, tks: TitleKeys, keys: &KeySet) -
             Err(Error::Unsupported(_)) => continue,
             Err(e) => return Err(e),
         };
-        infos.push(NcaInfo { name: name.clone(), content_type: n.content_type, program_id: n.program_id });
+        infos.push(NcaInfo {
+            name: name.clone(),
+            content_type: n.content_type,
+            program_id: n.program_id,
+        });
         if n.content_type != ContentType::Program || !exefs.is_empty() {
             continue;
         }
@@ -84,19 +97,25 @@ pub fn ingest_sources(ncas: Vec<(String, Src)>, tks: TitleKeys, keys: &KeySet) -
                         exefs.push((e.name.clone(), fs.read(&e.name)?));
                     }
                 }
-                FsType::RomFs if romfs.is_none() => {
-                    match n.section(sec.index) {
-                        Ok(s) => romfs = Some(RomFs::parse(nca::romfs_data(&s, sec)?)?),
-                        Err(Error::Unsupported(m)) => romfs_note = Some(m),
-                        Err(e) => return Err(e),
-                    }
-                }
+                FsType::RomFs if romfs.is_none() => match n.section(sec.index) {
+                    Ok(s) => romfs = Some(RomFs::parse(nca::romfs_data(&s, sec)?)?),
+                    Err(Error::Unsupported(m)) => romfs_note = Some(m),
+                    Err(e) => return Err(e),
+                },
                 _ => {}
             }
         }
     }
     if exefs.is_empty() {
-        return Err(Error::Container("no Program NCA with ExeFS found (update-only or unsupported input?)".into()));
+        return Err(Error::Container(
+            "no Program NCA with ExeFS found (update-only or unsupported input?)".into(),
+        ));
     }
-    Ok(Ingested { ncas: infos, exefs, romfs, title_id, romfs_note })
+    Ok(Ingested {
+        ncas: infos,
+        exefs,
+        romfs,
+        title_id,
+        romfs_note,
+    })
 }

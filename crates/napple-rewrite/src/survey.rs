@@ -12,7 +12,7 @@ use napple_core::infrastructure::nso::Nso;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-/// Bytes of patch area per rewritten site, measured: LAS 39-40, ACNH sdk 43 (docs/changes/2026-10-26-claude-nx-rewriter-2026-10-26-nx.md).
+/// Bytes of patch area per rewritten site, measured: LAS 39-40, ACNH sdk 43 (docs/archive/changes/2026-10-26-claude-nx-rewriter-2026-10-26-nx.md).
 /// Jump-table landing pads come on top (ACNH main: 151 B/site), so this is a floor; `--survey-exact` runs the real rewriter.
 const EST_BYTES_PER_SITE: usize = 40;
 
@@ -46,16 +46,28 @@ fn is_module(name: &str) -> bool {
 
 /// ELF32 (DT_REL=17, no DT_RELA=7) dynamic section behind MOD0: the AArch32 layout (MK8D base).
 pub fn is_aarch32(nso: &Nso) -> bool {
-    let Ok(img) = ModuleImage::from_nso(nso) else { return false };
-    let u32_at = |o: usize| img.bytes.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
-    let Some(at) = u32_at(4).map(|v| v as usize) else { return false };
+    let Ok(img) = ModuleImage::from_nso(nso) else {
+        return false;
+    };
+    let u32_at = |o: usize| {
+        img.bytes
+            .get(o..o + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    let Some(at) = u32_at(4).map(|v| v as usize) else {
+        return false;
+    };
     if img.bytes.get(at..at + 4) != Some(b"MOD0") {
         return false;
     }
-    let Some(dynoff) = u32_at(at + 4).map(|v| (at as i64 + v as i32 as i64) as usize) else { return false };
+    let Some(dynoff) = u32_at(at + 4).map(|v| (at as i64 + v as i32 as i64) as usize) else {
+        return false;
+    };
     let mut tags = Vec::new();
     for i in 0..256 {
-        let (Some(t), Some(_)) = (u32_at(dynoff + 8 * i), u32_at(dynoff + 8 * i + 4)) else { break };
+        let (Some(t), Some(_)) = (u32_at(dynoff + 8 * i), u32_at(dynoff + 8 * i + 4)) else {
+            break;
+        };
         if t == 0 {
             break;
         }
@@ -75,7 +87,10 @@ fn reloc_name(kind: u32) -> String {
 }
 
 pub fn survey_module(name: &str, bytes: &[u8], exact: bool) -> ModuleSurvey {
-    let mut m = ModuleSurvey { name: name.into(), ..Default::default() };
+    let mut m = ModuleSurvey {
+        name: name.into(),
+        ..Default::default()
+    };
     let nso = match Nso::parse(bytes) {
         Ok(n) => n,
         Err(e) => {
@@ -84,7 +99,12 @@ pub fn survey_module(name: &str, bytes: &[u8], exact: bool) -> ModuleSurvey {
         }
     };
     m.build_id = nso.build_id_hex();
-    (m.text, m.ro, m.data, m.bss) = (nso.text.data.len(), nso.rodata.data.len(), nso.data.data.len(), nso.bss_size);
+    (m.text, m.ro, m.data, m.bss) = (
+        nso.text.data.len(),
+        nso.rodata.data.len(),
+        nso.data.data.len(),
+        nso.bss_size,
+    );
     if is_aarch32(&nso) {
         m.aarch32 = true;
         m.problems.push("AArch32 module: no AArch64 rewrite, built as a plain image + NTB2 tables (MK8D base game); the A64 patch-size figures do not apply".into());
@@ -100,21 +120,40 @@ pub fn survey_module(name: &str, bytes: &[u8], exact: bool) -> ModuleSurvey {
     let found = scan(&img);
     for k in found.sites.values() {
         let n = format!("{k:?}");
-        *m.sites.entry(n.split('(').next().unwrap_or("?").to_string()).or_default() += 1;
+        *m.sites
+            .entry(n.split('(').next().unwrap_or("?").to_string())
+            .or_default() += 1;
     }
     if !found.undecodable.is_empty() {
-        m.problems.push(format!("{} undecodable word(s) with a register-18 field (left untouched)", found.undecodable.len()));
+        m.problems.push(format!(
+            "{} undecodable word(s) with a register-18 field (left untouched)",
+            found.undecodable.len()
+        ));
     }
     if !found.other_sysregs.is_empty() {
-        m.problems.push(format!("{} system-register access(es) that are neither native nor rewritten", found.other_sysregs.len()));
+        m.problems.push(format!(
+            "{} system-register access(es) that are neither native nor rewritten",
+            found.other_sysregs.len()
+        ));
     }
-    match relocs::collect(&img.bytes, &img.dynamic_tags(), img.layout.data_off as u64, img.layout.image_len as u64) {
+    match relocs::collect(
+        &img.bytes,
+        &img.dynamic_tags(),
+        img.layout.data_off as u64,
+        img.layout.image_len as u64,
+    ) {
         Ok(rs) => {
             for r in &rs {
                 *m.relocs.entry(reloc_name(r.kind)).or_default() += 1;
             }
-            if let Some(k) = rs.iter().map(|r| r.kind).find(|k| ![257, 1025, 1026, 1027].contains(k)) {
-                m.problems.push(format!("relocation kind {k} (type{k}) is not handled by the loader"));
+            if let Some(k) = rs
+                .iter()
+                .map(|r| r.kind)
+                .find(|k| ![257, 1025, 1026, 1027].contains(k))
+            {
+                m.problems.push(format!(
+                    "relocation kind {k} (type{k}) is not handled by the loader"
+                ));
             }
         }
         Err(e) => m.problems.push(format!("relocation tables: {e}")),
@@ -128,7 +167,10 @@ pub fn survey_module(name: &str, bytes: &[u8], exact: bool) -> ModuleSurvey {
                     m.problems.push(format!("UNHANDLED {u}"));
                 }
                 if out.unhandled.len() > 5 {
-                    m.problems.push(format!("... and {} more unhandled sites", out.unhandled.len() - 5));
+                    m.problems.push(format!(
+                        "... and {} more unhandled sites",
+                        out.unhandled.len() - 5
+                    ));
                 }
             }
             Err(e) => m.problems.push(format!("rewrite fails: {e}")),
@@ -139,18 +181,33 @@ pub fn survey_module(name: &str, bytes: &[u8], exact: bool) -> ModuleSurvey {
 
 pub fn survey_program(label: &str, exefs: &[(String, Vec<u8>)], exact: bool) -> Survey {
     use rayon::prelude::*;
-    let mut s = Survey { label: label.into(), ..Default::default() };
+    let mut s = Survey {
+        label: label.into(),
+        ..Default::default()
+    };
     match exefs.iter().find(|(n, _)| n == "main.npdm") {
         Some((_, d)) => match parse_npdm(d) {
             Ok(n) => {
                 s.npdm = Some(format!(
                     "{} product '{}' title {:016X} {} address_space {} sys_resource {:#x} stack {:#x} prio {} core {} acid_flags {:#x}{} svcs {} services {}",
-                    n.name, n.product_code, n.title_id, if n.is_64bit { "64-bit" } else { "32-bit" }, n.address_space, n.system_resource_size,
-                    n.main_thread_stack_size, n.main_thread_priority, n.main_thread_core, n.acid_flags,
-                    if n.acid_production { " production" } else { "" }, n.kernel.allowed_svcs.len(), n.services.len()
+                    n.name,
+                    n.product_code,
+                    n.title_id,
+                    if n.is_64bit { "64-bit" } else { "32-bit" },
+                    n.address_space,
+                    n.system_resource_size,
+                    n.main_thread_stack_size,
+                    n.main_thread_priority,
+                    n.main_thread_core,
+                    n.acid_flags,
+                    if n.acid_production { " production" } else { "" },
+                    n.kernel.allowed_svcs.len(),
+                    n.services.len()
                 ));
                 if !n.is_64bit {
-                    s.problems.push("NPDM says 32-bit: this program runs on the AArch32 path only".into());
+                    s.problems.push(
+                        "NPDM says 32-bit: this program runs on the AArch32 path only".into(),
+                    );
                 }
             }
             Err(e) => s.problems.push(format!("main.npdm unreadable: {e}")),
@@ -161,7 +218,10 @@ pub fn survey_program(label: &str, exefs: &[(String, Vec<u8>)], exact: bool) -> 
     if !mods.iter().any(|(n, _)| n == "main") {
         s.problems.push("no `main` module in the ExeFS".into());
     }
-    s.modules = mods.par_iter().map(|(n, b)| survey_module(n, b, exact)).collect();
+    s.modules = mods
+        .par_iter()
+        .map(|(n, b)| survey_module(n, b, exact))
+        .collect();
     s.modules.sort_by(|a, b| a.name.cmp(&b.name));
     let mixed = s.modules.iter().any(|m| m.aarch32) && s.modules.iter().any(|m| !m.aarch32);
     if mixed {
@@ -185,18 +245,38 @@ impl Survey {
             let _ = writeln!(
                 o,
                 "{:<8} {} build {}  text {}  ro {}  data {}  bss {}",
-                m.name, if m.aarch32 { "A32" } else { "A64" }, m.build_id.get(..16).unwrap_or(&m.build_id), mb(m.text), mb(m.ro), mb(m.data), mb(m.bss as usize)
+                m.name,
+                if m.aarch32 { "A32" } else { "A64" },
+                m.build_id.get(..16).unwrap_or(&m.build_id),
+                mb(m.text),
+                mb(m.ro),
+                mb(m.data),
+                mb(m.bss as usize)
             );
             if !m.aarch32 {
-                let kv = |t: &BTreeMap<String, usize>| t.iter().map(|(k, v)| format!("{k}={v}")).collect::<Vec<_>>().join(" ");
+                let kv = |t: &BTreeMap<String, usize>| {
+                    t.iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                };
                 let _ = writeln!(o, "         sites: {}", kv(&m.sites));
                 let _ = writeln!(o, "         relocs: {}", kv(&m.relocs));
                 match m.exact_patch {
                     Some(p) => {
-                        let _ = writeln!(o, "         patch area: {} (exact; estimate was {})", mb(p), mb(m.est_patch));
+                        let _ = writeln!(
+                            o,
+                            "         patch area: {} (exact; estimate was {})",
+                            mb(p),
+                            mb(m.est_patch)
+                        );
                     }
                     None => {
-                        let _ = writeln!(o, "         patch area: ~{} (estimate, excludes jump pads)", mb(m.est_patch));
+                        let _ = writeln!(
+                            o,
+                            "         patch area: ~{} (estimate, excludes jump pads)",
+                            mb(m.est_patch)
+                        );
                     }
                 }
             }
@@ -214,7 +294,12 @@ impl Survey {
     pub fn blocking(&self) -> Vec<String> {
         let mut v = self.problems.clone();
         for m in &self.modules {
-            v.extend(m.problems.iter().filter(|p| !p.starts_with("AArch32 module")).map(|p| format!("{}: {p}", m.name)));
+            v.extend(
+                m.problems
+                    .iter()
+                    .filter(|p| !p.starts_with("AArch32 module"))
+                    .map(|p| format!("{}: {p}", m.name)),
+            );
         }
         v.retain(|p| !p.starts_with("NPDM says 32-bit") || !self.modules.iter().all(|m| m.aarch32));
         v
@@ -236,7 +321,8 @@ mod tests {
             let off = f.len() as u32;
             f[0x10 + i * 0x10..0x14 + i * 0x10].copy_from_slice(&off.to_le_bytes());
             f[0x14 + i * 0x10..0x18 + i * 0x10].copy_from_slice(&sg.mem_offset.to_le_bytes());
-            f[0x18 + i * 0x10..0x1C + i * 0x10].copy_from_slice(&(sg.data.len() as u32).to_le_bytes());
+            f[0x18 + i * 0x10..0x1C + i * 0x10]
+                .copy_from_slice(&(sg.data.len() as u32).to_le_bytes());
             f[0x60 + i * 4..0x64 + i * 4].copy_from_slice(&(sg.data.len() as u32).to_le_bytes());
             f.extend_from_slice(&sg.data);
         }
@@ -246,19 +332,33 @@ mod tests {
     #[test]
     fn survey_counts_sites_and_flags_garbage() {
         // mov x18,x0 ; nop
-        let text: Vec<u8> = [0xAA00_03F2u32, 0xD503_201F].iter().flat_map(|w| w.to_le_bytes()).collect();
+        let text: Vec<u8> = [0xAA00_03F2u32, 0xD503_201F]
+            .iter()
+            .flat_map(|w| w.to_le_bytes())
+            .collect();
         let n = Nso {
             build_id: [0x11; 32],
-            text: Segment { mem_offset: 0, data: text },
-            rodata: Segment { mem_offset: 0x1000, data: vec![0; 16] },
-            data: Segment { mem_offset: 0x2000, data: vec![0; 16] },
+            text: Segment {
+                mem_offset: 0,
+                data: text,
+            },
+            rodata: Segment {
+                mem_offset: 0x1000,
+                data: vec![0; 16],
+            },
+            data: Segment {
+                mem_offset: 0x2000,
+                data: vec![0; 16],
+            },
             bss_size: 0,
         };
         let bytes = nso_file(&n);
         let m = survey_module("main", &bytes, true);
         assert_eq!(m.sites.get("X18"), Some(&1), "{m:?}");
         assert!(m.exact_patch.is_some());
-        assert!(survey_module("main", b"garbage", false).problems[0].contains("not a readable NSO"));
+        assert!(
+            survey_module("main", b"garbage", false).problems[0].contains("not a readable NSO")
+        );
     }
 
     #[test]

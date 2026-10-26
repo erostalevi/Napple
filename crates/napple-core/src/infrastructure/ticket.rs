@@ -1,4 +1,4 @@
-use crate::domain::error::{container, Result};
+use crate::domain::error::{Result, container};
 
 pub struct Ticket {
     pub rights_id: [u8; 16],

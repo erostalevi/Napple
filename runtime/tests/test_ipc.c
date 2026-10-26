@@ -25,7 +25,8 @@ static unsigned build(uint32_t *m, unsigned type, unsigned cmd, const void *args
     uint8_t *w = payload;
     if (domain) { uint8_t dh[16] = {1, 0}; uint16_t sz = (uint16_t)(16 + nargs); memcpy(dh + 2, &sz, 2); uint32_t oid = (uint32_t)domain_obj; memcpy(dh + 4, &oid, 4); memcpy(w, dh, 16); w += 16; }
     uint32_t h[4] = {CMIF_IN_MAGIC, 0, cmd, 0}; memcpy(w, h, 16); w += 16;
-    if (nargs) memcpy(w, args, nargs); w += nargs;
+    if (nargs) memcpy(w, args, nargs);
+    w += nargs;
     unsigned words = (unsigned)((w - (uint8_t *)p + 3) / 4);
     m[0] = type; m[1] = (words & 0x3ff) | (special ? 1u << 31 : 0);
     return words;

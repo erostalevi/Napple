@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
         if (!thumb && ((w >> 25) & 7) == 4 && (w >> 28) != 15) if (((w >> 16) & 15) < 15) s->regs[(w >> 16) & 15] = ARENA_LO + 0x400 + ((rnd() & 0x3ff0));   /* ldm/stm: a base that cannot wrap the 4 GiB window */
         if (thumb && ((w & 0xffff) >> 9) == 0x74 && (w & 15) < 15) s->regs[w & 15] = ARENA_LO + 0x400 + ((rnd() & 0x3ff0));
         if (vfp) { for (int r = 0; r < 32; r++) s->d[r] = rnd64(); s->fpscr = 0; }
-        seeds[ns] = CODE_BASE + STRIDE * (uint32_t)ns | (thumb ? 1u : 0u);
+        seeds[ns] = (CODE_BASE + STRIDE * (uint32_t)ns) | (thumb ? 1u : 0u);
         for (int wi = 0; wi < 2; wi++) {
             uint8_t *p = (wi ? winj : win) + CODE_BASE + STRIDE * ns;
             if (thumb) { uint16_t h1 = w & 0xffff, h2 = w >> 16; memcpy(p, &h1, 2); memcpy(p + 2, &h2, 2); }

@@ -2,8 +2,8 @@
  * napple_gfx.h - public interface of libnapple_gfx (NVN -> Metal) for the Napple runtime.
  *
  * Contract version: NAPPLE_GFX_ABI_VERSION. Pure C, no Objective-C types: the runtime (Rust/C) can include or
- * bind this directly. See docs/gfx-interface.md for the prose version (what the runtime must provide) and
- * docs/gfx-design.md for how the library works inside.
+ * bind this directly. See docs/architecture/gfx.md for the prose version (what the runtime must provide) and
+ * docs/architecture/gfx.md for how the library works inside.
  *
  * Model
  *   - The guest (Switch game) runs natively. It calls NVN through function pointers obtained from
@@ -85,7 +85,7 @@ typedef struct napple_gfx_settings {
     uint32_t prewarm_shader_cache;      /* 1 = compile every cached shader at init (progress via napple_gfx_get_stats) */
     uint32_t docked;                    /* 1 = report docked operation mode properties to the game (affects game-chosen resolution) */
     uint32_t unimplemented_abort;       /* 1 = abort() on the first unimplemented NVN call; 0 = log once, return 0 */
-    uint32_t present_interval_override; /* 0 = honour the game; N>0 = treat every present as interval N (see docs/gfx-design.md, frame pacing) */
+    uint32_t present_interval_override; /* 0 = honour the game; N>0 = treat every present as interval N (see docs/architecture/gfx.md, frame pacing) */
     uint32_t reserved[7];
 } napple_gfx_settings;
 

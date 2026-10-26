@@ -1,4 +1,4 @@
-/* t_nvnapi.c - NVN entry points filled in on 2026-10-24 (docs/changes/2026-10-24-nvn-pipeline.md), checked through the public API with pixel readback:
+/* t_nvnapi.c - NVN entry points filled in on 2026-10-24 (docs/archive/changes/2026-10-24-nvn-pipeline.md), checked through the public API with pixel readback:
  * DrawTexture in both window origin modes, object getters, advanced (Porter-Duff) blend modes, multi-draw indirect with a GPU count, MSAA resolve copies. */
 #include <signal.h>
 #include "nvn_test.h"

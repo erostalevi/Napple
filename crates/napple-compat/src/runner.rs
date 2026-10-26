@@ -3,10 +3,10 @@ use crate::model::*;
 use crate::store::*;
 use napple_core::analysis::a64::{self, SiteKind};
 use napple_core::application::ingest::Ingested;
-use napple_core::application::package::{scan, BuildPlan, Pack};
+use napple_core::application::package::{BuildPlan, Pack, scan};
 use napple_core::domain::keys::KeySet;
 use napple_core::infrastructure::cnmt::TitleKind;
-use napple_core::infrastructure::npdm::{parse_npdm, Npdm};
+use napple_core::infrastructure::npdm::{Npdm, parse_npdm};
 use napple_core::infrastructure::nso::Nso;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -33,7 +33,13 @@ pub fn find_games(dir: &Path) -> Vec<PathBuf> {
             let p = e.path();
             if t.is_dir() {
                 go(&p, depth + 1, out);
-            } else if t.is_file() && p.extension().and_then(|x| x.to_str()).is_some_and(|x| ["nsp", "xci", "nsz", "xcz"].iter().any(|e| x.eq_ignore_ascii_case(e))) {
+            } else if t.is_file()
+                && p.extension().and_then(|x| x.to_str()).is_some_and(|x| {
+                    ["nsp", "xci", "nsz", "xcz"]
+                        .iter()
+                        .any(|e| x.eq_ignore_ascii_case(e))
+                })
+            {
                 out.push(p);
             }
         }
@@ -58,13 +64,30 @@ pub fn title_id_from_name(name: &str) -> Option<String> {
 }
 
 fn res(status: Status, reason: impl Into<String>, evidence: &str, t: u64) -> StageResult {
-    StageResult { status, reason: reason.into(), evidence: evidence.to_string(), time: t, tool: TOOL.into(), counters: Counters::default() }
+    StageResult {
+        status,
+        reason: reason.into(),
+        evidence: evidence.to_string(),
+        time: t,
+        tool: TOOL.into(),
+        counters: Counters::default(),
+    }
 }
 
 pub fn npdm_info(n: &Npdm) -> NpdmInfo {
     let k = &n.kernel;
-    let mut used: Vec<String> = n.services.iter().filter(|s| !s.host).map(|s| s.name.clone()).collect();
-    let mut hosted: Vec<String> = n.services.iter().filter(|s| s.host).map(|s| s.name.clone()).collect();
+    let mut used: Vec<String> = n
+        .services
+        .iter()
+        .filter(|s| !s.host)
+        .map(|s| s.name.clone())
+        .collect();
+    let mut hosted: Vec<String> = n
+        .services
+        .iter()
+        .filter(|s| s.host)
+        .map(|s| s.name.clone())
+        .collect();
     used.sort();
     hosted.sort();
     NpdmInfo {
@@ -80,11 +103,28 @@ pub fn npdm_info(n: &Npdm) -> NpdmInfo {
         fs_permissions: format!("{:#x}", n.fs_permissions),
         handle_table_size: k.handle_table_size,
         kernel_version: k.kernel_version.map(|(a, b)| format!("{a}.{b}")),
-        thread_info: k.thread_info.map(|(lo, hi, c0, c1)| format!("prio {hi}..{lo}, cores {c0}..{c1}")),
+        thread_info: k
+            .thread_info
+            .map(|(lo, hi, c0, c1)| format!("prio {hi}..{lo}, cores {c0}..{c1}")),
         allowed_svcs: k.allowed_svcs.clone(),
-        memory_maps: k.memory_maps.iter().map(|(a, s, ro, normal)| format!("mem {a:#x}+{s:#x}{}{}", if *ro { " ro" } else { "" }, if *normal { "" } else { " io" })).collect(),
+        memory_maps: k
+            .memory_maps
+            .iter()
+            .map(|(a, s, ro, normal)| {
+                format!(
+                    "mem {a:#x}+{s:#x}{}{}",
+                    if *ro { " ro" } else { "" },
+                    if *normal { "" } else { " io" }
+                )
+            })
+            .collect(),
         io_maps: k.io_maps.iter().map(|a| format!("io {a:#x}")).collect(),
-        debug_flags: format!("allow_debug={} force_debug={} program_type={}", k.enable_debug, k.force_debug, k.program_type.map_or("n/a".into(), |t| t.to_string())),
+        debug_flags: format!(
+            "allow_debug={} force_debug={} program_type={}",
+            k.enable_debug,
+            k.force_debug,
+            k.program_type.map_or("n/a".into(), |t| t.to_string())
+        ),
         services_used: used,
         services_hosted: hosted,
     }
@@ -115,7 +155,14 @@ pub struct Analysis {
 
 /// nso-load + site-scan over the ExeFS of one program (pure: takes already-ingested data).
 pub fn analyze(prog: &Ingested) -> Analysis {
-    let mut a = Analysis { modules: vec![], npdm: None, main_build: None, notes: vec![], nso_error: None, scan_totals: BTreeMap::new() };
+    let mut a = Analysis {
+        modules: vec![],
+        npdm: None,
+        main_build: None,
+        notes: vec![],
+        nso_error: None,
+        scan_totals: BTreeMap::new(),
+    };
     let mut files: Vec<&(String, Vec<u8>)> = prog.exefs.iter().filter(|(n, _)| is_nso(n)).collect();
     files.sort_by_key(|(n, _)| nso_rank(n));
     for (name, data) in files {
@@ -140,7 +187,11 @@ pub fn analyze(prog: &Ingested) -> Analysis {
             .collect();
         svcs.sort_unstable();
         svcs.dedup();
-        let sites: BTreeMap<String, u64> = rep.sites.iter().map(|(k, v)| (format!("{k:?}"), v.len() as u64)).collect();
+        let sites: BTreeMap<String, u64> = rep
+            .sites
+            .iter()
+            .map(|(k, v)| (format!("{k:?}"), v.len() as u64))
+            .collect();
         for (k, n) in &sites {
             *a.scan_totals.entry(k.clone()).or_default() += n;
         }
@@ -148,12 +199,20 @@ pub fn analyze(prog: &Ingested) -> Analysis {
         if name == "main" {
             a.main_build = Some(bid[..16].to_string());
         }
-        a.modules.push(ModuleInfo { name: name.clone(), build_id: bid, text_bytes: nso.text.data.len() as u64, sites, svc_numbers: svcs });
+        a.modules.push(ModuleInfo {
+            name: name.clone(),
+            build_id: bid,
+            text_bytes: nso.text.data.len() as u64,
+            sites,
+            svc_numbers: svcs,
+        });
     }
     match prog.exefs.iter().find(|(n, _)| n == "main.npdm") {
         Some((_, d)) => match parse_npdm(d) {
             Ok(n) => a.npdm = Some(n),
-            Err(e) => a.notes.push(format!("[auto] main.npdm could not be parsed: {e}")),
+            Err(e) => a
+                .notes
+                .push(format!("[auto] main.npdm could not be parsed: {e}")),
         },
         None => a.notes.push("[auto] no main.npdm in ExeFS".into()),
     }
@@ -161,13 +220,25 @@ pub fn analyze(prog: &Ingested) -> Analysis {
         // SVCs present in module text but not granted by the NPDM: either dead code or a parser gap.
         let allowed: Vec<u32> = n.kernel.allowed_svcs.iter().map(|&x| x as u32).collect();
         for m in &a.modules {
-            let extra: Vec<String> = m.svc_numbers.iter().filter(|s| !allowed.contains(s)).map(|s| format!("{s:#x}")).collect();
+            let extra: Vec<String> = m
+                .svc_numbers
+                .iter()
+                .filter(|s| !allowed.contains(s))
+                .map(|s| format!("{s:#x}"))
+                .collect();
             if !extra.is_empty() {
-                a.notes.push(format!("[auto] module {} contains svc numbers not in the NPDM allow-list: {}", m.name, extra.join(" ")));
+                a.notes.push(format!(
+                    "[auto] module {} contains svc numbers not in the NPDM allow-list: {}",
+                    m.name,
+                    extra.join(" ")
+                ));
             }
         }
         if !n.is_64bit {
-            a.notes.push("[auto] RISK: NPDM declares a 32-bit process; the A64 pipeline does not apply".into());
+            a.notes.push(
+                "[auto] RISK: NPDM declares a 32-bit process; the A64 pipeline does not apply"
+                    .into(),
+            );
         }
     }
     a
@@ -181,7 +252,11 @@ pub fn rewrite_hook(_prog: &Ingested, _t: u64) -> Option<(StageResult, StageResu
 }
 
 fn kind_name(k: TitleKind) -> &'static str {
-    if k == TitleKind::Patch { "update" } else { "base" }
+    if k == TitleKind::Patch {
+        "update"
+    } else {
+        "base"
+    }
 }
 
 pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
@@ -190,7 +265,10 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
     let mut m = load_matrix(&o.matrix)?;
     let files = find_games(&o.folder);
     if files.is_empty() {
-        return Err(format!("no .nsp/.xci/.nsz/.xcz files under {}", o.folder.display()));
+        return Err(format!(
+            "no .nsp/.xci/.nsz/.xcz files under {}",
+            o.folder.display()
+        ));
     }
     let mut packs: Vec<Pack> = Vec::new();
     for f in &files {
@@ -204,7 +282,10 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
                 let tid = title_id_from_name(fname).unwrap_or_else(|| "0000000000000000".into());
                 let r = res(Status::Fail, format!("container scan failed: {e}"), "", t);
                 write_stage(&o.stage_dir, &tid, "unknown", "ingest", &r)?;
-                m.game_mut(&tid).version_mut(0, "unknown").stages.insert("ingest".into(), r);
+                m.game_mut(&tid)
+                    .version_mut(0, "unknown")
+                    .stages
+                    .insert("ingest".into(), r);
             }
         }
     }
@@ -215,10 +296,22 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
     for (app, group) in groups {
         let tid = format!("{app:016X}");
         let plan = BuildPlan::from_packs(group);
-        log(&format!("game {tid}: base={} updates={} dlc={}", plan.base.is_some(), plan.updates.len(), plan.dlcs.len()));
+        log(&format!(
+            "game {tid}: base={} updates={} dlc={}",
+            plan.base.is_some(),
+            plan.updates.len(),
+            plan.dlcs.len()
+        ));
         let mut targets: Vec<usize> = plan.base.into_iter().collect();
         targets.extend(&plan.updates);
-        let dlc: Vec<DlcEntry> = plan.dlcs.iter().map(|&i| DlcEntry { title_id: format!("{:016X}", plan.packs[i].meta.title_id), version: plan.packs[i].meta.version }).collect();
+        let dlc: Vec<DlcEntry> = plan
+            .dlcs
+            .iter()
+            .map(|&i| DlcEntry {
+                title_id: format!("{:016X}", plan.packs[i].meta.title_id),
+                version: plan.packs[i].meta.version,
+            })
+            .collect();
         let mut touched: Vec<(u32, String)> = vec![];
         let mut sets: Vec<(String, Vec<String>)> = vec![];
         for i in targets {
@@ -227,7 +320,13 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
             let prog = p.program(&keys);
             let control = p.control(&keys);
             let (bid, entry_stages, modules, npdm, notes) = match &prog {
-                Err(e) => ("unknown".to_string(), vec![("ingest", res(Status::Fail, e.to_string(), "", t))], vec![], None, vec![]),
+                Err(e) => (
+                    "unknown".to_string(),
+                    vec![("ingest", res(Status::Fail, e.to_string(), "", t))],
+                    vec![],
+                    None,
+                    vec![],
+                ),
                 Ok(prog) => {
                     let a = analyze(prog);
                     let bid = a.main_build.clone().unwrap_or_else(|| "unknown".into());
@@ -237,12 +336,27 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
                         (None, Some(n)) => format!("romfs pending ({n})"),
                         _ => "no romfs".into(),
                     };
-                    let st_ingest = if prog.romfs.is_some() || kind == "update" && prog.romfs_note.is_some() {
-                        let status = if prog.romfs.is_some() { Status::Pass } else { Status::Partial };
-                        res(status, format!("{} ExeFS files, {rom}", prog.exefs.len()), "", t)
-                    } else {
-                        res(Status::Partial, format!("{} ExeFS files, {rom}", prog.exefs.len()), "", t)
-                    };
+                    let st_ingest =
+                        if prog.romfs.is_some() || kind == "update" && prog.romfs_note.is_some() {
+                            let status = if prog.romfs.is_some() {
+                                Status::Pass
+                            } else {
+                                Status::Partial
+                            };
+                            res(
+                                status,
+                                format!("{} ExeFS files, {rom}", prog.exefs.len()),
+                                "",
+                                t,
+                            )
+                        } else {
+                            res(
+                                Status::Partial,
+                                format!("{} ExeFS files, {rom}", prog.exefs.len()),
+                                "",
+                                t,
+                            )
+                        };
                     st.push(("ingest", st_ingest));
                     let has_main = a.modules.iter().any(|m| m.name == "main");
                     st.push((
@@ -250,13 +364,29 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
                         match (&a.nso_error, has_main) {
                             (Some(e), _) => res(Status::Fail, e.clone(), "", t),
                             (None, false) => res(Status::Fail, "no main NSO in ExeFS", "", t),
-                            (None, true) => res(Status::Pass, format!("{} modules, segment hashes verified, main build {}", a.modules.len(), bid), "", t),
+                            (None, true) => res(
+                                Status::Pass,
+                                format!(
+                                    "{} modules, segment hashes verified, main build {}",
+                                    a.modules.len(),
+                                    bid
+                                ),
+                                "",
+                                t,
+                            ),
                         },
                     ));
                     if a.modules.is_empty() {
-                        st.push(("site-scan", res(Status::Blocked, "no loadable modules", "", t)));
+                        st.push((
+                            "site-scan",
+                            res(Status::Blocked, "no loadable modules", "", t),
+                        ));
                     } else {
-                        let tot: Vec<String> = a.scan_totals.iter().map(|(k, n)| format!("{k}={n}")).collect();
+                        let tot: Vec<String> = a
+                            .scan_totals
+                            .iter()
+                            .map(|(k, n)| format!("{k}={n}"))
+                            .collect();
                         st.push(("site-scan", res(Status::Pass, tot.join(" "), "", t)));
                     }
                     if let Some((rw, rv)) = rewrite_hook(prog, t) {
@@ -266,27 +396,38 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
                     (bid, st, a.modules, a.npdm.as_ref().map(npdm_info), a.notes)
                 }
             };
-            log(&format!("  {kind} v{ver} build {bid}: {} modules", modules.len()));
+            log(&format!(
+                "  {kind} v{ver} build {bid}: {} modules",
+                modules.len()
+            ));
             let g = m.game_mut(&tid);
             let v = g.version_mut(ver, &bid);
             v.kind = kind.into();
             v.title_id = format!("{:016X}", p.meta.title_id);
             if let Ok(Some(n)) = &control {
                 v.display_version = n.display_version.clone();
-                if g.name.is_empty() || kind == "base" {
-                    if let Some(nm) = n.name() {
-                        g.name = nm.to_string();
-                        g.publisher = n.publisher().unwrap_or("").to_string();
-                    }
+                if (g.name.is_empty() || kind == "base")
+                    && let Some(nm) = n.name()
+                {
+                    g.name = nm.to_string();
+                    g.publisher = n.publisher().unwrap_or("").to_string();
                 }
             }
             let v = g.version_mut(ver, &bid);
-            let mut vnotes: Vec<String> = v.notes.iter().filter(|n| !n.starts_with("[auto]")).cloned().collect();
+            let mut vnotes: Vec<String> = v
+                .notes
+                .iter()
+                .filter(|n| !n.starts_with("[auto]"))
+                .cloned()
+                .collect();
             vnotes.extend(notes);
             if let Err(e) = &control {
                 vnotes.push(format!("[auto] control NCA unreadable: {e}"));
             }
-            sets.push((format!("{kind} v{ver}"), modules.iter().map(|x| x.name.clone()).collect()));
+            sets.push((
+                format!("{kind} v{ver}"),
+                modules.iter().map(|x| x.name.clone()).collect(),
+            ));
             v.notes = vnotes;
             if !modules.is_empty() {
                 v.modules = modules;
@@ -303,20 +444,35 @@ pub fn run(o: &RunOpts, log: &mut dyn FnMut(&str)) -> Result<Matrix, String> {
         // build-plan is a per-game stage, recorded on every version of the group.
         let bp = match (plan.base, plan.warnings.is_empty()) {
             (None, _) => res(Status::Fail, plan.warnings.join("; "), "", t),
-            (Some(_), true) => res(Status::Pass, format!("base + {} update(s) + {} DLC", plan.updates.len(), plan.dlcs.len()), "", t),
+            (Some(_), true) => res(
+                Status::Pass,
+                format!(
+                    "base + {} update(s) + {} DLC",
+                    plan.updates.len(),
+                    plan.dlcs.len()
+                ),
+                "",
+                t,
+            ),
             (Some(_), false) => res(Status::Partial, plan.warnings.join("; "), "", t),
         };
         let g = m.game_mut(&tid);
         g.dlc = dlc;
         for (ver, bid) in &touched {
             write_stage(&o.stage_dir, &tid, bid, "build-plan", &bp)?;
-            g.version_mut(*ver, bid).stages.insert("build-plan".into(), bp.clone());
+            g.version_mut(*ver, bid)
+                .stages
+                .insert("build-plan".into(), bp.clone());
         }
         // Differing NSO sets between versions of the same game.
         g.notes.retain(|n| !n.starts_with("[auto]"));
         if let Some((n0, s0)) = sets.first() {
             for (n, s) in sets.iter().skip(1).filter(|(_, s)| s != &sets[0].1) {
-                g.notes.push(format!("[auto] NSO set differs: {n0} = [{}], {n} = [{}]", s0.join(" "), s.join(" ")));
+                g.notes.push(format!(
+                    "[auto] NSO set differs: {n0} = [{}], {n} = [{}]",
+                    s0.join(" "),
+                    s.join(" ")
+                ));
             }
         }
     }
@@ -338,8 +494,14 @@ mod tests {
 
     #[test]
     fn title_id_from_file_name() {
-        assert_eq!(title_id_from_name("Zelda [01006bb00c6f0000][v0].nsp").as_deref(), Some("01006BB00C6F0000"));
-        assert_eq!(title_id_from_name("Game [v0] [0100000000010000].nsp").as_deref(), Some("0100000000010000"));
+        assert_eq!(
+            title_id_from_name("Zelda [01006bb00c6f0000][v0].nsp").as_deref(),
+            Some("01006BB00C6F0000")
+        );
+        assert_eq!(
+            title_id_from_name("Game [v0] [0100000000010000].nsp").as_deref(),
+            Some("0100000000010000")
+        );
         assert_eq!(title_id_from_name("nothing.nsp"), None);
         assert_eq!(title_id_from_name("bad [01006bb00c6f000].nsp"), None);
         assert_eq!(title_id_from_name("é[0100"), None);
@@ -350,17 +512,35 @@ mod tests {
         let d = std::env::temp_dir().join(format!("napple-compat-find-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(d.join("sub")).unwrap();
-        for f in ["a.nsp", "sub/b.XCI", "c.txt", "d.nsz", "sub/e.XCZ", "f.nsz.bak"] {
+        for f in [
+            "a.nsp",
+            "sub/b.XCI",
+            "c.txt",
+            "d.nsz",
+            "sub/e.XCZ",
+            "f.nsz.bak",
+        ] {
             std::fs::write(d.join(f), b"x").unwrap();
         }
         let v = find_games(&d);
         assert_eq!(v.len(), 4);
-        assert!(nso_rank("rtld") < nso_rank("main") && nso_rank("main") < nso_rank("subsdk0") && nso_rank("subsdk2") < nso_rank("subsdk10") && nso_rank("subsdk10") < nso_rank("sdk"));
+        assert!(
+            nso_rank("rtld") < nso_rank("main")
+                && nso_rank("main") < nso_rank("subsdk0")
+                && nso_rank("subsdk2") < nso_rank("subsdk10")
+                && nso_rank("subsdk10") < nso_rank("sdk")
+        );
     }
 
     #[test]
     fn analyze_without_modules_reports_note() {
-        let prog = Ingested { ncas: vec![], exefs: vec![("main.npdm".into(), vec![1, 2, 3])], romfs: None, title_id: None, romfs_note: None };
+        let prog = Ingested {
+            ncas: vec![],
+            exefs: vec![("main.npdm".into(), vec![1, 2, 3])],
+            romfs: None,
+            title_id: None,
+            romfs_note: None,
+        };
         let a = analyze(&prog);
         assert!(a.modules.is_empty() && a.npdm.is_none());
         assert!(a.notes[0].contains("could not be parsed"));

@@ -1,7 +1,7 @@
 //! Minimal ZIP reader for the firmware archive (central directory, stored and deflate entries, no zip64).
 //! Stored entries are served as bounded slices of the file (no copy); deflate entries are inflated into memory.
 use crate::error::{BuildError, Result};
-use napple_core::infrastructure::io::{read_vec, BytesSource, FileSource, Slice, Src};
+use napple_core::infrastructure::io::{BytesSource, FileSource, Slice, Src, read_vec};
 use std::io::Read;
 use std::path::Path;
 
@@ -43,9 +43,16 @@ impl ZipArchive {
         }
         let tail_len = size.min(22 + 0xFFFF) as usize;
         let tail = read_vec(&*src, size - tail_len as u64, tail_len)?;
-        let eocd = (0..=tail_len - 22).rev().find(|&i| tail[i..i + 4] == [0x50, 0x4B, 5, 6]).ok_or_else(|| bad("end of central directory not found"))?;
+        let eocd = (0..=tail_len - 22)
+            .rev()
+            .find(|&i| tail[i..i + 4] == [0x50, 0x4B, 5, 6])
+            .ok_or_else(|| bad("end of central directory not found"))?;
         let e = &tail[eocd..];
-        let (count, cd_size, cd_off) = (u16le(e, 10) as usize, u32le(e, 12) as u64, u32le(e, 16) as u64);
+        let (count, cd_size, cd_off) = (
+            u16le(e, 10) as usize,
+            u32le(e, 12) as u64,
+            u32le(e, 16) as u64,
+        );
         if count == 0xFFFF || cd_size == 0xFFFF_FFFF || cd_off == 0xFFFF_FFFF {
             return Err(bad("zip64 archives are not supported"));
         }
@@ -58,10 +65,25 @@ impl ZipArchive {
             if o + 46 > cd.len() || cd[o..o + 4] != [0x50, 0x4B, 1, 2] {
                 return Err(bad("corrupt central directory"));
             }
-            let (method, csize, usz, nl, el, cl, lho) =
-                (u16le(&cd, o + 10), u32le(&cd, o + 20) as u64, u32le(&cd, o + 24) as u64, u16le(&cd, o + 28) as usize, u16le(&cd, o + 30) as usize, u16le(&cd, o + 32) as usize, u32le(&cd, o + 42) as u64);
-            let name = cd.get(o + 46..o + 46 + nl).ok_or_else(|| bad("corrupt central directory"))?;
-            entries.push(ZipEntry { name: String::from_utf8_lossy(name).into_owned(), method, csize, usize: usz, local_off: lho });
+            let (method, csize, usz, nl, el, cl, lho) = (
+                u16le(&cd, o + 10),
+                u32le(&cd, o + 20) as u64,
+                u32le(&cd, o + 24) as u64,
+                u16le(&cd, o + 28) as usize,
+                u16le(&cd, o + 30) as usize,
+                u16le(&cd, o + 32) as usize,
+                u32le(&cd, o + 42) as u64,
+            );
+            let name = cd
+                .get(o + 46..o + 46 + nl)
+                .ok_or_else(|| bad("corrupt central directory"))?;
+            entries.push(ZipEntry {
+                name: String::from_utf8_lossy(name).into_owned(),
+                method,
+                csize,
+                usize: usz,
+                local_off: lho,
+            });
             o += 46 + nl + el + cl;
         }
         Ok(Self { src, entries })
@@ -74,7 +96,8 @@ impl ZipArchive {
             return Err(bad("bad local header"));
         }
         let data_off = e.local_off + 30 + u16le(&lh, 26) as u64 + u16le(&lh, 28) as u64;
-        let raw = Slice::new(self.src.clone(), data_off, e.csize).map_err(|_| bad("entry extends past the archive"))?;
+        let raw = Slice::new(self.src.clone(), data_off, e.csize)
+            .map_err(|_| bad("entry extends past the archive"))?;
         match e.method {
             0 => Ok(raw),
             8 => {
@@ -83,7 +106,10 @@ impl ZipArchive {
                 }
                 let comp = read_vec(&*raw, 0, e.csize as usize)?;
                 let mut out = Vec::with_capacity(e.usize as usize);
-                flate2::read::DeflateDecoder::new(&comp[..]).take(MAX_INFLATED).read_to_end(&mut out).map_err(|x| bad(&format!("inflate failed: {x}")))?;
+                flate2::read::DeflateDecoder::new(&comp[..])
+                    .take(MAX_INFLATED)
+                    .read_to_end(&mut out)
+                    .map_err(|x| bad(&format!("inflate failed: {x}")))?;
                 if out.len() as u64 != e.usize {
                     return Err(bad("inflated size mismatch"));
                 }

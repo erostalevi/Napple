@@ -1,4 +1,4 @@
-/* Registration of every host service (docs/runtime-services.md). */
+/* Registration of every host service (docs/architecture/runtime-services.md). */
 #include "../ipc.h"
 #include "../frontend.h"
 #include "napple_input.h"

@@ -1,29 +1,37 @@
-/target
-.venv/
+# Copyrighted game dumps, console keys and firmware: never commit
 *.keys
-*.xci
 *.nsp
 *.nsz
+*.xci
 *.nca
 *.nso
-extracted/
-work/
-gfx/build/
-gfx/*.a
-.DS_Store
-
-# Copyrighted game data and firmware: never commit
 *.romfs
 Firmware*.zip
+Testing Material/
 
-# Build outputs (rebuilt by each component's Makefile / swift build)
+# Build outputs (rebuilt by each component's Makefile / cargo / swift build)
+/target/
+target/
 **/build/
-runtime/build*/
-gfx/build-*/
-*/lib*.a
+**/build-*/
+.build/
 **/.build/
-studio/dist/
+*.a
 *.o
 *.dSYM/
-__pycache__/
+dist/
+studio/dist/
+out-ios-link*/
+build-ios-deps/
 *.pyc
+__pycache__/
+
+# Local working data
+work/
+extracted/
+.venv/
+
+# Editor and OS leftovers
+.DS_Store
+*.orig
+*.rej

@@ -23,20 +23,30 @@ const R_AARCH64_JUMP_SLOT: u32 = 1026;
 const R_AARCH64_RELATIVE: u32 = 1027;
 
 fn rd64(img: &[u8], o: usize) -> Result<u64, RewriteError> {
-    img.get(o..o + 8).map(|b| u64::from_le_bytes(b.try_into().unwrap())).ok_or_else(|| RewriteError::Relocation(format!("read outside image at {o:#x}")))
+    img.get(o..o + 8)
+        .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
+        .ok_or_else(|| RewriteError::Relocation(format!("read outside image at {o:#x}")))
 }
 fn rd32(img: &[u8], o: usize) -> Result<u32, RewriteError> {
-    img.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap())).ok_or_else(|| RewriteError::Relocation(format!("read outside image at {o:#x}")))
+    img.get(o..o + 4)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .ok_or_else(|| RewriteError::Relocation(format!("read outside image at {o:#x}")))
 }
 
 /// Decodes DT_RELR into `(where, implicit addend)` pairs; every address must be 8-aligned and
 /// inside `[lower, upper)`, no address may repeat and every addend must point into the module.
-pub fn decode_relr(img: &[u8], tags: &BTreeMap<i64, u64>, lower: u64, upper: u64) -> Result<Vec<(u64, u64)>, RewriteError> {
+pub fn decode_relr(
+    img: &[u8],
+    tags: &BTreeMap<i64, u64>,
+    lower: u64,
+    upper: u64,
+) -> Result<Vec<(u64, u64)>, RewriteError> {
     let present = [DT_RELR, DT_RELRSZ, DT_RELRENT].map(|k| tags.contains_key(&k));
     if !present.iter().any(|p| *p) {
         return Ok(Vec::new());
     }
-    if !present.iter().all(|p| *p) || tags[&DT_RELRENT] != 8 || tags[&DT_RELRSZ] % 8 != 0 {
+    if !present.iter().all(|p| *p) || tags[&DT_RELRENT] != 8 || !tags[&DT_RELRSZ].is_multiple_of(8)
+    {
         return Err(RewriteError::Relocation("invalid DT_RELR tags".into()));
     }
     let (table, size) = (tags[&DT_RELR] as usize, tags[&DT_RELRSZ] as usize);
@@ -46,15 +56,21 @@ pub fn decode_relr(img: &[u8], tags: &BTreeMap<i64, u64>, lower: u64, upper: u64
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut push = |a: u64| -> Result<(), RewriteError> {
-        if a % 8 != 0 || a < lower || a + 8 > upper || a as usize + 8 > img.len() {
-            return Err(RewriteError::Relocation(format!("RELR relocation outside writable image: {a:#x}")));
+        if !a.is_multiple_of(8) || a < lower || a + 8 > upper || a as usize + 8 > img.len() {
+            return Err(RewriteError::Relocation(format!(
+                "RELR relocation outside writable image: {a:#x}"
+            )));
         }
         if !seen.insert(a) {
-            return Err(RewriteError::Relocation(format!("duplicate RELR relocation: {a:#x}")));
+            return Err(RewriteError::Relocation(format!(
+                "duplicate RELR relocation: {a:#x}"
+            )));
         }
         let addend = rd64(img, a as usize)?;
         if addend >= upper {
-            return Err(RewriteError::Relocation(format!("RELR addend outside module: {a:#x}")));
+            return Err(RewriteError::Relocation(format!(
+                "RELR addend outside module: {a:#x}"
+            )));
         }
         out.push((a, addend));
         Ok(())
@@ -66,7 +82,9 @@ pub fn decode_relr(img: &[u8], tags: &BTreeMap<i64, u64>, lower: u64, upper: u64
             push(e)?;
             cursor = Some(e + 8);
         } else {
-            let c = cursor.ok_or_else(|| RewriteError::Relocation("RELR bitmap before initial address".into()))?;
+            let c = cursor.ok_or_else(|| {
+                RewriteError::Relocation("RELR bitmap before initial address".into())
+            })?;
             for bit in 1..64 {
                 if e >> bit & 1 == 1 {
                     push(c + (bit as u64 - 1) * 8)?;
@@ -90,32 +108,61 @@ pub struct Reloc {
 /// All relocations of the module with their module-relative targets (imports have `None`).
 ///
 /// `data_lower` is the first writable offset, `image_len` the end of the module (RELR bounds).
-pub fn collect(img: &[u8], tags: &BTreeMap<i64, u64>, data_lower: u64, image_len: u64) -> Result<Vec<Reloc>, RewriteError> {
+pub fn collect(
+    img: &[u8],
+    tags: &BTreeMap<i64, u64>,
+    data_lower: u64,
+    image_len: u64,
+) -> Result<Vec<Reloc>, RewriteError> {
     let mut out: Vec<Reloc> = decode_relr(img, tags, data_lower, image_len)?
         .into_iter()
-        .map(|(offset, addend)| Reloc { offset, kind: R_AARCH64_RELATIVE, target: Some(addend) })
+        .map(|(offset, addend)| Reloc {
+            offset,
+            kind: R_AARCH64_RELATIVE,
+            target: Some(addend),
+        })
         .collect();
     let nsyms = match tags.get(&DT_HASH) {
         Some(h) => rd32(img, *h as usize + 4).unwrap_or(0) as usize,
         None => 0,
     };
-    for (tab, sz) in [(tags.get(&DT_RELA), tags.get(&DT_RELASZ)), (tags.get(&DT_JMPREL), tags.get(&DT_PLTRELSZ))] {
-        let (Some(&tab), sz) = (tab, sz.copied().unwrap_or(0)) else { continue };
+    for (tab, sz) in [
+        (tags.get(&DT_RELA), tags.get(&DT_RELASZ)),
+        (tags.get(&DT_JMPREL), tags.get(&DT_PLTRELSZ)),
+    ] {
+        let (Some(&tab), sz) = (tab, sz.copied().unwrap_or(0)) else {
+            continue;
+        };
         for i in 0..(sz / 24) as usize {
             let at = tab as usize + 24 * i;
-            let (offset, info, addend) = (rd64(img, at)?, rd64(img, at + 8)?, rd64(img, at + 16)? as i64);
+            let (offset, info, addend) = (
+                rd64(img, at)?,
+                rd64(img, at + 8)?,
+                rd64(img, at + 16)? as i64,
+            );
             let (kind, sym) = (info as u32, (info >> 32) as usize);
             let target = match kind {
                 R_AARCH64_RELATIVE => Some(addend as u64),
-                R_AARCH64_ABS64 | R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT if sym != 0 && sym < nsyms.max(1) => {
+                R_AARCH64_ABS64 | R_AARCH64_GLOB_DAT | R_AARCH64_JUMP_SLOT
+                    if sym != 0 && sym < nsyms.max(1) =>
+                {
                     let symtab = *tags.get(&DT_SYMTAB).unwrap_or(&0) as usize;
                     let ent = symtab + 24 * sym;
-                    let (shndx, value) = (img.get(ent + 6..ent + 8).map(|b| u16::from_le_bytes(b.try_into().unwrap())).unwrap_or(0), rd64(img, ent + 8).unwrap_or(0));
+                    let (shndx, value) = (
+                        img.get(ent + 6..ent + 8)
+                            .map(|b| u16::from_le_bytes(b.try_into().unwrap()))
+                            .unwrap_or(0),
+                        rd64(img, ent + 8).unwrap_or(0),
+                    );
                     (shndx != 0).then(|| value.wrapping_add(addend as u64))
                 }
                 _ => None,
             };
-            out.push(Reloc { offset, kind, target });
+            out.push(Reloc {
+                offset,
+                kind,
+                target,
+            });
         }
     }
     Ok(out)
@@ -141,7 +188,10 @@ mod tests {
             img[a as usize..a as usize + 8].copy_from_slice(&0x40u64.to_le_bytes());
         }
         let r = decode_relr(&img, &tags(0x200, 16), 0x100, 0x400).unwrap();
-        assert_eq!(r.iter().map(|x| x.0).collect::<Vec<_>>(), vec![0x100, 0x108, 0x118]);
+        assert_eq!(
+            r.iter().map(|x| x.0).collect::<Vec<_>>(),
+            vec![0x100, 0x108, 0x118]
+        );
         assert!(r.iter().all(|x| x.1 == 0x40));
     }
 
@@ -158,7 +208,11 @@ mod tests {
         let mut t = tags(0x200, 8);
         t.remove(&DT_RELRSZ);
         assert!(decode_relr(&img, &t, 0x100, 0x400).is_err()); // partial tags
-        assert!(decode_relr(&img, &BTreeMap::new(), 0x100, 0x400).unwrap().is_empty());
+        assert!(
+            decode_relr(&img, &BTreeMap::new(), 0x100, 0x400)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

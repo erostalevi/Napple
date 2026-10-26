@@ -1,11 +1,11 @@
 //! Groups user-supplied packs into a build plan: one base game, its updates and its DLC.
-use super::ingest::{collect, ingest_sources, Ingested};
+use super::ingest::{Ingested, collect, ingest_sources};
 use crate::domain::error::{Error, Result};
 use crate::domain::keys::KeySet;
-use crate::infrastructure::cnmt::{parse_cnmt, Cnmt, TitleKind};
+use crate::infrastructure::cnmt::{Cnmt, TitleKind, parse_cnmt};
 use crate::infrastructure::io::{FileSource, Src};
+use crate::infrastructure::nacp::{Nacp, parse_nacp};
 use crate::infrastructure::nca::{self, ContentType, FsType, Nca, TitleKeys};
-use crate::infrastructure::nacp::{parse_nacp, Nacp};
 use crate::infrastructure::pfs::parse_pfs0;
 use crate::infrastructure::romfs::RomFs;
 use std::collections::HashMap;
@@ -31,7 +31,10 @@ impl Pack {
             .iter()
             .find(|c| c.ctype == 1)
             .ok_or_else(|| Error::Container("pack has no Program content".into()))?;
-        let src = self.ncas.get(&rec.nca_name()).ok_or_else(|| Error::Container("Program NCA missing from pack".into()))?;
+        let src = self
+            .ncas
+            .get(&rec.nca_name())
+            .ok_or_else(|| Error::Container("Program NCA missing from pack".into()))?;
         ingest_sources(vec![(rec.nca_name(), src.clone())], self.tks.clone(), keys)
     }
 }
@@ -39,15 +42,21 @@ impl Pack {
 impl Pack {
     /// Reads `control.nacp` from this pack's Control NCA (None when the pack has no readable control data).
     pub fn control(&self, keys: &KeySet) -> Result<Option<Nacp>> {
-        let Some(rec) = self.meta.contents.iter().find(|c| c.ctype == 3) else { return Ok(None) };
-        let Some(src) = self.ncas.get(&rec.nca_name()) else { return Ok(None) };
+        let Some(rec) = self.meta.contents.iter().find(|c| c.ctype == 3) else {
+            return Ok(None);
+        };
+        let Some(src) = self.ncas.get(&rec.nca_name()) else {
+            return Ok(None);
+        };
         let n = match Nca::open(src.clone(), keys, &self.tks) {
             Ok(n) => n,
             Err(Error::Unsupported(_)) => return Ok(None),
             Err(e) => return Err(e),
         };
         for sec in n.sections.iter().filter(|s| s.fs_type == FsType::RomFs) {
-            let Ok(s) = n.section(sec.index) else { continue };
+            let Ok(s) = n.section(sec.index) else {
+                continue;
+            };
             let fs = RomFs::parse(nca::romfs_data(&s, sec)?)?;
             if let Some(f) = fs.files.iter().find(|f| f.path == "control.nacp") {
                 if f.size > 0x10000 {
@@ -78,7 +87,12 @@ pub fn scan(path: &Path, keys: &KeySet) -> Result<Vec<Pack>> {
         for sec in n.sections.iter().filter(|s| s.fs_type == FsType::Pfs0) {
             let fs = parse_pfs0(nca::pfs0_data(&n.section(sec.index)?, sec)?)?;
             for e in fs.entries.iter().filter(|e| e.name.ends_with(".cnmt")) {
-                packs.push(Pack { path: path.to_path_buf(), meta: parse_cnmt(&fs.read(&e.name)?)?, ncas: map.clone(), tks: tks.clone() });
+                packs.push(Pack {
+                    path: path.to_path_buf(),
+                    meta: parse_cnmt(&fs.read(&e.name)?)?,
+                    ncas: map.clone(),
+                    tks: tks.clone(),
+                });
             }
         }
     }
@@ -112,15 +126,24 @@ impl BuildPlan {
         let mut seen = std::collections::HashSet::new();
         for (i, p) in packs.iter().enumerate() {
             if !seen.insert((p.meta.title_id, p.meta.version)) {
-                warnings.push(format!("duplicate pack {:016X} {} ignored", p.meta.title_id, version_label(p.meta.version)));
+                warnings.push(format!(
+                    "duplicate pack {:016X} {} ignored",
+                    p.meta.title_id,
+                    version_label(p.meta.version)
+                ));
                 continue;
             }
             match p.meta.kind {
                 TitleKind::Application if base.is_none() => base = Some(i),
-                TitleKind::Application => warnings.push(format!("second base game {:016X} ignored", p.meta.title_id)),
+                TitleKind::Application => {
+                    warnings.push(format!("second base game {:016X} ignored", p.meta.title_id))
+                }
                 TitleKind::Patch => updates.push(i),
                 TitleKind::AddOn => dlcs.push(i),
-                _ => warnings.push(format!("unsupported content type for {:016X} ignored", p.meta.title_id)),
+                _ => warnings.push(format!(
+                    "unsupported content type for {:016X} ignored",
+                    p.meta.title_id
+                )),
             }
         }
         match base {
@@ -132,7 +155,10 @@ impl BuildPlan {
                         if packs[i].meta.application_id == app {
                             out.push(i);
                         } else {
-                            warnings.push(format!("{what} {:016X} belongs to another game and was ignored", packs[i].meta.title_id));
+                            warnings.push(format!(
+                                "{what} {:016X} belongs to another game and was ignored",
+                                packs[i].meta.title_id
+                            ));
                         }
                     }
                 }
@@ -143,7 +169,13 @@ impl BuildPlan {
         }
         updates.sort_by_key(|&i| packs[i].meta.version);
         dlcs.sort_by_key(|&i| (packs[i].meta.title_id, packs[i].meta.version));
-        Self { packs, base, updates, dlcs, warnings }
+        Self {
+            packs,
+            base,
+            updates,
+            dlcs,
+            warnings,
+        }
     }
 
     pub fn pick_updates(&self, c: &Choice) -> Vec<usize> {
@@ -151,7 +183,12 @@ impl BuildPlan {
             Choice::All => self.updates.clone(),
             Choice::None => vec![],
             Choice::Latest => self.updates.last().copied().into_iter().collect(),
-            Choice::Only(v) => self.updates.iter().copied().filter(|&i| v.contains(&self.packs[i].meta.version)).collect(),
+            Choice::Only(v) => self
+                .updates
+                .iter()
+                .copied()
+                .filter(|&i| v.contains(&self.packs[i].meta.version))
+                .collect(),
         }
     }
 
@@ -159,7 +196,12 @@ impl BuildPlan {
         match c {
             DlcChoice::All => self.dlcs.clone(),
             DlcChoice::None => vec![],
-            DlcChoice::Only(ids) => self.dlcs.iter().copied().filter(|&i| ids.contains(&self.packs[i].meta.title_id)).collect(),
+            DlcChoice::Only(ids) => self
+                .dlcs
+                .iter()
+                .copied()
+                .filter(|&i| ids.contains(&self.packs[i].meta.title_id))
+                .collect(),
         }
     }
 }
@@ -176,8 +218,21 @@ mod tests {
     use super::*;
 
     fn pack(kind: TitleKind, title: u64, app: u64, version: u32) -> Pack {
-        let meta = Cnmt { title_id: title, version, kind, application_id: app, required_system_version: 0, required_application_version: 0, contents: vec![] };
-        Pack { path: "x".into(), meta, ncas: HashMap::new(), tks: TitleKeys::new() }
+        let meta = Cnmt {
+            title_id: title,
+            version,
+            kind,
+            application_id: app,
+            required_system_version: 0,
+            required_application_version: 0,
+            contents: vec![],
+        };
+        Pack {
+            path: "x".into(),
+            meta,
+            ncas: HashMap::new(),
+            tks: TitleKeys::new(),
+        }
     }
 
     #[test]
@@ -192,12 +247,21 @@ mod tests {
             pack(TitleKind::Patch, app + 0x800, app, 65536), // duplicate
         ]);
         assert_eq!(plan.base, Some(1));
-        let vers: Vec<u32> = plan.updates.iter().map(|&i| plan.packs[i].meta.version).collect();
+        let vers: Vec<u32> = plan
+            .updates
+            .iter()
+            .map(|&i| plan.packs[i].meta.version)
+            .collect();
         assert_eq!(vers, [65536, 131072]);
         assert_eq!(plan.dlcs.len(), 1);
         assert_eq!(plan.warnings.len(), 2);
         assert_eq!(plan.pick_updates(&Choice::Latest).len(), 1);
-        assert_eq!(plan.packs[plan.pick_updates(&Choice::Latest)[0]].meta.version, 131072);
+        assert_eq!(
+            plan.packs[plan.pick_updates(&Choice::Latest)[0]]
+                .meta
+                .version,
+            131072
+        );
         assert_eq!(plan.pick_updates(&Choice::Only(vec![65536])).len(), 1);
         assert!(plan.pick_dlcs(&DlcChoice::None).is_empty());
     }

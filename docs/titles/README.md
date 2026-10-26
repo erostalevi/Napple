@@ -1,7 +1,7 @@
 # Titles
 
 Status of the four Testing Material titles. Numbers are scripted/measured (headless unless said) on an Apple M-series Mac, never "played" unless a note says a person did.
-Symptom lookup: [../symptoms.md](../symptoms.md). Status as of 2026-10-26; later branches may have moved it: check `integrators/` and `docs/changes/`.
+Symptom lookup: [../symptoms.md](../symptoms.md). Status as of 2026-10-26; later branches may have moved it: check the [change archive](../archive/changes/README.md) and the integrator files.
 
 | Title | Id | macOS | iOS Simulator | Note |
 |---|---|---|---|---|
@@ -20,5 +20,5 @@ Run headless (the data dir is `<scratch>/<title id>/<build id>`; take the newest
 ```bash
 runtime/build/napple-runtime <data dir> --headless --seconds 45 --save-root <tmp save dir>
 ```
-Passing: exit 0, a `stats: frames N` line with N in the thousands, no `CRASH`. Useful env: `NAPPLE_PERF_LOG=1` (fps, GPU ms, RSS), `NAPPLE_INPUT_SCRIPT="15:A,19:A:0.3"` (frame:button[:seconds]), `NAPPLE_SCREENSHOT` (see [../reference.md](../reference.md)).
+Passing: exit 0, a `stats: frames N` line with N in the thousands, no `CRASH`. Useful env: `NAPPLE_PERF_LOG=1` (fps, GPU ms, RSS), `NAPPLE_INPUT_SCRIPT="15:A,19:A:0.3"` (seconds after HID is configured : button [: hold seconds]), `NAPPLE_SCREENSHOT` (see [../reference.md](../reference/subsystems.md)).
 Games live in `/Users/neto/Documents/Napple/Testing Material` (gitignored). Delete scratch data when done.

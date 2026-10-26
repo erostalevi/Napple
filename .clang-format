@@ -1,0 +1,60 @@
+# Napple code style, one file for the whole tree (2026-10-26 slim batch).
+# Cpp section: C and headers (the code-slim format pass). ObjC section: .m/.mm (the mac-slim format pass).
+# Derived from the existing code with minimal diff: 4 spaces, attached braces, T *p, 160 columns, dense one-line helpers.
+# SortIncludes stays off: include order matters for the macOS/Linux stubs.
+---
+BasedOnStyle: LLVM
+Language: Cpp
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 160
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: All
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Always
+AllowShortCaseLabelsOnASingleLine: true
+AllowAllParametersOfDeclarationOnNextLine: true
+BinPackArguments: true
+BinPackParameters: true
+AlignAfterOpenBracket: Align
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 3
+IndentCaseLabels: true
+PointerAlignment: Right
+ReflowComments: false
+SortIncludes: Never
+MaxEmptyLinesToKeep: 2
+BreakStringLiterals: false
+---
+Language: ObjC
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 160
+BreakBeforeBraces: Attach
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortBlocksOnASingleLine: Always
+AllowShortFunctionsOnASingleLine: All
+AllowShortCaseLabelsOnASingleLine: true
+AllowShortEnumsOnASingleLine: true
+AlignConsecutiveAssignments: None
+AlignConsecutiveDeclarations: None
+AlignConsecutiveMacros: None
+AlignTrailingComments: false
+SpacesBeforeTrailingComments: 1
+ReflowComments: false
+SortIncludes: Never
+IndentCaseLabels: true
+PointerAlignment: Right
+BinPackArguments: true
+BinPackParameters: true
+AlwaysBreakAfterReturnType: None
+ContinuationIndentWidth: 4
+MaxEmptyLinesToKeep: 2
+ObjCBlockIndentWidth: 4
+ObjCSpaceAfterProperty: true
+...

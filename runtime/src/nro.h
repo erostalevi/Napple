@@ -32,10 +32,15 @@ uint32_t nro_validate(const uint8_t *image, uint64_t nro_size, uint64_t bss_size
 
 enum { NRR_KIND_USER = 0, NRR_KIND_JIT_PLUGIN = 1 };
 #define NRR_HEADER_SIZE 0x350
-typedef struct { uint64_t program_id; uint32_t size; uint8_t kind; uint32_t hashes_off, nhashes; } NrrInfo;
+typedef struct {
+    uint64_t program_id;
+    uint32_t size;
+    uint8_t kind;
+    uint32_t hashes_off, nhashes;
+} NrrInfo;
 /* NRR at `nrr` (size bytes). program_id 0 skips the program id check; expect_kind < 0 skips the kind check. */
 uint32_t nrr_validate(const uint8_t *nrr, uint64_t size, uint64_t program_id, int expect_kind, NrrInfo *out);
 /* 1 when sha256 `hash` is in the NRR's (sorted) hash list. */
 int nrr_has_hash(const uint8_t *nrr, const NrrInfo *info, const uint8_t hash[32]);
 
-void nro_id_hex(const uint8_t id[32], unsigned bytes, char *out);   /* lowercase hex of the first `bytes` bytes */
+void nro_id_hex(const uint8_t id[32], unsigned bytes, char *out); /* lowercase hex of the first `bytes` bytes */

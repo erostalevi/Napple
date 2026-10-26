@@ -46,7 +46,7 @@ static void run_handoff(int prio, int work_ms, int expect_done_at_return, const 
     ms(50);                                              /* the worker is blocked in WaitForAddress */
     svcv(0x0F, CUR, (uint64_t)-1, 1, 0);                 /* main takes core 0: the worker is pinned to the caller's core */
     CHECK(svcv(0x35, (uintptr_t)&word_a, 0, 0, 1) == 0, "SignalToAddress");
-    CHECK(done == expect_done_at_return, what);
+    CHECK(done == expect_done_at_return, "%s", what);
     ms(work_ms + 60);
     svcv(0x0B, 0, 0, 0, 0);                              /* a yield lets an equal-priority waiter have the core (it blocks again before main gets it back) */
     CHECK(done == 1, "the worker finished its work in the end");

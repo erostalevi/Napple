@@ -21,8 +21,15 @@ pub fn hex(b: &[u8]) -> String {
 /// `{"k":v,...}` from already-encoded values, one per line when `pretty`.
 pub fn obj(fields: &[(&str, String)], pretty: bool) -> String {
     let sep = if pretty { ",\n  " } else { "," };
-    let body: Vec<String> = fields.iter().map(|(k, v)| format!("{}:{}", jstr(k), v)).collect();
-    if pretty { format!("{{\n  {}\n}}", body.join(sep)) } else { format!("{{{}}}", body.join(sep)) }
+    let body: Vec<String> = fields
+        .iter()
+        .map(|(k, v)| format!("{}:{}", jstr(k), v))
+        .collect();
+    if pretty {
+        format!("{{\n  {}\n}}", body.join(sep))
+    } else {
+        format!("{{{}}}", body.join(sep))
+    }
 }
 
 pub fn arr(items: &[String]) -> String {
@@ -35,7 +42,10 @@ mod tests {
     #[test]
     fn escapes() {
         assert_eq!(jstr("a\"b\\c\n\u{1}"), "\"a\\\"b\\\\c\\n\\u0001\"");
-        assert_eq!(obj(&[("a", "1".into()), ("b", jstr("x"))], false), "{\"a\":1,\"b\":\"x\"}");
+        assert_eq!(
+            obj(&[("a", "1".into()), ("b", jstr("x"))], false),
+            "{\"a\":1,\"b\":\"x\"}"
+        );
         assert_eq!(arr(&["1".into(), "2".into()]), "[1,2]");
     }
 }

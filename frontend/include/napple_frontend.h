@@ -9,7 +9,7 @@
    window closes or napple_frontend_request_quit() is called.  The guest and gfx run on other threads
    (start them from on_ready).  Everything else may be called from any thread.
 
-   See docs/audio-input-frontend-interface.md. */
+   See docs/architecture/audio-input-frontend.md. */
 #ifndef NAPPLE_FRONTEND_H
 #define NAPPLE_FRONTEND_H
 
@@ -22,45 +22,45 @@ extern "C" {
 
 #define NAPPLE_FRONTEND_API_VERSION 1
 
-struct napple_input;   /* input/include/napple_input.h (optional) */
+struct napple_input; /* input/include/napple_input.h (optional) */
 
 /* ---- settings (persisted at ~/Library/Application Support/Napple/<titleid>/settings.json) ---- */
 typedef struct napple_settings {
     /* Video */
-    int internal_width, internal_height;   /* guest render target size the game is told about; 0,0 = game native */
-    int internal_scale_percent;            /* 25..400; used when internal_width/height are 0 (100 = native) */
-    int output_width, output_height;       /* window content size in points (windowed); 0 = default 1280x720 */
-    int fps_cap;                           /* 0 = the game's own pacing (real time), 15..999 = fixed display rate the guest is paced by (game speed scales with it), 1000 = uncapped (fast forward) */
-    int vsync;                             /* 1 = present on display refresh */
+    int internal_width, internal_height; /* guest render target size the game is told about; 0,0 = game native */
+    int internal_scale_percent;          /* 25..400; used when internal_width/height are 0 (100 = native) */
+    int output_width, output_height;     /* window content size in points (windowed); 0 = default 1280x720 */
+    int fps_cap; /* 0 = the game's own pacing (real time), 15..999 = fixed display rate the guest is paced by (game speed scales with it), 1000 = uncapped (fast forward) */
+    int vsync; /* 1 = present on display refresh */
     int fullscreen;
-    int aspect;                            /* window / image shape: 0 = locked 16:9 (native), 1 = locked 16:9, 2 = locked 4:3, 3 = free window, stretch the image,
+    int aspect; /* window / image shape: 0 = locked 16:9 (native), 1 = locked 16:9, 2 = locked 4:3, 3 = free window, stretch the image,
                                               4 = free window, keep the game's aspect (bars), 5 = free window, fill (crop), 6 = free window, tell the game the window's aspect (engines
                                               that support it extend their field of view; others fall back to 4) */
     /* Display (render size, supersampling, output filter, frame generation) */
-    int render_mode;                       /* 0 = native size, 1 = scale factor (internal_scale_percent), 2 = follow window (render at the window's pixel size),
+    int render_mode;         /* 0 = native size, 1 = scale factor (internal_scale_percent), 2 = follow window (render at the window's pixel size),
                                               3 = fixed size (internal_width x internal_height) */
-    int supersample_percent;               /* 100..400: render this much larger than the chosen size and filter down to the window (1.5x, 2x, 3x, 4x) */
-    int filter;                            /* output filter: 0 bilinear, 1 nearest, 2 box (area average), 3 bicubic (Catmull-Rom), 4 Lanczos, 5 sharpened bilinear */
-    int sharpness;                         /* 0..100: strength of the sharpening (filter 5, and the MetalFX upscaler's post sharpen) */
-    int upscaler;                          /* 0 = none (the filter alone), 1 = MetalFX spatial upscaler (renders below the window size and upscales) */
-    int anisotropy;                        /* 0 = as the game asks, 2 / 4 / 8 / 16 = at least this many samples */
-    int frame_gen;                         /* 1 = generate in-between frames */
-    int frame_gen_mult;                    /* 0 = automatic (as many as the display can show), 2..8 = output rate = multiplier x the game's rate */
-    int frame_gen_method;                  /* 0 = best available, 1 = optical flow (VideoToolbox), 2 = optical flow low latency (VideoToolbox), 3 = motion-compensated blend (Metal), 4 = plain blend */
-    int show_stats;                        /* 1 = frame rate / GPU time / latency overlay in the corner of the game view */
+    int supersample_percent; /* 100..400: render this much larger than the chosen size and filter down to the window (1.5x, 2x, 3x, 4x) */
+    int filter;              /* output filter: 0 bilinear, 1 nearest, 2 box (area average), 3 bicubic (Catmull-Rom), 4 Lanczos, 5 sharpened bilinear */
+    int sharpness;           /* 0..100: strength of the sharpening (filter 5, and the MetalFX upscaler's post sharpen) */
+    int upscaler;            /* 0 = none (the filter alone), 1 = MetalFX spatial upscaler (renders below the window size and upscales) */
+    int anisotropy;          /* 0 = as the game asks, 2 / 4 / 8 / 16 = at least this many samples */
+    int frame_gen;           /* 1 = generate in-between frames */
+    int frame_gen_mult;      /* 0 = automatic (as many as the display can show), 2..8 = output rate = multiplier x the game's rate */
+    int frame_gen_method; /* 0 = best available, 1 = optical flow (VideoToolbox), 2 = optical flow low latency (VideoToolbox), 3 = motion-compensated blend (Metal), 4 = plain blend */
+    int show_stats; /* 1 = frame rate / GPU time / latency overlay in the corner of the game view */
     /* Game speed (independent of the frame rate) */
-    int speed_percent;                     /* 10..1000: how fast game time passes (100 = normal) */
-    int turbo_percent;                     /* speed while the turbo key is held / toggled (default 300) */
-    int speed_mode;                        /* 0 = game clock and vsync (everything runs faster), 1 = vsync only (frame skip turbo, clocks stay real), 2 = game clock only */
-    int audio_speed_mode;                  /* 0 = automatic (pitch shift between 0.5x and 2x, silent outside), 1 = always pitch shift, 2 = silent while the speed is not 1x */
+    int speed_percent;    /* 10..1000: how fast game time passes (100 = normal) */
+    int turbo_percent;    /* speed while the turbo key is held / toggled (default 300) */
+    int speed_mode;       /* 0 = game clock and vsync (everything runs faster), 1 = vsync only (frame skip turbo, clocks stay real), 2 = game clock only */
+    int audio_speed_mode; /* 0 = automatic (pitch shift between 0.5x and 2x, silent outside), 1 = always pitch shift, 2 = silent while the speed is not 1x */
     /* Audio */
-    float master_volume;                   /* 0..1 */
-    int mute_in_background;                /* 1 = pause audio when the window loses focus */
+    float master_volume;    /* 0..1 */
+    int mute_in_background; /* 1 = pause audio when the window loses focus */
     /* Input */
-    int show_touch_cursor;                 /* mouse cursor visible over the game */
+    int show_touch_cursor; /* mouse cursor visible over the game */
     /* Game: applied at the next guest restart */
-    char update_version[32];               /* "" = latest installed; otherwise a manifest version string */
-    char disabled_dlc[32][20];             /* title ids (16 hex) of DLC switched off */
+    char update_version[32];   /* "" = latest installed; otherwise a manifest version string */
+    char disabled_dlc[32][20]; /* title ids (16 hex) of DLC switched off */
     int disabled_dlc_count;
 } napple_settings;
 
@@ -74,32 +74,41 @@ int napple_data_path(const char *config_dir, const char *title_id, const char *f
 /* Hot keys handled by the frontend (not remappable, chosen outside the default keyboard bindings): F1 overlay, F12 screenshot, F2 hold = turbo (the key held down),
    F3 toggle turbo, F4 toggle slow motion (0.5x), F5 speed - (one step), F6 speed + (one step), F7 reset to 1x, F8 frame generation on / off, F9 statistics overlay,
    F10 cycle supersampling (1x, 1.5x, 2x, 3x). Controller: none (they would collide with games' own bindings). Steps: 10 25 50 75 100 150 200 300 400 600 800 1000 %. */
-#define NAPPLE_SPEED_STEPS {10, 25, 50, 75, 100, 150, 200, 300, 400, 600, 800, 1000}
+#define NAPPLE_SPEED_STEPS                                                                                                                                     \
+    { 10, 25, 50, 75, 100, 150, 200, 300, 400, 600, 800, 1000 }
 /* Resolved speed, for the runtime: the effective game speed in percent given the hold / toggle state; implemented in settings.c (pure, unit tested). */
 int napple_effective_speed_percent(const napple_settings *s, int turbo_held, int turbo_toggled, int slow_toggled);
 
 /* ---- game manifest: what the runtime tells the overlay about the installed game ---- */
-typedef struct napple_manifest_dlc { char title_id[20]; char name[64]; } napple_manifest_dlc;
-typedef struct napple_manifest_update { char version[32]; char name[64]; } napple_manifest_update;
+typedef struct napple_manifest_dlc {
+    char title_id[20];
+    char name[64];
+} napple_manifest_dlc;
+typedef struct napple_manifest_update {
+    char version[32];
+    char name[64];
+} napple_manifest_update;
 typedef struct napple_manifest {
     char title_id[20];
     char title_name[96];
     char base_version[32];
-    const napple_manifest_dlc *dlc; size_t dlc_count;
-    const napple_manifest_update *updates; size_t update_count;   /* newest first */
+    const napple_manifest_dlc *dlc;
+    size_t dlc_count;
+    const napple_manifest_update *updates;
+    size_t update_count; /* newest first */
 } napple_manifest;
 
 /* ---- text input (nn::swkbd replacement) ---- */
 typedef struct napple_text_request {
-    const char *header;             /* UTF-8 */
+    const char *header; /* UTF-8 */
     const char *sub;
     const char *guide;
     const char *initial;
-    uint32_t max_length;            /* characters; 0 = 500 */
+    uint32_t max_length; /* characters; 0 = 500 */
     uint32_t min_length;
     int password;
     int numeric;
-    uint32_t disabled_keys;         /* bit1 space, bit2 '@', bit3 '%', bit4 '/', bit5 '\\', bit6 digits (swkbd order) */
+    uint32_t disabled_keys; /* bit1 space, bit2 '@', bit3 '%', bit4 '/', bit5 '\\', bit6 digits (swkbd order) */
 } napple_text_request;
 /* Called once: accepted=1 with UTF-8 text (valid only during the call), or accepted=0 on cancel. */
 typedef void (*napple_text_done_fn)(void *user, int accepted, const char *utf8);
@@ -130,13 +139,13 @@ typedef struct napple_frontend_callbacks {
 } napple_frontend_callbacks;
 
 typedef struct napple_frontend_config {
-    const char *title_id;            /* 16 hex digits */
-    const char *title_name;          /* window title; NULL = "Napple" */
-    const char *config_dir;          /* override of the per-game directory (tests); NULL = default */
-    const char *screenshot_dir;      /* NULL = ~/Pictures/Napple */
+    const char *title_id;       /* 16 hex digits */
+    const char *title_name;     /* window title; NULL = "Napple" */
+    const char *config_dir;     /* override of the per-game directory (tests); NULL = default */
+    const char *screenshot_dir; /* NULL = ~/Pictures/Napple */
     napple_frontend_callbacks callbacks;
-    struct napple_input *input;      /* optional: key/mouse/focus events are routed here and the remap UI is enabled */
-    int headless;                    /* 1: no window shown (offscreen; tests) */
+    struct napple_input *input; /* optional: key/mouse/focus events are routed here and the remap UI is enabled */
+    int headless;               /* 1: no window shown (offscreen; tests) */
 } napple_frontend_config;
 
 typedef struct napple_frontend napple_frontend;
@@ -155,7 +164,7 @@ double napple_frontend_display_hz(napple_frontend *fe);
 void napple_frontend_drawable_size(napple_frontend *fe, int *w, int *h, double *scale);
 
 void napple_frontend_get_settings(napple_frontend *fe, napple_settings *out);
-int napple_frontend_set_settings(napple_frontend *fe, const napple_settings *s);   /* clamps, saves, notifies */
+int napple_frontend_set_settings(napple_frontend *fe, const napple_settings *s); /* clamps, saves, notifies */
 /* The overlay's Game tab; copies the manifest. NULL clears. */
 void napple_frontend_set_manifest(napple_frontend *fe, const napple_manifest *m);
 void napple_frontend_show_overlay(napple_frontend *fe, int visible);
@@ -178,12 +187,15 @@ size_t napple_utf8_to_utf16(const char *s, uint16_t *out, size_t cap_units);
 size_t napple_utf16_to_utf8(const uint16_t *s, size_t n, char *out, size_t cap);
 
 /* ---- frame limiter / vsync helpers for gfx ---- */
-typedef struct napple_frame_limiter { uint64_t next_ns; uint64_t period_ns; } napple_frame_limiter;
+typedef struct napple_frame_limiter {
+    uint64_t next_ns;
+    uint64_t period_ns;
+} napple_frame_limiter;
 void napple_frame_limiter_init(napple_frame_limiter *l, int fps_cap /* 0 = off */);
 /* Sleep until the next frame is due (precise: nanosleep then spin the last 200 us). Returns ns slept. now_ns is
    CLOCK_UPTIME_RAW based; pass 0 to read the clock. Pure maths exposed for tests via napple_frame_limiter_step. */
 uint64_t napple_frame_limiter_wait(napple_frame_limiter *l);
-uint64_t napple_frame_limiter_step(napple_frame_limiter *l, uint64_t now_ns);   /* ns to wait from now_ns; advances state */
+uint64_t napple_frame_limiter_step(napple_frame_limiter *l, uint64_t now_ns); /* ns to wait from now_ns; advances state */
 /* Blocks until the next display refresh of the game window (CVDisplayLink), or timeout_ms. 1 if a refresh, 0 on timeout. */
 int napple_frontend_wait_vsync(napple_frontend *fe, int timeout_ms);
 
