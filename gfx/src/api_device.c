@@ -1,4 +1,5 @@
 /* api_device.c - NVN device, queue, sync objects and events. */
+#include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -171,6 +172,7 @@ NVN(nvnQueueResetMemoryUsageCounts, void, NVNqueue *q) { (void)q; }
 
 NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h) {
     queue_t *o = (queue_t *)q;
+    { static int tr = -1; if (tr < 0) tr = getenv("NAPPLE_GFX_CMDTRACE") != NULL; if (tr) fprintf(stderr, "[cmdtrace] submit q %p n %d h0 %#llx\n", (void *)q, n, h ? (unsigned long long)h[0] : 0ull); }
     if (n <= 0 || !h) return;
     cmdrec *recs[64];
     cmdrec **list = n <= 64 ? recs : malloc((size_t)n * sizeof *list);

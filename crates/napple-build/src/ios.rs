@@ -190,6 +190,9 @@ pub fn dylibize(game: &Path, frameworks: &Path, platform: macho::Platform) -> Re
                 let Some(stem) = p.file_name().and_then(|s| s.to_str()).and_then(|s| s.strip_suffix(".patched.bin")).map(str::to_string) else { continue };
                 let image = std::fs::read(&p).map_err(|e| BuildError::io("read module image", e))?;
                 let tables = std::fs::read(dir.join(format!("{stem}.tables"))).map_err(|e| BuildError::io(&format!("read {stem}.tables"), e))?;
+                if tables.starts_with(b"NTB2") {
+                    continue;   // AArch32 title (interpreter): the image is read as data, no executable pages to wrap
+                }
                 let layout = macho::layout_from_ntb1(&tables)?;
                 let name = format!("{vname}.{tag}{stem}.dylib");
                 let dylib = macho::build_dylib(&image, &layout, &format!("@rpath/{name}"), platform)?;
@@ -371,7 +374,7 @@ pub fn sign_sim(app: &Path) -> Result<Vec<String>> {
 /// `ditto -c -k --keepParent <payload_dir>`: payload_dir must be a directory named `Payload` containing the .app (ditto writes zip64, so multi-GB RomFS images work).
 pub fn export_ipa(payload_dir: &Path, ipa: &Path) -> Result<()> {
     let _ = std::fs::remove_file(ipa);
-    run_out(Command::new("ditto").args(["-c", "-k", "--keepParent"]).arg(payload_dir).arg(ipa)).map(|_| ()).map_err(|e| BuildError::new("ipa", format!("ditto failed: {e}")))
+    run_out(Command::new("ditto").args(["-c", "-k", "--keepParent", "--norsrc", "--noextattr", "--noacl"]).arg(payload_dir).arg(ipa)).map(|_| ()).map_err(|e| BuildError::new("ipa", format!("ditto failed: {e}")))
 }
 
 /// Installs (and optionally launches) with Xcode's `devicectl`.

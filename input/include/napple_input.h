@@ -170,6 +170,7 @@ uint32_t napple_input_active_style(const napple_input *in, int slot);           
 typedef struct napple_vibration { float amp_low, freq_low, amp_high, freq_high; } napple_vibration;
 void napple_input_set_vibration(napple_input *in, uint32_t npad_id, int side /*0 left,1 right*/, const napple_vibration *v);
 void napple_input_set_sixaxis_enabled(napple_input *in, int enabled);
+void napple_input_shake(napple_input *in);   /* player 1's sensor shakes side to side for 3 whole cycles (0.6 s): games that detect a shake (SMO cap throw) */
 
 /* ---- host events, fed by the frontend (or a test) ---- */
 void napple_input_key(napple_input *in, uint16_t mac_keycode, int down);           /* macOS virtual keycode */

@@ -29,6 +29,9 @@ pub enum UpdateRomfs {
     Materialize,
     /// BKTR delta layer (`romfs.delta/`): patch storage + relocation table over the base romfs.bin.
     Delta,
+    /// Development (`--data-only` only): every version gets a `romfs.map` (extents of the game files + AES-CTR
+    /// parameters) that the runtime decrypts on read; nothing is copied. The map holds keys: never ship it.
+    InPlace,
 }
 
 #[derive(Clone, Debug)]
@@ -184,6 +187,7 @@ fn rewrite_version(exefs: &[(String, Vec<u8>)], dir: &Path, label: &str, lo: f64
     }
     let order = load_order(&v.iter().map(|m| m.name.clone()).collect::<Vec<_>>());
     v.sort_by_key(|m| order.iter().position(|n| *n == m.name).unwrap_or(usize::MAX));
+    crate::tables32::recompile_if_requested(&mdir)?;   // AArch32 titles, only with NAPPLE_A32_RECOMPILE=1
     Ok(v)
 }
 
@@ -431,7 +435,7 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             let nca_id = p.meta.contents.iter().find(|c| c.ctype == 1).map(|c| c.nca_name().trim_end_matches(".nca").to_string()).unwrap_or_default();
             match update_romfs(&c, p, &keys, base_rom.as_ref().ok_or_else(|| BuildError::new("container", "base RomFS needed to patch an update"))?)? {
                 Some((patched, shift)) => match o.update_romfs {
-                    UpdateRomfs::Materialize => RomfsPlan::Full { src: patched.data.clone(), key: format!("romfs-patched-{nca_id}") },
+                    UpdateRomfs::Materialize | UpdateRomfs::InPlace => RomfsPlan::Full { src: patched.data.clone(), key: format!("romfs-patched-{nca_id}") },
                     UpdateRomfs::Delta => RomfsPlan::Delta { patched, base_shift: shift, key: nca_id },
                 },
                 None => match base_romfs(&c, p, &keys)? {
@@ -474,12 +478,17 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
     }
 
     // sizes -> free-space check
+    let in_place = matches!(o.update_romfs, UpdateRomfs::InPlace);
+    if in_place && !o.data_only {
+        return Err(BuildError::usage("--update-romfs in-place is for --data-only development builds (the map holds decryption keys)"));
+    }
     let cache_dir = root.join(".napple-cache.nosync").join(cache_dir_name(app_id, &o.files, &out));
     let mut need: u64 = 256 << 20;
     let mut jobs_total: u64 = 0;
     let mut sized: Vec<(String, u64)> = Vec::new();
     for v in &versions {
         match &v.romfs {
+            RomfsPlan::Full { .. } if in_place => {}
             RomfsPlan::Full { src, key } => sized.push((key.clone(), src.size())),
             RomfsPlan::Delta { patched, key, .. } => {
                 need += patched.patch_size;
@@ -567,6 +576,17 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         let dir = game.join(&v.dir);
         let label = format!("{} RomFS", v.label);
         let ro = match &v.romfs {
+            RomfsPlan::Full { src, .. } if in_place => {
+                progress("romfs", P_ROMFS.0, &format!("{label}: in-place map"));
+                std::fs::create_dir_all(&dir).map_err(|e| BuildError::io("create dir", e))?;
+                let n = crate::romfs_map::write_map(src, &dir.join("romfs.map"))?;
+                progress("romfs", P_ROMFS.0, &format!("{label}: {n} extents, {} bytes", src.size()));
+                RomfsOut { mode: if v.kind == "base" { "map" } else { "patched-map" }, size: src.size(), sha256: String::new() }
+            }
+            RomfsPlan::SameAsBase if in_place => {
+                std::fs::copy(game.join(&versions[0].dir).join("romfs.map"), dir.join("romfs.map")).map_err(|e| BuildError::io("copy romfs.map", e))?;
+                RomfsOut { mode: "base", size: base_size, sha256: base_sha.clone() }
+            }
             RomfsPlan::Full { src, key } => {
                 let lo = P_ROMFS.0 + share(done_bytes);
                 let hi = P_ROMFS.0 + share(done_bytes + src.size());

@@ -632,6 +632,12 @@ impl Ck<'_> {
                             self.bad(oa, "window: external branch does not leave through a correct exit stub");
                         }
                     }
+                } else if ow & 0x9F00_0000 == 0x9000_0000 {
+                    // adrp: re-encoded for the copy's address, same target page, same (substituted) destination
+                    let ok = expected_plain.is_some_and(|e| pw & 0x9F00_0000 == 0x9000_0000 && pw & 31 == e & 31) && a64::adr_target(pw, pa as u64) == a64::adr_target(ow, oa as u64);
+                    if !ok {
+                        self.bad(oa, "window: adrp not re-encoded to the same page");
+                    }
                 } else if Some(pw) != expected_plain {
                     self.bad(oa, "window: copied instruction differs from the original (modulo x18)");
                 }

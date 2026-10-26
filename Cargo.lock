@@ -443,6 +443,7 @@ dependencies = [
 name = "napple-rewrite"
 version = "0.0.1"
 dependencies = [
+ "cc",
  "napple-core",
  "rayon",
  "unicorn-engine",

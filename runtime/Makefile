@@ -1,7 +1,7 @@
 # napple-runtime: native Horizon host for rewritten Switch games.   make -C runtime [debug=1]
 CC ?= clang
 BUILD := build
-SRC := $(wildcard src/*.c src/services/*.c src/a32/*.c)
+SRC := $(wildcard src/*.c src/services/*.c src/a32/*.c) src/a32jit/a32jit.c
 MSRC := $(wildcard src/*.m)
 ASM := $(wildcard src/*.S)
 OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC)) $(patsubst src/%.m,$(BUILD)/%.o,$(MSRC)) $(patsubst src/%.S,$(BUILD)/%.o,$(ASM))
@@ -67,7 +67,7 @@ HOST_KERNEL := src/kernel.c src/threads.c src/ksession.c src/kmsg.c src/kcode.c 
 HOST_LOADER := src/module.c src/dispatch.c src/json.c src/nro.c src/sha256.c src/ipc.c
 HOST_HDRS := $(wildcard src/*.h) $(wildcard tests/host/*.h) tests/check.h
 HOST_TESTS := $(HOST_BUILD)/test_svc_async $(HOST_BUILD)/test_kernel_ipc $(HOST_BUILD)/test_loader $(HOST_BUILD)/test_nvdrv $(HOST_BUILD)/test_fs_savedata $(HOST_BUILD)/test_fs_journal $(HOST_BUILD)/test_ios_dylib
-HOST_FS := src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c tests/host/host_save_dir.c
+HOST_FS := src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c tests/host/host_save_dir.c src/services/romfs_map.c
 $(HOST_BUILD)/test_kernel_ipc: tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) $(HOST_HDRS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
@@ -89,6 +89,11 @@ $(HOST_BUILD)/test_fs_journal: tests/test_fs_journal.c src/services/fs.c $(HOST_
 $(HOST_BUILD)/test_ios_dylib: tests/host/test_ios_dylib.c src/ios_dylib.c $(HOST_HDRS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_ios_dylib.c src/ios_dylib.c -o $@
+# nx-kernel (2026-10-26): same-core handoff, yield, sleep precision, FreeThreadCount, ideal core -3
+$(HOST_BUILD)/test_kernel_sched: tests/host/test_kernel_sched.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_sched.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_kernel_sched
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 

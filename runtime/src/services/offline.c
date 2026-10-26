@@ -176,6 +176,7 @@ static IpcObject *nfp_open(void) { return IPC_OBJECT("nfp:user", nfp_cmds, NULL,
 static void ret_u64_1(IpcObject *s, IpcCall *c) { (void)s; uint64_t v = 1; IPC_OUT(c, v); }
 static const IpcCmd prepo_cmds[] = {
     {10100, "SaveReport", noop, IPC_STUB}, {10101, "SaveReportWithUser", noop, IPC_STUB}, {10102, "SaveReportOld", noop, IPC_STUB}, {10103, "SaveReportWithUserOld", noop, IPC_STUB},
+    {10104, "SaveReportForApplication", noop, IPC_STUB}, {10105, "SaveReportWithUserForApplication", noop, IPC_STUB},   /* Animal Crossing 3.0.3 (SDK 20) reports with 10105 */
     {10200, "RequestImmediateTransmission", noop, IPC_STUB}, {10300, "GetTransmissionStatus", ret_u32_0, IPC_STUB}, {10400, "GetSystemSessionId", ret_u64_1, IPC_STUB},
     {20100, "SaveSystemReport", noop, IPC_STUB}, {20101, "SaveSystemReportWithUser", noop, IPC_STUB}, {40100, "IsUserAgreementCheckEnabled", ret_u8_0, IPC_STUB},
     {40101, "SetUserAgreementCheckEnabled", noop, IPC_STUB}, {90100, "ClearStorage", noop, IPC_STUB}, {90200, "GetStorageUsage", ret_u64_0, IPC_STUB},

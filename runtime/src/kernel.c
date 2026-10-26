@@ -16,6 +16,7 @@ int kcode_close_object(ObjType type, void *obj);
 void threads_svc_enter(unsigned num, uint64_t *regs, const char *module, uint64_t offset);
 void threads_svc_exit(void);
 void threads_checkpoint(void);
+int threads_live_count(void);
 
 /* ---- handle table ---------------------------------------------------------------------------------------------
  * Handles encode the slot in bits 0-14 and a linear id in bits 15-29 that changes on every allocation, as the kernel's
@@ -205,7 +206,7 @@ static void svc_get_info(uint64_t *r) {
     case 18: value = g_program_id; break;
     case 20: { extern uint64_t memory_exception_context(void); value = memory_exception_context(); } break;
     case 23: value = 1; break;                                             /* IsApplication */
-    case 24: value = 0x100; break;                                         /* FreeThreadCount */
+    case 24: { int live = threads_live_count(); value = live < 96 ? 96 - live : 0; break; }   /* FreeThreadCount: pm's 96 application threads minus the live ones */
     case 25: value = 0; break;                                             /* ThreadTickCount */
     case 26: {                                                             /* IsSvcPermitted */
         value = !g_npdm.valid || (sub < 192 && (g_npdm.svc_mask[sub / 32] >> (sub % 32) & 1));

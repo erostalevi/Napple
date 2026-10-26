@@ -1,4 +1,5 @@
 //! napple-rewrite: ahead-of-time rewriter for Switch NSO modules.
+pub mod a32;
 pub mod a64;
 pub mod check;
 pub mod cli;
@@ -10,6 +11,7 @@ pub mod patch;
 pub mod relocs;
 pub mod rewrite;
 pub mod scan;
+pub mod survey;
 pub mod templates;
 pub mod types;
 pub mod windows;

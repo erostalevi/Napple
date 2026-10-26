@@ -221,7 +221,11 @@ impl Rewriter<'_> {
                 if a64::is_bl(w) {
                     return Err(Reason(format!("instruction at {a:#x} cannot be relocated into a window")));
                 }
-                let out = if let Some(tgt) = a64::direct_target(w, a as u64) {
+                let out = if w & 0x9F00_0000 == 0x9000_0000 {
+                    // adrp: same target page from the copy's address (x18 already replaced by the scratch register in `nw`)
+                    let page = a64::adr_target(w, a as u64).ok_or("adrp target")?;
+                    a64::adrp(nw & 31, here as u64, page)?
+                } else if let Some(tgt) = a64::direct_target(w, a as u64) {
                     let dest = copied.get(&(tgt as u32)).or_else(|| exit_at.get(&(tgt as u32))).copied().ok_or("window exit missing")?;
                     a64::retarget(nw, here as u64, dest as u64)?
                 } else {

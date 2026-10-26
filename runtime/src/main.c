@@ -189,6 +189,7 @@ int main(int argc, char **argv) {
     if (a32_title) a32_process_init(g_cfg.data_dir); else memory_init();
     { size_t n; const HostSymbol *t = gfx_hle_table(&n); host_symbols_register(t, n); }
     movie_register_overrides();
+    { extern void time_register_overrides(void); time_register_overrides(); }
     if (!a32_title) modules_load(g_cfg.data_dir);
     { extern void watch_install(void); watch_install(); }
     if (!g_cfg.nvn_major && !a32_title) detect_nvn_version();

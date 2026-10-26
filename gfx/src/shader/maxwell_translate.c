@@ -195,6 +195,7 @@ static void fcmp_expr(char *out, int op, const char *a, const char *b) {
     case 15: strcpy(out, "true"); break;
     case 7: sprintf(out, "(!isnan(%s) && !isnan(%s))", a, b); break;
     case 8: sprintf(out, "(isnan(%s) || isnan(%s))", a, b); break;
+    case 5: sprintf(out, "((%s < %s) || (%s > %s))", a, b, a, b); break;    // ordered NE: false when either is NaN (MSL `!=` is true then)
     default:
         if (op < 7) sprintf(out, "(%s %s %s)", a, cmp_op(op), b);
         else sprintf(out, "((%s %s %s) || isnan(%s) || isnan(%s))", a, cmp_op(op), b, a, b);
@@ -260,6 +261,7 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
             }
         } else if (addr >= 0x80 && addr < 0x280) {
             int a = (addr - 0x80) >> 4, comp = (addr >> 2) & 3;
+            c->info->attr_read_mask |= 1u << a;      /* read whether or not the vertex shader provides it (pipeline key normalisation, mtl_shader.m) */
             // (MSL: a mask of 0 means unknown. GLSL: the renderer always passes the vertex shader's outputs, and
             // Vulkan requires every fragment input to be a vertex output, so 0 means none.)
             if (c->key && c->key->vs_out_mask && !(c->key->vs_out_mask & (1u << a))) {
@@ -1056,7 +1058,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0x5c60000000000000ull, 0xfff8000000000000ull) || OPM(0x4c60000000000000ull, 0xfff8000000000000ull) ||
                OPM(0x3860000000000000ull, 0xfef8000000000000ull)) {  // FMNMX
         const char *x = NA(F(R(a)), bits(w, 48, 1), bits(w, 46, 1)), *y = NA(F(B(true)), bits(w, 45, 1), bits(w, 49, 1));
-        sprintf(t, "(%s ? fmin(%s, %s) : fmax(%s, %s))", P((int)bits(w, 39, 3), bits(w, 42, 1)), x, y, x, y);
+        /* precise:: so the non-NaN operand wins (Maxwell FMNMX) whatever math mode the library is compiled with (NAPPLE_GFX_MATH, mtl_shader.m) */
+        sprintf(t, "(%s ? precise::fmin(%s, %s) : precise::fmax(%s, %s))", P((int)bits(w, 39, 3), bits(w, 42, 1)), x, y, x, y);
         set_reg(c, d, FRES(t, false));
     } else if (OPM(0x5bb0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bb0000000000000ull, 0xfff0000000000000ull) ||
                OPM(0x36b0000000000000ull, 0xfef0000000000000ull)) {  // FSETP
@@ -1420,7 +1423,9 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xf0c8000000000000ull, 0xfff8000000000000ull)) {  // S2R
         int sr = (int)bits(w, 20, 8);
         switch (sr) {
-        case 0x12: set_reg(c, d, "0xbf800000u"); break;  // y_direction: -1 (lower-left)
+        /* SR_Y_DIRECTION: -1 under the lower-left window origin (NVN's default; LASRecomp answers -1 for LAS, nxnative LAS notes), +1 under upper-left
+         * (Ryujinx's constant, right for the upper-left titles it runs). The origin is the guest's, from the pipeline key. */
+        case 0x12: set_reg(c, d, c->key && c->key->upper_left ? "0x3f800000u" : "0xbf800000u"); break;
         case 0x21: set_reg(c, d, "tid.x"); break;
         case 0x22: set_reg(c, d, "tid.y"); break;
         case 0x23: set_reg(c, d, "tid.z"); break;
@@ -1763,6 +1768,42 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         fail(c, "OUT: geometry shader output is not supported (Metal has no geometry stage)");
     } else if ((w >> 56) == 0xea || (w >> 56) == 0xeb) {   // (RED, 0xebf8, is matched above)
         fail(c, "surface access (SULD/SUST/SUATOM/SURED family, opcode %03x) is not supported: no image binding in the translator contract", (unsigned)(w >> 52));
+    } else if (OPM(0x3a00000000000000ull, 0xfe00000000000000ull)) {  // VMNMX: video (byte/half/word) integer min/max, then a second op with Rc
+        /* Field layout as Ryujinx's InstVmnmx decoder (MIT; MacNativeGames/vendor/ryujinx InstDecoders.cs): selects A bits 36..38 + sign 48, B 28..30 + sign 49,
+         * B from a register when bit 50 else imm16 at 20, MX (max) bit 56, D-format (signed second op) 54, SAT 55, video op 51..53, CC 47.
+         * Unlike Ryujinx the mixed-signedness case is computed exactly in 64 bits. Found in Animal Crossing (fragment 23e43e94e45bb1d5 @0x3e8: 3-way max). */
+        if (bits(w, 47, 1)) fail(c, "VMNMX.CC is not supported");
+        int asel = (int)bits(w, 36, 3), bsel = (int)bits(w, 28, 3), asg = (int)bits(w, 48, 1), bsg = (int)bits(w, 49, 1);
+        bool mx = bits(w, 56, 1), dfmt = bits(w, 54, 1), sat = bits(w, 55, 1), bvid = bits(w, 50, 1);
+        int vop = (int)bits(w, 51, 3), rc = (int)bits(w, 39, 8);
+        static const int sh[] = { 0, 8, 16, 24, 0, 16, 0, 0 };
+        static const char *const ux[] = { "0xFFu", "0xFFu", "0xFFu", "0xFFu", "0xFFFFu", "0xFFFFu", "0xFFFFFFFFu", "0xFFFFFFFFu" };
+        static const int nb[] = { 8, 8, 8, 8, 16, 16, 32, 32 };
+        char ea[160], eb[160];
+#define VSEL(out, src, sel, sg) do { if (nb[sel] == 32) sprintf(out, (sg) ? "long(int(%s))" : "long(%s)", src); \
+            else if (sg) sprintf(out, "long(int(%s << %du) >> %d)", src, 32 - nb[sel] - sh[sel], 32 - nb[sel]); \
+            else sprintf(out, "long((%s >> %du) & %s)", src, sh[sel], ux[sel]); } while (0)
+        VSEL(ea, R(a), asel, asg);
+        if (bvid) VSEL(eb, R((int)bits(w, 20, 8)), bsel, bsg);
+        else { uint32_t im = (uint32_t)bits(w, 20, 16); sprintf(eb, "long(%d)", bsg ? (int)(int16_t)im : (int)im); }
+#undef VSEL
+        bool rsg = asg == bsg ? asg : !mx;     /* mixed signedness: a max fits u32, a min fits s32 */
+        sp(&c->body, "    { long va = %s, vb = %s; long vr = %s(va, vb);\n", ea, eb, mx ? "max" : "min");
+        if (sat && dfmt && !rsg) sp(&c->body, "      vr = min(vr, 2147483647l);\n");
+        else if (sat && !dfmt && rsg) sp(&c->body, "      vr = max(vr, 0l);\n");
+        sp(&c->body, "      uint res = uint(vr); uint vc = %s;\n", R(rc));
+        switch (vop) {
+        case 0: sp(&c->body, "      res = insert_bits(vc, res, 16u, 16u);\n"); break;
+        case 1: sp(&c->body, "      res = insert_bits(vc, res, 0u, 16u);\n"); break;
+        case 2: sp(&c->body, "      res = insert_bits(vc, res, 0u, 8u);\n"); break;
+        case 3: sp(&c->body, "      res = insert_bits(vc, res, 16u, 8u);\n"); break;
+        case 4: sp(&c->body, "      res = res + vc;\n"); break;
+        case 5: sp(&c->body, dfmt ? "      res = uint(min(int(res), int(vc)));\n" : "      res = min(res, vc);\n"); break;
+        case 6: sp(&c->body, dfmt ? "      res = uint(max(int(res), int(vc)));\n" : "      res = max(res, vc);\n"); break;
+        default: break;
+        }
+        if (d != RZ) { c->reg_used[d] = 1; sp(&c->body, "      r%d = res;\n", d); }
+        sp(&c->body, "    }\n");
     } else {
         fail(c, "unknown instruction %016llx at %#x", (unsigned long long)w, pc);
     }
@@ -2028,6 +2069,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     info->msl = s.buf;
     info->attr_mask = c->in_attr_mask;
     info->out_mask = stage == STAGE_FRAGMENT ? c->omap_target : c->out_attr_mask;
+    info->indexed_inputs = c->uses_attr_arr;
     free(c->body.buf);
     free(c);
     return info;

@@ -21,7 +21,7 @@ pub const USAGE: &str = "usage:
       --runtime <path>              runtime binary (default: next to napple, or runtime/build/napple-runtime in a checkout)
       --launcher <path>             launcher binary (default: packaging/build/napple-launcher)
       --make-runtime                run make -C runtime and make -C packaging first (checkout only)
-      --update-romfs materialize|delta  one patched romfs.bin per update (default) or a BKTR delta layer
+      --update-romfs materialize|delta|in-place  one patched romfs.bin per update (default), a BKTR delta layer, or (with --data-only, development) a romfs.map per version that reads the RomFS straight out of the game files (no copy; the map holds decryption keys)
       --keep-cache                  keep <outdir>/.napple-cache (resumable RomFS copies)
       --no-sign                     skip codesign (macOS: no signature; iOS: unsigned app/IPA for an external signer)
       --data-only                   write <outdir>/<titleid>/<buildid16>/ data directories only (runtime development; no .app)
@@ -110,7 +110,8 @@ pub fn parse(args: &[String]) -> Result<Opts> {
                 o.update_romfs = match val()?.as_str() {
                     "materialize" => UpdateRomfs::Materialize,
                     "delta" => UpdateRomfs::Delta,
-                    x => return Err(BuildError::usage(format!("--update-romfs: expected materialize|delta, got {x:?}"))),
+                    "in-place" => UpdateRomfs::InPlace,
+                    x => return Err(BuildError::usage(format!("--update-romfs: expected materialize|delta|in-place, got {x:?}"))),
                 }
             }
             "-h" | "--help" => return Err(BuildError::usage(USAGE)),

@@ -24,7 +24,8 @@ static void t_ring(void) {
     uint8_t *shm = calloc(1, NAPPLE_HID_SHM_SIZE); napple_hid_layout l; napple_hid_layout_for(NAPPLE_HID_LAYOUT_LATEST, &l);
     napple_hid_init(shm, &l);
     const uint32_t ring = l.npad_base + l.npad_lifo[0];
-    CHECK(r64(shm + ring + 8) == 17 && napple_hid_lifo_count(shm, ring) == 0 && !napple_hid_lifo_latest(shm, ring, 0x28), "initial ring is empty");
+    CHECK(r64(shm + ring + 8) == 17 && napple_hid_lifo_count(shm, ring) == 17 && r64(napple_hid_lifo_latest(shm, ring, 0x28)) == 16, "initial ring is full of idle entries (S6: history reads of 16 entries)");
+    for (uint64_t k = 0; k < 17; k++) CHECK(r64(shm + ring + 0x20 + k * 0x30) == 2 * k && r64(shm + ring + 0x28 + k * 0x30) == k, "prefilled entry %llu has outer 2*n and inner n sampling numbers", (unsigned long long)k);
     napple_hid_set_npad_style(shm, &l, 0, NAPPLE_STYLE_FULL_KEY | NAPPLE_STYLE_JOY_DUAL, 0);
     CHECK(r32(shm + l.npad_base) == (NAPPLE_STYLE_FULL_KEY | NAPPLE_STYLE_JOY_DUAL), "style set written at +0");
     napple_npad_state st = {.buttons = NAPPLE_BTN_MASK(NAPPLE_BTN_A) | NAPPLE_BTN_MASK(NAPPLE_BTN_ZR), .left = {-1000, 32767}, .right = {5, -6}, .attributes = NAPPLE_ATTR_CONNECTED};
@@ -32,20 +33,20 @@ static void t_ring(void) {
     for (int i = 0; i < 40; i++) {
         st.left.x = i; napple_hid_push_npad(shm, &l, 0, NAPPLE_STYLE_FULL_KEY, &st);
         const uint8_t *e = napple_hid_lifo_latest(shm, ring, 0x28);
-        CHECK(e && r64(e) == (uint64_t)i && (i == 0 || r64(e) == last + 1), "sampling number increments (%d)", i);
+        CHECK(e && r64(e) == (uint64_t)(17 + i) && (i == 0 || r64(e) == last + 1), "sampling number increments (%d)", i);
         last = r64(e);
         CHECK(r64(e + 8) == st.buttons && (int32_t)r32(e + 0x10) == i && (int32_t)r32(e + 0x14) == 32767 && (int32_t)r32(e + 0x18) == 5 && (int32_t)r32(e + 0x1c) == -6 && r32(e + 0x20) == NAPPLE_ATTR_CONNECTED, "state fields at libnx offsets (%d)", i);
         uint64_t count = napple_hid_lifo_count(shm, ring), tail = r64(shm + ring + 16);
-        CHECK(count == (uint64_t)(i + 1 < 17 ? i + 1 : 17) && tail == (uint64_t)(i % 17), "count %llu tail %llu at push %d", (unsigned long long)count, (unsigned long long)tail, i);
+        CHECK(count == 17 && tail == (uint64_t)(i % 17), "count %llu tail %llu at push %d", (unsigned long long)count, (unsigned long long)tail, i);
         /* outer copy of the sampling number */
-        CHECK(r64(shm + ring + 0x20 + tail * 0x30) == (uint64_t)i, "outer sampling number");
+        CHECK(r64(shm + ring + 0x20 + tail * 0x30) == 2 * (uint64_t)(17 + i), "outer sampling number is 2*n (even: odd means being written)");
     }
     /* the 17 entries hold the 17 newest states in ring order */
-    int seen = 0; for (int k = 0; k < 17; k++) { uint64_t sn = r64(shm + ring + 0x20 + (uint64_t)k * 0x30); seen += sn >= 23; }
+    int seen = 0; for (int k = 0; k < 17; k++) { uint64_t sn = r64(shm + ring + 0x20 + (uint64_t)k * 0x30); seen += sn >= 2 * 40; }
     CHECK(seen == 17, "ring holds the newest 17 samples");
     /* other styles go to their own lifo, others untouched */
     napple_hid_push_npad(shm, &l, 9, NAPPLE_STYLE_HANDHELD, &st);
-    CHECK(napple_hid_lifo_count(shm, l.npad_base + 9 * l.npad_stride + l.npad_lifo[1]) == 1 && napple_hid_lifo_count(shm, l.npad_base + 9 * l.npad_stride + l.npad_lifo[0]) == 0, "handheld lifo on slot 9");
+    CHECK(r64(napple_hid_lifo_latest(shm, l.npad_base + 9 * l.npad_stride + l.npad_lifo[1], 0x28)) == 17 && r64(napple_hid_lifo_latest(shm, l.npad_base + 9 * l.npad_stride + l.npad_lifo[0], 0x28)) == 16, "handheld lifo on slot 9 advanced, the full-key one untouched");
     free(shm);
 }
 
@@ -55,7 +56,7 @@ static void t_sixaxis(void) {
     napple_hid_push_sixaxis(shm, &l, 0, 0, &s); napple_hid_push_sixaxis(shm, &l, 0, 0, &s);
     const uint32_t ring = l.npad_base + l.npad_sixaxis[0];
     const uint8_t *e = napple_hid_lifo_latest(shm, ring, 0x60);
-    CHECK(e && r64(e) == 5000000 && r64(e + 8) == 1, "six-axis: delta time then sampling number");
+    CHECK(e && r64(e) == 5000000 && r64(e + 8) == 18, "six-axis: delta time then sampling number");
     CHECK(nearf(rf(e + 0x10 + 8), -1, 1e-6f) && nearf(rf(e + 0x1c), .5f, 1e-6f) && nearf(rf(e + 0x28 + 4), .25f, 1e-6f) && nearf(rf(e + 0x34 + 16), 1, 1e-6f) && r32(e + 0x58) == 1, "six-axis fields");
     napple_hid_set_npad_device(shm, &l, 0, 3, 0xff, 4);
     CHECK(r32(shm + l.npad_base + l.npad_device_type) == 3 && r32(shm + l.npad_base + l.npad_battery) == 4, "device type / battery");
@@ -69,7 +70,7 @@ static void t_touch_mouse_keyboard(void) {
     const uint8_t *e = napple_hid_lifo_latest(shm, l.touch_screen, 0x290);
     CHECK(e && r32(e + 8) == 1 && r32(e + 0x10 + 0xc) == 3 && r32(e + 0x10 + 0x10) == 640 && r32(e + 0x10 + 0x14) == 360 && (r32(e + 0x10 + 8) & 1), "touch point fields");
     napple_hid_push_touch(shm, &l, NULL, 0);
-    e = napple_hid_lifo_latest(shm, l.touch_screen, 0x290); CHECK(e && r32(e + 8) == 0 && r64(e) == 1, "release = count 0 with next sampling number");
+    e = napple_hid_lifo_latest(shm, l.touch_screen, 0x290); CHECK(e && r32(e + 8) == 0 && r64(e) == 18, "release = count 0 with next sampling number");
     napple_mouse_state m = {.x = 100, .y = 200, .delta_x = -3, .delta_y = 4, .wheel_y = 1, .buttons = 1, .attributes = 3};
     napple_hid_push_mouse(shm, &l, &m);
     e = napple_hid_lifo_latest(shm, l.mouse, 0x28); CHECK(e && (int32_t)r32(e + 8) == 100 && (int32_t)r32(e + 12) == 200 && (int32_t)r32(e + 16) == -3 && r32(e + 0x20) == 1 && r32(e + 0x24) == 3, "mouse fields");

@@ -3,6 +3,8 @@
    Ring ("lifo") format used by every hid shared memory section:
      header (0x20): u64 timestamp, u64 buffer_count (17), u64 tail (index of the newest entry), u64 count (valid entries)
      entries (17): u64 sampling_number (outer, written last, lets readers detect a torn entry) + state bytes
+   The OUTER sampling number is written as 2*n and the state's own (inner) number as n: the Nintendo SDK's reader (seen in Animal Crossing 3.0.3, nn::hid
+   Npad lifo read) treats an odd outer number as "entry being written" and retries forever, and requires consecutive inner numbers (difference 1).
    A state itself starts with its own u64 sampling_number (npad, mouse, keyboard, touch) or with delta_time then
    sampling_number (six-axis).  The writer advances `tail`, fills the entry, then publishes `count`/`tail` with
    release ordering so a game thread reading concurrently sees either the old or the new entry.
@@ -61,7 +63,7 @@ static Slot ring_begin(uint8_t *shm, uint32_t ring, uint32_t state_size) {
     uint64_t count = get64(s.hdr + 24), tail = get64(s.hdr + 16);
     if (get64(s.hdr + 8) != RING) { put64(s.hdr + 8, RING); count = 0; tail = RING - 1; }
     uint32_t next = count ? (uint32_t)((tail + 1) % RING) : 0;
-    s.sampling = count ? get64(s.hdr + 0x20 + tail * (8 + state_size)) + 1 : 0;
+    s.sampling = count ? get64(s.hdr + 0x20 + tail * (8 + state_size)) / 2 + 1 : 0;      /* the stored outer number is 2*n */
     s.tail = next; s.count = (uint32_t)(count < RING ? count + 1 : RING);
     s.entry = s.hdr + 0x20 + (size_t)next * (8 + state_size);
     s.state = s.entry + 8;
@@ -69,7 +71,7 @@ static Slot ring_begin(uint8_t *shm, uint32_t ring, uint32_t state_size) {
     return s;
 }
 static void ring_commit(Slot *s) {
-    put64(s->entry, s->sampling);                       /* outer sampling number */
+    put64(s->entry, s->sampling * 2);                   /* outer sampling number (even: odd means "being written" to the SDK reader) */
     put64(s->state, s->sampling);                       /* the state's own copy (not used by six-axis: see caller) */
     atomic_thread_fence(memory_order_release);
     put64(s->hdr + 8, RING); put64(s->hdr + 24, s->count);
@@ -77,17 +79,27 @@ static void ring_commit(Slot *s) {
     put64(s->hdr + 0, s->sampling);
 }
 
+/* A ring starts full of idle entries with consecutive sampling numbers 0..RING-1 (outer copy 2*n; tail = newest): games read a whole history (SMO reads all 16
+   entries of GetNpadStates and ignores the returned count) and an entry with a stale or zero sampling number reads as "no sample", which left
+   its sticks dead until the ring had wrapped. Zero states carry valid numbers; the first push continues at RING. nxnative docs/reference/services.md
+   "History reads fill every requested entry" (MIT; behaviour only). */
+static void ring_prefill(uint8_t *shm, uint32_t ring, uint32_t state_size, int six) {
+    uint8_t *hdr = shm + ring;
+    for (uint32_t i = 0; i < RING; i++) {
+        uint8_t *e = hdr + 0x20 + (size_t)i * (8 + state_size);
+        put64(e, 2 * (uint64_t)i); put64(e + 8 + (six ? 8 : 0), i);   /* outer number is 2*n (even), see ring_commit */
+    }
+    put64(hdr + 0, RING - 1); put64(hdr + 8, RING); put64(hdr + 16, RING - 1); put64(hdr + 24, RING);
+}
+
 void napple_hid_init(uint8_t *shm, const napple_hid_layout *l) {
     memset(shm, 0, NAPPLE_HID_SHM_SIZE);
-    uint32_t rings[8 + 10 * 13]; unsigned n = 0;
-    rings[n++] = l->touch_screen; rings[n++] = l->mouse; rings[n++] = l->keyboard;
+    ring_prefill(shm, l->touch_screen, TOUCH_STATE, 0); ring_prefill(shm, l->mouse, MOUSE_STATE, 0); ring_prefill(shm, l->keyboard, KEY_STATE, 0);
     for (int slot = 0; slot < 10; slot++) {
         uint32_t base = l->npad_base + (uint32_t)slot * l->npad_stride;
-        for (int i = 0; i < 7; i++) if (l->npad_lifo[i]) rings[n++] = base + l->npad_lifo[i];
-        for (int i = 0; i < 6; i++) if (l->npad_sixaxis[i]) rings[n++] = base + l->npad_sixaxis[i];
+        for (int i = 0; i < 7; i++) if (l->npad_lifo[i]) ring_prefill(shm, base + l->npad_lifo[i], NPAD_STATE, 0);
+        for (int i = 0; i < 6; i++) if (l->npad_sixaxis[i]) ring_prefill(shm, base + l->npad_sixaxis[i], SIX_STATE, 1);
     }
-    /* write headers for the rings (tail = last index so the first push lands on index 0) */
-    for (unsigned i = 0; i < n; i++) { put64(shm + rings[i] + 8, RING); put64(shm + rings[i] + 16, RING - 1); }
 }
 
 void napple_hid_set_npad_style(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t style_set, uint32_t assign) {
@@ -133,7 +145,7 @@ void napple_hid_push_sixaxis(uint8_t *shm, const napple_hid_layout *l, int slot,
     for (int i = 0; i < 9; i++) putf(s.state + 0x34 + 4 * i, st->direction[i]);
     put32(s.state + 0x58, st->attributes);
     atomic_thread_fence(memory_order_release);
-    put64(s.entry, s.sampling); put64(s.state + 8, s.sampling);
+    put64(s.entry, s.sampling * 2); put64(s.state + 8, s.sampling);
     put64(s.hdr + 8, RING); put64(s.hdr + 24, s.count); put64(s.hdr + 16, s.tail); put64(s.hdr + 0, s.sampling);
 }
 

@@ -1,0 +1,110 @@
+# Regression safety on every push and pull request (release.yml builds and publishes only on main; pages.yml is the site).
+# Every step is the same command tools/ci_build.sh and .claude/skills/napple-latest/napple_latest.sh run, validated step by step in a fresh copy of this tree.
+# GitHub's macOS runners are virtual Macs: the headless Metal tests of gfx are built everywhere but their run is non-blocking (a runner without a usable GPU
+# or Metal feature set fails them for reasons that are not the code); the run result is visible in the log and `make -C gfx test` stays a local gate.
+# Not run in CI: anything that needs game files, keys or firmware (LAS/SMO/ACNH/MK8D boots), `swift test` UI automation, signing.
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  docs:
+    name: Docs links and symptom index
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Markdown links, anchors, symptom rows, title notes
+        run: python3 tools/check_docs.py
+
+  rust:
+    name: cargo test --workspace
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustc --version
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: tests-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: tests-cargo-${{ runner.os }}-
+      - name: cargo test --workspace
+        run: cargo test --workspace --locked
+
+  native:
+    name: audio, input, frontend, gfx, runtime tests
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          brew install opus libvpx     # linked statically into napple-runtime
+          xcodebuild -version
+      - name: input
+        run: make -C input -j"$(sysctl -n hw.ncpu)" test
+      - name: audio
+        run: make -C audio -j"$(sysctl -n hw.ncpu)" test
+      - name: frontend
+        run: make -C frontend -j"$(sysctl -n hw.ncpu)" test
+      - name: gfx library, adapter, and every test program built
+        run: |
+          make -C gfx -j"$(sysctl -n hw.ncpu)" lib adapter
+          make -C gfx -j"$(sysctl -n hw.ncpu)" tests
+      - name: gfx headless Metal tests (non-blocking, see the header of this file)
+        continue-on-error: true
+        run: make -C gfx test
+      - name: runtime host and service tests
+        run: make -C runtime -j"$(sysctl -n hw.ncpu)" test test-services
+
+  studio:
+    name: Napple Studio swift test
+    runs-on: macos-26   # Studio targets macOS 26 (studio/Package.swift)
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift --version
+      - name: swift test
+        run: swift test --package-path studio
+
+  ios-smoke:
+    name: iOS Simulator compile smoke (runtime links for iphonesimulator)
+    # Non-blocking until claude/ios-sim-2026-10-25-titles lands: on main tools/build_ios.sh does not compile runtime/src/a32/*.c, so the link fails with undefined _a32_*
+    # (measured 2026-10-26 in a fresh copy). After that branch is integrated, delete the next line to make it a gate.
+    continue-on-error: true
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: command -v cmake || brew install cmake
+      - name: libopus for the Simulator (downloaded and built by the project's script)
+        run: SDK=iphonesimulator tools/build_ios_deps.sh
+      - name: napple-runtime for the Simulator (build only, nothing is run)
+        run: |
+          SDK=iphonesimulator tools/build_ios.sh
+          test -x runtime/build-ios-sim/napple-runtime
+          file runtime/build-ios-sim/napple-runtime

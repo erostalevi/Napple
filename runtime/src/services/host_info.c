@@ -1,5 +1,6 @@
 #include "host_info.h"
 #include "../napple.h"
+#include "../json.h"
 #include <CoreFoundation/CoreFoundation.h>
 #include <ctype.h>
 #include <stdio.h>
@@ -40,7 +41,26 @@ uint64_t host_desired_language(void) {
     LOGV("host", "language %s", code);
     return v;
 }
-void host_display_version(char out[16]) { snprintf(out, 16, "%s", "1.0.0"); }
+/* The NACP display version: napple build writes the newest version's (napple-app.json "display_version", one level above the
+ * data dir); it applies when this data dir is the newest version ("versions" last entry), else "1.0.0" (older builds, base runs). */
+void host_display_version(char out[16]) {
+    static char v[16]; static int done;
+    if (!done) {
+        done = 1; snprintf(v, sizeof v, "1.0.0");
+        char path[1200]; FILE *f = NULL;
+        if (g_cfg.data_dir) { snprintf(path, sizeof path, "%s/../napple-app.json", g_cfg.data_dir); f = fopen(path, "rb"); }
+        char *text = f ? malloc(1 << 20) : NULL; size_t n = text ? fread(text, 1, (1 << 20) - 1, f) : 0;
+        if (f) fclose(f);
+        JsonNode *root = text ? json_parse(text, n) : NULL;
+        const JsonNode *vers = root ? json_get(root, "versions") : NULL; const JsonNode *last = NULL;
+        for (const JsonNode *e = vers && vers->type == J_ARR ? vers->child : NULL; e; e = e->next) last = e;
+        const char *dir = last ? json_str(last, "dir", NULL) : NULL, *dv = root ? json_str(root, "display_version", NULL) : NULL;
+        const char *base = g_cfg.data_dir ? strrchr(g_cfg.data_dir, '/') : NULL; base = base ? base + 1 : g_cfg.data_dir;
+        if (dir && dv && *dv && base && !strcmp(dir, base)) snprintf(v, sizeof v, "%s", dv);
+        json_free(root); free(text);
+    }
+    snprintf(out, 16, "%s", v);
+}
 const char *host_user_name(void) { return "Napple"; }
 const char *host_save_dir(void) {
     static char dir[1100];

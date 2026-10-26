@@ -16,6 +16,7 @@ pub mod legacy;
 pub mod macho;
 pub mod nro;
 pub mod pipeline;
+pub mod romfs_map;
 pub mod stream;
 pub mod sysdata;
 pub mod tables;

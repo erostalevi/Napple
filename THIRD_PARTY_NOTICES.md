@@ -50,3 +50,14 @@ IN THE SOFTWARE.
 
 ## runtime/src/movie.c, movie.h
 Adapted from MacNativeGames (MIT), games/totk/runtime/movie_host.c/.h: host VP9 decoder behind the SDK's movie::Decoder (libvpx, BSD-3-Clause, linked statically).
+
+## nxnative (MIT, copyright seedds): test and documentation ideas
+`gfx/tests/t_clear_ds.c`, `t_clear_tex.c`, `t_depth16.c`, `t_feedback.c`, `t_copy_alias.c`, `t_present_snap.c`, `t_pso_archive.c`, `tools/check_docs.py` and `.github/workflows/tests.yml`
+follow the structure and test ideas of nxnative (`dm/gfx/tests/t_*.m`, `dm/tools/tests/test_docs.py`, `.github/workflows/tests.yml`; https://github.com/seedds/nxnative, MIT licence). They are
+written fresh against this repository's NVN entry points; no source lines were copied. Copyright (c) seedds, MIT licence text: see nxnative/LICENSE.
+
+## crates/napple-rewrite (jumptab.rs shapes, windows.rs adrp, survey.rs): nxnative cases
+Behaviour cases (jump-table shapes incl. halfword tables padded to the largest entry, adr-relative offset tables, adrp inside exclusive windows) and the pre-flight survey idea follow the documented cases in nxnative (MIT, Copyright (c) seedds), docs/reference/rewriter.md, dm/games/profile_guess.py and scripts/build_ipa_from_nsp.py. The Rust code is written from those descriptions; no nxnative source text is copied.
+
+## nx-kernel (2026-10-26)
+Behaviour (not code) of nxnative (MIT, copyright seedds) docs/reference/threads.md and services.md was used as the specification for the same-core handoff, sleep_precise, ideal-core -3, history-ring prefill, shake and offline push-service stand-ins in runtime/src/threads.c, input/src and runtime/src/services/push.c. No nxnative source was copied.

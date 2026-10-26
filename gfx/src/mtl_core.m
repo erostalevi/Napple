@@ -17,33 +17,56 @@ int g_prof_on;
 /* ---------------------------------------------------------------------------------------------------------------
  * Memory pool registry. Pool memory is wrapped without copying; copy-on-write snapshots keep lookups lock-free.
  * --------------------------------------------------------------------------------------------------------------- */
-@interface PoolRec : NSObject { @public uintptr_t base, end; id<MTLBuffer> buf; } @end
+@interface PoolRec : NSObject { @public uintptr_t base, end; id<MTLBuffer> buf; NSArray<PoolRec *> *kids; } @end
 @implementation PoolRec @end
 
 static NSArray<PoolRec *> *g_pools;                 /* sorted by base; replaced wholesale */
 static _Atomic uint64_t g_pool_epoch;               /* bumped whenever the set of pools changes */
 uint64_t mtl_pool_epoch(void) { return atomic_load(&g_pool_epoch); }
-void mtl_pool_each(void (^fn)(id<MTLBuffer> buf)) { NSArray<PoolRec *> *p = g_pools; for (PoolRec *r in p) fn(r->buf); }
 static pthread_mutex_t g_pool_mu = PTHREAD_MUTEX_INITIALIZER;
+/* The snapshot is copied under the mutex: a bare read of the strong global races with the writer's assignment (ARC releases the old array between the load and
+ * the retain: Animal Crossing crashed in mtl_addr with a freed array while it created pools on the game thread). The array itself is never mutated after publication. */
+static NSArray<PoolRec *> *pools_snapshot(void) { pthread_mutex_lock(&g_pool_mu); NSArray<PoolRec *> *p = g_pools; pthread_mutex_unlock(&g_pool_mu); return p; }
+void mtl_pool_each(void (^fn)(id<MTLBuffer> buf)) { NSArray<PoolRec *> *p = pools_snapshot(); for (PoolRec *r in p) fn(r->buf); }
+
+static void pool_insert(PoolRec *r) {      /* g_pool_mu held */
+    NSMutableArray *n = [NSMutableArray arrayWithArray:g_pools ?: @[]];
+    NSUInteger i = 0;
+    while (i < n.count && ((PoolRec *)n[i])->base < r->base) i++;
+    [n insertObject:r atIndex:i];
+    g_pools = n;
+}
+
+/* A pool larger than the device's maxBufferLength (256 MiB on the iOS Simulator and older iPhones) is wrapped by overlapping chunks: every GPU access of up to
+ * POOL_OVERLAP bytes lies inside one chunk, and mtl_addr() already scans neighbouring records. The returned head record only owns the chunk list. */
+#define POOL_OVERLAP (32u << 20)
 
 void *gfx_mtl_pool_add(uint8_t *mem, uint64_t size, uint32_t flags) {
     (void)flags;
     @autoreleasepool {
         uintptr_t pg = (uintptr_t)getpagesize();
         uintptr_t b = (uintptr_t)mem & ~(pg - 1), e = ((uintptr_t)mem + size + pg - 1) & ~(pg - 1);
-        if (e - b > g_mtl.dev.maxBufferLength) { LOGE("memory pool of %llu bytes exceeds the Metal buffer limit", (unsigned long long)size); return NULL; }
-        id<MTLBuffer> buf = [g_mtl.dev newBufferWithBytesNoCopy:(void *)b length:e - b options:MTLResourceStorageModeShared deallocator:nil];
-        if (!buf) { LOGE("newBufferWithBytesNoCopy failed for pool %p+%#llx", mem, (unsigned long long)size); return NULL; }
+        uintptr_t maxl = (uintptr_t)g_mtl.dev.maxBufferLength & ~(pg - 1);
+        NSMutableArray<PoolRec *> *kids = [NSMutableArray array];
+        uintptr_t step = maxl > POOL_OVERLAP * 2 ? maxl - POOL_OVERLAP : 0;
+        if (e - b > maxl && !step) { LOGE("memory pool of %llu bytes exceeds the Metal buffer limit", (unsigned long long)size); return NULL; }
+        for (uintptr_t c = b; c < e; c += step ? step : e - b) {
+            uintptr_t ce = e - c > maxl ? c + maxl : e;
+            id<MTLBuffer> buf = [g_mtl.dev newBufferWithBytesNoCopy:(void *)c length:ce - c options:MTLResourceStorageModeShared deallocator:nil];
+            if (!buf) { LOGE("newBufferWithBytesNoCopy failed for pool %p+%#llx", mem, (unsigned long long)size); return NULL; }
+            PoolRec *k = [PoolRec new];
+            k->base = c; k->end = ce; k->buf = buf;
+            [kids addObject:k];
+            if (ce == e) break;
+        }
         PoolRec *r = [PoolRec new];
-        r->base = b; r->end = e; r->buf = buf;
+        r->base = b; r->end = e; r->kids = kids;
+        if (kids.count == 1) { r->buf = kids[0]->buf; }
         pthread_mutex_lock(&g_pool_mu);
-        NSMutableArray *n = [NSMutableArray arrayWithArray:g_pools ?: @[]];
-        NSUInteger i = 0;
-        while (i < n.count && ((PoolRec *)n[i])->base < b) i++;
-        [n insertObject:r atIndex:i];
-        g_pools = n;
+        for (PoolRec *k in kids) pool_insert(k);
         atomic_fetch_add(&g_pool_epoch, 1);
         pthread_mutex_unlock(&g_pool_mu);
+        if (kids.count > 1) LOGI("memory pool of %llu bytes wrapped as %lu overlapping Metal buffers (maxBufferLength %llu)", (unsigned long long)size, (unsigned long)kids.count, (unsigned long long)g_mtl.dev.maxBufferLength);
         return (void *)CFBridgingRetain(r);
     }
 }
@@ -54,16 +77,16 @@ void gfx_mtl_pool_remove(void *rec) {
     mtl_tex_forget_range((const void *)r->base, r->end - r->base);
     pthread_mutex_lock(&g_pool_mu);
     NSMutableArray *n = [NSMutableArray arrayWithArray:g_pools ?: @[]];
-    [n removeObject:r];
+    [n removeObjectsInArray:r->kids];
     g_pools = n;
     atomic_fetch_add(&g_pool_epoch, 1);
     pthread_mutex_unlock(&g_pool_mu);
-    /* the GPU may still read the buffer: drop our reference when everything submitted so far completed */
+    /* the GPU may still read the buffers: drop our reference when everything submitted so far completed */
     gfx_retire((void (*)(void *))CFRelease, rec);
 }
 
 int mtl_addr(uint64_t addr, uint64_t len, id<MTLBuffer> __autoreleasing *buf, uint64_t *off) {
-    NSArray<PoolRec *> *p = g_pools;
+    NSArray<PoolRec *> *p = pools_snapshot();
     NSUInteger lo = 0, hi = p.count;
     while (lo < hi) { NSUInteger m = (lo + hi) / 2; if (((PoolRec *)p[m])->base <= addr) lo = m + 1; else hi = m; }
     for (NSUInteger i = lo, n = 0; i > 0 && n < 64; i--, n++) {

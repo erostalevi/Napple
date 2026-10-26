@@ -33,6 +33,12 @@ int main(void) {
     CHECK(fabsf(sqrtf(dx * dx + dy * dy) - 32767.f) < 3, "diagonal magnitude %f", sqrtf(dx * dx + dy * dy));
     /* keyboard section: usage 15 ('L') down */
     const uint8_t *k = napple_hid_lifo_latest(shm, l.keyboard, 0x30); CHECK(k && (k[16 + 1] & 0x80), "keyboard usage bitmap has L");
+    /* shake: three whole side-to-side cycles on player 1's six-axis sensor, then back to rest */
+    { const uint32_t ring = l.npad_base + l.npad_sixaxis[0]; float peak = 0; uint64_t t = 1030000000ull;
+      napple_input_shake(in);
+      for (int i = 0; i < 200; i++, t += 5000000ull) { napple_input_update(in, t); const uint8_t *z = napple_hid_lifo_latest(shm, ring, 0x60); float a; uint32_t u = r32(z + 0x10); memcpy(&a, &u, 4); if (fabsf(a) > peak) peak = fabsf(a); }
+      const uint8_t *z = napple_hid_lifo_latest(shm, ring, 0x60); float ax; uint32_t u = r32(z + 0x10); memcpy(&ax, &u, 4);
+      CHECK(peak > 3.5f && fabsf(ax) < 1e-3f, "shake: x acceleration peaks at %f G and is back at rest (%f)", peak, ax); }
     /* on-screen controller: analog stick + buttons for player 1, merged with the keyboard (bigger deflection wins), cleared by focus loss */
     napple_input_key(in, 13, 0); napple_input_key(in, 2, 0); napple_input_key(in, 37, 0); napple_input_key(in, 49, 0);
     napple_input_virtual_pad(in, NAPPLE_BTN_MASK(NAPPLE_BTN_X) | NAPPLE_BTN_MASK(NAPPLE_BTN_L), 0.5f, 0.f, 0.f, -1.f);

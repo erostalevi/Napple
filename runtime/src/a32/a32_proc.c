@@ -13,6 +13,7 @@
 #include "napple.h"
 #include "a32.h"
 #include "a32_module.h"
+#include "../a32jit/a32jit.h"
 #include <errno.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -22,6 +23,7 @@
 #include <sys/mman.h>
 
 extern void memory_init_a32(uint8_t *window);
+extern void memory_a32_reserve(uint64_t host_lo, uint64_t size, unsigned state, unsigned perm);
 extern uint8_t *memory_a32_base(void);
 void threads_set_tlr_current(void *tlr);
 int a32_hle_call(A32Cpu *c, const char *name, uint32_t pc);
@@ -134,7 +136,17 @@ static void stack_backtrace(const A32Cpu *c) {
         fprintf(stderr, "  [sp+%#x] %s\n", a - c->r[13], symbolize(v & ~1u, sb, sizeof sb)); shown++;
     }
 }
+static int a32_svc_impl(A32Cpu *c, uint32_t imm);
+static int svc_trace = -1;
 static int a32_svc(A32Cpu *c, uint32_t imm) {
+    if (svc_trace < 0) svc_trace = getenv("NAPPLE_A32_SVCTRACE") != NULL;
+    if (!svc_trace) return a32_svc_impl(c, imm);
+    uint32_t a0 = c->r[0], a1 = c->r[1], a2 = c->r[2], a3 = c->r[3], lr = c->r[14];
+    int rc = a32_svc_impl(c, imm);
+    fprintf(stderr, "[svc] tlr %#x svc %#04x(%s) r0-r3 %#x %#x %#x %#x lr %#x -> r0 %#x r1 %#x\n", c->tpidruro, imm, imm < 256 && layouts[imm].valid ? "" : "?", a0, a1, a2, a3, lr, c->r[0], c->r[1]);
+    return rc;
+}
+static int a32_svc_impl(A32Cpu *c, uint32_t imm) {
     if (imm == 0x26) {
         trace_dump();
         char sb[300]; LOG("a32", "guest Break: r0 %#x r1 %#x r2 %#x lr %s sp %#x", c->r[0], c->r[1], c->r[2], symbolize(c->r[14] & ~1u, sb, sizeof sb), c->r[13]);
@@ -234,7 +246,7 @@ static A32Cpu *cpu_new(uint32_t tlr) {
     return c;
 }
 static A32Exit run_slice(A32Cpu *c) {
-    if (!trace_on) return a32_run(c, 1000000);
+    if (!trace_on) return a32jit_active() ? a32jit_run(c, 1000000) : a32_run(c, 1000000);
     static uint32_t abort_fn;
     if (!abort_fn) abort_fn = a32_find_symbol(&g_a32w, "_ZN2nn4diag6detail10VAbortImplEPKcS3_S3_iPKNS_6ResultEPKNS_2os17UserExceptionInfoES3_St9__va_list") ?: 1;
     for (unsigned i = 0; i < 1000000; i++) {
@@ -291,6 +303,7 @@ void a32_process_init(const char *data_dir) {
     g_a32w.is_override = a32_is_host_override;
     memory_init_a32(B);
     if (mprotect(B + TLR_POOL, TLR_SLOTS * 0x200u, PROT_READ | PROT_WRITE)) runtime_fail("cannot map the thread local regions: %s", strerror(errno));
+    memory_a32_reserve((uint64_t)(uintptr_t)B + TLR_POOL, TLR_SLOTS * 0x200u, 0xc, 3);   /* ThreadLocal, read + write */
     char dir[4096], err[256];
     snprintf(dir, sizeof dir, "%s/modules", data_dir);
     for (unsigned i = 0; i < sizeof module_order / sizeof *module_order; i++) {
@@ -298,12 +311,14 @@ void a32_process_init(const char *data_dir) {
         if (access(p, R_OK)) continue;
         if (a32_module_map(&g_a32w, dir, module_order[i], err, sizeof err)) runtime_fail("AArch32 module %s: %s", module_order[i], err);
         const A32Module *m = &g_a32w.mods[g_a32w.nmods - 1];
+        memory_a32_reserve((uint64_t)(uintptr_t)B + m->base, (m->size + 0xFFFu) & ~0xFFFu, 3, 5);   /* Code, read + execute */
         LOG("a32", "mapped %s at %#x (%#x bytes, %u relocations)", m->name, m->base, m->size, m->nrel);
     }
     if (!g_a32w.nmods) runtime_fail("no AArch32 modules in %s", dir);
     stub_return = a32_hle_stub(&g_a32w, "<return to host>");
     A32RelStats st;
     if (a32_relocate(&g_a32w, &st, err, sizeof err)) runtime_fail("AArch32 relocation: %s", err);
+    a32jit_init(dir, &g_a32w);
     LOG("a32", "relocations applied: %llu (%llu imports resolved across modules, %u host imports)", (unsigned long long)g_a32w.applied, (unsigned long long)st.to_module, g_a32w.nhle);
 }
 
@@ -339,6 +354,7 @@ _Noreturn void a32_boot(uint32_t main_handle) {
     stack_size = (stack_size + 0xFFF) & ~0xFFFu;
     if (mprotect(B + MAIN_STACK, stack_size, PROT_READ | PROT_WRITE)) runtime_fail("cannot map the main thread stack: %s", strerror(errno));
     main_stack_lo = MAIN_STACK; main_stack_hi = MAIN_STACK + stack_size;
+    memory_a32_reserve((uint64_t)(uintptr_t)B + MAIN_STACK, stack_size, 0xb, 3);   /* Stack: else QueryMemory reports it inside a Free gap and the SDK maps shared memory (pl:u fonts) over it */
     A32Cpu *c = cpu_new(tlr);
     c->r[13] = MAIN_STACK + stack_size - 16;
     LOG("a32", "main thread: handle %#x stack %#x+%#x tlr %#x", main_handle, MAIN_STACK, stack_size, tlr);

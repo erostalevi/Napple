@@ -183,6 +183,66 @@ fn br_x18_signed_offset_table() {
     assert!(out.sites.iter().any(|r| matches!(r, napple_rewrite::SiteRow::Jump { base: 0x40, count: 7, .. })), "{:?}", out.sites);
 }
 
+fn adr(rd: u32, pc: u32, target: u32) -> u32 {
+    let off = target.wrapping_sub(pc);
+    0x1000_0000 | ((off & 3) << 29) | (((off >> 2) & 0x7_FFFF) << 5) | rd
+}
+
+/// text = `prefix` then nops to `fill_to` bytes; ro = `ro` bytes at the page after the text.
+fn module_with_ro(prefix: Vec<u32>, fill_to: u32, ro: &[u8]) -> Nso {
+    let mut code = prefix;
+    while code.len() < (fill_to / 4) as usize {
+        code.push(NOP);
+    }
+    code.extend(std::iter::repeat(NOP).take(16));
+    let mut nso = synth::nso(&code);
+    let mut data = ro.to_vec();
+    data.resize(0x1000, 0);
+    nso.rodata = Segment { mem_offset: nso.text.data.len() as u32, data };
+    nso.data.mem_offset = nso.text.data.len() as u32 + 0x1000;
+    nso
+}
+
+#[test]
+fn br_x18_halfword_table_is_padded_to_the_largest_entry() {
+    // adrp x17,tab ; add x17,x17,#lo ; cmp w0,#3 ; b.hi out ; ldrh w9,[x17,x0,lsl #1] ; adr x18,0x40 ; add x18,x18,x9,lsl #2 ; br x18
+    let table = 0x1000u32;
+    let code = vec![
+        a64::adrp(17, 0, table as u64).unwrap(),
+        a64::add_imm(17, 17, table & 0xFFF, false),
+        0x7100_0C1F,
+        0x5400_0000 | (8 << 5) | 8,
+        0x7860_7A29,
+        adr(18, 20, 0x40),
+        0x8B09_0A52,
+        0xD61F_0240,
+    ];
+    let ro: Vec<u8> = [0u16, 1, 2, 5].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let nso = module_with_ro(code, 0x40, &ro);
+    let out = assert_equiv(&nso, 3); // adr (pcrel), add (plain), br
+    assert!(out.sites.iter().any(|r| matches!(r, napple_rewrite::SiteRow::Jump { base: 0x40, count: 6, .. })), "{:?}", out.sites);
+}
+
+#[test]
+fn br_x18_adr_relative_offset_table() {
+    // adrp x17,tab ; add x17,x17,#lo ; cmp w0,#3 ; b.hi out ; adr x18,0x40 ; ldrsw x9,[x17,x0,lsl #2] ; add x18,x18,x9 ; br x18
+    let table = 0x1000u32;
+    let code = vec![
+        a64::adrp(17, 0, table as u64).unwrap(),
+        a64::add_imm(17, 17, table & 0xFFF, false),
+        0x7100_0C1F,
+        0x5400_0000 | (8 << 5) | 8,
+        adr(18, 16, 0x40),
+        0xB8A0_7A29,
+        0x8B09_0252,
+        0xD61F_0240,
+    ];
+    let ro: Vec<u8> = [0i32, 8, 0x10, 0x18].iter().flat_map(|v| v.to_le_bytes()).collect();
+    let nso = module_with_ro(code, 0x40, &ro);
+    let out = assert_equiv(&nso, 3); // adr (pcrel), add (plain), br
+    assert!(out.sites.iter().any(|r| matches!(r, napple_rewrite::SiteRow::Jump { base: 0x40, count: 7, .. })), "{:?}", out.sites);
+}
+
 #[test]
 fn blr_x18_call() {
     let nso = synth::nso(&[0xD63F_0240, NOP, NOP, NOP]);
@@ -209,6 +269,52 @@ fn exclusive_windows() {
     let rep = check_equivalence(&orig, &out, &Options { mutate: 0, ..Default::default() });
     assert!(rep.ok(), "{rep:#?}");
     napple_rewrite::check::assert_structure(&orig, &out);
+}
+
+#[test]
+fn adrp_inside_an_exclusive_window_is_reencoded() {
+    // ldxr x0,[x18] ; adrp x10,page(+0x3000) ; add x0,x0,#1 ; stxr w1,x0,[x18] ; cbnz w1,-16
+    let ldxr = 0xC85F_7C00u32 | (18 << 5);
+    let stxr = 0xC800_7C00u32 | (1 << 16) | (18 << 5);
+    let adrp = a64::adrp(10, 4, 0x3000).unwrap();
+    let cbnz = 0x3500_0000u32 | (((-3i32 as u32) & 0x7FFFF) << 5) | 1;
+    let mut code = vec![ldxr, adrp, 0x9100_0400, stxr, cbnz];
+    code.extend(std::iter::repeat(NOP).take(4));
+    let nso = synth::nso(&code);
+    let (orig, out) = rewrite(&nso);
+    assert!(out.unhandled.is_empty(), "{:?}", out.unhandled);
+    assert_eq!(out.stats["window"], 1);
+    let rep = check_equivalence(&orig, &out, &Options { mutate: 0, ..Default::default() });
+    assert!(rep.ok(), "{rep:#?}");
+    napple_rewrite::check::assert_structure(&orig, &out);
+}
+
+#[test]
+fn out_of_line_retry_block_reenters_the_window() {
+    // 0: ldxr x0,[x18] ; cmp x0,x16 ; b.ne out(+8) ; stxr w1,x2,[x18] ; cbnz w1,R(+2) ; nop
+    // 6: R: ldxr x0,[x18] ; cmp x0,x16 ; b.eq 3 (the stxr, -5)
+    let ldxr = 0xC85F_7C00u32 | (18 << 5);
+    let cmp = 0xEB10_001Fu32;
+    let stxr = 0xC800_7C00u32 | (1 << 16) | (18 << 5) | 2;
+    let code = vec![ldxr, cmp, 0x5400_0000 | (8 << 5) | 1, stxr, 0x3500_0000 | (2 << 5) | 1, NOP, ldxr, cmp, 0x5400_0000 | (((-5i32 as u32) & 0x7FFFF) << 5), NOP, NOP, NOP];
+    let nso = synth::nso(&code);
+    let (orig, out) = rewrite(&nso);
+    assert!(out.unhandled.is_empty(), "{:?}", out.unhandled);
+    assert!(out.stats["window"] >= 1, "{:?}", out.stats);
+    let rep = check_equivalence(&orig, &out, &Options { mutate: 0, ..Default::default() });
+    assert!(rep.ok(), "{rep:#?}");
+    napple_rewrite::check::assert_structure(&orig, &out);
+}
+
+#[test]
+fn branch_into_the_middle_of_a_window_is_refused() {
+    // a plain `b` (not a conditional retry) into the stxr of a window must be refused, not mis-linked
+    let ldxr = 0xC85F_7C00u32 | (18 << 5);
+    let stxr = 0xC800_7C00u32 | (1 << 16) | (18 << 5);
+    let code = vec![ldxr, 0x9100_0400, stxr, 0x3500_0000 | (((-3i32 as u32) & 0x7FFFF) << 5) | 1, NOP, 0x1400_0000 | ((-3i32 as u32) & 0x3FF_FFFF), NOP, NOP];
+    let nso = synth::nso(&code);
+    let (_, out) = rewrite(&nso);
+    assert!(out.unhandled.iter().any(|u| u.reason.contains("enters the middle")), "{:?}", out.unhandled);
 }
 
 #[test]

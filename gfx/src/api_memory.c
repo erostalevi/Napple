@@ -1,3 +1,4 @@
+#include <stdio.h>
 /* api_memory.c - NVN memory pools and buffers. Pool memory is guest memory: the GPU address of a byte is its host address. */
 #include <stdlib.h>
 #include <unistd.h>
@@ -126,6 +127,7 @@ NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappi
         }
         if (r[i].poff < 0 || (uint64_t)r[i].poff + size > pp->size) { LOGE("MapVirtual: physical range outside its pool"); return 0; }
         uint8_t *src = pp->mem + r[i].poff;
+        { static int ml = -1; if (ml < 0) ml = getenv("NAPPLE_MAPLOG") != NULL; if (ml) fprintf(stderr, "[maplog] virtual %p..%p <- physical %p (pool %p off %#llx size %#llx)\n", (void *)dst, (void *)(dst + size), (void *)src, (void *)pp, (unsigned long long)r[i].poff, (unsigned long long)size); }
         if (((uintptr_t)dst - (uintptr_t)src) & (pg - 1)) { LOG_ONCE(NAPPLE_LOG_ERROR, "MapVirtual: virtual %p and physical %p ranges differ modulo the host page size: cannot alias", (void *)dst, (void *)src); return 0; }
         uintptr_t dlo = (uintptr_t)dst & ~(pg - 1), dhi = ((uintptr_t)dst + size + pg - 1) & ~(pg - 1), slo = (uintptr_t)src & ~(pg - 1);
         mach_vm_address_t a = (mach_vm_address_t)dlo;
@@ -162,7 +164,7 @@ NVN(nvnMemoryPoolMap, void *, const NVNmemoryPool *p) {
 /* CPU and GPU share memory and caches on Apple silicon: flush and invalidate have nothing to do. */
 NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { (void)p; (void)off; (void)n; }
 NVN(nvnMemoryPoolInvalidateMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { (void)p; (void)off; (void)n; }
-NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { return (NVNbufferAddress)(uintptr_t)((const pool_t *)p)->mem; }
+NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { const pool_t *o = (const pool_t *)p; if (!o->mem) LOGW("MemoryPoolGetBufferAddress: pool %p has no storage (magic %#x flags %#x size %#llx)", (const void *)p, o->magic, o->flags, (unsigned long long)o->size); return (NVNbufferAddress)(uintptr_t)o->mem; }
 NVN(nvnMemoryPoolGetSize, size_t, const NVNmemoryPool *p) { return (size_t)((const pool_t *)p)->size; }
 NVN(nvnMemoryPoolGetFlags, NVNmemoryPoolFlags, const NVNmemoryPool *p) { return (NVNmemoryPoolFlags)((const pool_t *)p)->flags; }
 
@@ -194,7 +196,7 @@ NVN(nvnBufferMap, void *, const NVNbuffer *b) {
     if (v->magic != BUF_MAGIC || (v->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS)) return NULL;
     return v->pool->mem + v->off;
 }
-NVN(nvnBufferGetAddress, NVNbufferAddress, const NVNbuffer *b) { const buf_t *v = (const buf_t *)b; return (NVNbufferAddress)(uintptr_t)(v->pool->mem + v->off); }
+NVN(nvnBufferGetAddress, NVNbufferAddress, const NVNbuffer *b) { const buf_t *v = (const buf_t *)b; if (!v->pool || !v->pool->mem) LOGW("BufferGetAddress: buffer %p has no pool storage (pool %p off %#llx)", (const void *)b, (const void *)v->pool, (unsigned long long)v->off); return (NVNbufferAddress)(uintptr_t)(v->pool->mem + v->off); }
 NVN(nvnBufferFlushMappedRange, void, const NVNbuffer *b, ptrdiff_t off, size_t size) { (void)b; (void)off; (void)size; }
 NVN(nvnBufferInvalidateMappedRange, void, const NVNbuffer *b, ptrdiff_t off, size_t size) { (void)b; (void)off; (void)size; }
 NVN(nvnBufferGetMemoryPool, NVNmemoryPool *, const NVNbuffer *b) { return (NVNmemoryPool *)((const buf_t *)b)->pool; }

@@ -4,6 +4,7 @@
  *   save data OpenSaveDataFileSystem maps to directories under <save-root>/<titleid>/save/<space>/<type>[/<user>].
  *   sdcard    <save-root>/<titleid>/sdcard.
  * Paths are validated (no "..", no NUL, bounded length) before they touch the host file system. */
+#include "romfs_map.h"
 #include "../ipc.h"
 #include "host_info.h"
 #include <dirent.h>
@@ -465,13 +466,14 @@ static IpcObject *open_host_fs(const char *root, int read_only, int journaled, i
  * RLC1 reloc: 'RLC1', u32 count, u64 data_size, then {u64 data_offset, u64 source_offset, u32 source (0 base romfs.bin, 1 patch.bin), u32 0};
  * entry i covers [data_offset_i, data_offset_i+1). Reads are composed through the table. */
 typedef struct { uint64_t data_offset, source_offset; uint32_t source; } DeltaEnt;
-typedef struct { int fd; uint64_t size; int src_fd[2]; DeltaEnt *ents; uint32_t nents; } StorageFile;
+typedef struct { int fd; uint64_t size; int src_fd[2]; DeltaEnt *ents; uint32_t nents; RomfsMap *map; } StorageFile;
 static void storage_destroy(IpcObject *o) {
     StorageFile *s = o->state; if (!s) return;
-    if (s->ents) { for (int i = 0; i < 2; i++) if (s->src_fd[i] >= 0) close(s->src_fd[i]); free(s->ents); } else close(s->fd);
+    if (s->map) romfs_map_close(s->map); else if (s->ents) { for (int i = 0; i < 2; i++) if (s->src_fd[i] >= 0) close(s->src_fd[i]); free(s->ents); } else close(s->fd);
     free(s);
 }
 static ssize_t storage_pread(StorageFile *st, void *dst, size_t len, uint64_t off) {
+    if (st->map) return romfs_map_pread(st->map, dst, len, off);
     if (!st->ents) return pread(st->fd, dst, len, (off_t)off);
     uint32_t lo = 0, hi = st->nents;   /* last entry with data_offset <= off */
     while (hi - lo > 1) { uint32_t m = lo + (hi - lo) / 2; if (st->ents[m].data_offset <= off) lo = m; else hi = m; }
@@ -484,11 +486,11 @@ static ssize_t storage_pread(StorageFile *st, void *dst, size_t len, uint64_t of
 static void storage_read(IpcObject *self, IpcCall *c) {
     StorageFile *st = self->state; int64_t off = IPC_IN(c, int64_t, 0), size = IPC_IN(c, int64_t, 8);
     const IpcBuf *b = ipc_out_buf(c, 0);
-    if (!b || off < 0 || size < 0 || (uint64_t)off > st->size || (uint64_t)size > b->size) { c->result = FS_RESULT(4002); return; }
-    if ((uint64_t)off + (uint64_t)size > st->size) { c->result = FS_RESULT(4002); return; }   /* out of range */
+    if (!b || off < 0 || size < 0 || (uint64_t)off > st->size || (uint64_t)size > b->size) { LOG("fs", "IStorage::Read rejected: offset %#llx size %#llx (storage %#llx bytes, out buffer %#llx)", (unsigned long long)off, (unsigned long long)size, (unsigned long long)st->size, (unsigned long long)(b ? b->size : 0)); c->result = FS_RESULT(4002); return; }
+    if ((uint64_t)off + (uint64_t)size > st->size) { LOG("fs", "IStorage::Read out of range: offset %#llx size %#llx (storage %#llx bytes)", (unsigned long long)off, (unsigned long long)size, (unsigned long long)st->size); c->result = FS_RESULT(4002); return; }   /* out of range */
     void *dst = guest_ptr(b->addr, (uint64_t)size);
     if (!dst && size) { c->result = R_FS_INVALID_ARGUMENT; return; }
-    if (size >= 0x10000 && getenv("NAPPLE_FS_TRACE")) LOG("fs", "RomFS read offset %#llx size %#llx", (unsigned long long)off, (unsigned long long)size);
+    if (getenv("NAPPLE_FS_TRACE") && (size >= 0x10000 || getenv("NAPPLE_FS_TRACE")[0] == 'a')) LOG("fs", "RomFS read offset %#llx size %#llx", (unsigned long long)off, (unsigned long long)size);
     guest_write_prepare(b->addr, (size_t)size);
     for (int64_t done = 0; done < size;) {
         ssize_t n = storage_pread(st, (char *)dst + done, (size_t)(size - done), (uint64_t)(off + done));
@@ -546,6 +548,11 @@ static IpcObject *open_romfs_delta(IpcCall *c) {
 static IpcObject *open_romfs_storage(IpcCall *c) {
     char path[1200]; snprintf(path, sizeof path, "%s/romfs.bin", g_cfg.data_dir);
     if (access(path, R_OK) != 0) { char d[1300]; snprintf(d, sizeof d, "%s/romfs.delta/romfs.reloc", g_cfg.data_dir); if (access(d, R_OK) == 0) return open_romfs_delta(c); }
+    if (access(path, R_OK) != 0) {   /* romfs.map: development build that reads the RomFS in place from the game files */
+        char d[1300]; snprintf(d, sizeof d, "%s/romfs.map", g_cfg.data_dir); uint64_t sz = 0; RomfsMap *m = romfs_map_open(d, &sz);
+        if (m) { StorageFile *st = calloc(1, sizeof *st); st->fd = -1; st->src_fd[0] = st->src_fd[1] = -1; st->map = m; st->size = sz;
+                 LOG("fs", "RomFS storage: %s (in place, %llu bytes)", d, (unsigned long long)sz); return IPC_OBJECT("IStorage", storage_cmds, st, storage_destroy); }
+    }
     IpcObject *o = open_romfs_storage_path(c, path, "OpenDataStorageByCurrentProcess");
     if (!o) summary_note("romfs.bin missing");
     return o;

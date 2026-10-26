@@ -12,7 +12,7 @@
 
 #import "mtl_priv.h"
 
-#define TRANSLATOR_VERSION 7u          /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 8u          /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader @end
 @implementation GfxPipe @end
@@ -102,8 +102,11 @@ static void archive_add(id desc) {        /* every pipeline the run builds (rend
     });
 }
 static void shader_progress_summary(void);
+static _Atomic uint64_t g_norm_n, g_spec_n, g_spec_used;
 void mtl_shader_shutdown(void) {
     shader_progress_summary();
+    LOGI("pipeline lookups changed by key normalisation: %llu; speculative shader variants: %llu compiled, %llu used by draws",
+         (unsigned long long)atomic_load(&g_norm_n), (unsigned long long)atomic_load(&g_spec_n), (unsigned long long)atomic_load(&g_spec_used));
     if (!g_archive) return;
     dispatch_sync(g_archive_q, ^{
         archive_save();
@@ -120,6 +123,13 @@ static MTLCompileOptions *compile_options(void) {
     o.languageVersion = MTLLanguageVersion3_0;
     o.preserveInvariance = YES;                 /* depth pre-pass + EQUAL test needs identical positions */
     o.fastMathEnabled = NO;                     /* Maxwell NaN / inf semantics */
+    /* NAPPLE_GFX_MATH=safe (default on every platform) | relaxed | fast. Measured on Apple GPUs (docs/changes/2026-10-25-nx-shader.md): relaxed already folds
+     * `x != x` to false, fast also drops NaN/inf assumptions; the translator only emits isnan() and precise:: min/max for NaN-sensitive maths, so relaxed is a
+     * candidate for iOS (nxnative ships relaxed there) once measured on a device. */
+    static int mode = -1;
+    if (mode < 0) { const char *m = getenv("NAPPLE_GFX_MATH"); mode = !m ? 0 : !strcmp(m, "relaxed") ? 1 : !strcmp(m, "fast") ? 2 : 0; }
+    if (mode == 2) o.fastMathEnabled = YES;
+    if (@available(macOS 15.0, iOS 18.0, *)) { if (mode) o.mathMode = mode == 1 ? MTLMathModeRelaxed : MTLMathModeFast; }
     return o;
 }
 static NSMutableDictionary<NSNumber *, GfxShader *> *g_shaders;
@@ -173,6 +183,82 @@ static void shader_progress_start(void) {
     dispatch_resume(t);
 }
 
+/* ---- first-use stutter (G11): what is in a pipeline key, which keys to build before the game asks ------------------------------------
+ * - Keys persisted in pipelines.bin survive translator version bumps (only the key layout, i.e. its size, must match): a stale key only costs a
+ *   background build nobody uses, a draw always looks up its own key. Seed manifests in the same format add keys recorded elsewhere.
+ * - Normalisation: state that cannot change the Metal pipeline (blend factors of disabled or unwritten targets, write masks of absent targets,
+ *   attributes the vertex program never reads and the streams only they use) is cleared before hashing, so equal pipelines share one build.
+ *   The fragment variant's vs_out_mask keeps only the bits the program reads (fragment variants are shared across vertex programs).
+ * - Speculation (opt-in, NAPPLE_GFX_SPECULATE=1): a program registered with no persisted key gets its most likely variant compiled at utility QoS.
+ *   A draw that needs a variant being speculated waits for that build instead of starting another. Off by default: SMO registers whole shader archives
+ *   (cold 120 s run: 6673 speculative variants compiled, 101 used by draws), so the background compile load costs more than it saves there. */
+typedef struct { int ok; uint32_t vs_in, fs_read; int fs_indexed; } prog_io;
+static NSMutableDictionary<NSNumber *, NSData *> *g_io;
+static prog_io program_io(uint64_t hash) {       /* inputs of a program, from a translation with the default key (cheap: no Metal compile) */
+    prog_io r = {0};
+    if (!hash) return r;
+    pthread_mutex_lock(&g_sh_mu);
+    NSData *d = g_io ? g_io[@(hash)] : nil;
+    pthread_mutex_unlock(&g_sh_mu);
+    if (d) { memcpy(&r, d.bytes, sizeof r); return r; }
+    const shader_blob *b = shader_blob_find(hash);
+    if (!b) return r;
+    if (b->stage == STAGE_VERTEX || b->stage == STAGE_FRAGMENT) {
+        ShaderKey key = {0};
+        ShaderInfo *t = maxwell_translate(b->code, b->code_size, b->stage, &key);
+        if (t && t->msl) { r.ok = 1; r.vs_in = t->attr_mask; r.fs_read = t->attr_read_mask; r.fs_indexed = t->indexed_inputs; }
+        if (t) maxwell_free(t);
+    }
+    pthread_mutex_lock(&g_sh_mu);
+    if (!g_io) g_io = [NSMutableDictionary dictionary];
+    g_io[@(hash)] = [NSData dataWithBytes:&r length:sizeof r];
+    pthread_mutex_unlock(&g_sh_mu);
+    return r;
+}
+static void pipe_key_normalize(pipe_key *k) {
+    pipe_key o = *k;
+    for (int i = 0; i < 8; i++) {
+        if (!k->color_fmt[i]) { k->wmask[i] = 0; k->rt_kind[i] = 0; }
+        if (!k->color_fmt[i] || !k->wmask[i] || !k->blend_en[i]) { k->blend_en[i] = 0; memset(&k->blend[i], 0, sizeof k->blend[i]); }
+    }
+    prog_io io = program_io(k->vs);
+    uint32_t nat = k->nattr < 32 ? k->nattr : 32, streams = 0;
+    for (uint32_t i = 0; i < 32; i++) {
+        if (i >= nat || (io.ok && !(io.vs_in & (1u << i)))) { memset(&k->attr[i], 0, sizeof k->attr[i]); k->attr_kind[i] = 0; continue; }
+        streams |= 1u << (k->attr[i].stream % MAX_STREAMS);
+    }
+    for (uint32_t st = 0; st < MAX_STREAMS; st++) if (st >= k->nstream || (io.ok && !(streams & (1u << st)))) memset(&k->stream[st], 0, sizeof k->stream[st]);
+    if (memcmp(&o, k, sizeof o)) atomic_fetch_add(&g_norm_n, 1);
+}
+/* Persisted / seed key file: header + keys. user = 1: the user's own file (its hashes are not appended again). Returns the keys added. */
+static unsigned pipe_keys_load(NSString *path, int user) {
+    NSData *d = [NSData dataWithContentsOfFile:path];
+    pipe_hdr h; size_t ks = sizeof(pipe_key);
+    if (d.length < sizeof h) return 0;
+    memcpy(&h, d.bytes, sizeof h);
+    if (h.magic != PIPE_MAGIC || h.key_size != ks) {        /* another key layout: useless */
+        if (user) [NSFileManager.defaultManager removeItemAtPath:path error:nil];
+        return 0;
+    }
+    unsigned n = 0;
+    static NSMutableSet<NSNumber *> *seen;
+    if (!seen) seen = [NSMutableSet set];
+    for (size_t o = sizeof h; o + ks <= d.length; o += ks) {
+        NSData *kd = [d subdataWithRange:NSMakeRange(o, ks)];
+        const pipe_key *k = kd.bytes;
+        NSNumber *kh = @(fnv1a(k, ks, FNV_INIT));
+        if (user) [g_stored_hashes addObject:kh];
+        if ([seen containsObject:kh]) continue;
+        [seen addObject:kh]; n++;
+        for (int w = 0; w < 2; w++) { uint64_t hs = w ? k->fs : k->vs; if (!hs) continue; NSMutableArray *a = g_stored[@(hs)]; if (!a) g_stored[@(hs)] = a = [NSMutableArray array]; if (w == 0 || k->fs != k->vs) [a addObject:kd]; }
+    }
+    return n;
+}
+static dispatch_queue_t g_spec_q[2];
+static int g_spec_on;
+static _Atomic unsigned g_spec_rr;
+static NSMutableSet<NSNumber *> *g_spec_keys;         /* variant keys (g_shaders) created by speculation and not used yet */
+
 static int cache_load(NSString *path, ShaderInfo *info);
 void mtl_shader_init(void) {
     unsigned pc = perf_cores();
@@ -191,21 +277,16 @@ void mtl_shader_init(void) {
     g_stored = [NSMutableDictionary dictionary]; g_stored_hashes = [NSMutableSet set];
     if (g_gfx.cfg.cache_dir) {
         g_pipe_file = [NSString stringWithFormat:@"%s/pipelines.bin", g_gfx.cfg.cache_dir];
-        NSData *d = [NSData dataWithContentsOfFile:g_pipe_file];
-        pipe_hdr h; size_t ks = sizeof(pipe_key);
-        if (d.length >= sizeof h) {
-            memcpy(&h, d.bytes, sizeof h);
-            if (h.magic == PIPE_MAGIC && h.version == TRANSLATOR_VERSION && h.key_size == ks) {
-                for (size_t o = sizeof h; o + ks <= d.length; o += ks) {
-                    NSData *kd = [d subdataWithRange:NSMakeRange(o, ks)];
-                    const pipe_key *k = kd.bytes;
-                    [g_stored_hashes addObject:@(fnv1a(k, ks, FNV_INIT))];
-                    for (int w = 0; w < 2; w++) { uint64_t hs = w ? k->fs : k->vs; if (!hs) continue; NSMutableArray *a = g_stored[@(hs)]; if (!a) g_stored[@(hs)] = a = [NSMutableArray array]; if (w == 0 || k->fs != k->vs) [a addObject:kd]; }
-                }
-                LOGI("pipeline prewarm list: %lu pipelines from %s", (unsigned long)g_stored_hashes.count, g_pipe_file.UTF8String);
-            } else { [NSFileManager.defaultManager removeItemAtPath:g_pipe_file error:nil]; }
-        }
+        unsigned n = pipe_keys_load(g_pipe_file, 1);
+        if (n) LOGI("pipeline prewarm list: %u pipelines from %s", n, g_pipe_file.UTF8String);
+        /* seed manifests (pipeline keys recorded on another install, same format): <cache>/pipelines-seed.bin and NAPPLE_GFX_PIPE_SEED=<file>[:<file>...] */
+        NSMutableArray<NSString *> *seeds = [NSMutableArray arrayWithObject:[NSString stringWithFormat:@"%s/pipelines-seed.bin", g_gfx.cfg.cache_dir]];
+        const char *se = getenv("NAPPLE_GFX_PIPE_SEED");
+        if (se) for (NSString *f in [@(se) componentsSeparatedByString:@":"]) if (f.length) [seeds addObject:f];
+        for (NSString *f in seeds) { unsigned m = pipe_keys_load(f, 0); if (m) LOGI("pipeline prewarm seed: %u new pipelines from %s", m, f.UTF8String); }
     }
+    g_spec_on = getenv("NAPPLE_GFX_SPECULATE") && atoi(getenv("NAPPLE_GFX_SPECULATE")) != 0;      /* opt-in: see the measurement in the comment above */
+    for (int i = 0; i < 2; i++) g_spec_q[i] = dispatch_queue_create("napple.gfx.speculate", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
     napple_gfx_settings st; gfx_settings_get(&st);
     if (st.prewarm_shader_cache && g_gfx.cfg.cache_dir) {
         /* Compile every cached shader before the game needs it (the runtime holds the game until prewarm_done == prewarm_total, behind a
@@ -281,6 +362,9 @@ static int build_shader(GfxShader *s, const shader_blob *b, ShaderKey key) {
     uint64_t gm[2] = { maxwell_gmem_base, maxwell_gmem_size };
     NSString *cp = cache_path(b->hash, fnv1a(gm, sizeof gm, key_hash(&key)));
     st_note_first();
+    { /* NAPPLE_SHADER_DUMP_HASH=<hash hex>: dump that program's Maxwell code (header included) to NAPPLE_SHADER_DUMP even when it translates */
+      const char *dh = getenv("NAPPLE_SHADER_DUMP_HASH"), *dd = getenv("NAPPLE_SHADER_DUMP");
+      if (dh && dd && strtoull(dh, NULL, 16) == b->hash) { char fp[1024]; snprintf(fp, sizeof fp, "%s/%016llx_s%d.bin", dd, (unsigned long long)b->hash, b->stage); FILE *f = fopen(fp, "wb"); if (f) { fwrite(b->code, 1, b->code_size, f); fclose(f); } } }
     if (!cache_load(cp, &s->info)) {
         uint64_t t0 = gfx_now_ns();
         ShaderInfo *t = maxwell_translate(b->code, b->code_size, b->stage, &key);
@@ -334,14 +418,20 @@ static void run_shader(GfxShader *s, const shader_blob *b, ShaderKey key) {
 }
 
 /* Variant lookup; `wait` blocks until built. The blob must be registered. */
-static GfxShader *shader_variant(uint64_t hash, const ShaderKey *key, int wait) {
+static GfxShader *shader_variant_q(uint64_t hash, const ShaderKey *key, int wait, int spec) {
     uint64_t kh = key_hash(key);
     NSNumber *k = @(hash ^ (kh * 0x9e3779b97f4a7c15ull));
     pthread_mutex_lock(&g_sh_mu);
     GfxShader *s = g_shaders[k];
     int create = !s;
-    if (create) { s = [GfxShader new]; g_shaders[k] = s; }
+    if (create) { s = [GfxShader new]; g_shaders[k] = s; if (spec) { if (!g_spec_keys) g_spec_keys = [NSMutableSet set]; [g_spec_keys addObject:k]; } }
+    else if (!spec && g_spec_keys.count && [g_spec_keys containsObject:k]) { [g_spec_keys removeObject:k]; atomic_fetch_add(&g_spec_used, 1); }
     pthread_mutex_unlock(&g_sh_mu);
+    if (spec) {                                     /* runs on a speculation queue already: build here */
+        if (create) { const shader_blob *b = shader_blob_find(hash); if (!b) { s->claimed = 1; __atomic_store_n(&s->state, 2, __ATOMIC_RELEASE); return s; }
+                      atomic_fetch_add(&g_gfx.shaders_pending, 1); atomic_fetch_add(&g_st_queued, 1); atomic_fetch_add(&g_spec_n, 1); run_shader(s, b, *key); }
+        return s;
+    }
     const shader_blob *b = NULL;
     if (create) {
         b = shader_blob_find(hash);
@@ -359,7 +449,25 @@ static GfxShader *shader_variant(uint64_t hash, const ShaderKey *key, int wait) 
     return s;
 }
 
+static GfxShader *shader_variant(uint64_t hash, const ShaderKey *key, int wait) { return shader_variant_q(hash, key, wait, 0); }
 GfxShader *mtl_shader_for(uint64_t hash, const ShaderKey *key) { return shader_variant(hash, key, 0); }
+
+/* Speculation (see "first-use stutter" above): the variant a first draw most likely asks for, from the device state at registration. */
+static void speculate(uint64_t hash) {
+    if (!g_spec_on || !g_spec_q[0]) return;
+    dispatch_async(g_spec_q[atomic_fetch_add(&g_spec_rr, 1) & 1], ^{ @autoreleasepool {
+        const shader_blob *b = shader_blob_find(hash);
+        if (!b) return;
+        ShaderKey key = {0};
+        if (b->stage == STAGE_VERTEX) { key.flip_y = g_gfx.origin_flip && g_gfx.device_origin == 0; key.depth_minus_one = g_gfx.device_depth_mode == 0; }
+        else if (b->stage == STAGE_FRAGMENT) {
+            prog_io io = program_io(hash);
+            if (!io.ok || io.fs_indexed) return;
+            key.vs_out_mask = 0xffffffffu; key.upper_left = g_gfx.origin_flip && g_gfx.device_origin != 0;
+        } else return;
+        shader_variant_q(hash, &key, 0, 1);
+    } });
+}
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Render pipelines
@@ -466,6 +574,11 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     ShaderKey fk = {0};
     memcpy(fk.rt_kind, k.rt_kind, sizeof fk.rt_kind);
     fk.vs_out_mask = vs->info.out_mask;
+    { prog_io fio = program_io(k.fs);          /* only the varyings the fragment program reads matter (normalisation, see above) */
+      if (fio.ok && !fio.fs_indexed) fk.vs_out_mask = vs->info.out_mask | ~fio.fs_read; }
+    /* guest origin for SR_Y_DIRECTION: with the exact lower-left emulation (origin_flip, the default) flip_y is set exactly under the lower-left origin;
+     * without it (NAPPLE_ORIGIN_FLIP=0, debug) the key does not carry the origin and the register keeps the lower-left answer */
+    fk.upper_left = g_gfx.origin_flip && !k.flip_y;
     fk.depth_slots = k.depth_slots[1];
     { /* NAPPLE_SHADER_PROBE=<fragment program hash hex>:<pc hex>:<rA>:<rB>:<rC>[:<scale>][;<next probe>...]: the fragment program draws those registers as its colour
          * (debugging aid; several probes are cycled every 30 frames so one run can capture them all) */
@@ -591,23 +704,31 @@ void mtl_pipe_prewarm(uint64_t blob_hash) {
     pthread_mutex_lock(&g_sh_mu);
     keys = [g_stored[@(blob_hash)] copy];
     pthread_mutex_unlock(&g_sh_mu);
+    if (!keys.count) { speculate(blob_hash); return; }
     for (NSData *kd in keys) {
         const pipe_key *k = kd.bytes;
         if ((k->vs && !shader_blob_find(k->vs)) || (k->fs && !shader_blob_find(k->fs))) continue;        /* the other program is not registered yet: it triggers this */
-        uint64_t h = fnv1a(k, sizeof *k, FNV_INIT);
-        pthread_mutex_lock(&g_sh_mu);
-        GfxPipe *p = g_pipes[@(h)];
-        int create = !p;
-        if (create) { p = [GfxPipe new]; g_pipes[@(h)] = p; }
-        pthread_mutex_unlock(&g_sh_mu);
-        if (!create) continue;
         pipe_key kc = *k;
-        atomic_fetch_add(&g_gfx.pipelines_prewarmed, 1);
-        dispatch_async(g_pipe_q, ^{ build_pipe(p, kc); });
+        atomic_fetch_add(&g_gfx.pipelines_prewarmed, 1);        /* queued (a draw may still get to it first: the build happens once either way) */
+        dispatch_async(g_pipe_q, ^{
+            pipe_key kn = kc;
+            pipe_key_normalize(&kn);                 /* the same hash a draw computes */
+            uint64_t h = fnv1a(&kn, sizeof kn, FNV_INIT);
+            pthread_mutex_lock(&g_sh_mu);
+            GfxPipe *p = g_pipes[@(h)];
+            int create = !p;
+            if (create) { p = [GfxPipe new]; g_pipes[@(h)] = p; }
+            pthread_mutex_unlock(&g_sh_mu);
+            if (!create) return;
+            build_pipe(p, kn);
+        });
     }
 }
 
-GfxPipe *mtl_pipe_get(const pipe_key *k) {
+GfxPipe *mtl_pipe_get(const pipe_key *k0) {
+    pipe_key kn = *k0;
+    pipe_key_normalize(&kn);
+    const pipe_key *k = &kn;
     uint64_t h = fnv1a(k, sizeof *k, FNV_INIT);
     NSNumber *key = @(h);
     static int skip_mode = -1;
@@ -684,3 +805,5 @@ id<MTLComputePipelineState> mtl_compute_pipe(uint64_t hash, GfxShader *__autorel
     pthread_mutex_unlock(&g_sh_mu);
     return ps;
 }
+
+void mtl_shader_spec_stats(uint64_t *compiled, uint64_t *used) { *compiled = atomic_load(&g_spec_n); *used = atomic_load(&g_spec_used); }   /* tests (t_pipekey) */

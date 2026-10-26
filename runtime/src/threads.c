@@ -24,8 +24,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
 #ifdef __APPLE__
 #include <pthread/qos.h>
+#include <mach/mach.h>
 #define thread_set_interactive() pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
 #define cond_wait_relative(cv, m, rel) pthread_cond_timedwait_relative_np((cv), (m), (rel))
 #else   /* the host unit tests (runtime/tests/host) build this file on Linux */
@@ -45,6 +47,7 @@ static int cond_wait_relative(pthread_cond_t *cv, pthread_mutex_t *m, const stru
 typedef struct Event { int signaled; int refs; } Event;
 
 static Thread *g_all, *g_wait, *g_core_wait, *g_core_owner[NCORE];
+static Thread *g_core_resv[NCORE]; static int64_t g_core_resv_ns[NCORE];   /* core kept for a woken / started higher-priority thread pinned to it (same-core handoff) */
 static Thread *g_core_last[NCORE], *g_core_prev[NCORE];   /* GetLastThreadInfo: who held each core before its current owner */
 pthread_mutex_t kernel_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_park_cv = PTHREAD_COND_INITIALIZER;
@@ -82,19 +85,22 @@ static Thread *pick(int kind, uint64_t a) {
     }
     return b;
 }
-static void wake(Thread *t, int64_t res) { wait_unlink(t); t->wkind = 0; t->woke = 1; t->wres = res; pthread_cond_signal(&t->cv); }
+static void core_handoff_note(Thread *t);
+static void wake(Thread *t, int64_t res) { wait_unlink(t); t->wkind = 0; t->woke = 1; t->wres = res; pthread_cond_signal(&t->cv); core_handoff_note(t); }
 Thread *kthread_self(void) { return self(); }
 Thread *kthread_self_or_null(void) { return self_or_null(); }
 void kthread_wake(Thread *t, int64_t res) { wake(t, res); }
 
 static void core_assign(Thread *t, int c) {
+    if (g_core_resv[c] == t) g_core_resv[c] = NULL;
     t->cur_core = c; t->core_since = runtime_now_ns(); g_core_owner[c] = t;
     if (g_core_last[c] != t) { g_core_prev[c] = g_core_last[c]; g_core_last[c] = t; }
 }
 static void core_grant(int c) {
     Thread *b = NULL, **bp = NULL;
     for (Thread **p = &g_core_wait; *p; p = &(*p)->cnext)
-        if (core_allowed(*p, c) && (!b || (*p)->prio < b->prio || ((*p)->prio == b->prio && (*p)->cseq < b->cseq))) { b = *p; bp = p; }
+        if (g_core_resv[c]) { if (*p == g_core_resv[c]) { b = *p; bp = p; break; } }   /* reserved: only its thread may take it (it may not have run yet) */
+        else if (core_allowed(*p, c) && (!b || (*p)->prio < b->prio || ((*p)->prio == b->prio && (*p)->cseq < b->cseq))) { b = *p; bp = p; }
     if (!b) return;
     *bp = b->cnext; b->cnext = NULL; core_assign(b, c); pthread_cond_signal(&b->cv);
 }
@@ -106,12 +112,31 @@ static void core_take(Thread *t) {
     if (!cores_enabled() || t->cur_core >= 0) return;
     uint64_t mask = t->mask & CORE_MASK_ALL;
     if (!mask) runtime_fail("thread %#x has a core mask (%#llx) without an application core", t->handle, (unsigned long long)t->mask);
-    int c = t->core >= 0 && t->core < NCORE && core_allowed(t, t->core) && !g_core_owner[t->core] ? t->core : -1;
-    for (int i = 0; c < 0 && i < NCORE; i++) if (core_allowed(t, i) && !g_core_owner[i]) c = i;
+    #define CORE_FREE(i) (!g_core_owner[i] && (!g_core_resv[i] || g_core_resv[i] == t))
+    int c = t->core >= 0 && t->core < NCORE && core_allowed(t, t->core) && CORE_FREE(t->core) ? t->core : -1;
+    for (int i = 0; c < 0 && i < NCORE; i++) if (core_allowed(t, i) && CORE_FREE(i)) c = i;
+    #undef CORE_FREE
     if (c >= 0) { core_assign(t, c); return; }
     t->cseq = ++g_seq; t->cnext = g_core_wait; g_core_wait = t;
     for (int i = 0; i < NCORE; i++) if (core_allowed(t, i) && g_core_owner[i] && g_core_owner[i]->prio > t->prio) g_core_owner[i]->preempt = 1;
-    while (t->cur_core < 0) pthread_cond_wait(&t->cv, &G);
+    while (t->cur_core < 0) {
+        /* a reservation whose thread never came for it (it should always) must not hold a core for good */
+        struct timespec rel = {0, 50000000};
+        if (cond_wait_relative(&t->cv, &G, &rel) == 0 || t->cur_core >= 0) continue;
+        for (int i = 0; i < NCORE; i++)
+            if (g_core_resv[i] && !g_core_owner[i] && runtime_now_ns() - g_core_resv_ns[i] > 50000000ll) { g_core_resv[i] = NULL; core_grant(i); }
+    }
+}
+/* Same-core handoff (Horizon runs the better thread at once): waking or starting a thread that can only run on the caller's core, with a
+ * better priority than the caller, reserves that core for it and flags the caller, which yields the core at its svc exit (core_checkpoint)
+ * and gets it back when that thread blocks again. Threads that may run on another core do not take the caller's. G held. */
+static void core_handoff_note(Thread *t) {
+    Thread *me = self_or_null();
+    if (!me || me == t || !cores_enabled() || me->cur_core < 0 || t->cur_core >= 0 || t->exited) return;
+    int c = me->cur_core;
+    if (t->mask != (1ull << c) || t->prio >= me->prio) return;
+    if (g_core_resv[c] && g_core_resv[c]->prio <= t->prio) return;
+    g_core_resv[c] = t; g_core_resv_ns[c] = runtime_now_ns(); me->preempt = 1;
 }
 void thread_core_away(int *token) {
     Thread *t = self_or_null();
@@ -143,6 +168,7 @@ int threads_current_core(void) { Thread *t = self_or_null(); return t ? (t->cur_
 static int64_t mono_ns(void) { return (int64_t)timescale_guest_ns(); }
 /* A timed wait never sleeps longer than this in one go, so a change of the game speed reaches threads that wait with a long timeout. */
 #define WAIT_SLICE_NS 100000000ll
+#define SLEEP_PRECISE_NS 20000ll
 #define TIMEOUT_CAP_NS 4000000000000000000ll   /* ~126 years: keeps now + timeout from overflowing for INT64_MAX timeouts */
 
 /* Suspends until woken or timed out (ns < 0 forever, 0 immediately); returns wres or R_TIMED_OUT. G held. */
@@ -245,6 +271,7 @@ static _Noreturn void thread_exit(Thread *t) {
 }
 void runtime_thread_returned(void) { runtime_fail("guest thread entry function returned (Horizon requires ExitThread)"); }
 
+static void *pcprof_main(void *arg);
 /* Registers the calling host thread as a guest thread (the main thread; the host unit tests adopt more threads this way). */
 uint32_t threads_register_main(void) {
     pthread_once(&g_key_once, key_create);
@@ -257,11 +284,56 @@ uint32_t threads_register_main(void) {
     pthread_mutex_unlock(&G);
     pthread_setspecific(g_key, t);
     t->tlr = pthread_getspecific(runtime_keys[2]);
+    if (getenv("NAPPLE_PCPROF")) { pthread_t pt; pthread_create(&pt, NULL, pcprof_main, NULL); pthread_detach(pt); }
     return t->handle;
+}
+/* Threads of the process that have not exited (GetInfo FreeThreadCount = the 96-thread application limit minus this). */
+int threads_live_count(void) {
+    int n = 0;
+    pthread_mutex_lock(&G);
+    for (Thread *t = g_all; t; t = t->all) if (!t->exited) n++;
+    pthread_mutex_unlock(&G);
+    return n;
 }
 uint32_t threads_current_handle(void) { Thread *t = self_or_null(); return t ? t->handle : 0; }
 uint64_t threads_current_id(void) { Thread *t = self_or_null(); return t ? t->id : 0; }
 
+/* NAPPLE_PCPROF=1: debug aid, samples the pc of every running (not waiting) guest thread every ms and logs the hottest (thread id, pc) pairs every 5 s. */
+#define PCP_N 512
+static struct { uint64_t id, pc; unsigned n; } pcp[PCP_N];
+static void *pcprof_main(void *arg) {
+    (void)arg; unsigned tick = 0;
+    for (;;) {
+        usleep(1000);
+        pthread_mutex_lock(&G);
+        for (Thread *t = g_all; t; t = t->all) {
+            if (t->exited || t->wkind || !t->pt || pthread_equal(t->pt, pthread_self())) continue;
+            mach_port_t mt = pthread_mach_thread_np(t->pt); arm_thread_state64_t st; mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT; uint64_t pc = 0;
+            if (thread_suspend(mt) != KERN_SUCCESS) continue;
+            if (thread_get_state(mt, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt) == KERN_SUCCESS) pc = arm_thread_state64_get_pc(st);
+            thread_resume(mt);
+            if (!pc) continue;
+            if (t->id == 0x51 && getenv("NAPPLE_PCPROF_REGS") && tick % 300 == 0 && tick < 6000) {
+                LOG("pcprof", "regs pc=%#llx x0=%#llx x1=%#llx x2=%#llx x3=%#llx x8=%#llx x9=%#llx x10=%#llx x11=%#llx x14=%#llx x15=%#llx x16=%#llx x17=%#llx x19=%#llx x21=%#llx x22=%#llx", (unsigned long long)pc,
+                    (unsigned long long)st.__x[0], (unsigned long long)st.__x[1], (unsigned long long)st.__x[2], (unsigned long long)st.__x[3], (unsigned long long)st.__x[8], (unsigned long long)st.__x[9], (unsigned long long)st.__x[10], (unsigned long long)st.__x[11],
+                    (unsigned long long)st.__x[14], (unsigned long long)st.__x[15], (unsigned long long)st.__x[16], (unsigned long long)st.__x[17], (unsigned long long)st.__x[19], (unsigned long long)st.__x[21], (unsigned long long)st.__x[22]);
+            }
+            unsigned h = (unsigned)((pc >> 2) ^ (t->id * 31)) % PCP_N, k;
+            for (k = 0; k < PCP_N; k++, h = (h + 1) % PCP_N) if (!pcp[h].n || (pcp[h].pc == pc && pcp[h].id == t->id)) break;
+            if (k < PCP_N) { pcp[h].id = t->id; pcp[h].pc = pc; pcp[h].n++; }
+        }
+        pthread_mutex_unlock(&G);
+        if (++tick % 5000) continue;
+        for (int r = 0; r < 200; r++) {
+            int best = -1; for (int i = 0; i < PCP_N; i++) if (pcp[i].n && (best < 0 || pcp[i].n > pcp[best].n)) best = i;
+            if (best < 0) break;
+            char w[96]; module_describe(pcp[best].pc, w, sizeof w);
+            LOG("pcprof", "thread %#llx pc %s : %u samples", (unsigned long long)pcp[best].id, w, pcp[best].n); pcp[best].n = 0;
+        }
+        memset(pcp, 0, sizeof pcp);
+    }
+    return NULL;
+}
 static int sync_state(uint32_t h);
 void thread_dump_all(void) {
     pthread_mutex_lock(&G);
@@ -272,6 +344,17 @@ void thread_dump_all(void) {
         if (t->wkind == 4) { for (int i = 0; i < t->nwh && i < 4; i++) LOG("threads", "  waits on handle %#x (type %d, state %d)", t->wh[i], (int)handle_type(t->wh[i]), sync_state(t->wh[i])); }
         else if (t->wkind) LOG("threads", "  waits on address %#llx key %#llx", (unsigned long long)t->waddr, (unsigned long long)t->wkey);
         if (!t->exited && t->last_fp) runtime_trace_guest_n(t->last_fp, t->last_lr, 7);
+        if (!t->exited && !t->wkind && t->pt && !pthread_equal(t->pt, pthread_self())) {   /* running in guest code: live pc + frame chain */
+            mach_port_t mt = pthread_mach_thread_np(t->pt); arm_thread_state64_t st; mach_msg_type_number_t cnt = ARM_THREAD_STATE64_COUNT;
+            if (thread_suspend(mt) == KERN_SUCCESS) {
+                if (thread_get_state(mt, ARM_THREAD_STATE64, (thread_state_t)&st, &cnt) == KERN_SUCCESS) {
+                    char w[96]; module_describe(arm_thread_state64_get_pc(st), w, sizeof w);
+                    LOG("threads", "  RUNNING in guest at pc %s (x0=%#llx x1=%#llx x2=%#llx)", w, (unsigned long long)st.__x[0], (unsigned long long)st.__x[1], (unsigned long long)st.__x[2]);
+                    runtime_trace_guest_n(arm_thread_state64_get_fp(st), arm_thread_state64_get_lr(st), 24);
+                }
+                thread_resume(mt);
+            }
+        }
     }
     pthread_mutex_unlock(&G);
 }
@@ -345,7 +428,7 @@ static void svc_create_thread(uint64_t *r) {
 static void svc_start_thread(uint64_t *r) {
     pthread_mutex_lock(&G);
     Thread *t = thread_of((uint32_t)r[0]);
-    if (t) { t->started = 1; pthread_cond_signal(&t->cv); }
+    if (t) { int first = !t->started; t->started = 1; pthread_cond_signal(&t->cv); if (first) core_handoff_note(t); }
     pthread_mutex_unlock(&G);
     r[0] = t ? 0 : R_INVALID_HANDLE;
 }
@@ -359,6 +442,9 @@ static void svc_sleep_thread(uint64_t *r) {
         int64_t deadline = mono_ns() + ns, left;
         while ((left = deadline - mono_ns()) > 0) {      /* guest time left, re-evaluated so a speed change applies to a sleeping thread */
             left = timescale_real_wait_ns(left); if (left > WAIT_SLICE_NS) left = WAIT_SLICE_NS;
+            /* sleep_precise: macOS nanosleep overshoots by ~10% (33 ms -> 36.4 ms, a 30 Hz thread ran at 27 Hz), so sleep 3/4 of what is left per
+             * step and stop within SLEEP_PRECISE_NS of the deadline. Under that margin (e.g. SleepThread(100)) the plain short sleep stays. */
+            if (left > SLEEP_PRECISE_NS) { left = left * 3 / 4; if (left < SLEEP_PRECISE_NS) left = SLEEP_PRECISE_NS; }
             struct timespec ts = {left / 1000000000, left % 1000000000}; nanosleep(&ts, NULL);
         }
         pthread_mutex_lock(&G); core_take(me); pthread_mutex_unlock(&G);
@@ -396,7 +482,7 @@ static void svc_set_thread_core_mask(uint64_t *r) {
         else if ((m | CORE_MASK_ALL) != CORE_MASK_ALL) res = R_INVALID_PROCESSOR_ID;
         else if (!m) res = R_INVALID_COMBINATION;
         else if (c >= 0 && c < NCORE) { if (!((m >> c) & 1)) res = R_INVALID_COMBINATION; }
-        else if (c == -3) { c = t->core; if (c >= 0 && !((m >> c) & 1)) res = R_INVALID_COMBINATION; }
+        else if (c == -3) { c = t->core; if (c >= 0 && !((m >> c) & 1)) c = __builtin_ctzll(m); }   /* ideal core kept, unless the new mask excludes it: it then moves into the mask (Horizon; nxnative docs/reference/threads.md) */
         else if (c != -1) res = R_INVALID_PROCESSOR_ID;
         if (!res) {
             t->core = c; t->mask = m;
@@ -543,14 +629,15 @@ static void svc_signal_process_wide_key(uint64_t *r) {
     pthread_mutex_unlock(&G);
     r[0] = 0;
 }
-/* WaitForAddress(x0 address, w1 arbitration type: 0 wait if less than, 1 decrement-and-wait if less than, 2 wait if equal; w2 value, x3 timeout) */
+/* WaitForAddress(x0 address, w1 arbitration type: 0 wait if less than, 1 decrement-and-wait if less than, 2 wait if equal, 3 wait if equal (64-bit); w2 value, x3 timeout) */
 static void svc_wait_for_address(uint64_t *r) {
     Thread *t = self(); uint64_t addr = r[0]; int type = (int)r[1]; int32_t val = (int32_t)r[2];
     if (!user_word_ok(addr)) { r[0] = R_INVALID_ADDRESS; return; }
-    if (type < 0 || type > 2) { r[0] = R_INVALID_ENUM; return; }
+    if (type < 0 || type > 3) { r[0] = R_INVALID_ENUM; return; }
     pthread_mutex_lock(&G);
     int64_t res; uint32_t v = ld32(addr);
-    int ok = type == 2 ? (int32_t)v == val : (int32_t)v < val;
+    /* type 3 (Horizon 18, SDK 19 nn::os::WaitForAddress(const long *, long)): wait if the 64-bit value equals */
+    int ok = type == 3 ? *(volatile uint64_t *)(uintptr_t)addr == r[2] : type == 2 ? (int32_t)v == val : (int32_t)v < val;
     if (ok && type == 1) { while (!cas32(addr, &v, v - 1)) if (!((int32_t)v < val)) { ok = 0; break; } }
     if (!ok) res = R_INVALID_STATE;
     else { t->waddr = addr; res = block(t, 3, (int64_t)r[3]); }
@@ -569,7 +656,7 @@ static void svc_signal_to_address(uint64_t *r) {
     if (type != 0) {
         int32_t nv = val + 1;
         if (type == 2) {
-            if (cnt <= 0) nv = nw > 0 ? val - 1 : val + 1;
+            if (cnt <= 0) nv = nw > 0 ? val - 2 : val + 1;      /* mesosphere KAddressArbiter: value - 2 with waiters and no count limit (found by the nxnative review, K1) */
             else nv = nw == 0 ? val + 1 : nw <= cnt ? val - 1 : val;
         }
         uint32_t e = (uint32_t)val;
@@ -653,6 +740,7 @@ void threads_svc_exit(void) {
     Thread *me = self_or_null();
     if (!me) return;
     if (me->paused) { pthread_mutex_lock(&G); park_if_paused(me); pthread_mutex_unlock(&G); }
+    if (me->preempt) core_checkpoint();   /* a wake / start above handed this core to a better thread: it runs before the caller continues */
     const uint64_t *g = me->svc_regs;
     if (g) { me->last_fp = g[29]; me->last_lr = g[30]; me->last_sp = g[KREG_GUEST_SP] + 16 + 160; me->last_pc = svc_site_pc(me); }
     __atomic_store_n(&me->svc_regs, NULL, __ATOMIC_RELEASE);   /* no lock on the hot path: readers only trust it for blocked or parked threads */

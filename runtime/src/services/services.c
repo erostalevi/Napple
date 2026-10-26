@@ -25,6 +25,7 @@ void service_register_ngc(void);
 void service_register_fgm(void);
 void service_register_ectx(void);
 void service_register_olsc(void);
+void service_register_push(void);
 void service_register_setfd(void);
 void service_register_pdm(void);
 void service_register_hidbus(void);
@@ -74,6 +75,7 @@ void services_init(void) {
     service_register_fgm();
     service_register_ectx();
     service_register_olsc();
+    service_register_push();
     service_register_setfd();
     service_register_pdm();
     service_register_hidbus();

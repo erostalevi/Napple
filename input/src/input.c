@@ -41,6 +41,7 @@ struct napple_input {
     uint8_t keys[256];
     float mouse_nx, mouse_ny, scroll_dx, scroll_dy; int mouse_buttons, mouse_have_pos; int32_t last_mx, last_my;
     int focused, blocked;
+    uint64_t shake_start_ns; int shake_req;   /* napple_input_shake: a side-to-side shake of player 1's six-axis sensor (0 = none) */
     /* on-screen controller (touch devices): buttons NAPPLE_BTN_MASK bits and analog sticks in [-1,1], y up; merged into player 1 */
     uint64_t virt_buttons; float virt_lx, virt_ly, virt_rx, virt_ry;
     /* guest configuration */
@@ -130,6 +131,8 @@ void napple_input_destroy(napple_input *in) {
 }
 
 static uint64_t clock_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+#define SHAKE_HZ 5.0
+#define SHAKE_CYCLES 3.0
 
 static void *input_thread(void *p) {
     napple_input *in = p;
@@ -164,6 +167,7 @@ void napple_input_stop(napple_input *in) {
 void napple_input_set_supported_styles(napple_input *in, uint32_t s) { pthread_mutex_lock(&in->lock); in->supported_styles = s; pthread_mutex_unlock(&in->lock); }
 void napple_input_set_assignment_mode(napple_input *in, uint32_t m) { pthread_mutex_lock(&in->lock); in->assign_mode = m ? 1 : 0; pthread_mutex_unlock(&in->lock); }
 void napple_input_set_player_count(napple_input *in, int n) { pthread_mutex_lock(&in->lock); in->player_count = n < 1 ? 1 : n > 8 ? 8 : n; pthread_mutex_unlock(&in->lock); }
+void napple_input_shake(napple_input *in) { pthread_mutex_lock(&in->lock); in->shake_req = 1; pthread_mutex_unlock(&in->lock); }
 void napple_input_set_sixaxis_enabled(napple_input *in, int e) { pthread_mutex_lock(&in->lock); in->sixaxis_enabled = e != 0; pthread_mutex_unlock(&in->lock); ng_set_motion(e); }
 uint32_t napple_input_active_style(const napple_input *in, int slot) { return slot >= 0 && slot < NSLOTS ? (uint32_t)in->slot_style[slot] : 0; }
 void napple_input_set_vibration(napple_input *in, uint32_t npad_id, int side, const napple_vibration *v) {
@@ -225,6 +229,7 @@ void napple_input_release_all(napple_input *in) {
 }
 void napple_input_virtual_pad(napple_input *in, uint64_t buttons, float lx, float ly, float rx, float ry) {
     pthread_mutex_lock(&in->lock);
+    if (getenv("NAPPLE_INPUT_LOG") && (buttons || in->virt_buttons)) napple_input_log("virtual pad buttons=%#llx focused=%d blocked=%d", (unsigned long long)buttons, in->focused, in->blocked);
     if (in->blocked || !in->focused) buttons = 0, lx = ly = rx = ry = 0;
     in->virt_buttons = buttons & (NAPPLE_BTN_MASK(NAPPLE_BTN_COUNT_BASIC) - 1);
     float *dst[4] = {&in->virt_lx, &in->virt_ly, &in->virt_rx, &in->virt_ry}; float src[4] = {lx, ly, rx, ry};
@@ -357,6 +362,7 @@ void napple_input_update(napple_input *in, uint64_t now) {
     uint64_t dt_ns = in->last_ns ? now - in->last_ns : 1000000000ull / (uint64_t)in->cfg.update_hz; in->last_ns = now;
     if (dt_ns > 200000000ull) dt_ns = 200000000ull;
     const float dt = (float)dt_ns / 1e9f;
+    if (in->shake_req) { in->shake_req = 0; in->shake_start_ns = now ? now : 1; }
     int handheld_only; const uint32_t style = choose_style(in->supported_styles, in->bind.style, &handheld_only);
     napple_capture_fn cb = NULL; void *cbu = NULL; int cap_code = -1;
     for (int slot = 0; slot < 8; slot++) {
@@ -381,7 +387,16 @@ void napple_input_update(napple_input *in, uint64_t now) {
         }
         /* six-axis: controller motion if present, otherwise the at-rest pose */
         napple_sixaxis_state six; const float rest_acc[3] = {0, 0, -1}, zero[3] = {0, 0, 0};
-        if (slot < in->npads && in->pads[slot].has_motion && in->sixaxis_enabled) {
+        float shake_acc[3] = {0, 0, -1};
+        int shaking = slot == 0 && in->shake_start_ns && in->sixaxis_enabled;
+        if (shaking) {   /* SHAKE_CYCLES whole cycles of +-4 G along x, so the sensor ends at rest (SMO's cap throw, nxnative DM_BTN_SHAKE) */
+            double t = (double)(now - in->shake_start_ns) * 1e-9;
+            if (t >= SHAKE_CYCLES / SHAKE_HZ) in->shake_start_ns = 0, shaking = 0;
+            else shake_acc[0] = (float)(4.0 * sin(2.0 * M_PI * SHAKE_HZ * t));
+        }
+        if (shaking) {
+            napple_motion_step(&in->motion[slot], dt, shake_acc, zero, &six);
+        } else if (slot < in->npads && in->pads[slot].has_motion && in->sixaxis_enabled) {
             napple_motion_step(&in->motion[slot], dt, in->pads[slot].acc, in->pads[slot].gyro, &six);
         } else {
             napple_motion_reset(&in->motion[slot]);

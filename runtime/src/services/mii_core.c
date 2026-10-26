@@ -31,29 +31,30 @@ static void fill_neutral(MiiCharInfo *m) {
     m->hair_color = 1; m->eye_color = 8; m->eyebrow_color = 1; m->mouth_color = 19;
 }
 
+/* A create ID is a UUID: the SDK's CharInfoRaw::Verify (and so CharInfoAccessor::IsValid, which Mario Kart 8 builds a head model from) wants version 4 and the RFC 4122 variant bits. */
 static void set_id(MiiCharInfo *m, uint8_t tag, uint32_t index) {
     memcpy(m->create_id, "NappleMii", 9); m->create_id[9] = tag; m->create_id[12] = (uint8_t)index; m->create_id[15] = 1;
+    m->create_id[6] = (uint8_t)((m->create_id[6] & 0x0f) | 0x40); m->create_id[8] = (uint8_t)((m->create_id[8] & 0x3f) | 0x80);
 }
 
+/* The system's default Mii as the mii service builds it (3DS-era default parameters, colours as the Switch's common colour indices); index picks the colour and gender. */
 void mii_build_default(uint32_t index, MiiCharInfo *out) {
     index %= MII_DEFAULT_COUNT;
     fill_neutral(out);
     set_id(out, 'D', index);
-    static const uint8_t color[MII_DEFAULT_COUNT] = {0, 3, 6, 9, 2, 7};
-    out->gender = (uint8_t)(index % 2);                    /* alternate male / female, as the six defaults do */
-    out->favorite_color = color[index];
-    out->faceline_type = (uint8_t)index; out->hair_type = (uint8_t)(index * 7 + (index % 2) * 20);
-    out->eye_type = (uint8_t)(index * 3); out->eyebrow_type = (uint8_t)index; out->nose_type = (uint8_t)index; out->mouth_type = (uint8_t)(index * 2);
-    out->faceline_color = (uint8_t)(index % 6); out->height = (uint8_t)(60 + index * 4);
-    static const char *const names[MII_DEFAULT_COUNT] = {"Mii", "Mii", "Mii", "Mii", "Mii", "Mii"};
-    mii_utf8_to_utf16(names[index], out->name, 10);
+    out->favorite_color = (uint8_t)(index * 2);            /* red, yellow, green, sky blue, purple, white */
+    out->gender = index >= 3;
+    out->hair_type = 33; out->hair_color = 1;
+    out->eye_type = 2; out->eye_color = 8; out->eyebrow_type = 6; out->eyebrow_color = 1; out->nose_type = 1; out->mouth_type = 23; out->mouth_color = 19;
+    out->beard_color = 8; out->glasses_color = 8;
+    mii_utf8_to_utf16("no name", out->name, 10);
 }
 
 void mii_build_random(uint32_t age, uint32_t gender, uint32_t race, MiiCharInfo *out) {
     (void)age; (void)race;
-    mii_build_default(gender == MII_GENDER_FEMALE ? 1 : 0, out);   /* index 1 is female, 0 male */
+    mii_build_default(gender == MII_GENDER_FEMALE ? 3 : 0, out);   /* defaults 0..2 are male, 3..5 female */
     out->gender = gender == MII_GENDER_FEMALE ? MII_GENDER_FEMALE : MII_GENDER_MALE;
-    out->create_id[10] = 'R';
+    static uint32_t serial; uint32_t n = ++serial; memcpy(out->create_id + 10, &n, 4);   /* fresh ID per random Mii (the title builds twelve) */
 }
 
 static void build_user(MiiCharInfo *m) {

@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <stdlib.h>
 /* api_window.c - NVN windows (swapchains) and presentation. */
 #include "gfx_mtl.h"
 #include "timeline.h"
@@ -52,6 +54,7 @@ NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
     }
     gfx_mtl_window_attach(o);
     LOGI("window with %d textures (%ux%u)", o->ntex, ((const tex_t *)s->tex[0])->s.d.width, ((const tex_t *)s->tex[0])->s.d.height);
+    for (int i = 0; i < s->ntex; i++) { const tex_t *t = (const tex_t *)s->tex[i]; LOGI("window texture %d: mem %p size %llu %ux%u format %#x flags %#x pool %p", i, (void *)t->s.mem, (unsigned long long)t->s.size, (unsigned)t->s.d.width, (unsigned)t->s.d.height, (unsigned)t->s.d.format, (unsigned)t->s.d.flags, (const void *)t->pool); }
     return 1;
 }
 NVN(nvnWindowFinalize, void, NVNwindow *w) { GFX_BLOCKING(); gfx_mtl_finish(); WN(w)->magic = 0; }
@@ -92,6 +95,7 @@ NVN(nvnQueuePresentTexture, void, NVNqueue *q, NVNwindow *w, int index) {
     if (o->magic != WIN_MAGIC || index < 0 || index >= o->ntex) { LOG_ONCE(NAPPLE_LOG_WARN, "QueuePresentTexture with an invalid window or index %d", index); return; }
     const tex_t *t = (const tex_t *)o->tex[index];
     o->ticket[index]++;
+    { static int pl = -1, n; if (pl < 0) pl = getenv("NAPPLE_PRESENTLOG") ? atoi(getenv("NAPPLE_PRESENTLOG")) : 0; if (pl && (int)o->presents >= pl && n++ < 12) { fprintf(stderr, "[presentlog] present index %d of %d mem %p %ux%u fmt %#x; window textures:", index, o->ntex, (void *)(uintptr_t)t->s.mem, (unsigned)t->s.d.width, (unsigned)t->s.d.height, (unsigned)t->s.d.format); for (int i = 0; i < o->ntex; i++) fprintf(stderr, " %p", (void *)(uintptr_t)((const tex_t *)o->tex[i])->s.mem); fputc('\n', stderr); } }
     uint64_t seq = gfx_mtl_present(o, index, &t->s, (uint32_t)o->interval);
     atomic_store(&qo->last_seq, seq);
     gfx_notify_present(o->presents++, (uint32_t)o->interval);

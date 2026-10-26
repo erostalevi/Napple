@@ -41,7 +41,7 @@ rm -f "$ROOT/audio/$B/libnapple_audio.a"; xcrun ar rcs "$ROOT/audio/$B/libnapple
 # frontend (UIKit)
 make -C "$ROOT/frontend" -f Makefile.ios CC="$CC" OUT=$B
 # runtime
-RT=$(objs "$ROOT/runtime/src/*.c $ROOT/runtime/src/services/*.c $ROOT/runtime/src/*.m $ROOT/runtime/src/*.S" "$ROOT/runtime/$B" \
+RT=$(objs "$ROOT/runtime/src/*.c $ROOT/runtime/src/services/*.c $ROOT/runtime/src/a32/*.c $ROOT/runtime/src/*.m $ROOT/runtime/src/*.S" "$ROOT/runtime/$B" \
      -I"$ROOT/input/include" -I"$ROOT/audio/include" -I"$ROOT/gfx/include" -I"$ROOT/frontend/include" -I"$DEPS/include" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/services")
 RT=$(echo "$RT" | grep -v 'gfx_stub')
 METALFX="-framework MetalFX"; [ "$SDK" = iphonesimulator ] && METALFX=""   # the Xcode 27 Simulator SDK has no MetalFX

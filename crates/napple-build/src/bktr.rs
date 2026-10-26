@@ -17,7 +17,7 @@ use aes::cipher::{generic_array::GenericArray, BlockDecrypt, KeyInit, KeyIvInit,
 use aes::Aes128;
 use napple_core::domain::error::{Error as CoreError, Result as CoreResult};
 use napple_core::domain::keys::KeySet;
-use napple_core::infrastructure::io::{check, read_vec, Slice, Source, Src};
+use napple_core::infrastructure::io::{check, map_ctr, read_vec, MapExt, Slice, Source, Src};
 use napple_core::infrastructure::nca::TitleKeys;
 use std::sync::Arc;
 use xts_mode::Xts128;
@@ -154,6 +154,14 @@ impl CtrSource {
         buf.copy_from_slice(&tmp[pre..]);
         Ok(())
     }
+
+    fn map_gen(&self, offset: u64, len: u64, generation: Option<u32>, out: &mut Vec<MapExt>) -> bool {
+        let mut hi = self.hi;
+        if let Some(g) = generation {
+            hi[4..8].copy_from_slice(&g.to_be_bytes());
+        }
+        check(offset, len, self.raw.size()).is_ok() && map_ctr(&*self.raw, offset, len, self.key, hi, self.base, out)
+    }
 }
 
 impl Source for CtrSource {
@@ -163,6 +171,9 @@ impl Source for CtrSource {
     fn read_at(&self, offset: u64, buf: &mut [u8]) -> CoreResult<()> {
         check(offset, buf.len() as u64, self.raw.size())?;
         self.apply(offset, buf, None)
+    }
+    fn map(&self, offset: u64, len: u64, out: &mut Vec<MapExt>) -> bool {
+        self.map_gen(offset, len, None, out)
     }
 }
 
@@ -267,6 +278,27 @@ impl Source for ExCtrSource {
         }
         Ok(())
     }
+    fn map(&self, offset: u64, len: u64, out: &mut Vec<MapExt>) -> bool {
+        if check(offset, len, self.size()).is_err() {
+            return false;
+        }
+        let (mut pos, end) = (offset, offset + len);
+        while pos < end {
+            let (gen_, limit) = if pos >= self.data_end {
+                (None, self.size())
+            } else {
+                let i = self.subs.partition_point(|s| s.offset <= pos) - 1;
+                let next = self.subs.get(i + 1).map(|s| s.offset).unwrap_or(self.data_end).min(self.data_end);
+                (Some(self.subs[i].generation), next)
+            };
+            let n = (limit - pos).min(end - pos);
+            if !self.inner.map_gen(pos, n, gen_, out) {
+                return false;
+            }
+            pos += n;
+        }
+        true
+    }
 }
 
 /// Virtual address space of the patched section, composed from the base section and the patch storage.
@@ -299,6 +331,24 @@ impl Source for IndirectSource {
             done += n;
         }
         Ok(())
+    }
+    fn map(&self, offset: u64, len: u64, out: &mut Vec<MapExt>) -> bool {
+        if check(offset, len, self.total).is_err() {
+            return false;
+        }
+        let (mut pos, end) = (offset, offset + len);
+        while pos < end {
+            let i = self.relocs.partition_point(|r| r.virtual_off <= pos) - 1;
+            let e = self.relocs[i];
+            let lim = self.relocs.get(i + 1).map(|r| r.virtual_off).unwrap_or(self.total);
+            let n = (lim - pos).min(end - pos);
+            let src = if e.source == 0 { &self.base } else { &self.patch };
+            if !src.map(e.physical_off + (pos - e.virtual_off), n, out) {
+                return false;
+            }
+            pos += n;
+        }
+        true
     }
 }
 

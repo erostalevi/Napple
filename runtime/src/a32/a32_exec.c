@@ -613,6 +613,16 @@ static const A32Insn *fetch_decode(A32Cpu *c, uint32_t pc, uint32_t *raw_out) {
     return &e->insn;
 }
 
+#ifdef A32_WATCH
+#include <pthread.h>
+static uint32_t watch_pc, watch_off, watch_addr, watch_last; static int watch_init;
+static void watch_check(A32Cpu *c, uint32_t pc) {
+    if (!watch_init) { watch_init = 1; const char *e = getenv("A32_WATCH_PC"); if (e) watch_pc = (uint32_t)strtoul(e, 0, 16); e = getenv("A32_WATCH_ADDR"); if (e) { watch_addr = (uint32_t)strtoul(e, 0, 16); watch_last = 0xdeadbeef; } e = getenv("A32_WATCH_OFF"); watch_off = e ? (uint32_t)strtoul(e, 0, 16) : 0; }
+    if (watch_pc && pc == watch_pc) { watch_addr = c->r[0] + watch_off; watch_last = ld32(c, watch_addr); fprintf(stderr, "[watch] entry pc %#x r0=%#x watch %#x = %#x (cpu %p)\n", pc, c->r[0], watch_addr, watch_last, (void *)c); }
+    static int armed; if (pc == 0x50b420) armed = 1;
+    if (watch_addr && armed) { uint32_t v = ld32(c, watch_addr); if (v != watch_last) { fprintf(stderr, "[watch] %#x: %#x -> %#x after pc %#x lr %#x (cpu %p)\n", watch_addr, watch_last, v, pc, c->r[14], (void *)c); watch_last = v; } }
+}
+#endif
 A32Exit a32_run(A32Cpu *c, uint64_t budget) {
     if (!c->cache) {
         c->cache = calloc(CACHE_SIZE, sizeof(CacheEntry));
@@ -628,6 +638,9 @@ A32Exit a32_run(A32Cpu *c, uint64_t budget) {
             if (stop) return A32_EXIT_STOP;
             continue;
         }
+#ifdef A32_WATCH
+        watch_check(c, pc);
+#endif
         uint32_t raw;
         const A32Insn *i = fetch_decode(c, pc, &raw);
         unsigned it = c->thumb ? c->itstate : 0;

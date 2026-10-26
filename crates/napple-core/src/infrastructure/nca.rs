@@ -209,6 +209,9 @@ impl Source for CtrSource {
         buf.copy_from_slice(&tmp[pre..]);
         Ok(())
     }
+    fn map(&self, offset: u64, len: u64, out: &mut Vec<super::io::MapExt>) -> bool {
+        check(offset, len, self.raw.size()).is_ok() && super::io::map_ctr(&*self.raw, offset, len, self.key, self.hi, self.base, out)
+    }
 }
 
 /// HierarchicalSha256 (PFS0): validates the master hash over the hash table, which doubles as a

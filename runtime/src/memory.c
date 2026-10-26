@@ -31,7 +31,13 @@ void svc_kcode_register(void);
 /* Without the extended-virtual-addressing entitlement an iOS app gets one 6 GiB window at 0x70_0000_0000 (measured on an iPhone 16 Pro Max, iOS 26).
  * Odyssey asks for a 0xc8000000 heap whatever the pool size says, so: a 3.25 GiB heap cap, and an alias region that shrinks from the request down to 1 GiB
  * in 1 GiB steps (3.25 GiB + 0.75 GiB of stack/gaps + 1 GiB tail + 1 GiB alias = 6 GiB). */
+#include <TargetConditionals.h>
+#if TARGET_OS_SIMULATOR
+/* The Simulator is a macOS process: no 6 GiB window. Link's Awakening aborts in its movie library with the 3.25 GiB cap (it asks for a 0xc9a00000 heap and then needs more), so use the macOS cap. */
+#define HEAP_CAP_DEFAULT (0x100000000ULL)
+#else
 #define HEAP_CAP_DEFAULT (0xD0000000ULL)
+#endif
 #define ALIAS_STEP (1ULL << 30)
 #define ALIAS_LEAST (1ULL << 30)
 #else
@@ -133,6 +139,16 @@ void memory_init_a32(uint8_t *window) {
     pthread_mutex_unlock(&mem_lock);
 }
 uint8_t *memory_a32_base(void) { return a32_base; }
+
+/* AArch32 process: ranges inside the window the runtime itself uses (module images, thread local regions). QueryMemory must not report them Free, or the SDK's
+ * address-space scan maps shared memory (the shared fonts) right over them. */
+static struct { uint64_t lo, size; unsigned state, perm; } a32_reserved[32];
+static unsigned n_a32_reserved;
+void memory_a32_reserve(uint64_t host_lo, uint64_t size, unsigned state, unsigned perm) {
+    pthread_mutex_lock(&mem_lock);
+    if (n_a32_reserved < 32) { a32_reserved[n_a32_reserved].lo = host_lo; a32_reserved[n_a32_reserved].size = size; a32_reserved[n_a32_reserved].state = state; a32_reserved[n_a32_reserved].perm = perm; n_a32_reserved++; }
+    pthread_mutex_unlock(&mem_lock);
+}
 /* IPC buffer descriptors carry guest addresses; the services work on host addresses (identical in a 64-bit process, base + address in an AArch32 one). */
 uint64_t guest_addr_to_host(uint64_t a) { return a32_base && a && a < (1ULL << 32) ? (uint64_t)(uintptr_t)a32_base + a : a; }
 uint64_t host_addr_to_guest(uint64_t a) { return a32_base && a >= (uintptr_t)a32_base && a < (uintptr_t)a32_base + (1ULL << 32) ? a - (uintptr_t)a32_base : a; }
@@ -359,6 +375,11 @@ static void svc_query_memory(uint64_t *r) {
         else if (!(addr >= (uintptr_t)alias_space && addr < (uintptr_t)alias_space + alias_len)) { size = 0x1000; state = 0x10; perm = 0; }
     }
     pthread_mutex_lock(&mem_lock);
+    for (unsigned i = 0; i < n_a32_reserved; i++) {
+        uint64_t lo = a32_reserved[i].lo, hi = lo + a32_reserved[i].size;
+        if (addr >= lo && addr < hi) { base = lo; size = a32_reserved[i].size; state = a32_reserved[i].state; perm = a32_reserved[i].perm; attr = 0; break; }
+        if (state == 0) { uint64_t end = base + size; if (hi <= addr && hi > base) base = hi; if (lo > addr && lo < end) end = lo; size = end - base; }
+    }
     if (addr >= (uintptr_t)alias_space && addr < (uintptr_t)alias_space + alias_len) {
         unsigned p = (unsigned)((addr - (uintptr_t)alias_space) / PAGE_4K), lo = p, hi = p + 1, st = alias_state[p];
         while (lo > 0 && alias_state[lo - 1] == st) lo--;

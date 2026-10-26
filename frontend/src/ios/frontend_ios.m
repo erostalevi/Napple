@@ -152,6 +152,7 @@ static float pref_float(NSString *k, float d) { id v = [NSUserDefaults.standardU
     (void)e;
     for (UITouch *t in ts) {
         CGPoint p = [t locationInView:self]; int i = pad_hit(_ctl, _n, (float)p.x, (float)p.y);
+        if (getenv("NAPPLE_INPUT_LOG")) fprintf(stderr, "[napple] pad touch (%.0f,%.0f) in %.0fx%.0f -> control %d\n", p.x, p.y, self.bounds.size.width, self.bounds.size.height, i);
         if (i < 0) continue;
         if (_ctl[i].kind == PAD_BUTTON && pref_bool(@"napple.padHaptics", YES)) [_haptic impactOccurred];
         [_owner setObject:@(i) forKey:t]; [self apply:t index:i];

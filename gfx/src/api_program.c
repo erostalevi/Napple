@@ -24,6 +24,12 @@ static NVNboolean set_shaders(NVNprogram *p, int n, const uint8_t *data, size_t 
         uint64_t code = *(const uint64_t *)(data + (size_t)i * stride);
         const uint8_t *control = (const uint8_t *)(uintptr_t) * (const uint64_t *)(data + (size_t)i * stride + 8);
         if (!code || !control) { LOGE("ProgramSetShaders: null code or control section"); return 0; }
+        if (code < 0x100000000ull || (uint64_t)(uintptr_t)control < 0x100000000ull) {   /* every host pointer is above the 4 GiB page-zero of an arm64 Mac process */      /* a pool-relative offset, not an address: the pool base the game added was 0 */
+            static _Atomic uint64_t n_bad;
+            uint64_t k = atomic_fetch_add(&n_bad, 1);
+            if (k < 8 || (k & (k - 1)) == 0) LOGW("ProgramSetShaders: stage %d code address %#llx / control %p is not a mapped address (%llu so far); program rejected", i, (unsigned long long)code, (const void *)control, (unsigned long long)k + 1);
+            return 0;
+        }
         if (i < 6) { o->sd[i].data = code; o->sd[i].control = control; }
         /* The stage comes from the control section (what the shader compiler recorded); gfx_shader_register validates it. */
         int stage = (int)*(const uint32_t *)(control + 0x714);

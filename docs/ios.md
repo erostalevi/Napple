@@ -1,7 +1,7 @@
 # iOS / iPadOS support (iOS 26 and later)
 
 Goal: `napple build --target ios` (or Studio's "iPhone & iPad" target) turns a game you own into an app you install on **your own** iPhone or iPad with your own Apple ID.
-Status: **written on Linux, never compiled or run on a Mac or an iPhone.** What is verified and what is not is listed at the end. Read "Risks" before spending an evening on it.
+Status: **written on Linux; compiled and run on the iOS Simulator (LAS reaches its title screen, SMO its menu: see the last section); never run on an iPhone.** What is verified and what is not is listed at the end. Read "Risks" before spending an evening on it.
 
 ## Why iOS needed more than a new target string
 
@@ -109,3 +109,36 @@ xcrun simctl install booted out/<Name>.app && xcrun simctl launch --console-pty 
 Result with Super Mario Odyssey: dyld accepts the hand-written dylibs as they are (`__TEXT_EXEC`, empty `LC_DYLD_INFO_ONLY`, no `LC_FUNCTION_STARTS`), the guest boots, reaches `nn::init::Start` and the game's menu renders with the touch controller.
 **Not validated by the Simulator:** it runs arm64 code as a macOS process, so device code-signing, AMFI/exec-page rules and the real memory limits are untested; the device path is still unverified.
 Simulator-only workarounds: no MetalFX in the Xcode 27 Simulator SDK; `addPresentedHandler:` / `presentDrawable:afterMinimumDuration:` missing from its headers (the former also at run time); Metal binary archive disabled; the Simulator's phantom "Gamepad (MFi)" does not hide the touch controller.
+
+## Simulator run of the four titles (2026-10-25, branch claude/ios-sim-2026-10-25-titles; Xcode 27.1, iPhone 17 / iOS 26.1 Simulator)
+
+Real libopus and libvpx (v1.14.1) built for the Simulator (`SDK=iphonesimulator VPX=1 tools/build_ios_deps.sh`; the script's libvpx step now uses `--target=arm64-linux-gcc` with the Simulator clang because libvpx's darwin targets force the macOS SDK), then `SDK=iphonesimulator tools/build_ios.sh`, `napple build ... --target ios-sim`, `simctl install/launch`, screenshots through the Simulator tool. Everything below was driven by hand through the touch controller or unattended; none of it was "played".
+
+| Title | Result on the Simulator |
+|---|---|
+| LAS (01006BB00C6F0000, base v0) | **boots to the title screen** ("Press L+R"); intro movie (VP9 via the iOS libvpx) and audio (RemoteIO) run; touch controller drawn. Screenshots: shared notes folder `ios-sim-las-intro-*.png`, `ios-sim-las-title.png` |
+| SMO (0100000000010000, base v0) | reaches the Start / Assist Mode menu at about 75 s (audio 0 underruns). A tap on the touch A button did not visibly advance the menu (not investigated; the panel shows the landscape app in portrait, tap coordinates unverified) |
+| MK8D, `--updates latest` | the latest update is an **AArch64** build (id fe941ed5ba14be5d): stops at 1.1 s with `IPC command time:u:300 not implemented` (services, same on macOS data of that update; not iOS) |
+| MK8D, base v0 (AArch32 interpreter) | boots through the A32 loader, runs about 15 s of interpreted code (`nnMain still running ... 1600 M instructions`), then aborts in gfx: `Render Pipeline Descriptor Validation: This set of render targets requires 48 bytes of pixel storage. This device supports 32 bytes.` The **Simulator GPU** allows 32 bytes of colour attachment per pixel; Apple A11+ allows 64, so a device would likely pass this (unverified). gfx work: split MK8D's G-buffer pass or fall back on the Simulator |
+| ACNH 3.0.3 | see the ACNH line in `docs/changes/2026-10-25-ios-sim-titles.md` |
+
+What was broken and is fixed on this branch (all found by the first real Simulator run):
+1. `tools/build_ios.sh` did not compile `runtime/src/a32/*.c` (link failed with `a32_boot` and friends).
+2. Depth/stencil textures were created with `MTLStorageModeShared`, which iOS and the Simulator refuse (assertion in `mtl_tex.m`): Private on iOS (`gfx/src/mtl_tex.m`, `TARGET_OS_IOS`).
+3. A 424 MB guest memory pool exceeds the Simulator's `maxBufferLength` (256 MiB); `gfx_mtl_pool_add` now wraps big pools as overlapping Metal buffers (`mtl_core.m`; 32 MiB overlap, `mtl_addr` already scans neighbours). Real iPhones report larger limits but may also be below the pool size.
+4. Without libvpx the guest's own movie decoder runs and calls the unimplemented NVN function `nvnTextureGetNvRmSurfaceNVX` (SIGSEGV): libvpx for the Simulator fixes it.
+5. LAS aborts in its movie library with the 3.25 GiB heap cap used for the 6 GiB device window: the Simulator build uses the macOS 4 GiB cap (`memory.c`, `TARGET_OS_SIMULATOR`). **Open for devices**: LAS probably needs more than 3.25 GiB of guest heap, so a non-entitled iPhone (6 GiB window) may not run it; a smaller `low_gap_v` (1 GiB tail) could free the 0.75 GiB but is unverified.
+6. `napple build --target ios*` died on AArch32 titles (`not an NTB1 table file`): the interpreter reads NTB2 images as data, so `dylibize` now skips them.
+7. `--ipa`: `ditto` stored AppleDouble `._*` files in the IPA when the bundle files carry extended attributes; it now passes `--norsrc --noextattr --noacl`.
+
+IPA check (`napple build LAS --target ios --no-sign --ipa`, iPhoneOS runtime built with `SDK=iphoneos`): `Payload/<Name>.app` with `napple-runtime` (platform 2, minos 26.0), `Frameworks/*.dylib` (4, platform 2), `game/`, `Info.plist` (`CFBundleSupportedPlatforms = iPhoneOS`, landscape, scene manifest), icons; 3.99 GB compressed, 169 files; `codesign -dv` says "not signed at all" as intended. Signing/installing on a device stays unverified.
+
+Not proven by the Simulator (still open): signing and AMFI/exec-page rules for the dylibs on a device, the real memory limits (jetsam, the 6 GiB window, `maxBufferLength` on A-series), dyld on a phone, Files app integration, thermals/performance, MFi controllers (the Simulator has a phantom "Gamepad (MFi)"; once the settings sheet opened by itself right after launch, not reproduced), the colour-attachment budget of real GPUs.
+
+### Follow-up notes (2026-10-26)
+
+- **Touch input on the Simulator is unverified.** `simctl`/tool taps and `touch_path`/`touch2_path` never reached the app (no `hitTest` call, main thread idle), so the on-screen pad has not been exercised; only `NAPPLE_INPUT_SCRIPT` (keyboard bindings path, `SIMCTL_CHILD_NAPPLE_INPUT_SCRIPT=...`) was used. With it LAS goes title -> "Please select a file" (File 1-3 New Game). Beware zsh: `"$t:A"` expands as a path modifier, write `"${t}:A"`. `NAPPLE_INPUT_LOG=1` now also traces pad touches and virtual-pad pushes.
+- **Time:u command 300** (`CalculateMonotonicSystemClockBaseTimePoint`) is implemented (returns the clock context offset, unverified against hardware); needed by the MK8D 3.x (AArch64) build.
+- **Memory budget on a phone (from nxnative's notes, `docs/reference/memory.md`):** without `extended-virtual-addressing` a single 6 GB reservation succeeds but Metal needs address space too; 5 GB total is the proven figure on a phone. Our device layout reserves 6 GiB (0.75 stack/gaps + 3.25 heap + 1 gap + 1 alias), so the device build may fail at Metal setup, and LAS needs more than the 3.25 GiB heap. Candidate layout to try on a device: drop the 1 GiB tail gap (0.75 + 3.25 + 1 = 5 GiB), and give LAS a profile-sized pool. Not applied: no device and the purpose of `low_gap_v` is unverified.
+- **Not measured:** RSS of the four titles on the Simulator (game data under `work/games` was removed by another session for disk space; rebuilding needs 6-18 GB each, disk had 2.6 GB free). Studio `swift test` and per-title IPA sizes (only LAS: 3.99 GB compressed) not run for the same reason.
+- nxnative rows not applicable to my paths: G10/G13/G19 (gfx: present hardening, iOS relaxed math, same-pass feedback snapshot) are needs for the gfx owners; T2 (CI with an iOS compile smoke, `nxnative/dm/ios/tools/build_smoke.py`) is a CI item; T5 (iOS build/launcher settings table) is only partially useful: `tools/build_ios.sh` could take a per-title settings file.

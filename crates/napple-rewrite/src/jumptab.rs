@@ -20,6 +20,10 @@ pub enum Shape {
     AdrByteHalf,
     /// `adrp/add T; cmp idx, #n; b.hi; ldrsw E,[T,idx,lsl #2]; add x18,E,T; br x18`
     SignedWord,
+    /// `adr x18, L; ldrsw E,[T,idx,lsl #2]; add x18,x18,E; br x18` after `cmp idx,#n; b.hi/hs`: target = L + entry
+    AdrRelative,
+    /// `adrp/add T; cmp idx,#n; b.hi; ldrh E,[T,idx,lsl #1]; adr x18,L; add x18,x18,E,lsl #2; br x18`, padded to the largest entry
+    AdrHalfTable,
     /// Every instruction slot of the enclosing function (table base not recoverable locally).
     FunctionSpan,
 }
@@ -69,10 +73,13 @@ fn imm_of(op: &str) -> Option<i64> {
 pub fn analyze(img: &ModuleImage, br_at: u32, func: Option<(u32, u32)>, max_pads: u32) -> Result<JumpTable, String> {
     let lo = func.map_or(br_at.saturating_sub(4 * 48), |(f, _)| f.max(br_at.saturating_sub(4 * 48)));
     let ctx = decode_range(img, lo, br_at);
-    if let Some(j) = adr_byte_half(&ctx) {
+    if let Some(j) = adr_byte_half(img, &ctx) {
         return Ok(j);
     }
     if let Some(j) = signed_word(img, &ctx, func) {
+        return Ok(j);
+    }
+    if let Some(j) = adr_relative(img, &ctx, func) {
         return Ok(j);
     }
     // No exact shape: accept only if the dispatch is recognisably a table walk, then bound by the function.
@@ -118,57 +125,33 @@ fn last_x18_def(ctx: &[Ins]) -> Option<usize> {
     None
 }
 
-fn adr_byte_half(ctx: &[Ins]) -> Option<JumpTable> {
+fn adr_byte_half(img: &ModuleImage, ctx: &[Ins]) -> Option<JumpTable> {
     let base = ctx.iter().rev().find(|i| i.word & 0x9F00_001F == 0x1000_0012).and_then(|i| a64::adr_target(i.word, i.addr as u64))?;
     // add x18, x18, xK, lsl #2
     let add = ctx.iter().rposition(|i| i.word & 0xFFE0_FFFF == 0x8B00_0A52)?;
     let idx = (ctx[add].word >> 16) & 31;
-    let width = ctx[..add].iter().rev().find_map(|i| {
+    let (k, width) = ctx[..add].iter().enumerate().rev().find_map(|(k, i)| {
         let t = i.text.as_ref()?;
         if op_num(t, 0) != Some(idx) {
             return None;
         }
         match t.mnemonic.as_str() {
-            "ldrb" | "ldurb" => Some(256u32),
-            "ldrh" | "ldurh" => Some(65536),
+            "ldrb" | "ldurb" => Some((k, 256u32)),
+            "ldrh" | "ldurh" => Some((k, 65536)),
             _ => None,
         }
     })?;
-    Some(JumpTable { base: u32::try_from(base).ok()?, count: width, how: Shape::AdrByteHalf })
+    let base = u32::try_from(base).ok()?;
+    if width == 65536 {
+        if let Some(n) = half_count(img, ctx, k) {
+            return Some(JumpTable { base, count: n, how: Shape::AdrHalfTable });
+        }
+    }
+    Some(JumpTable { base, count: width, how: Shape::AdrByteHalf })
 }
 
-/// Reference-compatible analysis of old-clang signed-offset tables (see module docs).
-fn signed_word(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Option<JumpTable> {
-    let d = last_x18_def(ctx)?;
-    let t = ctx[d].text.as_ref()?;
-    if t.mnemonic != "add" || t.ops.len() != 3 || t.ops[0] != "x18" {
-        return None;
-    }
-    let (a, b) = (op_num(t, 1)?, op_num(t, 2)?);
-    // the entry load
-    let mut l = None;
-    for k in (0..d).rev() {
-        let p = &ctx[k];
-        if let Some(x) = &p.text {
-            if x.mnemonic == "ldrsw" && x.ops.len() == 4 && x.ops[3] == "lsl #2" {
-                let (e, tb) = (op_num(x, 0), op_num(x, 1));
-                if e.is_some() && tb.is_some() && e != tb && [e.unwrap(), tb.unwrap()].iter().all(|r| *r == a || *r == b) {
-                    l = Some(k);
-                    break;
-                }
-            }
-        }
-        if a64::is_control_flow(p.word) || writes(p, Some(a)) || writes(p, Some(b)) {
-            return None;
-        }
-    }
-    let k2 = l?;
-    let lx = ctx[k2].text.as_ref()?;
-    let (tr, ir) = (op_num(lx, 1)?, op_num(lx, 2)?);
-    if ctx[k2 + 1..d].iter().any(|p| writes(p, Some(tr)) || writes(p, Some(ir))) {
-        return None;
-    }
-    // table base: adrp xT, page ; add xT, xT, #lo
+/// Table base `adrp T; add T,T,#lo` feeding the load at `k` (register `tr`), and the `cmp idx,#n; b.hi/hs` entry count.
+fn table_base_and_bound(ctx: &[Ins], k2: usize, tr: u32, ir: u32) -> Option<(i64, i64)> {
     let mut k3 = k2.checked_sub(1)?;
     while !writes(&ctx[k3], Some(tr)) {
         k3 = k3.checked_sub(1)?;
@@ -224,16 +207,68 @@ fn signed_word(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Opti
         return None;
     }
     let n = imm_of(&cmp.ops[1])? + hi as i64;
-    if !(1..=4096).contains(&n) || table < 0 {
+    ((1..=65536).contains(&n) && table >= 0).then_some((table, n))
+}
+
+/// Halfword table `ldrh wE,[xT,xI,lsl #1]` at `ctx[k]`: pad only up to the largest entry (nxnative cut ACNH's patch area 42 -> 7.9 MB this way).
+fn half_count(img: &ModuleImage, ctx: &[Ins], k: usize) -> Option<u32> {
+    let x = ctx[k].text.as_ref()?;
+    if x.mnemonic != "ldrh" || x.ops.len() != 4 || x.ops[3] != "lsl #1" {
         return None;
     }
+    let (tr, ir) = (op_num(x, 1)?, op_num(x, 2)?);
+    let (table, n) = table_base_and_bound(ctx, k, tr, ir)?;
+    let mut max = 0u32;
+    for e in 0..n as u32 {
+        let off = (table as u32).checked_add(2 * e)?;
+        if off as usize + 2 > img.layout.image_len {
+            return None;
+        }
+        let v = img.word(off & !3);
+        max = max.max(if off & 2 == 0 { v & 0xFFFF } else { v >> 16 });
+    }
+    Some(max + 1)
+}
+
+/// `adr x18, L; ... ldrsw E,[T,I,lsl #2]; add x18,x18,E; br x18`: target = L + entry (not table + entry).
+fn adr_relative(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Option<JumpTable> {
+    let d = last_x18_def(ctx)?;
+    let t = ctx[d].text.as_ref()?;
+    if t.mnemonic != "add" || t.ops.len() != 3 || t.ops[0] != "x18" {
+        return None;
+    }
+    let (a, b) = (op_num(t, 1)?, op_num(t, 2)?);
+    let e = if a == 18 { b } else if b == 18 { a } else { return None };
+    // adr x18 is the last other writer of x18 before the add
+    let ka = (0..d).rev().find(|&k| writes(&ctx[k], Some(18)))?;
+    if ctx[ka].word & 0x9F00_001F != 0x1000_0012 {
+        return None;
+    }
+    let rel = a64::adr_target(ctx[ka].word, ctx[ka].addr as u64)? as i64;
+    let k2 = (0..d).rev().find(|&k| {
+        ctx[k].text.as_ref().is_some_and(|x| x.mnemonic == "ldrsw" && x.ops.len() == 4 && x.ops[3] == "lsl #2" && op_num(x, 0) == Some(e))
+    })?;
+    if ctx[k2 + 1..d].iter().any(|p| a64::is_control_flow(p.word) || writes(p, Some(e))) {
+        return None;
+    }
+    let lx = ctx[k2].text.as_ref()?;
+    let (tr, ir) = (op_num(lx, 1)?, op_num(lx, 2)?);
+    let (table, n) = table_base_and_bound(ctx, k2, tr, ir)?;
+    if n > 4096 {
+        return None;
+    }
+    targets_extent(img, table, n, rel, func, Shape::AdrRelative)
+}
+
+/// Reads `n` signed 32-bit entries at `table`, adds `rel` and requires every target to be an instruction (of `func` if known).
+fn targets_extent(img: &ModuleImage, table: i64, n: i64, rel: i64, func: Option<(u32, u32)>, how: Shape) -> Option<JumpTable> {
     let mut targets = Vec::with_capacity(n as usize);
     for e in 0..n as u32 {
         let off = (table as u32).checked_add(4 * e)?;
         if off as usize + 4 > img.layout.image_len {
             return None;
         }
-        let t = (table + img.word(off) as i32 as i64) as u32 as i64;
+        let t = rel + img.word(off) as i32 as i64;
         let inside = func.is_none_or(|(fa, fb)| (fa as i64..fb as i64).contains(&t));
         if !inside || t % 4 != 0 || t < 0 || t >= img.layout.text_end as i64 {
             return None;
@@ -241,7 +276,45 @@ fn signed_word(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Opti
         targets.push(t as u32);
     }
     let (mn, mx) = (*targets.iter().min()?, *targets.iter().max()?);
-    Some(JumpTable { base: mn, count: (mx - mn) / 4 + 1, how: Shape::SignedWord })
+    Some(JumpTable { base: mn, count: (mx - mn) / 4 + 1, how })
+}
+
+/// Reference-compatible analysis of old-clang signed-offset tables (see module docs).
+fn signed_word(img: &ModuleImage, ctx: &[Ins], func: Option<(u32, u32)>) -> Option<JumpTable> {
+    let d = last_x18_def(ctx)?;
+    let t = ctx[d].text.as_ref()?;
+    if t.mnemonic != "add" || t.ops.len() != 3 || t.ops[0] != "x18" {
+        return None;
+    }
+    let (a, b) = (op_num(t, 1)?, op_num(t, 2)?);
+    // the entry load
+    let mut l = None;
+    for k in (0..d).rev() {
+        let p = &ctx[k];
+        if let Some(x) = &p.text {
+            if x.mnemonic == "ldrsw" && x.ops.len() == 4 && x.ops[3] == "lsl #2" {
+                let (e, tb) = (op_num(x, 0), op_num(x, 1));
+                if e.is_some() && tb.is_some() && e != tb && [e.unwrap(), tb.unwrap()].iter().all(|r| *r == a || *r == b) {
+                    l = Some(k);
+                    break;
+                }
+            }
+        }
+        if a64::is_control_flow(p.word) || writes(p, Some(a)) || writes(p, Some(b)) {
+            return None;
+        }
+    }
+    let k2 = l?;
+    let lx = ctx[k2].text.as_ref()?;
+    let (tr, ir) = (op_num(lx, 1)?, op_num(lx, 2)?);
+    if ctx[k2 + 1..d].iter().any(|p| writes(p, Some(tr)) || writes(p, Some(ir))) {
+        return None;
+    }
+    let (table, n) = table_base_and_bound(ctx, k2, tr, ir)?;
+    if n > 4096 {
+        return None;
+    }
+    targets_extent(img, table, n, table, func, Shape::SignedWord)
 }
 
 #[cfg(test)]

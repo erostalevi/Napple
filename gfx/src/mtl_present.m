@@ -320,6 +320,8 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
         MTLPixelFormat pf = nonsrgb(gt->pf);
         src = pf == gt->pf ? gt->tex : [gt->tex newTextureViewWithPixelFormat:pf];
     }
+    { extern id<MTLTexture> mtl_dbg_composite(void); if (getenv("NAPPLE_SHOT_COMPOSITE") && mtl_dbg_composite()) src = mtl_dbg_composite(); }
+    { extern id<MTLTexture> mtl_frame_present_pick(uint32_t, uint32_t); id<MTLTexture> alt = mtl_frame_present_pick((uint32_t)snap->d.width, (uint32_t)snap->d.height); if (alt) { src = alt; static int once; if (!once++) LOGW("presenting the orphan render target (%lux%lu) instead of the window texture: the frame's picture was never copied to it", (unsigned long)alt.width, (unsigned long)alt.height); } }
     uint32_t interval_eff = st.present_interval_override ? st.present_interval_override : (interval ? interval : 1);
     double speed = ds.speed > 0.05f ? ds.speed : 1.0;
     double min_dur = 0;
@@ -413,14 +415,17 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
         g_display_stats.output_ms = (c.GPUEndTime - c.GPUStartTime) * 1000.0;
         if (shot) shot_write(shot, shot_path);
         if (!dr) {                            /* headless (or dropped): "shown" at the pacing rate, so the guest runs at its real speed without a display */
-            static uint64_t last_ns;
-            if (min_dur > 0 && !drop) {
-                uint64_t due = last_ns + (uint64_t)(min_dur * 1e9), now = gfx_now_ns();
-                if (g_prof_on && due > now) atomic_fetch_add(&g_prof[3], due - now);
-                if (due > now) { struct timespec ts = {(time_t)((due - now) / 1000000000ull), (long)((due - now) % 1000000000ull)}; nanosleep(&ts, NULL); }
-            }
-            last_ns = gfx_now_ns();
-            finish_display();
+            /* The wait is a timer, not a sleep in this handler: Metal runs the completion handlers of every command buffer on one thread, and a sleeping handler held
+             * back the completion (and so the fences) of the next frame's drawing work, adding the whole sleep to every frame (MK8D: 46 fps instead of 60). */
+            static uint64_t last_due; static dispatch_queue_t pq;
+            static dispatch_once_t once; dispatch_once(&once, ^{ pq = dispatch_queue_create("napple.pacing", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INTERACTIVE, 0)); });
+            uint64_t now = gfx_now_ns(), due = now;
+            if (min_dur > 0 && !drop) { due = last_due + (uint64_t)(min_dur * 1e9); if (due < now) due = now; }       /* a late frame is not followed by a burst */
+            last_due = due;
+            if (g_prof_on && due > now) atomic_fetch_add(&g_prof[3], due - now);
+            if (due - now < 200000) { finish_display(); gfx_timeline_complete(seq); return; }
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(due - now)), pq, ^{ finish_display(); gfx_timeline_complete(seq); });
+            return;
         }
         gfx_timeline_complete(seq);
     }];

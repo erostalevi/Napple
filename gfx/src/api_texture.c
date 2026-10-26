@@ -1,3 +1,5 @@
+#include <stdio.h>
+#include <stdlib.h>
 /* api_texture.c - NVN texture builders, textures, views, samplers and descriptor pools. */
 #include <stdlib.h>
 
@@ -107,9 +109,12 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     napple_tex_layout(&s->d, &L);
     if (!L.bpb) { LOGE("TextureInitialize: unsupported format %#x", s->d.format); return 0; }
     if (!s->pool || s->pool->magic != POOL_MAGIC || s->off < 0 || (uint64_t)s->off + L.size > s->pool->size) {
-        LOGE("TextureInitialize: storage out of range (pool %p off %lld size %llu)", (void *)s->pool, (long long)s->off, (unsigned long long)L.size);
+        LOGE("TextureInitialize: storage out of range (pool %p off %lld size %llu; pool %s, pool size %llu, %ux%ux%u fmt %#x target %d levels %d)", (void *)s->pool, (long long)s->off, (unsigned long long)L.size,
+             !s->pool ? "missing" : s->pool->magic == POOL_MAGIC ? "valid" : "not initialised", (unsigned long long)(s->pool ? s->pool->size : 0),
+             (unsigned)s->d.width, (unsigned)s->d.height, (unsigned)s->d.depth, (unsigned)s->d.format, (int)s->d.target, (int)s->d.levels);
         return 0;
     }
+    { static int n; if (getenv("NAPPLE_TEXLOG") && (s->d.flags & 1) && n++ < 20) fprintf(stderr, "[texlog] display-flag texture %ux%u fmt %#x flags %#x mem %p pool %p off %lld\n", (unsigned)s->d.width, (unsigned)s->d.height, (unsigned)s->d.format, (unsigned)s->d.flags, (void *)(s->pool ? s->pool->mem + s->off : NULL), (const void *)s->pool, (long long)s->off); }
     o->magic = TEX_MAGIC;
     o->s.d = s->d;
     o->s.mem = s->pool->mem + s->off;
@@ -314,6 +319,10 @@ static void register_tex(const dpool_t *p, int id, const NVNtexture *t, const NV
     gdpool *h = dpool_host(p);
     if (!h || id < 0 || id >= h->n || !t || CTX(t)->magic != TEX_MAGIC) return;
     dtex *e = &h->tex[id];
+    { static int on = -1, n; if (on < 0) on = getenv("NAPPLE_REGTRACE") != NULL;
+      if (on && CTX(t)->s.d.width >= 1280 && n++ < 40) fprintf(stderr, "[regtrace] pool %p id %d <- %ux%u fmt %#x flags %#x mem %p\n", (const void *)p, id, (unsigned)CTX(t)->s.d.width, (unsigned)CTX(t)->s.d.height, (unsigned)CTX(t)->s.d.format, (unsigned)CTX(t)->s.d.flags, (void *)CTX(t)->s.mem); }
+    { static int slot = -2; if (slot == -2) slot = getenv("NAPPLE_REGSLOT") ? atoi(getenv("NAPPLE_REGSLOT")) : -1;
+      if (slot >= 0 && id == slot) fprintf(stderr, "[regslot] frame %llu id %d <- %ux%u fmt %#x flags %#x mem %p\n", (unsigned long long)g_gfx.frames, id, (unsigned)CTX(t)->s.d.width, (unsigned)CTX(t)->s.d.height, (unsigned)CTX(t)->s.d.format, (unsigned)CTX(t)->s.d.flags, (void *)(uintptr_t)CTX(t)->s.mem); }
     e->s = CTX(t)->s;
     if (v) e->view = *CVW(v); else memset(&e->view, 0, sizeof e->view);
 }

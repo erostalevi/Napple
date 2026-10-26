@@ -93,6 +93,50 @@ static ShaderInfo *xl_ins(int stage, const uint64_t *ins, int n, ShaderKey key, 
     CHECK(REFUSED(var, why), label " must be refused with \"%s\" (msl %s, error \"%s\")", why, var->msl ? "present" : "null", var->error); \
     maxwell_free(var)
 
+
+#ifdef __APPLE__
+/* Runs a translated fragment shader on a 1x1 RGBA32Uint target and returns its colour output (registers r0..r3 at EXIT): numeric checks of ALU translations. */
+static int run_fs_u4(const char *msl, uint32_t out[4], int math_mode) {
+    NSError *e = nil;
+    MTLCompileOptions *o = [MTLCompileOptions new]; o.languageVersion = MTLLanguageVersion3_0; o.preserveInvariance = YES; o.fastMathEnabled = NO;
+    if (@available(macOS 15.0, *)) { if (math_mode) o.mathMode = math_mode == 1 ? MTLMathModeRelaxed : MTLMathModeFast; }
+    id<MTLLibrary> fl = [g_dev newLibraryWithSource:@(msl) options:o error:&e];
+    if (!fl) { printf("  fs compile: %s\n", e.localizedDescription.UTF8String); return 0; }
+    static id<MTLFunction> vfn;
+    if (!vfn) {
+        id<MTLLibrary> vl = [g_dev newLibraryWithSource:@"#include <metal_stdlib>\nusing namespace metal;\nstruct VO { float4 pos [[position]]; };\n"
+                             "vertex VO vmain(uint vid [[vertex_id]]) { VO o; float2 p = float2((vid << 1) & 2, vid & 2); o.pos = float4(p * 2.0 - 1.0, 0, 1); return o; }" options:nil error:&e];
+        vfn = [vl newFunctionWithName:@"vmain"];
+    }
+    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+    d.vertexFunction = vfn; d.fragmentFunction = [fl newFunctionWithName:@"main0"];
+    d.colorAttachments[0].pixelFormat = MTLPixelFormatRGBA32Uint;
+    id<MTLRenderPipelineState> ps = [g_dev newRenderPipelineStateWithDescriptor:d error:&e];
+    if (!ps) { printf("  pipeline: %s\n", e.localizedDescription.UTF8String); return 0; }
+    MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatRGBA32Uint width:1 height:1 mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget; td.storageMode = MTLStorageModeShared;
+    id<MTLTexture> rt = [g_dev newTextureWithDescriptor:td];
+    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor new];
+    rp.colorAttachments[0].texture = rt; rp.colorAttachments[0].loadAction = MTLLoadActionClear; rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLCommandQueue> q = [g_dev newCommandQueue];
+    id<MTLCommandBuffer> cb = [q commandBuffer];
+    id<MTLRenderCommandEncoder> en = [cb renderCommandEncoderWithDescriptor:rp];
+    [en setRenderPipelineState:ps]; [en drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3]; [en endEncoding];
+    [cb commit]; [cb waitUntilCompleted];
+    [rt getBytes:out bytesPerRow:16 fromRegion:MTLRegionMake2D(0, 0, 1, 1) mipmapLevel:0];
+    return 1;
+}
+#endif
+static uint64_t i_s2r(int d, int sr) { return 0xf0c8000000000000ull | (uint64_t)d | ((uint64_t)sr << 20) | PT_BITS; }
+static uint64_t i_fmnmx(int d, int a, int b, int pred, int pneg) { return 0x5c60000000000000ull | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)pred << 39) | ((uint64_t)pneg << 42) | PT_BITS; }
+/* FSETP P0 = (Ra <cmp> Rb) && PT;  SEL d = P0 ? Ra(imm 1) : RZ via FSET would need more ops: use SEL (reg) d = p ? a : b */
+static uint64_t i_fsetp(int pd, int a, int b, int cmp) { return 0x5bb0000000000000ull | ((uint64_t)pd << 3) | 7ull | ((uint64_t)a << 8) | ((uint64_t)b << 20) | (7ull << 39) | ((uint64_t)cmp << 48) | PT_BITS; }
+static uint64_t i_sel(int d, int a, int b, int p) { return 0x5ca0000000000000ull | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)p << 39) | PT_BITS; }
+static uint64_t i_vmnmx(int d, int a, int b, int c_, int asel, int asg, int bsel, int bsg, int bvid, int mx, int vop, int dfmt, int sat) {
+    return 0x3a00000000000000ull | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)bsel << 28) | ((uint64_t)asel << 36) | ((uint64_t)c_ << 39) |
+           ((uint64_t)asg << 48) | ((uint64_t)bsg << 49) | ((uint64_t)bvid << 50) | ((uint64_t)vop << 51) | ((uint64_t)dfmt << 54) | ((uint64_t)sat << 55) | ((uint64_t)mx << 56) | PT_BITS;
+}
+
 int main(void) {
     POOL {
 #ifdef __APPLE__
@@ -274,6 +318,17 @@ int main(void) {
             CHECK(HAS(cs, "r4 = 0u;") && HAS(cs, "r5 = 0u;") && HAS(cs, "r6 = 0u;") && HAS(cs, "r7 = 0u;"), "CS2R writes the register pair");
             maxwell_free(cs);
         }
+        /* -- VMNMX (video min/max): Animal Crossing v0 shader 23e43e94e45bb1d5 holds 0x3b34056060470100 = VMNMX.U32.U32.MX.MAX R0, R1, R4, R10 */
+        {
+            XL_OK(vm, STAGE_FRAGMENT, z, 0xf, "VMNMX from Animal Crossing", 0x3b34056060470100ull, ins_exit());
+            CHECK(HAS(vm, "long vr = max(va, vb);") && HAS(vm, "res = max(res, vc);") && HAS(vm, "r0 = res;"), "VMNMX MAX, U32: three-way unsigned maximum");   /* integrate: matches nx-shader's VMNMX (the one kept) */
+            maxwell_free(vm);
+            /* byte select + MRG_16L merge (video op 1) with the 16-bit immediate: only checks that the merge goes through insert_bits */
+            uint64_t w = 0x3a00000000000000ull | 2 | (1ull << 8) | (0x0033ull << 20) | (4ull << 36) | (1ull << 51) | PT_BITS | (9ull << 36 & 0);
+            XL_OK(vm2, STAGE_FRAGMENT, z, 0xf, "VMNMX with a byte select", w, ins_exit());
+            CHECK(HAS(vm2, "insert_bits(") && HAS(vm2, "min("), "VMNMX byte select translates");
+            maxwell_free(vm2);
+        }
         /* -- double precision and the other stage/model gaps are refused by name */
         {
             const uint64_t dp[][2] = { {0x5c70000000000000ull, 0}, {0x4c80000000000000ull, 1}, {0x5b70000000000000ull, 2}, {0x5b80000000000000ull, 3}, {0x5c50000000000000ull, 4}, {0x3870000000000000ull, 5} };
@@ -399,6 +454,58 @@ int main(void) {
             CHECK(HAS(s1, "float2(as_type<float>(r8), as_type<float>(r9)) + float2(int2(int(r12 << 28) >> 28, int(r12 << 24) >> 28))") && HAS(s1, "component::z"), "TLD4S offsets from Rb, coordinates from Ra and Ra+1");
             maxwell_free(s1);
             XL_REFUSE(s2, STAGE_FRAGMENT, z, 0xf, "depth reference and offsets", "TLD4S dc+offset", i_tld4s(0, 2, 8, 12, 8, 1, 1, 0), ins_exit());
+        }
+        /* -- nx-shader round: varyings start at (0,0,0,1) (G7), NaN-exact FMNMX / FSETP.NE (G13), SR_Y_DIRECTION per origin (G14), VMNMX */
+        {
+            ShaderKey zz = {0};
+            XL_OK(g7, STAGE_VERTEX, zz, 0, "partial varying write", ins_ald(0, 0x80, 4), ins_ast(0, 0x70, 4), ins_ast(0, 0x90, 2), ins_exit());
+            CHECK(HAS(g7, "out.v1 = float4(0, 0, 0, 1);") && HAS(g7, "out.pos = float4(0, 0, 0, 1);"), "unwritten varying components default to (0,0,0,1) (G7)");
+            maxwell_free(g7);
+
+            XL_OK(mn, STAGE_FRAGMENT, zz, 0xf, "FMNMX", i_fmnmx(0, 1, 2, 7, 0), ins_exit());
+            CHECK(HAS(mn, "precise::fmin(") && HAS(mn, "precise::fmax(") && !HAS(mn, " fmin("), "FMNMX uses precise:: min/max");
+            maxwell_free(mn);
+#ifdef __APPLE__
+            const uint32_t qnan = 0x7fc00000u, one = 0x3f800000u, two = 0x40000000u;
+            for (int mm = 0; mm < 3; mm++) {        /* safe, relaxed, fast: the NaN-sensitive translations hold in every math mode */
+                ShaderKey uk = {0}; uk.rt_kind[0] = 2;
+                /* r0 = fmin(NaN, 1) ; r1 = fmax(1, NaN) ; r2 = (NaN NE 1) ? 2 : 1 (ordered: false) ; r3 = (2 NE 1) ? 2 : 1 */
+                XL_OK(nf, STAGE_FRAGMENT, uk, 0xf, "NaN FMNMX/FSETP", ins_mov32i(4, qnan), ins_mov32i(5, one), ins_mov32i(6, two),
+                      i_fmnmx(0, 4, 5, 7, 0), i_fmnmx(1, 5, 4, 7, 1), i_fsetp(0, 4, 5, 5), i_sel(2, 6, 5, 0), i_fsetp(1, 6, 5, 5), i_sel(3, 6, 5, 1), ins_exit());
+                uint32_t o[4] = {0};
+                if (nf->msl && run_fs_u4(nf->msl, o, mm))
+                    CHECK(o[0] == one && o[1] == one && o[2] == one && o[3] == two, "math mode %d: fmin(NaN,1)=%08x fmax(1,NaN)=%08x NaN.NE=%08x 2.NE.1=%08x", mm, o[0], o[1], o[2], o[3]);
+                maxwell_free(nf);
+            }
+            /* SR_Y_DIRECTION: -1.0 for the lower-left origin (default key), +1.0 for upper-left */
+            for (int ul = 0; ul < 2; ul++) {
+                ShaderKey uk = {0}; uk.rt_kind[0] = 2; uk.upper_left = ul;
+                XL_OK(yd, STAGE_FRAGMENT, uk, 0xf, "S2R SR_Y_DIRECTION", i_s2r(0, 0x12), ins_exit());
+                uint32_t o[4] = {0};
+                if (yd->msl && run_fs_u4(yd->msl, o, 0)) CHECK(o[0] == (ul ? 0x3f800000u : 0xbf800000u), "SR_Y_DIRECTION upper_left=%d reads %08x", ul, o[0]);
+                maxwell_free(yd);
+            }
+            /* VMNMX: the Animal Crossing word (R0 = max(max.u32(R1, R4), R10)), then byte/half selects, signedness, immediate, merge and accumulate ops */
+            {
+                ShaderKey uk = {0}; uk.rt_kind[0] = 2;
+                XL_OK(vm, STAGE_FRAGMENT, uk, 0xf, "VMNMX (AC 23e43e94e45bb1d5 @0x3e8)", ins_mov32i(1, 7), ins_mov32i(4, 0x90000000u), ins_mov32i(10, 3), 0x3b34056060470100ull,
+                      ins_mov32i(1, 0xfffffff0u), ins_mov32i(4, 5), ins_mov32i(10, 0x80000000u), 0x3b34056060470101ull,    /* r1 = max(max(0xfffffff0, 5), 0x80000000) */
+                      ins_mov32i(5, 0x0000ff02u), ins_mov32i(6, 0x00030004u), ins_mov32i(7, 0xaabbccddu),
+                      i_vmnmx(2, 5, 6, 7, 1, 1, 4, 1, 1, 0, 1, 0, 0),     /* min(s8 byte1 of r5 = -1, s16 half0 of r6 = 4) = -1 -> merge low 16 bits into r7: 0xaabbffff */
+                      i_vmnmx(3, 5, 0x123, 7, 0, 0, 0, 0, 0, 1, 4, 0, 0), /* max(u8 byte0 of r5 = 2, imm 0x123) = 0x123, + r7 */
+                      ins_exit());
+                uint32_t o[4] = {0};
+                if (vm->msl && run_fs_u4(vm->msl, o, 0))
+                    CHECK(o[0] == 0x90000000u && o[1] == 0xfffffff0u && o[2] == 0xaabbffffu && o[3] == 0xaabbccddu + 0x123u,
+                          "VMNMX results %08x %08x %08x %08x", o[0], o[1], o[2], o[3]);
+                maxwell_free(vm);
+                /* mixed signedness: max(s32 -1, u32 5) = 5 ; min(s32 -1, u32 0x80000000) = -1 (exact, 64-bit compare) */
+                XL_OK(vx, STAGE_FRAGMENT, uk, 0xf, "VMNMX mixed sign", ins_mov32i(5, 0xffffffffu), ins_mov32i(6, 5), ins_mov32i(7, 0x80000000u), ins_mov32i(9, 0),
+                      i_vmnmx(0, 5, 6, 9, 6, 1, 6, 0, 1, 1, 4, 0, 0), i_vmnmx(1, 5, 7, 9, 6, 1, 6, 0, 1, 0, 4, 0, 0), ins_exit());
+                if (vx->msl && run_fs_u4(vx->msl, o, 0)) CHECK(o[0] == 5 && o[1] == 0xffffffffu, "VMNMX mixed sign %08x %08x", o[0], o[1]);
+                maxwell_free(vx);
+            }
+#endif
         }
         const char *dir = getenv("NAPPLE_SHADER_CORPUS");
         if (dir) {

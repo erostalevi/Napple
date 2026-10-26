@@ -3,6 +3,7 @@
  *   0x00 steady clock context, 0x38 local system clock context, 0x80 network system clock context, 0xC8 automatic correction flag,
  * each a lock-free pair (u32 counter, two copies of the value; the reader uses copy [counter & 1]). */
 #include "../ipc.h"
+#include "../napple.h"
 #include "../timescale.h"
 #include "time_core.h"
 #include "hz_result.h"
@@ -20,6 +21,19 @@ static int64_t posix_now(void) { return (int64_t)time(NULL) + timescale_wall_ske
 static void system_context(uint8_t *p) {                       /* SystemClockContext, 0x20 */
     int64_t steady = steady_seconds(), off = posix_now() - steady;
     memcpy(p, &off, 8); memcpy(p + 8, &steady, 8); memcpy(p + 0x10, clock_source, 16);
+}
+
+/* nn::time::AdjustableUserSystemClock::GetCurrentTime, the clock Animal Crossing 3.0.3's days follow (SDK 20.5.4): the SDK reads it through a MonotonicSystemClock
+ * (sdk+0x4421cc) and, with the shared memory this service gives, the game saw epoch 0 (ToCalendarTime(0)), took the date and time for invalid
+ * (System_DateTimeNg event flow) and never left its boot sequence. The host answers with its own clock, as nxnative does. */
+static uint32_t h_adjustable_user_clock_now(int64_t *out) { if (out) *out = posix_now(); return 0; }
+static int h_adjustable_user_clock_timespec(int64_t *ts) { if (ts) { ts[0] = posix_now(); ts[1] = 0; } return 0; }
+void time_register_overrides(void) {
+    static HostSymbol table[] = {
+        {"_ZN2nn4time25AdjustableUserSystemClock14GetCurrentTimeEPNS0_9PosixTimeE", h_adjustable_user_clock_now},
+        {"_ZN2nn4time43GetAdjustableUserSystemClockCurrentTimespecEP8timespec", h_adjustable_user_clock_timespec},
+    };
+    host_symbols_register(table, sizeof table / sizeof *table);
 }
 
 static IpcSharedMemory *shmem;
@@ -111,6 +125,7 @@ static void tz_to_calendar_my_rule(IpcObject *s, IpcCall *c) {        /* 101: th
 }
 static void tz_to_calendar(IpcObject *s, IpcCall *c) {                /* 100: the rule the guest loaded; none we recognise -> UTC */
     (void)s; TimeRule r; int have = !rule_from_call(c, &r); TimeCalendar cal; TimeCalendarInfo info;
+    { static int n; if (getenv("NAPPLE_TIME_LOG") && n++ < 5) LOG("time", "ToCalendarTime(%lld) rule %s", (long long)IPC_IN(c, int64_t, 0), have ? "loaded" : "none"); }
     calendar_under(IPC_IN(c, int64_t, 0), have ? &r : NULL, &cal, &info); put_calendar(c, &cal, &info);
 }
 static void posix_out(IpcCall *c, int64_t t, int ok) {
@@ -179,6 +194,13 @@ static void st_user_clock_difference(IpcObject *s, IpcCall *c) {
     if (two_snapshots(c, &a, &b) || time_snapshot_span(&a, &b, &span)) { c->result = HZ_RESULT(HZ_MOD_TIME, 200); return; }
     int64_t ns = span * 1000000000ll; IPC_OUT(c, ns);
 }
+/* CalculateMonotonicSystemClockBaseTimePoint(SystemClockContext) -> s64: context.offset + now - context.steady_time_point, or a clock mismatch error. */
+static void st_monotonic_base(IpcObject *s, IpcCall *c) {
+    (void)s; const uint8_t *ctx = ipc_in(c, 0, 0x20); if (!ctx) { c->result = HZ_RESULT(HZ_MOD_TIME, 200); return; }
+    int64_t off, tp; memcpy(&off, ctx, 8); memcpy(&tp, ctx + 8, 8);
+    if (memcmp(ctx + 0x10, clock_source, 16)) { c->result = HZ_RESULT(HZ_MOD_TIME, 200); return; }   /* [unverified] ResultClockMismatch */
+    int64_t base = off + steady_seconds() - tp; IPC_OUT(c, base);
+}
 static void st_auto_correction_get(IpcObject *s, IpcCall *c) { (void)s; uint8_t v = (uint8_t)auto_correction; IPC_OUT(c, v); }
 static void st_auto_correction_set(IpcObject *s, IpcCall *c) { (void)s; auto_correction = IPC_IN(c, uint8_t, 0) != 0; }
 
@@ -196,6 +218,7 @@ static const IpcCmd static_cmds[] = {
     {100, "IsStandardUserSystemClockAutomaticCorrectionEnabled", st_auto_correction_get, IPC_IMPL},
     {101, "SetStandardUserSystemClockAutomaticCorrectionEnabled", st_auto_correction_set, IPC_IMPL}, {102, "GetStandardUserSystemClockInitialYear", st_initial_year, IPC_STUB},
     {200, "IsStandardNetworkSystemClockAccuracySufficient", svc_true, IPC_IMPL},
+    {300, "CalculateMonotonicSystemClockBaseTimePoint", st_monotonic_base, IPC_IMPL},
     {400, "GetClockSnapshot", st_get_snapshot, IPC_IMPL}, {401, "GetClockSnapshotFromSystemClockContext", st_get_snapshot_ctx, IPC_IMPL},
     {500, "CalculateStandardUserSystemClockDifferenceByUser", st_user_clock_difference, IPC_IMPL}, {501, "CalculateSpanBetween", st_span_between, IPC_IMPL},
 };

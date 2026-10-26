@@ -26,6 +26,7 @@ typedef struct {
     uint8_t rt_kind[8];     /* fragment outputs: 0 float, 1 signed int, 2 unsigned int */
     bool depth_minus_one;   /* NVN depth mode near = -w: remap clip z to [0, w] */
     bool flip_y;            /* lower-left window origin: flip clip y */
+    bool upper_left;        /* fragment: the guest's window origin is upper-left (SR_Y_DIRECTION reads +1; lower-left, the default, reads -1) */
     uint32_t depth_slots;   /* NVN combined-texture binding slots (c2 + 0x20 + 8 * slot) that hold depth textures: sampled as depth2d, result (d, 0, 0, 1) */
     bool point_prim;        /* vertex: the pipeline draws points (the point size output exists only then) */
     uint32_t vs_out_mask;   /* fragment: varyings the vertex shader provides (0 = unknown, all inputs are read) */
@@ -52,6 +53,8 @@ typedef struct {
     ShaderTexture tex[64];
     uint32_t attr_mask;     /* vertex: input attributes; fragment: input varyings */
     uint32_t out_mask;      /* vertex: output varyings; fragment: render targets written (4 bits each) */
+    uint32_t attr_read_mask;/* fragment: every varying the program reads by a constant address, provided by the vertex shader or not */
+    bool indexed_inputs;    /* fragment: varyings read through a register (the generated code then depends on the whole vs_out_mask) */
     bool writes_depth, uses_discard, writes_point_size;
     bool uses_gmem, uses_gmem_store;
     bool bindless_approx;       // a bindless handle indexed at run time was resolved to the first entry of its table (approximation)

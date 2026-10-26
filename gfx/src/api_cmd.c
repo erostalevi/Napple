@@ -27,7 +27,11 @@ typedef struct cmdbuf_host {
     uint8_t dummy[256];                       /* sink for commands recorded outside Begin/End */
 } cmdbuf_host;
 
+/* The per-buffer recording lists (recs / rec_chunk / rec_chunk_end) are updated under one lock: Animal Crossing was seen (v0, 1 run in 3) storing into a NULL
+ * rec_chunk while another thread was between the reallocs of the same list, so a command buffer is evidently touched by more than one thread at a time. */
+static pthread_mutex_t g_recs_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic uint64_t g_rec_live;
+static _Atomic uint64_t g_rec_bytes;      /* bytes held by live recordings (headers + command data) */
 static _Atomic uint64_t g_rel_why[5];
 static int g_cmdtrace = -1;                 /* NAPPLE_GFX_CMDTRACE=1: log recording lifetimes (command handle debugging) */
 #define CMDTRACE(...) do { if (g_cmdtrace < 0) g_cmdtrace = getenv("NAPPLE_GFX_CMDTRACE") != NULL; if (g_cmdtrace) fprintf(stderr, "[cmdtrace] " __VA_ARGS__); } while (0)      /* recordings released by: grave cap, chunk reuse, dead, live cap, finalize (diagnostics) */
@@ -44,6 +48,7 @@ void cmdrec_release(cmdrec *r) {
     htab_free(r->handle);
     r->magic = 0;
     atomic_fetch_sub(&g_rec_live, 1);
+    atomic_fetch_sub(&g_rec_bytes, sizeof *r + r->len);
     free(r);
 }
 cmdrec *cmdrec_from_handle(uint64_t h) {
@@ -57,12 +62,14 @@ static int pred_chunk(const cmdbuf_host *h, uint32_t i, uintptr_t a);
 static void grave_add(cmdrec *r);
 static void drop_recs(cmdbuf_host *h, int (*pred)(const cmdbuf_host *, uint32_t, uintptr_t), uintptr_t arg) {
     uint32_t k = 0;
+    pthread_mutex_lock(&g_recs_mu);
     for (uint32_t i = 0; i < h->nrecs; i++) {
         if (pred(h, i, arg) && pred == pred_chunk) { CMDTRACE("to grave %#llx (memory handed back)\n", (unsigned long long)h->recs[i]->handle); atomic_fetch_add(&g_rel_why[1], 1); grave_add(h->recs[i]); }
         else if (pred(h, i, arg)) { CMDTRACE("drop %#llx cb %p [%#lx,%#lx) why %s\n", (unsigned long long)h->recs[i]->handle, (void *)h, (unsigned long)h->rec_chunk[i], (unsigned long)h->rec_chunk_end[i], pred == pred_all ? "all" : pred == pred_dead ? "dead" : "reuse"); atomic_fetch_add(&g_rel_why[pred == pred_all ? 4 : pred == pred_dead ? 2 : 1], 1); LOGD("drop recording handle %#llx (%s)", (unsigned long long)h->recs[i]->handle, pred == pred_all ? "finalize" : pred == pred_dead ? "dead" : "chunk reuse"); cmdrec_release(h->recs[i]); }
         else { h->recs[k] = h->recs[i]; h->rec_chunk[k] = h->rec_chunk[i]; h->rec_chunk_end[k] = h->rec_chunk_end[i]; k++; }
     }
     h->nrecs = k;
+    pthread_mutex_unlock(&g_recs_mu);
 }
 static int pred_all(const cmdbuf_host *h, uint32_t i, uintptr_t a) { (void)h; (void)i; (void)a; return 1; }
 
@@ -70,42 +77,30 @@ static int pred_all(const cmdbuf_host *h, uint32_t i, uintptr_t a) { (void)h; (v
  * its command memory to another buffer, and keep calling the handle. SMO builds thousands of per-model display lists in exactly-sized scratch
  * allocations this way and calls them every frame (the memory it re-uses is what real NVN did not need: our size estimate is larger). A recording
  * is a host copy, so replaying it stays correct whatever happens to the guest memory. Recordings whose buffer was finalized or whose memory was
- * handed back therefore move to this graveyard and are released once the game has not used them for GRAVE_IDLE_S seconds, or when their handle
- * is finalized. GRAVE_CAP only bounds a game that leaks. */
-#define GRAVE_CAP (1u << 18)
-#define GRAVE_IDLE_S 30
-static cmdrec **g_grave; static uint32_t g_ngrave, g_capgrave, g_grave_pruned;
+ * handed back therefore move to this graveyard; they are released over a memory budget only (see rec_budget). */
+#define GRAVE_CAP (1u << 21)
+/* Finalized lists are kept until the recordings' memory exceeds a budget (NAPPLE_REC_BUDGET_MB, default 1024), then the least recently used of the oldest are released:
+ * never by idle time. SMO and MK8D call lists they recorded minutes earlier (a cutscene's parrot, menu to race); releasing them after 30 s made those calls drop
+ * ("CallCommands: stale or invalid command handle") and models drew without their setup (exploded geometry), 65 000 stale calls a minute in MK8D. */
+static uint64_t rec_budget(void) { static uint64_t b; if (!b) { const char *e = getenv("NAPPLE_REC_BUDGET_MB"); b = (e && atoll(e) > 0 ? (uint64_t)atoll(e) : 1024ull) << 20; } return b; }
+static cmdrec **g_grave; static uint32_t g_ngrave, g_capgrave;
 static pthread_mutex_t g_grave_mu = PTHREAD_MUTEX_INITIALIZER;
 uint32_t cmdrec_now(void) { return (uint32_t)(gfx_now_ns() / 1000000000ull); }
 static void grave_add(cmdrec *r) {
-    cmdrec *rel_stack[256], **rel = rel_stack; uint32_t nrel = 0, caprel = 256, now = cmdrec_now();
+    cmdrec *rel_stack[256], **rel = rel_stack; uint32_t nrel = 0; uint64_t freed = 0;
     pthread_mutex_lock(&g_grave_mu);
-    if (g_ngrave >= GRAVE_CAP) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "%u finalized command lists still alive: releasing the oldest", g_ngrave);
-        rel[nrel++] = g_grave[0]; memmove(g_grave, g_grave + 1, (g_ngrave - 1) * sizeof *g_grave); g_ngrave--;
-    }
     if (g_ngrave == g_capgrave) { g_capgrave = g_capgrave ? g_capgrave * 2 : 1024; g_grave = realloc(g_grave, g_capgrave * sizeof *g_grave); }
     g_grave[g_ngrave++] = r;
-    if (now != g_grave_pruned) {            /* at most once a second: release idle and finalized recordings */
-        g_grave_pruned = now;
-        uint32_t k = 0;
-        for (uint32_t i = 0; i < g_ngrave; i++) {
-            cmdrec *e = g_grave[i];
-            if (atomic_load(&e->dead) || now - atomic_load(&e->last_use) > GRAVE_IDLE_S) {      /* no per-pass cap: a cap of 256 a second let the graveyard grow to GRAVE_CAP (~2 GB) in live play */
-                if (nrel == caprel) {
-                    cmdrec **n = malloc((caprel *= 2) * sizeof *n); memcpy(n, rel, nrel * sizeof *n);
-                    if (rel != rel_stack) free(rel);
-                    rel = n;
-                }
-                rel[nrel++] = e; continue;
-            }
-            g_grave[k++] = e;
-        }
-        g_ngrave = k;
+    /* over the budget (or the safety cap): release the least recently used of the 1024 oldest, a few at a time */
+    while (nrel < 256 && g_ngrave && (atomic_load(&g_rec_bytes) - freed > rec_budget() || g_ngrave > GRAVE_CAP)) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "finalized command lists over the %llu MB budget (%u alive): releasing the least recently used", (unsigned long long)(rec_budget() >> 20), g_ngrave);
+        uint32_t vic = 0, lim = g_ngrave < 1024 ? g_ngrave : 1024;
+        for (uint32_t i = 1; i < lim; i++) if (atomic_load(&g_grave[i]->last_use) < atomic_load(&g_grave[vic]->last_use)) vic = i;
+        freed += sizeof *g_grave[vic] + g_grave[vic]->len;
+        rel[nrel++] = g_grave[vic]; memmove(g_grave + vic, g_grave + vic + 1, (g_ngrave - vic - 1) * sizeof *g_grave); g_ngrave--;
     }
     pthread_mutex_unlock(&g_grave_mu);
     for (uint32_t i = 0; i < nrel; i++) { CMDTRACE("grave release %#llx\n", (unsigned long long)rel[i]->handle); atomic_fetch_add(&g_rel_why[0], 1); cmdrec_release(rel[i]); }
-    if (rel != rel_stack) free(rel);
 }
 uint64_t gfx_cmdrec_live(void) { return atomic_load(&g_rec_live); }
 static uintptr_t g_reuse_hi;   /* end of the command memory being handed back (pred_chunk argument is its start) */
@@ -114,7 +109,15 @@ static int pred_chunk(const cmdbuf_host *h, uint32_t i, uintptr_t a) { return h-
 /* ---------------------------------------------------------------------------------------------------------------
  * Command buffer object
  * --------------------------------------------------------------------------------------------------------------- */
-#define CBH(c) (((cmd_t *)(c))->h)
+/* A command buffer that was never initialised or already finalized has no host part (h == NULL): the game may still call getters/setters on it (AC v0 crashed in
+ * GetCommandMemoryUsed on a null buffer). They then act on a scratch host object, so the call is a harmless no-op instead of a fault. */
+static cmdbuf_host g_null_host;
+static cmdbuf_host *cbh_get(const void *c) {
+    cmdbuf_host *h = c ? ((const cmd_t *)c)->h : NULL;
+    if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "command buffer call on a null or finalized command buffer ignored"); return &g_null_host; }
+    return h;
+}
+#define CBH(c) cbh_get(c)
 
 NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
     (void)d;
@@ -136,11 +139,13 @@ NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) {
     cmdbuf_host *h = o->h;
     if (o->magic != CB_MAGIC || !h) return;
     CMDTRACE("finalize cb %p (%u recordings)\n", (void *)h, h->nrecs);
+    pthread_mutex_lock(&g_recs_mu);
     for (uint32_t i = 0; i < h->nrecs; i++) grave_add(h->recs[i]);   /* handles stay valid after the buffer is gone */
     h->nrecs = 0;
     for (uint32_t i = 0; i < h->nchild; i++) cmdrec_release(h->children[i]);
     free(h->children); free(h->recs); free(h->rec_chunk); free(h->rec_chunk_end); free(h->buf); free(h);
     memset(o, 0, sizeof *o);
+    pthread_mutex_unlock(&g_recs_mu);
 }
 NVN(nvnCommandBufferSetDebugLabel, void, NVNcommandBuffer *c, const char *l) { (void)c; (void)l; }
 NVN(nvnCommandBufferSetMemoryCallback, void, NVNcommandBuffer *c, PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb) { CBH(c)->cb = cb; }
@@ -168,18 +173,20 @@ NVN(nvnCommandBufferGetControlMemorySize, size_t, const NVNcommandBuffer *c) { r
 /* Control memory is not consumed (recordings are host-side), so none is in use and all of it is free. */
 NVN(nvnCommandBufferGetControlMemoryUsed, size_t, const NVNcommandBuffer *c) { (void)c; return 0; }
 NVN(nvnCommandBufferGetControlMemoryFree, size_t, const NVNcommandBuffer *c) { return CBH(c)->ctl_size; }
-NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return ((const cmd_t *)c)->recording; }
+NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return c ? ((const cmd_t *)c)->recording : 0; }
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Record writer
  * --------------------------------------------------------------------------------------------------------------- */
 static void *rec_op(NVNcommandBuffer *c, uint16_t op, uint32_t payload) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = o->h;
+    cmdbuf_host *h = o ? o->h : NULL;
+    if (!h) { static uint8_t scratch[64]; LOG_ONCE(NAPPLE_LOG_WARN, "command recorded on a null or finalized command buffer ignored"); memset(scratch, 0, sizeof scratch); return scratch; }
     if (!o->recording) {
         LOG_ONCE(NAPPLE_LOG_WARN, "command recorded outside BeginRecording/EndRecording (op %u) ignored", op);
         return h->dummy;
     }
+    { static int tr = -1; if (tr < 0) tr = getenv("NAPPLE_NVNTRACE") != NULL; if (tr) fprintf(stderr, "[nvntrace] cb %p op %u\n", (void *)c, op); }     /* record-order op stream (diagnostics) */
     uint32_t size = (uint32_t)((sizeof(op_hdr) + payload + 7) & ~7u);
     if (h->len + size > h->cap) {
         size_t nc = h->cap * 2;
@@ -202,7 +209,8 @@ static void *rec_op(NVNcommandBuffer *c, uint16_t op, uint32_t payload) {
 
 NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = o->h;
+    cmdbuf_host *h = o ? o->h : NULL;
+    if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "BeginRecording on a null or finalized command buffer ignored"); return; }
     if (o->recording) LOG_ONCE(NAPPLE_LOG_WARN, "BeginRecording while already recording");
     h->len = 0;
     h->rec_lo = h->cmd_base + h->used_est;
@@ -214,7 +222,8 @@ NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
 
 NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = o->h;
+    cmdbuf_host *h = o ? o->h : NULL;
+    if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording on a null or finalized command buffer ignored"); return 0; }
     if (!o->recording) { LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording without BeginRecording"); return 0; }
     rec_op(c, OP_END, 0);
     o->recording = 0;
@@ -232,7 +241,9 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     atomic_init(&r->last_use, cmdrec_now());
     r->handle = htab_alloc(r);
     atomic_fetch_add(&g_rec_live, 1);
+    atomic_fetch_add(&g_rec_bytes, sizeof *r + r->len);
     /* keep the recording alive as long as the game may still submit it */
+    pthread_mutex_lock(&g_recs_mu);
     if (h->nrecs >= MAX_LIVE_RECS) {
         LOG_ONCE(NAPPLE_LOG_WARN, "command buffer holds %u recordings: releasing the oldest (handles of reused command memory)", h->nrecs);
         atomic_fetch_add(&g_rel_why[3], 1);
@@ -254,6 +265,7 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     h->rec_chunk[h->nrecs] = lo;
     h->rec_chunk_end[h->nrecs] = h->cmd_base + h->used_est > lo ? h->cmd_base + h->used_est : lo + 1;
     h->nrecs++;
+    pthread_mutex_unlock(&g_recs_mu);
     LOGD("EndRecording -> handle %#llx (%u bytes recorded)", (unsigned long long)r->handle, r->len);
     CMDTRACE("end %#llx cb %p [%#lx,%#lx) len %u\n", (unsigned long long)r->handle, (void *)h, (unsigned long)h->rec_chunk[h->nrecs - 1], (unsigned long)h->rec_chunk_end[h->nrecs - 1], r->len);
     return r->handle;

@@ -296,6 +296,53 @@ static void sample_positions(uint8_t *n, uint8_t pos[8]) {
     *n = S.ms.sl_n < 8 ? S.ms.sl_n : 8;
     memcpy(pos, S.ms.sl_pos, *n);
 }
+/* "Orphan composite": a frame whose largest render target is never sampled while the window texture only receives a couple of small draws.
+ * Animal Crossing 3.0.3 renders its whole picture (scene, tone map, UI) into a 1920x1080 RGB10A2 target that no draw ever reads; the window texture gets one
+ * 500x110 label quad (state inherited from the previous draw). nxnative shows the same title's picture, so something on the way to the window is still missing
+ * here (found by comparing op streams, see the change note). Until that is found the host presents the orphan target instead: a stopgap, only used when
+ * a target of at least 80% of the window area was drawn into, nothing sampled it and the window got at most two draws. */
+#define FT_MAX 48
+static struct { GfxTex *t; id<MTLTexture> mt; uint32_t w, h; uint32_t draws; int display; } g_ft_rt[FT_MAX];
+static int g_ft_n, g_ft_cur = -1;
+static GfxTex *g_ft_sampled[256]; static int g_ft_ns;
+static uint32_t g_ft_win_draws;
+static uint64_t g_ft_win_maxsample;     /* largest texture (texels) sampled by a draw into the window texture this frame */
+static pthread_mutex_t g_ft_mu = PTHREAD_MUTEX_INITIALIZER;
+static void ft_note_rt(GfxTex *t, id<MTLTexture> mt) {
+    pthread_mutex_lock(&g_ft_mu);
+    int i; for (i = 0; i < g_ft_n; i++) if (g_ft_rt[i].t == t) break;
+    if (i == g_ft_n && g_ft_n < FT_MAX) { g_ft_rt[g_ft_n++] = (typeof(g_ft_rt[0])){ t, mt, t->w, t->h, 0, (t->key.d.flags & 1) != 0 }; }
+    else if (i < g_ft_n) g_ft_rt[i].mt = mt;
+    g_ft_cur = i < g_ft_n ? i : -1;
+    pthread_mutex_unlock(&g_ft_mu);
+}
+static void ft_note_draw(void) { pthread_mutex_lock(&g_ft_mu); if (g_ft_cur >= 0) { g_ft_rt[g_ft_cur].draws++; if (g_ft_rt[g_ft_cur].display) g_ft_win_draws++; } pthread_mutex_unlock(&g_ft_mu); }
+static void ft_note_sampled(GfxTex *t) { pthread_mutex_lock(&g_ft_mu); if (g_ft_cur >= 0 && g_ft_rt[g_ft_cur].display && (uint64_t)t->w * t->h > g_ft_win_maxsample) g_ft_win_maxsample = (uint64_t)t->w * t->h; for (int i = 0; i < g_ft_ns; i++) if (g_ft_sampled[i] == t) { pthread_mutex_unlock(&g_ft_mu); return; } if (g_ft_ns < 256) g_ft_sampled[g_ft_ns++] = t; pthread_mutex_unlock(&g_ft_mu); }
+/* Called by the present path for every presented frame (resets the per-frame tables); returns the texture to show instead of the window texture, or nil. */
+id<MTLTexture> mtl_frame_present_pick(uint32_t win_w, uint32_t win_h) {
+    id<MTLTexture> pick = nil;
+    pthread_mutex_lock(&g_ft_mu);
+    /* the window draws sampled nothing bigger than a quarter of the window: they cannot be the copy of a full picture (SMO's window copy samples its composite) */
+    if (g_ft_win_draws >= 1 && g_ft_win_draws <= 2 && g_ft_win_maxsample * 4 < (uint64_t)win_w * win_h && !getenv("NAPPLE_NO_ORPHAN")) {
+        uint64_t best = 0;
+        for (int i = 0; i < g_ft_n; i++) {
+            if (g_ft_rt[i].display || g_ft_rt[i].draws < 8 || !g_ft_rt[i].mt) continue;      /* a real composite takes many draws (tone map, UI layers) */
+            uint64_t area = (uint64_t)g_ft_rt[i].w * g_ft_rt[i].h;
+            if (area * 5 < (uint64_t)win_w * win_h * 4 || area <= best) continue;
+            int sampled = 0; for (int k = 0; k < g_ft_ns; k++) if (g_ft_sampled[k] == g_ft_rt[i].t) sampled = 1;
+            if (sampled) continue;
+            MTLPixelFormat pf = g_ft_rt[i].t->pf;
+            if (pf == MTLPixelFormatDepth32Float || pf == MTLPixelFormatDepth16Unorm || pf == MTLPixelFormatDepth32Float_Stencil8) continue;
+            best = area; pick = g_ft_rt[i].mt;
+            { static int nl; if (getenv("NAPPLE_ORPHANLOG") && nl++ < 10) fprintf(stderr, "[orphan] pick %ux%u pf %d draws %u (window draws %u, window max sample %llu texels, %d targets, %d sampled)\n", g_ft_rt[i].w, g_ft_rt[i].h, (int)g_ft_rt[i].t->pf, g_ft_rt[i].draws, g_ft_win_draws, (unsigned long long)g_ft_win_maxsample, g_ft_n, g_ft_ns); }
+        }
+    }
+    g_ft_n = 0; g_ft_ns = 0; g_ft_win_draws = 0; g_ft_win_maxsample = 0; g_ft_cur = -1;
+    pthread_mutex_unlock(&g_ft_mu);
+    return pick;
+}
+id<MTLTexture> g_dbg_composite;
+id<MTLTexture> mtl_dbg_composite(void) { return g_dbg_composite; }
 static int pass_begin(void) {
     if (P.open) return 1;
     if (!S.rt_valid) return 0;
@@ -324,6 +371,8 @@ static int pass_begin(void) {
         id<MTLTexture> mt = mtl_tex_attach_view(t, &S.rt.color[i].view, S.rt.color[i].has_view, &lv, &sl);
         MTLRenderPassColorAttachmentDescriptor *a = rp.colorAttachments[i];
         a.texture = mt; a.level = lv;
+        if (i == 0) ft_note_rt(t, mt);
+        if (i == 0 && t->pf == MTLPixelFormatRGB10A2Unorm && t->w >= 1280) g_dbg_composite = mt;     /* NAPPLE_SHOT_COMPOSITE: the last 3D-scene composite, shown instead of the window texture in screenshots */
         if (t->tex.textureType == MTLTextureType3D) a.depthPlane = sl; else a.slice = sl;
         if (P.clear_color[i]) {
             a.loadAction = MTLLoadActionClear;
@@ -564,7 +613,7 @@ static void clear_color_quad(uint32_t index, uint32_t kind, uint32_t mask, const
 }
 
 static void do_clear_color(const p_clear_color *c) {
-    if (c->index >= 8) return;
+    if (c->index >= 8 || !S.render_enable) return;
     GfxTex *t = (c->index < S.rt.n) ? mtl_tex_get(&S.rt.color[c->index].s, 1) : nil;
     if (!t) return;
     if (!P.open) pass_info_from_rt();
@@ -579,7 +628,7 @@ static void do_clear_color(const p_clear_color *c) {
 }
 
 static void do_clear_ds(const p_clear_ds *c) {
-    if (!S.rt.depth.s.valid) return;
+    if (!S.rt.depth.s.valid || !S.render_enable) return;
     GfxTex *d = mtl_tex_get(&S.rt.depth.s, 1);
     if (!d) return;
     if (!P.open) pass_info_from_rt();
@@ -798,6 +847,8 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
                 uint64_t va = gpu_va(S.ssbo[stage][i].addr, S.ssbo[stage][i].size);
                 e[0] = (uint32_t)va; e[1] = (uint32_t)(va >> 32); e[2] = (uint32_t)S.ssbo[stage][i].size;
             }
+            /* c0 + 0x610: the largest point size (Maxwell's limit, 2047); GLSLC clamps a shader-written gl_PointSize to it (SMO's point sprites, nxnative G6) */
+            if (!compute) { const float max_point = 2047.0f; memcpy(p + 0x610, &max_point, 4); }
             if (compute) {
                 uint32_t *g = (uint32_t *)(p + 0x200); g[0] = cs_groups[0]; g[1] = cs_groups[1]; g[2] = cs_groups[2];
                 for (int i = 0; i < 14; i++) {       /* uniform buffers read through global memory (compute shaders): GPU virtual addresses, like the SSBOs */
@@ -869,7 +920,7 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
                                                  (unsigned)e->s.d.target, (unsigned)e->s.d.depth, (unsigned long)gt->tex.textureType, (unsigned long)gt->tex.width, (unsigned long)gt->tex.height, (unsigned long)gt->tex.depth, (unsigned long)gt->tex.arrayLength, st->type);
             if (gt && g_drawlog_verbose && gt->tex.textureType == MTLTextureType3D && gt->tex.width <= 16) g_dbg_3d = gt;
             if (gt && g_drawlog_on && getenv("NAPPLE_DRAWLOG_TEX")) { static uintptr_t seen[256]; static int ns; int dup = 0; for (int q = 0; q < ns; q++) dup |= seen[q] == (uintptr_t)gt->key.mem; if (!dup && ns < 256) { seen[ns++] = (uintptr_t)gt->key.mem; mtl_tex_prepare_sample(gt); mtl_tex_debug_dump(gt, getenv("NAPPLE_DRAWLOG_TEX"), 0); } }
-            if (gt) { mtl_tex_prepare_sample(gt); tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, st->type, st->shadow); if (rscale_ptr && i < 64) { rscale_ptr[(i + 1) * 4] = gt->rsx > 0 ? gt->rsx : 1; rscale_ptr[(i + 1) * 4 + 1] = gt->rsy > 0 ? gt->rsy : 1; } }
+            if (gt) { ft_note_sampled(gt); mtl_tex_prepare_sample(gt); tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, st->type, st->shadow); if (rscale_ptr && i < 64) { rscale_ptr[(i + 1) * 4] = gt->rsx > 0 ? gt->rsx : 1; rscale_ptr[(i + 1) * 4 + 1] = gt->rsy > 0 ? gt->rsy : 1; } }
             if (gt && g_drawlog_verbose && e->s.d.width * e->s.d.height <= 16) {         /* tiny data textures (animation / wind parameters): print guest bytes and what the GPU texture holds */
                 const uint32_t *raw = (const uint32_t *)(uintptr_t)gt->key.mem; uint8_t back[128] = {0};
                 if (!gt->gpu_owned && gt->tex && gt->tex.width * gt->tex.height <= 16 && gt->pf == MTLPixelFormatRG11B10Float) [gt->tex getBytes:back bytesPerRow:128 fromRegion:MTLRegionMake2D(0, 0, gt->tex.width, gt->tex.height) mipmapLevel:0];
@@ -998,7 +1049,7 @@ static void do_draw_texture(const p_draw_tex *dt) {
     [g_re setViewport:vp];
     [g_re setScissorRect:scissor_rect()];
     [g_re drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
-    P.draws++;
+    P.draws++; ft_note_draw();
     atomic_fetch_add(&g_gfx.draws, 1);
     g_pk_dirty = 1; g_cur_pipe = nil;
 }
@@ -1012,6 +1063,7 @@ static int streams_misaligned(void) {
 
 /* Prepare pipeline + state for a draw. Returns 0 when the draw must be skipped. */
 static int prepare_draw(uint32_t prim) {
+    if (!S.render_enable && getenv("NAPPLE_RCLOG")) { static uint64_t n; if (n++ % 1000 == 0) fprintf(stderr, "[rclog] draw skipped by render enable #%llu: rt0 %ux%u fmt %d vs %016llx fs %016llx\n", (unsigned long long)n, S.rt.color[0].s.d.width, S.rt.color[0].s.d.height, S.rt.color[0].s.d.format, (unsigned long long)S.prog[ST_VS], (unsigned long long)S.prog[ST_FS]); }
     if (!S.render_enable || S.raster_discard) return 0;
     if (!S.prog[ST_VS]) return 0;
     drawlog_update();
@@ -1095,7 +1147,7 @@ static int prepare_draw(uint32_t prim) {
     }
     bind_stage(ST_VS, p->vs, g_re, 0, NULL);
     if (p->fs) bind_stage(ST_FS, p->fs, g_re, 0, NULL);
-    P.draws++;
+    P.draws++; ft_note_draw();
     atomic_fetch_add(&g_gfx.draws, 1);
     return 1;
 }
@@ -1492,7 +1544,33 @@ static void wait_event(const p_event *e) {
     cb_begin();
 }
 
+/* Conditional rendering (NVN SetRenderEnableConditional): the condition compares the 64-bit counters at addr and addr + 16, evaluated here at replay from
+ * memory. A timestamp report replayed earlier in the same submission has not reached memory yet and counts as 0 (the time goes in the second field of the
+ * record); a samples-passed result (an occlusion query) is only known when the GPU completes, so a condition on it keeps drawing. (Animal Crossing and Zelda TOTK
+ * wrap their clears in these conditions: ignoring them wipes targets that were just drawn, a black frame; the idea comes from nxnative's render_cond.) */
+#define RC_PEND 256
+static struct { uint64_t addr; int ts; } g_rc_pend[RC_PEND];
+static int g_rc_npend;
+static void rc_note_report(uint64_t addr, uint32_t type, int is_value) {
+    if (g_rc_npend >= RC_PEND) g_rc_npend = 0;
+    g_rc_pend[g_rc_npend].addr = addr; g_rc_pend[g_rc_npend].ts = !is_value && type != NVN_COUNTER_TYPE_SAMPLES_PASSED && type < 0x20; g_rc_npend++;
+}
+static int rc_value(uint64_t a, uint64_t *v) {          /* 0 = not known at replay time */
+    for (int i = g_rc_npend - 1; i >= 0; i--) if (g_rc_pend[i].addr == a) { if (!g_rc_pend[i].ts) return 0; *v = 0; return 1; }
+    if (a < 0x100000 || (a & 7)) return 0;
+    *v = *(const volatile uint64_t *)(uintptr_t)a; return 1;
+}
 static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
+    { static long fr = -2; if (fr == -2) { const char *e = getenv("NAPPLE_OPLOG_FRAME"); fr = e ? atol(e) : -1; }
+      if (fr >= 0 && (long)atomic_load(&g_gfx.frames) == fr) {
+        fprintf(stderr, "[oplog] d%d op %u", depth, h->op);
+        if (h->op == OP_SET_RT) { const p_set_rt *r = (const p_set_rt *)pl; fprintf(stderr, " n %u c0 mem %#llx %ux%u fmt %d", r->n, (unsigned long long)(uintptr_t)r->color[0].s.mem, r->color[0].s.d.width, r->color[0].s.d.height, r->color[0].s.d.format); }
+        else if (h->op == OP_BIND_TEX) { const uint32_t *u = (const uint32_t *)pl; fprintf(stderr, " stage %u first %u n %u:", u[0], u[1], u[2]); for (uint32_t k = 0; k < u[2] && k < 16; k++) fprintf(stderr, " %llu", (unsigned long long)(((const uint64_t *)(u + 4))[k] & 0xfffff)); }
+        else if (h->op == OP_BIND_PROGRAM) { const p_bind_program *b = (const p_bind_program *)pl; fprintf(stderr, " mask %x vs %016llx fs %016llx", b->stage_mask, (unsigned long long)b->hash[0], (unsigned long long)b->hash[4]); }
+        else if (h->op == OP_CALL) { const p_call *c = (const p_call *)pl; const uint64_t *l = (const uint64_t *)(c + 1); fprintf(stderr, " count %u", c->count); for (uint32_t i = 0; i < c->count && i < 6; i++) { const cmdrec *r = (const cmdrec *)(uintptr_t)l[i]; fprintf(stderr, " [len %u nchild %u magic %#x]", r->len, r->nchildren, r->magic); } }
+        else if (h->op == OP_BIND_UBO || h->op == OP_BIND_SSBO || h->op == OP_BIND_VBUF || h->op == OP_DRAW_ELEMENTS) { const uint64_t *q = (const uint64_t *)pl; fprintf(stderr, " w %016llx %016llx %016llx %016llx", (unsigned long long)q[0], (unsigned long long)q[1], (unsigned long long)q[2], (unsigned long long)q[3]); }
+        else if (h->op == OP_RENDER_ENABLE) { const uint32_t *u = (const uint32_t *)pl; fprintf(stderr, " en %u mode %u addr %#llx", u[0], u[1], (unsigned long long)*(const uint64_t *)(u + 2)); }
+        fputc('\n', stderr); } }
     switch (h->op) {
     case OP_CALL: {
         const p_call *c = (const p_call *)pl;
@@ -1554,7 +1632,12 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
     case OP_ALPHA_REF: S.alpha_ref = *(const float *)pl; break;
     case OP_DEPTH_CLAMP: S.depth_clamp = (int)*(const uint32_t *)pl; break;
     case OP_RASTER_DISCARD: S.raster_discard = (int)*(const uint32_t *)pl; break;
-    case OP_RENDER_ENABLE: { const uint32_t *u = (const uint32_t *)pl; S.render_enable = u[1] ? 1 : (int)u[0]; if (u[1]) LOG_ONCE(NAPPLE_LOG_WARN, "conditional rendering is treated as always enabled"); break; }
+    case OP_RENDER_ENABLE: { const uint32_t *u = (const uint32_t *)pl;
+        if (!u[1]) { S.render_enable = (int)u[0]; break; }
+        uint64_t addr = *(const uint64_t *)(u + 2), x = 0, y = 0;
+        int known = rc_value(addr, &x) && rc_value(addr + 16, &y), if_not_equal = (int)u[1] - 1;
+        int skip = known && (if_not_equal ? x == y : x != y);
+        S.render_enable = !skip; break; }
     case OP_LINE_WIDTH: case OP_POINT_SIZE: case OP_SAMPLE_MASK: case OP_DEPTH_BOUNDS: break;
     case OP_CLEAR_COLOR: do_clear_color((const p_clear_color *)pl); break;
     case OP_CLEAR_DS: do_clear_ds((const p_clear_ds *)pl); break;
@@ -1582,6 +1665,11 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
     case OP_WAIT_EVENT: wait_event((const p_event *)pl); break;
     case OP_REPORT_COUNTER: {
         const p_counter *c = (const p_counter *)pl;
+        rc_note_report(c->addr, c->type, c->type == 0x100);
+        /* In-order GPU semantics for the CPU's view: a timestamp report zeroes the counter field now, not when the command buffer completes. The game's condition
+         * for its next clear of this target reads the same record (it sets the counter to 1 when the target needs a clear, the report resets it): evaluated against the
+         * old value it would clear a target nothing drew into since, or skip one that was drawn. The time field is still written at completion. */
+        if (c->type != 0x100 && c->type != NVN_COUNTER_TYPE_SAMPLES_PASSED && c->type < 0x20 && c->addr >= 0x100000 && !(c->addr & 7)) __atomic_store_n((uint64_t *)(uintptr_t)c->addr, 0, __ATOMIC_SEQ_CST);
         if (c->type == 0x100) { post_add(6, c->addr, c->pad, 0); break; }          /* ReportValue */
         if (c->type == NVN_COUNTER_TYPE_SAMPLES_PASSED) { if (!g_occl) { g_occl = 1; LOGI("occlusion queries in use: counting samples"); } vis_close(); }
         post_add(2, c->addr, c->type, 0);
@@ -1611,7 +1699,9 @@ static void exec_rec(const cmdrec *r, int depth) {
 void replay_run_submission(cmdrec *const *recs, uint32_t n, uint64_t seq) {
     static int init;
     if (!init) { state_reset(); init = 1; }
+    { const char *e = getenv("NAPPLE_OPLOG_FRAME"); if (e && (long)atomic_load(&g_gfx.frames) == atol(e)) fprintf(stderr, "[oplog] ==== submission seq %llu recs %u\n", (unsigned long long)seq, n); }
     g_seq = seq;
+    g_rc_npend = 0;
     cb_begin();
     for (uint32_t i = 0; i < n; i++) exec_rec(recs[i], 0);
     flush_clears();

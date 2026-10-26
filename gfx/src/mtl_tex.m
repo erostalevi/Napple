@@ -1,4 +1,5 @@
 /* mtl_tex.m - Metal textures from guest texture descriptors: creation, upload (block-linear -> Metal), views, samplers, vertex formats. */
+#include <TargetConditionals.h>
 #include <pthread.h>
 
 #import "mtl_priv.h"
@@ -72,7 +73,7 @@ static MTLTextureType type_for(const napple_texdesc *d, uint32_t *layers_out) {
     case 5: t = MTLTextureType2DMultisample; break;
     case 6: t = MTLTextureType2DMultisampleArray; layers = d->depth ? d->depth : 1; break;
     case 8: t = MTLTextureTypeCube; layers = 6; break;
-    case 9: t = MTLTextureTypeCubeArray; layers = (d->depth ? d->depth : 1) * 6; break;
+    case 9: t = MTLTextureTypeCubeArray; layers = d->depth ? d->depth : 6; break;   /* depth counts layer-faces (see napple_layout.c) */
     default: t = MTLTextureType2D; break;
     }
     *layers_out = layers;
@@ -106,6 +107,9 @@ static GfxTex *tex_create(const texsnap *s, int for_gpu_write) {
     td.arrayLength = (type == MTLTextureTypeCubeArray) ? layers / 6 : (type == MTLTextureType2DArray || type == MTLTextureType1DArray || type == MTLTextureType2DMultisampleArray) ? layers : 1;
     td.sampleCount = t->samples;
     td.storageMode = MTLStorageModeShared;
+#if TARGET_OS_IOS
+    if (t->is_depth) td.storageMode = MTLStorageModePrivate;       /* iOS and the iOS Simulator reject depth/stencil textures with Shared storage */
+#endif
     td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
     td.usage |= MTLTextureUsageRenderTarget;
     if (d->flags & 0x4) td.usage |= MTLTextureUsageShaderWrite;       /* NVN_TEXTURE_FLAGS_IMAGE */

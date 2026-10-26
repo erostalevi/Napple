@@ -8,9 +8,10 @@ const char *host_user_name(void) { return "Tester"; }
 int main(void) {
     MiiCharInfo m;
     for (uint32_t i = 0; i < MII_DEFAULT_COUNT; i++) { mii_build_default(i, &m); CHECK(mii_char_info_valid(&m), "default Mii %u is inside every editor range", i); }
-    mii_build_default(0, &m); MiiCharInfo m1; mii_build_default(1, &m1);
+    mii_build_default(0, &m); MiiCharInfo m1; mii_build_default(3, &m1);   /* defaults 0..2 male, 3..5 female */
     CHECK(m.gender != m1.gender && memcmp(m.create_id, m1.create_id, 16) != 0, "defaults differ in gender and id");
-    CHECK(m.name[0] == 'M' && m.name[3] == 0, "default name is NUL-terminated UTF-16");
+    CHECK((m.create_id[6] & 0xf0) == 0x40 && (m.create_id[8] & 0xc0) == 0x80, "default create id is a UUID v4 (CharInfo::Verify)");
+    CHECK(m.name[0] == 'n' && m.name[7] == 0, "default name \"no name\" is NUL-terminated UTF-16");
     MiiCharInfo wrap; mii_build_default(MII_DEFAULT_COUNT + 2, &wrap); mii_build_default(2, &m); CHECK(!memcmp(&wrap, &m, sizeof m), "index wraps");
     uint16_t u[8]; size_t n = mii_utf8_to_utf16("A\xC3\xA9\xE2\x82\xAC", u, 8); CHECK(n == 3 && u[0] == 'A' && u[1] == 0xE9 && u[2] == 0x20AC, "UTF-8 to UTF-16 (BMP)");
     CHECK(mii_count(0) == 0 && mii_count(MII_FLAG_DATABASE) == 1 && mii_count(MII_FLAG_DEFAULT) == 6 && mii_count(3) == 7, "counts by source flag");
