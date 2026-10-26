@@ -142,3 +142,16 @@ Not proven by the Simulator (still open): signing and AMFI/exec-page rules for t
 - **Memory budget on a phone (from nxnative's notes, `docs/reference/memory.md`):** without `extended-virtual-addressing` a single 6 GB reservation succeeds but Metal needs address space too; 5 GB total is the proven figure on a phone. Our device layout reserves 6 GiB (0.75 stack/gaps + 3.25 heap + 1 gap + 1 alias), so the device build may fail at Metal setup, and LAS needs more than the 3.25 GiB heap. Candidate layout to try on a device: drop the 1 GiB tail gap (0.75 + 3.25 + 1 = 5 GiB), and give LAS a profile-sized pool. Not applied: no device and the purpose of `low_gap_v` is unverified.
 - **Not measured:** RSS of the four titles on the Simulator (game data under `work/games` was removed by another session for disk space; rebuilding needs 6-18 GB each, disk had 2.6 GB free). Studio `swift test` and per-title IPA sizes (only LAS: 3.99 GB compressed) not run for the same reason.
 - nxnative rows not applicable to my paths: G10/G13/G19 (gfx: present hardening, iOS relaxed math, same-pass feedback snapshot) are needs for the gfx owners; T2 (CI with an iOS compile smoke, `nxnative/dm/ios/tools/build_smoke.py`) is a CI item; T5 (iOS build/launcher settings table) is only partially useful: `tools/build_ios.sh` could take a per-title settings file.
+
+## Simulator re-run on integrated main (2026-10-26, main after the 2026-10-26-nx batch; iPhone 17 Simulator, iOS 27.1)
+
+`SDK=iphonesimulator VPX=1 tools/build_ios_deps.sh && SDK=iphonesimulator tools/build_ios.sh` (needed the a32jit.c fix in `build_ios.sh`), `napple build --target ios-sim` (LAS, SMO full RomFS; ACNH 3.0.3 + 3 DLC and MK8D 3.0.5 + DLC with `--update-romfs delta`, about 11 GB each), `simctl install`, `SIMCTL_CHILD_NAPPLE_INPUT_SCRIPT` for A presses, screenshots through the Simulator tool. Unattended or scripted only.
+
+| Title | Where it stops |
+|---|---|
+| LAS | intro movie at 61 fps (~66 s), **title screen** "Press L+R" at ~95 s, 55 fps; scripted A at 75/82/88 s did not leave the title (the title wants L+R). No abort |
+| SMO | **Start / Assist Mode menu** at ~55 s; scripted A at 60 s -> abort: `This set of render targets requires 48 bytes of pixel storage. This device supports 32 bytes.` (build_pipe) |
+| ACNH 3.0.3 + DLC | abort at ~2.3 s, same 48-byte colour-attachment assertion, before any frame was shown (macOS shows the Nook Inc. scene) |
+| MK8D 3.0.5 + DLC (AArch64) | past `time:u:300` now; abort at ~2.3 s with the same 48-byte assertion |
+
+All three aborts are the Simulator GPU's 32-byte colour-attachment budget (A11+ devices allow 64; unverified on a device). One gfx fix (split or fall back on wide MRT sets when the device limit is 32) would likely unblock SMO past its menu, ACNH and MK8D on the Simulator.
