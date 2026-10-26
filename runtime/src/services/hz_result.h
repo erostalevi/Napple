@@ -28,6 +28,9 @@ enum {
     HZ_MOD_AUDIO_IN = HZ_MOD_AUDIO,
     HZ_MOD_IRSENSOR = 205,
     HZ_MOD_CAPTURE = 206,
+    HZ_MOD_PSM = 133, /* [unverified] */
+    HZ_MOD_LBL = 131, /* [unverified] */
+    HZ_MOD_APM = 127, /* [unverified] */
 };
 
 /* Results the offline answers use. */
@@ -39,6 +42,7 @@ enum {
 #define HZ_R_NS_APPLICATION_NOT_FOUND HZ_RESULT(HZ_MOD_NS, 400)                        /* [unverified] */
 #define HZ_R_BCAT_NOT_FOUND HZ_RESULT(HZ_MOD_BCAT, 20)                                 /* [unverified] */
 #define HZ_R_CAPTURE_NOT_FOUND HZ_RESULT(HZ_MOD_CAPTURE, 5)                            /* [unverified] */
+#define HZ_R_CAPTURE_INVALID_ARGUMENT HZ_RESULT(HZ_MOD_CAPTURE, 2)                          /* [unverified] */
 #define HZ_R_CAPTURE_SCREENSHOT_NOT_PERMITTED HZ_RESULT(HZ_MOD_CAPTURE, 1052)          /* [unverified] */
 #define HZ_R_LDN_NETWORK_NOT_AVAILABLE HZ_RESULT(HZ_MOD_LDN, 22)                       /* [unverified] */
 #define HZ_R_IRSENSOR_NOT_CONNECTED HZ_RESULT(HZ_MOD_IRSENSOR, 3)                      /* [unverified] */

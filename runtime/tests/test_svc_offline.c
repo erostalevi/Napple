@@ -33,7 +33,7 @@ int main(void) {
     CHECK(HZ_MODULE(friend_pop_notification_result()) == HZ_MOD_FRIENDS && friend_pop_notification_result() != 0, "friend pop result");
 
     /* bsd:u IPC */
-    IpcObject *bs = bsd_open(); IpcCall c; bsd_ready = 0;
+    IpcObject *bs = bsd_open(); IpcCall c; bsdg_reset(bsd_g()); online_null_reset();
     bcall(bs, 2, BSD_AF_INET, BSD_SOCK_STREAM, 0, &c); CHECK(c.out_size == 8 && bsd_ret(&c, 0) == 0 && bsd_ret(&c, 1) == 0, "Socket -> {0, 0}");
     int32_t fd = 0; svc_call(bs, 14, &fd, 4, &c); CHECK(bsd_ret(&c, 0) == -1 && bsd_ret(&c, 1) == HZ_ENETDOWN, "Connect -> {-1, ENETDOWN}");
     svc_call(bs, 8, &fd, 4, &c); CHECK(bsd_ret(&c, 1) == HZ_ENOTCONN, "Recv on an unconnected stream -> ENOTCONN");

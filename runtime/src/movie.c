@@ -26,6 +26,7 @@
 #include "napple.h"
 #include "gfx.h"
 #include "movie.h"
+#include "movie_audio_core.h"
 #include "vt_h264.h"
 #include <arm_neon.h>
 #include <pthread.h>
@@ -58,7 +59,20 @@ static int h264_type(void) {
     }
     return v;
 }
-enum { TYPE_VP9 = 3, MODE_BUFFER = 1, MODE_TEXTURE = 2, FORMAT_NV12 = 4, FLAG_EOS = 4 };
+enum { TYPE_VP9 = 3, TYPE_VORBIS = 5, MODE_BUFFER = 1, MODE_TEXTURE = 2, FORMAT_NV12 = 4, FORMAT_PCM = 1, FLAG_EOS = 4 };
+/* Vorbis audio (type 5, PCM output, buffer mode) through movie_audio_core (stb_vorbis): raw packets in, interleaved s16 PCM out, one output slot per
+ * packet that yields samples. Off unless NAPPLE_MOVIE_VORBIS=1 until the Mac check passes on the titles that play movie audio (media-services
+ * 2026-10-26: written on Linux, never run with the SDK library); NAPPLE_MOVIE_VORBIS=0 forces it off once the default flips. */
+#define MOVIE_VORBIS_DEFAULT 0
+enum { AUDIO_OUT_CAP = 131072 }; /* bytes per PCM output slot: 8192 frames of 8 channels at 16 bits, the most one packet can yield */
+static int vorbis_on(void) {
+    static int v = -1;
+    if (v < 0) {
+        const char *e = getenv("NAPPLE_MOVIE_VORBIS");
+        v = e ? strcmp(e, "0") != 0 : MOVIE_VORBIS_DEFAULT;
+    }
+    return v;
+}
 enum {
     ST_OK = 0,
     ST_ERROR = 0x1000,
@@ -90,6 +104,8 @@ typedef struct {
     vpx_codec_ctx_t vpx;
     int vpx_live;
     int h264;
+    int vorbis, arate, ach; /* Vorbis audio: rate and channel count once the header packets are in */
+    VorbisPcm *vp;
     VtH264 *vt; /* H.264 decoder (VideoToolbox) instead of libvpx */
     uint8_t *in[IN_BUFS];
     int in_free[IN_BUFS], nin_free;
@@ -220,7 +236,7 @@ static void fire(const Signals *s) {
     for (int i = 0; i < s->n; i++) G.signal_event(s->ev[i]);
 }
 
-static int frame_bytes(const Movie *m) { return m->w * m->h + (m->w / 2) * (m->h / 2) * 2; }
+static int frame_bytes(const Movie *m) { return m->vorbis ? AUDIO_OUT_CAP : m->w * m->h + (m->w / 2) * (m->h / 2) * 2; }
 
 /* I420 (libvpx) -> packed NV12: Y rows, then rows of interleaved U, V. */
 static void to_nv12(const vpx_image_t *img, uint8_t *dst, int w, int h) {
@@ -254,7 +270,7 @@ static int free_out(const Movie *m) {
 static void push_ready(Movie *m, Signals *s, int slot, unsigned flags, int64_t time, int bytes) {
     m->out_held[slot] = 1;
     m->out_bytes[slot] = bytes;
-    if (pace_on()) {
+    if (pace_on() && !m->vorbis) { /* audio is not paced by presents */
         m->decoded[m->ndecoded++] = (Ready){slot, flags, time};
         return;
     }
@@ -338,7 +354,31 @@ static int decode_one(Movie *m, Signals *s, const Pending *p) {
     int freeslots = 0;
     for (int i = 0; i < OUT_BUFS; i++) freeslots += !m->out_held[i];
     if (freeslots < need) return 0;
-    if (p->size > 0 && m->h264) {
+    if (p->size > 0 && m->vorbis) {
+        int slot = free_out(m), frames = 0, chans = m->ach > 0 ? m->ach : 1, room = AUDIO_OUT_CAP / 2 / chans;
+        int rc = vorbispcm_packet(m->vp, m->in[p->index] + p->offset, (size_t)p->size, (int16_t *)m->out[slot],
+                                  room < VORBISPCM_MAX_FRAMES ? room : VORBISPCM_MAX_FRAMES, &frames);
+        if (rc == AUDIO_NEED_MORE) {
+            if (!m->errors++) MLOG("Vorbis audio packet before the three header packets: dropped");
+        } else if (rc < 0) {
+            m->errors++;
+            m->last_error = ST_ERROR;
+            note(m, s, EV_ERROR);
+            if (m->errors <= 4) MLOG("Vorbis decode error (%d) on a %d-byte packet at %lld us", rc, p->size, (long long)p->time);
+        } else {
+            if (!m->format_sent && vorbispcm_ready(m->vp)) {
+                m->format_sent = 1;
+                m->arate = vorbispcm_rate(m->vp);
+                m->ach = vorbispcm_channels(m->vp);
+                MLOG("Vorbis headers read: %d Hz, %d channels", m->arate, m->ach);
+                if (negative() != 2) note(m, s, EV_FORMAT);
+            }
+            if (frames > 0) {
+                push_ready(m, s, slot, 0, p->time, frames * m->ach * 2);
+                m->frames++;
+            }
+        }
+    } else if (p->size > 0 && m->h264) {
         uint64_t t0 = now_ns();
         if (vth264_decode(m->vt, m->in[p->index] + p->offset, (size_t)p->size, p->time, h264_frame, &(H264Out){m, s}) < 0) {
             m->errors++;
@@ -409,6 +449,10 @@ static void release_codec(Movie *m) {
         vth264_destroy(m->vt);
         m->vt = NULL;
     }
+    if (m->vp) {
+        vorbispcm_destroy(m->vp);
+        m->vp = NULL;
+    }
     for (int i = 0; i < IN_BUFS; i++) {
         free(m->in[i]);
         m->in[i] = NULL;
@@ -438,8 +482,11 @@ static void h_ctor(void *obj, int type, int format, int mode, int priority) {
     MLOG("decoder object %p: type %d output format %d mode %d priority %d%s", obj, type, format, mode, priority,
          g_old_ctor ? " (older library: type/format only)" : "");
     int is264 = type == h264_type() && type != TYPE_VP9;
-    if ((type != TYPE_VP9 && !is264) || (mode != MODE_BUFFER && mode != MODE_TEXTURE)) {
-        MLOG("decoder type %d mode %d format %d: left to the library (only VP9 and H.264 in buffer or texture mode run on the host)", type, mode, format);
+    int isvorbis = type == TYPE_VORBIS && format == FORMAT_PCM && mode == MODE_BUFFER && vorbis_on() && !is264;
+    if (!isvorbis && ((type != TYPE_VP9 && !is264) || (mode != MODE_BUFFER && mode != MODE_TEXTURE))) {
+        MLOG(
+            "decoder type %d mode %d format %d: left to the library (only VP9 and H.264 in buffer or texture mode, and Vorbis audio when enabled, run on the host)",
+            type, mode, format);
         if (g_old_ctor) ((void (*)(void *, int, int))G.orig[MOVIE_CTOR])(obj, type, format);
         else ((ctor_fn)G.orig[MOVIE_CTOR])(obj, type, format, mode, priority);
         return;
@@ -448,6 +495,7 @@ static void h_ctor(void *obj, int type, int format, int mode, int priority) {
     if (!m) runtime_fail("movie decoder allocation");
     m->guest = obj;
     m->h264 = is264;
+    m->vorbis = isvorbis;
     m->format = format;
     m->mode = mode;
     pthread_mutex_init(&m->mu, NULL);
@@ -464,8 +512,15 @@ static void h_ctor(void *obj, int type, int format, int mode, int priority) {
     pthread_mutex_unlock(&g_lock);
     ((void **)obj)[0] = G.vptr;
     ((void **)obj)[1] = m;
-    MLOG("%s decoder %p on the host (%s), mode %d (%s), output format %d", is264 ? "H.264" : "VP9", obj, is264 ? "VideoToolbox" : vpx_codec_version_str(), mode,
-         mode == MODE_TEXTURE ? "NVN texture" : "buffer", format);
+    MLOG("%s decoder %p on the host (%s), mode %d (%s), output format %d",
+         isvorbis ? "Vorbis"
+         : is264  ? "H.264"
+                  : "VP9",
+         obj,
+         isvorbis ? "stb_vorbis"
+         : is264  ? "VideoToolbox"
+                  : vpx_codec_version_str(),
+         mode, mode == MODE_TEXTURE ? "NVN texture" : "buffer", format);
 }
 /* Older movie libraries construct with (type, output format) only: buffer mode, default priority. */
 static void h_ctor_old(void *obj, int type, int format) { h_ctor(obj, type, format, MODE_BUFFER, 0); }
@@ -526,6 +581,31 @@ static int h_configure(void *obj, void *format) {
     G.md_find_int32(format, "width", &w);
     G.md_find_int32(format, "height", &h);
     MLOG("host decoder %p configure: mime %s %dx%d", obj, mime ? mime : "(none)", w, h);
+    if (m->vorbis) {
+        int rate = 0, chans = 0;
+        G.md_find_int32(format, "sample-rate", &rate);
+        G.md_find_int32(format, "channel-count", &chans);
+        if (!mime || strcmp(mime, "audio/vorbis")) {
+            MLOG("configure: mime %s not supported by the Vorbis decoder", mime ? mime : "(none)");
+            return ST_UNSUPPORTED;
+        }
+        pthread_mutex_lock(&m->mu);
+        release_codec(m);
+        if (!(m->vp = vorbispcm_create())) runtime_fail("Vorbis decoder allocation");
+        for (int i = 0; i < IN_BUFS; i++)
+            if (!(m->in[i] = malloc(IN_CAP))) runtime_fail("movie input buffers");
+        for (int i = 0; i < OUT_BUFS; i++)
+            if (!(m->out[i] = malloc(AUDIO_OUT_CAP))) runtime_fail("movie output buffers");
+        reset_queues(m);
+        m->format_sent = 0;
+        m->arate = rate;
+        m->ach = chans;
+        m->configured = 1;
+        m->last_error = 0;
+        pthread_mutex_unlock(&m->mu);
+        MLOG("configured Vorbis audio (%d Hz, %d channels announced; the header packets give the real values)", rate, chans);
+        return ST_OK;
+    }
     if (m->mode == MODE_BUFFER && m->format != FORMAT_NV12) {
         MLOG("output format %d not implemented on the host (NV12 = 4 only)", m->format);
         return ST_UNSUPPORTED;
@@ -565,6 +645,13 @@ static int h_register_events(void *obj, void *events) {
     return ST_OK;
 }
 static void set_format(Movie *m, void *md) {
+    if (m->vorbis) {
+        G.md_set_string(md, "mime", "audio/raw");
+        G.md_set_int32(md, "sample-rate", m->arate);
+        G.md_set_int32(md, "channel-count", m->ach);
+        G.md_set_int32(md, "pcm-encoding", 2); /* ENCODING_PCM_16BIT */
+        return;
+    }
     G.md_set_string(md, "mime", "video/raw");
     G.md_set_int32(md, "width", m->w);
     G.md_set_int32(md, "height", m->h);
@@ -626,10 +713,13 @@ static int h_flush(void *obj) {
     Movie *m = find(obj);
     if (!m) return ((int_fn)G.orig[MOVIE_FLUSH])(obj);
     pthread_mutex_lock(&m->mu);
-    if (m->configured && m->h264) {
+    if (m->configured && m->vorbis) {
+        vorbispcm_flush(m->vp);
+        reset_queues(m);
+    } else if (m->configured && m->h264) {
         vth264_reset(m->vt);
         reset_queues(m);
-    }                         /* parameter sets are kept: decoding resumes at the next IDR */
+    } /* parameter sets are kept: decoding resumes at the next IDR */
     else if (m->configured) { /* drop queued work; the next input starts a new decode (after a seek: a key frame) */
         vpx_codec_destroy(&m->vpx);
         m->vpx_live = 0;

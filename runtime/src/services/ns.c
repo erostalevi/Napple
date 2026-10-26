@@ -83,29 +83,32 @@ static void cm_occupied(IpcObject *s, IpcCall *c) {
 }
 static const IpcCmd cm_cmds[] = {
     {11, "CalculateApplicationOccupiedSize", cm_occupied, IPC_STUB},
-    {43, "CheckSdCardMountStatus", svc_noop, IPC_STUB},
+    {43, "CheckSdCardMountStatus", svc_noop, IPC_IMPL},
     {47, "GetTotalSpaceSize", cm_total_space, IPC_IMPL},
     {48, "GetFreeSpaceSize", cm_free_space, IPC_IMPL},
 };
 
-/* IApplicationVersionInterface */
+/* IApplicationVersionInterface: the host runs the one version it was built from, so no launch version is ever required and no update list exists; auto update
+ * and the eShop calls need the network and answer with the offline result. All complete answers (class c). Still stubs below: ListApplicationRecord and
+ * friends (the host has no installed-application database: needs the napple-build manifest to list the running title) and GetApplicationControlData
+ * / content-path queries (need control.nacp and the content layout from napple-build; follow-up for whoever owns the build layout). */
 static const IpcCmd ver_cmds[] = {
-    {0, "GetLaunchRequiredVersion", svc_ret_u32_0, IPC_STUB},
-    {1, "UpgradeLaunchRequiredVersion", svc_noop, IPC_STUB},
-    {35, "UpdateVersionList", svc_noop, IPC_STUB},
-    {36, "PushLaunchVersion", svc_noop, IPC_STUB},
-    {37, "ListRequiredVersion", ret_s32_0, IPC_STUB},
-    {1000, "PerformAutoUpdate", offline_error, IPC_STUB},
+    {0, "GetLaunchRequiredVersion", svc_ret_u32_0, IPC_IMPL},
+    {1, "UpgradeLaunchRequiredVersion", svc_noop, IPC_IMPL},
+    {35, "UpdateVersionList", svc_noop, IPC_IMPL},
+    {36, "PushLaunchVersion", svc_noop, IPC_IMPL},
+    {37, "ListRequiredVersion", ret_s32_0, IPC_IMPL},
+    {1000, "PerformAutoUpdate", offline_error, IPC_IMPL},
 };
 /* IECommerceInterface: every call needs the eShop */
 static const IpcCmd ec_cmds[] = {
-    {0, "RequestLinkDevice", offline_error, IPC_STUB},
-    {1, "RequestCleanupAllPreInstalledApplications", offline_error, IPC_STUB},
-    {2, "RequestSyncRights", offline_error, IPC_STUB},
-    {3, "RequestUnlinkDevice", offline_error, IPC_STUB},
+    {0, "RequestLinkDevice", offline_error, IPC_IMPL},
+    {1, "RequestCleanupAllPreInstalledApplications", offline_error, IPC_IMPL},
+    {2, "RequestSyncRights", offline_error, IPC_IMPL},
+    {3, "RequestUnlinkDevice", offline_error, IPC_IMPL},
 };
 /* IDownloadTaskInterface / IDocumentInterface: nothing is downloading */
-static const IpcCmd dl_cmds[] = {{701, "ClearTaskStatusList", svc_noop, IPC_STUB}, {702, "RequestDownloadTaskList", ret_s32_0, IPC_STUB}};
+static const IpcCmd dl_cmds[] = {{701, "ClearTaskStatusList", svc_noop, IPC_IMPL}, {702, "RequestDownloadTaskList", ret_s32_0, IPC_IMPL}};
 static const IpcCmd doc_cmds[] = {{21, "GetApplicationContentPath", app_not_found, IPC_STUB}, {23, "ResolveApplicationContentPath", app_not_found, IPC_STUB}};
 
 #define SUB(fn, name, table)                                                                                                                                   \
@@ -128,7 +131,7 @@ static IpcObject *am2_open(void) { return IPC_OBJECT("ns:am2", getter_cmds, NULL
 static IpcObject *ec_open(void) { return IPC_OBJECT("ns:ec", getter_cmds, NULL, NULL); }
 
 /* ns:vm (IVulnerabilityManagerInterface): the emulated system is always up to date, so there is nothing to patch. */
-static const IpcCmd vm_cmds[] = {{1200, "NeedsUpdateVulnerability", svc_ret_u8_0, IPC_STUB}, {1201, "UpdateSafeSystemVersionForDebug", svc_noop, IPC_STUB}};
+static const IpcCmd vm_cmds[] = {{1200, "NeedsUpdateVulnerability", svc_ret_u8_0, IPC_IMPL}, {1201, "UpdateSafeSystemVersionForDebug", svc_noop, IPC_IMPL}};
 static IpcObject *vm_open(void) { return IPC_OBJECT("ns:vm", vm_cmds, NULL, NULL); }
 void service_register_ns(void) {
     ipc_register_service("ns:am2", am2_open);

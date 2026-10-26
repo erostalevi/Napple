@@ -143,17 +143,32 @@ static void dev_active_name(IpcObject *s, IpcCall *c) {
         ipc_write_buf(c, b, name, b->size < sizeof name ? b->size : sizeof name);
     }
 }
+/* Device events (QueryAudioDeviceSystemEvent / InputEvent / OutputEvent): fire when the set of devices or the active device changes. The
+ * writable ends are kept so audio_device_changed() (called by the host when the Mac's default device changes) can signal them; a title that
+ * waits on one is woken once per change, as on a console when a headset is plugged in. */
+#define AUDIO_DEV_EVENTS 24
+static uint32_t dev_events[AUDIO_DEV_EVENTS];
+static unsigned ndev_events;
 static void dev_event(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint32_t r = 0;
-    event_create(&r);
+    uint32_t r = 0, w = event_create(&r);
+    if (ndev_events == AUDIO_DEV_EVENTS) { /* a guest that keeps asking: recycle the oldest slot */
+        memmove(dev_events, dev_events + 1, (AUDIO_DEV_EVENTS - 1) * sizeof dev_events[0]);
+        ndev_events--;
+    }
+    dev_events[ndev_events++] = w;
     ipc_out_copy_handle(c, r);
+}
+void audio_device_changed(void) {
+    for (unsigned i = 0; i < ndev_events; i++) event_signal_handle(dev_events[i]);
 }
 static void dev_channels(IpcObject *s, IpcCall *c) {
     (void)s;
     uint32_t v = (uint32_t)napple_audio_device_channel_count();
     IPC_OUT(c, v);
 }
+/* The system master volume setting is the console's volume slider; the host has no such slider (the Mac's own volume applies), so the title
+ * always sees full scale and applies its own gain on top. */
 static void dev_master_volume(IpcObject *s, IpcCall *c) {
     (void)s;
     float v = 1.0f;
@@ -164,15 +179,15 @@ static const IpcCmd dev_cmds[] = {
     {1, "SetAudioDeviceOutputVolume", dev_set_volume, IPC_IMPL},
     {2, "GetAudioDeviceOutputVolume", dev_get_volume, IPC_IMPL},
     {3, "GetActiveAudioDeviceName", dev_active_name, IPC_IMPL},
-    {4, "QueryAudioDeviceSystemEvent", dev_event, IPC_STUB},
+    {4, "QueryAudioDeviceSystemEvent", dev_event, IPC_IMPL},
     {5, "GetActiveChannelCount", dev_channels, IPC_IMPL},
     {6, "ListAudioDeviceNameAuto", dev_list_names, IPC_IMPL},
     {7, "SetAudioDeviceOutputVolumeAuto", dev_set_volume, IPC_IMPL},
     {8, "GetAudioDeviceOutputVolumeAuto", dev_get_volume, IPC_IMPL},
     {10, "GetActiveAudioDeviceNameAuto", dev_active_name, IPC_IMPL},
-    {11, "QueryAudioDeviceInputEvent", dev_event, IPC_STUB},
-    {12, "QueryAudioDeviceOutputEvent", dev_event, IPC_STUB},
-    {13, "GetAudioSystemMasterVolumeSetting", dev_master_volume, IPC_STUB},
+    {11, "QueryAudioDeviceInputEvent", dev_event, IPC_IMPL},
+    {12, "QueryAudioDeviceOutputEvent", dev_event, IPC_IMPL},
+    {13, "GetAudioSystemMasterVolumeSetting", dev_master_volume, IPC_IMPL},
 };
 static IpcObject *make_device(void) {
     audio_init_once();
@@ -183,6 +198,7 @@ static IpcObject *make_device(void) {
 typedef struct {
     napple_audren *r;
     EventPair *ev;
+    int manual; /* OpenAudioRendererForManualExecution: no render thread, the guest calls ExecuteAudioRendererRendering */
 } Renderer;
 static void rend_destroy(IpcObject *o) {
     Renderer *r = o->state;
@@ -255,6 +271,15 @@ static void rend_get_limit(IpcObject *s, IpcCall *c) {
     uint32_t v = napple_audren_get_time_limit(r->r);
     IPC_OUT(c, v);
 }
+/* Renders one frame on the calling thread. Only a renderer opened for manual execution accepts it (the console answers an invalid state). */
+static void rend_execute(IpcObject *s, IpcCall *c) {
+    Renderer *r = s->state;
+    if (!r->manual) {
+        c->result = 153u | (7u << 9);
+        return;
+    }
+    napple_audren_render_frame(r->r);
+}
 static const IpcCmd rend_cmds[] = {
     {0, "GetSampleRate", rend_sample_rate, IPC_IMPL},
     {1, "GetSampleCount", rend_sample_count, IPC_IMPL},
@@ -267,18 +292,18 @@ static const IpcCmd rend_cmds[] = {
     {8, "SetRenderingTimeLimit", rend_set_limit, IPC_IMPL},
     {9, "GetRenderingTimeLimit", rend_get_limit, IPC_IMPL},
     {10, "RequestUpdateAuto", rend_update, IPC_IMPL},
-    {11, "ExecuteAudioRendererRendering", noop, IPC_STUB},
+    {11, "ExecuteAudioRendererRendering", rend_execute, IPC_IMPL},
 };
 
 /* ---- audren:u ------------------------------------------------------------------------------------------------------------------------ */
-static void mgr_open(IpcObject *s, IpcCall *c) {
-    (void)s;
+static void mgr_open_impl(IpcCall *c, int manual) {
     audio_init_once();
     const uint8_t *param = ipc_in(c, 0, NAPPLE_AUDREN_PARAM_SIZE);
     Renderer *r = calloc(1, sizeof *r);
     r->ev = new_event_pair();
     napple_audio_host h = make_host(r->ev, 1);
-    int rc = napple_audren_open(param, NAPPLE_AUDREN_PARAM_SIZE, &h, 0, &r->r);
+    r->manual = manual;
+    int rc = napple_audren_open(param, NAPPLE_AUDREN_PARAM_SIZE, &h, manual ? NAPPLE_AUDREN_MANUAL : 0, &r->r);
     if (rc) {
         LOG("audio", "OpenAudioRenderer failed (%d)", rc);
         free(r);
@@ -288,6 +313,14 @@ static void mgr_open(IpcObject *s, IpcCall *c) {
     LOG("audio", "audio renderer opened: %d Hz, %d samples per frame, %d mix buffers, revision %#x", napple_audren_sample_rate(r->r),
         napple_audren_sample_count(r->r), napple_audren_mix_buffer_count(r->r), napple_audren_revision(r->r));
     ipc_out_object(c, IPC_OBJECT("IAudioRenderer", rend_cmds, r, rend_destroy));
+}
+static void mgr_open(IpcObject *s, IpcCall *c) {
+    (void)s;
+    mgr_open_impl(c, 0);
+}
+static void mgr_open_manual(IpcObject *s, IpcCall *c) {
+    (void)s;
+    mgr_open_impl(c, 1);
 }
 static void mgr_work_size(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -307,7 +340,7 @@ static const IpcCmd audren_cmds[] = {
     {0, "OpenAudioRenderer", mgr_open, IPC_IMPL},
     {1, "GetWorkBufferSize", mgr_work_size, IPC_IMPL},
     {2, "GetAudioDeviceService", mgr_device, IPC_IMPL},
-    {3, "OpenAudioRendererForManualExecution", mgr_open, IPC_IMPL},
+    {3, "OpenAudioRendererForManualExecution", mgr_open_manual, IPC_IMPL},
     {4, "GetAudioDeviceServiceWithRevisionInfo", mgr_device, IPC_IMPL},
 };
 static IpcObject *audren_open(void) { return IPC_OBJECT("audren:u", audren_cmds, NULL, NULL); }
@@ -382,18 +415,18 @@ static void out_contains(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, v);
 }
 static void out_count(IpcObject *s, IpcCall *c) {
-    (void)s;
-    uint32_t v = 0;
+    AudOut *a = s->state;
+    uint32_t v = napple_audout_buffer_count(a->o);
     IPC_OUT(c, v);
 }
 static void out_played(IpcObject *s, IpcCall *c) {
-    (void)s;
-    uint64_t v = 0;
+    AudOut *a = s->state;
+    uint64_t v = napple_audout_played_samples(a->o);
     IPC_OUT(c, v);
 }
 static void out_flush(IpcObject *s, IpcCall *c) {
-    (void)s;
-    uint8_t v = 0;
+    AudOut *a = s->state;
+    uint8_t v = (uint8_t)napple_audout_flush(a->o);
     IPC_OUT(c, v);
 }
 static const IpcCmd out_cmds[] = {
@@ -406,9 +439,9 @@ static const IpcCmd out_cmds[] = {
     {6, "ContainsAudioOutBuffer", out_contains, IPC_IMPL},
     {7, "AppendAudioOutBufferAuto", out_append, IPC_IMPL},
     {8, "GetReleasedAudioOutBuffersAuto", out_released, IPC_IMPL},
-    {9, "GetAudioOutBufferCount", out_count, IPC_STUB},
-    {10, "GetAudioOutPlayedSampleCount", out_played, IPC_STUB},
-    {11, "FlushAudioOutBuffers", out_flush, IPC_STUB},
+    {9, "GetAudioOutBufferCount", out_count, IPC_IMPL},
+    {10, "GetAudioOutPlayedSampleCount", out_played, IPC_IMPL},
+    {11, "FlushAudioOutBuffers", out_flush, IPC_IMPL},
 };
 static void aout_list(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -645,11 +678,13 @@ static void opus_decode_common(IpcObject *s, IpcCall *c, int reset, int perf) {
 static void opus_dec_old(IpcObject *s, IpcCall *c) { opus_decode_common(s, c, 0, 0); }
 static void opus_dec_perf_old(IpcObject *s, IpcCall *c) { opus_decode_common(s, c, 0, 1); }
 static void opus_dec(IpcObject *s, IpcCall *c) { opus_decode_common(s, c, IPC_IN(c, uint8_t, 0) != 0, 1); }
+/* SetContext / SetContextForMultiStream hand the decoder its saved state buffer; the decoder state lives inside libnapple_audio (the guest's
+ * work buffer is never used), so there is nothing to restore: a documented no-op. */
 static const IpcCmd opus_cmds[] = {
     {0, "DecodeInterleavedOld", opus_dec_old, IPC_IMPL},
-    {1, "SetContext", noop, IPC_STUB},
+    {1, "SetContext", noop, IPC_IMPL},
     {2, "DecodeInterleavedForMultiStreamOld", opus_dec_old, IPC_IMPL},
-    {3, "SetContextForMultiStream", noop, IPC_STUB},
+    {3, "SetContextForMultiStream", noop, IPC_IMPL},
     {4, "DecodeInterleavedWithPerfOld", opus_dec_perf_old, IPC_IMPL},
     {5, "DecodeInterleavedForMultiStreamWithPerfOld", opus_dec_perf_old, IPC_IMPL},
     {6, "DecodeInterleaved", opus_dec, IPC_IMPL},

@@ -32,6 +32,7 @@ struct napple_audout {
     unsigned qhead, qcount;
     uint64_t released[MAX_QUEUED];
     unsigned rcount;
+    uint64_t played_frames; /* frames of guest data handed to the engine since open (silence is not counted) */
     nae_source *out;
 };
 
@@ -72,6 +73,7 @@ static void consume(napple_audout *o, uint32_t frames) {
         uint32_t n = left < want ? (uint32_t)left : want;
         to_stereo((const int16_t *)(const void *)(b->data + b->done * o->channels * 2), o->channels, n, lr + 2 * produced);
         b->done += n;
+        o->played_frames += n;
         produced += n;
         frames -= n;
         if (b->done >= b->frames) {
@@ -212,3 +214,34 @@ void napple_audout_pump(napple_audout *o, uint32_t frames) {
 
 /* Test/diagnostic hook: latest frames handed to the output engine. */
 int audout_peek(napple_audout *o, float *lr, int frames) { return nae_source_peek(o->out, lr, frames); }
+
+/* GetAudioOutBufferCount: buffers the guest appended and has not yet taken back (still queued, or released but not yet fetched). */
+uint32_t napple_audout_buffer_count(const napple_audout *o) {
+    napple_audout *m = (napple_audout *)(uintptr_t)o;
+    pthread_mutex_lock(&m->lock);
+    uint32_t n = o->qcount + o->rcount;
+    pthread_mutex_unlock(&m->lock);
+    return n;
+}
+/* GetAudioOutPlayedSampleCount: sample frames consumed from guest buffers. */
+uint64_t napple_audout_played_samples(const napple_audout *o) {
+    napple_audout *m = (napple_audout *)(uintptr_t)o;
+    pthread_mutex_lock(&m->lock);
+    uint64_t n = o->played_frames;
+    pthread_mutex_unlock(&m->lock);
+    return n;
+}
+/* FlushAudioOutBuffers: abandon whatever is still queued; every queued buffer is released at once (its tag becomes available through
+ * get_released). Returns 1 when there was something to flush. */
+int napple_audout_flush(napple_audout *o) {
+    pthread_mutex_lock(&o->lock);
+    int any = o->qcount != 0;
+    while (o->qcount) {
+        if (o->rcount < MAX_QUEUED) o->released[o->rcount++] = o->q[o->qhead].tag;
+        o->qhead = (o->qhead + 1) % MAX_QUEUED;
+        o->qcount--;
+    }
+    pthread_mutex_unlock(&o->lock);
+    if (any && o->host.buffer_event) o->host.buffer_event(o->host.user);
+    return any;
+}

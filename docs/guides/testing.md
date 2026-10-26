@@ -54,7 +54,7 @@ Not in CI: anything that needs game files, keys or firmware (boots of the refere
 
 ### Linux subset: `tools/linux-check`
 `runtime/` only builds on macOS; `tools/linux-check` checks the portable service code on Linux (details in `tools/linux-check/README.md`):
-- `sh tools/linux-check/run-tests.sh [runtime/tests/test_svc_x.c ...]` compiles each `test_svc_*.c` with every `src/services/*_core.c` and `ipc_mock.c` (a stand-in for `ipc.c`, `kernel.c`, `log.c`) and runs it. Measured: 29 of 32 pass with `"failed":0`;
+- `sh tools/linux-check/run-tests.sh [runtime/tests/test_svc_x.c ...]` compiles each `test_svc_*.c` with every `src/services/*_core.c` and `ipc_mock.c` (a stand-in for `ipc.c`, `kernel.c`, `log.c`) and runs it. Measured: 29 of 32 pass with `"failed":0` (33 of 36 after sim-online added `test_svc_online`, `test_svc_irs_sim`, `test_svc_amiibo`, `test_svc_nfp`);
   `test_svc_fs` and `test_svc_fs_dataid` do not link (`romfs_map.c` is not part of the script), `test_svc_time` does not link (`host_symbols_register`). Sanitizers:
   `ASAN_OPTIONS=detect_leaks=0 CC="gcc -fsanitize=address,undefined" sh tools/linux-check/run-tests.sh`.
 - `sh tools/linux-check/check-syntax.sh [file.c ...]` runs `-fsyntax-only` with gcc and clang over `src/services/*.c` with stub headers (measured: "syntax check: all clean", with warnings in `hid.c`, `ncm.c`; skips `fs.c`, `nvdrv.c`).
@@ -108,3 +108,4 @@ Booting the reference titles needs the user's own game files and keys, so it is 
 | `audio/`, `input/`, `frontend/` | the matching `make -C <dir> test` |
 | `studio/` | `swift test --package-path studio` |
 | any `*.md` | `python3 tools/check_docs.py` |
+| `compat/matrix.json`, `docs/titles/*`, the coverage snapshot | `python3 -I tools/support/gen_support.py` (regenerates the support tables), then `python3 tools/check_docs.py` |

@@ -61,3 +61,13 @@ Behaviour cases (jump-table shapes incl. halfword tables padded to the largest e
 
 ## nx-kernel (2026-10-26)
 Behaviour (not code) of nxnative (MIT, copyright seedds) docs/reference/threads.md and services.md was used as the specification for the same-core handoff, sleep_precise, ideal-core -3, history-ring prefill, shake and offline push-service stand-ins in runtime/src/threads.c, input/src and runtime/src/services/push.c. No nxnative source was copied.
+
+## gfx/src/shader (envytools, 2026-10-26)
+The bit layouts of the video ALU ops (VADD, VMAD, VABSDIFF, VSHL, VSHR, VSET, VSETP), FCHK, PIXLD, IMAD/IMAD32I, DSET and the call/jump family in maxwell_translate.c were checked against the Maxwell
+disassembler tables of envytools (envydis gm107.c, MIT, Copyright 2014 Red Hat Inc., https://github.com/envytools/envytools). Only the encoding facts (bit positions and operand roles) were read; no source text was copied.
+
+## stb_vorbis (public domain / MIT, Sean Barrett)
+
+`runtime/src/third_party/stb_vorbis.c` (v1.22) is vendored for the host Vorbis movie-audio decoder (`runtime/src/services/movie_audio_core.c`). The
+file carries its own dual public-domain / MIT notice. One local change: the CRC and granule reads in the push-data page scan cast to `uint32` before
+shifting by 24 (signed-shift undefined behaviour under UBSAN, no change in behaviour).

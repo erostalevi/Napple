@@ -1,5 +1,6 @@
 #include "offline_core.h"
 #include "hz_result.h"
+#include "online_provider.h"
 #include <string.h>
 
 void bsd_init(BsdTable *t) { memset(t, 0, sizeof *t); }
@@ -108,11 +109,22 @@ void nifm_request_init(NifmRequest *r) {
     r->result = 0;
 }
 void nifm_request_submit(NifmRequest *r) {
+    if (r->state == NIFM_STATE_ACCEPTED) nifm_request_cancel(r); /* a second Submit replaces the first connection */
+    const OnlineProvider *p = online_provider();
+    uint32_t (*connect)(void *) = ONLINE_FN(p, net_connect);
+    uint32_t res = connect ? connect(p->ctx) : HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
     r->submitted = 1;
-    r->state = NIFM_STATE_FREE;
-    r->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    r->state = res == 0 ? NIFM_STATE_ACCEPTED : NIFM_STATE_FREE; /* the NullProvider rejects at once: communication disabled */
+    r->result = res;
 }
-void nifm_request_cancel(NifmRequest *r) { nifm_request_init(r); }
+void nifm_request_cancel(NifmRequest *r) {
+    if (r->state == NIFM_STATE_ACCEPTED) {
+        const OnlineProvider *p = online_provider();
+        void (*rel)(void *) = ONLINE_FN(p, net_release);
+        if (rel) rel(p->ctx);
+    }
+    nifm_request_init(r);
+}
 uint32_t nifm_request_result(const NifmRequest *r) { return r->result; }
 
 uint32_t friend_pop_notification_result(void) { return HZ_RESULT(HZ_MOD_FRIENDS, 15); } /* [unverified] "notification queue empty" */

@@ -1,0 +1,15 @@
+# Linux build of the input library's portable tests (CI / cloud sessions).  make -f Makefile.linux [test|clean]
+# gamepad.m (GameController, CoreHaptics) is replaced by tests/linux/ng_stub.c; everything else compiles unchanged.
+CC      ?= cc
+CFLAGS  ?= -std=gnu11 -O1 -g -Wall -Wextra -Wno-deprecated-declarations -D_GNU_SOURCE
+INC     := -Iinclude -Isrc
+SRC     := $(wildcard src/*.c) tests/linux/ng_stub.c
+TESTS   := hid bindings motion input gesture hid_sections
+build/linux/test_%: tests/test_%.c $(SRC) $(wildcard src/*.h) include/napple_input.h tests/check.h
+	@mkdir -p build/linux
+	$(CC) $(CFLAGS) $(INC) $(SRC) $< -lm -lpthread -o $@
+test: $(patsubst %,build/linux/test_%,$(TESTS))
+	@for t in $(TESTS); do echo "== $$t"; ./build/linux/test_$$t || exit 1; done
+clean:
+	rm -rf build/linux
+.PHONY: test clean

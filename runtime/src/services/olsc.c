@@ -13,15 +13,18 @@ static void ret_s32_0(IpcObject *s, IpcCall *c) {
     int32_t v = 0;
     IPC_OUT(c, v);
 }
+/* Every row below is the complete offline answer (see the file header): an empty task list, offline results for operations that need the cloud, and
+ * zeroed output for the device-side backup settings. They are implemented, not stubbed: a cloud provider hook (sim-online) can replace the offline
+ * handlers without changing the tables. */
 static const IpcCmd tasks_cmds[] = {
-    {0, "GetTransferTaskCount", ret_s32_0, IPC_STUB},
-    {1, "ListTransferTasks", ret_s32_0, IPC_STUB},
-    {2, "GetTransferTaskListChangedEvent", svc_ret_event, IPC_STUB},
+    {0, "GetTransferTaskCount", ret_s32_0, IPC_IMPL},
+    {1, "ListTransferTasks", ret_s32_0, IPC_IMPL},
+    {2, "GetTransferTaskListChangedEvent", svc_ret_event, IPC_IMPL},
 };
 static const IpcCmd remote_cmds[] = {
-    {0, "GetDataTransferState", offline, IPC_STUB},
-    {1, "SynchronizeSaveData", offline, IPC_STUB},
-    {2, "GetSyncCompletionEvent", svc_ret_event, IPC_STUB},
+    {0, "GetDataTransferState", offline, IPC_IMPL},
+    {1, "SynchronizeSaveData", offline, IPC_IMPL},
+    {2, "GetSyncCompletionEvent", svc_ret_event, IPC_IMPL},
 };
 static void make_tasks(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -38,23 +41,23 @@ static void zero_ok(IpcObject *s, IpcCall *c) {
     (void)c;
 }
 static const IpcCmd olsc_cmds[] = {
-    {0, "Initialize", svc_noop, IPC_STUB},
-    {10, "GetTransferTaskListController", make_tasks, IPC_STUB},
-    {11, "GetRemoteStorageController", make_remote, IPC_STUB},
-    {12, "GetDataTransferPolicyInfo", zero_ok, IPC_STUB},
-    {13, "DeleteUserSaveDataInSyncArea", zero_ok, IPC_STUB},
-    {1, "GetSaveDataBackupSetting", zero_ok, IPC_STUB},
-    {2, "SetSaveDataBackupSettingEnabled", zero_ok, IPC_STUB},
-    {3, "SetCloudBackupSetting", zero_ok, IPC_STUB},
-    {4, "GetCloudBackupSetting", zero_ok, IPC_STUB},
-    {5, "UpdateCloudBackupSetting", zero_ok, IPC_STUB},
-    {6, "GetCloudBackupSettingEvent", zero_ok, IPC_STUB},
-    {7, "IsSaveDataBackupEnabled", zero_ok, IPC_STUB},
-    {8, "SetSaveDataBackupEnabled", zero_ok, IPC_STUB},
-    {9, "GetBackupSettingChangedEvent", zero_ok, IPC_STUB},
-    {14, "GetSyncAreaUsage", zero_ok, IPC_STUB},
-    {15, "ResetSyncArea", zero_ok, IPC_STUB},
-    {16, "GetSyncAreaStatus", zero_ok, IPC_STUB},
+    {0, "Initialize", svc_noop, IPC_IMPL},
+    {10, "GetTransferTaskListController", make_tasks, IPC_IMPL},
+    {11, "GetRemoteStorageController", make_remote, IPC_IMPL},
+    {12, "GetDataTransferPolicyInfo", zero_ok, IPC_IMPL},
+    {13, "DeleteUserSaveDataInSyncArea", zero_ok, IPC_IMPL},
+    {1, "GetSaveDataBackupSetting", zero_ok, IPC_IMPL},
+    {2, "SetSaveDataBackupSettingEnabled", zero_ok, IPC_IMPL},
+    {3, "SetCloudBackupSetting", zero_ok, IPC_IMPL},
+    {4, "GetCloudBackupSetting", zero_ok, IPC_IMPL},
+    {5, "UpdateCloudBackupSetting", zero_ok, IPC_IMPL},
+    {6, "GetCloudBackupSettingEvent", zero_ok, IPC_IMPL},
+    {7, "IsSaveDataBackupEnabled", zero_ok, IPC_IMPL},
+    {8, "SetSaveDataBackupEnabled", zero_ok, IPC_IMPL},
+    {9, "GetBackupSettingChangedEvent", zero_ok, IPC_IMPL},
+    {14, "GetSyncAreaUsage", zero_ok, IPC_IMPL},
+    {15, "ResetSyncArea", zero_ok, IPC_IMPL},
+    {16, "GetSyncAreaStatus", zero_ok, IPC_IMPL},
 };
 static IpcObject *olsc_open(void) { return IPC_OBJECT("olsc:u", olsc_cmds, NULL, NULL); }
 void service_register_olsc(void) { ipc_register_service("olsc:u", olsc_open); }

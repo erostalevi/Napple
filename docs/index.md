@@ -13,7 +13,7 @@ the repository front page is the [README](../README.md) and the title status is 
 
 **Contributor** (you want to change the code)
 1. [Architecture overview](architecture/overview.md), then the page of the subsystem you touch.
-2. [Contributor guides](guides/README.md): add a service, an svc, an NVN function, a Maxwell op, a game, a signature; [debugging](guides/debugging.md); [testing](guides/testing.md).
+2. [Contributor guides](guides/README.md): add a service, an svc, an NVN function, a Maxwell op, a game, a signature; [debugging](guides/debugging.md); [testing](guides/testing.md); [network providers](guides/network-providers.md); [hardware simulators](guides/hardware-simulators.md).
 3. [Subsystem map](reference/subsystems.md) (code, tests, debug switches per subsystem), [environment variables](reference/environment-variables.md), [glossary](reference/glossary.md).
 
 **Maintainer** (you integrate and release)
@@ -46,6 +46,8 @@ See the [guide index](guides/README.md).
 | [Subsystem map](reference/subsystems.md) | Code, tests and debug switches per subsystem |
 | [CLI](reference/cli.md) | `napple` and the runtime command line |
 | [Environment variables](reference/environment-variables.md) | Every `NAPPLE_*` variable read by the code |
+| [Support matrix](reference/support-matrix.md) | Generated per-title status per platform (macOS now, iOS deferred) |
+| [Feature support](reference/feature-support.md) | Generated coverage by domain and what is not implemented yet ([JSON for the site](reference/support-data.json)) |
 | [Glossary](reference/glossary.md) | Horizon, NSO, NCA, BKTR, NVN, Maxwell and the rest |
 | [Tooling](reference/tooling.md) | REA, Ghidra and the JDK used for signatures |
 | [Open work markers](todo.md) | Deferred work that used to be `TODO` comments in the source |

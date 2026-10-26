@@ -6,6 +6,7 @@ their own links are not checked, but each must be listed in docs/archive/changes
 written fresh for this repository layout.   usage: tools/check_docs.py [--root <Napple dir>]   exit 0 = ok."""
 import argparse
 import re
+import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import unquote
@@ -112,6 +113,10 @@ def main():
     for t in TITLES:
         if not (root / f"docs/titles/{t}.md").exists():
             bad.append(f"docs/titles/{t}.md missing")
+    gen = root / "tools/support/gen_support.py"
+    if gen.exists():  # the generated support tables must not be stale
+        r = subprocess.run([sys.executable, "-I", str(gen), "--root", str(root), "--check"], capture_output=True, text=True)
+        bad += [line[5:] for line in r.stdout.split("\n") if line.startswith("FAIL ")] or ([f"support tables: {r.stdout.strip() or r.stderr.strip()}"] if r.returncode else [])
     for b in bad:
         print("FAIL", b)
     print(f"checked {len(files)} Markdown files: {'OK' if not bad else str(len(bad)) + ' problems'}")

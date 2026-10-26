@@ -99,3 +99,12 @@ void napple_motion_step(napple_motion *m, float dt, const float acc[3], const fl
     to_matrix(m->q, out->direction);
     out->attributes = 1;
 }
+
+/* IsSixAxisSensorAtRest: acceleration within 8%% of 1 G and every angular velocity below 0.01 revolutions per second (3.6 deg/s). */
+int napple_sixaxis_at_rest(const napple_sixaxis_state *s) {
+    float a = sqrtf(s->acceleration[0] * s->acceleration[0] + s->acceleration[1] * s->acceleration[1] + s->acceleration[2] * s->acceleration[2]);
+    if (a < 0.92f || a > 1.08f) return 0;
+    for (int i = 0; i < 3; i++)
+        if (fabsf(s->angular_velocity[i]) >= 0.01f) return 0;
+    return 1;
+}

@@ -29,21 +29,21 @@ Everything else is unsupported and reported by number and name.
 |---|---|---|
 | `sm:` | implemented | Initialize, GetServiceHandle; NPDM access list enforced |
 | `lm` | implemented | log packets forwarded to the runtime log |
-| `apm` | implemented / stub | performance configuration remembered; CPU overclock stub |
+| `apm` | implemented | per-mode performance configuration remembered; every id accepted in both modes (the docked/handheld marks of the unverified clock table in `apm_core.c` are documentation only: Link's Awakening sets a "docked" id in handheld mode and stops if refused); CPU overclock flag read back; host never changes its own speed |
 | `appletOE` | implemented / stubs | proxy with ICommonStateGetter, ISelfController, IWindowController, IAudioController, IDisplayController, ILibraryAppletCreator (storage), IApplicationFunctions; focus message queued at launch; stubs: sleep locks, screenshot permission, home button, recording, media state |
 | `fsp-srv` | implemented | RomFS as IStorage over `romfs.bin`; save data and sdcard as host directories; save data of type account/device/system/cache is transactional (see "Save data"); stubs: access log, auto save data creation, free space (1 GiB) |
-| `set` / `set:sys` | implemented / stubs | language list, region (USA stub), firmware 18.1.0 |
+| `set` / `set:sys` | implemented | language list, region from the host language (`NAPPLE_REGION` overrides), colour set (`NAPPLE_COLOR_SET`), time zone name (`NAPPLE_TIMEZONE`, default UTC), firmware 18.1.0 (`settings_core.c`) |
 | `acc:u0` | implemented / stubs | one offline user; profile image calls stubbed |
 | `aoc:u` | tested | add-on content from the `dlc` array of `manifest.json`; DLC romfs mounted through `fsp-srv` command 30 (see the aoc:u section below) |
-| `pctl` | stub | unrestricted device |
+| `pctl` | implemented | parental controls off: no restriction, safety level 0, every confirm-permission call succeeds (documented answers; ids unverified) |
 | `time:u/s/a` | implemented | clock contexts in the shared memory block, time zone = host |
-| `hid` | implemented / stubs | shared memory + configuration through `input/` (libnapple_input); SendVibrationValue(s) / GetActualVibrationValue / GetVibrationDeviceInfo drive CoreHaptics rumble; xpad/gesture stubs |
+| `hid` | implemented / stubs | shared memory + configuration through `input/` (libnapple_input); SendVibrationValue(s) / GetActualVibrationValue / GetVibrationDeviceInfo drive CoreHaptics rumble; every row is implemented: debug pad (player 1's pad), gesture (recogniser in `input/src/gesture.c` over the touch stream), six-axis at-rest from the sensor sample, npad assignment (deactivate, disconnect, swap, merge, LR mode), capture assignment, keyboard lock keys, touch resolution, console six-axis record, active vibration device list, xpad = none; section offsets for gesture/console six-axis and the debug pad state layout are unverified |
 | `vi:u` | implemented / stubs | display, layer (android Parcel native window), vsync event thread; IHOSBinderDriver answers every IGraphicBufferProducer transaction with a dummy success (the SDK of Super Mario Odyssey creates an android::Surface eagerly; NVN never uses it) |
 
 | `pl:u` / `pl:s` | implemented | shared fonts from `<app-support>/system/fonts` (see "Shared fonts"); zero-size fonts when absent |
-| `audren:u`, `audout:u`, `hwopus` | implemented | over libnapple_audio; `GetReleasedAudioOutBuffer` zero-fills unused tags (the SDK returns the first tag without checking the count); hwopus calls `guest_write_prepare` on the PCM buffer |
+| `audren:u`, `audout:u`, `hwopus` | implemented | over libnapple_audio; audout buffer count / played samples / flush are real, audio device events fire on `audio_device_changed()`, manual-execution renderer renders on `ExecuteAudioRendererRendering`, the renderer's performance frame follows the v1 (REV1-4, 0x10 header) / v2 (REV5+, 0x20 header with `PERF` magic) layout (unverified); `GetReleasedAudioOutBuffer` zero-fills unused tags (the SDK returns the first tag without checking the count); hwopus calls `guest_write_prepare` on the PCM buffer |
 | `audin:u` | implemented (silent) | over libnapple_audio (`napple_audin_*`): one device "BuiltInHeadset", OpenAudioIn(Auto), IAudioIn 0-6, 8, 9, 11-14; buffers are filled in real time with silence because no capture source is installed (no microphone access, no `NSMicrophoneUsageDescription`). `OpenAudioInProtocolSpecified` (5) and the UAC appends (IAudioIn 7, 10) are not implemented |
-| `nvdrv`, `nvdrv:a/s/t` | partial | `/dev/nvmap` (create/alloc/free/param/get_id/from_id as bookkeeping on guest memory), `/dev/nvhost-ctrl` (syncpoints, events), host1x channels `nvhost-nvdec/vic/msenc/nvjpg` accept Submit and complete it instantly (syncpoints advance; nothing is decoded: video is decoded by `movie.c`, see below). Every other device/ioctl is refused and listed in `missing_ipc` as `nvdrv:ioctl <path> <cmd>` |
+| `nvdrv`, `nvdrv:a/s/t` | partial | `/dev/nvmap` (create/alloc/free/param/get_id/from_id as bookkeeping on guest memory), `/dev/nvhost-ctrl` (syncpoints, events), host1x channels `nvhost-nvdec/vic/msenc/nvjpg` parse SUBMIT command buffers as host1x streams and run them on register-level engines (NVDEC to a `DecoderBackend`, VIC NV12 to RGBA, NVJPG real JPEG decode; see "Media services" at the end); submits complete instantly and syncpoints advance. Movie playback is still decoded by `movie.c`, see below. Every other device/ioctl is refused and listed in `missing_ipc` as `nvdrv:ioctl <path> <cmd>` |
 | `mm:u` | stub | multimedia clock requests accepted |
 | `friend:u` (+v/m/s/a), `nifm:u` (+a/s), `bsd:u` (+s/a), `nsd:u` (+a), `ssl`, `prepo:u` (+a/m/s), `nfp:user`/`nfc:user` | stubs (offline) | friends: empty lists; nifm: requests never accepted, connection "disconnected"; bsd: RegisterClient/Close succeed, every network call answers {-1, ENETDOWN}; nsd: environment "lp1", names resolve to themselves; ssl: contexts/connections creatable, nothing can handshake; prepo: reports dropped; nfp: initialised, no devices |
 | `csrng` | implemented | host `arc4random_buf` |
@@ -88,7 +88,7 @@ fonts out in a 0x1100000-byte shared memory as {0x18029A7F, size ^ 0x49621806, T
 ## Host movie decoder (`runtime/src/movie.c`)
 The SDK media library (`movie::Decoder`, Android MediaCodec over NvMM/NVDEC) is replaced for VP9 by libvpx: the constructor and the 17 virtual
 methods are bound by symbol name through `host_symbols_register`, so the library's own vtable slots land on the host code; other decoder types
-(Vorbis audio, H.264) are forwarded to the library's original code. Mode 1 (buffer) returns NV12 in the client's Buffer; mode 2 (NVN texture, used
+(Vorbis audio unless `NAPPLE_MOVIE_VORBIS=1`, H.264) are forwarded to the library's original code. Mode 1 (buffer) returns NV12 in the client's Buffer; mode 2 (NVN texture, used
 by Link's Awakening) converts to RGBA and writes into the game's NVNtexture through `gfx_texture_write_rgba` (block-linear swizzle, dirty tracking).
 Adapted from MacNativeGames (MIT), see THIRD_PARTY_NOTICES.md. H.264 is decoded through VideoToolbox (see the H.264 paragraph at the end).
 
@@ -159,7 +159,7 @@ nvdrv host1x channels (`/dev/nvhost-nvdec`, `-vic`, `-nvjpg`, `-msenc`, host1x c
 returned); GET_SYNCPOINT (allocated per channel and index from id 32 up, released on close); GET_WAITBASE (0); SET_SUBMIT_TIMEOUT;
 MAP/UNMAP_CMD_BUFFER (one stable 32-bit device address per nvmap handle). Bad sizes, unknown handles and out-of-range indexes answer
 BadParameter; other ioctls stay NotImplemented and are listed in the summary. The SUBMIT layout changed to the documented one: syncpoint
-increments are 0x14 bytes and fences are u32 thresholds (earlier code used 0x10 and {id, value}). Nothing is decoded; video stays with movie.c.
+increments are 0x14 bytes and fences are u32 thresholds (earlier code used 0x10 and {id, value}). Command buffers with a mapped address are executed since media-services (2026-10-26), see "Media services".
 
 fsp-srv save data (`fs.c`): **partial**.
 - 21/25/28 Delete (by id, by space and id, by attribute), 22/23/35 CreateSaveDataFileSystem (plain / by system save id / with hash salt),
@@ -195,23 +195,23 @@ Status words: *real* = state or logic behind the answer, covered by a unit test;
 | Service | Status | Notes |
 |---|---|---|
 | `mii:u` | partial | read-only database: the local player's Mii plus six default Miis (CharInfo 0x58); GetCount, Get, Get1, UpdateLatest, BuildRandom (a default of the requested gender), BuildDefault, FindIndex, GetIndex; no editing, no StoreData variants |
-| `caps:su` | partial | every save call succeeds and adds an in-memory album entry without a file (64 max, oldest dropped); refused after `SetScreenShotPermission(Disable)` |
-| `caps:u` | partial | in-memory album: lists saved entries, size/load of one yield 0 bytes, delete removes it, unknown entries report not found (host tests only, unverified on Mac) |
-| `psm` | partial | battery percentage, charger type, voltage state, enough-power, charging flags from a configured host situation (docked = AC; `NAPPLE_BATTERY="NN[,ac|battery]"`), not the Mac's battery |
-| `lbl` | real | brightness (clamped), applied brightness, switch, dimming, auto brightness, VR brightness; nothing reaches the display; no light sensor |
+| `caps:su` | partial | every save call succeeds and adds an in-memory album entry (64 max, oldest dropped); a save with a 1280x720 RGBA input buffer is stored as JPEG (size and hash in the entry); refused after `SetScreenShotPermission(Disable)` |
+| `caps:u` | partial | in-memory album: lists saved entries, delete removes it, unknown entries report not found; an entry with an image sizes to its JPEG, LoadAlbumFile gives the JPEG, 110 the decoded 1280x720 RGBA, 120 / session 5 the 320x180 RGBA thumbnail; entries without an image yield 0 bytes (tested on Linux, unverified on Mac) |
+| `psm` | implemented | state-change events (session and charge-info) fire on `psm_host_power_changed()` and toggled emulation, controller power supply acquire/release counted; battery percentage, charger type, voltage state, enough-power, charging flags from a configured host situation (docked = AC; `NAPPLE_BATTERY="NN[,ac|battery]"`), not the Mac's battery |
+| `lbl` | real | brightness (clamped), saved vs current vs applied brightness (Save/Load), switch, dimming, auto brightness, VR brightness and VR apply, ambient sensor value and reflection delay level read back; nothing reaches the display; no light sensor (`IsAmbientLightSensorAvailable` = false) |
 | `ncm` | partial | in-memory content-meta database (Set/Get/Remove/Has/HasAll/List/ListApplication/GetLatestContentMetaKey/GetSize/GetPatchId) and content storage (placeholders, Register, Has, Delete, counts, sizes); starts empty, nothing persisted, no content files (GetPath is empty); unverified layouts; GetContentIdByType/ListContentInfo/HasContent/ListContentMetaInfo/LookupOrphanContent stay stubs |
 | `ns:am2`, `ns:ec` | partial | language conversion/selection with regional fallbacks and free/total space (statvfs of the save volume) are real; no application records; control data not found; e-commerce fails offline |
 | `ns:vm` | stub | never needs a vulnerability update |
 | `sfdnsres` | partial | error strings real; every lookup fails like a resolver with no server |
-| `spsm` | stub | always awake |
-| `bcat:u` | partial | name validation and progress record real; the delivery cache is always empty, sync finishes at once with the offline result |
+| `spsm` | implemented | always awake (the host never sleeps: sleep requests return at once, no power message pending) |
+| `bcat:u` | implemented | name validation, passphrase size check and progress record real; the delivery cache is always empty (a console with no network), sync finishes at once with the offline result, background tasks are accepted and never scheduled |
 | `ldn:u` | partial | initialize/open/create/station state machine with legal-transition checks and a state-change event; no radio: scans empty, connect fails |
 | `irs` | stub | camera handles and a zeroed shared memory; processors report sensor not connected |
 | `audin:u` | partial | one input device, parameter negotiation, buffer queue; appended buffers are zero-filled (silence) and complete at once |
 | `hidbus` | stub | no device is ever found |
-| `pdm:qry` | partial | play statistics of the running title (one launch, minutes since start); other titles and events empty |
+| `pdm:qry` | implemented | play statistics of the running title (one launch, minutes since start); no play log is kept, so other titles and event queries answer empty like a freshly reset console |
 | `set:fd` | real | in-memory settings items with key iterator; not persisted and not read back by `set:sys` |
-| `olsc:u`, `ectx:aw`, `fgm`, `btm:u`, `ovln:snd` | stub | command ids are guesses; unlisted ids fail loudly |
+| `olsc:u`, `ectx:aw`, `fgm`, `ovln:snd` | implemented (offline answers) | command ids are guesses; unlisted ids fail loudly. `btm:u` stays stub (BLE hardware simulation belongs to sim-online) |
 
 Depth changes to existing services (IPC_STUB rows before → after, from the command tables): `appletOE` 87 → 55 (the guest's settings are stored and read
 back: master volumes, VR mode, auto sleep, idle detection, screenshot permission, cpu boost, home-button blocking, ...); `hid` 30 → 21 (six-axis fusion and
@@ -233,8 +233,50 @@ Supersedes the `aoc:u` row above (stub) and the library applet answers; status o
 
 `audrec:u` (audio-small, 2026-10-24): `OpenFinalOutputRecorder` returns an `IFinalOutputRecorder` that records silence (48 kHz stereo PCM16); appended buffers are zero-filled and complete at once, with end times as a running frame count. Command ids and layouts from memory, unverified. Core: `audrec_core.[ch]`.
 
-H.264 movies (2026-10-24, media-h264): `movie.c` also hosts `video/avc` decoders through VideoToolbox (`src/vt_h264.c`). Annex B or AVCC access units, SPS/PPS taken in-band (or csd via `vth264_config`), output packed NV12 into the same slots/pacing as VP9, B-frame reordering by pts (depth 2; 0 for baseline). The DecoderType value for AVC is 1, read from the movie library ([note](../archive/changes/2026-10-24-h264-decoder-type.md)): `NAPPLE_MOVIE_H264_TYPE` overrides. `vt_h264.c` also has `jpeg_decode_rgba` / `jpeg_encode_rgba` (ImageIO); not yet wired to nvjpg or caps.
+H.264 movies (2026-10-24, media-h264): `movie.c` also hosts `video/avc` decoders through VideoToolbox (`src/vt_h264.c`). Annex B or AVCC access units, SPS/PPS taken in-band (or csd via `vth264_config`), output packed NV12 into the same slots/pacing as VP9, B-frame reordering by pts (depth 2; 0 for baseline). The DecoderType value for AVC is 1, read from the movie library ([note](../archive/changes/2026-10-24-h264-decoder-type.md)): `NAPPLE_MOVIE_H264_TYPE` overrides. `vt_h264.c` also has `jpeg_decode_rgba` / `jpeg_encode_rgba` (ImageIO); nvjpg and caps use the portable `jpeg_core` instead (below).
 
 ac-services (2026-10-24, plan9): `fsp-srv` cmd 202 `OpenDataStorageByDataId` shares cmd 30's handler: DLC data ids resolve through `aoc_data_id_romfs`; any other id is a system data archive served from `<data-dir>/sysdata/<id as 16 hex>.bin` when that file exists, else `NOT_FOUND_DATA` (0x7d202). Nothing creates `sysdata/` yet, so system data (e.g. id 0100000000000823, storage 3, asked by the v0 AC build) is still missing. `ICommonStateGetter` cmd 900 `SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled` is accepted as a no-op (stub). Tests: `test_svc_fs`, `test_svc_applet`.
 
 sysdata-firmware (2026-10-24, plan10): `napple build --firmware` now writes every firmware data archive for title ids 0100000000000800-0FFF that has a RomFS (≤64 MiB; 40 on 22.1.0, ~300 MB) as `<title dir>/sysdata/<id16hex>.bin` (the raw RomFS image). fs.c `OpenDataStorageByDataId` looks in `<data-dir>/sysdata/` then `<data-dir>/../sysdata/` (data-dir is the build-id directory). AC v0 now gets 0100000000000823 (98324 bytes) and boots past it; the next stop is an SDK abort after `nfp:user` opens (SetTerminateResult 0x2a2).
+
+sim-online (2026-10-26, branch `claude/sim-online-2026-10-26-macos1`; supersedes the offline rows for `friend`, `nifm`, `bsd`, `nsd`, `ssl`, `prepo`, `nfp:user`/`nfc:user`, `sfdnsres` and `irs` above; status is **tested on Linux** against the IPC mock, not yet run on macOS or a title; all command layouts are from memory of the public documentation and unverified):
+
+| Service | Status | Notes |
+|---|---|---|
+| `bsd:u`/`:s`/`:a` | implemented over [`OnlineProvider`](../guides/network-providers.md) | guest descriptors map to provider sockets (`bsd_core.c`); Socket, Select, Poll, Recv, RecvFrom, Send, SendTo, Accept, Bind, Connect, GetPeerName, GetSockName, GetSockOpt, SetSockOpt, Listen, Ioctl (FIONBIO), Fcntl (O_NONBLOCK), Shutdown, ShutdownAllSockets, Write, Read, Close; with the NullProvider the errno answers are the previous offline ones |
+| `nifm:u`/`:a`/`:s` | implemented over the provider | Submit asks `net_connect`; Accepted/Free states, `GetCurrentIpAddress`, connection status, `IsAnyInternetRequestAccepted`; NullProvider rejects with "communication disabled" |
+| `sfdnsres` | implemented over the provider | GetHostByName/Addr, GetAddrInfo, GetNameInfo (+WithOptions) serialise provider answers; NullProvider: TRY_AGAIN / EAI_AGAIN |
+| `ssl` | implemented over the provider | handshake, Read, Write, Pending through `tls_*`; NullProvider: not connected |
+| `friend:*` | partial | friend count/list/ids and `UpdateUserPresence` from the provider; notifications still empty |
+| `nsd:u`/`:a`, `prepo:*` | provider hooks | `nsd_resolve` (identity by default), `report` (dropped by default) |
+| `nfp:user`, `nfc:user`, `nfc:mf:u` | implemented over [`NfcTagSource`](../guides/hardware-simulators.md) | virtual amiibo state machine, structures, application area, events; no reader unless a frontend or `NAPPLE_AMIIBO` installs one (then the old "no device" answers stay) |
+| `irs` | implemented over `IrFrameSource` | moment, clustering, image transfer on 320x240 frames; no source = sensor not connected as before |
+
+IPC command depth (`IPC_IMPL` / `IPC_STUB` rows): `offline.c` 1 / 146 -> 106 / 80, `irs.c` 1 / 17 -> 11 / 7, `sfdnsres.c` 2 / 12 -> 10 / 4.
+
+## Media services (2026-10-26, media-services; tested on Linux, unbuilt and unverified on the Mac)
+Portable cores (`runtime/src/services/*_core.c`, no macOS headers; unit tests in `runtime/tests/test_svc_*.c` and `tests/host/test_nvdrv.c`):
+
+| Piece | Files | What it does |
+|---|---|---|
+| host1x engines | `nvdrv_media_core.[ch]`, `nvdrv_media_regs.h` | Parses command buffers: SETCL (with register mask), INCR, NONINCR, MASK, IMM, RESTART, GATHER (command gather and register gather, depth 4), EXTEND; writes engine registers; EXECUTE (offset 0xC0) runs the engine. Malformed op or unmapped gather fails the SUBMIT (BadParameter); a failed decode is only counted and written to the status structure. Writes to registers outside the map are counted (`MediaStats.unknown_regs`) and summarised on close, so a real title's trace fixes the map |
+| `nvdrv.c` wiring | `nvdrv.c` | SUBMIT reads each command buffer whose nvmap handle has a mapped address (`guest_ptr`), applies relocations (word = (target iova + offset) >> shift) to a copy, runs it on the channel's engine under the nvdrv lock. Handles without an address behave as before (accepted, nothing run). Surfaces are addressed by device address >> 8 (MAP_CMD_BUFFER iovas) |
+| NVDEC (0xF0) | same | application id = codec (H.264 3, VP8 5, H.265 7, VP9 9), picture-info, bitstream and output surfaces (display buffer or per-picture-index slots), execute -> `DecoderBackend.decode`, status structure (error, width, height, macroblocks) |
+| VIC (0x5D) | same | slot 0 NV12 -> RGBA/XBGR/ARGB with BT.601/BT.709, limited/full range, nearest scaling, pitch. Uses a **reduced Napple config structure** (9 words, `nvdrv_media_regs.h`), not the real one |
+| NVJPG (0xC0) | same + `jpeg_core.[ch]` | baseline JPEG (all samplings, restart intervals, grey) to RGBA or NV12, optional scaling and pitch, status (error, size). Reduced pic-setup structure (6 words) |
+| MSENC (0x21) | same | executes accepted, status says no bitstream |
+| DecoderBackend | `decoder_backend.h`, `decoder_null_core.c` | frames in (codec, picture-info, bitstream, output planes), NV12 out; default null backend takes the size from the codec headers and writes a deterministic grey. The Mac VideoToolbox/libvpx backend is not written yet: it implements the struct and calls `decoder_backend_install` at start-up |
+| Codec headers | `codec_headers_core.[ch]` | H.264 SPS (incl. cropping, high-profile scaling lists), VP9 uncompressed header, VP8 frame tag, H.265 SPS skeleton (size only) |
+| Movie audio | `movie_audio_core.[ch]`, `third_party/stb_vorbis.c`, `movie.c` | Vorbis (raw packets wrapped into Ogg pages for stb_vorbis push-data; headers in-band or as Xiph csd-0) and Opus (libopus, `-DNAPPLE_HAVE_OPUS`) to interleaved s16 PCM. `movie.c` hosts type 5 / PCM / buffer mode decoders on it **only with `NAPPLE_MOVIE_VORBIS=1`** (`MOVIE_VORBIS_DEFAULT` 0 until a Mac run proves the SDK's calling pattern) |
+| JPEG caps | `caps_core.[ch]`, `caps.c`, `jpeg_core` | see the caps rows above |
+
+ioctl table of the multimedia channels (type 0 unless noted; all layouts as in the nvdrv.c comment): 'H' 0x01 SET_NVMAP_FD, 'H' 0x03 SET_TIMEOUT, 0x01 SUBMIT, 0x02 GET_SYNCPOINT, 0x03 GET_WAITBASE, 0x07 SET_SUBMIT_TIMEOUT, 0x09 MAP_CMD_BUFFER, 0x0A UNMAP_CMD_BUFFER.
+Everything else on these devices is still refused by number (NotImplemented, listed in the summary). **The register offsets, the codec ids and the reduced VIC/NVJPG structures
+are written from memory of the public driver sources and were never checked against a real title**; the Mac check is to run the four titles with `-v` (`NAPPLE_VERBOSE=1`),
+read the `nvdrv` data lines and the "writes to registers outside the known map" summary, and fix `nvdrv_media_regs.h` (the only place offsets live).
+Known limits: NVDEC output is pitch-linear NV12 (the hardware writes block-linear); decode runs inside the nvdrv lock; no H.264 parameter-set synthesis from the picture-info structure (the null backend never needs it, a real backend does).
+
+Depth changes (runtime-depth, 2026-10-26, IPC_STUB rows before → after; scan "IPC: command depth" 52% → 68%): `hid` 24 → 0, `audio.c` 10 → 0, `bcat` 21 → 0, `psm` 9 → 0,
+`lbl` 9 → 0, `settings` 4 → 0, `apm` 2 → 0, `pdm` 6 → 0, `misc.c` (pctl, aoc) 17 → 0, `olsc` 23 → 0, `spsm`/`ovln`/`ectx`/`fgm` → 0, `ns` 22 → 7, `ncm` 7 → 4, `time` 8 → 0,
+`audin` 2 → 0, `ngc` 4 → 2. Rows that stay stubs on purpose are listed in `docs/archive/changes/2026-10-26-runtime-depth.md` with the reason (needs a hardware simulation,
+a data drop, build-layout data, or belongs to another area).

@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "maxwell.h"
+#include "soft_double_msl.h"
 
 uint64_t maxwell_gmem_base, maxwell_gmem_size;
 
@@ -65,6 +66,7 @@ typedef struct {
     int ipa_mode;           // interpolation mode of the IPA being translated (-1 for plain loads)
     int ipa_mul;            // its multiplier register (mode 1: the result is the "pass" value attr/w times this register)
     bool uses_gmem_store;   // STG/ATOM/RED present: the gmem buffer is written
+    bool uses_f64;          // a double-precision op is present: the emulation library (soft_double_core.inc) is emitted
     bool uses_smem, smem_dyn, atom_dev, atom_tg,
         uses_vattr_arr;       // shared memory in use / addressed through a register / atomics / vertex inputs read through a register
     uint32_t smem_need;       // highest statically addressed shared byte + 1
@@ -185,6 +187,80 @@ static const char *fresult(const char *e, bool sat, char *buf) {
     return buf;
 }
 #define FRES(e, sat) fresult((e), (sat), alloca(700))
+
+// ------------------------------------------------------------------ double precision
+// Metal has no double: a binary64 is a register pair (Rn = low word, Rn+1 = high word, n even) carried as a `ulong` of raw bits, and every operation is a call
+// into the library of soft_double_core.inc (bit-exact IEEE 754, all four rounding modes, emitted once per shader that needs it).
+// The emulation level: NAPPLE_F64=off refuses double-precision shaders again (the pre-emulation behaviour, for A/B debugging of a suspect shader); anything else,
+// and the default, is the bit-exact emulation.
+static void use_f64(Ctx *c) {
+    static int off = -1;
+    if (off < 0) {
+        const char *e = getenv("NAPPLE_F64");
+        off = e && !strcmp(e, "off");
+    }
+    if (off) fail(c, "double precision is disabled (NAPPLE_F64=off)");
+    c->uses_f64 = true;
+}
+
+static const char *dpair(Ctx *c, int r, char *buf) {
+    use_f64(c);
+    if (r == RZ) return "0ul";
+    char lo[16], hi[16];
+    sprintf(buf, "(ulong(%s) | (ulong(%s) << 32))", reg(c, r, lo), reg(c, r + 1, hi));
+    return buf;
+}
+
+static const char *dcbuf(Ctx *c, uint64_t w, char *buf) {
+    char l[128], h[128];
+    int idx = (int)bits(w, 34, 5);
+    int64_t off = (int64_t)bits(w, 20, 14) * 4;
+    sprintf(buf, "(ulong(%s) | (ulong(%s) << 32))", cbuf_ref(c, idx, off, NULL, l), cbuf_ref(c, idx, off + 4, NULL, h));
+    return buf;
+}
+
+// operand B as a 64-bit value: register pair, two constant-buffer words, or the 20-bit immediate that fills the top of the high word
+static const char *dop_b(Ctx *c, uint64_t w, char *buf) {
+    use_f64(c);
+    switch (b_form(w)) {
+        case B_REG: return dpair(c, (int)bits(w, 20, 8), buf);
+        case B_CBUF: return dcbuf(c, w, buf);
+        default: {
+            uint32_t v = ((uint32_t)bits(w, 20, 19) | ((uint32_t)bits(w, 56, 1) << 19)) << 12;
+            sprintf(buf, "0x%08x00000000ul", v);
+            return buf;
+        }
+    }
+}
+#define DB() dop_b(c, w, alloca(320))
+#define DR(r) dpair(c, (r), alloca(96))
+
+// DFMA's operands: B and C swap places between the register form (C = REG_39) and the 0x53 form (B = REG_39, C = constant buffer)
+static const char *dop_c_dfma(Ctx *c, uint64_t w, char *cbuf_, const char **b_out, char *bbuf) {
+    if ((w >> 56) == 0x53) {
+        *b_out = dpair(c, (int)bits(w, 39, 8), bbuf);
+        return dcbuf(c, w, cbuf_);
+    }
+    *b_out = dop_b(c, w, bbuf);
+    return dpair(c, (int)bits(w, 39, 8), cbuf_);
+}
+
+static const char *dneg_abs(const char *e, bool neg, bool abs_, char *buf) {
+    if (abs_ && neg) sprintf(buf, "(sd_abs(%s) ^ 0x8000000000000000ul)", e);
+    else if (abs_) sprintf(buf, "sd_abs(%s)", e);
+    else if (neg) sprintf(buf, "sd_neg(%s)", e);
+    else return e;
+    return buf;
+}
+#define DNA(e, n, a) dneg_abs((e), (n), (a), alloca(700))
+
+static void dstore(Ctx *c, int d, const char *expr) {
+    if (d == RZ) return;
+    sp(&c->body, "    { ulong dv = %s;\n", expr);
+    set_reg(c, d, "uint(dv)");
+    if (d + 1 < RZ) set_reg(c, d + 1, "uint(dv >> 32)");
+    sp(&c->body, "    }\n");
+}
 
 static const char *cmp_op(int op) {
     static const char *const ops[] = {"false", "<", "==", "<=", ">", "!=", ">=", "num", "nan", "<", "==", "<=", ">", "!=", ">=", "true"};
@@ -1148,7 +1224,80 @@ static void emit_txd(Ctx *c, uint64_t w) {
     write_tex_result(c, slot, call, mask, d, RZ, false, false);
 }
 
+// ------------------------------------------------------------------ video ALU (VADD, VMAD, VABSDIFF, VSHL, VSHR, VSET, VSETP, VMNMX)
+// One operand scheme for the whole family (layout facts: envytools envydis gm107, MIT): A = Ra viewed through the selector at bits 36-38 (0-3 byte, 4 low half,
+// 5 high half, 6-7 word) with sign bit 48; B = register Rb (bits 20-27) through the selector at bits 28-30 when bit 50 is set, else the 16-bit immediate at 20,
+// both signed by bit 49; Rc at bits 39-46; secondary op at 51-53; dest signed at bit 54; saturate at bit 55. Operands are widened to 64-bit `long`.
+static void video_sel(char *out, const char *src, int sel, bool sg) {
+    static const int sh[] = {0, 8, 16, 24, 0, 16, 0, 0};
+    static const char *const ux[] = {"0xFFu", "0xFFu", "0xFFu", "0xFFu", "0xFFFFu", "0xFFFFu", "0xFFFFFFFFu", "0xFFFFFFFFu"};
+    static const int nb[] = {8, 8, 8, 8, 16, 16, 32, 32};
+    if (nb[sel] == 32) sprintf(out, sg ? "long(int(%s))" : "long(%s)", src);
+    else if (sg) sprintf(out, "long(int(%s << %du) >> %d)", src, 32 - nb[sel] - sh[sel], 32 - nb[sel]);
+    else sprintf(out, "long((%s >> %du) & %s)", src, sh[sel], ux[sel]);
+}
+
+static void video_ab(Ctx *c, uint64_t w, char *ea, char *eb) {
+    char rb[16], ra[16];
+    video_sel(ea, reg(c, (int)bits(w, 8, 8), ra), (int)bits(w, 36, 3), bits(w, 48, 1));
+    bool bsg = bits(w, 49, 1);
+    if (bits(w, 50, 1)) video_sel(eb, reg(c, (int)bits(w, 20, 8), rb), (int)bits(w, 28, 3), bsg);
+    else {
+        uint32_t im = (uint32_t)bits(w, 20, 16);
+        sprintf(eb, "long(%d)", bsg ? (int)(int16_t)im : (int)im);
+    }
+}
+
+// Secondary operation with Rc (bits 51-53): MRG_16H, MRG_16L, MRG_8B0, MRG_8B2 merge the result into Rc, ACC adds, MIN/MAX compare, 7 passes it through.
+static void video_tail(Ctx *c, int vop, bool dfmt, int rc, int d) {
+    char rcb[16];
+    sp(&c->body, "      uint res = uint(vr); uint vc = %s;\n", reg(c, rc, rcb));
+    switch (vop) {
+        case 0: sp(&c->body, "      res = insert_bits(vc, res, 16u, 16u);\n"); break;
+        case 1: sp(&c->body, "      res = insert_bits(vc, res, 0u, 16u);\n"); break;
+        case 2: sp(&c->body, "      res = insert_bits(vc, res, 0u, 8u);\n"); break;
+        case 3: sp(&c->body, "      res = insert_bits(vc, res, 16u, 8u);\n"); break;
+        case 4: sp(&c->body, "      res = res + vc;\n"); break;
+        case 5: sp(&c->body, dfmt ? "      res = uint(min(int(res), int(vc)));\n" : "      res = min(res, vc);\n"); break;
+        case 6: sp(&c->body, dfmt ? "      res = uint(max(int(res), int(vc)));\n" : "      res = max(res, vc);\n"); break;
+        default: break;
+    }
+    if (d != RZ) {
+        c->reg_used[d] = 1;
+        c->reg_cb[d] = -1;
+        sp(&c->body, "      r%d = res;\n", d);
+    }
+    sp(&c->body, "    }\n");
+}
+
+// A video op that yields `vr` (the exact 64-bit result in terms of va, vb), then saturates/wraps it to 32 bits and applies the secondary op.
+static void video_op(Ctx *c, uint64_t w, int d, const char *vr_expr, bool with_tail) {
+    char ea[160], eb[160];
+    video_ab(c, w, ea, eb);
+    bool dfmt = bits(w, 54, 1), sat = bits(w, 55, 1);
+    sp(&c->body, "    { long va = %s, vb = %s; long vr = %s;\n", ea, eb, vr_expr);
+    if (sat) sp(&c->body, dfmt ? "      vr = clamp(vr, -2147483648l, 2147483647l);\n" : "      vr = clamp(vr, 0l, 4294967295l);\n");
+    if (with_tail) video_tail(c, (int)bits(w, 51, 3), dfmt, (int)bits(w, 39, 8), d);
+    else {
+        sp(&c->body, "      uint res = uint(vr);\n");
+        if (d != RZ) {
+            c->reg_used[d] = 1;
+            c->reg_cb[d] = -1;
+            sp(&c->body, "      r%d = res;\n", d);
+        }
+        sp(&c->body, "    }\n");
+    }
+}
+
+static const char *video_cmp(int op, char *buf) {
+    static const char *const ops[] = {"false", "va < vb", "va == vb", "va <= vb", "va > vb", "va != vb", "va >= vb", "true"};
+    strcpy(buf, ops[op & 7]);
+    return buf;
+}
+
 // ------------------------------------------------------------------ instruction translation
+#include "surface.inc"
+
 static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     char t[2048], u[2048];
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
@@ -1382,8 +1531,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo));
         }
         sp(&c->body, "    }\n");
-    } else if (OPM(0x5800000000000000ull, 0xff00000000000000ull) || OPM(0x4800000000000000ull, 0xfe00000000000000ull) ||
-               OPM(0x3000000000000000ull, 0xfe00000000000000ull)) {   // FSET
+    } else if (OPM(0x5800000000000000ull, 0xff00000000000000ull) || OPM(0x4800000000000000ull, 0xff00000000000000ull) || /* 0x49 is DSET */
+               OPM(0x3000000000000000ull, 0xfe00000000000000ull)) {                                                      // FSET
         const char *x = NA(F(R(a)), bits(w, 43, 1), bits(w, 54, 1)), *y = NA(F(B(true)), bits(w, 53, 1), bits(w, 44, 1));
         char cmp[512];
         fcmp_expr(cmp, (int)bits(w, 48, 4), x, y);
@@ -1416,6 +1565,79 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                OPM(0x38a0000000000000ull, 0xfef8000000000000ull)) {   // SEL
         sprintf(t, "(%s ? %s : %s)", P((int)bits(w, 39, 3), bits(w, 42, 1)), R(a), B(false));
         set_reg(c, d, t);
+    } else if ((OPM(0x5cb0000000000000ull, 0xfff8000000000000ull) || OPM(0x4cb0000000000000ull, 0xfff8000000000000ull) ||
+                OPM(0x38b0000000000000ull, 0xfef8000000000000ull)) &&
+               (bits(w, 10, 2) == 3 || bits(w, 8, 2) == 3)) {   // F2I from f64 and/or to a 64-bit integer
+        int sfmt = (int)bits(w, 10, 2), dsz = (int)bits(w, 8, 2);
+        char s64[700];
+        if (sfmt == 3) strcpy(s64, DB());
+        else if (sfmt == 1) sprintf(s64, "sd_from_f32(as_type<uint>(float(as_type<half2>(%s)[%d])))", B(false), (int)bits(w, 41, 1));
+        else sprintf(s64, "sd_from_f32(%s)", B(true));
+        use_f64(c);
+        static const unsigned nb[] = {8, 16, 32, 64};
+        sprintf(t, "sd_to_int(%s, %uu, %uu, %uu)", DNA(s64, bits(w, 45, 1), bits(w, 49, 1)), (unsigned)bits(w, 39, 2), bits(w, 12, 1) ? 1u : 0u, nb[dsz]);
+        if (dsz == 3) dstore(c, d, t);
+        else {
+            sprintf(u, "uint(%s)", t);
+            set_reg(c, d, u);
+        }
+    } else if ((OPM(0x5cb8000000000000ull, 0xfff8000000000000ull) || OPM(0x4cb8000000000000ull, 0xfff8000000000000ull) ||
+                OPM(0x38b8000000000000ull, 0xfef8000000000000ull)) &&
+               (bits(w, 10, 2) == 3 || bits(w, 8, 2) == 3)) {   // I2F to f64 and/or from a 64-bit integer
+        bool sgn = bits(w, 13, 1);
+        int sz = (int)bits(w, 10, 2), sel = (int)bits(w, 41, 2), dfm = (int)bits(w, 8, 2);
+        unsigned rm = (unsigned)bits(w, 39, 2);
+        char s64[700], src[300];
+        const char *bv = B(false);
+        if (sz == 3) strcpy(s64, DB());
+        else {
+            if (sz == 0) sprintf(src, sgn ? "int(char((%s >> %d) & 0xFF))" : "((%s >> %d) & 0xFFu)", bv, sel * 8);
+            else if (sz == 1) sprintf(src, sgn ? "int(short((%s >> %d) & 0xFFFF))" : "((%s >> %d) & 0xFFFFu)", bv, sel * 8);
+            else sprintf(src, sgn ? "int(%s)" : "%s", bv);
+            sprintf(s64, sgn ? "ulong(long(%s))" : "ulong(%s)", src);
+        }
+        use_f64(c);
+        if (dfm == 3) {
+            sprintf(t, "sd_from_int(%s, %uu, %uu)", s64, sgn ? 1u : 0u, rm);
+            dstore(c, d, DNA(t, bits(w, 45, 1), bits(w, 49, 1)));
+        } else {   // a 64-bit integer into f32 (or f16 through f32)
+            sprintf(u, "as_type<float>(sd_int_to_f32(%s, %uu, %uu))", s64, sgn ? 1u : 0u, rm);
+            if (dfm == 1) {
+                snprintf(t, sizeof t, "(uint(as_type<ushort>(half(%s))))", NA(u, bits(w, 45, 1), bits(w, 49, 1)));
+                set_reg(c, d, t);
+            } else set_reg(c, d, FRES(NA(u, bits(w, 45, 1), bits(w, 49, 1)), false));
+        }
+    } else if ((OPM(0x5ca8000000000000ull, 0xfff8000000000000ull) || OPM(0x4ca8000000000000ull, 0xfff8000000000000ull) ||
+                OPM(0x38a8000000000000ull, 0xfef8000000000000ull)) &&
+               (bits(w, 10, 2) == 3 || bits(w, 8, 2) == 3)) {   // F2F with an f64 source and/or destination
+        int dfmt = (int)bits(w, 8, 2), sfmt = (int)bits(w, 10, 2);
+        int fm = (int)(bits(w, 39, 2) |
+                       (bits(w, 42, 1) << 2));   // 4..7: round to an integral value (floor/ceil/trunc/rint); 0..3: the rounding of a narrowing result
+        char s64[700], sv[512];
+        use_f64(c);
+        if (sfmt == 3) strcpy(s64, DNA(DB(), bits(w, 45, 1), bits(w, 49, 1)));
+        else {   // f16/f32 source: modifiers and integer rounding in float, then the exact widening
+            if (sfmt == 1) sprintf(sv, "float(as_type<half2>(%s)[%d])", B(false), (int)bits(w, 41, 1));
+            else strcpy(sv, F(B(true)));
+            const char *xf = NA(sv, bits(w, 45, 1), bits(w, 49, 1));
+            static const char *const rf[] = {"rint", "floor", "ceil", "trunc"};
+            if (fm >= 4) sprintf(t, "%s(%s)", rf[fm - 4], xf);
+            else strcpy(t, xf);
+            sprintf(s64, "sd_from_f32(as_type<uint>(%s))", t);
+        }
+        if (sfmt == 3 && fm >= 4) {
+            sprintf(u, "sd_rint(%s, %uu)", s64, (unsigned)(fm - 4));
+            strcpy(s64, u);
+        }
+        if (dfmt == 3) dstore(c, d, s64);
+        else {   // f64 -> f32 (a half goes through f32: two roundings, rare)
+            sprintf(t, "as_type<float>(sd_to_f32(%s, %uu))", s64, fm >= 4 ? 0u : (unsigned)fm);
+            if (dfmt == 1) {
+                char h[2200];
+                snprintf(h, sizeof h, "(uint(as_type<ushort>(half(%s))))", bits(w, 50, 1) ? (sprintf(sv, "saturate(%s)", t), sv) : t);
+                set_reg(c, d, h);
+            } else set_reg(c, d, FRES(t, bits(w, 50, 1)));
+        }
     } else if (OPM(0x5cb0000000000000ull, 0xfff8000000000000ull) || OPM(0x4cb0000000000000ull, 0xfff8000000000000ull) ||
                OPM(0x38b0000000000000ull, 0xfef8000000000000ull)) {   // F2I (src fmt bits 10-11: 1 F16; dst size bits 8-9)
         char srcv[512];
@@ -1529,11 +1751,12 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sprintf(t, "((%s << %du) + 0x%08xu)", R(a), (int)bits(w, 53, 5), (uint32_t)bits(w, 20, 32));
         set_reg(c, d, t);
     } else if (OPM(0x5a00000000000000ull, 0xff80000000000000ull) || OPM(0x5200000000000000ull, 0xff80000000000000ull) ||
-               OPM(0x4a00000000000000ull, 0xff80000000000000ull) || OPM(0x3400000000000000ull, 0xfe00000000000000ull)) {   // IMAD
-        /* Bit layout from memory; no real word in the LAS or SMO corpora (docs/archive/changes/2026-10-24-audio-small.md). d = [0,8), a = [8,16), B by the
-         * opcode class (reg 0x5a, cbuf 0x4a, imm 0x34) and c = REG_39; the 0x52 form has B = REG_39 and c = a cbuf. Bit 48 signed, 49 negate c,
-         * 51 negate the product, 53 .HI (high word of the 64-bit product, plus c). The carry forms (.CC bit 47, .X bit 54) fail cleanly. */
-        char cb[128], pr[256], cs[160];
+               OPM(0x4a00000000000000ull, 0xff80000000000000ull) || OPM(0x3400000000000000ull, 0xfe80000000000000ull)) {   // IMAD
+        /* d = [0,8), a = [8,16), B by the opcode class (reg 0x5a, cbuf 0x4a, imm 0x34) and c = REG_39; the 0x52 form has B = REG_39 and c = a cbuf.
+         * Layout per envytools envydis gm107 (MIT): bit 48 A and B signed, 53 C signed, 54 .HI (high word of the 64-bit product, plus c), 50 .SAT, 49 .X,
+         * 47 .CC. (An earlier version read bits 49/51 as negations and 53 as .HI, from memory; no real shader in the LAS or SMO corpora uses IMAD.)
+         * The saturating and carry forms fail cleanly. */
+        char cb[128], pr[256];
         const char *bv, *cv;
         if ((w >> 56) == 0x52) {
             bv = R((int)bits(w, 39, 8));
@@ -1542,18 +1765,17 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             bv = B(false);
             cv = R((int)bits(w, 39, 8));
         }
-        bool sgn = bits(w, 48, 1), negc = bits(w, 49, 1), negp = bits(w, 51, 1), hi = bits(w, 53, 1);
-        if (bits(w, 47, 1) || bits(w, 54, 1)) {
-            fail(c, "imad carry forms (.CC/.X)");
+        bool sgn = bits(w, 48, 1), hi = bits(w, 54, 1);
+        if (bits(w, 47, 1) || bits(w, 49, 1) || bits(w, 50, 1)) {
+            fail(c, "imad carry/saturate forms (.CC/.X/.SAT)");
             return;
         }
-        sprintf(cs, negc ? "(0u - %s)" : "%s", cv);
         if (hi) {
             if (sgn) sprintf(pr, "ulong(long(int(%s)) * long(int(%s)))", R(a), bv);
             else sprintf(pr, "(ulong(%s) * ulong(%s))", R(a), bv);
-            sprintf(t, "(uint(%s%s%s >> 32) + %s)", negp ? "(0ul - " : "", pr, negp ? ")" : "", cs);
+            sprintf(t, "(uint(%s >> 32) + %s)", pr, cv);
         } else {
-            sprintf(t, negp ? "((0u - %s * %s) + %s)" : "(%s * %s + %s)", R(a), bv, cs);
+            sprintf(t, "(%s * %s + %s)", R(a), bv, cv);
         }
         set_reg(c, d, t);
     } else if (OPM(0x5bd0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bd0000000000000ull, 0xfff0000000000000ull) ||
@@ -2258,25 +2480,166 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xf0a8000000000000ull, 0xfff8000000000000ull)) {   // BAR
         sp(&c->body, "    threadgroup_barrier(mem_flags::mem_threadgroup);\n");
     } else if (OPM(0x5c70000000000000ull, 0xfff8000000000000ull) || OPM(0x4c70000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3870000000000000ull, 0xfef8000000000000ull)) {
-        fail(c, "DADD: double precision is not supported (Metal has no f64)");
+               OPM(0x3870000000000000ull, 0xfef8000000000000ull)) {   // DADD (rounding 39-40, neg B 45, abs A 46, neg A 48, abs B 49)
+        sprintf(t, "sd_add(%s, %s, %uu)", DNA(DR(a), bits(w, 48, 1), bits(w, 46, 1)), DNA(DB(), bits(w, 45, 1), bits(w, 49, 1)), (unsigned)bits(w, 39, 2));
+        dstore(c, d, t);
     } else if (OPM(0x5c80000000000000ull, 0xfff8000000000000ull) || OPM(0x4c80000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3880000000000000ull, 0xfef8000000000000ull)) {
-        fail(c, "DMUL: double precision is not supported (Metal has no f64)");
+               OPM(0x3880000000000000ull,
+                   0xfef8000000000000ull)) {   // DMUL (rounding 39-40, negate 48: applied to A so the rounding mode sees the negated product)
+        sprintf(t, "sd_mul(%s, %s, %uu)", DNA(DR(a), bits(w, 48, 1), false), DB(), (unsigned)bits(w, 39, 2));
+        dstore(c, d, t);
     } else if (OPM(0x5b70000000000000ull, 0xfff8000000000000ull) || OPM(0x4b70000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3670000000000000ull, 0xfef8000000000000ull) || OPM(0x5370000000000000ull, 0xfff8000000000000ull)) {
-        fail(c, "DFMA: double precision is not supported (Metal has no f64)");
+               OPM(0x3670000000000000ull, 0xfef8000000000000ull) ||
+               OPM(0x5370000000000000ull, 0xfff8000000000000ull)) {   // DFMA (neg B 48, neg C 49, rounding 50-51)
+        const char *bv;
+        char cbuf_c[320], bbuf[320];
+        const char *cv = dop_c_dfma(c, w, cbuf_c, &bv, bbuf);
+        sprintf(t, "sd_fma(%s, %s, %s, %uu)", DR(a), DNA(bv, bits(w, 48, 1), false), DNA(cv, bits(w, 49, 1), false), (unsigned)bits(w, 50, 2));
+        dstore(c, d, t);
     } else if (OPM(0x5b80000000000000ull, 0xfff8000000000000ull) || OPM(0x4b80000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3680000000000000ull, 0xfef8000000000000ull)) {
-        fail(c, "DSETP: double precision is not supported (Metal has no f64)");
+               OPM(0x3680000000000000ull,
+                   0xfef8000000000000ull)) {   // DSETP (the FSETP layout: neg A 43, abs A 7, neg B 6, abs B 44, compare 48-51, combine 45-46)
+        const char *x = DNA(DR(a), bits(w, 43, 1), bits(w, 7, 1)), *y = DNA(DB(), bits(w, 6, 1), bits(w, 44, 1));
+        int p = (int)bits(w, 3, 3), q = (int)bits(w, 0, 3), bo = (int)bits(w, 45, 2);
+        const char *pc_ = P((int)bits(w, 39, 3), bits(w, 42, 1));
+        sp(&c->body, "    { bool cmp = sd_cmp(%s, %s, %uu) != 0u; bool pp = %s;\n", x, y, (unsigned)bits(w, 48, 4), pc_);
+        if (p != PT) {
+            c->pred_used[p] = 1;
+            sp(&c->body, "      p%d = cmp %s pp;\n", p, bool_op(bo));
+        }
+        if (q != PT) {
+            c->pred_used[q] = 1;
+            sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo));
+        }
+        sp(&c->body, "    }\n");
+    } else if (OPM(0x5900000000000000ull, 0xff80000000000000ull) || OPM(0x4900000000000000ull, 0xff80000000000000ull) ||
+               OPM(0x3200000000000000ull,
+                   0xfe80000000000000ull)) {   // DSET (the FSET layout; the result is one 32-bit register: 0xFFFFFFFF, or 1.0f with the BF bit 52)
+        const char *x = DNA(DR(a), bits(w, 43, 1), bits(w, 54, 1)), *y = DNA(DB(), bits(w, 53, 1), bits(w, 44, 1));
+        sprintf(t, "((sd_cmp(%s, %s, %uu) != 0u) %s %s)", x, y, (unsigned)bits(w, 48, 4), bool_op((int)bits(w, 45, 2)), P((int)bits(w, 39, 3), bits(w, 42, 1)));
+        sprintf(u, bits(w, 52, 1) ? "(%s ? 0x3f800000u : 0u)" : "(%s ? 0xFFFFFFFFu : 0u)", t);
+        set_reg(c, d, u);
     } else if (OPM(0x5c50000000000000ull, 0xfff8000000000000ull) || OPM(0x4c50000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3850000000000000ull, 0xfef8000000000000ull)) {
-        fail(c, "DMNMX: double precision is not supported (Metal has no f64)");
+               OPM(0x3850000000000000ull, 0xfef8000000000000ull)) {   // DMNMX (the FMNMX layout: predicate true selects the minimum)
+        const char *x = DNA(DR(a), bits(w, 48, 1), bits(w, 46, 1)), *y = DNA(DB(), bits(w, 45, 1), bits(w, 49, 1));
+        sprintf(t, "sd_minmax(%s, %s, %s ? 0u : 1u)", x, y, P((int)bits(w, 39, 3), bits(w, 42, 1)));
+        dstore(c, d, t);
+    } else if (OPM(0x2000000000000000ull, 0xfc00000000000000ull)) {   // VADD
+        video_op(c, w, d, "va + vb", true);
+    } else if (OPM(0x5400000000000000ull, 0xff00000000000000ull)) {   // VABSDIFF
+        video_op(c, w, d, "(va > vb ? va - vb : vb - va)", true);
+    } else if (OPM(0x5f00000000000000ull, 0xff00000000000000ull)) {   // VMAD: a * b (>> 7 or 15 with the SHR bits 51-52) + Rc, no secondary op
+        int shr = bits(w, 51, 2) == 1 ? 7 : bits(w, 51, 2) == 2 ? 15 : 0;
+        bool sg = bits(w, 48, 1) || bits(w, 49, 1);   // Rc is signed when an operand is
+        char e[200];
+        sprintf(e, "((va * vb) >> %d) + long(%s(%s))", shr, sg ? "int" : "uint", R((int)bits(w, 39, 8)));
+        video_op(c, w, d, e, false);
+    } else if (OPM(0x5700000000000000ull, 0xff00000000000000ull) || OPM(0x5600000000000000ull, 0xff00000000000000ull)) {   // VSHL / VSHR
+        /* The count is the 16-bit immediate at 20 (bit 50 narrows it to 8 bits); .W (bit 49) wraps it modulo 32, otherwise it clamps at 32. The B scheme of the
+         * other video ops does not apply (bit 49 is .W here, not a sign), so B is forced to the unsigned immediate form. */
+        bool left = (w >> 56) == 0x57;
+        char e[200];
+        if (bits(w, 49, 1)) sprintf(e, "(va %s (vb & 31l))", left ? "<<" : ">>");
+        else sprintf(e, "(va %s min(vb & %s, 32l))", left ? "<<" : ">>", bits(w, 50, 1) ? "255l" : "65535l");
+        video_op(c, w & ~(3ull << 49), d, e, true);
+    } else if (OPM(0x4000000000000000ull, 0xfe00000000000000ull)) {   // VSET: Rd = (a cmp b) ? 1 : 0, then the secondary op with Rc
+        char cb[32], e[96];
+        sprintf(e, "(%s) ? 1l : 0l", video_cmp((int)(bits(w, 43, 2) | (bits(w, 47, 1) << 2)), cb));
+        video_op(c, w, d, e, true);
+    } else if (OPM(0x50f0000000000000ull, 0xfff8000000000000ull)) {   // VSETP: Pd = (a cmp b) bop Pc, Pq = !(a cmp b) bop Pc
+        char ea[160], eb[160], cb[32];
+        video_ab(c, w, ea, eb);
+        int p = (int)bits(w, 3, 3), q = (int)bits(w, 0, 3), bo = (int)bits(w, 45, 2);
+        sp(&c->body, "    { long va = %s, vb = %s; bool cmp = %s; bool pp = %s;\n", ea, eb, video_cmp((int)(bits(w, 43, 2) | (bits(w, 47, 1) << 2)), cb),
+           P((int)bits(w, 39, 3), bits(w, 42, 1)));
+        if (p != PT) {
+            c->pred_used[p] = 1;
+            sp(&c->body, "      p%d = cmp %s pp;\n", p, bool_op(bo));
+        }
+        if (q != PT) {
+            c->pred_used[q] = 1;
+            sp(&c->body, "      p%d = !cmp %s pp;\n", q, bool_op(bo));
+        }
+        sp(&c->body, "    }\n");
+    } else if (OPM(0x1000000000000000ull, 0xfc00000000000000ull)) {   // IMAD32I: Rd = (+-Ra * imm32 (.HI: its high word)) + (+-Rd); signed per bits 54 and 57
+        bool sg = bits(w, 54, 1) || bits(w, 57, 1), hi = bits(w, 53, 1);
+        if (bits(w, 52, 1)) {
+            fail(c, "IMAD32I.CC is not supported");
+            return;
+        }
+        char pr[300], acc[48];
+        if (sg) sprintf(pr, "(long(int(%s)) * long(int(0x%08xu)))", R(a), (uint32_t)bits(w, 20, 32));
+        else sprintf(pr, "(long(%s) * long(0x%08xu))", R(a), (uint32_t)bits(w, 20, 32));
+        sprintf(acc, bits(w, 55, 1) ? "(0u - %s)" : "%s", R(d));
+        sprintf(t, hi ? "(uint((%s%s%s) >> 32) + %s)" : "(uint(%s%s%s) + %s)", bits(w, 56, 1) ? "-" : "", pr, "", acc);
+        set_reg(c, d, t);
+    } else if (OPM(0x5c88000000000000ull, 0xfff8000000000000ull) || OPM(0x4c88000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0x3888000000000000ull, 0xfef8000000000000ull)) {   // FCHK.DIVIDE: Pd = this division needs the slow path
+        /* Conservative: true unless both operands are normal and the quotient's exponent keeps clear of the range ends, so the shader's fast reciprocal path
+         * only runs when it is exact enough; whatever it rejects is computed by the slow path the compiler emitted. Pd at bits 3-5 (envydis). */
+        int pd = (int)bits(w, 3, 3);
+        if (pd != PT) {
+            c->pred_used[pd] = 1;
+            const char *x = NA(F(R(a)), bits(w, 48, 1), bits(w, 46, 1)), *y = NA(F(B(true)), bits(w, 45, 1), bits(w, 49, 1));
+            sp(&c->body, "    { uint ea = (as_type<uint>(%s) >> 23) & 0xFFu, eb = (as_type<uint>(%s) >> 23) & 0xFFu; int eq = int(ea) - int(eb) + 127;\n", x,
+               y);
+            sp(&c->body, "      p%d = ea < 2u || ea > 253u || eb < 2u || eb > 253u || eq <= 24 || eq >= 253; }\n", pd);
+        }
+    } else if (OPM(0xefe8000000000000ull, 0xfff8000000000000ull)) {   // PIXLD: pixel/sample info; single-sample semantics (one sample, centred)
+        /* mode at bits 31-33: 1 COVMASK, 2 COVERED, 3 OFFSET, 4 CENT_OFFSET, 5 MY_INDEX; Pd at bits 45-47. Coverage is the one sample, offsets and the index are 0. */
+        int mode = (int)bits(w, 31, 3), pd = (int)bits(w, 45, 3);
+        set_reg(c, d, mode == 1 || mode == 2 || mode == 0 ? "1u" : "0u");
+        if (pd != PT) {
+            c->pred_used[pd] = 1;
+            sp(&c->body, "    p%d = %s;\n", pd, mode == 3 || mode == 4 || mode == 5 ? "false" : "true");
+        }
+    } else if (OPM(0x50d0000000000000ull, 0xfff8000000000000ull)) {   // LEPC: the address of this instruction (the unit the branch targets use)
+        sprintf(t, "%uu", pc);
+        set_reg(c, d, t);
+    } else if (OPM(0xe260000000000000ull, 0xfff0000000000020ull)) {   // CAL: call, relative target; RET pops the return address
+        c->uses_branches = true;
+        sp(&c->body, "    cal[cal_n++] = %uu; pc = %uu; continue;\n", norm_target((int64_t)pc + 8), norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));
+    } else if (OPM(0xe220000000000000ull, 0xfff0000000000020ull)) {   // JCAL: call, absolute 32-bit target
+        c->uses_branches = true;
+        sp(&c->body, "    cal[cal_n++] = %uu; pc = %uu; continue;\n", norm_target((int64_t)pc + 8), norm_target((int64_t)bits(w, 20, 32)));
+    } else if (OPM(0xe210000000000000ull, 0xfff0000000000020ull)) {   // JMP: absolute 32-bit target
+        c->uses_branches = true;
+        sp(&c->body, "    pc = %uu; continue;\n", norm_target((int64_t)bits(w, 20, 32)));
+    } else if (OPM(0xe200000000000000ull, 0xfff0000000000020ull)) {   // JMX: absolute target Ra + imm32 (every instruction is a label, as for BRX)
+        c->uses_branches = true;
+        sp(&c->body, "    pc = %s + 0x%xu; continue;\n", R(a), (uint32_t)bits(w, 20, 32));
+    } else if (OPM(0xe320000000000000ull, 0xfff0000000000000ull)) {   // RET: back to the caller (a RET with no caller ends the program)
+        sp(&c->body, "    if (cal_n == 0u) { exit_now = true; break; }\n    pc = cal[--cal_n]; continue;\n");
+    } else if (OPM(0xef60000000000000ull, 0xfff8000000000000ull) || OPM(0xef80000000000000ull, 0xfff8000000000000ull)) {
+        // CCTL / CCTLL: cache control (invalidate, write back): no effect on the emulated memory
+    } else if (OPM(0x5000000000000000ull, 0xff80000000000000ull)) {
+        fail(c, "VABSDIFF4 is not translated (four-lane byte absolute difference: no application shader uses it)");
+    } else if (OPM(0xdf40000000000000ull, 0xfff8000000000000ull)) {
+        fail(c, "TXA is not translated (texture attribute query: no application shader uses it)");
+    } else if (OPM(0x53f8000000000000ull, 0xfff8000000000000ull) || OPM(0x53d8000000000000ull, 0xfff8000000000000ull)) {
+        fail(c, "IDP is not translated (integer dot product exists from SM 6.0 only; Maxwell SM 5.x has none)");
+    } else if (OPM(0x5a80000000000000ull, 0xff80000000000000ull) || OPM(0x5280000000000000ull, 0xff80000000000000ull) ||
+               OPM(0x4a80000000000000ull, 0xff80000000000000ull) || OPM(0x3480000000000000ull, 0xfe80000000000000ull)) {
+        fail(c, "IMADSP is not translated (multiply-add with sub-word operand selectors: compilers emit XMAD instead)");
+    } else if (OPM(0xf0b8000000000000ull, 0xfff8000000000000ull) || OPM(0xf0c0000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0xe3a0000000000000ull, 0xfff0000000000000ull) || OPM(0xe390000000000000ull, 0xfff0000000000000ull) ||
+               OPM(0xe380000000000000ull, 0xfff0000000000000ull) || OPM(0xe370000000000000ull, 0xfff0000000000000ull) ||
+               OPM(0xe360000000000000ull, 0xfff0000000000000ull) || OPM(0xe2c0000000000000ull, 0xfff0000000000000ull) ||
+               OPM(0xe2d0000000000000ull, 0xfff0000000000000ull) || OPM(0xe2e0000000000000ull, 0xfff0000000000000ull) ||
+               OPM(0xe2f0000000000000ull, 0xfff0000000000000ull) || OPM(0xe230000000000000ull, 0xfff0000000000000ull) ||
+               OPM(0xe310000000000000ull, 0xfff0000000000000ull) || OPM(0xe280000000000000ull, 0xfff0000000000000ull) ||
+               OPM(0xefd0000000000000ull, 0xfff8000000000000ull) || OPM(0xeea0000000000000ull, 0xfff8000000000000ull)) {
+        fail(
+            c,
+            "control/system instruction %03x (B2R R2B BPT IDE RAM SAM RTT GET/SETCRSPTR GET/SETLMEMBASE PEXIT LONGJMP PLONGJMP ISBERD STP) is not translated: debugger, trap, call-return-stack, tessellation and geometry plumbing no application shader reaches",
+            (unsigned)(w >> 52));
     } else if (OPM(0xfbe0000000000000ull, 0xfff8000000000000ull)) {
         fail(c, "OUT: geometry shader output is not supported (Metal has no geometry stage)");
+    } else if ((w >> 53) == (0xeb0 >> 1) || (w >> 53) == (0xeb2 >> 1) || (w >> 53) == (0xeb4 >> 1) || (w >> 53) == (0xea0 >> 1)) {   // SULD / SUST / SURED / SUATOM (+ .B)
+        unsigned top = (unsigned)(w >> 52);
+        emit_surface(c, w, top >> 1 == 0xeb0 >> 1 ? SF_SULD : top >> 1 == 0xeb2 >> 1 ? SF_SUST : top >> 1 == 0xeb4 >> 1 ? SF_SURED : SF_SUATOM, top & 1);
     } else if ((w >> 56) == 0xea || (w >> 56) == 0xeb) {   // (RED, 0xebf8, is matched above)
-        fail(c, "surface access (SULD/SUST/SUATOM/SURED family, opcode %03x) is not supported: no image binding in the translator contract",
-             (unsigned)(w >> 52));
+        fail(c, "surface access (opcode %03x: SUATOM.CAS, SUCLAMP-class helpers and other variants) is not translated", (unsigned)(w >> 52));
     } else if (OPM(0x3a00000000000000ull, 0xfe00000000000000ull)) {   // VMNMX: video (byte/half/word) integer min/max, then a second op with Rc
         /* Field layout as Ryujinx's InstVmnmx decoder (MIT; MacNativeGames/vendor/ryujinx InstDecoders.cs): selects A bits 36..38 + sign 48, B 28..30 + sign 49,
          * B from a register when bit 50 else imm16 at 20, MX (max) bit 56, D-format (signed second op) 54, SAT 55, video op 51..53, CC 47.
@@ -2285,16 +2648,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         int asel = (int)bits(w, 36, 3), bsel = (int)bits(w, 28, 3), asg = (int)bits(w, 48, 1), bsg = (int)bits(w, 49, 1);
         bool mx = bits(w, 56, 1), dfmt = bits(w, 54, 1), sat = bits(w, 55, 1), bvid = bits(w, 50, 1);
         int vop = (int)bits(w, 51, 3), rc = (int)bits(w, 39, 8);
-        static const int sh[] = {0, 8, 16, 24, 0, 16, 0, 0};
-        static const char *const ux[] = {"0xFFu", "0xFFu", "0xFFu", "0xFFu", "0xFFFFu", "0xFFFFu", "0xFFFFFFFFu", "0xFFFFFFFFu"};
-        static const int nb[] = {8, 8, 8, 8, 16, 16, 32, 32};
         char ea[160], eb[160];
-#define VSEL(out, src, sel, sg)                                                                                                                                \
-    do {                                                                                                                                                       \
-        if (nb[sel] == 32) sprintf(out, (sg) ? "long(int(%s))" : "long(%s)", src);                                                                             \
-        else if (sg) sprintf(out, "long(int(%s << %du) >> %d)", src, 32 - nb[sel] - sh[sel], 32 - nb[sel]);                                                    \
-        else sprintf(out, "long((%s >> %du) & %s)", src, sh[sel], ux[sel]);                                                                                    \
-    } while (0)
+#define VSEL(out, src, sel, sg) video_sel(out, src, sel, sg)
         VSEL(ea, R(a), asel, asg);
         if (bvid) VSEL(eb, R((int)bits(w, 20, 8)), bsel, bsg);
         else {
@@ -2306,22 +2661,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sp(&c->body, "    { long va = %s, vb = %s; long vr = %s(va, vb);\n", ea, eb, mx ? "max" : "min");
         if (sat && dfmt && !rsg) sp(&c->body, "      vr = min(vr, 2147483647l);\n");
         else if (sat && !dfmt && rsg) sp(&c->body, "      vr = max(vr, 0l);\n");
-        sp(&c->body, "      uint res = uint(vr); uint vc = %s;\n", R(rc));
-        switch (vop) {
-            case 0: sp(&c->body, "      res = insert_bits(vc, res, 16u, 16u);\n"); break;
-            case 1: sp(&c->body, "      res = insert_bits(vc, res, 0u, 16u);\n"); break;
-            case 2: sp(&c->body, "      res = insert_bits(vc, res, 0u, 8u);\n"); break;
-            case 3: sp(&c->body, "      res = insert_bits(vc, res, 16u, 8u);\n"); break;
-            case 4: sp(&c->body, "      res = res + vc;\n"); break;
-            case 5: sp(&c->body, dfmt ? "      res = uint(min(int(res), int(vc)));\n" : "      res = min(res, vc);\n"); break;
-            case 6: sp(&c->body, dfmt ? "      res = uint(max(int(res), int(vc)));\n" : "      res = max(res, vc);\n"); break;
-            default: break;
-        }
-        if (d != RZ) {
-            c->reg_used[d] = 1;
-            sp(&c->body, "      r%d = res;\n", d);
-        }
-        sp(&c->body, "    }\n");
+        video_tail(c, vop, dfmt, rc, d);
     } else {
         fail(c, "unknown instruction %016llx at %#x", (unsigned long long)w, pc);
     }
@@ -2369,13 +2709,26 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         uint64_t w = ((const uint64_t *)code)[i];
         uint32_t pc = (uint32_t)(i * 8);
         bool is_flow = (w & 0xfff0000000000020ull) == 0xe240000000000000ull || (w & 0xfff0000000000020ull) == 0xe290000000000000ull ||
-                       (w & 0xfff0000000000020ull) == 0xe2a0000000000000ull || (w & 0xfff0000000000020ull) == 0xe2b0000000000000ull;
+                       (w & 0xfff0000000000020ull) == 0xe2a0000000000000ull || (w & 0xfff0000000000020ull) == 0xe2b0000000000000ull ||
+                       (w & 0xfff0000000000020ull) == 0xe260000000000000ull;   // CAL: relative like BRA
         if (is_flow) {
             int64_t t = norm_target((int64_t)pc + 8 + sbits(w, 20, 24));
             if (t >= 0 && (size_t)(t / 8) < end) label[t / 8] = 1;
             any_branch = true;
         }
-        if ((w & 0xfff0000000000000ull) == 0xe250000000000000ull) {   // BRX: any instruction may be a target
+        if ((w & 0xfff0000000000020ull) == 0xe260000000000000ull ||
+            (w & 0xfff0000000000020ull) == 0xe220000000000000ull) {   // CAL / JCAL: the return address is a label
+            int64_t t = norm_target((int64_t)pc + 8);
+            if (t >= 0 && (size_t)(t / 8) < end) label[t / 8] = 1;
+        }
+        if ((w & 0xfff0000000000020ull) == 0xe220000000000000ull || (w & 0xfff0000000000020ull) == 0xe210000000000000ull) {   // JCAL / JMP: absolute target
+            int64_t t = norm_target((int64_t)bits(w, 20, 32));
+            if (t >= 0 && (size_t)(t / 8) < end) label[t / 8] = 1;
+            any_branch = true;
+        }
+        if ((w & 0xfff0000000000000ull) == 0xe320000000000000ull) any_branch = true;   // RET
+        if ((w & 0xfff0000000000000ull) == 0xe250000000000000ull ||
+            (w & 0xfff0000000000020ull) == 0xe200000000000000ull) {   // BRX / JMX: any instruction may be a target
             any_branch = true;
             memset(label, 1, end);
         }
@@ -2443,6 +2796,14 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
        "switch (mode) { case 1u: v = c + i; break; case 2u: v = 4u + ((c + 4u - i) & 3u); break; case 3u: v = c; break; case 4u: v = i <= c ? i : 3u; break; case 5u: v = min(i, c); break; default: v = (c & 1u) * 2u + (i & 1u); break; } "
        "n |= (v & 7u) << (i * 4); } return prmt(a, b, n); }\n");
 
+    if (c->uses_f64) {   // one newline per function keeps the generated text readable and the Metal diagnostics locatable
+        sp(&s, "// ---- IEEE 754 binary64 emulation (soft_double_core.inc)\n");
+        for (const char *q = sd_msl_source; *q; q++) {
+            sp(&s, "%c", *q);
+            if (*q == '}' && q[1] == ' ') sp(&s, "\n");
+        }
+        sp(&s, "\n");
+    }
     if (c->atom_dev || c->atom_tg) {
         /* integer atomics; op: 0 add, 1 min, 2 max, 3 inc (wraps at the operand), 4 dec (wraps to the operand), 5 and, 6 or, 7 xor, 8 exchange. All return the old value. */
         static const char *const as[2][2] = {{"atom_dev", "device"}, {"atom_tg", "threadgroup"}};
@@ -2523,6 +2884,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         else sp(&args, ", texture%s<float> t%d [[texture(%d)]]", tn, i, i);
         if (i < 16) sp(&args, ", sampler s%d [[sampler(%d)]]", i, i);
     }
+    emit_image_args(&args, info);
     if (stage == STAGE_VERTEX) {
         sp(&s, "vertex VOut main0(VIn in [[stage_in]], uint vid [[vertex_id]], uint iid [[instance_id]]%s%s) {\n", "", args.buf ? args.buf : "");
         sp(&s, "  VOut out = {};\n  out.pos = float4(0, 0, 0, 1);\n");
@@ -2565,7 +2927,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (c->uses_cc) sp(&s, "  uint cc = 0; bool ccz = false, ccs = false;\n");
     if (c->uses_local) sp(&s, "  uint lmem[%d] = {};\n", LMEM_WORDS);
     if (any_branch) {
-        sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0;\n");
+        sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0; uint cal[16]; uint cal_n = 0;\n");
         sp(&s, "  bool exit_now = false;\n");
         sp(&s, "  for (uint guard = 0; guard < 100000u; guard++) {\n  switch (pc) {\n");
         sp(&s, "%s", c->body.buf ? c->body.buf : "");

@@ -21,6 +21,11 @@ static void ret_u8_0(IpcObject *s, IpcCall *c) {
     uint8_t v = 0;
     IPC_OUT(c, v);
 }
+static void ret_u8_1(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = 1;
+    IPC_OUT(c, v);
+}
 static void event(IpcObject *s, IpcCall *c) {
     (void)s;
     uint32_t r = 0;
@@ -151,6 +156,10 @@ static void aoc_prepare_app(IpcObject *s, IpcCall *c) {
     }
     aoc_prepare(s, c);
 }
+/* Rows 8..14 and 50: the installed add-on set is read once from the manifest and never changes while the process runs, so the list-changed
+ * events never fire, nothing is ever "lost" (error code 0), and mounting or unmounting content has no state to track: the console answers
+ * success to Notify(Un)Mount for content that is installed, and CheckAddOnContentMountStatus succeeds for it. These are the real answers for an
+ * immutable DLC set (documented no-ops); the actual read access is the fsp-srv data-id open served from the DLC romfs. */
 static const IpcCmd aoc_cmds[] = {
     {0, "CountAddOnContentByApplicationId", aoc_count_app, IPC_IMPL},
     {1, "ListAddOnContentByApplicationId", aoc_list_app, IPC_IMPL},
@@ -161,28 +170,34 @@ static const IpcCmd aoc_cmds[] = {
     /* 6/7: the guest sequence is List(3), Prepare(7, index), BaseId(5), fsp OpenDataStorageByDataId(202), Notify(11) (switchbrew numbering, firmware 17+). */
     {6, "PrepareAddOnContentByApplicationId", aoc_prepare_app, IPC_IMPL},
     {7, "PrepareAddOnContent", aoc_prepare, IPC_IMPL},
-    {8, "GetAddOnContentListChangedEvent", event, IPC_STUB},
-    {9, "GetAddOnContentLostErrorCode", ret_u32_0, IPC_STUB},
-    {10, "GetAddOnContentListChangedEventWithProcessId", event, IPC_STUB},
-    {11, "NotifyMountAddOnContent", noop, IPC_STUB},
-    {12, "NotifyUnmountAddOnContent", noop, IPC_STUB},
-    {13, "NotifyMountAddOnContentWithProcessId", noop, IPC_STUB},
-    {14, "NotifyUnmountAddOnContentWithProcessId", noop, IPC_STUB},
-    {50, "CheckAddOnContentMountStatus", noop, IPC_STUB},
+    {8, "GetAddOnContentListChangedEvent", event, IPC_IMPL},
+    {9, "GetAddOnContentLostErrorCode", ret_u32_0, IPC_IMPL},
+    {10, "GetAddOnContentListChangedEventWithProcessId", event, IPC_IMPL},
+    {11, "NotifyMountAddOnContent", noop, IPC_IMPL},
+    {12, "NotifyUnmountAddOnContent", noop, IPC_IMPL},
+    {13, "NotifyMountAddOnContentWithProcessId", noop, IPC_IMPL},
+    {14, "NotifyUnmountAddOnContentWithProcessId", noop, IPC_IMPL},
+    {50, "CheckAddOnContentMountStatus", noop, IPC_IMPL},
 };
 static IpcObject *aoc_open(void) { return IPC_OBJECT("aoc:u", aoc_cmds, NULL, NULL); }
 
-/* pctl: an unrestricted device. IParentalControlService commands that ask "is X restricted" answer no. */
+/* pctl: a console with parental controls switched off. Every "is X restricted" query answers no, every "confirm permission" call succeeds and
+ * returns no unlock requirement, the safety level is 0 (none). Command ids are from the author's memory of the public documentation [unverified];
+ * a command that is not in the table still stops the runtime with the usual unknown-command log, which is the signal to add it. */
 static const IpcCmd pctl_service_cmds[] = {
-    {1, "Initialize", noop, IPC_STUB},
-    {1001, "CheckFreeCommunicationPermission", noop, IPC_STUB},
-    {1031, "IsRestrictionEnabled", ret_u8_0, IPC_STUB},
-    {1032, "GetSafetyLevel", ret_u32_0, IPC_STUB},
-    {1035, "IsFreeCommunicationDefaultValue", ret_u8_0, IPC_STUB},
-    {1018, "IsRestrictionTemporaryUnlocked", ret_u8_0, IPC_STUB},
-    {1061, "ConfirmStereoVisionPermission", noop, IPC_STUB},
-    {1062, "EndFreeCommunication", noop, IPC_STUB},
-    {1451, "IsStereoVisionPermitted", ret_u8_0, IPC_STUB},
+    {1, "Initialize", noop, IPC_IMPL},
+    {1001, "CheckFreeCommunicationPermission", noop, IPC_IMPL},
+    {1002, "ConfirmLaunchApplicationPermission", noop, IPC_IMPL},
+    {1003, "ConfirmResumeApplicationPermission", noop, IPC_IMPL},
+    {1004, "ConfirmSnsPostPermission", noop, IPC_IMPL},
+    {1005, "ConfirmSystemSettingsPermission", noop, IPC_IMPL},
+    {1031, "IsRestrictionEnabled", ret_u8_0, IPC_IMPL},
+    {1032, "GetSafetyLevel", ret_u32_0, IPC_IMPL},
+    {1035, "IsFreeCommunicationDefaultValue", ret_u8_0, IPC_IMPL},
+    {1018, "IsRestrictionTemporaryUnlocked", ret_u8_0, IPC_IMPL},
+    {1061, "ConfirmStereoVisionPermission", noop, IPC_IMPL},
+    {1062, "EndFreeCommunication", noop, IPC_IMPL},
+    {1451, "IsStereoVisionPermitted", ret_u8_1, IPC_IMPL},
 };
 static void pctl_create(IpcObject *s, IpcCall *c) {
     (void)s;

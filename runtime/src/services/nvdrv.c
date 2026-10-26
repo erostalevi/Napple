@@ -2,9 +2,11 @@
  * buffers of the vi native window, media). Napple's NVN is implemented by the graphics back end, so the GPU channels, address spaces and
  * syncpoints of the real driver are not needed: this service answers the *memory* side (nvmap handle bookkeeping on guest-provided memory) and
  * the control side (syncpoint counters, event objects) at the level the SDK initializes and polls, the host1x channels of the multimedia
- * engines (nvhost-nvdec/vic/nvjpg/msenc: the channel ioctls, with submits that complete at once), and refuses everything else by number
+ * engines (nvhost-nvdec/vic/nvjpg/msenc: the channel ioctls; a submit's command buffers are parsed as host1x streams and run on the register-level
+ * engines of nvdrv_media_core, decode work going to the installed DecoderBackend; submits complete at once), and refuses everything else by number
  * (NotImplemented) so a game that really needs a device reports it in the log and the compat summary. See docs/architecture/runtime-services.md. */
 #include "../ipc.h"
+#include "nvdrv_media_core.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -29,6 +31,7 @@ typedef struct {
     uint32_t timeout_ms, submit_timeout_ms;
     uint32_t syncpt[CHANNEL_SYNCPTS];
     uint64_t submits;
+    MediaEngine *eng; /* register-level engine behind the channel (nvdrv_media_core) */
 } Channel;
 typedef struct {
     DevKind kind;
@@ -300,9 +303,12 @@ static uint32_t ctrl_ioctl(unsigned nr, uint8_t *buf, uint32_t size) {
  *        + u32 shift[relocs] + incr{u32 id, u32 count, 3 x u32 reserved}[syncpt_incrs] + u32 fence_threshold[fences] (out)
  *   0x02 GET_SYNCPOINT {u32 index, u32 id (out)}   0x03 GET_WAITBASE {u32 index, u32 base (out)}   0x07 SET_SUBMIT_TIMEOUT {u32 ms}
  *   0x09 MAP_CMD_BUFFER / 0x0A UNMAP_CMD_BUFFER {u32 count, u32 data_address, u8 attach_host_ch_das, pad[3]} + {u32 handle, u32 iova (out)}[count]
- * The engines themselves are not emulated: a submit is validated (command buffers must lie inside live nvmap handles) and completes
- * at once, its syncpoint increments land immediately and the fence thresholds are what the guest then waits for. Output surfaces keep
- * whatever the guest had there (video is decoded by movie.c at the media library level instead). */
+ * A submit is validated (command buffers must lie inside live nvmap handles), the command buffers that have a mapped address are read
+ * (relocations applied to a copy), run as host1x streams on the channel's engine (nvdrv_media_core: NVDEC to the DecoderBackend, VIC colour
+ * conversion, NVJPG decode through jpeg_core, MSENC accepted) and the submit completes at once: its syncpoint increments land immediately and
+ * the fence thresholds are what the guest then waits for. A malformed stream or an unmapped gather fails the submit like the kernel's
+ * firewall; a failed decode is reported in the engine's status structure only. Movie playback in movie.c still decodes at the media
+ * library level and does not go through here. Everything runs under the nvdrv lock. */
 enum { NV_BAD_VALUE = 0xB, NV_INVALID_STATE = 8 };
 #define SYNCPT_FIRST_DYNAMIC 32 /* ids below are the fixed ones (display, GPU) the SDK may poll through nvhost-ctrl */
 static uint8_t syncpt_owned[NSYNC];
@@ -324,6 +330,17 @@ static uint32_t nvmap_pin(NvMapHandle *h) {
     next_iova = (uint32_t)end;
     h->iova = (uint32_t)at;
     return h->iova;
+}
+/* Device address -> host pointer for the media engines: the nvmap handle whose pinned range covers it (guest addresses are host addresses here). */
+static uint8_t *nv_resolve(void *ctx, uint64_t iova, size_t *avail) {
+    (void)ctx;
+    for (unsigned i = 0; i < MAX_NVMAP; i++) {
+        NvMapHandle *h = &nvmap[i];
+        if (!h->used || !h->iova || !h->addr || iova < h->iova || iova >= (uint64_t)h->iova + h->size) continue;
+        *avail = (size_t)((uint64_t)h->iova + h->size - iova);
+        return guest_ptr(h->addr + (iova - h->iova), *avail); /* NULL when the guest gave an address that is not mapped */
+    }
+    return NULL;
 }
 static uint32_t rd32(const uint8_t *p) {
     uint32_t v;
@@ -348,6 +365,34 @@ static uint32_t channel_submit(Channel *ch, uint8_t *buf, uint32_t size) {
     }
     for (uint32_t i = 0; i < ni; i++)
         if (rd32(buf + incr_off + (uint64_t)i * 20) >= NSYNC) return NV_BAD_PARAMETER;
+    for (uint32_t i = 0; ch->eng && i < nc; i++) { /* run the command buffers on the engine */
+        const uint8_t *e = buf + cmd_off + (uint64_t)i * 12;
+        NvMapHandle *h = nvmap_find(rd32(e));
+        uint32_t offset = rd32(e + 4), words = rd32(e + 8);
+        const uint8_t *src = h->addr && words && !(offset & 3) ? guest_ptr(h->addr + offset, (uint64_t)words * 4) : NULL;
+        if (!src) continue; /* no readable memory behind the handle (or nothing in it): accepted as before */
+        uint32_t *w = malloc((size_t)words * 4);
+        if (!w) return NV_INSUFFICIENT_MEMORY;
+        memcpy(w, src, (size_t)words * 4);
+        for (uint32_t r = 0; r < nrel; r++) { /* relocations: the word at (cmdbuf, offset) becomes (target iova + target offset) >> shift */
+            const uint8_t *re = buf + rel_off + (uint64_t)r * 16;
+            uint32_t at = rd32(re + 4), toff = rd32(re + 12), shift = rd32(buf + shift_off + (uint64_t)r * 4);
+            if (rd32(re) != h->id || at < offset || at >= offset + words * 4 || at & 3) continue;
+            NvMapHandle *t = nvmap_find(rd32(re + 8));
+            uint32_t iova = t ? nvmap_pin(t) : 0;
+            if (!t || !iova || shift > 31) {
+                free(w);
+                return t && !iova ? NV_INSUFFICIENT_MEMORY : NV_BAD_PARAMETER;
+            }
+            w[(at - offset) / 4] = (uint32_t)(((uint64_t)iova + toff) >> shift);
+        }
+        int rc = media_engine_run(ch->eng, w, words);
+        free(w);
+        if (rc) {
+            LOG("nvdrv", "%s: command buffer %u rejected (%s)", "channel", i, rc == MEDIA_BAD_ADDRESS ? "unmapped gather" : "malformed host1x stream");
+            return NV_BAD_PARAMETER;
+        }
+    }
     for (uint32_t i = 0; i < ni; i++) {
         const uint8_t *e = buf + incr_off + (uint64_t)i * 20;
         uint32_t id = rd32(e), n = rd32(e + 4);
@@ -440,6 +485,16 @@ static uint32_t channel_ioctl(Channel *ch, unsigned type, unsigned nr, uint8_t *
     return r;
 }
 static void channel_release(Channel *ch) { /* close of the fd: its syncpoints go back to the pool */
+    if (ch->eng) {
+        const MediaStats *st = media_engine_stats(ch->eng);
+        LOGV("nvdrv", "engine class %#x closed: %llu executes, %llu frames, %llu errors, %llu unknown register writes", media_engine_class(ch->eng),
+             (unsigned long long)st->executes, (unsigned long long)st->frames, (unsigned long long)st->errors, (unsigned long long)st->unknown_regs);
+        if (st->unknown_regs)
+            summary_note("nvdrv: media engine %#x: %llu writes to registers outside the known map (last %#x)", media_engine_class(ch->eng),
+                         (unsigned long long)st->unknown_regs, st->last_unknown_reg);
+        media_engine_free(ch->eng);
+        ch->eng = NULL;
+    }
     for (unsigned i = 0; i < CHANNEL_SYNCPTS; i++)
         if (ch->syncpt[i]) {
             syncpt_owned[ch->syncpt[i]] = 0;
@@ -476,7 +531,9 @@ static void nv_open(IpcObject *s, IpcCall *c) {
         err = NV_INSUFFICIENT_MEMORY;
         for (unsigned i = 1; i < MAX_FD; i++)
             if (!fds[i].open) {
+                static const NvMediaMem mem = {nv_resolve, NULL};
                 fds[i] = (Fd){.kind = kind, .open = 1, .ch = {.class_id = class_id, .nvmap_fd = -1}};
+                if (kind == DEV_CHANNEL) fds[i].ch.eng = media_engine_new(class_id, &mem);
                 snprintf(fds[i].path, sizeof fds[i].path, "%s", p);
                 fd = i;
                 err = NV_OK;

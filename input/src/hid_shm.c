@@ -15,6 +15,7 @@
    Offsets of the Npad entry fields past the first lifo follow Switchbrew/libnx/yuzu documentation and are table
    driven (napple_hid_layout): see docs/architecture/audio-input-frontend.md section 2.4. */
 #include "napple_input.h"
+#include "gesture.h"
 #include <stdatomic.h>
 #include <string.h>
 
@@ -25,6 +26,8 @@
 #define MOUSE_STATE 0x28u
 #define KEY_STATE 0x30u
 #define NPAD_ENTRY_SIZE 0x5000u
+#define DEBUGPAD_STATE 0x20u
+#define GESTURE_STATE 0x60u
 
 uint32_t napple_hid_lifo_bytes(uint32_t state_size) { return 0x20 + RING * (8 + state_size); }
 
@@ -54,6 +57,8 @@ void napple_hid_layout_for(int profile, napple_hid_layout *l) {
     l->npad_button_properties = at + 16;
     l->npad_battery = at + 20;
     l->revision = (uint32_t)profile;
+    l->gesture = l->npad_base + 10 * l->npad_stride; /* right after the ten npad entries; section size 0x800 */
+    l->console_sixaxis = l->gesture + 0x800;
 }
 
 /* ---- small helpers ---- */
@@ -122,7 +127,9 @@ static void ring_prefill(uint8_t *shm, uint32_t ring, uint32_t state_size, int s
 
 void napple_hid_init(uint8_t *shm, const napple_hid_layout *l) {
     memset(shm, 0, NAPPLE_HID_SHM_SIZE);
+    ring_prefill(shm, l->debug_pad, DEBUGPAD_STATE, 0);
     ring_prefill(shm, l->touch_screen, TOUCH_STATE, 0);
+    if (l->gesture) ring_prefill(shm, l->gesture, GESTURE_STATE, 0);
     ring_prefill(shm, l->mouse, MOUSE_STATE, 0);
     ring_prefill(shm, l->keyboard, KEY_STATE, 0);
     for (int slot = 0; slot < 10; slot++) {
@@ -228,6 +235,65 @@ void napple_hid_push_touch(uint8_t *shm, const napple_hid_layout *l, const nappl
         put32(t + 0x20, pts[i].rotation_angle);
     }
     ring_commit(&s);
+}
+
+void napple_hid_push_debug_pad(uint8_t *shm, const napple_hid_layout *l, const napple_debug_pad_state *d) {
+    Slot s = ring_begin(shm, l->debug_pad, DEBUGPAD_STATE);
+    put32(s.state + 8, d->attributes);
+    put32(s.state + 12, d->buttons);
+    put32(s.state + 16, (uint32_t)d->right.x);
+    put32(s.state + 20, (uint32_t)d->right.y);
+    put32(s.state + 24, (uint32_t)d->left.x);
+    put32(s.state + 28, (uint32_t)d->left.y);
+    ring_commit(&s);
+}
+
+void napple_debug_pad_from_npad(const napple_npad_state *in, napple_debug_pad_state *out) {
+    static const struct {
+        int npad_button;
+        int debug_bit;
+    } map[] = {{NAPPLE_BTN_A, 0},     {NAPPLE_BTN_B, 1},   {NAPPLE_BTN_X, 2},      {NAPPLE_BTN_Y, 3},    {NAPPLE_BTN_L, 4},
+               {NAPPLE_BTN_R, 5},     {NAPPLE_BTN_ZL, 6},  {NAPPLE_BTN_ZR, 7},     {NAPPLE_BTN_PLUS, 8}, {NAPPLE_BTN_MINUS, 9},
+               {NAPPLE_BTN_LEFT, 10}, {NAPPLE_BTN_UP, 11}, {NAPPLE_BTN_RIGHT, 12}, {NAPPLE_BTN_DOWN, 13}};
+    memset(out, 0, sizeof *out);
+    out->attributes = NAPPLE_DEBUGPAD_ATTR_CONNECTED;
+    for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
+        if (in->buttons & NAPPLE_BTN_MASK(map[i].npad_button)) out->buttons |= 1u << map[i].debug_bit;
+    out->left = in->left;
+    out->right = in->right;
+}
+
+void napple_hid_push_gesture(uint8_t *shm, const napple_hid_layout *l, const struct napple_gesture_state *g) {
+    if (!l->gesture) return;
+    Slot s = ring_begin(shm, l->gesture, GESTURE_STATE);
+    put64(s.state + 8, g->context_number);
+    put32(s.state + 16, g->type);
+    put32(s.state + 20, g->direction);
+    put32(s.state + 24, (uint32_t)g->x);
+    put32(s.state + 28, (uint32_t)g->y);
+    put32(s.state + 32, (uint32_t)g->delta_x);
+    put32(s.state + 36, (uint32_t)g->delta_y);
+    putf(s.state + 40, g->velocity_x);
+    putf(s.state + 44, g->velocity_y);
+    put32(s.state + 48, g->attributes);
+    putf(s.state + 52, g->scale);
+    putf(s.state + 56, g->rotation_angle);
+    put32(s.state + 60, (uint32_t)g->point_count);
+    for (int i = 0; i < NAPPLE_GESTURE_MAX_POINTS; i++) {
+        put32(s.state + 64 + 8 * i, (uint32_t)g->points[i].x);
+        put32(s.state + 68 + 8 * i, (uint32_t)g->points[i].y);
+    }
+    ring_commit(&s);
+}
+
+void napple_hid_set_console_sixaxis(uint8_t *shm, const napple_hid_layout *l, int at_rest, float vert_err, const float bias[3]) {
+    if (!l->console_sixaxis) return;
+    uint8_t *b = shm + l->console_sixaxis;
+    uint64_t n = get64(b) + 1;
+    put64(b, n);
+    b[8] = at_rest ? 1 : 0;
+    putf(b + 12, vert_err);
+    for (int i = 0; i < 3; i++) putf(b + 16 + 4 * i, bias ? bias[i] : 0.0f);
 }
 
 void napple_hid_push_mouse(uint8_t *shm, const napple_hid_layout *l, const napple_mouse_state *m) {

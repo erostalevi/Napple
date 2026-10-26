@@ -64,6 +64,17 @@ Conventions used by the code, unless a row says otherwise:
 | `NAPPLE_MOVIE_PACE` | `0` or other; default off | Non-zero paces decoded frames by presentation time; `0` (and the default) hands every decoded frame over at once. | `runtime/src/movie.c` |
 | `NAPPLE_MOVIE_NEGATIVE` | `0`, `1`, `2`; default 0 | Negative controls for the probe movie only: `1` swaps U and V, `2` suppresses the format-changed event. | `runtime/src/movie.c` |
 
+### Network providers, amiibo and the IR camera (sim-online)
+
+| Variable | Values / default | Effect | Defined in |
+|---|---|---|---|
+| `NAPPLE_ONLINE_PROVIDER` | path of a shared library; unset = NullProvider | Loaded once at the first network call; must export `napple_online_provider_v1` (see [network providers](../guides/network-providers.md)). A load or check failure is logged and the NullProvider stays. Not read on iOS. | `runtime/src/services/online_core.c` |
+| `NAPPLE_AMIIBO` | `<what>[,<insert_ms>[,<remove_ms>]]`; unset = no reader | Headless amiibo: installs the picker as the NFC reader. `<what>` is a 16-digit model id, a 14-digit stored UID or the path of a 540-byte dump. | `runtime/src/services/offline.c` |
+| `NAPPLE_AMIIBO_DB` | URL, file or folder; default `https://amiiboapi.com/api/amiibo/` | Source of the amiibo metadata index (never bundled; cached locally). | `runtime/src/services/amiibo_lib_core.c` |
+| `NAPPLE_AMIIBO_KEY` | path; default `~/.switch/key_retail.bin` | The user's retail key file for the optional dump import. | `runtime/src/services/amiibo_lib_core.c` |
+| `NAPPLE_AMIIBO_STORE` | folder; default `<save-root>/system/amiibo` | Where the virtual amiibo JSON files live. | `runtime/src/services/amiibo_lib_core.c` |
+| `NAPPLE_IR_SOURCE` | `blob:x,y,r[,dx,dy]`, `dark`, `flat:v`; unset = no IR camera | Scripted frame source for the IR camera simulator when the frontend installs none. | `runtime/src/services/irs.c` |
+
 ## Speed, input script, screenshots (runtime glue)
 
 | Variable | Values / default | Effect | Defined in |

@@ -12,13 +12,18 @@
 #include <pthread.h>
 #include <sys/mman.h>
 #include "napple.h"
+#ifdef __APPLE__
 #include <sys/ucontext.h>
 #include <mach/mach.h>
 #include "mach_vm_compat.h"
+#endif
+#include "hz_result.h"
 
 static napple_input *g_input;
+#ifdef __APPLE__
 static int trace_on;
 static void *trace_rearm(void *arg);
+#endif
 static IpcSharedMemory *g_shmem;
 static uint32_t npad_events;
 static HidCore hidc;
@@ -47,12 +52,14 @@ static void ensure_input(void) {
     cfg.screen_h = 720;
     if (napple_input_create(&cfg, &g_input)) runtime_fail("input backend failed to start");
     napple_input_start(g_input);
+#ifdef __APPLE__
     if (getenv("NAPPLE_HID_TRACE")) {
         trace_on = 1;
         pthread_t t;
         pthread_create(&t, NULL, trace_rearm, NULL);
         pthread_detach(t);
     }
+#endif
     {
         extern void input_script_start(napple_input *);
         input_script_start(g_input);
@@ -60,6 +67,7 @@ static void ensure_input(void) {
     LOG("hid", "input backend started (%s)", g_cfg.headless ? "no GameController discovery" : "keyboard + GameController");
 }
 
+#ifdef __APPLE__
 /* NAPPLE_HID_TRACE=1: debugging aid that logs which offsets of the HID shared memory the guest reads (and from where). The guest alias is
  * protected PROT_NONE and re-armed every 20 ms; each fault unprotects its page, is logged once per distinct offset (first 600) and
  * the faulting load then runs normally. Writes by the input thread go through the host alias and are unaffected. */
@@ -213,6 +221,14 @@ int hid_trace_fault(const void *addr, void *context) {
     return 0;
 }
 
+#else
+int hid_trace_fault(const void *addr, void *context) {
+    (void)addr;
+    (void)context;
+    return 0;
+} /* the shared-memory read trace needs Mach */
+#endif
+
 napple_input *hid_input_get(void) {
     ensure_input();
     return g_input;
@@ -221,16 +237,6 @@ napple_input *hid_input_get(void) {
 static void noop(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
-}
-static void ret_i64_0(IpcObject *s, IpcCall *c) {
-    (void)s;
-    int64_t v = 0;
-    IPC_OUT(c, v);
-}
-static void ret_u8_1(IpcObject *s, IpcCall *c) {
-    (void)s;
-    uint8_t v = 1;
-    IPC_OUT(c, v);
 }
 static void event_handle(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -316,6 +322,7 @@ static void hid_get_styles(IpcObject *s, IpcCall *c) {
     uint32_t v = HC()->styles_set ? HC()->styles : 0x1f;
     IPC_OUT(c, v);
 }
+static void push_assignment(void);
 static void hid_set_id_types(IpcObject *s, IpcCall *c) {
     (void)s;
     ensure_input();
@@ -325,6 +332,8 @@ static void hid_set_id_types(IpcObject *s, IpcCall *c) {
         LOG("hid", "SetSupportedNpadIdType: %llu ids, first %#x", (unsigned long long)(b->size / 4), b->size >= 4 ? ids[0] : 0);
     }
     napple_input_set_player_count(g_input, b ? (int)(b->size / 4 > 8 ? 8 : (b->size / 4 ? b->size / 4 : 1)) : 1);
+    hidc_reconnect_all(HC()); /* the guest declared its pads again: disconnected ones come back */
+    push_assignment();
 }
 static void hid_assign_single(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -392,9 +401,17 @@ static void hid_get_actual_vibration(IpcObject *s, IpcCall *c) { /* 202 GetActua
     if (slot >= 0) napple_input_get_vibration(g_input, slot, (int)((h >> 24) & 1), &v);
     IPC_OUT(c, v);
 }
+/* IActiveVibrationDeviceList::ActivateVibrationDevice(handle): the device joins the active set (hid_core keeps it). SendVibrationValue reaches the
+ * pad whether or not it was activated: titles that skip the activation (or activate late) still rumble, which is the more useful host behaviour. */
+static void hid_vib_list_activate(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    int r = hidc_vib_activate(HC(), IPC_IN(c, uint32_t, 0));
+    if (r) c->result = HZ_RESULT(HZ_MOD_HID, 301); /* [unverified] invalid vibration device handle / list full */
+}
 static void hid_active_vibration_list(IpcObject *s, IpcCall *c) {
     (void)s;
-    static const IpcCmd cmds[] = {{0, "ActivateVibrationDevice", noop, IPC_STUB}};
+    static const IpcCmd cmds[] = {{0, "ActivateVibrationDevice", hid_vib_list_activate, IPC_IMPL}};
     ipc_out_object(c, IPC_OBJECT("IActiveVibrationDeviceList", cmds, NULL, NULL));
 }
 /* GetVibrationDeviceInfo(handle) -> {device type (1 left LRA, 2 right LRA), position (0 left, 1 right)} */
@@ -509,28 +526,198 @@ static void hid_get_comm_mode(IpcObject *s, IpcCall *c) {
     uint64_t v = HC()->comm_mode;
     IPC_OUT(c, v);
 }
+/* IsVibrationDeviceMounted(handle, aruid): a valid handle whose npad is connected (the backend reports a style for the slot). */
 static void hid_device_mounted(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint8_t v = 1;
+    uint32_t id = 0, side = 0;
+    uint8_t v = 0;
+    if (IN_OK(c, 0, uint32_t) && !hidc_vib_handle_decode(IPC_IN(c, uint32_t, 0), &id, &side)) {
+        ensure_input();
+        int slot = hidc_slot_from_id(id);
+        v = slot >= 0 && napple_input_active_style(g_input, slot) != 0;
+    }
     IPC_OUT(c, v);
-} /* a vibration device handle the SDK produced is always attached (one virtual pad per slot) */
+}
 
+/* A host pad never needs a firmware update (the Mac's GameController stack owns the device): the console's answer for an up-to-date controller. */
 static void hid_fw_update_needed(IpcObject *s, IpcCall *c) {
     (void)s;
     uint8_t v = 0;
     IPC_OUT(c, v);
 }
+
+/* ---- npad assignment, optional sections and the rarely used commands (hid_core.h keeps the state, input/ applies it) ------------------ */
+#define R_HID_INVALID_NPAD HZ_RESULT(HZ_MOD_HID, 710) /* [unverified] NpadIdType not valid for this command */
+#define R_HID_SAME_NPAD HZ_RESULT(HZ_MOD_HID, 711)    /* [unverified] both ids name the same pad */
+#define R_HID_INVALID_ARG HZ_RESULT(HZ_MOD_HID, 100)  /* [unverified] */
+static void push_assignment(void) {
+    ensure_input();
+    HidCore *h = HC();
+    napple_npad_assign a = {.active = h->npad_active, .disconnected = h->disconnected, .keyboard_locks = h->kb_locks};
+    memcpy(a.perm, h->perm, sizeof a.perm);
+    memcpy(a.dual_of, h->dual_of, sizeof a.dual_of);
+    napple_input_set_assignment(g_input, &a);
+}
+static void hid_activate_debug_pad(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    ensure_input();
+    HC()->debug_pad_active = 1;
+    napple_input_set_debug_pad_enabled(g_input, 1); /* the debug pad is player 1's pad */
+}
+static void hid_activate_gesture(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    ensure_input();
+    HC()->gesture_active = 1;
+    napple_input_set_gesture_enabled(g_input, 1);
+}
+static void hid_activate_npad(IpcObject *s, IpcCall *c) { /* 103, 109: arms the pads again */
+    (void)s;
+    (void)c;
+    HC()->npad_active = 1;
+    hidc_reconnect_all(HC());
+    push_assignment();
+}
+static void hid_deactivate_npad(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->npad_active = 0;
+    push_assignment();
+}
+static void hid_disconnect_npad(IpcObject *s, IpcCall *c) { /* 107(npad id u32, aruid u64) */
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    if (hidc_disconnect(HC(), IPC_IN(c, uint32_t, 0))) {
+        c->result = R_HID_INVALID_NPAD;
+        return;
+    }
+    push_assignment();
+}
+static void hid_swap_assignment(IpcObject *s, IpcCall *c) { /* 130(npad id a, npad id b, aruid) */
+    (void)s;
+    if (!IN_OK(c, 4, uint32_t)) return;
+    int r = hidc_swap(HC(), IPC_IN(c, uint32_t, 0), IPC_IN(c, uint32_t, 4));
+    if (r) {
+        c->result = r == -2 ? R_HID_SAME_NPAD : R_HID_INVALID_NPAD;
+        return;
+    }
+    push_assignment();
+}
+static void hid_merge_joy(IpcObject *s, IpcCall *c) { /* 125(npad id a, npad id b, aruid) */
+    (void)s;
+    if (!IN_OK(c, 4, uint32_t)) return;
+    int r = hidc_merge(HC(), IPC_IN(c, uint32_t, 0), IPC_IN(c, uint32_t, 4));
+    if (r) {
+        c->result = r == -2 ? R_HID_SAME_NPAD : R_HID_INVALID_NPAD;
+        return;
+    }
+    push_assignment();
+}
+/* LR assignment mode (the screen where a player presses SL/SR on a lone Joy-Con to choose its side): the host pads have no detachable halves, so
+ * the mode is only a flag the guest can bracket its screen with. */
+static void hid_start_lr(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->lr_assign_mode = 1;
+}
+static void hid_stop_lr(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->lr_assign_mode = 0;
+}
+/* Stick centre clamp: the backend already limits every stick to the unit circle (input test "diagonal magnitude"), which is what the clamp asks for. */
+static void hid_center_clamp(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) HC()->center_clamp = IPC_IN(c, uint8_t, 0) != 0;
+}
+/* Capture button assignment: Set(style u32 at 0, aruid at 8, button index u64 at 16), Clear(style). The Capture press itself reaches the host's
+ * screenshot hotkey; the table decides which npad button bit would mirror it, which the host pads never set. */
+static void hid_set_capture_button(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    int button = IN_OK(c, 16, uint64_t) ? (int)IPC_IN(c, uint64_t, 16) : -1;
+    if (hidc_capture_assign(HC(), IPC_IN(c, uint32_t, 0), button)) c->result = R_HID_INVALID_ARG;
+}
+static void hid_clear_capture_button(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    if (hidc_capture_clear(HC(), IPC_IN(c, uint32_t, 0))) c->result = R_HID_INVALID_ARG;
+}
+static void hid_keyboard_lock(IpcObject *s, IpcCall *c) { /* 32(HidKeyboardLockKeyEvent bits u32) */
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    hidc_keyboard_lock_event(HC(), IPC_IN(c, uint32_t, 0));
+    push_assignment();
+}
+/* Xpad (the pre-Npad pad interface, removed from current firmware): this host has no xpad devices, so the id list is empty and the id event never
+ * fires, which is what a console without one answers. */
+static void hid_get_xpad_ids(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t n = 0;
+    IPC_OUT(c, n);
+}
+static int six_slot(IpcCall *c) {
+    uint32_t h = IN_OK(c, 0, uint32_t) ? IPC_IN(c, uint32_t, 0) : 0;
+    return hidc_slot_from_id(((h >> 8) & 0xff) == 1 ? 0x20 : (h >> 16) & 0xff);
+}
+/* IsSixAxisSensorAtRest(handle, aruid): judged from the sensor sample the backend last wrote for that pad. */
+static void hid_six_at_rest(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ensure_input();
+    napple_sixaxis_state st;
+    int slot = six_slot(c);
+    uint8_t v = slot >= 0 && napple_input_get_sixaxis(g_input, slot, &st) ? (uint8_t)napple_sixaxis_at_rest(&st) : 1;
+    IPC_OUT(c, v);
+}
+static void console_six_apply(void) {
+    ensure_input();
+    napple_input_set_console_sixaxis_enabled(g_input, HC()->console_six_active && HC()->console_six_started);
+}
+static void hid_console_six_activate(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->console_six_active = 1;
+    console_six_apply();
+}
+static void hid_console_six_start(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->console_six_started = 1;
+    console_six_apply();
+}
+static void hid_console_six_stop(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->console_six_started = 0;
+    console_six_apply();
+}
+static void hid_set_touch_config(IpcObject *s, IpcCall *c) { /* 1002(config: first byte is the mode) */
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) HC()->touch_mode = IPC_IN(c, uint8_t, 0);
+}
+static void hid_set_touch_resolution(IpcObject *s, IpcCall *c) { /* 1004(u32 width, u32 height, aruid) */
+    (void)s;
+    if (!IN_OK(c, 4, uint32_t)) return;
+    uint32_t w = IPC_IN(c, uint32_t, 0), h = IPC_IN(c, uint32_t, 4);
+    if (hidc_set_touch_resolution(HC(), w, h)) {
+        c->result = R_HID_INVALID_ARG;
+        return;
+    }
+    ensure_input();
+    napple_input_set_screen_size(g_input, (int)w, (int)h);
+}
 static const IpcCmd hid_cmds[] = {
     {0, "CreateAppletResource", hid_create_applet_resource, IPC_IMPL},
-    {1, "ActivateDebugPad", noop, IPC_IMPL},
+    {1, "ActivateDebugPad", hid_activate_debug_pad, IPC_IMPL},
     {11, "ActivateTouchScreen", noop, IPC_IMPL},
     {21, "ActivateMouse", noop, IPC_IMPL},
     {31, "ActivateKeyboard", noop, IPC_IMPL},
-    {32, "SendKeyboardLockKeyEvent", noop, IPC_STUB},
-    {40, "AcquireXpadIdEventHandle", event_handle, IPC_STUB},
-    {41, "ReleaseXpadIdEventHandle", noop, IPC_STUB},
-    {51, "ActivateXpad", noop, IPC_STUB},
-    {55, "GetXpadIds", ret_i64_0, IPC_STUB},
+    {32, "SendKeyboardLockKeyEvent", hid_keyboard_lock, IPC_IMPL},
+    {40, "AcquireXpadIdEventHandle", event_handle, IPC_IMPL},
+    {41, "ReleaseXpadIdEventHandle", noop, IPC_IMPL},
+    {51, "ActivateXpad", noop, IPC_IMPL},
+    {55, "GetXpadIds", hid_get_xpad_ids, IPC_IMPL},
     {66, "StartSixAxisSensor", hid_six_axis, IPC_IMPL},
     {67, "StopSixAxisSensor", hid_six_axis_off, IPC_IMPL},
     {68, "IsSixAxisSensorFusionEnabled", hid_fusion_enabled, IPC_IMPL},
@@ -540,33 +727,33 @@ static const IpcCmd hid_cmds[] = {
     {79, "SetGyroscopeZeroDriftMode", hid_set_zero_drift, IPC_IMPL},
     {80, "GetGyroscopeZeroDriftMode", hid_get_zero_drift, IPC_IMPL},
     {81, "ResetGyroscopeZeroDriftMode", hid_reset_zero_drift, IPC_IMPL},
-    {82, "IsSixAxisSensorAtRest", ret_u8_1, IPC_STUB},
-    {91, "ActivateGesture", noop, IPC_STUB},
+    {82, "IsSixAxisSensorAtRest", hid_six_at_rest, IPC_IMPL},
+    {91, "ActivateGesture", hid_activate_gesture, IPC_IMPL},
     {100, "SetSupportedNpadStyleSet", hid_set_styles, IPC_IMPL},
     {101, "GetSupportedNpadStyleSet", hid_get_styles, IPC_IMPL},
     {102, "SetSupportedNpadIdType", hid_set_id_types, IPC_IMPL},
-    {103, "ActivateNpad", noop, IPC_IMPL},
-    {104, "DeactivateNpad", noop, IPC_STUB},
+    {103, "ActivateNpad", hid_activate_npad, IPC_IMPL},
+    {104, "DeactivateNpad", hid_deactivate_npad, IPC_IMPL},
     {106, "AcquireNpadStyleSetUpdateEventHandle", hid_style_update_event, IPC_IMPL},
-    {107, "DisconnectNpad", noop, IPC_STUB},
+    {107, "DisconnectNpad", hid_disconnect_npad, IPC_IMPL},
     {108, "GetPlayerLedPattern", hid_get_player_led_pattern, IPC_IMPL},
-    {109, "ActivateNpadWithRevision", noop, IPC_IMPL},
+    {109, "ActivateNpadWithRevision", hid_activate_npad, IPC_IMPL},
     {120, "SetNpadJoyHoldType", hid_set_joy_hold, IPC_IMPL},
     {121, "GetNpadJoyHoldType", hid_get_joy_hold, IPC_IMPL},
     {122, "SetNpadJoyAssignmentModeSingleByDefault", hid_assign_single, IPC_IMPL},
     {123, "SetNpadJoyAssignmentModeSingle", hid_assign_single, IPC_IMPL},
     {124, "SetNpadJoyAssignmentModeDual", hid_assign_dual, IPC_IMPL},
-    {125, "MergeSingleJoyAsDualJoy", noop, IPC_STUB},
-    {126, "StartLrAssignmentMode", noop, IPC_STUB},
-    {127, "StopLrAssignmentMode", noop, IPC_STUB},
+    {125, "MergeSingleJoyAsDualJoy", hid_merge_joy, IPC_IMPL},
+    {126, "StartLrAssignmentMode", hid_start_lr, IPC_IMPL},
+    {127, "StopLrAssignmentMode", hid_stop_lr, IPC_IMPL},
     {128, "SetNpadHandheldActivationMode", hid_set_handheld_mode, IPC_IMPL},
     {129, "GetNpadHandheldActivationMode", hid_get_handheld_mode, IPC_IMPL},
-    {130, "SwapNpadAssignment", noop, IPC_STUB},
+    {130, "SwapNpadAssignment", hid_swap_assignment, IPC_IMPL},
     {131, "IsUnintendedHomeButtonInputProtectionEnabled", hid_home_protect_get, IPC_IMPL},
     {132, "EnableUnintendedHomeButtonInputProtection", hid_home_protect_set, IPC_IMPL},
-    {133, "SetNpadAnalogStickUseCenterClamp", noop, IPC_STUB},
-    {134, "SetNpadCaptureButtonAssignment", noop, IPC_STUB},
-    {135, "ClearNpadCaptureButtonAssignment", noop, IPC_STUB},
+    {133, "SetNpadAnalogStickUseCenterClamp", hid_center_clamp, IPC_IMPL},
+    {134, "SetNpadCaptureButtonAssignment", hid_set_capture_button, IPC_IMPL},
+    {135, "ClearNpadCaptureButtonAssignment", hid_clear_capture_button, IPC_IMPL},
     {200, "GetVibrationDeviceInfo", hid_vibration_device_info, IPC_IMPL},
     {201, "SendVibrationValue", hid_send_vibration, IPC_IMPL},
     {202, "GetActualVibrationValue", hid_get_actual_vibration, IPC_IMPL},
@@ -574,15 +761,15 @@ static const IpcCmd hid_cmds[] = {
     {204, "PermitVibration", hid_permit_vibration, IPC_IMPL},
     {205, "IsVibrationPermitted", hid_is_vibration_permitted, IPC_IMPL},
     {206, "SendVibrationValues", hid_send_vibrations, IPC_IMPL},
-    {211, "IsVibrationDeviceMounted", hid_device_mounted, IPC_STUB},
-    {300, "ActivateConsoleSixAxisSensor", noop, IPC_STUB},
-    {301, "StartConsoleSixAxisSensor", noop, IPC_STUB},
-    {302, "StopConsoleSixAxisSensor", noop, IPC_STUB},
+    {211, "IsVibrationDeviceMounted", hid_device_mounted, IPC_IMPL},
+    {300, "ActivateConsoleSixAxisSensor", hid_console_six_activate, IPC_IMPL},
+    {301, "StartConsoleSixAxisSensor", hid_console_six_start, IPC_IMPL},
+    {302, "StopConsoleSixAxisSensor", hid_console_six_stop, IPC_IMPL},
     {1000, "SetNpadCommunicationMode", hid_set_comm_mode, IPC_IMPL},
     {1001, "GetNpadCommunicationMode", hid_get_comm_mode, IPC_IMPL},
-    {1002, "SetTouchScreenConfiguration", noop, IPC_STUB},
-    {1003, "IsFirmwareUpdateNeededForNotification", hid_fw_update_needed, IPC_STUB},
-    {1004, "SetTouchScreenResolution", noop, IPC_STUB},
+    {1002, "SetTouchScreenConfiguration", hid_set_touch_config, IPC_IMPL},
+    {1003, "IsFirmwareUpdateNeededForNotification", hid_fw_update_needed, IPC_IMPL},
+    {1004, "SetTouchScreenResolution", hid_set_touch_resolution, IPC_IMPL},
 };
 static IpcObject *hid_open(void) { return IPC_OBJECT("hid", hid_cmds, NULL, NULL); }
 void service_register_hid(void) { ipc_register_service("hid", hid_open); }

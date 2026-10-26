@@ -23,11 +23,13 @@ static void ngc_mask(IpcObject *s, IpcCall *c) {
     uint32_t masked = 0;
     IPC_OUT(c, masked);
 }
+/* Check and Mask stay stubs on purpose: they need the profanity word lists, which are not shipped (class d: no title can tell a missing list from a
+ * clean text; a real list is a data drop, not code). The version and Reload rows are complete. */
 static const IpcCmd ngc_cmds[] = {
-    {0, "GetContentVersion", ngc_content_version, IPC_STUB},
+    {0, "GetContentVersion", ngc_content_version, IPC_IMPL},
     {1, "Check", ngc_check, IPC_STUB},
     {2, "Mask", ngc_mask, IPC_STUB},
-    {3, "Reload", svc_noop, IPC_STUB},
+    {3, "Reload", svc_noop, IPC_IMPL},
 };
 static IpcObject *ngc_open(void) { return IPC_OBJECT("ngc:u", ngc_cmds, NULL, NULL); }
 void service_register_ngc(void) { ipc_register_service("ngc:u", ngc_open); }

@@ -99,8 +99,9 @@ typedef struct napple_hid_layout {
     uint32_t npad_lifo[7];    /* full_key, handheld, joy_dual, joy_left, joy_right, palma, system_ext (0 = absent) */
     uint32_t npad_sixaxis[6]; /* full_key, handheld, joy_dual_left, joy_dual_right, joy_left, joy_right (0 = absent) */
     uint32_t npad_device_type, npad_system_properties, npad_button_properties, npad_battery, npad_gc_trigger;
-    uint32_t lifo_count; /* entries per ring: 17 */
-    uint32_t revision;   /* which profile this table came from (NAPPLE_HID_LAYOUT_*) */
+    uint32_t lifo_count;               /* entries per ring: 17 */
+    uint32_t revision;                 /* which profile this table came from (NAPPLE_HID_LAYOUT_*) */
+    uint32_t gesture, console_sixaxis; /* gesture lifo section (0x800) and console six-axis record (0x20); offsets unverified */
 } napple_hid_layout;
 
 enum {
@@ -150,6 +151,22 @@ void napple_hid_push_npad(uint8_t *shm, const napple_hid_layout *l, int slot, ui
 void napple_hid_push_sixaxis(uint8_t *shm, const napple_hid_layout *l, int slot, int sixaxis_index, const napple_sixaxis_state *s);
 void napple_hid_set_npad_device(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t device_type, uint64_t system_properties, uint32_t battery_level);
 void napple_hid_push_touch(uint8_t *shm, const napple_hid_layout *l, const napple_touch_point *pts, uint32_t count);
+/* Debug pad (hid 1 ActivateDebugPad): DebugPadState {u64 sampling, u32 attributes (bit0 connected), u32 buttons (A B X Y L R ZL ZR Plus Minus Left Up Right Down = bits 0..13),
+   right stick {s32 x, y}, left stick {s32 x, y}} in a 17 entry ring at layout.debug_pad. Layout is from the author's memory of the public description: unverified. */
+enum { NAPPLE_DEBUGPAD_ATTR_CONNECTED = 1u };
+typedef struct napple_debug_pad_state {
+    uint32_t attributes, buttons;
+    napple_stick right, left;
+} napple_debug_pad_state;
+void napple_hid_push_debug_pad(uint8_t *shm, const napple_hid_layout *l, const napple_debug_pad_state *s);
+/* Maps a Switch npad state to the debug pad: the face and shoulder buttons keep their meaning, the d-pad and +/- too; sticks are copied. */
+void napple_debug_pad_from_npad(const napple_npad_state *in, napple_debug_pad_state *out);
+/* Gesture section: GestureState (see gesture.h) in a 17 entry ring at layout.gesture. */
+struct napple_gesture_state;
+void napple_hid_push_gesture(uint8_t *shm, const napple_hid_layout *l, const struct napple_gesture_state *g);
+int napple_sixaxis_at_rest(const napple_sixaxis_state *s); /* 1 when the sensor is still: ~1 G of acceleration, negligible rotation */
+/* Console six-axis record: {u64 sampling, u8 at rest, f32 verticalization error, f32 gyro bias x, y, z}. */
+void napple_hid_set_console_sixaxis(uint8_t *shm, const napple_hid_layout *l, int at_rest, float verticalization_error, const float gyro_bias[3]);
 void napple_hid_push_mouse(uint8_t *shm, const napple_hid_layout *l, const napple_mouse_state *s);
 void napple_hid_push_keyboard(uint8_t *shm, const napple_hid_layout *l, uint64_t modifiers, const uint8_t keys[32]);
 /* Reading (tests, diagnostics): latest entry of the ring at `ring` (offset of the lifo header); returns
@@ -195,6 +212,27 @@ typedef struct napple_vibration {
 } napple_vibration;
 void napple_input_set_vibration(napple_input *in, uint32_t npad_id, int side /*0 left,1 right*/, const napple_vibration *v);
 void napple_input_set_sixaxis_enabled(napple_input *in, int enabled);
+/* Npad assignment the guest configured (hid_core.h keeps the master copy and pushes it here whenever it changes). `active` 0 = DeactivateNpad: the npad
+   sections stop updating. `disconnected` bit per slot 0..9. `perm[slot]` = which physical pad feeds the slot (SwapNpadAssignment). `dual_of[slot]` != 0:
+   the slot reports a Joy-Con pair (MergeSingleJoyAsDualJoy). `keyboard_locks`: bit0 num lock, bit1 caps lock, bit2 scroll lock (SendKeyboardLockKeyEvent),
+   shown as the matching HidKeyboardModifier bits. */
+typedef struct napple_npad_assign {
+    int active;
+    uint32_t disconnected;
+    uint8_t perm[10], dual_of[10];
+    uint32_t keyboard_locks;
+} napple_npad_assign;
+void napple_input_set_assignment(napple_input *in, const napple_npad_assign *a);
+/* SetTouchScreenResolution: the coordinate space touch (and mouse) positions are reported in. */
+void napple_input_set_screen_size(napple_input *in, int w, int h);
+/* Sections the guest has to activate before the backend writes them (ActivateDebugPad / ActivateGesture / ActivateConsoleSixAxisSensor). */
+void napple_input_set_debug_pad_enabled(napple_input *in, int enabled);
+void napple_input_set_gesture_enabled(napple_input *in, int enabled);
+void napple_input_set_console_sixaxis_enabled(napple_input *in, int enabled);
+/* Latest six-axis sample of a player slot (0..9), for IsSixAxisSensorAtRest; returns 0 when the slot has produced none. */
+int napple_input_get_sixaxis(napple_input *in, int slot, napple_sixaxis_state *out);
+/* Touch screen frame injection (a multi-touch frontend, tests): replaces the mouse-derived finger while set; count 0 releases. */
+void napple_input_touch_points(napple_input *in, const napple_touch_point *pts, uint32_t count);
 void napple_input_shake(napple_input *in); /* player 1's sensor shakes side to side for 3 whole cycles (0.6 s): games that detect a shake (SMO cap throw) */
 
 /* ---- host events, fed by the frontend (or a test) ---- */

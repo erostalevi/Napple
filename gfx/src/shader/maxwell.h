@@ -10,6 +10,10 @@
  *  - global memory (LDG/STG) -> `device uchar *gmem [[buffer(GMEM_BUFFER_INDEX)]]`, addressed relative to maxwell_gmem_base.
  *  - shared memory (LDS/STS/ATOMS, compute only) -> a `threadgroup uint smem_w[]` declared inside the kernel (ShaderInfo.shared_mem bytes, no argument to bind);
  *    BAR is threadgroup_barrier(mem_threadgroup).
+ *  - surface images (SULD/SUST/SUATOM/SURED): image slot i (ShaderInfo.img[i], in order of first use) -> `texture<dim><T, access::A> im<i> [[texture(IMAGE_TEXTURE_BASE + i)]]`;
+ *    the NVN image handle is read from c2 at ShaderImage.handle_offset (or from the user uniform buffer for bindless handles, as for textures). T is float/int/uint
+ *    (ShaderImage.kind), A is read / write / read_write from the instructions that use the image. Atomics need MSL 3.1 (ShaderInfo.needs_msl31).
+ *    Full contract: docs/architecture/gfx.md, section "Surface images".
  *  - rscale table (resolution scale) -> `constant float4 *rscale [[buffer(18)]]` when ShaderInfo.uses_rscale.
  *  - clip space: ShaderKey.flip_y / depth_minus_one epilogues convert NVN clip space to Metal's.
  */
@@ -35,6 +39,10 @@ typedef struct {
     uint8_t probe_reg[3];
     float probe_scale;
     uint32_t
+        image_int_mask; /* surface images whose texture format is signed integer (bit n = image n of the SULD/SUST immediate index; bit 31 = every bindless image) */
+    uint32_t
+        image_uint_mask; /* ... unsigned integer. Images in neither mask are float (or, for raw sub-word / atomic access, promoted to integer on first use) */
+    uint32_t
         shared_size; /* compute: shared (threadgroup) memory bytes the program declares; 0 = infer from static LDS/STS offsets, 32 KB if addressed dynamically. Above 32 KB the shader is refused */
 } ShaderKey;
 
@@ -44,6 +52,21 @@ typedef struct {
     bool shadow, is_array, is_image, bindless, depth;
     uint32_t bindless_cbuf, bindless_offset;
 } ShaderTexture;
+
+enum { IMGACC_READ = 1, IMGACC_WRITE = 2 };
+enum { IMGKIND_FLOAT = 0, IMGKIND_INT = 1, IMGKIND_UINT = 2 };
+#define IMAGE_TEXTURE_BASE 64 /* Metal texture index of image slot 0 (sampled textures use 0..62) */
+#define MAX_IMAGES 8
+typedef struct {
+    uint32_t handle_offset; /* byte offset of the image handle in c2 (immediate index * 4) */
+    uint8_t type;           /* TEXTYPE_1D, _1D_ARRAY, _2D, _2D_ARRAY, _3D or _BUFFER */
+    uint8_t access;         /* IMGACC_* bits */
+    uint8_t kind;           /* IMGKIND_* : component type of the Metal texture */
+    bool kind_fixed;        /* kind came from ShaderKey (or an atomic forced it) */
+    bool atomic;            /* used by SUATOM/SURED: the texture must be r32uint / r32sint with MTLTextureUsageShaderAtomic */
+    bool bindless;
+    uint32_t bindless_cbuf, bindless_offset;
+} ShaderImage;
 
 typedef struct {
     int stage;
@@ -59,6 +82,9 @@ typedef struct {
     bool indexed_inputs;     /* fragment: varyings read through a register (the generated code then depends on the whole vs_out_mask) */
     bool writes_depth, uses_discard, writes_point_size;
     bool uses_gmem, uses_gmem_store;
+    int nimg;
+    ShaderImage img[MAX_IMAGES];
+    bool needs_msl31;       /* the MSL uses texture atomics: compile with MTLLanguageVersion3_1 */
     bool bindless_approx;   // a bindless handle indexed at run time was resolved to the first entry of its table (approximation)
     bool uses_rscale;
     uint32_t local_mem;

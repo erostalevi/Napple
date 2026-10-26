@@ -349,6 +349,8 @@ static void st_size(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, n);
 }
 
+/* Rows 3, 4, 16 and 17 stay stubs: they would read the content infos out of the stored meta blobs (a CNMT parse), which nothing needs yet (class a, left for
+ * a later pass). LookupOrphanContent has no orphans to report and GetPath / GetPlaceHolderPath are complete (registered content has no host file path). */
 static const IpcCmd meta_db_cmds[] = {
     {0, "Set", meta_set, IPC_IMPL},
     {1, "Get", meta_get, IPC_IMPL},
@@ -364,7 +366,7 @@ static const IpcCmd meta_db_cmds[] = {
     {11, "GetRequiredSystemVersion", meta_required_system_version, IPC_IMPL},
     {12, "GetPatchId", meta_patch_id, IPC_IMPL},
     {13, "DisableForcibly", svc_noop, IPC_IMPL},
-    {14, "LookupOrphanContent", svc_noop, IPC_STUB},
+    {14, "LookupOrphanContent", svc_noop, IPC_IMPL},
     {15, "Commit", svc_noop, IPC_IMPL},
     {16, "HasContent", meta_has_content, IPC_STUB},
     {17, "ListContentMetaInfo", meta_list_info_zero, IPC_STUB},
@@ -378,8 +380,8 @@ static const IpcCmd storage_cmds[] = {
     {5, "Register", st_register, IPC_IMPL},
     {6, "Delete", st_delete, IPC_IMPL},
     {7, "Has", st_has, IPC_IMPL},
-    {8, "GetPath", st_get_path, IPC_STUB},
-    {9, "GetPlaceHolderPath", st_get_placeholder_path, IPC_STUB},
+    {8, "GetPath", st_get_path, IPC_IMPL},
+    {9, "GetPlaceHolderPath", st_get_placeholder_path, IPC_IMPL},
     {10, "CleanupAllPlaceHolder", st_cleanup_placeholders, IPC_IMPL},
     {11, "ListPlaceHolder", st_list_placeholder, IPC_IMPL},
     {12, "GetContentCount", st_content_count, IPC_IMPL},

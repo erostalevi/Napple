@@ -7,6 +7,8 @@ typedef struct {
     float brightness; /* current setting, 0..1 */
     float applied;    /* brightness applied to the backlight */
     float vr_brightness;
+    float saved;               /* the setting in persistent storage (SaveCurrentSetting writes it, LoadCurrentSetting reads it) */
+    float reflection_delay[2]; /* SetBrightnessReflectionDelayLevel, one level per direction (0 = brighter, 1 = darker) */
     uint32_t switch_status;
     int dimming, auto_brightness;
     float ambient_lux;
@@ -18,3 +20,7 @@ float lbl_clamp(float v); /* NaN -> default, clamped to 0..1 */
 void lbl_set_brightness(LblState *s, float v);
 void lbl_apply(LblState *s); /* ApplyCurrentBrightnessSettingToBacklight */
 void lbl_switch(LblState *s, int on);
+void lbl_save(LblState *s);
+void lbl_load(LblState *s);
+void lbl_set_ambient(LblState *s, int over_limit, float lux); /* a test or simulated sensor value; lux is clamped to >= 0 */
+void lbl_apply_vr(LblState *s);

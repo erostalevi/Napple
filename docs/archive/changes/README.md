@@ -104,3 +104,8 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-10-26-repo-hygiene](2026-10-26-repo-hygiene.md) | Slim batch: LICENSE and community files, README, `tools/dev` and `tools/legacy`, process archive, legacy projects removed. |
 | [2026-10-26-docs-consolidate](2026-10-26-docs-consolidate.md) | Slim batch: docs restructured into architecture, guides, reference, process and archive; mkdocs site; docs check extended. |
 | [2026-10-26-mac-slim](2026-10-26-mac-slim.md) | Slim batch (Mac): Obj-C and Swift warnings zero, smaller runtime, shader cache cap, `napple clean`, Makefile dependency tracking. |
+| [2026-10-26-f64-isa](2026-10-26-f64-isa.md) | Bit-exact double precision (DADD/DMUL/DFMA/DSETP/DMNMX/DSET, 64-bit conversions) for the Maxwell translator and the 40-item rare-ISA audit. |
+| [2026-10-26-claude-support-tables-2026-10-26-cloud2](2026-10-26-claude-support-tables-2026-10-26-cloud2.md) | Generated support matrix, feature-support table and site JSON with a `--check` staleness guard. |
+| [2026-10-26-claude-media-services-2026-10-26-cloud2](2026-10-26-claude-media-services-2026-10-26-cloud2.md) | nvdrv multimedia engines (NVDEC/VIC/NVJPG/MSENC) over a DecoderBackend, portable JPEG codec, caps album images, Vorbis/Opus movie audio (cloud, Linux-tested). |
+| [2026-10-26-runtime-depth](2026-10-26-runtime-depth.md) | Stub IPC rows become real behaviour with host tests: hid, bcat, audio, psm, lbl, settings, apm, pdm, pctl/aoc and part of spsm/ovln/ectx/fgm/olsc/time/ns/ncm/ngc. |
+| [2026-10-26-shader-surface](2026-10-26-shader-surface.md) | SULD/SUST/SUATOM/SURED translated to Metal image calls, with the image binding contract. |

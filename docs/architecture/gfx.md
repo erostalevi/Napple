@@ -140,3 +140,36 @@ Pending: runtime/ has no loader yet (empty directory when this was written). Whe
 - Headless runs pace presents at the swap interval so the guest runs at real speed.
 - New host API: `napple_gfx_texture_info`, `napple_gfx_texture_write_rgba` (video decoders).
 - Per-game: `nvn_major/nvn_minor` from `game.json`.
+
+### 11. Surface images (SULD, SUST, SUATOM, SURED)
+
+The translator turns the Maxwell surface instructions into Metal texture `read` / `write` / `atomic_fetch_*` calls (`gfx/src/shader/surface.inc`). Status: *tested* on Linux (`sh gfx/tests/t_xlate_linux.sh`: text assertions on hand-assembled words); *unbuilt* against Metal and never run on a real shader binary. The instruction field positions follow the public Maxwell decoders from memory; the corpus run on the Mac (`NAPPLE_SHADER_CORPUS`) is the first check against real code.
+
+**Binding contract (translator output -> Metal runtime).** `ShaderInfo.nimg` / `img[i]` (`shader/maxwell.h`, `ShaderImage`) list the images in order of first use, at most `MAX_IMAGES` (8).
+
+| Item | Rule |
+|---|---|
+| Metal texture index | image slot `i` is `[[texture(IMAGE_TEXTURE_BASE + i)]]`, base 64. Sampled textures use 0..62, so the two never collide. No sampler. Declared after the sampled textures, in all stages (compute, fragment, vertex). |
+| MSL argument | `texture<dim><T, access::A> im<i>`; `dim` from `ShaderImage.type`: 1D `texture1d`, 1D array `texture1d_array`, 2D `texture2d`, 2D array `texture2d_array`, 3D `texture3d`, buffer `texture_buffer`. |
+| Component type `T` | `float` by default. `int` / `uint` when the pipeline key says so (`ShaderKey.image_int_mask` / `image_uint_mask`, bit n = SULD/SUST immediate index n, bit 31 = every bindless image), or when the shader forces it (raw `.U8/.S8/.U16/.S16` access, atomics): then `ShaderImage.kind` is `IMGKIND_INT` / `IMGKIND_UINT` and the runtime must supply a matching format (R8Uint ... RGBA32Uint, R32Uint / R32Sint for atomics). A key that contradicts the shader is a translator error naming the instruction. |
+| Access `A` | `read`, `write` or `read_write` from `ShaderImage.access` (`IMGACC_READ`, `IMGACC_WRITE`): the union of the instructions that use the image. The runtime creates the texture with the matching usage (`MTLTextureUsageShaderRead`, `ShaderWrite`; atomics also `MTLTextureUsageShaderAtomic`), and `read_write` needs `MTLReadWriteTextureTier` 1 (R32 formats) or 2 (all). |
+| Handle | `ShaderImage.handle_offset`: byte offset in c2 of the NVN image handle (immediate index * 4), exactly like `ShaderTexture.handle_offset`. A bindless handle (`.B` forms, `ShaderImage.bindless`) is read from user uniform buffer `bindless_cbuf` at `bindless_offset`; a bindless handle that comes from c2 is an ordinary table entry. |
+| Language version | `ShaderInfo.needs_msl31`: the MSL contains texture atomics and must be compiled with `MTLLanguageVersion3_1` (macOS 14+). Other shaders compile as before. |
+| Out of range | per instruction clamp mode: IGN and TRAP skip the access (a load returns 0, a store is dropped; there is no trap on a GPU), ZERO the same, CLAMP clamps each coordinate and the layer to the extent. The checks are explicit, not left to Metal. |
+
+**What is translated.**
+
+- SULD / SUST, dimensions 1D, BUFFER, 1D_ARRAY, 2D, 2D_ARRAY, 3D (coordinates in consecutive registers from Ra: x, y, z, and the array layer last). `.D` raw sizes U8 S8 U16 S16 32 64 128 (1, 1, 1, 1, 1, 2, 4 registers; sub-word sizes need an integer image), `.P` formatted access with a channel mask (channels compact into consecutive registers; a partial-mask store is a read-modify-write and makes the image `read_write`), `.BA` byte addressing (x is divided by the access size, which assumes the texel size equals the access size).
+- SUATOM (returns the old value) and SURED (no result, data in Rd): ADD, MIN, MAX, AND, OR, XOR on 32-bit signed / unsigned integer images. MIN / MAX use the signedness of the instruction type, and the image is declared `int` or `uint` accordingly.
+- Unsupported, each a translator error naming the instruction (for example `SUATOM.EXCH.2D: ...`): INC and DEC (wrapping compare-and-update: no Metal texture atomic), EXCH and CAS (MSL 3.1 texture atomics are fetch_add/sub/and/or/xor/min/max only), 64-bit and floating-point atomics, more than 8 distinct images, one image used with two dimensions, other opcodes of the 0xea / 0xeb range.
+
+**Known approximations.** A raw `.D` access without `.BA` returns the first channel(s) of the texel, not the packed texel bits; formatted UNORM/SNORM data comes back as Metal's converted float, the same value `.P` returns on hardware. Float-image `.D.32` moves the bit pattern through the float channel (NaN payloads may be canonicalised by the texture unit).
+
+**Calls the Mac glue needs** (`gfx/src/mtl_shader.m`, `mtl_replay.m`, owned by gfx-correctness; none of this exists yet):
+
+1. After `maxwell_translate`, bind each `info->img[i]` texture with `setTexture:atIndex:IMAGE_TEXTURE_BASE + i` on the compute / fragment / vertex encoder: resolve the handle from c2 at `handle_offset` (or the bound user buffer at `bindless_cbuf` / `bindless_offset`) through the same TIC lookup as sampled textures.
+2. Make the texture a view with `MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite` (plus `ShaderAtomic` when `img[i].atomic`) and an integer pixel format when `kind` is `INT` / `UINT`; sRGB views cannot be written, use the linear twin.
+3. Fill `ShaderKey.image_int_mask` / `image_uint_mask` from the formats of the bound images when building the pipeline key (pipelines for the same shader with different formats are different pipelines).
+4. Compile with `MTLLanguageVersion3_1` when `needs_msl31`.
+5. `useResource:usage:` is not needed unless the images are reached through an argument buffer.
+6. Tell the dirty-tracker (`dirty.c`) that a shader-written image modifies guest memory (write-back to the guest pages).

@@ -36,15 +36,17 @@ static void q_range_0(IpcObject *s, IpcCall *c) {
     int32_t v[3] = {0, 0, 0};
     ipc_out(c, v, 12);
 }
+/* Event history: this host keeps no play log (only the running title's statistics above are tracked), which is how a console that was just
+ * reset answers: zero events returned, an empty available range {0, 0, 0}. Documented no-ops rather than stubs. */
 static const IpcCmd pdm_cmds[] = {
-    {0, "QueryAppletEvent", q_count_0, IPC_STUB},
+    {0, "QueryAppletEvent", q_count_0, IPC_IMPL},
     {1, "QueryPlayStatisticsByApplicationId", q_stats_by_app, IPC_IMPL},
     {2, "QueryPlayStatisticsByApplicationIdAndUserAccountId", q_stats_by_app_user, IPC_IMPL},
-    {6, "QueryPlayEvent", q_count_0, IPC_STUB},
-    {7, "GetAvailablePlayEventRange", q_range_0, IPC_STUB},
-    {8, "QueryAccountEvent", q_count_0, IPC_STUB},
-    {9, "QueryAccountPlayEvent", q_count_0, IPC_STUB},
-    {10, "GetAvailableAccountPlayEventRange", q_range_0, IPC_STUB},
+    {6, "QueryPlayEvent", q_count_0, IPC_IMPL},
+    {7, "GetAvailablePlayEventRange", q_range_0, IPC_IMPL},
+    {8, "QueryAccountEvent", q_count_0, IPC_IMPL},
+    {9, "QueryAccountPlayEvent", q_count_0, IPC_IMPL},
+    {10, "GetAvailableAccountPlayEventRange", q_range_0, IPC_IMPL},
 };
 static IpcObject *pdm_open(void) { return IPC_OBJECT("pdm:qry", pdm_cmds, NULL, NULL); }
 void service_register_pdm(void) { ipc_register_service("pdm:qry", pdm_open); }

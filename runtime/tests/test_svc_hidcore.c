@@ -21,6 +21,29 @@ int main(void) {
     CHECK(hidc_home_protection_get(&h, 0) == 0 && hidc_home_protection_get(&h, 0x20) == 1 && h.nhome == 2, "home protection per npad id, replace in place");
     for (uint32_t i = 0; i < 40; i++) hidc_home_protection_set(&h, 100 + i, 1);
     CHECK(h.nhome == HIDC_MAX_HOME_IDS, "home table is bounded");
+    /* npad assignment */
+    HidCore n; hidc_init(&n);
+    CHECK(n.npad_active == 1 && hidc_pad_source(&n, 3) == 3 && hidc_slot_from_id(0x20) == 9 && hidc_slot_from_id(0x10) == 8 && hidc_slot_from_id(8) == -1, "defaults: active, identity source, id -> slot");
+    CHECK(hidc_swap(&n, 0, 2) == 0 && hidc_pad_source(&n, 0) == 2 && hidc_pad_source(&n, 2) == 0 && hidc_pad_source(&n, 1) == 1, "swap two players");
+    CHECK(hidc_swap(&n, 2, 0) == 0 && hidc_pad_source(&n, 0) == 0, "swapping back restores the identity");
+    CHECK(hidc_swap(&n, 1, 1) == -2 && hidc_swap(&n, 0, 0x20) == -1 && hidc_swap(&n, 8, 0) == -1, "swap rejects the same pad and non-player ids");
+    CHECK(hidc_merge(&n, 0, 1) == 0 && n.dual_of[0] == 2 && (n.disconnected & 2), "merge: slot 1 joins slot 0 and is freed");
+    CHECK(hidc_merge(&n, 3, 3) == -2 && hidc_merge(&n, 0, 9) == -1, "merge validation");
+    CHECK(hidc_disconnect(&n, 0x20) == 0 && (n.disconnected & (1u << 9)) && hidc_disconnect(&n, 99) == -1, "disconnect by npad id");
+    hidc_reconnect_all(&n); CHECK(n.disconnected == 0, "re-arming reconnects");
+    CHECK(hidc_keyboard_lock_event(&n, 1u << 3) == 2 && hidc_keyboard_lock_event(&n, 1u << 2) == 3 && hidc_keyboard_lock_event(&n, 1u << 4) == 1 && hidc_keyboard_lock_event(&n, (1u << 0) | (1u << 8)) == 5, "lock key on / toggle / off");
+    CHECK(hidc_capture_get(&n, 1) == -1 && hidc_capture_assign(&n, 1, 12) == 0 && hidc_capture_get(&n, 1) == 12 && hidc_capture_assign(&n, 1, 3) == 0 && hidc_capture_get(&n, 1) == 3 && n.ncapture == 1, "capture assignment per style, replaced in place");
+    CHECK(hidc_capture_assign(&n, 3, 1) == -1 && hidc_capture_assign(&n, 0, 1) == -1, "not a single style bit");
+    hidc_capture_clear(&n, 1); CHECK(hidc_capture_get(&n, 1) == -1, "cleared");
+    CHECK(hidc_set_touch_resolution(&n, 1920, 1080) == 0 && n.touch_w == 1920 && hidc_set_touch_resolution(&n, 0, 5) == -1 && hidc_set_touch_resolution(&n, 5000, 5) == -1 && n.touch_w == 1920, "touch resolution validated, last good kept");
+    uint32_t id, side;
+    CHECK(hidc_vib_handle_decode(0x01000000u | (2u << 16), &id, &side) == 0 && id == 2 && side == 1, "right device of player 3");
+    CHECK(hidc_vib_handle_decode(1u << 8, &id, &side) == 0 && id == 0x20 && side == 0, "handheld style index maps to 0x20");
+    CHECK(hidc_vib_handle_decode(2u << 24, 0, 0) == -1 && hidc_vib_handle_decode(9u << 16, 0, 0) == -1, "bad device index / npad id");
+    CHECK(hidc_vib_activate(&n, 0x01000000u) == 0 && hidc_vib_is_active(&n, 0x01000000u) && !hidc_vib_is_active(&n, 0) && hidc_vib_activate(&n, 0x01000000u) == 0 && n.nvib_active == 1, "activation is idempotent");
+    CHECK(hidc_vib_activate(&n, 2u << 24) == -1, "invalid handle refused");
+    for (uint32_t i = 0; i < 40; i++) hidc_vib_activate(&n, i << 16 & 0x00070000u | 0x00000000u | ((i & 1) << 24));
+    CHECK(n.nvib_active <= HIDC_MAX_VIB_ACTIVE, "active list is bounded");
     printf("{\"test\":\"svc_hidcore\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

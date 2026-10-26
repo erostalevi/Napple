@@ -42,6 +42,14 @@ int main(void) {
     uint64_t rel[4] = {0}; memset(&c, 0, sizeof c); svc_set_out_buf(&c, rel, sizeof rel); svc_call_c(ai, 5, &c);
     CHECK(SVC_OUT(&c, uint32_t, 0) == 1 && rel[0] == 0xBEEF && !event_is_signaled(ev), "GetReleasedAudioInBuffer returns the tag and clears the event");
     svc_call(ai, 9, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "buffer count back to 0");
+    { /* device gain is kept per input, clamped, default unity */
+        IpcObject *mgr = audin_open(); IpcCall gc; uint8_t in[16] = {0}; uint32_t rate = 48000; memcpy(in, &rate, 4); uint16_t chs = 2; memcpy(in + 4, &chs, 2);
+        memset(&gc, 0, sizeof gc); gc.in = in; gc.in_size = 8; svc_find(mgr, 1)->fn(mgr, &gc); IpcObject *ai = gc.out_objects[0];
+        svc_call(ai, 11, NULL, 0, &gc); CHECK(SVC_OUT(&gc, float, 0) == 1.0f, "gain starts at unity");
+        float g = 0.25f; svc_call(ai, 10, &g, 4, &gc); svc_call(ai, 11, NULL, 0, &gc); CHECK(SVC_OUT(&gc, float, 0) == 0.25f, "gain reads back");
+        g = 7.0f; svc_call(ai, 10, &g, 4, &gc); svc_call(ai, 11, NULL, 0, &gc); CHECK(SVC_OUT(&gc, float, 0) == 1.0f, "gain clamps high");
+        g = -1.0f; svc_call(ai, 10, &g, 4, &gc); svc_call(ai, 11, NULL, 0, &gc); CHECK(SVC_OUT(&gc, float, 0) == 0.0f, "gain clamps low");
+    }
     printf("{\"test\":\"svc_audin\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

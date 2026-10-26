@@ -15,6 +15,6 @@ static void ectx_accept(IpcObject *s, IpcCall *c) {
     (void)c;
     reports++;
 }
-static const IpcCmd writer_cmds[] = {{0, "SetResult", ectx_set_result, IPC_STUB}, {1, "SetResultWithContext", ectx_accept, IPC_STUB}};
+static const IpcCmd writer_cmds[] = {{0, "SetResult", ectx_set_result, IPC_IMPL}, {1, "SetResultWithContext", ectx_accept, IPC_IMPL}};
 static IpcObject *ectx_open(void) { return IPC_OBJECT("ectx:aw", writer_cmds, NULL, NULL); }
 void service_register_ectx(void) { ipc_register_service("ectx:aw", ectx_open); }

@@ -19,3 +19,5 @@ int bcat_valid_directory_name(const char name[BCAT_NAME_SIZE]);
 int bcat_valid_file_name(const char name[BCAT_NAME_SIZE]);
 /* DeliveryCacheProgressImpl: u32 status at +0, u32 result at +4, everything else 0 (nothing was transferred). */
 void bcat_make_progress(uint32_t status, uint32_t result, uint8_t out[BCAT_PROGRESS_SIZE]);
+/* A passphrase buffer holds at most 0x40 characters plus the NUL terminator. */
+static inline int bcat_valid_passphrase_size(uint64_t size) { return size >= 1 && size <= 0x41; }

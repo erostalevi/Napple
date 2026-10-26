@@ -36,6 +36,31 @@ static void t_stereo_queue(void) {
     napple_audout_close(o);
 }
 
+static void t_count_played_flush(void) {
+    static int16_t a[2 * 480];
+    napple_audout *o;
+    CHECK(napple_audout_open(0, 0, NULL, &o, NULL, NULL) == 0, "open");
+    napple_audout_set_manual(o, 1);
+    CHECK(napple_audout_buffer_count(o) == 0 && napple_audout_played_samples(o) == 0 && napple_audout_flush(o) == 0, "empty: nothing counted, nothing to flush");
+    for (int i = 0; i < 3; i++) napple_audout_append(o, 10 + i, (uint64_t)(uintptr_t)a, sizeof a, 0);
+    CHECK(napple_audout_buffer_count(o) == 3, "three queued");
+    napple_audout_start(o);
+    napple_audout_pump(o, 480 + 240);
+    CHECK(napple_audout_played_samples(o) == 720, "720 frames consumed (got %llu)", (unsigned long long)napple_audout_played_samples(o));
+    CHECK(napple_audout_buffer_count(o) == 3, "released-but-not-fetched still counts");
+    uint64_t tags[4];
+    CHECK(napple_audout_get_released(o, tags, 4) == 1, "one released");
+    CHECK(napple_audout_buffer_count(o) == 2, "two left");
+    napple_audout_pump(o, 2000);
+    CHECK(napple_audout_played_samples(o) == 3 * 480, "silence is not counted");
+    napple_audout_append(o, 20, (uint64_t)(uintptr_t)a, sizeof a, 0);
+    napple_audout_append(o, 21, (uint64_t)(uintptr_t)a, sizeof a, 0);
+    CHECK(napple_audout_flush(o) == 1 && !napple_audout_contains(o, 20) && napple_audout_played_samples(o) == 3 * 480, "flush drops the queue without playing it");
+    uint32_t n = napple_audout_get_released(o, tags, 4);
+    CHECK(n == 4 && tags[2] == 20 && tags[3] == 21, "flushed tags are released (n=%u)", n);
+    napple_audout_close(o);
+}
+
 static void t_mono_and_surround(void) {
     static int16_t m[100], s6[6 * 100];
     for (int k = 0; k < 100; k++) {
@@ -114,6 +139,7 @@ int main(void) {
     napple_audio_config c = {.use_device = 0};
     napple_audio_init(&c);
     t_stereo_queue();
+    t_count_played_flush();
     t_mono_and_surround();
     t_realtime_pacing();
     t_resample_44k();

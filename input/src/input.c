@@ -9,6 +9,7 @@
    Everything is sampled by one thread (default 120 Hz) that writes the shared memory with the pure writers in
    hid_shm.c; napple_input_update can also be called by the embedder. */
 #include "internal.h"
+#include "gesture.h"
 #include "tinyjson.h"
 #include <errno.h>
 #include <math.h>
@@ -65,6 +66,17 @@ struct napple_input {
     int slot_style[NSLOTS];
     napple_input_snapshot snap;
     int touch_down;
+    napple_npad_assign assign;
+    /* optional sections the guest activates, and their sources */
+    int debug_pad_on, gesture_on, console_six_on;
+    napple_gesture gesture;
+    napple_touch_point inj_pts[NAPPLE_GESTURE_MAX_POINTS];
+    uint32_t inj_count;
+    int inj_active;
+    napple_debug_pad_state prev_debug;
+    int debug_pushed;
+    napple_sixaxis_state six_last[NSLOTS];
+    int six_have[NSLOTS];
     uint8_t prev_keyboard[32];
     uint64_t prev_modifiers;
     napple_mouse_state prev_mouse;
@@ -169,6 +181,8 @@ int napple_input_create(const napple_input_config *c, napple_input **out) {
     load_bindings(in);
     in->focused = 1;
     in->player_count = 1;
+    in->assign.active = 1;
+    for (int i = 0; i < 10; i++) in->assign.perm[i] = (uint8_t)i;
     in->sixaxis_enabled = 1;
     in->supported_styles = NAPPLE_STYLE_FULL_KEY | NAPPLE_STYLE_HANDHELD | NAPPLE_STYLE_JOY_DUAL;
     for (int i = 0; i < NG_MAX_PADS; i++) napple_motion_reset(&in->motion[i]);
@@ -186,7 +200,15 @@ void napple_input_destroy(napple_input *in) {
     free(in);
 }
 
+#ifdef __APPLE__
 static uint64_t clock_ns(void) { return clock_gettime_nsec_np(CLOCK_UPTIME_RAW); }
+#else /* portable build (Linux unit tests): a monotonic clock is all the update loop needs */
+static uint64_t clock_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
+}
+#endif
 #define SHAKE_HZ 5.0
 #define SHAKE_CYCLES 3.0
 
@@ -260,6 +282,51 @@ void napple_input_set_sixaxis_enabled(napple_input *in, int e) {
     in->sixaxis_enabled = e != 0;
     pthread_mutex_unlock(&in->lock);
     ng_set_motion(e);
+}
+void napple_input_set_assignment(napple_input *in, const napple_npad_assign *a) {
+    pthread_mutex_lock(&in->lock);
+    in->assign = *a;
+    pthread_mutex_unlock(&in->lock);
+}
+void napple_input_set_screen_size(napple_input *in, int w, int h) {
+    if (w < 1 || h < 1) return;
+    pthread_mutex_lock(&in->lock);
+    in->cfg.screen_w = w;
+    in->cfg.screen_h = h;
+    pthread_mutex_unlock(&in->lock);
+}
+void napple_input_set_debug_pad_enabled(napple_input *in, int e) {
+    pthread_mutex_lock(&in->lock);
+    in->debug_pad_on = e != 0;
+    pthread_mutex_unlock(&in->lock);
+}
+void napple_input_set_gesture_enabled(napple_input *in, int e) {
+    pthread_mutex_lock(&in->lock);
+    in->gesture_on = e != 0;
+    pthread_mutex_unlock(&in->lock);
+}
+void napple_input_set_console_sixaxis_enabled(napple_input *in, int e) {
+    pthread_mutex_lock(&in->lock);
+    in->console_six_on = e != 0;
+    pthread_mutex_unlock(&in->lock);
+}
+int napple_input_get_sixaxis(napple_input *in, int slot, napple_sixaxis_state *out) {
+    int ok = 0;
+    pthread_mutex_lock(&in->lock);
+    if (slot >= 0 && slot < NSLOTS && in->six_have[slot]) {
+        *out = in->six_last[slot];
+        ok = 1;
+    }
+    pthread_mutex_unlock(&in->lock);
+    return ok;
+}
+void napple_input_touch_points(napple_input *in, const napple_touch_point *pts, uint32_t count) {
+    pthread_mutex_lock(&in->lock);
+    if (count > NAPPLE_GESTURE_MAX_POINTS) count = NAPPLE_GESTURE_MAX_POINTS;
+    for (uint32_t i = 0; i < count; i++) in->inj_pts[i] = pts[i];
+    in->inj_count = count;
+    in->inj_active = count != 0;
+    pthread_mutex_unlock(&in->lock);
 }
 uint32_t napple_input_active_style(const napple_input *in, int slot) { return slot >= 0 && slot < NSLOTS ? (uint32_t)in->slot_style[slot] : 0; }
 void napple_input_set_vibration(napple_input *in, uint32_t npad_id, int side, const napple_vibration *v) {
@@ -492,8 +559,9 @@ static void map_slot(const napple_input *in, int slot, napple_npad_state *st) {
             ry = in->virt_ry;
         }
     }
-    if (slot < in->npads) {
-        const ng_pad *p = &in->pads[slot];
+    const int src = slot >= 0 && slot < 10 ? in->assign.perm[slot] : slot;
+    if (src < in->npads) {
+        const ng_pad *p = &in->pads[src];
         uint32_t e = p->elements;
         if ((in->bind.face_layout == 1 && p->by_label) || (in->bind.face_layout == 2 && !p->by_label)) e = swap_face(e);
         /* analog triggers: the press point is the player's setting, not GameController's */
@@ -603,12 +671,15 @@ void napple_input_update(napple_input *in, uint64_t now) {
         in->shake_start_ns = now ? now : 1;
     }
     int handheld_only;
-    const uint32_t style = choose_style(in->supported_styles, in->bind.style, &handheld_only);
+    const uint32_t global_style = choose_style(in->supported_styles, in->bind.style, &handheld_only);
     napple_capture_fn cb = NULL;
     void *cbu = NULL;
     int cap_code = -1;
     for (int slot = 0; slot < 8; slot++) {
-        const int present = slot == 0 || (slot < in->npads && slot < in->player_count);
+        if (!in->assign.active) continue; /* DeactivateNpad: the npad sections stay as they were */
+        const int src = in->assign.perm[slot];
+        const int present = !(in->assign.disconnected >> slot & 1) && (slot == 0 || (src < in->npads && slot < in->player_count));
+        const uint32_t style = in->assign.dual_of[slot] ? NAPPLE_STYLE_JOY_DUAL : global_style; /* a merged pair is a dual Joy-Con pad */
         if (!present) {
             if (in->slot_style[slot]) {
                 napple_npad_state off = {0};
@@ -651,8 +722,8 @@ void napple_input_update(napple_input *in, uint64_t now) {
         }
         if (shaking) {
             napple_motion_step(&in->motion[slot], dt, shake_acc, zero, &six);
-        } else if (slot < in->npads && in->pads[slot].has_motion && in->sixaxis_enabled) {
-            napple_motion_step(&in->motion[slot], dt, in->pads[slot].acc, in->pads[slot].gyro, &six);
+        } else if (src < in->npads && in->pads[src].has_motion && in->sixaxis_enabled) {
+            napple_motion_step(&in->motion[slot], dt, in->pads[src].acc, in->pads[src].gyro, &six);
         } else {
             napple_motion_reset(&in->motion[slot]);
             napple_motion_step(&in->motion[slot], dt, rest_acc, zero, &six);
@@ -663,9 +734,11 @@ void napple_input_update(napple_input *in, uint64_t now) {
                             : style == NAPPLE_STYLE_JOY_LEFT ? 4
                                                              : 5;
         napple_hid_push_sixaxis(shm, l, slot, six_idx, &six);
+        in->six_last[slot] = six;
+        in->six_have[slot] = 1;
         if (style == NAPPLE_STYLE_JOY_DUAL) napple_hid_push_sixaxis(shm, l, slot, 3, &six);
         if (handheld_only && slot == 0) napple_hid_push_sixaxis(shm, l, 9, 1, &six);
-        napple_hid_set_npad_device(shm, l, slot, 0, 0, slot < in->npads ? (uint32_t)in->pads[slot].battery : 4u);
+        napple_hid_set_npad_device(shm, l, slot, 0, 0, src < in->npads ? (uint32_t)in->pads[src].battery : 4u);
     }
     /* capture next controller press for the remap UI */
     if (in->capture) {
@@ -696,20 +769,43 @@ void napple_input_update(napple_input *in, uint64_t now) {
     napple_hotkey_fn hk = in->hotkey;
     void *hku = in->hotkey_user;
 
-    /* touch screen from the mouse */
+    /* touch screen: injected fingers (multi-touch frontends, tests) take precedence over the mouse-derived single finger */
     const int lmb = !neutral && in->bind.mouse_touch && (in->mouse_buttons & 1) && in->mouse_have_pos;
     napple_touch_point tp = {.finger_id = 0,
                              .x = (uint32_t)(in->mouse_nx * (float)(in->cfg.screen_w - 1)),
                              .y = (uint32_t)(in->mouse_ny * (float)(in->cfg.screen_h - 1)),
                              .diameter_x = 15,
                              .diameter_y = 15};
-    if (lmb) {
-        napple_hid_push_touch(shm, l, &tp, 1);
-        in->snap.touch_x = tp.x;
-        in->snap.touch_y = tp.y;
+    const napple_touch_point *frame = &tp;
+    uint32_t frame_n = lmb ? 1 : 0;
+    if (in->inj_active && !neutral) {
+        frame = in->inj_pts;
+        frame_n = in->inj_count;
+    }
+    if (frame_n) {
+        napple_hid_push_touch(shm, l, frame, frame_n);
+        in->snap.touch_x = frame[0].x;
+        in->snap.touch_y = frame[0].y;
     } else if (in->touch_down) napple_hid_push_touch(shm, l, NULL, 0);
-    in->touch_down = lmb;
-    in->snap.touch_active = lmb;
+    in->touch_down = frame_n != 0;
+    in->snap.touch_active = frame_n != 0;
+    if (in->gesture_on) {
+        napple_gesture_state gs;
+        if (napple_gesture_update(&in->gesture, (int64_t)now, frame, frame_n, &gs)) napple_hid_push_gesture(shm, l, &gs);
+    }
+    if (in->debug_pad_on) { /* player 1's merged pad is the debug pad */
+        napple_debug_pad_state dp;
+        napple_debug_pad_from_npad(&in->pad_state[0], &dp);
+        if (!in->debug_pushed || memcmp(&dp, &in->prev_debug, sizeof dp)) {
+            napple_hid_push_debug_pad(shm, l, &dp);
+            in->prev_debug = dp;
+            in->debug_pushed = 1;
+        }
+    }
+    if (in->console_six_on && in->six_have[0]) {
+        static const float no_bias[3] = {0, 0, 0};
+        napple_hid_set_console_sixaxis(shm, l, napple_sixaxis_at_rest(&in->six_last[0]), 0.0f, no_bias);
+    }
 
     /* mouse */
     napple_mouse_state ms = {.x = (int32_t)(in->mouse_nx * (float)(in->cfg.screen_w - 1)),
@@ -740,6 +836,8 @@ void napple_input_update(napple_input *in, uint64_t now) {
                 else if (u >= 0xE0) kb[u / 8] |= (uint8_t)(1u << (u % 8));
                 mods |= mb;
             }
+    mods |= (uint64_t)(in->assign.keyboard_locks & 2) << 4 | (uint64_t)(in->assign.keyboard_locks & 4) << 4 |
+            (uint64_t)(in->assign.keyboard_locks & 1) << 7; /* caps bit5, scroll bit6, num bit7 */
     if (memcmp(kb, in->prev_keyboard, 32) || mods != in->prev_modifiers) {
         napple_hid_push_keyboard(shm, l, mods, kb);
         memcpy(in->prev_keyboard, kb, 32);

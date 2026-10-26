@@ -283,17 +283,24 @@ static void need(int cond, const char *msg) {
 static uint32_t effect_out_bytes(const AudioRenderer *r) { return revision_number(r->revision) >= 9 ? 0x90u : 0x10u; }
 
 /* Performance metrics. The renderer does no real timing, so the numbers are modelled: a fixed cost per started voice, per mix and per sink,
- * laid out back to back from start time 0 and capped at 1/4 of the 5 ms frame budget each. The 0x10 block in the update output carries the
- * byte count of the history written to the performance buffer; the buffer holds a 0x10 header {u32 bytes, u32 entries, u32 details, u32
- * next history start time} and 0x10-byte entries {s32 node id, u32 start time, u32 processing time, u32 type}. Layout is from the author's
- * memory of the public description and unverified; a title that never supplies a performance buffer sees only the byte count (0). */
+ * laid out back to back from start time 0. The 0x10 block in the update output carries the byte count of the frame written to the
+ * performance buffer (0 when the title supplied no buffer). The buffer holds one frame: a header, then 0x10-byte entries
+ * {u32 node id, u32 start time (us), u32 processing time (us), u32 type (1 voice, 2 submix, 3 final mix, 4 sink)}. No detail entries are
+ * produced (detail_count 0), so a title that asks for detail types sees none. Header, from the author's memory of the public description of
+ * the performance frame (unverified; the two sizes and field order are the part to compare first if a title reads it back):
+ *   format 1 (REV1..REV4), 0x10 bytes: u32 entry_count, u32 detail_count, u32 next_offset (bytes from the frame start to the next frame =
+ *     the frame size), u32 total_processing_time.
+ *   format 2 (REV5+), 0x20 bytes: u32 magic 'PERF', u32 entry_count, u32 detail_count, u32 next_offset, u32 total_processing_time,
+ *     u32 voices_dropped, u32 start_time (0), u32 frame_index (renderer frames elapsed, low 32 bits). */
 enum { PERF_VOICE = 1, PERF_SUBMIX = 2, PERF_FINAL_MIX = 3, PERF_SINK = 4 };
-enum { PERF_VOICE_US = 24, PERF_MIX_US = 40, PERF_SINK_US = 16, PERF_HEADER = 0x10, PERF_ENTRY = 0x10 };
+enum { PERF_VOICE_US = 24, PERF_MIX_US = 40, PERF_SINK_US = 16, PERF_HEADER_V1 = 0x10, PERF_HEADER_V2 = 0x20, PERF_ENTRY = 0x10, PERF_MAGIC = 0x46524550 };
 static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t perf_size) {
-    if (!perf || perf_size < PERF_HEADER) return 0;
-    const uint32_t max_entries = (uint32_t)((perf_size - PERF_HEADER) / PERF_ENTRY);
-    uint32_t n = 0, t = 0;
-    uint8_t *w = perf + PERF_HEADER;
+    const int v2 = revision_number(r->revision) >= 5;
+    const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
+    if (!perf || perf_size < header) return 0;
+    const uint32_t max_entries = (uint32_t)((perf_size - header) / PERF_ENTRY);
+    uint32_t n = 0, t = 0, dropped = 0;
+    uint8_t *w = perf + header;
 #define PERF_ADD(node, us, kind)                                                                                                                               \
     do {                                                                                                                                                       \
         if (n < max_entries) {                                                                                                                                 \
@@ -304,14 +311,23 @@ static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t 
             t += (us);                                                                                                                                         \
         }                                                                                                                                                      \
     } while (0)
-    for (int i = 0; i < r->param.voice_count; i++)
-        if (r->voices[i].state == SV_STARTED && !r->voices[i].dropped) PERF_ADD(i, PERF_VOICE_US, PERF_VOICE);
+    for (int i = 0; i < r->param.voice_count; i++) {
+        if (r->voices[i].state != SV_STARTED) continue;
+        if (r->voices[i].dropped) dropped++;
+        else PERF_ADD(i, PERF_VOICE_US, PERF_VOICE);
+    }
     for (int i = 0; i < r->param.submix_count; i++) PERF_ADD(i, PERF_MIX_US, PERF_SUBMIX);
     PERF_ADD(r->param.submix_count, PERF_MIX_US, PERF_FINAL_MIX);
     for (int i = 0; i < r->param.sink_count; i++) PERF_ADD(i, PERF_SINK_US, PERF_SINK);
 #undef PERF_ADD
-    uint32_t bytes = PERF_HEADER + n * PERF_ENTRY, hdr[4] = {bytes, n, 0, t};
-    memcpy(perf, hdr, sizeof hdr);
+    uint32_t bytes = header + n * PERF_ENTRY;
+    if (v2) {
+        uint32_t hdr[8] = {PERF_MAGIC, n, 0, bytes, t, dropped, 0, (uint32_t)r->elapsed_frames};
+        memcpy(perf, hdr, sizeof hdr);
+    } else {
+        uint32_t hdr[4] = {n, 0, bytes, t};
+        memcpy(perf, hdr, sizeof hdr);
+    }
     return bytes;
 }
 

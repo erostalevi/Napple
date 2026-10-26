@@ -26,6 +26,18 @@ int main(void) {
     svc_call(o, 23, NULL, 0, &c); CHECK(c.out[0] == 0, "no ambient light sensor");
     svc_call(o, 16, NULL, 0, &c); CHECK(c.out_size == 8 && c.out[0] == 0 && SVC_OUT(&c, float, 4) == 0.0f, "ambient value: {over=0, lux=0}");
     f = 0.3f; svc_call(o, 24, &f, 4, &c); svc_call(o, 25, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.3f, "VR-mode brightness is kept apart");
+    /* save/load round trip, ambient sensor value, reflection delay, VR apply */
+    f = 0.9f; svc_call(o, 2, &f, 4, &c); svc_call(o, 0, NULL, 0, &c);
+    f = 0.1f; svc_call(o, 2, &f, 4, &c); svc_call(o, 1, NULL, 0, &c); svc_call(o, 3, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.9f, "Load restores what Save wrote");
+    uint8_t amb[8] = {1}; float lux = 1234.5f; memcpy(amb + 4, &lux, 4); svc_call(o, 15, amb, 8, &c);
+    svc_call(o, 16, NULL, 0, &c); CHECK(c.out[0] == 1 && SVC_OUT(&c, float, 4) == 1234.5f, "ambient value reads back");
+    lux = -3.0f; memcpy(amb + 4, &lux, 4); svc_call(o, 15, amb, 8, &c); svc_call(o, 16, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 4) == 0.0f, "negative lux clamps to 0");
+    uint8_t dl[8] = {1}; float lv = 0.75f; memcpy(dl + 4, &lv, 4); svc_call(o, 17, dl, 8, &c); uint32_t d1 = 1, d0 = 0;
+    svc_call(o, 18, &d1, 4, &c); CHECK(SVC_OUT(&c, float, 0) == 0.75f, "delay level for direction 1");
+    svc_call(o, 18, &d0, 4, &c); CHECK(SVC_OUT(&c, float, 0) == 0.0f, "direction 0 untouched");
+    uint32_t d2 = 2; svc_call(o, 18, &d2, 4, &c); CHECK(c.result != 0, "bad direction");
+    f = 0.35f; svc_call(o, 24, &f, 4, &c); svc_call(o, 26, NULL, 0, &c); svc_call(o, 5, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.35f, "VR apply sets the applied brightness");
+    svc_call(o, 19, NULL, 0, &c); CHECK(c.result == 0, "brightness mapping accepted");
     printf("{\"test\":\"svc_lbl\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

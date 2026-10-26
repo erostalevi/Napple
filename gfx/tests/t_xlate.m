@@ -23,7 +23,15 @@ static int compiles(const char *msl, NSString **err) {
 #define MSL_COMPILES(msl, what)                                                                                                                                \
     do {                                                                                                                                                       \
         NSString *e_ = nil;                                                                                                                                    \
-        CHECK(compiles((msl), &e_), what " MSL compiles: %s", e_.UTF8String);                                                                                  \
+        CHECK(compiles((msl), &e_), "%s MSL compiles: %s", (what), e_.UTF8String);                                                                           \
+    } while (0)
+#define MSL_COMPILES31(msl, what)                                                                                                                              \
+    do {                                                                                                                                                       \
+        NSError *e_ = nil;                                                                                                                                     \
+        MTLCompileOptions *o_ = [MTLCompileOptions new];                                                                                                       \
+        o_.languageVersion = MTLLanguageVersion3_1;                                                                                                            \
+        id<MTLLibrary> l_ = [g_dev newLibraryWithSource:@(msl) options:o_ error:&e_];                                                                          \
+        CHECK(l_ != nil, "%s MSL 3.1 compiles: %s", (what), e_.localizedDescription.UTF8String);                                                              \
     } while (0)
 #define POOL @autoreleasepool
 #else
@@ -33,6 +41,7 @@ static int g_unverified; /* Metal compile checks skipped on this host */
         (void)(msl);                                                                                                                                           \
         g_unverified++;                                                                                                                                        \
     } while (0)
+#define MSL_COMPILES31(msl, what) MSL_COMPILES(msl, what)
 #define POOL
 #endif
 static ShaderInfo *xl(uint8_t *blob, size_t n, int stage, ShaderKey key) { return maxwell_translate(blob, n, stage, &key); }
@@ -96,9 +105,7 @@ static uint64_t i_imad(uint64_t cls, int d, int a, int b, int c_, uint64_t flags
     return (cls << 56) | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)c_ << 39) | flags | PT_BITS;
 }
 #define IMAD_S (1ull << 48)
-#define IMAD_NC (1ull << 49)
-#define IMAD_NP (1ull << 51)
-#define IMAD_HI (1ull << 53)
+#define IMAD_HI (1ull << 54)
 static uint64_t i_lea_lo(uint64_t cls, int d, int a, int b, int scale, uint64_t flags) {
     return (cls << 56) | (0xdull << 52) | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)scale << 39) | flags | PT_BITS;
 }
@@ -106,6 +113,8 @@ static uint64_t i_lea_hi(int d, int a, int b, int c_, int scale, uint64_t flags)
     return (0x5bull << 56) | (0xdull << 52) | (1ull << 51) | (uint64_t)d | ((uint64_t)a << 8) | ((uint64_t)b << 20) | ((uint64_t)scale << 28) |
            ((uint64_t)c_ << 39) | flags | PT_BITS;
 }
+
+#include "t_surface_asm.inc"
 
 /* translate `n` instructions as `stage` (compute programs have no header: the code starts at the blob) */
 static ShaderInfo *xl_ins(int stage, const uint64_t *ins, int n, ShaderKey key, uint32_t omap) {
@@ -433,20 +442,205 @@ int main(void) {
             CHECK(HAS(vm2, "insert_bits(") && HAS(vm2, "min("), "VMNMX byte select translates");
             maxwell_free(vm2);
         }
-        /* -- double precision and the other stage/model gaps are refused by name */
+        /* -- double precision: emulated with the soft_double library (bit-exactness is proven by t_softdouble on the host and t_f64 on the GPU) */
         {
-            const uint64_t dp[][2] = {{0x5c70000000000000ull, 0}, {0x4c80000000000000ull, 1}, {0x5b70000000000000ull, 2},
-                                      {0x5b80000000000000ull, 3}, {0x5c50000000000000ull, 4}, {0x3870000000000000ull, 5}};
-            const char *nm[] = {"DADD", "DMUL", "DFMA", "DSETP", "DMNMX", "DADD"};
-            for (int i = 0; i < 6; i++) {
-                uint64_t ins[] = {dp[i][0] | 1 | (2ull << 8) | (4ull << 20) | PT_BITS, ins_exit()};
+            /* register pair at d, a; operand B: register 6 / cbuf c3[0x20] / 20-bit immediate */
+#define DF(base, d, a, b, fl) ((uint64_t)(base) | (uint64_t)(d) | ((uint64_t)(a) << 8) | ((uint64_t)(b) << 20) | (fl) | PT_BITS)
+            const uint64_t dadd_r = DF(0x5c70000000000000ull, 2, 4, 6, (3ull << 39) | (1ull << 45) | (1ull << 46) | (1ull << 48) | (1ull << 49));
+            XL_OK(da, STAGE_FRAGMENT, z, 0xf, "DADD", dadd_r, ins_exit());
+            CHECK(HAS(da, "inline ulong sd_add(ulong a, ulong b, uint rm)"), "DADD pulls in the double library");
+            CHECK(HAS(da, "inline ulong sd_fma(ulong a, ulong b, ulong c, uint rm)"), "the library is emitted whole (once)");
+            CHECK(HAS(da, "(ulong(r4) | (ulong(r5) << 32))") && HAS(da, "(ulong(r6) | (ulong(r7) << 32))"), "operands are even-aligned register pairs");
+            CHECK(HAS(da, "(sd_abs((ulong(r4) | (ulong(r5) << 32))) ^ 0x8000000000000000ul)") &&
+                      HAS(da, "(sd_abs((ulong(r6) | (ulong(r7) << 32))) ^ 0x8000000000000000ul)"),
+                  "-|A| (bits 48, 46) and -|B| (bits 45, 49)");
+            CHECK(HAS(da, ", 3u)") && HAS(da, "r2 = uint(dv);") && HAS(da, "r3 = uint(dv >> 32);"), "rounding field 3 (RZ) and the pair write-back");
+            maxwell_free(da);
+            ShaderInfo *plain = NULL;
+            {
+                uint64_t i1[] = {DF(0x4c70000000000000ull, 2, 4, 0x20, (0x2ull << 34)), ins_exit()};
+                plain = xl_ins(STAGE_FRAGMENT, i1, 2, z, 0xf);
+                CHECK(plain->msl != NULL, "DADD with a constant-buffer operand: %s", plain->error);
+                CHECK(HAS(plain, "(ulong(cb2[0][0]) | (ulong(cb2[0][1]) << 32))") || HAS(plain, "ulong(cb2["),
+                      "DADD reads two consecutive constant-buffer words");
+                maxwell_free(plain);
+                uint64_t i2[] = {DF(0x3870000000000000ull, 2, 4, 0x12345, 0), ins_exit()};
+                plain = xl_ins(STAGE_FRAGMENT, i2, 2, z, 0xf);
+                CHECK(plain->msl != NULL, "DADD immediate: %s", plain->error);
+                CHECK(HAS(plain, "0x12345000"), "the immediate is the top of the high word (0x12345 << 12)");
+                maxwell_free(plain);
+            }
+            struct {
+                const char *name, *need;
+                uint64_t w;
+            } dcases[] = {
+                {"DMUL rr", "sd_mul(", DF(0x5c80000000000000ull, 2, 4, 6, 0)},
+                {"DMUL cbuf", "sd_mul(", DF(0x4c80000000000000ull, 2, 4, 0x20, 0)},
+                {"DMUL imm", "sd_mul(", DF(0x3880000000000000ull, 2, 4, 0x300, 0)},
+                {"DMUL negated", "sd_mul(sd_neg(", DF(0x5c80000000000000ull, 2, 4, 6, 1ull << 48)},
+                {"DFMA rr", "sd_fma(", DF(0x5b70000000000000ull, 2, 4, 6, 8ull << 39)},
+                {"DFMA cbuf (B)", "sd_fma(", DF(0x4b70000000000000ull, 2, 4, 0x20, 8ull << 39)},
+                {"DFMA imm", "sd_fma(", DF(0x3670000000000000ull, 2, 4, 0x123, 8ull << 39)},
+                {"DFMA cbuf (C)", "sd_fma(", DF(0x5370000000000000ull, 2, 4, 6, 8ull << 39)},
+                {"DFMA neg B, neg C, RM", "sd_neg(", DF(0x5b70000000000000ull, 2, 4, 6, (8ull << 39) | (1ull << 48) | (1ull << 49) | (1ull << 50))},
+                {"DMNMX rr", "sd_minmax(", DF(0x5c50000000000000ull, 2, 4, 6, (7ull << 39))},
+                {"DMNMX cbuf", "sd_minmax(", DF(0x4c50000000000000ull, 2, 4, 0x20, (7ull << 39))},
+                {"DMNMX imm", "sd_minmax(", DF(0x3850000000000000ull, 2, 4, 0x20, (7ull << 39))},
+                {"DSETP rr", "sd_cmp(", DF(0x5b80000000000000ull, 0x3f, 4, 6, (2ull << 48) | (7ull << 39))},
+                {"DSETP cbuf", "sd_cmp(", DF(0x4b80000000000000ull, 0x3f, 4, 0x20, (1ull << 48) | (7ull << 39))},
+                {"DSETP imm", "sd_cmp(", DF(0x3680000000000000ull, 0x3f, 4, 0x20, (4ull << 48) | (7ull << 39))},
+                {"DSET rr", "sd_cmp(", DF(0x5900000000000000ull, 2, 4, 6, (2ull << 48) | (7ull << 39))},
+                {"DSET cbuf BF", "0x3f800000u", DF(0x4900000000000000ull, 2, 4, 0x20, (2ull << 48) | (7ull << 39) | (1ull << 52))},
+                {"DSET imm", "sd_cmp(", DF(0x3200000000000000ull, 2, 4, 0x20, (2ull << 48) | (7ull << 39))},
+                {"F2F f32->f64", "sd_from_f32(", DF(0x5ca8000000000000ull, 2, 0, 6, (3ull << 8) | (2ull << 10))},
+                {"F2F f64->f32 RP", "sd_to_f32(", DF(0x5ca8000000000000ull, 2, 0, 6, (2ull << 8) | (3ull << 10) | (2ull << 39))},
+                {"F2F f64->f64 floor", "sd_rint(", DF(0x5ca8000000000000ull, 2, 0, 6, (3ull << 8) | (3ull << 10) | (5ull << 39 & (3ull << 39)) | (1ull << 42))},
+                {"F2F f64->f16", "half(", DF(0x5ca8000000000000ull, 2, 0, 6, (1ull << 8) | (3ull << 10))},
+                {"I2F s32->f64", "sd_from_int(", DF(0x5cb8000000000000ull, 2, 0, 6, (3ull << 8) | (2ull << 10) | (1ull << 13))},
+                {"I2F u64->f64", "sd_from_int(", DF(0x5cb8000000000000ull, 2, 0, 6, (3ull << 8) | (3ull << 10))},
+                {"I2F s64->f32", "sd_int_to_f32(", DF(0x5cb8000000000000ull, 2, 0, 6, (2ull << 8) | (3ull << 10) | (1ull << 13))},
+                {"I2F u8->f64", "sd_from_int(", DF(0x5cb8000000000000ull, 2, 0, 6, (3ull << 8) | (0ull << 10))},
+                {"F2I f64->s32", "sd_to_int(", DF(0x5cb0000000000000ull, 2, 0, 6, (2ull << 8) | (3ull << 10) | (1ull << 12))},
+                {"F2I f64->u64", "sd_to_int(", DF(0x5cb0000000000000ull, 2, 0, 6, (3ull << 8) | (3ull << 10))},
+                {"F2I f32->s64", "sd_from_f32(", DF(0x5cb0000000000000ull, 2, 0, 6, (3ull << 8) | (2ull << 10) | (1ull << 12))},
+                {"F2I f64->s16", "sd_to_int(", DF(0x5cb0000000000000ull, 2, 0, 6, (1ull << 8) | (3ull << 10) | (1ull << 12))},
+            };
+            for (size_t i = 0; i < sizeof dcases / sizeof *dcases; i++) {
+                uint64_t ins[] = {dcases[i].w, ins_exit()};
                 ShaderInfo *r = xl_ins(STAGE_FRAGMENT, ins, 2, z, 0xf);
-                CHECK(REFUSED(r, nm[i]) && strstr(r->error, "double precision"), "%s is refused as double precision (error \"%s\")", nm[i], r->error);
+                CHECK(r->msl != NULL, "%s translates (error \"%s\")", dcases[i].name, r->error);
+                if (r->msl) {
+                    CHECK(strstr(r->msl, dcases[i].need) != NULL, "%s uses %s", dcases[i].name, dcases[i].need);
+                    CHECK(strstr(r->msl, "inline ulong sd_round_pack(") != NULL, "%s carries the double library", dcases[i].name);
+                    MSL_COMPILES(r->msl, dcases[i].name);
+                }
                 maxwell_free(r);
             }
+            { /* a shader without doubles pays nothing */
+                XL_OK(nd, STAGE_FRAGMENT, z, 0xf, "no double", DF(0x5c58000000000000ull, 2, 4, 6, 0), ins_exit());
+                CHECK(!HAS(nd, "sd_round_pack"), "the double library is emitted only when a double op is present");
+                maxwell_free(nd);
+            }
+#undef DF
             XL_REFUSE(ou, STAGE_VERTEX, z, 0, "OUT", "OUT", 0xfbe0000000000000ull | PT_BITS, ins_exit());
-            XL_REFUSE(su, STAGE_COMPUTE, z, 0, "surface access", "SULD family", 0xeb00000000000000ull | PT_BITS, ins_exit());
-            XL_REFUSE(sa2, STAGE_COMPUTE, z, 0, "surface access", "SUATOM family", 0xea00000000000000ull | PT_BITS, ins_exit());
+#include "t_surface.inc"
+        }
+        /* -- the rare ISA items (audit of the 2026-10-26 f64-isa package): video ALU, IMAD32I, FCHK, PIXLD, LEPC, calls/jumps, no-ops, refusals.
+         * Field layouts follow envytools envydis gm107 (MIT); the assembler below encodes them the way the translator decodes them, so a test pins the
+         * translator's reading of the layout, not the hardware's. */
+        {
+#define EV(base, d, a, b, fl) ((uint64_t)(base) | (uint64_t)(d) | ((uint64_t)(a) << 8) | ((uint64_t)(b) << 20) | (fl) | PT_BITS)
+#define VREG (1ull << 50)
+#define VBSEL(s) ((uint64_t)(s) << 28)
+#define VASEL(s) ((uint64_t)(s) << 36)
+#define VASG (1ull << 48)
+#define VBSG (1ull << 49)
+#define VOP2(o) ((uint64_t)(o) << 51)
+#define VDSG (1ull << 54)
+#define VSAT (1ull << 55)
+            struct {
+                const char *name, *need1, *need2;
+                uint64_t w;
+            } vcases[] = {
+                {"VADD u32 reg ACC", "long vr = va + vb;", "res = res + vc;", EV(0x2000000000000000ull, 1, 2, 3, VREG | VBSEL(6) | VASEL(6) | VOP2(4))},
+                {"VADD s8 imm MRG_16L sat", "long va = long(int(r2 << 16u) >> 24)", "vr = clamp(vr, -2147483648l, 2147483647l);",
+                 EV(0x2000000000000000ull, 1, 2, 0x7ff0, VASG | VASEL(1) | VOP2(1) | VDSG | VSAT)},
+                {"VADD u16 h1 MIN", "long va = long((r2 >> 16u) & 0xFFFFu)", "res = min(res, vc);", EV(0x2000000000000000ull, 1, 2, 3, VASEL(5) | VOP2(5))},
+                {"VABSDIFF", "(va > vb ? va - vb : vb - va)", "r1 = res;", EV(0x5400000000000000ull, 1, 2, 3, VREG | VBSEL(6) | VASEL(6) | VOP2(7))},
+                {"VMAD shr7", "((va * vb) >> 7) + long(uint(", "r1 = res;",
+                 EV(0x5f00000000000000ull, 1, 2, 3, VREG | VBSEL(6) | VASEL(6) | (1ull << 51) | (4ull << 39))},
+                {"VMAD signed shr15", "((va * vb) >> 15) + long(int(", "r1 = res;",
+                 EV(0x5f00000000000000ull, 1, 2, 3, VREG | VBSEL(6) | VASEL(6) | VASG | (2ull << 51))},
+                {"VSHL clamp", "(va << min(vb & 65535l, 32l))", "r1 = res;", EV(0x5700000000000000ull, 1, 2, 5, VASEL(6) | VOP2(7))},
+                {"VSHR wrap", "(va >> (vb & 31l))", "r1 = res;", EV(0x5600000000000000ull, 1, 2, 5, VASEL(6) | VOP2(7) | VBSG)},
+                {"VSET lt", "(va < vb) ? 1l : 0l", "r1 = res;", EV(0x4000000000000000ull, 1, 2, 3, VREG | VBSEL(6) | VASEL(6) | VOP2(7) | (1ull << 43))},
+                {"VSET ge", "(va >= vb) ? 1l : 0l", "r1 = res;",
+                 EV(0x4000000000000000ull, 1, 2, 3, VREG | VBSEL(6) | VASEL(6) | VOP2(7) | (1ull << 44) | (1ull << 47))},
+                {"VSETP gt", "bool cmp = va > vb;", "p1 = cmp ||",
+                 EV(0x50f0000000000000ull, (1 << 3) | 2, 2, 3, VREG | VBSEL(6) | VASEL(6) | (1ull << 47) | (1ull << 45) | (7ull << 39))},
+                {"IMAD32I", "r1 = (uint(", "* long(int(0x", EV(0x1000000000000000ull, 1, 2, 0, (0x1234ull << 20) | (1ull << 54))},
+                {"IMAD32I.HI", ">> 32) + r1)", "long(0x", EV(0x1000000000000000ull, 1, 2, 0, (0x1234ull << 20) | (1ull << 53))},
+                {"FCHK.DIVIDE", "eq <= 24", "p2 = ea < 2u", EV(0x5c88000000000000ull, 2 << 3, 4, 6, 0)},
+                {"PIXLD.COVMASK", "r1 = 1u;", "r1 = 1u;", EV(0xefe8000000000000ull, 1, 255, 0, (1ull << 31) | (7ull << 45))},
+                {"PIXLD.MY_INDEX", "r1 = 0u;", "p3 = false;", EV(0xefe8000000000000ull, 1, 255, 0, (5ull << 31) | (3ull << 45))},
+                {"LEPC", "r1 = 8u;", "r1 = 8u;", EV(0x50d0000000000000ull, 1, 0, 0, 0)},
+                {"CCTL", "", "", EV(0xef60000000000000ull, 0, 4, 0, 0)},
+                {"CCTLL", "", "", EV(0xef80000000000000ull, 0, 4, 0, 0)},
+            };
+            for (size_t i = 0; i < sizeof vcases / sizeof *vcases; i++) {
+                uint64_t ins[] = {vcases[i].w, ins_exit()};
+                ShaderInfo *r = xl_ins(STAGE_FRAGMENT, ins, 2, z, 0xf);
+                CHECK(r->msl != NULL, "%s translates (error \"%s\")", vcases[i].name, r->error);
+                if (r->msl) {
+                    CHECK(strstr(r->msl, vcases[i].need1) != NULL, "%s emits \"%s\"", vcases[i].name, vcases[i].need1);
+                    CHECK(strstr(r->msl, vcases[i].need2) != NULL, "%s emits \"%s\"", vcases[i].name, vcases[i].need2);
+                    MSL_COMPILES(r->msl, vcases[i].name);
+                }
+                maxwell_free(r);
+            }
+            /* calls and jumps: CAL/RET use a call stack, JMP/JCAL take absolute targets, JMX an absolute register target; each target becomes a label */
+            {
+                uint64_t cal = 0xe260000000000000ull | PT_BITS | ((uint64_t)(2 * 8 & 0xffffff) << 20); /* CAL +16 from the next instruction */
+                uint64_t ins[] = {cal, 0xe300000000000000ull | 0xf | PT_BITS, 0x5c98000000000000ull | 1 | (2ull << 20) | PT_BITS,
+                                  0xe320000000000000ull | 0xf | PT_BITS, ins_exit()};
+                ShaderInfo *r = xl_ins(STAGE_FRAGMENT, ins, 5, z, 0xf);
+                CHECK(r->msl != NULL, "CAL/RET translates: %s", r->error);
+                CHECK(HAS(r, "cal[cal_n++] = ") && HAS(r, "pc = cal[--cal_n]; continue;") && HAS(r, "uint cal[16]; uint cal_n = 0;"),
+                      "CAL pushes the return address, RET pops it");
+                CHECK(HAS(r, "if (cal_n == 0u) { exit_now = true; break; }"), "RET with no caller ends the program");
+                if (r->msl) MSL_COMPILES(r->msl, "CAL/RET");
+                maxwell_free(r);
+                uint64_t jmp = 0xe210000000000000ull | PT_BITS | (0x18ull << 20), jcal = 0xe220000000000000ull | PT_BITS | (0x28ull << 20);
+                uint64_t jmx = 0xe200000000000000ull | PT_BITS | (4ull << 8) | (0x10ull << 20);
+                uint64_t ins2[] = {jmp, ins_exit(), jcal, ins_exit(), jmx, ins_exit()};
+                r = xl_ins(STAGE_FRAGMENT, ins2, 6, z, 0xf);
+                CHECK(r->msl != NULL, "JMP/JCAL/JMX translate: %s", r->error);
+                CHECK(HAS(r, "pc = 24u; continue;") && HAS(r, "cal[cal_n++] = ") && HAS(r, "pc = r4 + 0x10u; continue;"),
+                      "absolute targets, and JMX = register + imm32");
+                if (r->msl) MSL_COMPILES(r->msl, "JMP/JCAL/JMX");
+                maxwell_free(r);
+            }
+            /* the instructions no application shader reaches are refused by name */
+            struct {
+                const char *name, *why;
+                uint64_t w;
+            } rcases[] = {
+                {"VABSDIFF4", "VABSDIFF4", EV(0x5000000000000000ull, 1, 2, 3, 0)},
+                {"TXA", "TXA", EV(0xdf40000000000000ull, 1, 2, 0, 0)},
+                {"IDP", "IDP", EV(0x53f8000000000000ull, 1, 2, 3, 0)},
+                {"IMADSP", "IMADSP", EV(0x5a80000000000000ull, 1, 2, 3, 0)},
+                {"B2R", "control/system", EV(0xf0b8000000000000ull, 1, 2, 0, 0)},
+                {"R2B", "control/system", EV(0xf0c0000000000000ull, 1, 2, 0, 0)},
+                {"BPT", "control/system", EV(0xe3a0000000000000ull, 0, 0, 0, 0)},
+                {"IDE", "control/system", EV(0xe390000000000000ull, 0, 0, 0, 0)},
+                {"RAM", "control/system", EV(0xe380000000000000ull, 0, 0, 0, 0)},
+                {"SAM", "control/system", EV(0xe370000000000000ull, 0, 0, 0, 0)},
+                {"RTT", "control/system", EV(0xe360000000000000ull, 0, 0, 0, 0)},
+                {"GETCRSPTR", "control/system", EV(0xe2c0000000000000ull, 1, 0, 0, 0)},
+                {"GETLMEMBASE", "control/system", EV(0xe2d0000000000000ull, 1, 0, 0, 0)},
+                {"SETCRSPTR", "control/system", EV(0xe2e0000000000000ull, 0, 2, 0, 0)},
+                {"SETLMEMBASE", "control/system", EV(0xe2f0000000000000ull, 0, 2, 0, 0)},
+                {"PEXIT", "control/system", EV(0xe230000000000000ull, 0, 0, 0, 0)},
+                {"LONGJMP", "control/system", EV(0xe310000000000000ull, 0, 0, 0, 0)},
+                {"PLONGJMP", "control/system", EV(0xe280000000000000ull, 0, 0, 0, 0)},
+                {"ISBERD", "control/system", EV(0xefd0000000000000ull, 1, 2, 0, 0)},
+                {"STP", "control/system", EV(0xeea0000000000000ull, 0, 0, 0, 0)},
+            };
+            for (size_t i = 0; i < sizeof rcases / sizeof *rcases; i++) {
+                uint64_t ins[] = {rcases[i].w, ins_exit()};
+                ShaderInfo *r = xl_ins(STAGE_FRAGMENT, ins, 2, z, 0xf);
+                CHECK(REFUSED(r, rcases[i].why), "%s is refused by name (msl %s, error \"%s\")", rcases[i].name, r->msl ? "present" : "null", r->error);
+                maxwell_free(r);
+            }
+#undef EV
+#undef VREG
+#undef VBSEL
+#undef VASEL
+#undef VASG
+#undef VBSG
+#undef VOP2
+#undef VDSG
+#undef VSAT
         }
         /* -- TLD (texel fetch), TXD (gradients) */
         {
@@ -503,13 +697,11 @@ int main(void) {
         }
         /* -- IMAD (reg, rc, cr, imm forms; .HI; negations) and LEA (.LO, .LO.CC/.X, .HI) */
         {
-            XL_OK(im, STAGE_FRAGMENT, z, 0xf, "IMAD", i_imad(0x5a, 1, 2, 3, 4, 0), i_imad(0x5a, 5, 2, 3, 4, IMAD_NC | IMAD_NP),
-                  i_imad(0x5a, 6, 2, 3, 4, IMAD_HI), i_imad(0x5a, 7, 2, 3, 4, IMAD_HI | IMAD_S | IMAD_NP), i_imad(0x52, 8, 2, 3, 0x10, 0),
-                  i_imad(0x4a, 9, 2, 0x10, 4, 0), ins_exit());
+            XL_OK(im, STAGE_FRAGMENT, z, 0xf, "IMAD", i_imad(0x5a, 1, 2, 3, 4, 0), i_imad(0x5a, 6, 2, 3, 4, IMAD_HI),
+                  i_imad(0x5a, 7, 2, 3, 4, IMAD_HI | IMAD_S), i_imad(0x52, 8, 2, 3, 0x10, 0), i_imad(0x4a, 9, 2, 0x10, 4, 0), ins_exit());
             CHECK(HAS(im, "r1 = (r2 * r3 + r4)"), "IMAD low word");
-            CHECK(HAS(im, "r5 = ((0u - r2 * r3) + (0u - r4))"), "IMAD negations");
-            CHECK(HAS(im, "r6 = (uint((ulong(r2) * ulong(r3)) >> 32) + r4)"), "IMAD.HI unsigned");
-            CHECK(HAS(im, "r7 = (uint((0ul - ulong(long(int(r2)) * long(int(r3)))) >> 32) + r4)"), "IMAD.HI signed with a negated product");
+            CHECK(HAS(im, "r6 = (uint((ulong(r2) * ulong(r3)) >> 32) + r4)"), "IMAD.HI unsigned (bit 54, envytools layout)");
+            CHECK(HAS(im, "r7 = (uint(ulong(long(int(r2)) * long(int(r3))) >> 32) + r4)"), "IMAD.HI signed (bit 48)");
             CHECK(HAS(im, "r8 = (r2 * r16 + cb0["), "IMAD rc form: B = REG_39, C = constant buffer");
             CHECK(HAS(im, "r9 = (r2 * cb0["), "IMAD cr form: B = constant buffer");
             maxwell_free(im);
@@ -517,6 +709,7 @@ int main(void) {
             CHECK(HAS(ii, "r1 = (r2 * 0x00000010u + r4)"), "IMAD with an immediate B");
             maxwell_free(ii);
             XL_REFUSE(ic, STAGE_FRAGMENT, z, 0xf, "imad carry", "IMAD.CC", i_imad(0x5a, 1, 2, 3, 4, 1ull << 47), ins_exit());
+            XL_REFUSE(is, STAGE_FRAGMENT, z, 0xf, "imad carry", "IMAD.SAT", i_imad(0x5a, 1, 2, 3, 4, 1ull << 50), ins_exit());
             XL_OK(lo, STAGE_FRAGMENT, z, 0xf, "LEA.LO", i_lea_lo(0x5b, 1, 2, 3, 2, 0), i_lea_lo(0x5b, 4, 2, 3, 5, 1ull << 45),
                   i_lea_lo(0x5b, 5, 2, 3, 3, 1ull << 47), i_lea_lo(0x5b, 6, 2, 3, 0, 1ull << 48), ins_exit());
             CHECK(HAS(lo, "r1 = ((r2 << 2u) + r3)") && HAS(lo, "r4 = ((r2 << 5u) + (0u - r3))"), "LEA.LO scales A and adds (or subtracts) B");

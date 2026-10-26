@@ -10,6 +10,7 @@ typedef struct {
     AudinQueue q;
     uint32_t event_w;
     uint32_t rate, channels;
+    float gain; /* SetDeviceGain / GetDeviceGain: kept per input (the host has no analogue gain stage; silence stays silence) */
 } AudIn;
 static void signal_if_ready(AudIn *a) {
     if (a->event_w && a->q.nreleased) event_signal_handle(a->event_w);
@@ -39,7 +40,7 @@ static void ai_append(IpcObject *s, IpcCall *c) {
     if (audin_append(&a->q, tag)) {
         c->result = HZ_RESULT(HZ_MOD_AUDIO_IN, 8);
         return;
-    }                           /* [unverified] buffer count limit */
+    } /* [unverified] buffer count limit */
     if (p && b->size >= 0x28) { /* silence into the guest's data buffer */
         uint64_t ptr, cap, size, off;
         memcpy(&ptr, p + 8, 8);
@@ -86,9 +87,14 @@ static void ai_flush(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, v);
     signal_if_ready(a);
 }
+static void ai_set_gain(IpcObject *s, IpcCall *c) {
+    AudIn *a = s->state;
+    float v = IPC_IN(c, float, 0);
+    a->gain = v != v ? 1.0f : v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v; /* clamped to 0..1, NaN = unity */
+}
 static void ai_gain(IpcObject *s, IpcCall *c) {
-    (void)s;
-    float v = 1.0f;
+    AudIn *a = s->state;
+    float v = a->gain;
     IPC_OUT(c, v);
 }
 static const IpcCmd audioin_cmds[] = {
@@ -102,8 +108,8 @@ static const IpcCmd audioin_cmds[] = {
     {7, "AppendAudioInBufferAuto", ai_append, IPC_IMPL},
     {8, "GetReleasedAudioInBufferAuto", ai_released, IPC_IMPL},
     {9, "GetAudioInBufferCount", ai_count, IPC_IMPL},
-    {10, "SetDeviceGain", svc_noop, IPC_STUB},
-    {11, "GetDeviceGain", ai_gain, IPC_STUB},
+    {10, "SetDeviceGain", ai_set_gain, IPC_IMPL},
+    {11, "GetDeviceGain", ai_gain, IPC_IMPL},
     {12, "FlushAudioInBuffers", ai_flush, IPC_IMPL},
 };
 static void ai_destroy(IpcObject *o) { free(o->state); }
@@ -122,6 +128,7 @@ static void mgr_list(IpcObject *s, IpcCall *c) {
 static void mgr_open(IpcObject *s, IpcCall *c) { /* in: {u32 sample rate, u16 channels, u16 pad, ...}; out: {rate, channels, format, state} */
     (void)s;
     AudIn *a = calloc(1, sizeof *a);
+    a->gain = 1.0f;
     audin_init(&a->q);
     uint32_t rate = IPC_IN(c, uint32_t, 0);
     uint32_t ch = IPC_IN(c, uint16_t, 4);

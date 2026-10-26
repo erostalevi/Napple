@@ -159,6 +159,9 @@ uint32_t napple_audout_state(const napple_audout *o); /* 0 = started, 1 = stoppe
 int napple_audout_append(napple_audout *o, uint64_t tag, uint64_t addr, uint64_t size, uint64_t offset);
 uint32_t napple_audout_get_released(napple_audout *o, uint64_t *tags, uint32_t max);
 int napple_audout_contains(const napple_audout *o, uint64_t tag);
+uint32_t napple_audout_buffer_count(const napple_audout *o);   /* queued + released-but-not-fetched */
+uint64_t napple_audout_played_samples(const napple_audout *o); /* sample frames consumed from guest buffers */
+int napple_audout_flush(napple_audout *o);                     /* releases every queued buffer; 1 if any */
 /* Manual mode for tests: the pacing thread idles and napple_audout_pump consumes `frames` frames from the queue
    immediately (releasing buffers as they finish). */
 void napple_audout_set_manual(napple_audout *o, int manual);

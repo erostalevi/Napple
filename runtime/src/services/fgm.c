@@ -31,12 +31,12 @@ static void rq_cancel(IpcObject *s, IpcCall *c) {
 }
 static void rq_destroy(IpcObject *o) { free(o->state); }
 static const IpcCmd request_cmds[] = {
-    {0, "Initialize", rq_initialize, IPC_STUB}, {1, "Set", rq_set, IPC_STUB}, {2, "Get", rq_get, IPC_STUB}, {3, "Cancel", rq_cancel, IPC_STUB}};
+    {0, "Initialize", rq_initialize, IPC_IMPL}, {1, "Set", rq_set, IPC_IMPL}, {2, "Get", rq_get, IPC_IMPL}, {3, "Cancel", rq_cancel, IPC_IMPL}};
 static void fgm_initialize(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("IRequest", request_cmds, calloc(1, sizeof(FgmRequest)), rq_destroy));
 }
-static const IpcCmd fgm_cmds[] = {{0, "Initialize", fgm_initialize, IPC_STUB}};
+static const IpcCmd fgm_cmds[] = {{0, "Initialize", fgm_initialize, IPC_IMPL}};
 static IpcObject *fgm_open(void) { return IPC_OBJECT("fgm", fgm_cmds, NULL, NULL); }
 void service_register_fgm(void) {
     ipc_register_service("fgm", fgm_open);

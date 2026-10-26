@@ -26,7 +26,7 @@ libnapple_input.a: $(OBJ)
 build/test_%: tests/test_%.c libnapple_input.a tests/check.h
 	$(CC) $(CFLAGS) $(INC) $< libnapple_input.a $(FW) -o $@
 
-TESTS := build/test_hid build/test_bindings build/test_motion build/test_input
+TESTS := build/test_hid build/test_bindings build/test_motion build/test_input build/test_gesture build/test_hid_sections
 test: $(TESTS)
 	@cmp src/tinyjson.h ../frontend/src/tinyjson.h && echo "tinyjson.h copies identical"
 	@for t in $(TESTS); do echo "== $$t"; ./$$t || exit 1; done

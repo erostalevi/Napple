@@ -33,6 +33,13 @@ int main(void) {
     char names[2 * BCAT_NAME_SIZE]; name(names, "news"); name(names + BCAT_NAME_SIZE, "list.json");
     svc_call(fs, 0, names, sizeof names, &c); CHECK(c.result == HZ_R_BCAT_NOT_FOUND, "file Open: not found");
     svc_call(stg, 10, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no cached directories");
+    /* SetPassphrase validates the buffer size; the delivery tasks are accepted and the task list stays empty */
+    uint8_t pass[0x42] = {0}; IpcCall pc; memset(&pc, 0, sizeof pc); svc_set_in_buf(&pc, pass, 0x41);
+    svc_call(root, 0, NULL, 0, &c); IpcObject *bsv = c.out_objects[0];
+    svc_call_c(bsv, 30100, &pc); CHECK(pc.result == 0, "passphrase of 0x41 bytes accepted");
+    memset(&pc, 0, sizeof pc); svc_set_in_buf(&pc, pass, 0x42); svc_call_c(bsv, 30100, &pc); CHECK(pc.result != 0, "passphrase too long");
+    svc_call(bsv, 30200, NULL, 0, &c); CHECK(c.result == 0, "register task"); svc_call(bsv, 90100, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no tasks");
+    svc_call(bsv, 90201, NULL, 0, &c); CHECK(c.result == 0, "clear storage");
     printf("{\"test\":\"svc_bcat\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

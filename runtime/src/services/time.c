@@ -73,11 +73,13 @@ static void sc_noop(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
 }
+/* SetCurrentTime / SetSystemClockContext: the guest must never move the Mac's clock, and the system clocks here read the host clock, so a guest set
+ * has no effect to record. The console answers success for the privileged setter too (documented no-op, class c). */
 static const IpcCmd system_clock_cmds[] = {
     {0, "GetCurrentTime", sc_get_current_time, IPC_IMPL},
-    {1, "SetCurrentTime", sc_noop, IPC_STUB},
+    {1, "SetCurrentTime", sc_noop, IPC_IMPL},
     {2, "GetSystemClockContext", sc_get_context, IPC_IMPL},
-    {3, "SetSystemClockContext", sc_noop, IPC_STUB},
+    {3, "SetSystemClockContext", sc_noop, IPC_IMPL},
 };
 static void steady_now(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -90,9 +92,15 @@ static void steady_zero(IpcObject *s, IpcCall *c) {
     int64_t v = 0;
     IPC_OUT(c, v);
 }
+/* The RTC is the host clock in seconds since 2000-01-01 (the Horizon RTC epoch); it never reports a reset, has no test offset and no internal offset. */
+static void steady_rtc(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t v = posix_now() - 946684800;
+    IPC_OUT(c, v);
+}
 static const IpcCmd steady_clock_cmds[] = {
-    {0, "GetCurrentTimePoint", steady_now, IPC_IMPL}, {2, "GetTestOffset", steady_zero, IPC_STUB},        {3, "SetTestOffset", sc_noop, IPC_STUB},
-    {200, "GetRtcValue", steady_zero, IPC_STUB},      {201, "IsRtcResetDetected", steady_zero, IPC_STUB}, {204, "GetInternalOffset", steady_zero, IPC_STUB},
+    {0, "GetCurrentTimePoint", steady_now, IPC_IMPL}, {2, "GetTestOffset", steady_zero, IPC_IMPL},        {3, "SetTestOffset", sc_noop, IPC_IMPL},
+    {200, "GetRtcValue", steady_rtc, IPC_IMPL},       {201, "IsRtcResetDetected", steady_zero, IPC_IMPL}, {204, "GetInternalOffset", steady_zero, IPC_IMPL},
 };
 
 /* time zone. The device zone is the host's IANA zone when /etc/localtime points into a zoneinfo directory, else UTC. A TimeZoneRule is an
@@ -409,7 +417,7 @@ static const IpcCmd static_cmds[] = {
     {20, "GetSharedMemoryNativeHandle", st_shared_memory, IPC_IMPL},
     {100, "IsStandardUserSystemClockAutomaticCorrectionEnabled", st_auto_correction_get, IPC_IMPL},
     {101, "SetStandardUserSystemClockAutomaticCorrectionEnabled", st_auto_correction_set, IPC_IMPL},
-    {102, "GetStandardUserSystemClockInitialYear", st_initial_year, IPC_STUB},
+    {102, "GetStandardUserSystemClockInitialYear", st_initial_year, IPC_IMPL},
     {200, "IsStandardNetworkSystemClockAccuracySufficient", svc_true, IPC_IMPL},
     {300, "CalculateMonotonicSystemClockBaseTimePoint", st_monotonic_base, IPC_IMPL},
     {400, "GetClockSnapshot", st_get_snapshot, IPC_IMPL},

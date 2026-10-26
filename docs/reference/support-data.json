@@ -1,0 +1,926 @@
+{
+ "features": {
+  "domains": [
+   {
+    "coverage": 1.0,
+    "items": {
+     "impl": 13,
+     "missing": 0,
+     "partial": 0,
+     "stub": 0
+    },
+    "key": "cpu_rewrite",
+    "points": 14.0,
+    "title": "CPU: AOT A64 rewrite",
+    "weight": 14
+   },
+   {
+    "coverage": 1.0,
+    "items": {
+     "impl": 5,
+     "missing": 0,
+     "partial": 0,
+     "stub": 0
+    },
+    "key": "loader",
+    "points": 5.0,
+    "title": "Loader: NSO/NRO/modules/relocs",
+    "weight": 5
+   },
+   {
+    "coverage": 1.0,
+    "items": {
+     "impl": 64,
+     "missing": 0,
+     "partial": 0,
+     "stub": 0
+    },
+    "key": "kernel",
+    "points": 10.0,
+    "title": "Kernel: Horizon svcs + scheduling",
+    "weight": 10
+   },
+   {
+    "coverage": 1.0,
+    "items": {
+     "impl": 53,
+     "missing": 0,
+     "partial": 0,
+     "stub": 0
+    },
+    "key": "ipc",
+    "points": 10.0,
+    "title": "IPC: HLE services (coverage)",
+    "weight": 10
+   },
+   {
+    "coverage": 0.5157,
+    "items": {
+     "impl": 0,
+     "missing": 0,
+     "partial": 0,
+     "stub": 0
+    },
+    "key": "ipc_depth",
+    "points": 2.58,
+    "title": "IPC: command depth (impl vs stub)",
+    "weight": 5
+   },
+   {
+    "coverage": 1.0,
+    "items": {
+     "impl": 523,
+     "missing": 0,
+     "partial": 0,
+     "stub": 0
+    },
+    "key": "nvn",
+    "points": 12.0,
+    "title": "GPU: NVN API surface",
+    "weight": 12
+   },
+   {
+    "coverage": 0.8263,
+    "items": {
+     "impl": 102,
+     "missing": 49,
+     "partial": 0,
+     "stub": 0
+    },
+    "key": "shader",
+    "points": 9.92,
+    "title": "GPU: Maxwell shader ISA",
+    "weight": 12
+   },
+   {
+    "coverage": 0.7914,
+    "items": {
+     "impl": 11,
+     "missing": 3,
+     "partial": 3,
+     "stub": 0
+    },
+    "key": "gpu_fixed",
+    "points": 6.33,
+    "title": "GPU: formats + pipeline features",
+    "weight": 8
+   },
+   {
+    "coverage": 0.8,
+    "items": {
+     "impl": 2,
+     "missing": 0,
+     "partial": 0,
+     "stub": 3
+    },
+    "key": "nvdrv",
+    "points": 1.6,
+    "title": "GPU: nvdrv / host1x devices",
+    "weight": 2
+   },
+   {
+    "coverage": 0.9792,
+    "items": {
+     "impl": 14,
+     "missing": 0,
+     "partial": 2,
+     "stub": 0
+    },
+    "key": "audio",
+    "points": 6.85,
+    "title": "Audio: audren/audout/opus",
+    "weight": 7
+   },
+   {
+    "coverage": 0.97,
+    "items": {
+     "impl": 8,
+     "missing": 0,
+     "partial": 3,
+     "stub": 0
+    },
+    "key": "input",
+    "points": 4.85,
+    "title": "Input: hid / npad",
+    "weight": 5
+   },
+   {
+    "coverage": 0.9,
+    "items": {
+     "impl": 10,
+     "missing": 3,
+     "partial": 1,
+     "stub": 0
+    },
+    "key": "content",
+    "points": 4.5,
+    "title": "Content: containers, crypto, updates, DLC",
+    "weight": 5
+   },
+   {
+    "coverage": 0.9821,
+    "items": {
+     "impl": 6,
+     "missing": 0,
+     "partial": 1,
+     "stub": 0
+    },
+    "key": "fs_runtime",
+    "points": 1.96,
+    "title": "FS: saves + storage",
+    "weight": 2
+   },
+   {
+    "coverage": 0.5769,
+    "items": {
+     "impl": 0,
+     "missing": 3,
+     "partial": 4,
+     "stub": 0
+    },
+    "key": "applets",
+    "points": 1.15,
+    "title": "Library applets",
+    "weight": 2
+   },
+   {
+    "coverage": 0.8056,
+    "items": {
+     "impl": 1,
+     "missing": 0,
+     "partial": 2,
+     "stub": 1
+    },
+    "key": "media",
+    "points": 0.81,
+    "title": "Video / media decode",
+    "weight": 1
+   }
+  ],
+  "final_percent": 91.5,
+  "missing": [
+   {
+    "domain": "applets",
+    "item": "controller applet",
+    "status": "partial"
+   },
+   {
+    "domain": "applets",
+    "item": "error applet",
+    "status": "partial"
+   },
+   {
+    "domain": "applets",
+    "item": "mii edit",
+    "status": "missing"
+   },
+   {
+    "domain": "applets",
+    "item": "photo viewer / album",
+    "status": "missing"
+   },
+   {
+    "domain": "applets",
+    "item": "player select (profile)",
+    "status": "partial"
+   },
+   {
+    "domain": "applets",
+    "item": "swkbd (software keyboard)",
+    "status": "partial"
+   },
+   {
+    "domain": "applets",
+    "item": "web / offline web",
+    "status": "missing"
+   },
+   {
+    "domain": "audio",
+    "item": "audin (microphone)",
+    "status": "partial"
+   },
+   {
+    "domain": "audio",
+    "item": "performance metrics",
+    "status": "partial"
+   },
+   {
+    "domain": "content",
+    "item": "IVFC hash-tree verification",
+    "status": "missing"
+   },
+   {
+    "domain": "content",
+    "item": "NCA2 / NCA0",
+    "status": "missing"
+   },
+   {
+    "domain": "content",
+    "item": "NSZ / XCZ (zstd)",
+    "status": "partial"
+   },
+   {
+    "domain": "content",
+    "item": "personalized tickets",
+    "status": "missing"
+   },
+   {
+    "domain": "fs_runtime",
+    "item": "bcat storage",
+    "status": "partial"
+   },
+   {
+    "domain": "gpu_fixed",
+    "item": "MSAA / resolve",
+    "status": "partial"
+   },
+   {
+    "domain": "gpu_fixed",
+    "item": "depth/stencil formats",
+    "status": "partial"
+   },
+   {
+    "domain": "gpu_fixed",
+    "item": "geometry shaders",
+    "status": "missing"
+   },
+   {
+    "domain": "gpu_fixed",
+    "item": "tessellation",
+    "status": "missing"
+   },
+   {
+    "domain": "gpu_fixed",
+    "item": "texture views / sparse",
+    "status": "partial"
+   },
+   {
+    "domain": "gpu_fixed",
+    "item": "transform feedback",
+    "status": "missing"
+   },
+   {
+    "domain": "input",
+    "item": "GameCube / Palma / NES styles",
+    "status": "partial"
+   },
+   {
+    "domain": "input",
+    "item": "IR camera (irs)",
+    "status": "partial"
+   },
+   {
+    "domain": "input",
+    "item": "gesture / debugpad",
+    "status": "partial"
+   },
+   {
+    "domain": "media",
+    "item": "H.264",
+    "status": "partial"
+   },
+   {
+    "domain": "media",
+    "item": "JPEG (nvjpg / caps)",
+    "status": "stub"
+   },
+   {
+    "domain": "media",
+    "item": "Vorbis/Opus movie audio",
+    "status": "partial"
+   },
+   {
+    "domain": "nvdrv",
+    "item": "/dev/nvdisp-disp0",
+    "status": "stub"
+   },
+   {
+    "domain": "nvdrv",
+    "item": "/dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)",
+    "status": "stub"
+   },
+   {
+    "domain": "nvdrv",
+    "item": "/dev/nvhost-nvdec, vic, nvjpg, msenc",
+    "status": "stub"
+   },
+   {
+    "domain": "shader",
+    "item": "B2R",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "BPT",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "CAL",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "CCTL",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "CCTLL",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "DADD",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "DFMA",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "DMNMX",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "DMUL",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "DSET",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "DSETP",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "FCHK",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "GETCRSPTR",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "GETLMEMBASE",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "IDE",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "IDP",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "IMAD32I",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "IMADSP",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "ISBERD",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "JCAL",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "JMP",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "JMX",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "LEPC",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "LONGJMP",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "OUT",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "PEXIT",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "PIXLD",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "PLONGJMP",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "R2B",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "RAM",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "RET",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "RTT",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "SAM",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "SETCRSPTR",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "SETLMEMBASE",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "STP",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "SUATOM",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "SULD",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "SURED",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "SUST",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "TXA",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "VABSDIFF",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "VABSDIFF4",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "VADD",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "VMAD",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "VSET",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "VSETP",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "VSHL",
+    "status": "missing"
+   },
+   {
+    "domain": "shader",
+    "item": "VSHR",
+    "status": "missing"
+   }
+  ],
+  "priorities": [
+   {
+    "domain": "audio",
+    "effort": "S",
+    "gain_pts": 0.1,
+    "importance": 2,
+    "item": "performance metrics",
+    "rank": 1,
+    "where": "audio/src/audren.c",
+    "why": "modelled buffer, layout unverified against a title"
+   },
+   {
+    "domain": "content",
+    "effort": "S",
+    "gain_pts": 0.07,
+    "importance": 2,
+    "item": "NSZ / XCZ (zstd)",
+    "rank": 2,
+    "where": "crates/napple-core ncz.rs",
+    "why": "implemented, needs a real NSZ/XCZ dump to verify"
+   },
+   {
+    "domain": "gpu_fixed",
+    "effort": "M",
+    "gain_pts": 0.14,
+    "importance": 3,
+    "item": "depth/stencil formats",
+    "rank": 3,
+    "where": "gfx/src/tex/napple_fmt.c, gfx/src/api_cmd.c",
+    "why": "D24/D24S8 substituted by D32F, ResolveDepthBuffer no-op; every 3D title"
+   },
+   {
+    "domain": "applets",
+    "effort": "S",
+    "gain_pts": 0.12,
+    "importance": 3,
+    "item": "swkbd (software keyboard)",
+    "rank": 4,
+    "where": "runtime/src/services/applet.c, app.m",
+    "why": "text entry applet; unit-tested only (ACNH name entry reached by script, not via swkbd)"
+   },
+   {
+    "domain": "gpu_fixed",
+    "effort": "M",
+    "gain_pts": 0.1,
+    "importance": 2,
+    "item": "MSAA / resolve",
+    "rank": 5,
+    "where": "gfx/src/mtl_replay.m, api_cmd.c",
+    "why": "integer resolves skipped, ResolveDepthBuffer no-op"
+   },
+   {
+    "domain": "input",
+    "effort": "S",
+    "gain_pts": 0.05,
+    "importance": 1,
+    "item": "gesture / debugpad",
+    "rank": 6,
+    "where": "runtime/src/services/hid.c",
+    "why": "activate succeeds, data never produced"
+   },
+   {
+    "domain": "applets",
+    "effort": "S",
+    "gain_pts": 0.08,
+    "importance": 2,
+    "item": "error applet",
+    "rank": 7,
+    "where": "runtime/src/services/applet.c",
+    "why": "no real UI, unit-tested only"
+   },
+   {
+    "domain": "applets",
+    "effort": "S",
+    "gain_pts": 0.08,
+    "importance": 2,
+    "item": "player select (profile)",
+    "rank": 8,
+    "where": "runtime/src/services/applet.c",
+    "why": "single profile, no cancel path"
+   },
+   {
+    "domain": "media",
+    "effort": "S",
+    "gain_pts": 0.08,
+    "importance": 3,
+    "item": "H.264",
+    "rank": 9,
+    "where": "runtime/src/movie.c, vt_h264.c",
+    "why": "VideoToolbox path exists, never driven by a guest; decoder type guess"
+   },
+   {
+    "domain": "shader",
+    "effort": "L",
+    "gain_pts": 0.07,
+    "importance": 2,
+    "item": "SULD",
+    "rank": 10,
+    "where": "gfx/src/shader, mtl_shader.m",
+    "why": "image loads need an image binding contract"
+   },
+   {
+    "domain": "shader",
+    "effort": "L",
+    "gain_pts": 0.07,
+    "importance": 2,
+    "item": "SUST",
+    "rank": 11,
+    "where": "gfx/src/shader, mtl_shader.m",
+    "why": "image stores, same contract"
+   },
+   {
+    "domain": "gpu_fixed",
+    "effort": "M",
+    "gain_pts": 0.05,
+    "importance": 1,
+    "item": "texture views / sparse",
+    "rank": 12,
+    "where": "gfx/src/mtl_tex.m",
+    "why": "views Metal cannot express fall back to the whole texture"
+   },
+   {
+    "domain": "applets",
+    "effort": "M",
+    "gain_pts": 0.12,
+    "importance": 3,
+    "item": "controller applet",
+    "rank": 13,
+    "where": "runtime/src/services/applet.c",
+    "why": "always confirms one pad; no pairing UI for multi-player"
+   },
+   {
+    "domain": "gpu_fixed",
+    "effort": "L",
+    "gain_pts": 0.38,
+    "importance": 2,
+    "item": "transform feedback",
+    "rank": 14,
+    "where": "gfx/src/api_cmd.c, mtl_replay.m",
+    "why": "no record/replay path; Metal vertex-capture emulation"
+   },
+   {
+    "domain": "gpu_fixed",
+    "effort": "L",
+    "gain_pts": 0.38,
+    "importance": 2,
+    "item": "tessellation",
+    "rank": 15,
+    "where": "gfx/src/shader, api_cmd.c",
+    "why": "patch size/levels are no-ops, no tess stages"
+   },
+   {
+    "domain": "gpu_fixed",
+    "effort": "L",
+    "gain_pts": 0.38,
+    "importance": 2,
+    "item": "geometry shaders",
+    "rank": 16,
+    "where": "gfx/src/shader",
+    "why": "no geometry stage in Metal; compute emulation"
+   },
+   {
+    "domain": "media",
+    "effort": "S",
+    "gain_pts": 0.06,
+    "importance": 1,
+    "item": "JPEG (nvjpg / caps)",
+    "rank": 17,
+    "where": "runtime/src/services/caps.c",
+    "why": "ImageIO helpers not wired to caps/nvdrv"
+   },
+   {
+    "domain": "media",
+    "effort": "M",
+    "gain_pts": 0.06,
+    "importance": 2,
+    "item": "Vorbis/Opus movie audio",
+    "rank": 18,
+    "where": "runtime/src/movie.c",
+    "why": "movie audio types Vorbis/AAC are not hooked"
+   },
+   {
+    "domain": "applets",
+    "effort": "M",
+    "gain_pts": 0.15,
+    "importance": 1,
+    "item": "mii edit",
+    "rank": 19,
+    "where": "runtime/src/services/applet.c",
+    "why": "mii editor applet"
+   },
+   {
+    "domain": "nvdrv",
+    "effort": "L",
+    "gain_pts": 0.2,
+    "importance": 2,
+    "item": "/dev/nvhost-nvdec, vic, nvjpg, msenc",
+    "rank": 20,
+    "where": "runtime/src/services/nvdrv.c",
+    "why": "ioctl surface only, no decode engines"
+   },
+   {
+    "domain": "applets",
+    "effort": "L",
+    "gain_pts": 0.15,
+    "importance": 1,
+    "item": "web / offline web",
+    "rank": 21,
+    "where": "runtime/src/services/applet.c",
+    "why": "web applet"
+   }
+  ],
+  "range": [
+   91.5,
+   91.5
+  ]
+ },
+ "generator": "tools/support/gen_support.py",
+ "matrix_last_run": "2026-10-21T02:18:02Z",
+ "schema": 1,
+ "snapshot": {
+  "commit": "332988e",
+  "date": "2026-10-26"
+ },
+ "titles": [
+  {
+   "build_id": "3ca12dfaaf9c82da",
+   "in_matrix": true,
+   "ios": "start menu; abort on A (48-byte colour attachments)",
+   "known_issues": [
+    "graphics: boot UI and Assist Mode screens render",
+    "audio: audren REV3: 0 underruns/overruns over 70 s on Core Audio",
+    "input: A and Plus reach the game through the shared HID path (Assist Mode select, demo skip)",
+    "saves: File1.bin and Common.bin created and committed after Start",
+    "Exploded geometry after a long idle (parrot after ~2 min) is root-caused to the old 30 s recording release",
+    "A 400x228 mipmapped pass is not scale-unified on purpose.",
+    "A phantom MFi pad showed the settings sheet once on the Simulator (not reproduced)."
+   ],
+   "macos": {
+    "audio": "partial",
+    "boot": "pass",
+    "graphics": "partial",
+    "input": "partial",
+    "saves": "partial",
+    "state": "plays on macOS (intro, menus, Cascade Kingdom); start menu on the iOS Simulator (a touch A did not visibly advance)."
+   },
+   "matrix_name": "SUPER MARIO ODYSSEY",
+   "name": "Super Mario Odyssey",
+   "note": "docs/titles/0100000000010000.md",
+   "performance": "Live play: steady 60 fps, GPU 6-12 ms, 4 of 51 five-second windows stalled (worst 990 ms at the scene change, 656 pipelines built in one window).",
+   "title_id": "0100000000010000",
+   "version": "1.0.0"
+  },
+  {
+   "build_id": null,
+   "in_matrix": false,
+   "ios": "3.0.5 aborts at ~2 s (48-byte colour attachments; time:u fixed)",
+   "known_issues": [
+    "The ~45 fps ceiling is gfx: guest blocked ~21 ms per present in SyncWait, per-submit commit to complete ~21 ms, present GPU <= 8 ms, replay CPU 0.7 ms (LAS runs 58 fps with the same code).",
+    "`CallCommands: stale or invalid command handle` (65 k+ per minute: about 4000 lists/s never finalized, over the recording budget)",
+    "iOS Simulator: the G-buffer pass needs 48 bytes of colour attachment, the Simulator allows 32 (base, AArch32)",
+    "Binary archive load time (2026-10-26): a 59 MB `cache/pipelines-v8.metalar` left in the default save root by earlier runs took 65.5 s to load in `mtl_shader_init` (Metal `MTLMetalScriptBuilderImpl::initFromData`), so a ...",
+    "A32: VFP/NEON lifting is not done",
+    "Both the ios-sim and mk8d-64 branches add `time:u` cmd 300 (conflict in `services/time.c` at integration)."
+   ],
+   "macos": {
+    "audio": null,
+    "boot": null,
+    "graphics": null,
+    "input": null,
+    "saves": null,
+    "state": "v3.0.5 (update v1376256 + Booster Course Pass DLC) boots and races headless on the normal 64-bit path at 40-47 fps (title, menus, cup select, races). The base 1.0 build is AArch32 and runs through the lifted `a32jit.dylib` at the same fps, or the interpreter at 6-15 in races."
+   },
+   "matrix_name": null,
+   "name": "Mario Kart 8 Deluxe",
+   "note": "docs/titles/0100152000022000.md",
+   "performance": "",
+   "title_id": "0100152000022000",
+   "version": null
+  },
+  {
+   "build_id": "ae16f71e002af8cb",
+   "in_matrix": true,
+   "ios": "title screen (2026-10-26 re-run)",
+   "known_issues": [
+    "audio: Core Audio output verified clean: 0 underruns/overruns over 95 s (frames requested = wall time x 48 kHz)",
+    "input: keyboard verified end to end in the packaged app (real HID key events, window key, title L+R -> game)",
+    "First-use pipeline/shader build stutter (170-1300 ms when entering a new area)",
+    "A sustained ~30 fps state reported once did not reproduce in 5 live runs.",
+    "iOS device: the memory cap above (decision: trim the low gap or require the increased-memory entitlement)."
+   ],
+   "macos": {
+    "audio": "partial",
+    "boot": "pass",
+    "graphics": "pass",
+    "input": "partial",
+    "saves": "pass",
+    "state": "plays on macOS (the most mature title); reaches its title screen on the iOS Simulator."
+   },
+   "matrix_name": "The Legend of Zelda: Link's Awakening",
+   "name": "Link's Awakening",
+   "note": "docs/titles/01006BB00C6F0000.md",
+   "performance": "60 fps live windowed in a 3-6 minute play (perf-las-live), GPU 6-12 ms",
+   "title_id": "01006BB00C6F0000",
+   "version": "1.0.0"
+  },
+  {
+   "build_id": null,
+   "in_matrix": false,
+   "ios": "abort at ~2 s (48-byte colour attachments)",
+   "known_issues": [
+    "The real cause of the missing composite to window copy (the window draw samples a plain bound texture and no op names the composite's pool slot 1634).",
+    "The final window pass culling/winding with an upper-left origin (`mtl_replay.m apply_raster_state`).",
+    "iOS Simulator: 100 s, no crash, no first frame.",
+    "v0 was not re-run after the clock/olsc/prepo/pool-race changes (its data was deleted).",
+    "Thread 0x56 is created but never started in every boot (harmless)."
+   ],
+   "macos": {
+    "audio": null,
+    "boot": null,
+    "graphics": null,
+    "input": null,
+    "saves": null,
+    "state": "version 3.0.3 (+3 DLC) boots through the whole opening (Timmy's dialogue, the Nook Inc. counter, the name-entry keyboard) and shows a picture; v0 (1.0.0) boots without crashes. The picture currently relies on a stopgap (`mtl_frame_present_pick`). Status after the last note, later rounds may have moved it: see the ac-render note."
+   },
+   "matrix_name": null,
+   "name": "Animal Crossing: New Horizons",
+   "note": "docs/titles/01006F8002326000.md",
+   "performance": "~30 fps windowed (240 s run), 1738 frames in 70 s headless with input.",
+   "title_id": "01006F8002326000",
+   "version": null
+  }
+ ]
+}

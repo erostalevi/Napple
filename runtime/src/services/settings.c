@@ -1,6 +1,8 @@
 /* set and set:sys: language, region, firmware version and the system settings the SDK reads at startup. */
 #include "../ipc.h"
 #include "host_info.h"
+#include "settings_core.h"
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -55,19 +57,23 @@ static void set_count18(IpcObject *s, IpcCall *c) {
 }
 static void set_get_region_code(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint32_t v = 1;
+    uint32_t v = settings_region(host_desired_language(), getenv("NAPPLE_REGION"));
     IPC_OUT(c, v);
-} /* USA */
+}
 static void set_get_quest_flag(IpcObject *s, IpcCall *c) {
     (void)s;
     uint8_t v = 0;
     IPC_OUT(c, v);
 }
 static const IpcCmd set_cmds[] = {
-    {0, "GetLanguageCode", set_get_language_code, IPC_IMPL},      {1, "GetAvailableLanguageCodes", set_get_available, IPC_IMPL},
-    {2, "MakeLanguageCode", set_make_language_code, IPC_IMPL},    {3, "GetAvailableLanguageCodeCount", set_count15, IPC_IMPL},
-    {4, "GetRegionCode", set_get_region_code, IPC_STUB},          {5, "GetAvailableLanguageCodes2", set_get_available2, IPC_IMPL},
-    {6, "GetAvailableLanguageCodeCount2", set_count18, IPC_IMPL}, {8, "GetQuestFlag", set_get_quest_flag, IPC_STUB},
+    {0, "GetLanguageCode", set_get_language_code, IPC_IMPL},
+    {1, "GetAvailableLanguageCodes", set_get_available, IPC_IMPL},
+    {2, "MakeLanguageCode", set_make_language_code, IPC_IMPL},
+    {3, "GetAvailableLanguageCodeCount", set_count15, IPC_IMPL},
+    {4, "GetRegionCode", set_get_region_code, IPC_IMPL},
+    {5, "GetAvailableLanguageCodes2", set_get_available2, IPC_IMPL},
+    {6, "GetAvailableLanguageCodeCount2", set_count18, IPC_IMPL},
+    {8, "GetQuestFlag", set_get_quest_flag, IPC_IMPL}, /* a retail console is never a quest unit */
 };
 static IpcObject *set_open(void) { return IPC_OBJECT("set", set_cmds, NULL, NULL); }
 
@@ -93,19 +99,20 @@ static void sys_get_firmware_version(IpcObject *s, IpcCall *c) {
 }
 static void sys_get_color_set_id(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint32_t v = 1;
+    uint32_t v = settings_color_set(getenv("NAPPLE_COLOR_SET"));
     IPC_OUT(c, v);
 }
 static void sys_get_device_timezone(IpcObject *s, IpcCall *c) {
     (void)s;
-    char n[0x24] = "UTC";
+    char n[SET_TZ_NAME_SIZE];
+    settings_timezone_name(getenv("NAPPLE_TIMEZONE"), n);
     ipc_out(c, n, sizeof n);
 }
 static const IpcCmd sys_cmds[] = {
     {3, "GetFirmwareVersion", sys_get_firmware_version, IPC_IMPL},
     {4, "GetFirmwareVersion2", sys_get_firmware_version, IPC_IMPL},
-    {23, "GetColorSetId", sys_get_color_set_id, IPC_STUB},
-    {62, "GetDeviceTimeZoneLocationName", sys_get_device_timezone, IPC_STUB},
+    {23, "GetColorSetId", sys_get_color_set_id, IPC_IMPL},
+    {62, "GetDeviceTimeZoneLocationName", sys_get_device_timezone, IPC_IMPL},
 };
 static IpcObject *sys_open(void) { return IPC_OBJECT("set:sys", sys_cmds, NULL, NULL); }
 void service_register_settings(void) {

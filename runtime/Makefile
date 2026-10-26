@@ -17,7 +17,7 @@ endif
 OPT ?= $(if $(debug),-O0,-O2)
 ROOT := ..
 INCS := -I$(ROOT)/input/include -I$(ROOT)/audio/include -I$(ROOT)/gfx/include -I$(ROOT)/frontend/include
-CFLAGS := -std=gnu11 $(INCS) $(OPT) -g -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -I/opt/homebrew/opt/libvpx/include -Isrc -Isrc/services
+CFLAGS := -std=gnu11 $(INCS) $(OPT) -g -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -I/opt/homebrew/opt/libvpx/include -I/opt/homebrew/opt/opus/include -DNAPPLE_HAVE_OPUS=1 -Isrc -Isrc/services
 FRAMEWORKS := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Metal -framework Foundation -framework CoreFoundation -framework AudioToolbox -framework CoreAudio -framework GameController
 # Release link: drop unreferenced code and local symbols (the build is always -g for the object files, but no dSYM is produced).
 LDFLAGS ?= -Wl,-dead_strip -Wl,-x
@@ -70,6 +70,8 @@ HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format
 HOST_KERNEL := src/kernel.c src/threads.c src/ksession.c src/kmsg.c src/kcode.c src/timescale.c tests/host/host_stubs.c
 HOST_LOADER := src/module.c src/dispatch.c src/json.c src/nro.c src/sha256.c src/ipc.c
 HOST_HDRS := $(wildcard src/*.h) $(wildcard tests/host/*.h) tests/check.h
+# media-services (2026-10-26): the portable media engines nvdrv.c now calls (host1x parser, engines, null decoder backend, header parsers, JPEG codec)
+HOST_MEDIA := src/services/nvdrv_media_core.c src/services/decoder_null_core.c src/services/codec_headers_core.c src/services/jpeg_core.c
 HOST_TESTS := $(HOST_BUILD)/test_svc_async $(HOST_BUILD)/test_kernel_ipc $(HOST_BUILD)/test_loader $(HOST_BUILD)/test_nvdrv $(HOST_BUILD)/test_fs_savedata $(HOST_BUILD)/test_fs_journal $(HOST_BUILD)/test_ios_dylib
 HOST_FS := src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c tests/host/host_save_dir.c src/services/romfs_map.c
 $(HOST_BUILD)/test_kernel_ipc: tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) $(HOST_HDRS)
@@ -81,9 +83,9 @@ $(HOST_BUILD)/test_svc_async: tests/host/test_svc_async.c src/kernel.c $(HOST_KE
 $(HOST_BUILD)/test_loader: tests/host/test_loader.c src/ro.c $(HOST_KERNEL) $(HOST_LOADER) $(HOST_HDRS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_loader.c $(HOST_KERNEL) $(HOST_LOADER) -o $@
-$(HOST_BUILD)/test_nvdrv: tests/host/test_nvdrv.c src/services/nvdrv.c src/ipc.c $(HOST_KERNEL) $(HOST_HDRS)
+$(HOST_BUILD)/test_nvdrv: tests/host/test_nvdrv.c src/services/nvdrv.c src/ipc.c $(HOST_KERNEL) $(HOST_MEDIA) $(HOST_HDRS)
 	@mkdir -p $(dir $@)
-	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_nvdrv.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_nvdrv.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c $(HOST_MEDIA) -lm -o $@
 $(HOST_BUILD)/test_fs_savedata: tests/host/test_fs_savedata.c src/services/fs.c $(HOST_KERNEL) $(HOST_HDRS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_fs_savedata.c $(HOST_FS) -o $@
@@ -98,6 +100,11 @@ $(HOST_BUILD)/test_kernel_sched: tests/host/test_kernel_sched.c $(HOST_KERNEL) $
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_sched.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
 HOST_TESTS += $(HOST_BUILD)/test_kernel_sched
+# media-services (2026-10-26): the media engines through nvdrv's own ioctl handlers (also runs under tools/linux-check on Linux)
+$(HOST_BUILD)/test_nvdrv_media: tests/test_svc_nvdrv_media.c src/services/nvdrv.c src/ipc.c $(HOST_KERNEL) $(HOST_MEDIA) $(HOST_HDRS) $(wildcard tests/*vectors.h)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) -DNAPPLE_HOST_TEST tests/test_svc_nvdrv_media.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c $(HOST_MEDIA) -lm -o $@
+HOST_TESTS += $(HOST_BUILD)/test_nvdrv_media
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 

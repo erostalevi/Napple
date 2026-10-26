@@ -36,6 +36,26 @@ int main(void) {
     IpcObject *sess = c.out_objects[0];
     svc_call(sess, 0, NULL, 0, &c); CHECK(c.nout_copy == 1 && !event_is_signaled(c.out_copy[0]), "BindStateChangeEvent: unsignalled event");
     svc_call(sess, 2, "\x01", 1, &c); CHECK(c.result == 0, "SetChargerTypeChangeEventEnabled accepted");
+
+    /* state-change events: nothing fires until the session enables a kind, then a toggled emulation / host change signals */
+    g_cfg.op_mode_handheld = 1; psm_ready = 0;
+    svc_call(o, 7, NULL, 0, &c); IpcObject *se = c.out_objects[0];
+    svc_call(se, 0, NULL, 0, &c); uint32_t ev = c.out_copy[0];
+    svc_call(o, 8, NULL, 0, &c); CHECK(!event_is_signaled(ev), "no kind enabled: the emulation toggle does not signal");
+    svc_call(o, 9, NULL, 0, &c);
+    uint8_t on = 1; svc_call(se, 3, &on, 1, &c);
+    svc_call(o, 8, NULL, 0, &c); CHECK(event_is_signaled(ev), "power-supply change signals the bound event");
+    event_clear_handle(ev); svc_call(o, 8, NULL, 0, &c); CHECK(!event_is_signaled(ev), "enabling emulation again changes nothing");
+    uint8_t off = 0; svc_call(se, 3, &off, 1, &c);
+    psm_host_power_changed(1, 100); CHECK(!event_is_signaled(ev), "charger change not enabled on this session");
+    svc_call(se, 2, &on, 1, &c);
+    psm_host_power_changed(0, 100); CHECK(event_is_signaled(ev), "charger removal signals once the charger kind is enabled");
+    event_clear_handle(ev); svc_call(se, 1, NULL, 0, &c); psm_host_power_changed(1, 100); CHECK(!event_is_signaled(ev), "unbound: silent");
+    svc_call(o, 16, NULL, 0, &c); uint32_t info = c.out_copy[0]; CHECK(!event_is_signaled(info), "charge info event starts clear");
+    psm_host_power_changed(1, 4); CHECK(event_is_signaled(info) && state()->percent == 4 && psm_voltage_state(state()->percent) == PSM_VOLTAGE_NEEDS_SLEEP, "voltage change signals the info event");
+    svc_call(o, 6, NULL, 0, &c); CHECK(c.result != 0, "release without acquire");
+    svc_call(o, 5, NULL, 0, &c); svc_call(o, 6, NULL, 0, &c); CHECK(c.result == 0, "acquire then release");
+    svc_call(o, 15, NULL, 0, &c); CHECK(SVC_OUT(&c, double, 0) == 100.0, "battery age 100");
     printf("{\"test\":\"svc_psm\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }
