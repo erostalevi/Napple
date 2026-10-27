@@ -444,6 +444,7 @@ dependencies = [
  "flate2",
  "libc",
  "napple-core",
+ "napple-mods",
  "napple-rewrite",
  "rayon",
  "sha2",

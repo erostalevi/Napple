@@ -37,3 +37,10 @@ uint64_t ns_total_space(const char *path);
 #define NS_APP_RECORD_SIZE 0x18u
 uint64_t ns_parse_title_id(const char *hex); /* 16 hex digits -> id; 0 when malformed */
 void ns_app_record(uint64_t id, uint8_t out[NS_APP_RECORD_SIZE]);
+
+/* control.nacp: the title's NACP (0x4000 bytes) as `napple build` / the mod glue writes it next to the data directory (<data_dir>/control.nacp).
+ * ns_control_path fills `out` (capacity `cap`) and returns 1 when the file exists and is a plausible NACP (1..NS_NACP_SIZE bytes); 0 otherwise.
+ * ns_control_load reads it zero-padded to NS_NACP_SIZE into buf and returns the size (NS_NACP_SIZE) or 0 when absent or invalid. */
+#define NS_NACP_SIZE 0x4000u
+int ns_control_path(const char *data_dir, char *out, unsigned cap);
+unsigned ns_control_load(const char *data_dir, uint8_t buf[NS_NACP_SIZE]);

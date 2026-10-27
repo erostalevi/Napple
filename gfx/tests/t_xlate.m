@@ -621,10 +621,8 @@ int main(void) {
                 const char *name, *why;
                 uint64_t w;
             } rcases[] = {
-                {"VABSDIFF4", "VABSDIFF4", EV(0x5000000000000000ull, 1, 2, 3, 0)},
-                {"TXA", "TXA", EV(0xdf40000000000000ull, 1, 2, 0, 0)},
+                /* VABSDIFF4, TXA and IMADSP are translated since the shader-stages package (tests/t_xlate_stages.inc); OUT outside a geometry shader is still refused */
                 {"IDP", "IDP", EV(0x53f8000000000000ull, 1, 2, 3, 0)},
-                {"IMADSP", "IMADSP", EV(0x5a80000000000000ull, 1, 2, 3, 0)},
                 {"B2R", "control/system", EV(0xf0b8000000000000ull, 1, 2, 0, 0)},
                 {"R2B", "control/system", EV(0xf0c0000000000000ull, 1, 2, 0, 0)},
                 {"BPT", "control/system", EV(0xe3a0000000000000ull, 0, 0, 0, 0)},

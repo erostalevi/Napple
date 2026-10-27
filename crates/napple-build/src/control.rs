@@ -11,6 +11,8 @@ use napple_core::infrastructure::romfs::RomFs;
 
 pub struct Control {
     pub nacp: Option<Nacp>,
+    /// The raw `control.nacp` (0x4000 bytes), written beside the data directory for ns 400/21/23.
+    pub nacp_raw: Option<Vec<u8>>,
     /// JPEG bytes of the best available icon (American English first).
     pub icon: Option<Vec<u8>>,
 }
@@ -55,15 +57,17 @@ pub fn read_control(cont: &Container, pack: &Pack, keys: &KeySet) -> Result<Opti
             }
             Ok(Some(read_vec(&*fs.open(f)?, 0, f.size as usize)?))
         };
-        let nacp = match read("control.nacp", 0x10000)? {
-            Some(b) => parse_nacp(&b).ok(),
-            None => None,
-        };
+        let nacp_raw = read("control.nacp", 0x10000)?;
+        let nacp = nacp_raw.as_deref().and_then(|b| parse_nacp(b).ok());
         let icon = match pick_icon(fs.files.iter().map(|f| f.path.as_str())) {
             Some(p) => read(p, MAX_ICON)?.filter(|b| b.starts_with(&[0xFF, 0xD8])),
             None => None,
         };
-        return Ok(Some(Control { nacp, icon }));
+        return Ok(Some(Control {
+            nacp,
+            nacp_raw,
+            icon,
+        }));
     }
     Ok(None)
 }

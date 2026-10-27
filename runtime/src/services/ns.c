@@ -16,11 +16,6 @@ static void offline_error(IpcObject *s, IpcCall *c) {
     (void)s;
     c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
 }
-static void app_not_found(IpcObject *s, IpcCall *c) {
-    (void)s;
-    c->result = HZ_R_NS_APPLICATION_NOT_FOUND;
-}
-
 /* The host runs exactly one title (g_cfg.title_id): it is the only application record. */
 static uint64_t host_app_id(void) { return ns_parse_title_id(g_cfg.title_id); }
 /* 0 ListApplicationRecord(s32 offset) -> s32 count, records in buffer 0 */
@@ -73,11 +68,27 @@ static void am_code_to_language(IpcObject *s, IpcCall *c) { /* 403(u64) -> u8 */
     uint8_t v = (uint8_t)l;
     IPC_OUT(c, v);
 }
+/* 400 GetApplicationControlData(u8 source, u64 application id) -> u32 actual size, ApplicationControlData in buffer 0 (the NACP, 0x4000 bytes, then the icon: none is
+ * kept next to the data directory, so the reply is the NACP alone). Only the running title is known; its NACP is <data_dir>/control.nacp. Without that file the title
+ * is "not found" and callers fall back to their built-in text. [argument layout unverified] */
+static void am_control_data(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t id = c->in_size >= 16 ? IPC_IN(c, uint64_t, 8) : host_app_id();
+    static uint8_t nacp[NS_NACP_SIZE];
+    if ((id && host_app_id() && id != host_app_id()) || !ns_control_load(g_cfg.data_dir, nacp)) {
+        c->result = HZ_R_NS_APPLICATION_NOT_FOUND;
+        return;
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint32_t n = 0;
+    if (b) n = (uint32_t)ipc_write_buf(c, b, nacp, NS_NACP_SIZE);
+    IPC_OUT(c, n);
+}
 static const IpcCmd am_cmds[] = {
     {0, "ListApplicationRecord", am_list_records, IPC_IMPL},
     {1, "GenerateApplicationRecordCount", am_record_count, IPC_IMPL},
     {2, "GetApplicationRecordUpdateSystemEvent", svc_ret_event, IPC_IMPL} /* the record list never changes: the event never fires */,
-    {400, "GetApplicationControlData", app_not_found, IPC_STUB},
+    {400, "GetApplicationControlData", am_control_data, IPC_IMPL},
     {401, "GetApplicationDesiredLanguage", am_desired_language, IPC_IMPL},
     {402, "ConvertApplicationLanguageToLanguageCode", am_language_to_code, IPC_IMPL},
     {403, "ConvertLanguageCodeToApplicationLanguage", am_code_to_language, IPC_IMPL},
@@ -113,8 +124,7 @@ static const IpcCmd cm_cmds[] = {
 
 /* IApplicationVersionInterface: the host runs the one version it was built from, so no launch version is ever required and no update list exists; auto update
  * and the eShop calls need the network and answer with the offline result. All complete answers (class c). The application record list is the running title.
- * Still stubs (class d): GetApplicationControlData and the content-path queries: they need control.nacp and the content layout, which napple build does
- * not write next to the data directory (follow-up for whoever owns the build layout). */
+ * GetApplicationControlData and the content-path queries read <data_dir>/control.nacp (written at build time by the mod glue); "not found" without it. */
 static const IpcCmd ver_cmds[] = {
     {0, "GetLaunchRequiredVersion", svc_ret_u32_0, IPC_IMPL},
     {1, "UpgradeLaunchRequiredVersion", svc_noop, IPC_IMPL},
@@ -132,7 +142,32 @@ static const IpcCmd ec_cmds[] = {
 };
 /* IDownloadTaskInterface / IDocumentInterface: nothing is downloading */
 static const IpcCmd dl_cmds[] = {{701, "ClearTaskStatusList", svc_noop, IPC_IMPL}, {702, "RequestDownloadTaskList", ret_s32_0, IPC_IMPL}};
-static const IpcCmd doc_cmds[] = {{21, "GetApplicationContentPath", app_not_found, IPC_STUB}, {23, "ResolveApplicationContentPath", app_not_found, IPC_STUB}};
+/* 21 GetApplicationContentPath(u8 content type, u64 application id) -> path in buffer 0; 23 ResolveApplicationContentPath(...) -> none. The host has no content storage: the
+ * one content the running title keeps is its control data (type 2), which is <data_dir>/control.nacp when `napple build` wrote it; everything else is "not found". */
+#define NS_CONTENT_CONTROL 2
+static int doc_resolve(IpcCall *c, char *path, unsigned cap) {
+    uint8_t type = c->in_size >= 1 ? IPC_IN(c, uint8_t, 0) : 0xff;
+    uint64_t id = c->in_size >= 16 ? IPC_IN(c, uint64_t, 8) : 0;
+    if (type != NS_CONTENT_CONTROL || (id && host_app_id() && id != host_app_id()) || !ns_control_path(g_cfg.data_dir, path, cap)) {
+        c->result = HZ_R_NS_APPLICATION_NOT_FOUND;
+        return 0;
+    }
+    return 1;
+}
+static void doc_content_path(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char path[0x300] = {0};
+    if (!doc_resolve(c, path, sizeof path)) return;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b) ipc_write_buf(c, b, path, b->size < sizeof path ? b->size : sizeof path);
+}
+static void doc_resolve_path(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char path[0x300];
+    doc_resolve(c, path, sizeof path);
+}
+static const IpcCmd doc_cmds[] = {{21, "GetApplicationContentPath", doc_content_path, IPC_IMPL},
+                                  {23, "ResolveApplicationContentPath", doc_resolve_path, IPC_IMPL}};
 
 #define SUB(fn, name, table)                                                                                                                                   \
     static void fn(IpcObject *s, IpcCall *c) {                                                                                                                 \

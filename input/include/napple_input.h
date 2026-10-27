@@ -70,18 +70,24 @@ enum {
     NAPPLE_STYLE_JOY_RIGHT = 1u << 4,
     NAPPLE_STYLE_GC = 1u << 5,
     NAPPLE_STYLE_PALMA = 1u << 6,
-    /* Famicom / NES controllers of Nintendo Switch Online (libnx HidNpadStyleTag_Lark*); bit positions from libnx, unverified on a title */
-    NAPPLE_STYLE_LARK_HVC_LEFT = 1u << 7,
-    NAPPLE_STYLE_LARK_HVC_RIGHT = 1u << 8,
-    NAPPLE_STYLE_LARK_NES_LEFT = 1u << 9,
-    NAPPLE_STYLE_LARK_NES_RIGHT = 1u << 10,
-    NAPPLE_STYLE_HANDHELD_LARK_HVC_LEFT = 1u << 11,
-    NAPPLE_STYLE_HANDHELD_LARK_HVC_RIGHT = 1u << 12,
-    NAPPLE_STYLE_HANDHELD_LARK_NES_LEFT = 1u << 13,
-    NAPPLE_STYLE_HANDHELD_LARK_NES_RIGHT = 1u << 14,
-    NAPPLE_STYLE_LUCIA = 1u << 15, /* SNES */
-    NAPPLE_STYLE_LAGON = 1u << 16, /* N64 */
-    NAPPLE_STYLE_LAGER = 1u << 17, /* Mega Drive / Genesis */
+    /* Bit positions of libnx HidNpadStyleTag (switchbrew "HID services" NpadStyleSet; yuzu NpadStyleTag; Ryujinx NpadStyleTag): Lark is the Famicom / NES
+       controller of Nintendo Switch Online, one style bit for all four physical pads (HVC / NES, left / right); which one it is travels in the device type
+       and in NpadLarkType, not in the style bit. Earlier revisions of this header gave HVC / NES left / right a bit each (7..14) and put Lucia, Lagon and
+       Lager at 15..17: that disagreed with every reference and with what a title writes in SetSupportedNpadStyleSet. */
+    NAPPLE_STYLE_LARK = 1u << 7,
+    NAPPLE_STYLE_HANDHELD_LARK = 1u << 8,
+    NAPPLE_STYLE_LUCIA = 1u << 9,  /* SNES */
+    NAPPLE_STYLE_LAGON = 1u << 10, /* N64 */
+    NAPPLE_STYLE_LAGER = 1u << 11, /* Mega Drive / Genesis */
+    /* old names, kept so existing callers still build */
+    NAPPLE_STYLE_LARK_HVC_LEFT = NAPPLE_STYLE_LARK,
+    NAPPLE_STYLE_LARK_HVC_RIGHT = NAPPLE_STYLE_LARK,
+    NAPPLE_STYLE_LARK_NES_LEFT = NAPPLE_STYLE_LARK,
+    NAPPLE_STYLE_LARK_NES_RIGHT = NAPPLE_STYLE_LARK,
+    NAPPLE_STYLE_HANDHELD_LARK_HVC_LEFT = NAPPLE_STYLE_HANDHELD_LARK,
+    NAPPLE_STYLE_HANDHELD_LARK_HVC_RIGHT = NAPPLE_STYLE_HANDHELD_LARK,
+    NAPPLE_STYLE_HANDHELD_LARK_NES_LEFT = NAPPLE_STYLE_HANDHELD_LARK,
+    NAPPLE_STYLE_HANDHELD_LARK_NES_RIGHT = NAPPLE_STYLE_HANDHELD_LARK,
     NAPPLE_STYLE_SYSTEM_EXT = 1u << 29,
     NAPPLE_STYLE_SYSTEM = 1u << 30
 };
@@ -160,6 +166,11 @@ void napple_hid_set_npad_style(uint8_t *shm, const napple_hid_layout *l, int slo
 void napple_hid_set_npad_colors(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t body, uint32_t buttons);
 /* Push one state into the lifo of `style` (exactly one NAPPLE_STYLE_* bit). Increments the sampling number. */
 void napple_hid_push_npad(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t style, const napple_npad_state *s);
+/* GameCube analog triggers (NpadGcTriggerState {u64 sampling, u32 left, u32 right}, 0..0x7fff, in the GC trigger lifo at layout.npad_gc_trigger; 0 = absent). Also writes
+   the NpadLarkType words that follow the lifo when `style` is Lark. Layout offsets are recalled from switchbrew / yuzu: unverified. */
+void napple_hid_push_gc_trigger(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t left, uint32_t right);
+enum { NAPPLE_LARK_INVALID = 0, NAPPLE_LARK_H1 = 1, NAPPLE_LARK_H2 = 2, NAPPLE_LARK_NL = 3, NAPPLE_LARK_NR = 4 }; /* NpadLarkType */
+void napple_hid_set_lark_type(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t left_and_main, uint32_t right);
 void napple_hid_push_sixaxis(uint8_t *shm, const napple_hid_layout *l, int slot, int sixaxis_index, const napple_sixaxis_state *s);
 void napple_hid_set_npad_device(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t device_type, uint64_t system_properties, uint32_t battery_level);
 void napple_hid_push_touch(uint8_t *shm, const napple_hid_layout *l, const napple_touch_point *pts, uint32_t count);

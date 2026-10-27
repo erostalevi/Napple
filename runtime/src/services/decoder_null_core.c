@@ -7,7 +7,7 @@
 
 typedef struct {
     int codec, width, height; /* last known size (inter frames reuse it) */
-    unsigned frames;
+    unsigned frames, configures;
 } NullCtx;
 
 static void *null_open(int codec) {
@@ -65,8 +65,20 @@ static int null_decode(void *ctx, const DecodeRequest *r, DecodeResult *out) {
     out->full_range = 0;
     return 0;
 }
-const DecoderBackend decoder_backend_null = {"null", null_open, null_close, null_decode, null_reset};
+/* Takes the size from the parameter sets the engine found, so a stream whose slices come without an SPS (the sets arrived earlier) still sizes the picture. */
+static int null_configure(void *ctx, const DecoderConfig *cfg) {
+    NullCtx *c = ctx;
+    if (cfg->codec != c->codec) return -1;
+    if (cfg->width > 0 && cfg->height > 0) c->width = cfg->width, c->height = cfg->height;
+    c->configures++;
+    return 0;
+}
+const DecoderBackend decoder_backend_null = {"null", null_open, null_close, null_decode, null_reset, null_configure, DECODER_BACKEND_ABI};
 
 static const DecoderBackend *installed;
 const DecoderBackend *decoder_backend_current(void) { return installed ? installed : &decoder_backend_null; }
-void decoder_backend_install(const DecoderBackend *b) { installed = b; }
+int decoder_backend_install(const DecoderBackend *b) {
+    if (b && (b->abi != DECODER_BACKEND_ABI || !b->open || !b->close || !b->decode)) return -1;
+    installed = b;
+    return 0;
+}

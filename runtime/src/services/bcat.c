@@ -76,10 +76,7 @@ static void dir_read(IpcObject *s, IpcCall *c) { /* out array of {char name[0x20
         while (d->cursor < d->n && (uint64_t)(got + 1) * BCAT_ENTRY_SIZE <= b->size) {
             const BcatFile *f = &d->files[d->cursor++];
             uint8_t *ent = ents + (size_t)got * BCAT_ENTRY_SIZE;
-            memset(ent, 0, BCAT_ENTRY_SIZE);
-            memcpy(ent, f->name, BCAT_NAME_SIZE);
-            memcpy(ent + 0x20, &f->size, 8);
-            memcpy(ent + 0x28, f->digest, 16);
+            bcat_pack_entry(f, ent);
             got++;
         }
         if (got) ipc_write_buf(c, b, ents, (uint64_t)got * BCAT_ENTRY_SIZE);

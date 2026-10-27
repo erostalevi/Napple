@@ -1,16 +1,13 @@
 /* acc:u0: one offline local user. */
 #include "../ipc.h"
 #include "host_info.h"
+#include "online_provider.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 const uint8_t g_user_id[16] = {0x4e, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x55, 0x73, 0x65, 0x72, 0, 0, 0, 0, 0, 1};
 
-static void noop(IpcObject *s, IpcCall *c) {
-    (void)s;
-    (void)c;
-}
 static void profile_get_base(IpcObject *s, IpcCall *c) {
     (void)s;
     uint8_t base[0x38] = {0};
@@ -79,29 +76,44 @@ static const IpcCmd profile_cmds[] = {
     {10, "GetImageSize", profile_get_image_size, IPC_IMPL},
     {11, "LoadImage", profile_load_image, IPC_IMPL},
 };
+/* The network account of the local user, from the active provider (ONLINE_CAP_ACCOUNT). The NullProvider has none: the user is not linked, which titles
+ * tolerate as "nothing cached" and offline play. Returns 1 and fills *out when the provider reports a linked account. */
+static int account_linked(OnlineAccountInfo *out) {
+    const OnlineProvider *p = online_provider();
+    int (*info)(void *, const uint8_t[16], OnlineAccountInfo *) = online_has(p, ONLINE_CAP_ACCOUNT) ? ONLINE_FN(p, account_info) : NULL;
+    memset(out, 0, sizeof *out);
+    return info && info(p->ctx, g_user_id, out) == 0 && out->linked;
+}
+/* 0 CheckAvailability: the local user is always usable; whether a network account sits behind it is the provider's business and is not an error either way. */
 static void manager_check(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
 }
+/* 1 GetAccountId -> u64: the provider's id for a linked account, else the fixed local id. */
 static void manager_account_id(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint64_t v = 0x4e61707070304e53ULL;
+    OnlineAccountInfo ai;
+    uint64_t v = account_linked(&ai) ? ai.id : 0x4e61707070304e53ULL;
     IPC_OUT(c, v);
 }
-/* GetNintendoAccountUserResourceCacheForApplication: the local user is not linked to a Nintendo Account: id 0 and an all-zero cache (no result error: titles tolerate "nothing cached"). */
+/* GetNintendoAccountUserResourceCacheForApplication: -> u64 id and the 0x68-byte cache buffer, both the provider's opaque values when the user is linked; else id 0
+ * and an all-zero cache (no result error: titles tolerate "nothing cached"). */
 static void manager_na_cache(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint64_t v = 0;
+    OnlineAccountInfo ai;
+    int linked = account_linked(&ai);
+    uint64_t v = linked ? ai.id : 0;
     IPC_OUT(c, v);
     const IpcBuf *b = ipc_out_buf(c, 0);
     if (b) {
-        uint8_t z[0x68] = {0};
+        uint8_t z[ONLINE_ACCOUNT_CACHE_SIZE] = {0};
+        if (linked) memcpy(z, ai.resource_cache, sizeof z);
         ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
     }
 }
-static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IPC_STUB},
-                                      {1, "GetAccountId", manager_account_id, IPC_STUB},
-                                      {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_STUB}};
+static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IPC_IMPL},
+                                      {1, "GetAccountId", manager_account_id, IPC_IMPL},
+                                      {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_IMPL}};
 
 static void acc_user_count(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -141,10 +153,20 @@ static void acc_bool_true(IpcObject *s, IpcCall *c) {
     uint8_t v = 1;
     IPC_OUT(c, v);
 }
+/* InitializeApplicationInfo{V0,,V2}: the SDK calls one of them before it asks for the account manager; remembered per connection (the title's own pid is the only
+ * application there is, so the info itself carries nothing to keep). The manager is handed out either way: a title that skipped it still gets its answers. */
+typedef struct {
+    uint8_t app_info_initialized;
+} AccSession;
+static void acc_initialize(IpcObject *s, IpcCall *c) {
+    (void)c;
+    if (s->state) ((AccSession *)s->state)->app_info_initialized = 1;
+}
 static void acc_baas_manager(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("IManagerForApplication", manager_cmds, NULL, NULL));
 }
+static void acc_destroy(IpcObject *o) { free(o->state); }
 static const IpcCmd acc_cmds[] = {
     {0, "GetUserCount", acc_user_count, IPC_IMPL},
     {1, "GetUserExistence", acc_user_exists, IPC_IMPL},
@@ -152,16 +174,16 @@ static const IpcCmd acc_cmds[] = {
     {3, "ListOpenUsers", acc_list_users, IPC_IMPL},
     {4, "GetLastOpenedUser", acc_last_opened, IPC_IMPL},
     {5, "GetProfile", acc_get_profile, IPC_IMPL},
-    {50, "IsUserRegistrationRequestPermitted", acc_bool_false, IPC_STUB},
+    {50, "IsUserRegistrationRequestPermitted", acc_bool_false, IPC_IMPL}, /* no registration flow exists: the one local user cannot be added to */
     {51, "TrySelectUserWithoutInteraction", acc_last_opened, IPC_IMPL},
-    {100, "InitializeApplicationInfoV0", noop, IPC_STUB},
+    {100, "InitializeApplicationInfoV0", acc_initialize, IPC_IMPL},
     {101, "GetBaasAccountManagerForApplication", acc_baas_manager, IPC_IMPL},
-    {140, "InitializeApplicationInfo", noop, IPC_STUB},
+    {140, "InitializeApplicationInfo", acc_initialize, IPC_IMPL},
     {141, "ListQualifiedUsers", acc_list_users, IPC_IMPL},
-    {150, "IsUserAccountSwitchLocked", acc_bool_false, IPC_STUB},
-    {160, "InitializeApplicationInfoV2", noop, IPC_STUB},
+    {150, "IsUserAccountSwitchLocked", acc_bool_false, IPC_IMPL},
+    {160, "InitializeApplicationInfoV2", acc_initialize, IPC_IMPL},
 };
-static IpcObject *acc_open(void) { return IPC_OBJECT("acc:u0", acc_cmds, NULL, NULL); }
+static IpcObject *acc_open(void) { return IPC_OBJECT("acc:u0", acc_cmds, calloc(1, sizeof(AccSession)), acc_destroy); }
 void service_register_account(void) {
     ipc_register_service("acc:u0", acc_open);
     ipc_register_service("acc:u1", acc_open);

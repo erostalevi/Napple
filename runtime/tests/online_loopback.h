@@ -22,6 +22,12 @@ typedef struct {
     int connected, reports, presence_updates;
     uint32_t net_connects, net_releases;
     char last_host[64];
+    /* ldn: one hosted network that a station in the same process can scan and join; acc: one linked account */
+    int ldn_hosting, ldn_joined, ldn_adv_updates;
+    OnlineLdnNetwork ldn_net;
+    uint16_t ldn_reason;
+    uint32_t ldn_rejected_ip;
+    int account_linked;
 } Lb;
 static Lb lb;
 
@@ -134,9 +140,44 @@ static uint32_t lb_net_connect(void *c) { (void)c; lb.net_connects++; return 0; 
 static void lb_net_release(void *c) { (void)c; lb.net_releases++; }
 static int lb_nsd(void *c, const char *in, char *out, size_t n) { (void)c; snprintf(out, n, "mapped.%s", in); return 0; }
 
+static int lb_ldn_scan(void *c, uint64_t lcid, OnlineLdnNetwork *o, uint32_t max) {
+    (void)c;
+    if (!max) return 0;
+    if (!lb.ldn_hosting || (lcid && lb.ldn_net.local_communication_id != lcid)) return 0;
+    o[0] = lb.ldn_net; return 1;
+}
+static uint32_t lb_ldn_create(void *c, const OnlineLdnNetwork *cfg) {
+    (void)c;
+    if (lb.ldn_hosting) return HZ_RESULT(HZ_MOD_LDN, 32);
+    lb.ldn_net = *cfg; lb.ldn_hosting = 1; lb.ldn_net.node_count = 1; lb.ldn_net.ipv4 = 0xc0a80001;
+    snprintf(lb.ldn_net.ssid, sizeof lb.ldn_net.ssid, "loopback-ldn"); memset(lb.ldn_net.bssid, 0xaa, 6);
+    lb.ldn_net.security_param[0] = 0x5a; lb.ldn_net.channel = lb.ldn_net.channel ? lb.ldn_net.channel : 6; return 0;
+}
+static void lb_ldn_destroy(void *c) { (void)c; lb.ldn_hosting = 0; lb.ldn_reason = 3; }
+static uint32_t lb_ldn_connect(void *c, const OnlineLdnNetwork *n) {
+    (void)c;
+    if (!lb.ldn_hosting || strcmp(n->ssid, lb.ldn_net.ssid) || n->local_communication_id != lb.ldn_net.local_communication_id) return HZ_R_LDN_NETWORK_NOT_AVAILABLE;
+    lb.ldn_joined = 1; lb.ldn_net.node_count = 2; return 0;
+}
+static void lb_ldn_disconnect(void *c) { (void)c; lb.ldn_joined = 0; lb.ldn_reason = 7; }
+static uint32_t lb_ldn_get(void *c, OnlineLdnNetwork *o, uint16_t *reason) {
+    (void)c; *reason = lb.ldn_reason;
+    if (!lb.ldn_hosting) return HZ_R_LDN_NETWORK_NOT_AVAILABLE;
+    *o = lb.ldn_net; return 0;
+}
+static uint32_t lb_ldn_adv(void *c, const void *d, uint32_t n) {
+    (void)c; if (n > ONLINE_LDN_ADVERTISE_MAX) return HZ_RESULT(HZ_MOD_LDN, 2);
+    memcpy(lb.ldn_net.advertise, d, n); lb.ldn_net.advertise_len = (uint16_t)n; lb.ldn_adv_updates++; return 0;
+}
+static uint32_t lb_ldn_reject(void *c, uint32_t ip) { (void)c; if (ip != 0xc0a80002) return HZ_RESULT(HZ_MOD_LDN, 24); lb.ldn_rejected_ip = ip; lb.ldn_joined = 0; return 0; }
+static int lb_account(void *c, const uint8_t u[16], OnlineAccountInfo *o) {
+    (void)c; (void)u; if (!lb.account_linked) return 1;
+    memset(o, 0, sizeof *o); o->linked = 1; o->id = 0x1234abcd5678ef90ull; memset(o->resource_cache, 0x77, sizeof o->resource_cache); return 0;
+}
+
 static const OnlineProvider lb_provider = {
     .abi_version = ONLINE_ABI_VERSION, .struct_size = sizeof(OnlineProvider), .name = "loopback (test)",
-    .caps = ONLINE_CAP_NETWORK | ONLINE_CAP_SOCKETS | ONLINE_CAP_DNS | ONLINE_CAP_TLS | ONLINE_CAP_FRIENDS | ONLINE_CAP_REPORTS | ONLINE_CAP_NSD,
+    .caps = ONLINE_CAP_NETWORK | ONLINE_CAP_SOCKETS | ONLINE_CAP_DNS | ONLINE_CAP_TLS | ONLINE_CAP_FRIENDS | ONLINE_CAP_REPORTS | ONLINE_CAP_NSD | ONLINE_CAP_LDN | ONLINE_CAP_ACCOUNT,
     .net_info = lb_net_info, .net_connect = lb_net_connect, .net_release = lb_net_release,
     .sock_open = lb_open, .sock_close = lb_close, .sock_bind = lb_bind, .sock_listen = lb_listen, .sock_accept = lb_accept, .sock_connect = lb_connect,
     .sock_send = lb_send, .sock_recv = lb_recv, .sock_shutdown = lb_shutdown, .sock_getsockname = lb_getsockname, .sock_getpeername = lb_getpeername,
@@ -144,4 +185,6 @@ static const OnlineProvider lb_provider = {
     .dns_resolve = lb_dns, .dns_reverse = lb_reverse,
     .tls_new = lb_tls_new, .tls_free = lb_tls_free, .tls_set_host = lb_tls_host, .tls_handshake = lb_tls_hs, .tls_read = lb_tls_read, .tls_write = lb_tls_write, .tls_pending = lb_tls_pending,
     .friend_count = lb_fcount, .friend_list = lb_flist, .presence_update = lb_presence, .report = lb_report, .nsd_resolve = lb_nsd,
+    .ldn_scan = lb_ldn_scan, .ldn_create = lb_ldn_create, .ldn_destroy = lb_ldn_destroy, .ldn_connect = lb_ldn_connect, .ldn_disconnect = lb_ldn_disconnect,
+    .ldn_get_network = lb_ldn_get, .ldn_set_advertise = lb_ldn_adv, .ldn_reject = lb_ldn_reject, .account_info = lb_account,
 };

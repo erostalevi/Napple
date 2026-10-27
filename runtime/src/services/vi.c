@@ -5,6 +5,7 @@
 #include "../gfx.h"
 #include "../timescale.h"
 #include "napple_display.h"
+#include "vi_core.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <string.h>
@@ -14,6 +15,15 @@ static uint32_t vsync_events[8];
 static unsigned nvsync;
 static pthread_mutex_t vlock = PTHREAD_MUTEX_INITIALIZER;
 static int vthread_started;
+static ViState vi;
+static pthread_once_t vi_once = PTHREAD_ONCE_INIT;
+static void vi_once_init(void) { vi_init(&vi); }
+/* one lock for the layer table and binder counts (vi_core is not thread-safe by itself) */
+static pthread_mutex_t vi_lock = PTHREAD_MUTEX_INITIALIZER;
+static ViState *vi_state(void) {
+    pthread_once(&vi_once, vi_once_init);
+    return &vi;
+}
 
 /* The display's vsync as the guest sees it. Deadlines are absolute (next += period), so scheduler latency never accumulates: a sleep-per-tick loop
  * would run a 60 Hz game at ~59.5 Hz and slow its logic by the same fraction. After a long stall (suspend, debugger) the clock resynchronises
@@ -86,6 +96,10 @@ static void ds_open_layer(IpcObject *s, IpcCall *c) {
     uint64_t binder = 1;
     memcpy(parcel + 0x18, &binder, 8);
     memcpy(parcel + 0x28, "dispdrv", 8);
+    pthread_mutex_lock(&vi_lock);
+    if (c->in_size >= 0x48) vi_layer(vi_state(), IPC_IN(c, uint64_t, 0x40)); /* OpenLayer(char name[0x40], u64 layer, u64 aruid) */
+    vi_binder_adjust(vi_state(), 1, 1, 1);
+    pthread_mutex_unlock(&vi_lock);
     const IpcBuf *b = ipc_out_buf(c, 0);
     uint64_t size = sizeof parcel;
     LOG("vi", "OpenLayer: out buffer %#llx bytes, input bytes %u", b ? (unsigned long long)b->size : 0ull, c->in_size);
@@ -93,9 +107,34 @@ static void ds_open_layer(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, size);
 }
 static void ds_create_stray_layer(IpcObject *s, IpcCall *c) {
-    uint64_t id = 2;
+    pthread_mutex_lock(&vi_lock);
+    ViLayer *l = vi_layer_create(vi_state(), 0);
+    uint64_t id = l ? l->id : 2;
+    pthread_mutex_unlock(&vi_lock);
     IPC_OUT(c, id);
     ds_open_layer(s, c);
+}
+/* Layer and display state (vi_core.c). Layer ids a title names without creating (the display's own layer 1) register on first use. */
+static uint64_t in_u64(const IpcCall *c, uint32_t off) { return c->in_size >= off + 8 ? IPC_IN(c, uint64_t, off) : 0; }
+static void ds_set_display_enabled(IpcObject *s, IpcCall *c) { /* 1101 SetDisplayEnabled(u8 enable, u64 display) */
+    (void)s;
+    uint8_t on = c->in_size >= 1 ? IPC_IN(c, uint8_t, 0) : 1;
+    pthread_mutex_lock(&vi_lock);
+    vi_state()->display_enabled = on != 0;
+    pthread_mutex_unlock(&vi_lock);
+}
+static void ds_set_scaling(IpcObject *s, IpcCall *c) { /* 2101 SetLayerScalingMode(u32 mode, u64 layer) */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    uint32_t r = vi_set_scaling(vi_state(), in_u64(c, 8), c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0);
+    pthread_mutex_unlock(&vi_lock);
+    if (r) c->result = r;
+}
+static void ds_close_layer(IpcObject *s, IpcCall *c) { /* 2021 CloseLayer(u64 layer) */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    vi_layer_destroy(vi_state(), in_u64(c, 0)); /* closing a layer that was never opened is harmless */
+    pthread_mutex_unlock(&vi_lock);
 }
 static void ds_vsync_event(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -141,9 +180,14 @@ static void binder_transact(IpcObject *s, IpcCall *c) {
     }
     ipc_write_buf(c, out, parcel, 0x10 + size);
 }
+/* 1 AdjustRefcount(s32 binder id, s32 addend, s32 type: 0 weak, 1 strong): counted per binder (vi_core.c), never below zero. */
 static void binder_adjust(IpcObject *s, IpcCall *c) {
     (void)s;
-    (void)c;
+    int32_t id = c->in_size >= 4 ? IPC_IN(c, int32_t, 0) : 0, add = c->in_size >= 8 ? IPC_IN(c, int32_t, 4) : 0,
+            type = c->in_size >= 12 ? IPC_IN(c, int32_t, 8) : 1;
+    pthread_mutex_lock(&vi_lock);
+    vi_binder_adjust(vi_state(), id, add, type);
+    pthread_mutex_unlock(&vi_lock);
 }
 static void binder_native_handle(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -151,38 +195,130 @@ static void binder_native_handle(IpcObject *s, IpcCall *c) {
     event_create(&r);
     ipc_out_copy_handle(c, r);
 }
+/* TransactParcel / TransactParcelAuto stay stubs on purpose: the graphics back end overrides nvnBootstrapLoader and never produces buffers through this producer, so
+ * the replies are well-formed dummies (class d, no title-visible behaviour to model). */
 static const IpcCmd binder_cmds[] = {{0, "TransactParcel", binder_transact, IPC_STUB},
-                                     {1, "AdjustRefcount", binder_adjust, IPC_STUB},
-                                     {2, "GetNativeHandle", binder_native_handle, IPC_STUB},
+                                     {1, "AdjustRefcount", binder_adjust, IPC_IMPL},
+                                     {2, "GetNativeHandle", binder_native_handle, IPC_IMPL},
                                      {3, "TransactParcelAuto", binder_transact, IPC_STUB}};
 static void ds_get_relay(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("IHOSBinderDriver", binder_cmds, NULL, NULL));
 }
-/* ISystemDisplayService / IManagerDisplayService: firmware applets (MiiEdit) open them to place their layer; catch-all stubs until a command matters. */
+/* ISystemDisplayService / IManagerDisplayService: firmware applets (MiiEdit) open them to place their layer. The placement calls keep what they are given in the layer
+ * table (vi_core.c); the host window composes the one game layer itself, so none of it moves pixels. Command ids and argument layouts are the author's memory
+ * of the public description (unverified). */
+static ViLayer *layer_at(IpcCall *c, uint32_t off) { return vi_layer(vi_state(), in_u64(c, off)); }
+static void sd_set_position(IpcObject *s, IpcCall *c) { /* 2201 SetLayerPosition(f32 x, f32 y, u64 layer) */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    ViLayer *l = layer_at(c, 8);
+    if (l && c->in_size >= 8) memcpy(&l->x, c->in, 4), memcpy(&l->y, c->in + 4, 4);
+    pthread_mutex_unlock(&vi_lock);
+}
+static void sd_set_size(IpcObject *s, IpcCall *c) { /* 2203 SetLayerSize(u64 layer, u64 width, u64 height) */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    ViLayer *l = layer_at(c, 0);
+    if (l) l->w = in_u64(c, 8), l->h = in_u64(c, 16);
+    pthread_mutex_unlock(&vi_lock);
+}
+static void sd_get_z(IpcObject *s, IpcCall *c) { /* 2204 GetLayerZ(u64 layer) -> s64 */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    ViLayer *l = layer_at(c, 0);
+    int64_t z = l ? l->z : 0;
+    pthread_mutex_unlock(&vi_lock);
+    IPC_OUT(c, z);
+}
+static void sd_set_z(IpcObject *s, IpcCall *c) { /* 2205 SetLayerZ(u64 layer, s64 z) */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    ViLayer *l = layer_at(c, 0);
+    if (l) l->z = (int64_t)in_u64(c, 8);
+    pthread_mutex_unlock(&vi_lock);
+}
+static void sd_set_visible(IpcObject *s, IpcCall *c) { /* 2207 SetLayerVisibility(u8 visible, u64 layer) */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    ViLayer *l = layer_at(c, 8);
+    if (l && c->in_size >= 1) l->visible = IPC_IN(c, uint8_t, 0) != 0;
+    pthread_mutex_unlock(&vi_lock);
+}
+static void sd_z_min(IpcObject *s, IpcCall *c) { /* 1200 GetZOrderCountMin(u64 display) -> s64 */
+    (void)s;
+    int64_t v = 0;
+    IPC_OUT(c, v);
+}
+static void sd_z_max(IpcObject *s, IpcCall *c) { /* 1202 GetZOrderCountMax(u64 display) -> s64: the application layer plus the system overlays */
+    (void)s;
+    int64_t v = 255;
+    IPC_OUT(c, v);
+}
+static const IpcCmd system_display_cmds[] = {
+    {1200, "GetZOrderCountMin", sd_z_min, IPC_IMPL},
+    {1202, "GetZOrderCountMax", sd_z_max, IPC_IMPL},
+    {2201, "SetLayerPosition", sd_set_position, IPC_IMPL},
+    {2203, "SetLayerSize", sd_set_size, IPC_IMPL},
+    {2204, "GetLayerZ", sd_get_z, IPC_IMPL},
+    {2205, "SetLayerZ", sd_set_z, IPC_IMPL},
+    {2207, "SetLayerVisibility", sd_set_visible, IPC_IMPL},
+};
+static void md_create_layer(IpcObject *s, IpcCall *c) { /* 2010 CreateManagedLayer(u32 flags, u64 display, u64 aruid) -> u64 layer */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    ViLayer *l = vi_layer_create(vi_state(), 1);
+    uint64_t id = l ? l->id : 0;
+    pthread_mutex_unlock(&vi_lock);
+    if (!l) {
+        c->result = VI_R_NOT_FOUND;
+        return;
+    }
+    IPC_OUT(c, id);
+}
+static void md_destroy_layer(IpcObject *s, IpcCall *c) { /* 2011 DestroyManagedLayer(u64 layer) */
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    int r = vi_layer_destroy(vi_state(), in_u64(c, 0));
+    pthread_mutex_unlock(&vi_lock);
+    if (r) c->result = VI_R_NOT_FOUND;
+}
+static void md_stack(IpcObject *s, IpcCall *c) { /* 6000 AddToLayerStack / 6001 RemoveFromLayerStack (u32 stack, u64 layer) */
+    pthread_mutex_lock(&vi_lock);
+    ViLayer *l = layer_at(c, 8);
+    if (l && c->in_size >= 4) l->stack = c->cmd == 6000 ? (uint8_t)(IPC_IN(c, uint32_t, 0) + 1) : 0;
+    pthread_mutex_unlock(&vi_lock);
+    (void)s;
+}
+static const IpcCmd manager_display_cmds[] = {
+    {2010, "CreateManagedLayer", md_create_layer, IPC_IMPL},
+    {2011, "DestroyManagedLayer", md_destroy_layer, IPC_IMPL},
+    {6000, "AddToLayerStack", md_stack, IPC_IMPL},
+    {6001, "RemoveFromLayerStack", md_stack, IPC_IMPL},
+};
 static void ds_get_system(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, ipc_object_new("ISystemDisplayService", NULL, 0, NULL, NULL));
+    ipc_out_object(c, IPC_OBJECT("ISystemDisplayService", system_display_cmds, NULL, NULL));
 }
 static void ds_get_manager(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, ipc_object_new("IManagerDisplayService", NULL, 0, NULL, NULL));
+    ipc_out_object(c, IPC_OBJECT("IManagerDisplayService", manager_display_cmds, NULL, NULL));
 }
 static const IpcCmd display_cmds[] = {
     {100, "GetRelayService", ds_get_relay, IPC_IMPL},
-    {101, "GetSystemDisplayService", ds_get_system, IPC_STUB},
-    {102, "GetManagerDisplayService", ds_get_manager, IPC_STUB},
+    {101, "GetSystemDisplayService", ds_get_system, IPC_IMPL},
+    {102, "GetManagerDisplayService", ds_get_manager, IPC_IMPL},
     {1000, "ListDisplays", ds_list_displays, IPC_IMPL},
     {1010, "OpenDisplay", ds_open_display, IPC_IMPL},
     {1011, "OpenDefaultDisplay", ds_open_display, IPC_IMPL},
     {1020, "CloseDisplay", noop, IPC_IMPL},
-    {1101, "SetDisplayEnabled", noop, IPC_STUB},
+    {1101, "SetDisplayEnabled", ds_set_display_enabled, IPC_IMPL},
     {1102, "GetDisplayResolution", ds_get_resolution, IPC_IMPL},
     {2020, "OpenLayer", ds_open_layer, IPC_IMPL},
-    {2021, "CloseLayer", noop, IPC_IMPL},
+    {2021, "CloseLayer", ds_close_layer, IPC_IMPL},
     {2030, "CreateStrayLayer", ds_create_stray_layer, IPC_IMPL},
     {2031, "DestroyStrayLayer", noop, IPC_IMPL},
-    {2101, "SetLayerScalingMode", noop, IPC_STUB},
+    {2101, "SetLayerScalingMode", ds_set_scaling, IPC_IMPL},
     {5202, "GetDisplayVsyncEvent", ds_vsync_event, IPC_IMPL},
 };
 static void vi_get_display_service(IpcObject *s, IpcCall *c) {

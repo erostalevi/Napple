@@ -546,8 +546,63 @@ static void t_performance_history(void) {
     CHECK(pb >= 2 * fsz, "the frame left behind comes out with the next update (%u)", pb);
     napple_audren_close(g.r);
 }
+/* Detail entries: the update's performance section names a target node; a voice target adds data source / volume ramp / mix details after the entries.
+ * Node ids come from the title (voice_pcm sets node_id = id; the test gives them a type in bits 28..31 like the SDK does). */
+static void t_performance_detail(int rev, uint32_t header_size) {
+    AudrenParameter p = param_default();
+    Rig g;
+    rig_open(&g, p);
+    Update u;
+    scene_init(&u, rev, &p);
+    u.voices[0] = voice_pcm(0, FMT_PCM16, g_pcm, sizeof g_pcm, 240);
+    u.voices[0].node_id = 0x10000000u | 7u; /* NodeIdType voice, index 7 */
+    uint8_t perf[0x20 + 16 * 16 + 8 * 0x10];
+    size_t w = 0, n = build_update(&u, g.in);
+    AudrenHeader h;
+    memcpy(&h, g.in, sizeof h);
+    int32_t target = (int32_t)0x10000007;
+    memcpy(g.in + n - h.render_info - h.performance, &target, 4);
+    memset(perf, 0, sizeof perf);
+    CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf) == 0, "REV%d: update with a detail target", rev);
+    uint32_t hdr[8];
+    memcpy(hdr, perf, sizeof hdr);
+    const uint32_t *f = header_size == 0x20 ? hdr + 1 : hdr; /* entry_count, detail_count, next_offset, total_time */
+    CHECK(f[1] == 3 && f[2] == header_size + (f[0] + f[1]) * 0x10, "REV%d: three details, next offset covers entries and details (%u %u %u)", rev, f[0], f[1], f[2]);
+    uint32_t e[4];
+    memcpy(e, perf + header_size, sizeof e);
+    CHECK(e[0] == 0x10000007u && e[3] == 1, "REV%d: the voice entry carries the title's node id", rev);
+    uint32_t d[3][4], ts = e[1];
+    for (int i = 0; i < 3; i++) memcpy(d[i], perf + header_size + (f[0] + (uint32_t)i) * 0x10, 0x10);
+    CHECK(d[0][0] == 0x10000007u && (d[0][3] & 0xff) == 1 && ((d[0][3] >> 8) & 0xff) == 1, "REV%d: PcmInt16 data source detail, parent voice", rev);
+    CHECK((d[1][3] & 0xff) == 3 && (d[2][3] & 0xff) == 5, "REV%d: volume ramp, then mix", rev);
+    CHECK(d[0][1] == ts && d[1][1] == ts + d[0][2] && d[2][1] == d[1][1] + d[1][2] && d[0][2] > 0, "REV%d: details are contiguous from the entry start", rev);
+    /* no target: no details; a target that names nothing: none either */
+    n = build_update(&u, g.in);
+    napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf);
+    memcpy(hdr, perf, sizeof hdr);
+    f = header_size == 0x20 ? hdr + 1 : hdr;
+    CHECK(f[1] == 0, "REV%d: target 0 produces no details", rev);
+    target = 0x10000063;
+    memcpy(g.in + n - h.render_info - h.performance, &target, 4);
+    napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf);
+    memcpy(hdr, perf, sizeof hdr);
+    f = header_size == 0x20 ? hdr + 1 : hdr;
+    CHECK(f[1] == 0, "REV%d: a target that names no started node produces no details", rev);
+    /* a buffer with room for the entries only: details are dropped, not truncated mid-entry */
+    target = 0x10000007;
+    memcpy(g.in + n - h.render_info - h.performance, &target, 4);
+    uint8_t small[0x20 + 4 * 0x10 + 0x10];
+    memset(small, 0, sizeof small);
+    napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, small, sizeof small);
+    memcpy(hdr, small, sizeof hdr);
+    f = header_size == 0x20 ? hdr + 1 : hdr;
+    CHECK(f[1] < 3 && f[0] + f[1] <= (sizeof small - header_size) / 0x10 && f[2] == header_size + (f[0] + f[1]) * 0x10 && f[2] <= sizeof small, "REV%d: details share the buffer with the entries and are capped (%u %u %u)", rev, f[0], f[1], f[2]);
+    napple_audren_close(g.r);
+}
 static void t_performance(void) {
     t_performance_history();
+    t_performance_detail(11, 0x20);
+    t_performance_detail(3, 0x10);
     perf_check(11, 0x20);
     perf_check(3, 0x10);
     perf_check(5, 0x20);

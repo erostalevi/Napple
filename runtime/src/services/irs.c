@@ -128,6 +128,7 @@ static void run_processor(IpcCall *c, IrMode mode, size_t cfg_size, int with_tme
         IrMomentConfig m;
         IrClusteringConfig k;
         IrTransferConfig t;
+        IrDpdConfig d;
     } cfg;
     memset(&cfg, 0, sizeof cfg);
     int have = cfg_size && c->in_size >= 16 + cfg_size;
@@ -164,9 +165,17 @@ static void irs_run_transfer(IpcObject *s, IpcCall *c) {
     (void)s;
     run_processor(c, IR_MODE_TRANSFER, sizeof(IrTransferConfig), 1);
 }
-/* Processors the simulator does not compute (tera plugin, pointing / DPD, IR LED): accepted while a source exists, producing nothing. */
+/* Processors the simulator does not compute (IR LED): accepted while a source exists, producing nothing. */
 /* RunImageTransferExProcessor: the same transfer as the plain processor (IrTransferConfig already carries the origin and trimming formats the Ex form adds). */
 static void irs_run_transfer_ex(IpcObject *s, IpcCall *c) { irs_run_transfer(s, c); }
+static void irs_run_tera(IpcObject *s, IpcCall *c) {
+    (void)s;
+    run_processor(c, IR_MODE_TERA, sizeof(IrTeraConfig), 0);
+}
+static void irs_run_dpd(IpcObject *s, IpcCall *c) {
+    (void)s;
+    run_processor(c, IR_MODE_DPD, sizeof(IrDpdConfig), 0);
+}
 static void irs_run_other(IpcObject *s, IpcCall *c) {
     (void)s;
     run_processor(c, IR_MODE_OTHER, 0, 0);
@@ -221,9 +230,9 @@ static const IpcCmd irs_cmds[] = {
     {307, "RunClusteringProcessor", irs_run_clustering, IPC_IMPL},
     {308, "RunImageTransferProcessor", irs_run_transfer, IPC_IMPL},
     {309, "GetImageTransferProcessorState", irs_get_transfer_state, IPC_IMPL},
-    {310, "RunTeraPluginProcessor", irs_run_other, IPC_STUB},
+    {310, "RunTeraPluginProcessor", irs_run_tera, IPC_IMPL},
     {311, "GetNpadIrCameraHandle", irs_get_camera_handle, IPC_IMPL},
-    {312, "RunDpdProcessor", irs_run_other, IPC_STUB},
+    {312, "RunDpdProcessor", irs_run_dpd, IPC_IMPL},
     {313, "SuspendImageProcessor", irs_stop, IPC_IMPL},
     {314, "CheckFirmwareVersion", irs_check_firmware, IPC_IMPL},
     {315, "SetFunctionLevel", irs_set_level, IPC_IMPL},

@@ -1,4 +1,5 @@
 #include "ns_core.h"
+#include <stdio.h>
 #include <string.h>
 #include <sys/statvfs.h>
 
@@ -79,4 +80,25 @@ void ns_app_record(uint64_t id, uint8_t out[NS_APP_RECORD_SIZE]) {
     memset(out, 0, NS_APP_RECORD_SIZE);
     memcpy(out, &id, 8);
     out[8] = 3;
+}
+
+int ns_control_path(const char *data_dir, char *out, unsigned cap) {
+    if (!data_dir || !*data_dir || !out || !cap) return 0;
+    if (snprintf(out, cap, "%s/control.nacp", data_dir) >= (int)cap) return 0;
+    FILE *f = fopen(out, "rb");
+    if (!f) return 0;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fclose(f);
+    return n > 0 && n <= (long)NS_NACP_SIZE;
+}
+unsigned ns_control_load(const char *data_dir, uint8_t buf[NS_NACP_SIZE]) {
+    char path[1400];
+    if (!ns_control_path(data_dir, path, sizeof path)) return 0;
+    FILE *f = fopen(path, "rb");
+    if (!f) return 0;
+    memset(buf, 0, NS_NACP_SIZE);
+    size_t n = fread(buf, 1, NS_NACP_SIZE, f);
+    fclose(f);
+    return n ? NS_NACP_SIZE : 0;
 }

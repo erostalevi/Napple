@@ -61,9 +61,10 @@ static int h264_type(void) {
 }
 enum { TYPE_VP9 = 3, TYPE_VORBIS = 5, MODE_BUFFER = 1, MODE_TEXTURE = 2, FORMAT_NV12 = 4, FORMAT_PCM = 1, FLAG_EOS = 4 };
 /* Vorbis audio (type 5, PCM output, buffer mode) through movie_audio_core (stb_vorbis): raw packets in, interleaved s16 PCM out, one output slot per
- * packet that yields samples. Off unless NAPPLE_MOVIE_VORBIS=1 until the Mac check passes on the titles that play movie audio (media-services
- * 2026-10-26: written on Linux, never run with the SDK library); NAPPLE_MOVIE_VORBIS=0 forces it off once the default flips. */
-#define MOVIE_VORBIS_DEFAULT 0
+ * packet that yields samples. The three header packets come out of band (the format metadata's csd-0..2, read in Configure) or as the first inputs.
+ * On by default since media-nvdrv 2026-10-27 (the synthetic SDK-style container with out-of-band headers decodes in test_svc_movie_audio); the Mac check
+ * on the titles that play movie audio is still open. NAPPLE_MOVIE_VORBIS=0 forces it off. */
+#define MOVIE_VORBIS_DEFAULT 1
 enum { AUDIO_OUT_CAP = 131072 }; /* bytes per PCM output slot: 8192 frames of 8 channels at 16 bits, the most one packet can yield */
 static int vorbis_on(void) {
     static int v = -1;
@@ -214,7 +215,23 @@ static void guest_init(void) {
     pthread_mutex_unlock(&g_lock);
 }
 
-static unsigned g_tc[32]; static const char *const g_tcn[32] = {"h_start","h_stop","h_reset","h_flush","h_acquire_input","h_get_input","h_send_input","h_acquire_output","h_get_output","h_release_output","h_get_last_error","h_get_output_size","h_get_output_buffer_format","h_register_events","h_get_output_format","h_configure"};
+static unsigned g_tc[32];
+static const char *const g_tcn[32] = {"h_start",
+                                      "h_stop",
+                                      "h_reset",
+                                      "h_flush",
+                                      "h_acquire_input",
+                                      "h_get_input",
+                                      "h_send_input",
+                                      "h_acquire_output",
+                                      "h_get_output",
+                                      "h_release_output",
+                                      "h_get_last_error",
+                                      "h_get_output_size",
+                                      "h_get_output_buffer_format",
+                                      "h_register_events",
+                                      "h_get_output_format",
+                                      "h_configure"};
 #define TC(i) __atomic_fetch_add(&g_tc[i], 1, __ATOMIC_RELAXED)
 static Movie *find(const void *guest) {
     if (!g_ready) guest_init();
@@ -314,18 +331,21 @@ static void tc_report(void) {
     if (!getenv("NAPPLE_MOVIE_TC") || n - last < 2000000000ull) return;
     last = n;
     char b[600] = "";
-    for (int i = 0; i < 16; i++) if (g_tc[i]) snprintf(b + strlen(b), sizeof b - strlen(b), " %s=%u", g_tcn[i], g_tc[i]);
+    for (int i = 0; i < 16; i++)
+        if (g_tc[i]) snprintf(b + strlen(b), sizeof b - strlen(b), " %s=%u", g_tcn[i], g_tc[i]);
     MLOG("calls:%s", b);
     for (int i = 0; i < MAX_MOVIES; i++)
         if (g_movies[i]) {
             Movie *m = g_movies[i];
             int held = 0;
             for (int k = 0; k < OUT_BUFS; k++) held += m->out_held[k];
-            MLOG("movie %d: frames %llu errors %llu decoded %d ready %d held %d pending %d in_free %d eos_in %d started %d t0 %llu", i, (unsigned long long)m->frames,
-                 (unsigned long long)m->errors, m->ndecoded, m->nready, held, m->npending, m->nin_free, m->eos_in, m->started, (unsigned long long)m->t0);
+            MLOG("movie %d: frames %llu errors %llu decoded %d ready %d held %d pending %d in_free %d eos_in %d started %d t0 %llu", i,
+                 (unsigned long long)m->frames, (unsigned long long)m->errors, m->ndecoded, m->nready, held, m->npending, m->nin_free, m->eos_in, m->started,
+                 (unsigned long long)m->t0);
         }
 }
-void movie_host_tick(void) { tc_report(); /* lock order g_lock -> Movie.mu, as in destroy; events fire after both are released */
+void movie_host_tick(void) {
+    tc_report(); /* lock order g_lock -> Movie.mu, as in destroy; events fire after both are released */
     Signals s = {0};
     pthread_mutex_lock(&g_lock);
     for (int i = 0; i < MAX_MOVIES; i++) {
@@ -584,6 +604,22 @@ static void h_d0(void *obj) {
 }
 
 typedef int (*md_fn)(void *, void *);
+/* A codec-specific-data buffer of the configure format (csd-0, csd-1, ...): 1 and the bytes (owned by the format) when the key holds a non-empty one. */
+static int find_csd(const void *format, const char *key, const uint8_t **data, size_t *size) {
+    static int (*find_buffer)(const void *, const char *, void **);
+    static void *(*buf_data)(const void *);
+    static size_t (*buf_size)(const void *);
+    if (!find_buffer) {
+        find_buffer = module_find_symbol("_ZNK5movie9MediaData10FindBufferEPKcPPNS_6BufferE");
+        buf_data = module_find_symbol("_ZNK5movie6Buffer4DataEv");
+        buf_size = module_find_symbol("_ZNK5movie6Buffer4SizeEv");
+    }
+    void *b = NULL;
+    if (!find_buffer || !buf_data || !buf_size || !find_buffer(format, key, &b) || !b || !buf_data(b) || !buf_size(b)) return 0;
+    *data = buf_data(b);
+    *size = buf_size(b);
+    return 1;
+}
 static int h_configure(void *obj, void *format) {
     TC(15);
     Movie *m = find(obj);
@@ -627,8 +663,32 @@ static int h_configure(void *obj, void *format) {
         m->ach = chans;
         m->configured = 1;
         m->last_error = 0;
+        /* Out-of-band headers: the library's Vorbis inputs carry audio packets only, the three header packets sit in the format as csd-0..2 (a Xiph bundle
+         * or single packets). The decoder is ready after this call when they are all there; the format event goes out with the first packet. */
+        {
+            const uint8_t *blobs[3] = {NULL, NULL, NULL};
+            size_t sizes[3] = {0, 0, 0};
+            int have = 0;
+            for (int c = 0; c < 3; c++) {
+                char key[8];
+                snprintf(key, sizeof key, "csd-%d", c);
+                have += find_csd(format, key, &blobs[c], &sizes[c]);
+            }
+            if (have) {
+                int rc = vorbispcm_set_headers_csd(m->vp, blobs, sizes);
+                MLOG("Vorbis headers out of band (%d csd blobs): %s", have,
+                     rc == AUDIO_OK          ? "complete"
+                     : rc == AUDIO_NEED_MORE ? "incomplete so far"
+                                             : "malformed");
+                if (rc == AUDIO_OK) {
+                    m->arate = vorbispcm_rate(m->vp);
+                    m->ach = vorbispcm_channels(m->vp);
+                }
+            }
+        }
         pthread_mutex_unlock(&m->mu);
-        MLOG("configured Vorbis audio (%d Hz, %d channels announced; the header packets give the real values)", rate, chans);
+        MLOG("configured Vorbis audio (%d Hz, %d channels announced%s)", rate, chans,
+             vorbispcm_ready(m->vp) ? "; headers read" : "; the header packets give the real values");
         return ST_OK;
     }
     if (m->mode == MODE_BUFFER && m->format != FORMAT_NV12) {
@@ -657,9 +717,13 @@ static int h_configure(void *obj, void *format) {
         {
             int (*contains)(const void *, const char *) = module_find_symbol("_ZNK5movie9MediaData8ContainsEPKc");
             int (*count)(const void *) = module_find_symbol("_ZNK5movie9MediaData12CountEntriesEv");
-            static const char *const K[] = {"csd-0", "csd-1", "csd", "avcC", "header", "headers", "extradata", "sps", "pps", "profile", "level", "mime", "width", "height", "frame-rate", "max-input-size", "bitrate", "color-format", "stride", "slice-height", "crop"};
-            MLOG("format entries %d (symbols: contains %p count %p find_buffer %p)", count ? count(format) : -1, (void *)contains, (void *)count, (void *)find_buffer);
-            for (unsigned k = 0; contains && k < sizeof K / sizeof *K; k++) if (contains(format, K[k])) MLOG("format has %s", K[k]);
+            static const char *const K[] = {"csd-0",   "csd-1",        "csd",    "avcC",         "header", "headers", "extradata",  "sps",
+                                            "pps",     "profile",      "level",  "mime",         "width",  "height",  "frame-rate", "max-input-size",
+                                            "bitrate", "color-format", "stride", "slice-height", "crop"};
+            MLOG("format entries %d (symbols: contains %p count %p find_buffer %p)", count ? count(format) : -1, (void *)contains, (void *)count,
+                 (void *)find_buffer);
+            for (unsigned k = 0; contains && k < sizeof K / sizeof *K; k++)
+                if (contains(format, K[k])) MLOG("format has %s", K[k]);
         }
         for (int c = 0; find_buffer && buf_data && buf_size && c < 2; c++) {
             void *b = NULL;
@@ -838,7 +902,8 @@ static int h_send_input(void *obj, int index, int offset, int size, int64_t time
         static int said;
         if (said < 12 && getenv("NAPPLE_MOVIE_TC")) {
             said++;
-            MLOG("send_input index %d offset %d size %d time %lld flags %#x eos_in %d npending %d", index, offset, size, (long long)time, flags, m->eos_in, m->npending);
+            MLOG("send_input index %d offset %d size %d time %lld flags %#x eos_in %d npending %d", index, offset, size, (long long)time, flags, m->eos_in,
+                 m->npending);
         }
     }
     if (m->eos_in) {

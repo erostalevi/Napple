@@ -25,6 +25,22 @@ void bcat_make_progress(uint32_t status, uint32_t result, uint8_t out[BCAT_PROGR
     memcpy(out + 4, &result, 4);
 }
 
+void bcat_make_progress_full(const BcatProgress *p, uint8_t out[BCAT_PROGRESS_SIZE]) {
+    bcat_make_progress(p->status, p->result, out);
+    if (p->directory) strncpy((char *)out + BCAT_PROGRESS_DIR, p->directory, BCAT_NAME_SIZE - 1);
+    if (p->file) strncpy((char *)out + BCAT_PROGRESS_FILE, p->file, BCAT_NAME_SIZE - 1);
+    memcpy(out + BCAT_PROGRESS_CUR_DONE, &p->current_downloaded, 8);
+    memcpy(out + 0x50, &p->current_total, 8);
+    memcpy(out + 0x58, &p->total_downloaded, 8);
+    memcpy(out + 0x60, &p->total_total, 8);
+}
+void bcat_pack_entry(const BcatFile *f, uint8_t out[BCAT_ENTRY_SIZE]) {
+    memset(out, 0, BCAT_ENTRY_SIZE);
+    memcpy(out, f->name, BCAT_NAME_SIZE);
+    memcpy(out + 0x20, &f->size, 8);
+    memcpy(out + 0x28, f->digest, 16);
+}
+
 /* ---- MD5 (RFC 1321): the digest of a cached file ---- */
 static uint32_t rol(uint32_t x, int s) { return (x << s) | (x >> (32 - s)); }
 static void md5_block(uint32_t st[4], const uint8_t b[64]) {

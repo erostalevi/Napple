@@ -22,7 +22,8 @@ int applet_storage_peek(const IpcObject *o, const uint8_t **data, uint64_t *size
 extern void applet_push_message(uint32_t message);
 extern void applet_push_message(uint32_t message);
 static pthread_mutex_t ae_lock = PTHREAD_MUTEX_INITIALIZER;
-static unsigned in_next, out_count;
+static unsigned in_next, out_count, iin_next, iout_count;
+static uint32_t terminate_result; /* IAppletCommonFunctions::SetTerminateResult: what ExitProcessAndReturn reports to the caller */
 
 static const char *dir_env(const char *name) { const char *d = getenv(name); return d && *d ? d : NULL; }
 static uint8_t *read_file(const char *path, uint64_t *size) {
@@ -34,6 +35,11 @@ static uint8_t *read_file(const char *path, uint64_t *size) {
 static unsigned in_count(void) {
     const char *d = dir_env("NAPPLE_APPLET_IN"); unsigned n = 0; char p[1300];
     while (d) { snprintf(p, sizeof p, "%s/in%u.bin", d, n); struct stat st; if (stat(p, &st)) break; n++; }
+    return n;
+}
+static unsigned iin_count(void) {
+    const char *d = dir_env("NAPPLE_APPLET_IN"); unsigned n = 0; char p[1300];
+    while (d) { snprintf(p, sizeof p, "%s/iin%u.bin", d, n); struct stat st; if (stat(p, &st)) break; n++; }
     return n;
 }
 static uint32_t plain_ev(int signaled) { uint32_t r = 0, w = event_create(&r); if (signaled) event_signal_handle(w); return r; }
@@ -74,13 +80,33 @@ static void sa_push_out(IpcObject *s, IpcCall *c) {
     mkdir(d, 0755); snprintf(p, sizeof p, "%s/out%u.bin", d, i);
     FILE *f = fopen(p, "wb"); if (f) { fwrite(data, 1, (size_t)n, f); fclose(f); } else LOG("applet-ae", "cannot write %s", p);
 }
-static void sa_no_data(IpcObject *s, IpcCall *c) { (void)s; c->result = 0x680; }
+/* The interactive channel: the caller's PushInteractiveInData storages are iin<N>.bin, the applet's PushInteractiveOutData ones become iout<N>.bin. */
+static void sa_pop_interactive_in(IpcObject *s, IpcCall *c) {
+    (void)s; const char *d = dir_env("NAPPLE_APPLET_IN"); char p[1300]; uint64_t n = 0;
+    pthread_mutex_lock(&ae_lock); unsigned i = iin_next; pthread_mutex_unlock(&ae_lock);
+    snprintf(p, sizeof p, "%s/iin%u.bin", d ? d : ".", i);
+    uint8_t *b = d ? read_file(p, &n) : NULL;
+    if (!b) { c->result = 0x680; return; }
+    pthread_mutex_lock(&ae_lock); iin_next = i + 1; pthread_mutex_unlock(&ae_lock);
+    LOG("applet-ae", "PopInteractiveInData: storage %u, %llu bytes", i, (unsigned long long)n);
+    ipc_out_object(c, applet_storage_make(b, n)); free(b);
+}
+static void sa_push_interactive_out(IpcObject *s, IpcCall *c) {
+    (void)s; const uint8_t *data; uint64_t n;
+    if (!c->nin_objects || !applet_storage_peek(c->in_objects[0], &data, &n)) { c->result = 0x1480; return; }
+    const char *d = dir_env("NAPPLE_APPLET_OUT"); char p[1300];
+    pthread_mutex_lock(&ae_lock); unsigned i = iout_count++; pthread_mutex_unlock(&ae_lock);
+    LOG("applet-ae", "PushInteractiveOutData: storage %u, %llu bytes", i, (unsigned long long)n);
+    if (!d) return;
+    mkdir(d, 0755); snprintf(p, sizeof p, "%s/iout%u.bin", d, i);
+    FILE *f = fopen(p, "wb"); if (f) { fwrite(data, 1, (size_t)n, f); fclose(f); } else LOG("applet-ae", "cannot write %s", p);
+}
 static void sa_pop_in_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_ev(in_next < in_count())); }
-static void sa_pop_inter_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_ev(0)); }
+static void sa_pop_inter_event(IpcObject *s, IpcCall *c) { (void)s; ipc_out_copy_handle(c, plain_ev(iin_next < iin_count())); }
 static void sa_exit_and_return(IpcObject *s, IpcCall *c) {
     (void)s; (void)c; LOG("applet-ae", "ExitProcessAndReturn: the applet is done (%u output storage(s))", out_count);
     const char *d = dir_env("NAPPLE_APPLET_OUT");
-    if (d) { char p[1300]; mkdir(d, 0755); snprintf(p, sizeof p, "%s/result.txt", d); FILE *f = fopen(p, "w"); if (f) { fprintf(f, "0\n"); fclose(f); } }
+    if (d) { char p[1300]; mkdir(d, 0755); snprintf(p, sizeof p, "%s/result.txt", d); FILE *f = fopen(p, "w"); if (f) { fprintf(f, "%u\n", terminate_result); fclose(f); } }
     summary_note("applet exited with %u output storage(s)", out_count);
     GUEST_EXIT(0); /* the system ends the applet's process when it returns (here: the child process, or this image's guest in library mode) */
 }
@@ -92,21 +118,37 @@ static void sa_can_use_app_core(IpcObject *s, IpcCall *c) { (void)s; uint8_t v =
 static void sa_caller_identity(IpcObject *s, IpcCall *c) { (void)s; uint8_t v[0x18] = {0}; uint64_t app = strtoull(getenv("NAPPLE_APPLET_CALLER") ? getenv("NAPPLE_APPLET_CALLER") : "0", NULL, 16); memcpy(v, &app, 8); ipc_out(c, v, sizeof v); }
 static void sa_storage_id(IpcObject *s, IpcCall *c) { (void)s; uint32_t v = 4; IPC_OUT(c, v); }   /* NCM storage id: NAND user */
 static const IpcCmd sa_cmds[] = {
-    {0, "PopInData", sa_pop_in, IPC_IMPL}, {1, "PushOutData", sa_push_out, IPC_IMPL}, {2, "PopInteractiveInData", sa_no_data, IPC_STUB},
-    {3, "PushInteractiveOutData", sa_push_out, IPC_STUB}, {5, "GetPopInDataEvent", sa_pop_in_event, IPC_IMPL}, {6, "GetPopInteractiveInDataEvent", sa_pop_inter_event, IPC_STUB},
-    {10, "ExitProcessAndReturn", sa_exit_and_return, IPC_IMPL}, {11, "GetLibraryAppletInfo", sa_info, IPC_IMPL}, {12, "GetMainAppletIdentityInfo", sa_caller_identity, IPC_STUB},
-    {13, "CanUseApplicationCore", sa_can_use_app_core, IPC_STUB}, {14, "GetCallerAppletIdentityInfo", sa_caller_identity, IPC_STUB},
-    {16, "GetMainAppletStorageId", sa_storage_id, IPC_STUB},
+    {0, "PopInData", sa_pop_in, IPC_IMPL}, {1, "PushOutData", sa_push_out, IPC_IMPL}, {2, "PopInteractiveInData", sa_pop_interactive_in, IPC_IMPL},
+    {3, "PushInteractiveOutData", sa_push_interactive_out, IPC_IMPL}, {5, "GetPopInDataEvent", sa_pop_in_event, IPC_IMPL}, {6, "GetPopInteractiveInDataEvent", sa_pop_inter_event, IPC_IMPL},
+    {10, "ExitProcessAndReturn", sa_exit_and_return, IPC_IMPL}, {11, "GetLibraryAppletInfo", sa_info, IPC_IMPL}, {12, "GetMainAppletIdentityInfo", sa_caller_identity, IPC_IMPL},
+    {13, "CanUseApplicationCore", sa_can_use_app_core, IPC_IMPL}, {14, "GetCallerAppletIdentityInfo", sa_caller_identity, IPC_IMPL},
+    {16, "GetMainAppletStorageId", sa_storage_id, IPC_IMPL},
 };
 
 /* ---- IProcessWindingController (library applet launch reason) ---------------------------------------------------------------------------- */
 static void pw_launch_reason(IpcObject *s, IpcCall *c) { (void)s; uint8_t v[4] = {0}; ipc_out(c, v, 4); }
-static const IpcCmd pw_cmds[] = {{0, "GetLaunchReason", pw_launch_reason, IPC_STUB}};
+static const IpcCmd pw_cmds[] = {{0, "GetLaunchReason", pw_launch_reason, IPC_IMPL}};
 
 /* ---- IAppletCommonFunctions ---------------------------------------------------------------------------------------------------------------- */
 static void acf_noop(IpcObject *s, IpcCall *c) { (void)s; (void)c; }
 static void acf_no_data(IpcObject *s, IpcCall *c) { (void)s; c->result = 0x680; }
-static const IpcCmd acf_cmds[] = {{0, "SetTerminateResult", acf_noop, IPC_STUB}, {10, "ReadThemeStorage", acf_no_data, IPC_STUB}, {11, "WriteThemeStorage", acf_noop, IPC_STUB}, {21, "TryPopFromAppletBoundChannel", acf_no_data, IPC_STUB}};
+static void acf_set_terminate_result(IpcObject *s, IpcCall *c) {
+    (void)s; if (c->in_size >= 4) { terminate_result = IPC_IN(c, uint32_t, 0); LOG("applet-ae", "SetTerminateResult %#x", terminate_result); }
+}
+/* The applet theme storage (the home menu's persisted theme blob): kept in memory for the life of the process. */
+static uint8_t theme_blob[0x1000]; static size_t theme_len;
+static void acf_read_theme(IpcObject *s, IpcCall *c) {
+    (void)s; const IpcBuf *b = ipc_out_buf(c, 0);
+    if (!theme_len || !b) { c->result = 0x680; return; }
+    size_t n = b->size < theme_len ? b->size : theme_len; ipc_write_buf(c, b, theme_blob, n);
+}
+static void acf_write_theme(IpcObject *s, IpcCall *c) {
+    (void)s; const IpcBuf *b = ipc_in_buf(c, 0); const uint8_t *p = b ? ipc_buf_ptr(b) : NULL;
+    if (!p) { c->result = 0x1d80; return; }
+    theme_len = b->size < sizeof theme_blob ? b->size : sizeof theme_blob; memcpy(theme_blob, p, theme_len);
+}
+/* TryPopFromAppletBoundChannel: no channel data is ever queued for the applet, so the queue reads empty (applet module 128 desc 3). */
+static const IpcCmd acf_cmds[] = {{0, "SetTerminateResult", acf_set_terminate_result, IPC_IMPL}, {10, "ReadThemeStorage", acf_read_theme, IPC_IMPL}, {11, "WriteThemeStorage", acf_write_theme, IPC_IMPL}, {21, "TryPopFromAppletBoundChannel", acf_no_data, IPC_IMPL}};
 
 /* ---- ILibraryAppletProxy ------------------------------------------------------------------------------------------------------------------- */
 #define SHARED(fn, key) static void fn(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, applet_shared_object(key)); }
@@ -114,6 +156,7 @@ SHARED(lp_common, "common") SHARED(lp_self, "self") SHARED(lp_window, "window") 
 static void lp_winding(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("IProcessWindingController", pw_cmds, NULL, NULL)); }
 static void lp_self_accessor(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("ILibraryAppletSelfAccessor", sa_cmds, NULL, NULL)); }
 static void lp_common_functions(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("IAppletCommonFunctions", acf_cmds, NULL, NULL)); }
+/* Kept stub: there is no home menu to notify. */
 static const IpcCmd lp_debug_cmds[] = {{0, "NotifyMessageToHomeMenuForDebug", acf_noop, IPC_STUB}};
 static void lp_debug(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("IDebugFunctions", lp_debug_cmds, NULL, NULL)); }
 static const IpcCmd lp_cmds[] = {
@@ -169,8 +212,9 @@ static void hid_sys_policy(IpcObject *s, IpcCall *c) {
     (void)c;
     hid_apply_system_common_policy();
 }
-static const IpcCmd hid_sys_cmds[] = {{303, "ApplyNpadSystemCommonPolicy", hid_sys_policy, IPC_IMPL}, {306, "ApplyNpadSystemCommonPolicyFull", hid_sys_policy, IPC_STUB}};
+static const IpcCmd hid_sys_cmds[] = {{303, "ApplyNpadSystemCommonPolicy", hid_sys_policy, IPC_IMPL}, {306, "ApplyNpadSystemCommonPolicyFull", hid_sys_policy, IPC_IMPL}};
 static IpcObject *hid_sys_open(void) { return IPC_OBJECT("hid:sys", hid_sys_cmds, NULL, NULL); }
+/* Kept stubs below (miiimg root, nfc:sys/nfp:sys root): catch-all objects until a firmware applet calls into them; the Mii image database and the system NFC interface belong to the Mii and NFC areas. */
 /* miiimg: the Mii image service; GetDatabaseService-like root (cmd 0) returns a catch-all object until its commands are known. */
 __attribute__((unused)) static void miiimg_root_get(IpcObject *s, IpcCall *c) {
     (void)s;

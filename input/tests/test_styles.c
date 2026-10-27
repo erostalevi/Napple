@@ -39,18 +39,23 @@ int main(void) {
     napple_input_focus(in, 1);
 
     const uint32_t standard = NAPPLE_STYLE_FULL_KEY | NAPPLE_STYLE_JOY_DUAL | NAPPLE_STYLE_HANDHELD;
-    const uint32_t nes = NAPPLE_STYLE_LARK_NES_LEFT | NAPPLE_STYLE_LARK_NES_RIGHT;
+    const uint32_t nes = NAPPLE_STYLE_LARK;
+    /* bit positions: libnx HidNpadStyleTag / switchbrew NpadStyleSet / yuzu and Ryujinx NpadStyleTag */
+    CHECK(NAPPLE_STYLE_FULL_KEY == 1u << 0 && NAPPLE_STYLE_HANDHELD == 1u << 1 && NAPPLE_STYLE_JOY_DUAL == 1u << 2 && NAPPLE_STYLE_JOY_LEFT == 1u << 3 &&
+              NAPPLE_STYLE_JOY_RIGHT == 1u << 4 && NAPPLE_STYLE_GC == 1u << 5 && NAPPLE_STYLE_PALMA == 1u << 6 && NAPPLE_STYLE_LARK == 1u << 7 &&
+              NAPPLE_STYLE_HANDHELD_LARK == 1u << 8 && NAPPLE_STYLE_LUCIA == 1u << 9 && NAPPLE_STYLE_LAGON == 1u << 10 && NAPPLE_STYLE_LAGER == 1u << 11 &&
+              NAPPLE_STYLE_SYSTEM_EXT == 1u << 29 && NAPPLE_STYLE_SYSTEM == 1u << 30,
+          "style tag bit positions match libnx");
     CHECK(style_with(in, standard | NAPPLE_STYLE_GC | NAPPLE_STYLE_PALMA | nes, 0) == NAPPLE_STYLE_FULL_KEY, "auto still prefers the Pro Controller");
     CHECK(style_with(in, standard | NAPPLE_STYLE_GC, NAPPLE_STYLE_PREF_GC) == NAPPLE_STYLE_GC, "GameCube preference wins when supported");
     CHECK(style_with(in, standard, NAPPLE_STYLE_PREF_GC) == NAPPLE_STYLE_FULL_KEY, "GameCube preference ignored when the title does not support it");
     CHECK(style_with(in, standard | NAPPLE_STYLE_PALMA, NAPPLE_STYLE_PREF_PALMA) == NAPPLE_STYLE_PALMA, "Palma preference");
-    CHECK(style_with(in, standard | nes, NAPPLE_STYLE_PREF_NES) == NAPPLE_STYLE_LARK_NES_LEFT, "NES preference picks the first supported Lark style");
-    CHECK(style_with(in, NAPPLE_STYLE_LARK_NES_RIGHT | NAPPLE_STYLE_LARK_HVC_RIGHT, NAPPLE_STYLE_PREF_NES) == NAPPLE_STYLE_LARK_HVC_RIGHT,
-          "lowest supported Lark bit");
+    CHECK(style_with(in, standard | nes, NAPPLE_STYLE_PREF_NES) == NAPPLE_STYLE_LARK, "NES preference picks the Lark style");
+    CHECK(style_with(in, NAPPLE_STYLE_LAGON | NAPPLE_STYLE_LUCIA, 0) == NAPPLE_STYLE_LUCIA, "retro styles: lowest supported bit (SNES before N64)");
     /* titles that support only the new styles */
     CHECK(style_with(in, NAPPLE_STYLE_GC, 0) == NAPPLE_STYLE_GC, "GameCube-only title");
     CHECK(style_with(in, NAPPLE_STYLE_PALMA, 0) == NAPPLE_STYLE_PALMA, "Palma-only title");
-    CHECK(style_with(in, nes, 0) == NAPPLE_STYLE_LARK_NES_LEFT, "NES-only title");
+    CHECK(style_with(in, nes, 0) == NAPPLE_STYLE_LARK, "NES-only title");
     CHECK(style_with(in, NAPPLE_STYLE_GC | NAPPLE_STYLE_PALMA, 0) == NAPPLE_STYLE_GC, "GameCube before Palma");
 
     /* GameCube reports through the FullKey lifo with the wired attribute, style bit set in the npad header */
@@ -64,10 +69,26 @@ int main(void) {
     style_with(in, NAPPLE_STYLE_PALMA, 0);
     e = napple_hid_lifo_latest(shm, l.npad_base + l.npad_lifo[5], 0x28);
     CHECK(e && (r64(e + 8) & NAPPLE_BTN_MASK(NAPPLE_BTN_A)), "Palma state in the Palma lifo");
-    /* NES left: left-connected attribute */
-    style_with(in, NAPPLE_STYLE_LARK_NES_LEFT, 0);
+    /* NES: left-connected attribute, NpadLarkType NL after the GC trigger lifo */
+    style_with(in, NAPPLE_STYLE_LARK, 0);
     e = napple_hid_lifo_latest(shm, l.npad_base + l.npad_lifo[0], 0x28);
     CHECK(e && r32(e + 0x20) == (NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_LEFT_CONNECTED), "NES left pad: connected + left attribute");
+    CHECK(r32(shm + l.npad_base) == NAPPLE_STYLE_LARK && r32(shm + l.npad_base + l.npad_gc_trigger + napple_hid_lifo_bytes(0x10)) == NAPPLE_LARK_NL &&
+              r32(shm + l.npad_base + l.npad_gc_trigger + napple_hid_lifo_bytes(0x10) + 4) == NAPPLE_LARK_INVALID,
+          "Lark style bit in the header, NpadLarkType NL / invalid after the GC trigger lifo");
+    /* GC trigger lifo: layout, entry size, clamping, digital ZL / ZR as a full press */
+    CHECK(l.npad_gc_trigger == 0x4C20 && napple_hid_lifo_bytes(0x10) == 0x1B8 && l.npad_gc_trigger + 0x1B8 + 8 <= l.npad_stride, "GC trigger lifo at 0x4C20, 0x1B8 bytes, inside the entry");
+    napple_hid_layout compat;
+    napple_hid_layout_for(NAPPLE_HID_LAYOUT_COMPAT, &compat);
+    CHECK(compat.npad_gc_trigger == 0, "older layout has no GC trigger lifo");
+    napple_input_key(in, 37, 0);
+    style_with(in, NAPPLE_STYLE_GC, 0);
+    e = napple_hid_lifo_latest(shm, l.npad_base + l.npad_gc_trigger, 0x10);
+    CHECK(e && r32(e + 8) == 0 && r32(e + 12) == 0, "GC triggers idle at 0");
+    napple_hid_push_gc_trigger(shm, &l, 0, 0x1234, 0xffff);
+    e = napple_hid_lifo_latest(shm, l.npad_base + l.npad_gc_trigger, 0x10);
+    CHECK(e && r32(e + 8) == 0x1234 && r32(e + 12) == 0x7fff, "GC trigger values stored, clamped to 0x7fff");
+    napple_input_key(in, 37, 1);
     napple_input_key(in, 37, 0);
 
     /* binding JSON round trip and validation */

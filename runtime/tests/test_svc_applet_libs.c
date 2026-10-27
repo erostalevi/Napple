@@ -34,6 +34,16 @@ static uint32_t run(IpcObject *la, uint8_t *out, uint64_t *n) {
     return r;
 }
 
+static int h_calls;
+static int h_echo(LibAppletCall *call) {
+    h_calls++;
+    if (call->mode == 9) return 0; /* falls through to the built-in answer */
+    uint8_t o[4] = {0xAB, (uint8_t)call->nin, call->nin ? call->in[0].data[0] : 0, 0};
+    libapplet_call_set_out(call, o, sizeof o);
+    return 1;
+}
+static int h_fail(LibAppletCall *call) { call->unsupported = 1; call->result = 0x1234; return 1; }
+
 int main(void) {
     IpcObject *oe = oe_open(); IpcCall c;
     svc_call(oe, 0, NULL, 0, &c); IpcObject *proxy = c.out_objects[0];
@@ -101,6 +111,21 @@ int main(void) {
     setenv("NAPPLE_PLAYER_SELECT", "cancel", 1);
     CHECK(run(la, out, &n) == 0 && n == APPLET_PLAYER_SELECT_OUT_SIZE && *(uint64_t *)out == APPLET_PLAYER_SELECT_CANCELLED && !*(uint64_t *)(out + 8), "player select applet: NAPPLE_PLAYER_SELECT=cancel");
     unsetenv("NAPPLE_PLAYER_SELECT");
+
+    /* registered handlers answer before the built-in applets */
+    CHECK(libapplet_find_handler(0x13) == NULL, "no handler registered at start");
+    CHECK(libapplet_register_handler(0x13, h_echo) == 0 && libapplet_find_handler(0x13) == h_echo, "register a handler");
+    la = create_applet(lac, 0x13); { uint8_t d[8] = {5}; push(la, d, 8); }
+    CHECK(run(la, out, &n) == 0 && n == 4 && out[0] == 0xAB && out[1] == 1 && out[2] == 5 && h_calls == 1, "handler answers a library applet id and its output is popped");
+    CHECK(libapplet_register_handler(LIBAPPLET_ID_PLAYER_SELECT, h_fail) == 0, "register over a built-in id");
+    la = create_applet(lac, LIBAPPLET_ID_PLAYER_SELECT);
+    CHECK(run(la, out, &n) == 0x1234 && n == 0, "handler overrides a built-in applet and may report a failure result");
+    libapplet_register_handler(LIBAPPLET_ID_PLAYER_SELECT, NULL);
+    la = create_applet(lac, LIBAPPLET_ID_PLAYER_SELECT); push(la, common, 0x20); push(la, selarg, 0xa0);
+    CHECK(run(la, out, &n) == 0 && n == APPLET_PLAYER_SELECT_OUT_SIZE, "removing the handler restores the built-in answer");
+    libapplet_clear_handlers();
+    CHECK(libapplet_find_handler(0x13) == NULL, "clear_handlers");
+    { LibAppletCall cc; memset(&cc, 0, sizeof cc); CHECK(libapplet_dispatch(&cc) == 0, "dispatch without a handler"); }
 
     la = create_applet(lac, 0x13);  /* web: still not implemented */
     CHECK(run(la, out, &n) == 0x1480 && n == 0, "unimplemented library applets still report cancelled");

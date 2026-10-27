@@ -53,6 +53,15 @@ iOS builds never load provider modules (no runtime code loading); the iOS app ca
 - Test it the way `runtime/tests/test_svc_online.c` does: `online_loopback.h` is a complete in-memory provider (sockets, DNS, TLS pass-through, friends) that serves a bsd echo
   connection. Run `sh tools/linux-check/run-tests.sh runtime/tests/test_svc_online.c`.
 
+### Additions after version 1 (struct_size-extensible, ipc-depth-rest2, 2026-10-27)
+`ABI_VERSION` stays 1: the table grew at the end, and a module built with the older, smaller `struct_size` simply lacks the new entry points (`ONLINE_FN` returns NULL, the service
+answers like the NullProvider). New capability bits: `ONLINE_CAP_LDN` (1<<7) and `ONLINE_CAP_ACCOUNT` (1<<8).
+- **ldn** (local wireless): `ldn_scan(lcid, out, max)`, `ldn_create(cfg)`, `ldn_destroy`, `ldn_connect(net)`, `ldn_disconnect`, `ldn_get_network(out, &disconnect_reason)`,
+  `ldn_set_advertise`, `ldn_reject(ipv4)`. The service keeps the state machine and encodes `OnlineLdnNetwork` into the guest's 0x480-byte NetworkInfo; the provider owns the transport.
+- **acc**: `account_info(user_id, out)` fills `OnlineAccountInfo` {linked, id, 0x68 opaque resource-cache bytes}; the service hands them to `GetAccountId` and
+  `GetNintendoAccountUserResourceCacheForApplication`. Without a linked account the answers are the offline ones (fixed local id, zero cache), never an error.
+- **bsd** `DuplicateSocket`, `SendMMsg`, `RecvMMsg` need no new entry point: they use the existing socket calls.
+
 ## Status
 Tested on Linux against the mock IPC layer and the loopback provider; not yet run on macOS or against a title. Argument layouts of the bsd/sfdnsres/ssl/friend commands are from
 memory of the public documentation and unverified. See the [hand-off notes](../archive/changes/2026-10-26-claude-sim-online-2026-10-26-macos1.md).

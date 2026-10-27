@@ -17,6 +17,17 @@ int main(void) {
     name(n, "ok"); n[10] = 'x'; CHECK(!bcat_valid_directory_name(n), "garbage after the NUL");
     uint8_t rec[BCAT_PROGRESS_SIZE]; bcat_make_progress(BCAT_STATUS_DONE, 0x1234, rec);
     CHECK(rec[0] == BCAT_STATUS_DONE && rec[4] == 0x34 && rec[5] == 0x12 && rec[8] == 0 && rec[BCAT_PROGRESS_SIZE - 1] == 0, "progress record layout");
+    { BcatProgress pr = {BCAT_STATUS_DOWNLOADING, 0, "news", "a.bin", 10, 20, 30, 40}; uint8_t full[BCAT_PROGRESS_SIZE]; bcat_make_progress_full(&pr, full); int64_t v;
+      CHECK(full[0] == BCAT_STATUS_DOWNLOADING && !memcmp(full + 8, "news", 5) && !memcmp(full + 0x28, "a.bin", 6) && full[8 + 5] == 0 && full[0x27] == 0, "progress: names at +0x08 and +0x28");
+      memcpy(&v, full + 0x48, 8); CHECK(v == 10, "progress: current downloaded at +0x48"); memcpy(&v, full + 0x50, 8); CHECK(v == 20, "current total at +0x50");
+      memcpy(&v, full + 0x58, 8); CHECK(v == 30, "total downloaded at +0x58"); memcpy(&v, full + 0x60, 8); CHECK(v == 40, "total total at +0x60");
+      int z = 1; for (unsigned i = 0x68; i < BCAT_PROGRESS_SIZE; i++) if (full[i]) z = 0; CHECK(z, "progress: reserved tail is zero");
+      char long_name[64]; memset(long_name, 'x', 63); long_name[63] = 0; pr.directory = long_name; bcat_make_progress_full(&pr, full); CHECK(full[8 + 31] == 0 && full[8 + 30] == 'x', "progress: long names are truncated, NUL kept"); }
+    { BcatFile f; memset(&f, 0, sizeof f); strcpy(f.name, "x.bin"); f.size = 0x1122334455667788ll; for (int i = 0; i < 16; i++) f.digest[i] = (uint8_t)(0xa0 + i);
+      uint8_t e[BCAT_ENTRY_SIZE]; bcat_pack_entry(&f, e); uint64_t sz; memcpy(&sz, e + 0x20, 8);
+      CHECK(BCAT_ENTRY_SIZE == 0x38 && !memcmp(e, "x.bin", 6) && sz == 0x1122334455667788ull && e[0x28] == 0xa0 && e[0x37] == 0xaf, "directory entry: name 0x20, size at +0x20, md5 at +0x28, 0x38 bytes");
+      uint8_t d[16]; bcat_md5("", 0, d); CHECK(d[0] == 0xd4 && d[1] == 0x1d && d[15] == 0x7e, "md5 of the empty string (RFC 1321 vector)");
+      bcat_md5("abc", 3, d); CHECK(d[0] == 0x90 && d[1] == 0x01 && d[15] == 0x72, "md5 of abc (RFC 1321 vector)"); }
 
     IpcObject *root = bcat_open(); IpcCall c;
     svc_call(root, 0, NULL, 0, &c); IpcObject *bs = c.out_objects[0];

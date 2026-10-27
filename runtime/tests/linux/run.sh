@@ -13,6 +13,7 @@ for n in $names; do
   inc=$(grep -o 'services/[A-Za-z0-9_]*\.c' "$t" | sort -u)
   cores=""; for f in src/services/*_core.c src/services/romfs_map.c src/services/hz_result.c; do [ -f "$f" ] || continue; skip=0; for i in $inc; do [ "src/$i" = "$f" ] && skip=1; done; [ $skip = 0 ] && cores="$cores $f"; done
   extra=""; if grep -q 'services/audio\.c' "$t"; then extra="$(ls ../audio/src/*.c | grep -v engine_ios) -I../audio/include -I../audio/src -I../audio/tests/linux/include -I/usr/include/opus -lopus -D_GNU_SOURCE"; fi
+  if grep -q 'services/vi\.c' "$t"; then extra="$extra -I../gfx/include"; fi
   if grep -q 'services/hid\.c' "$t"; then extra="$extra src/input_script.c ../input/src/bindings.c ../input/src/hid_shm.c ../input/src/input.c ../input/src/motion.c ../input/src/names.c ../input/src/gesture.c ../input/tests/linux/ng_stub.c -I../input/include -I../input/src -D_GNU_SOURCE"; fi
   if cc $CF $extra "$t" $cores $COMMON -lm -Wl,--allow-multiple-definition -o build/linux/t_$n 2>build/linux/$n.log; then
     built=$((built+1)); if ! ./build/linux/t_$n >build/linux/$n.out 2>&1; then echo "FAIL $n"; tail -5 build/linux/$n.out; fail=1; else tail -1 build/linux/$n.out; fi

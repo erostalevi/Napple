@@ -195,6 +195,8 @@ uint32_t irs_core_run(IrsCore *c, unsigned cam, IrMode mode, const void *cfg, ui
     if (mode == IR_MODE_MOMENT && cfg) k->cfg.moment = *(const IrMomentConfig *)cfg;
     if (mode == IR_MODE_CLUSTERING && cfg) k->cfg.cluster = *(const IrClusteringConfig *)cfg;
     if (mode == IR_MODE_TRANSFER && cfg) k->cfg.transfer = *(const IrTransferConfig *)cfg;
+    if (mode == IR_MODE_TERA && cfg) k->cfg.tera = *(const IrTeraConfig *)cfg;
+    if (mode == IR_MODE_DPD && cfg) k->cfg.dpd = *(const IrDpdConfig *)cfg;
     k->xfer_dst = xfer;
     k->xfer_size = xfer_size;
     k->sampling = 0;
@@ -270,6 +272,35 @@ int irs_core_pump(IrsCore *c, uint8_t *shm, uint64_t now_ns) {
                 memcpy(d->data, cd, (size_t)n * sizeof cd[0]);
                 seq_end(&d->seq);
             }
+        } else if (k->mode == IR_MODE_TERA) {
+            IrTeraState st;
+            memset(&st, 0, sizeof st);
+            ir_tera_compute(c->frame, &k->cfg.tera, st.data);
+            if (slot) {
+                IrTeraState *d = (IrTeraState *)(slot + IR_SLOT_TERA);
+                seq_begin(&d->seq);
+                d->timestamp_ns = ts;
+                d->sampling_number = k->sampling;
+                d->ambient_noise = noise;
+                memcpy(d->data, st.data, sizeof st.data);
+                seq_end(&d->seq);
+            }
+        } else if (k->mode == IR_MODE_DPD) {
+            IrDpdMarker mk[IR_DPD_MARKERS];
+            float px, py;
+            int n = ir_dpd_compute(c->frame, &k->cfg.dpd, mk, &px, &py);
+            if (slot) {
+                IrDpdState *d = (IrDpdState *)(slot + IR_SLOT_DPD);
+                seq_begin(&d->seq);
+                d->timestamp_ns = ts;
+                d->sampling_number = k->sampling;
+                d->count = (uint8_t)n;
+                d->point_x = px;
+                d->point_y = py;
+                memset(d->marker, 0, sizeof d->marker);
+                memcpy(d->marker, mk, (size_t)n * sizeof mk[0]);
+                seq_end(&d->seq);
+            }
         } else if (k->mode == IR_MODE_TRANSFER) {
             if (!k->image) k->image = malloc(IR_W * IR_H);
             if (k->image) {
@@ -280,6 +311,46 @@ int irs_core_pump(IrsCore *c, uint8_t *shm, uint64_t now_ns) {
         updated++;
     }
     return updated;
+}
+void ir_tera_compute(const uint8_t *frame, const IrTeraConfig *cfg, uint8_t out[IR_TERA_DATA]) {
+    if (!cfg || !cfg->mode) {
+        memset(out, 0, IR_TERA_DATA);
+        return;
+    }
+    const int bw = IR_W / 20, bh = IR_H / 15; /* 16 x 16 boxes */
+    for (int by = 0; by < 15; by++)
+        for (int bx = 0; bx < 20; bx++) {
+            uint32_t sum = 0;
+            for (int y = 0; y < bh; y++)
+                for (int x = 0; x < bw; x++) sum += frame[(by * bh + y) * IR_W + bx * bw + x];
+            out[by * 20 + bx] = (uint8_t)(sum / (uint32_t)(bw * bh));
+        }
+}
+int ir_dpd_compute(const uint8_t *frame, const IrDpdConfig *cfg, IrDpdMarker out[IR_DPD_MARKERS], float *px, float *py) {
+    IrClusteringConfig kc;
+    memset(&kc, 0, sizeof kc);
+    kc.cam = cfg ? cfg->cam : kc.cam;
+    kc.intensity_min = cfg && cfg->intensity_min ? cfg->intensity_min : 128;
+    kc.pixel_min = 2;
+    IrClusterData cd[IR_MAX_CLUSTERS];
+    int n = ir_cluster_compute(frame, &kc, cd);
+    if (n > IR_DPD_MARKERS) n = IR_DPD_MARKERS;
+    for (int i = 0; i < n; i++) {
+        out[i].x = (cd[i].cx - (IR_W - 1) / 2.0f) / (IR_W / 2.0f);
+        out[i].y = (cd[i].cy - (IR_H - 1) / 2.0f) / (IR_H / 2.0f);
+        out[i].size = (uint16_t)(cd[i].pixel_count > 0xffff ? 0xffff : cd[i].pixel_count);
+        out[i].intensity = cd[i].avg_intensity;
+        out[i].pad = 0;
+    }
+    *px = *py = 0;
+    if (n >= 2) {
+        *px = (out[0].x + out[1].x) / 2;
+        *py = (out[0].y + out[1].y) / 2;
+    } else if (n == 1) {
+        *px = out[0].x;
+        *py = out[0].y;
+    }
+    return n;
 }
 long irs_core_image(IrsCore *c, unsigned cam, uint8_t *dst, size_t cap, IrTransferState *st) {
     if (cam >= IR_NCAM || c->cam[cam].mode != IR_MODE_TRANSFER) return -1;

@@ -25,10 +25,10 @@ void bsdg_reset(BsdGuest *g) {
     pthread_mutex_lock(&g->lock);
     for (int i = 0; i < BSD_MAX_FDS; i++)
         if (g->h[i] >= 0) {
-            int e;
-            if (cl) cl(p->ctx, g->h[i], &e);
-            g->h[i] = -1;
-            g->nb[i] = 0;
+            int e, h = g->h[i];
+            if (cl) cl(p->ctx, h, &e);
+            for (int j = i; j < BSD_MAX_FDS; j++) /* aliases made by DuplicateSocket share the one provider socket: closed once */
+                if (g->h[j] == h) g->h[j] = -1, g->nb[j] = 0;
         }
     pthread_mutex_unlock(&g->lock);
 }
@@ -71,15 +71,41 @@ int bsdg_close(BsdGuest *g, int fd, int *err) {
     PROV(cl, sock_close, err, -1)
     pthread_mutex_lock(&g->lock);
     int h = fd >= 0 && fd < BSD_MAX_FDS ? g->h[fd] : -1;
-    if (h >= 0) g->h[fd] = -1, g->nb[fd] = 0;
+    int alias = 0;
+    if (h >= 0) {
+        g->h[fd] = -1, g->nb[fd] = 0;
+        for (int i = 0; i < BSD_MAX_FDS && !alias; i++) alias = g->h[i] == h;
+    }
     pthread_mutex_unlock(&g->lock);
     if (h < 0) {
         *err = HZ_EBADF;
         return -1;
     }
+    if (alias) { /* another descriptor still names the provider socket (DuplicateSocket): only the last close reaches the provider */
+        *err = 0;
+        return 0;
+    }
     int r = cl(P_->ctx, h, err);
     if (r == 0) *err = 0;
     return r;
+}
+
+int bsdg_dup(BsdGuest *g, int fd, int *err) {
+    ensure(g);
+    int nfd = -1;
+    pthread_mutex_lock(&g->lock);
+    int h = fd >= 0 && fd < BSD_MAX_FDS ? g->h[fd] : -1;
+    if (h >= 0)
+        for (int i = 0; i < BSD_MAX_FDS; i++)
+            if (g->h[i] == -1) {
+                g->h[i] = h;
+                g->nb[i] = g->nb[fd]; /* the file status flags belong to the shared open description */
+                nfd = i;
+                break;
+            }
+    pthread_mutex_unlock(&g->lock);
+    *err = h < 0 ? HZ_EBADF : nfd < 0 ? HZ_EMFILE : 0;
+    return nfd;
 }
 
 #define WITH_HANDLE(g, fd, err, fail)                                                                                                                          \

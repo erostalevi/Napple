@@ -4,6 +4,7 @@
 //! `config.json` and `shaders/`. See docs/mods/format.md. Mods are unsigned by default, code patches need an explicit
 //! enable, and nothing in this crate downloads anything.
 pub mod apply;
+pub mod buildglue;
 pub mod cheats;
 pub mod cli;
 pub mod config;

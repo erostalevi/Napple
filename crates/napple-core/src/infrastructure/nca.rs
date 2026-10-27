@@ -1,4 +1,9 @@
 //! NCA3 (and NCA2/NCA0) reader: AES-XTS header, key-area / titlekey derivation, AES-CTR section decryption.
+//!
+//! NCA2 and NCA0 follow hactool's behaviour (the reference implementation). NCA2: like NCA3 except
+//! that each FS header is its own XTS unit at sector 0. NCA0 (pre-1.0): the FS headers are not in the
+//! main header but are the first 0x200 bytes of each section, and every section is AES-XTS with
+//! the 32-byte key from the key area, the sector number being `(file offset - 0x400) / 0x200`.
 use super::io::{Slice, Source, Src, check, read_vec};
 use super::ivfc::{self, Ivfc};
 use super::ticket::oaep_sha256_decrypt;
@@ -16,8 +21,16 @@ use xts_mode::Xts128;
 const HEADER_SIZE: usize = 0xC00;
 const SECTOR: usize = 0x200;
 const MEDIA: u64 = 0x200;
-/// User-supplied key for NCA0 key areas: hex of RSA private exponent (0x100) || modulus (0x100).
+/// User-supplied key for beta NCA0 key areas: hex of RSA private exponent (0x100) || modulus (0x100).
 pub const NCA0_KEY: &str = "nca0_key_area_rsa";
+/// SHA-256 of the first 0x20 key-area bytes of the retail pre-1.0 NCA0s, which store that key in
+/// the clear (constant from hactool's nca.c; it identifies the file, it is not a key).
+const NCA0_CLEAR_AREA_HASH: [u8; 32] = [
+    0x9A, 0xBB, 0xD2, 0x11, 0x86, 0x00, 0x21, 0x9D, 0x7A, 0xDC, 0x5B, 0x43, 0x95, 0xF8, 0x4E, 0xFD,
+    0xFF, 0x6B, 0x25, 0xEF, 0x9F, 0x96, 0x85, 0x28, 0x18, 0x9E, 0x76, 0xB0, 0x92, 0xF0, 0x6A, 0xCB,
+];
+/// NCA0 XTS sectors are counted from this file offset (hactool).
+const NCA0_SECTOR_BASE: u64 = 0x400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
@@ -65,6 +78,8 @@ pub struct Nca {
     pub sections: Vec<Section>,
     key_gen: u8,
     ctr_key: Option<[u8; 16]>,
+    /// NCA0: the section AES-XTS key.
+    xts_key: Option<[u8; 32]>,
 }
 
 fn u32le(b: &[u8], o: usize) -> u32 {
@@ -137,7 +152,16 @@ impl Nca {
         let rights_id: [u8; 16] = h[0x230..0x240].try_into().unwrap();
         let has_rights = rights_id != [0u8; 16];
 
-        let ctr_key = if has_rights {
+        let mut xts_key = None;
+        let ctr_key = if version == 0 {
+            if has_rights {
+                return Err(Error::Unsupported("NCA0 with a rights id".into()));
+            }
+            let kind = key_area_kind(app_idx)?;
+            let area: [u8; 0x100] = h[0x300..0x400].try_into().unwrap();
+            xts_key = Some(nca0_xts_key(&area, keys, key_gen, kind)?);
+            None
+        } else if has_rights {
             match title_keys.get(&rights_id) {
                 Some(enc) => {
                     let mut k = *enc;
@@ -148,32 +172,11 @@ impl Nca {
                 None => return Err(Error::MissingKey("ticket for this NCA's rights id".into())),
             }
         } else {
-            let kind = match app_idx {
-                0 => "application",
-                1 => "ocean",
-                2 => "system",
-                _ => return Err(Error::Unsupported("key area index".into())),
-            };
+            let kind = key_area_kind(app_idx)?;
+            let kek: [u8; 16] = keys.get(&format!("key_area_key_{kind}_{key_gen:02x}"))?;
             let mut area = [0u8; 64];
-            if version == 0 {
-                // NCA0: the key area is a 0x100-byte RSA-OAEP block (key `nca0_key_area_rsa` =
-                // private exponent || modulus). Unverified against retail files.
-                let kp = keys
-                    .get_vec(NCA0_KEY)
-                    .ok_or_else(|| Error::MissingKey(NCA0_KEY.into()))?;
-                if kp.len() != 0x200 {
-                    return Err(Error::KeyFile(format!("key {NCA0_KEY} has wrong length")));
-                }
-                let pt = oaep_sha256_decrypt(&h[0x300..0x400], &kp[..0x100], &kp[0x100..])?;
-                if pt.len() != 64 {
-                    return Err(Error::Integrity("NCA0 key area".into()));
-                }
-                area.copy_from_slice(&pt);
-            } else {
-                let kek: [u8; 16] = keys.get(&format!("key_area_key_{kind}_{key_gen:02x}"))?;
-                area.copy_from_slice(&h[0x300..0x340]);
-                aes_ecb_decrypt(&kek, &mut area);
-            }
+            area.copy_from_slice(&h[0x300..0x340]);
+            aes_ecb_decrypt(&kek, &mut area);
             Some(area[0x20..0x30].try_into().unwrap())
         };
 
@@ -184,22 +187,35 @@ impl Nca {
             if en <= s {
                 continue;
             }
-            let fh = &h[0x400 + i * SECTOR..0x400 + (i + 1) * SECTOR];
+            check(s, en - s, src.size())?;
+            let fh_buf;
+            let fh = if let Some(k) = &xts_key {
+                // NCA0: the FS header is the first sector of the section itself.
+                let mut b = read_vec(&*src, s, SECTOR)?;
+                nca0_xts(k, &mut b, s);
+                fh_buf = b;
+                &fh_buf[..]
+            } else {
+                &h[0x400 + i * SECTOR..0x400 + (i + 1) * SECTOR]
+            };
             let fs_type = match fh[2] {
                 0 => FsType::RomFs,
                 1 => FsType::Pfs0,
                 _ => return Err(Error::Unsupported("fs type".into())),
             };
-            let enc = match fh[4] {
-                1 => Enc::None,
-                2 => Enc::Xts,
-                3 => Enc::Ctr,
-                4 => Enc::Bktr,
-                _ => return Err(Error::Unsupported("encryption type".into())),
+            let enc = if xts_key.is_some() {
+                Enc::Xts
+            } else {
+                match fh[4] {
+                    1 => Enc::None,
+                    2 => Enc::Xts,
+                    3 => Enc::Ctr,
+                    4 => Enc::Bktr,
+                    _ => return Err(Error::Unsupported("encryption type".into())),
+                }
             };
             let mut ctr_hi: [u8; 8] = fh[0x140..0x148].try_into().unwrap();
             ctr_hi.reverse();
-            check(s, en - s, src.size())?;
             sections.push(Section {
                 index: i,
                 start: s,
@@ -220,6 +236,7 @@ impl Nca {
             sections,
             key_gen,
             ctr_key,
+            xts_key,
         })
     }
 
@@ -243,11 +260,102 @@ impl Nca {
                 hi: s.ctr_hi,
                 base: s.start,
             })),
-            Enc::Xts => Err(Error::Unsupported("AES-XTS sections".into())),
+            Enc::Xts => match self.xts_key {
+                // NCA0 sections. Its RomFS uses a pre-1.0 header layout that RomFs::parse does not read.
+                Some(_) if s.fs_type == FsType::RomFs => {
+                    Err(Error::Unsupported("NCA0 RomFS (pre-1.0 layout)".into()))
+                }
+                Some(key) => Ok(Arc::new(Nca0XtsSource {
+                    raw,
+                    key,
+                    base: s.start,
+                })),
+                None => Err(Error::Unsupported("AES-XTS sections".into())),
+            },
             Enc::Bktr => Err(Error::Unsupported(
                 "BKTR (update patch) sections: not yet".into(),
             )),
         }
+    }
+}
+
+fn key_area_kind(app_idx: u8) -> Result<&'static str> {
+    match app_idx {
+        0 => Ok("application"),
+        1 => Ok("ocean"),
+        2 => Ok("system"),
+        _ => Err(Error::Unsupported("key area index".into())),
+    }
+}
+
+/// The 32-byte section AES-XTS key of an NCA0, from its 0x100-byte key area, in hactool's order:
+/// beta files RSA-OAEP (SHA-256, empty label) with the user's `nca0_key_area_rsa`; the retail
+/// files store the key in the clear (recognised by hash); otherwise AES-ECB with the key area key.
+fn nca0_xts_key(area: &[u8; 0x100], keys: &KeySet, key_gen: u8, kind: &str) -> Result<[u8; 32]> {
+    nca0_xts_key_with(area, keys, key_gen, kind, &NCA0_CLEAR_AREA_HASH)
+}
+
+fn nca0_xts_key_with(
+    area: &[u8; 0x100],
+    keys: &KeySet,
+    key_gen: u8,
+    kind: &str,
+    clear_hash: &[u8; 32],
+) -> Result<[u8; 32]> {
+    if let Some(kp) = keys.get_vec(NCA0_KEY) {
+        if kp.len() != 0x200 {
+            return Err(Error::KeyFile(format!("key {NCA0_KEY} has wrong length")));
+        }
+        if let Ok(pt) = oaep_sha256_decrypt(area, &kp[..0x100], &kp[0x100..]) {
+            return pt
+                .get(..32)
+                .map(|k| k.try_into().unwrap())
+                .ok_or_else(|| Error::Integrity("NCA0 key area".into()));
+        }
+    }
+    if Sha256::digest(&area[..0x20])[..] == clear_hash[..] {
+        return Ok(area[..32].try_into().unwrap());
+    }
+    let kek: [u8; 16] = keys.get(&format!("key_area_key_{kind}_{key_gen:02x}"))?;
+    let mut k: [u8; 32] = area[..32].try_into().unwrap();
+    aes_ecb_decrypt(&kek, &mut k);
+    Ok(k)
+}
+
+/// Decrypts whole 0x200-byte sectors of an NCA0 starting at file offset `abs` (a multiple of 0x200).
+#[allow(clippy::chunks_exact_to_as_chunks)]
+fn nca0_xts(key: &[u8; 32], data: &mut [u8], abs: u64) {
+    let xts = Xts128::<Aes128>::new(
+        Aes128::new(GenericArray::from_slice(&key[..16])),
+        Aes128::new(GenericArray::from_slice(&key[16..])),
+    );
+    let first = (abs - NCA0_SECTOR_BASE) / SECTOR as u64;
+    for (i, sec) in data.chunks_exact_mut(SECTOR).enumerate() {
+        xts.decrypt_sector(sec, (first as u128 + i as u128).to_be_bytes());
+    }
+}
+
+/// NCA0 section: AES-XTS with sector `(file offset - 0x400) / 0x200`.
+struct Nca0XtsSource {
+    raw: Src,
+    key: [u8; 32],
+    base: u64,
+}
+
+impl Source for Nca0XtsSource {
+    fn size(&self) -> u64 {
+        self.raw.size()
+    }
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> Result<()> {
+        check(offset, buf.len() as u64, self.raw.size())?;
+        let pre = offset % SECTOR as u64;
+        let end = (offset + buf.len() as u64).next_multiple_of(SECTOR as u64);
+        // Sections are whole 0x200 media units, so the rounded-up range stays inside `raw`.
+        let mut tmp = vec![0u8; (end - (offset - pre)) as usize];
+        self.raw.read_at(offset - pre, &mut tmp)?;
+        nca0_xts(&self.key, &mut tmp, self.base + offset - pre);
+        buf.copy_from_slice(&tmp[pre as usize..pre as usize + buf.len()]);
+        Ok(())
     }
 }
 
@@ -331,5 +439,73 @@ fn romfs_level(section: &Src, sec: &Section, full: bool) -> Result<Src> {
             let lvl = 0x10 + 5 * 0x18;
             Slice::new(section.clone(), u64le(d, lvl), u64le(d, lvl + 8))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keyset(extra: &str) -> KeySet {
+        KeySet::parse(&format!("header_key = {}\n{extra}", "07".repeat(32))).unwrap()
+    }
+
+    #[test]
+    fn nca0_clear_key_area_is_recognised_by_hash() {
+        let mut area = [0u8; 0x100];
+        area[..32].copy_from_slice(&[0x5A; 32]);
+        let h: [u8; 32] = Sha256::digest(&area[..0x20]).into();
+        // hash matches: the first 0x20 bytes are the key, no key area key needed
+        assert_eq!(
+            nca0_xts_key_with(&area, &keyset(""), 2, "application", &h).unwrap(),
+            [0x5A; 32]
+        );
+        // hash differs: falls to AES-ECB and names the missing key area key
+        assert!(matches!(
+            nca0_xts_key_with(&area, &keyset(""), 2, "application", &[0; 32]),
+            Err(Error::MissingKey(m)) if m == "key_area_key_application_02"
+        ));
+    }
+
+    #[test]
+    fn nca0_aes_ecb_area_decrypts_with_the_key_area_key() {
+        let kek = [9u8; 16];
+        let key: [u8; 32] = std::array::from_fn(|i| i as u8);
+        let mut area = [0u8; 0x100];
+        let c = Aes128::new(GenericArray::from_slice(&kek));
+        for (i, b) in key.chunks(16).enumerate() {
+            let mut blk = GenericArray::clone_from_slice(b);
+            aes::cipher::BlockEncrypt::encrypt_block(&c, &mut blk);
+            area[i * 16..(i + 1) * 16].copy_from_slice(&blk);
+        }
+        let ks = keyset(&format!("key_area_key_system_03 = {}\n", "09".repeat(16)));
+        assert_eq!(
+            nca0_xts_key_with(&area, &ks, 3, "system", &[0; 32]).unwrap(),
+            key
+        );
+    }
+
+    #[test]
+    fn nca0_bad_rsa_key_length_is_a_key_file_error() {
+        let ks = keyset(&format!("{NCA0_KEY} = 0011\n"));
+        assert!(matches!(
+            nca0_xts_key(&[0; 0x100], &ks, 0, "application"),
+            Err(Error::KeyFile(_))
+        ));
+    }
+
+    #[test]
+    fn nca0_xts_sector_numbers_start_at_file_offset_0x400() {
+        // sector 0 is the one at file offset 0x400: decrypting at 0xC00 uses sectors 4.. not 6..
+        let key = [3u8; 32];
+        let mut a = vec![0xAAu8; 0x400];
+        let mut b = a.clone();
+        nca0_xts(&key, &mut a, 0xC00);
+        nca0_xts(&key, &mut b[..0x200], 0xC00);
+        nca0_xts(&key, &mut b[0x200..], 0xE00);
+        assert_eq!(a, b);
+        let mut c = vec![0xAAu8; 0x200];
+        nca0_xts(&key, &mut c, 0x400); // sector 0
+        assert_ne!(c, a[..0x200]);
     }
 }

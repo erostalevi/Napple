@@ -57,3 +57,111 @@ typedef struct {
 #define APPLET_CONTROLLER_OUT_SIZE 0xCu
 void applet_controller_answer(const uint8_t *arg, size_t arg_size, int connected, AppletControllerAnswer *a);
 void applet_controller_encode(const AppletControllerAnswer *a, uint8_t out[APPLET_CONTROLLER_OUT_SIZE]);
+
+/* Handler registry: another area (applets-rare, a frontend) can answer a library applet id without editing applet.c. A registered handler runs in
+ * Start before the built-in answers; it returns 1 when it answered (set the output with libapplet_call_set_out, the GetResult code in result) and 0
+ * to fall through to the built-in answer / firmware host. At most one handler per id; registering again replaces it, NULL removes it. */
+#define LIBAPPLET_MAX_IN 8
+typedef struct {
+    const uint8_t *data; /* NULL for a transfer-memory storage */
+    size_t size;
+    int transfer_memory;
+} LibAppletIn;
+typedef struct {
+    uint32_t applet_id, mode;
+    unsigned nin;
+    LibAppletIn in[LIBAPPLET_MAX_IN];
+    uint8_t *out; /* malloc'd output storage (NULL = no output); owned by the caller after the handler returns */
+    size_t out_size;
+    uint32_t result; /* GetResult code; 0 = success */
+    int unsupported; /* handler set: report the applet as terminated with `result` */
+    /* interactive channel: the storages the caller pushed with PushInteractiveInData, and the ones a handler answers with (popped in order by
+     * PopInteractiveOutData). Output storages are malloc'd by libapplet_call_push_interactive_out. */
+    unsigned ninteractive_in;
+    LibAppletIn interactive_in[LIBAPPLET_MAX_IN];
+    unsigned ninteractive_out;
+    uint8_t *interactive_out[LIBAPPLET_MAX_IN];
+    size_t interactive_out_size[LIBAPPLET_MAX_IN];
+} LibAppletCall;
+typedef int (*LibAppletHandler)(LibAppletCall *call);
+int libapplet_register_handler(uint32_t id, LibAppletHandler handler); /* 0 ok, -1 table full */
+LibAppletHandler libapplet_find_handler(uint32_t id);
+void libapplet_clear_handlers(void);
+/* Run the handler of call->applet_id if any; returns whether it answered. */
+int libapplet_dispatch(LibAppletCall *call);
+/* Copies `size` bytes (zero-filled when data is NULL) into a fresh output storage of the call. */
+void libapplet_call_set_out(LibAppletCall *call, const void *data, size_t size);
+int libapplet_call_push_interactive_out(LibAppletCall *call, const void *data, size_t size); /* 0 ok, -1 queue full */
+void libapplet_call_free(LibAppletCall *call);                                               /* frees out and the interactive outputs */
+
+/* ---- the firmware applet table ------------------------------------------------------------------------------------------------------------- */
+/* Library applet id -> the program id of the applet in the user's firmware (switchbrew "System Applets" list, remembered, [unverified] against a firmware dump;
+ * the Mii Maker's 0x12 -> 0100000000001009 is verified). A firmware applet runs through the host (child process or in-process) when it is enabled for its id
+ * and was built beside the game; otherwise the built-in answer (HLE) is used. */
+typedef struct {
+    uint32_t applet_id;
+    const char *program_id;
+    const char *name;
+    int default_firmware; /* run from firmware by default when present (only the Mii Maker: its HLE answer cannot show an editor) */
+} LibAppletProgram;
+const LibAppletProgram *libapplet_program_for(uint32_t applet_id); /* NULL when the id has no firmware program */
+/* Policy: NAPPLE_FIRMWARE_APPLETS=0 turns every firmware applet off; =all turns all table entries on; otherwise the defaults hold. NAPPLE_FIRMWARE_APPLET_IDS is
+ * a comma list ("0x11,0x0c" or names "swkbd,controller") of ids that are also on. `master` and `ids` are the two environment values (NULL when unset). */
+int libapplet_firmware_enabled(const LibAppletProgram *p, const char *master, const char *ids);
+/* Mode of CreateLibraryApplet: 0 AllForeground, 1 Background, 2 NoUi, 3 BackgroundIndirect, 4 AllForegroundInitiallyHidden. */
+int libapplet_mode_is_inline(uint32_t mode); /* swkbd inline keyboard: any non-foreground mode */
+
+/* ---- software keyboard: inline (interactive) mode ------------------------------------------------------------------------------------------- */
+/* The game starts the keyboard in a background mode and drives it through the interactive channel: requests {u32 command; payload} in, replies
+ * {u32 reply type; payload} out. Commands/replies are from libnx's swkbd as remembered [unverified against a title]. */
+enum {
+    APPLET_SWKBD_CMD_FINALIZE = 0x4,
+    APPLET_SWKBD_CMD_SET_USER_WORD = 0x6,
+    APPLET_SWKBD_CMD_SET_CUSTOMIZE_DIC = 0x7,
+    APPLET_SWKBD_CMD_CALC = 0xA,
+    APPLET_SWKBD_CMD_SET_CUSTOMIZED_DICTIONARIES = 0xB,
+    APPLET_SWKBD_CMD_UNSET_CUSTOMIZED_DICTIONARIES = 0xC
+};
+enum {
+    APPLET_SWKBD_REPLY_FINISHED_INITIALIZE = 0x0,
+    APPLET_SWKBD_REPLY_DEFAULT = 0x1,
+    APPLET_SWKBD_REPLY_CHANGED_STRING = 0x2,
+    APPLET_SWKBD_REPLY_MOVED_CURSOR = 0x3,
+    APPLET_SWKBD_REPLY_DECIDED_ENTER = 0x5,
+    APPLET_SWKBD_REPLY_DECIDED_CANCEL = 0x6,
+    APPLET_SWKBD_REPLY_CHANGED_STRING_UTF8 = 0x7,
+    APPLET_SWKBD_REPLY_DECIDED_ENTER_UTF8 = 0x9,
+    APPLET_SWKBD_REPLY_UNSET_CUSTOMIZED = 0xC
+};
+#define APPLET_SWKBD_INLINE_REPLY_SIZE 0x400u
+typedef struct {
+    int initialized, finalized, shown;
+    unsigned requests;
+    AppletSwkbdConfig cfg;
+} AppletSwkbdInline;
+void applet_swkbd_inline_init(AppletSwkbdInline *k, const AppletSwkbdConfig *cfg);
+/* Handle one request storage; `text` is what the user types when the keyboard appears (NULL = the user cancels). Replies go to call->interactive_out. Returns
+ * 0 on a malformed/unknown request (answered with a Default reply, so the game does not hang). */
+int applet_swkbd_inline_request(AppletSwkbdInline *k, const uint8_t *req, size_t size, const char *text, LibAppletCall *call);
+/* Encodes a reply {u32 type; u32 text bytes; utf8 text...} into a malloc'd interactive output. */
+int applet_swkbd_inline_reply(LibAppletCall *call, uint32_t type, const char *text);
+
+/* ---- error applet hook --------------------------------------------------------------------------------------------------------------------- */
+/* The frontend can surface the error message; the default is none (the runtime then falls back to the log line and the generic alert). */
+typedef void (*AppletErrorHook)(const AppletErrorInfo *e, const char *code_text, const char *description);
+void applet_set_error_hook(AppletErrorHook hook);
+int applet_error_notify(const AppletErrorInfo *e, const char *code_text, const char *description); /* 1 when a hook handled it */
+
+/* ---- player select: the profile list ------------------------------------------------------------------------------------------------------- */
+/* The account service registers its profile list getter (default: none, the caller supplies the one local user). */
+typedef unsigned (*AppletProfileLister)(uint8_t (*uids)[16], unsigned max);
+void applet_set_profile_lister(AppletProfileLister lister);
+unsigned applet_profiles(uint8_t (*uids)[16], unsigned max, const uint8_t fallback[16]);
+/* NAPPLE_PLAYER_SELECT: "cancel", "<index>", or "<hex uid prefix>" (not parsed here: index only). Returns 1 for cancel; *index = wanted profile. */
+int applet_player_select_spec(const char *spec, int *index);
+
+/* ---- controller support: cancel ------------------------------------------------------------------------------------------------------------ */
+enum { APPLET_CONTROLLER_OK = 0, APPLET_CONTROLLER_CANCELLED = 2 };
+/* NAPPLE_CONTROLLER_SUPPORT: "cancel" cancels; "strict" cancels when fewer pads are connected than the game's minimum (the real applet would keep waiting). */
+void applet_controller_encode_result(const AppletControllerAnswer *a, uint32_t result, uint8_t out[APPLET_CONTROLLER_OUT_SIZE]);
+void applet_controller_apply_policy(const char *spec, AppletControllerAnswer *a, uint32_t *result);

@@ -262,3 +262,4 @@
     XL_REFUSE(ou2, STAGE_COMPUTE, sk0, 0, "surface access (opcode ea4", "SUATOM.CAS-class 0xea4", 0xea40000000000000ull | PT_BITS, ins_exit());
 #undef SU_OK
 }
+#include "t_xlate_stages.inc"

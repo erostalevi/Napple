@@ -130,3 +130,131 @@ ssize_t romfs_map_pread(RomfsMap *m, void *dst, size_t len, uint64_t off) {
     return -1;
 #endif
 }
+
+/* ---- mod overlay ------------------------------------------------------------------------------------------------- */
+typedef struct {
+    char *path, *file;
+    uint64_t size;
+    int del;
+} OvEntry;
+struct RomfsOverlay {
+    char *dir;
+    size_t n;
+    OvEntry *e;
+};
+
+void romfs_overlay_free(RomfsOverlay *o) {
+    if (!o) return;
+    for (size_t i = 0; i < o->n; i++) {
+        free(o->e[i].path);
+        free(o->e[i].file);
+    }
+    free(o->e);
+    free(o->dir);
+    free(o);
+}
+
+/* Reads the string value of "key":"..." in line (no escapes are written by the builder: it refuses quotes and backslashes). */
+static char *ov_str(const char *line, const char *key) {
+    char pat[16];
+    snprintf(pat, sizeof pat, "\"%s\":\"", key);
+    const char *p = strstr(line, pat);
+    if (!p) return NULL;
+    p += strlen(pat);
+    const char *q = strchr(p, '"');
+    if (!q) return NULL;
+    char *s = malloc((size_t)(q - p) + 1);
+    memcpy(s, p, (size_t)(q - p));
+    s[q - p] = 0;
+    return s;
+}
+
+static int ov_path_ok(const char *p, int is_file) {
+    if (p[0] != '/' || (is_file && !p[1])) return 0;
+    for (const char *c = p; *c; c++)
+        if (c[0] == '/' && (c[1] == 0 ? c != p : 0)) return 0; /* trailing slash */
+    return strstr(p, "//") == NULL && strstr(p, "/../") == NULL && strstr(p, "/./") == NULL;
+}
+
+RomfsOverlay *romfs_overlay_load(const char *data_dir) {
+    char path[4096];
+    snprintf(path, sizeof path, "%s/mods/overlay.json", data_dir);
+    FILE *f = fopen(path, "rb");
+    if (!f) return NULL;
+    RomfsOverlay *o = calloc(1, sizeof *o);
+    o->dir = strdup(data_dir);
+    char line[8192];
+    int ok = 1;
+    size_t cap = 0;
+    while (ok && fgets(line, sizeof line, f)) {
+        char *del = ov_str(line, "delete"), *p = del ? NULL : ov_str(line, "path"), *file = p ? ov_str(line, "file") : NULL;
+        if (!del && !p) continue; /* header / footer lines */
+        const char *sz = strstr(line, "\"size\":");
+        if (o->n == cap) {
+            cap = cap ? cap * 2 : 64;
+            o->e = realloc(o->e, cap * sizeof *o->e);
+        }
+        OvEntry *e = &o->e[o->n];
+        memset(e, 0, sizeof *e);
+        e->del = del != NULL;
+        e->path = del ? del : p;
+        e->file = file;
+        if (sz) e->size = strtoull(sz + 7, NULL, 10);
+        /* a file entry needs a relative, non-escaping host file; every path must be a clean absolute romfs path */
+        if (!ov_path_ok(e->path, !e->del) || (!e->del && (!file || file[0] == '/' || strstr(file, "..")))) ok = 0;
+        o->n++;
+    }
+    fclose(f);
+    if (!ok || !o->n) {
+        romfs_overlay_free(o);
+        return NULL;
+    }
+    return o;
+}
+
+/* p is a strict path prefix of q at a component boundary. */
+static int ov_under(const char *p, const char *q) {
+    size_t n = strlen(p);
+    return strncmp(p, q, n) == 0 && q[n] == '/';
+}
+
+int romfs_overlay_lookup(const RomfsOverlay *o, const char *path, char *host, size_t cap, uint64_t *size) {
+    if (!o || !path) return ROMFS_OVERLAY_ORIGINAL;
+    for (size_t i = 0; i < o->n; i++) {
+        const OvEntry *e = &o->e[i];
+        if (!e->del && !strcmp(e->path, path)) {
+            snprintf(host, cap, "%s/%s", o->dir, e->file);
+            if (size) *size = e->size;
+            return ROMFS_OVERLAY_REPLACED;
+        }
+    }
+    for (size_t i = 0; i < o->n; i++) {
+        const OvEntry *e = &o->e[i];
+        if (e->del && (!strcmp(e->path, path) || ov_under(e->path, path))) return ROMFS_OVERLAY_DELETED;
+    }
+    return ROMFS_OVERLAY_ORIGINAL;
+}
+
+int romfs_overlay_child(const RomfsOverlay *o, const char *dir_path, size_t n, char *name, size_t cap, int *is_dir) {
+    if (!o) return 0;
+    size_t dl = strcmp(dir_path, "/") ? strlen(dir_path) : 0;
+    size_t seen = 0;
+    for (size_t i = 0; i < o->n; i++) {
+        const OvEntry *e = &o->e[i];
+        if (e->del || strncmp(e->path, dir_path, dl) || e->path[dl] != '/') continue;
+        const char *rest = e->path + dl + 1, *slash = strchr(rest, '/');
+        size_t len = slash ? (size_t)(slash - rest) : strlen(rest);
+        int dup = 0; /* each child name is reported once, in first-seen order */
+        for (size_t j = 0; j < i && !dup; j++) {
+            const OvEntry *d = &o->e[j];
+            dup = !d->del && !strncmp(d->path, dir_path, dl) && d->path[dl] == '/' && !strncmp(d->path + dl + 1, rest, len) &&
+                  (d->path[dl + 1 + len] == '/' || d->path[dl + 1 + len] == 0);
+        }
+        if (dup) continue;
+        if (seen++ != n) continue;
+        snprintf(name, cap, "%.*s", (int)len, rest);
+        if (is_dir) *is_dir = slash != NULL;
+        return 1;
+    }
+    return 0;
+}

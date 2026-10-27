@@ -12,6 +12,7 @@ struct MediaEngine {
     const DecoderBackend *backend;
     void *dec;
     int dec_codec;
+    uint64_t cfg_key; /* hash of the parameter sets last handed to configure(); 0 = none yet */
     uint32_t reg[NREGS];
     MediaStats st;
 };
@@ -59,6 +60,48 @@ static void fail(MediaEngine *e, uint32_t code) {
 }
 
 /* ---- NVDEC ---- */
+static uint64_t fnv64(uint64_t h, const void *p, size_t n) {
+    const uint8_t *b = p;
+    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 1099511628211ull;
+    return h;
+}
+/* Hands the backend the parameter sets of this frame's stream when they are new: H.264 SPS+PPS NAL units found in the bitstream, a VP9 key frame with a
+ * size. Returns 0 when the backend refused them, 1 otherwise (including "nothing new"). */
+static int nvdec_configure(MediaEngine *e, int codec, const uint8_t *bs, size_t n) {
+    DecoderConfig cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.codec = codec;
+    uint64_t key = 1469598103934665603ull;
+    if (codec == DEC_CODEC_H264) {
+        H264Sps sps;
+        if (h264_find_param_sets(bs, n, &cfg.h264) != 0) return 1; /* nothing (or only half) in this access unit: keep what the backend has */
+        for (int i = 0; i < cfg.h264.nsps; i++) key = fnv64(key, cfg.h264.sps[i], cfg.h264.sps_size[i]);
+        for (int i = 0; i < cfg.h264.npps; i++) key = fnv64(key, cfg.h264.pps[i], cfg.h264.pps_size[i]);
+        cfg.h264_annexb_size = h264_param_sets_annexb(&cfg.h264, cfg.h264_annexb, sizeof cfg.h264_annexb);
+        if (!h264_parse_sps(cfg.h264.sps[0] + 1, cfg.h264.sps_size[0] - 1, &sps)) cfg.width = sps.width, cfg.height = sps.height;
+    } else if (codec == DEC_CODEC_VP9) {
+        if (vp9_parse_header(bs, n, &cfg.vp9) || !cfg.vp9.key_frame || !cfg.vp9.width) return 1;
+        key = fnv64(key, &cfg.vp9.profile, sizeof cfg.vp9.profile);
+        key = fnv64(key, &cfg.vp9.width, sizeof cfg.vp9.width);
+        key = fnv64(key, &cfg.vp9.height, sizeof cfg.vp9.height);
+        key = fnv64(key, &cfg.vp9.bit_depth, sizeof cfg.vp9.bit_depth);
+        key = fnv64(key, &cfg.vp9.color_space, sizeof cfg.vp9.color_space);
+        key = fnv64(key, &cfg.vp9.color_range, sizeof cfg.vp9.color_range);
+        key = fnv64(key, &cfg.vp9.subsampling_x, sizeof cfg.vp9.subsampling_x);
+        key = fnv64(key, &cfg.vp9.subsampling_y, sizeof cfg.vp9.subsampling_y);
+        cfg.width = cfg.vp9.width;
+        cfg.height = cfg.vp9.height;
+        cfg.vpcc_size = vp9_build_vpcc(&cfg.vp9, cfg.vpcc);
+    } else {
+        return 1;
+    }
+    if (key == e->cfg_key) return 1;
+    if (e->backend->reset) e->backend->reset(e->dec);
+    if (e->backend->configure(e->dec, &cfg) < 0) return 0;
+    e->cfg_key = key;
+    e->st.configures++;
+    return 1;
+}
 static void nvdec_execute(MediaEngine *e) {
     int codec = (int)e->reg[NVM_SET_APPLICATION_ID];
     uint32_t status[8] = {0};
@@ -69,6 +112,7 @@ static void nvdec_execute(MediaEngine *e) {
     if (!e->dec) {
         e->dec = e->backend->open(codec);
         e->dec_codec = codec;
+        e->cfg_key = 0;
     }
     if (!e->dec) {
         fail(e, 1); /* codec not supported by the backend */
@@ -95,6 +139,12 @@ static void nvdec_execute(MediaEngine *e) {
     if (!bs || !luma || !chroma) {
         fail(e, 2);
         status[3] = 2;
+        status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
+        return;
+    }
+    if (e->backend->configure && !nvdec_configure(e, codec, bs, bs_len)) {
+        fail(e, 4); /* the backend refused the parameter sets */
+        status[3] = 4;
         status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
         return;
     }
@@ -364,4 +414,62 @@ static int run(MediaEngine *e, const uint32_t *w, uint32_t n, int depth) {
 int media_engine_run(MediaEngine *e, const uint32_t *w, uint32_t n) {
     e->cur_class = e->class_id;
     return run(e, w, n, 0);
+}
+
+/* ---- /dev/nvdisp-disp0 ----------------------------------------------------------------------------------------------------------------- */
+void nvdisp_init(NvDisp *d, uint64_t now_ns, int docked) {
+    memset(d, 0, sizeof *d);
+    d->docked = docked ? 1 : 0;
+    d->width = docked ? 1920 : 1280;
+    d->height = docked ? 1080 : 720;
+    d->refresh_mhz = 60000;
+    d->t0_ns = now_ns;
+}
+uint64_t nvdisp_vblank_count(const NvDisp *d, uint64_t now_ns) {
+    uint64_t el = now_ns > d->t0_ns ? now_ns - d->t0_ns : 0, sec = el / 1000000000u, rem = el % 1000000000u;
+    return (sec * d->refresh_mhz + rem * d->refresh_mhz / 1000000000u) / 1000u;
+}
+static uint64_t vblank_time(const NvDisp *d, uint64_t count) { return d->t0_ns + count * 1000000000000ull / d->refresh_mhz; }
+static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
+static void put64(uint8_t *p, uint64_t v) { memcpy(p, &v, 8); }
+int nvdisp_ioctl(NvDisp *d, unsigned nr, uint8_t *data, unsigned size, uint64_t now_ns) {
+    uint64_t n;
+    switch (nr) {
+        case NVDISP_GET_MODE:
+            if (size < 32) return NVDISP_BAD_PARAMETER;
+            memset(data, 0, 32);
+            put32(data, d->width);
+            put32(data + 4, d->height);
+            put32(data + 8, d->refresh_mhz);
+            put32(data + 12, 32);
+            put32(data + 16, d->docked);
+            return NVDISP_OK;
+        case NVDISP_GET_VBLANK:
+            if (size < 16) return NVDISP_BAD_PARAMETER;
+            n = nvdisp_vblank_count(d, now_ns);
+            put64(data, n);
+            put64(data + 8, vblank_time(d, n));
+            return NVDISP_OK;
+        case NVDISP_WAIT_VBLANK:
+            if (size < 24) return NVDISP_BAD_PARAMETER;
+            n = nvdisp_vblank_count(d, now_ns) + 1;
+            if (n <= d->last_wait) n = d->last_wait + 1;
+            d->last_wait = n;
+            put64(data + 8, n);
+            put64(data + 16, vblank_time(d, n));
+            return NVDISP_OK;
+        case NVDISP_GET_SYNCPT:
+            if (size < 8) return NVDISP_BAD_PARAMETER;
+            put32(data, d->syncpt);
+            put32(data + 4, (uint32_t)(d->last_wait > nvdisp_vblank_count(d, now_ns) ? d->last_wait : nvdisp_vblank_count(d, now_ns)));
+            return NVDISP_OK;
+        case NVDISP_GET_STATUS:
+            if (size < 16) return NVDISP_BAD_PARAMETER;
+            put32(data, 1);
+            put32(data + 4, 1);
+            put32(data + 8, d->docked);
+            put32(data + 12, 1);
+            return NVDISP_OK;
+        default: return NVDISP_NOT_IMPLEMENTED;
+    }
 }

@@ -5,7 +5,10 @@ use napple_core::domain::keys::KeySet;
 use napple_core::infrastructure::io::{FileSource, Src};
 use napple_core::infrastructure::nca::{self, ContentType, FsType, Nca, TitleKeys};
 use napple_core::infrastructure::pfs::parse_pfs0;
-use napple_core::infrastructure::{ticket::parse_ticket, xci::parse_xci};
+use napple_core::infrastructure::{
+    ticket::{encrypted_title_key, parse_ticket},
+    xci::parse_xci,
+};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -85,8 +88,8 @@ fn dump_romfs(game: &Path, keys: &KeySet, out: &Path) -> Result<(), String> {
                 ));
             } else if en.name.ends_with(".tik") {
                 let t = parse_ticket(&fs.read(&en.name).map_err(e)?).map_err(e)?;
-                if t.key_type == 0 {
-                    tks.insert(t.rights_id, t.encrypted_title_key);
+                if let Some(k) = encrypted_title_key(&t, keys).map_err(e)? {
+                    tks.insert(t.rights_id, k);
                 }
             }
         }

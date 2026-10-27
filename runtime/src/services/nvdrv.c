@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 enum {
     NV_OK = 0,
@@ -22,7 +23,7 @@ enum {
     NV_INSUFFICIENT_MEMORY = 6,
     NV_ACCESS_DENIED = 0x10
 };
-typedef enum { DEV_NONE, DEV_NVMAP, DEV_CTRL, DEV_CHANNEL, DEV_OTHER } DevKind;
+typedef enum { DEV_NONE, DEV_NVMAP, DEV_CTRL, DEV_CHANNEL, DEV_DISP, DEV_OTHER } DevKind;
 /* host1x client channel state (nvhost-nvdec / vic / nvjpg / msenc) */
 #define CHANNEL_SYNCPTS 16
 typedef struct {
@@ -38,6 +39,7 @@ typedef struct {
     char path[48];
     int open;
     Channel ch;
+    NvDisp disp; /* DEV_DISP: /dev/nvdisp-disp0 / disp1 */
 } Fd;
 #define MAX_FD 64
 static Fd fds[MAX_FD];
@@ -86,9 +88,18 @@ static void syncpt_advance(uint32_t id, uint32_t n) {
         }
 }
 
-static const char *const known_other[] = {"/dev/nvhost-gpu",      "/dev/nvhost-as-gpu", "/dev/nvhost-ctrl-gpu", "/dev/nvhost-dbg-gpu",
-                                          "/dev/nvhost-prof-gpu", "/dev/nvhost-tsec",   "/dev/nvdisp-disp0",    "/dev/nvdisp-disp1",
-                                          "/dev/nvdisp-ctrl",     "/dev/nvsched-ctrl",  "/dev/nvsched"};
+static const char *const known_other[] = {"/dev/nvhost-gpu",  "/dev/nvhost-as-gpu", "/dev/nvhost-ctrl-gpu", "/dev/nvhost-dbg-gpu", "/dev/nvhost-prof-gpu",
+                                          "/dev/nvhost-tsec", "/dev/nvdisp-ctrl",   "/dev/nvsched-ctrl",    "/dev/nvsched"};
+/* Display controller devices: the vblank syncpoint ids are those of the older Tegra host1x sources (NVSYNCPT_VBLANK0/1 = 26/27; unverified for Tegra X1). */
+static const struct {
+    const char *path;
+    uint32_t vblank_syncpt;
+} displays[] = {{"/dev/nvdisp-disp0", 26}, {"/dev/nvdisp-disp1", 27}};
+static uint64_t disp_now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000u + (uint64_t)ts.tv_nsec;
+}
 /* host1x engines with their host1x class ids */
 static const struct {
     const char *path;
@@ -513,10 +524,15 @@ static void nv_open(IpcObject *s, IpcCall *c) {
         memcpy(p, path, n);
     }
     DevKind kind = DEV_NONE;
-    uint32_t class_id = 0;
+    uint32_t class_id = 0, disp_syncpt = 0;
     if (!strcmp(p, "/dev/nvmap")) kind = DEV_NVMAP;
     else if (!strcmp(p, "/dev/nvhost-ctrl")) kind = DEV_CTRL;
     else {
+        for (unsigned i = 0; i < sizeof displays / sizeof *displays; i++)
+            if (!strcmp(p, displays[i].path)) {
+                kind = DEV_DISP;
+                disp_syncpt = displays[i].vblank_syncpt;
+            }
         for (unsigned i = 0; i < sizeof channels / sizeof *channels; i++)
             if (!strcmp(p, channels[i].path)) {
                 kind = DEV_CHANNEL;
@@ -534,6 +550,10 @@ static void nv_open(IpcObject *s, IpcCall *c) {
                 static const NvMediaMem mem = {nv_resolve, NULL};
                 fds[i] = (Fd){.kind = kind, .open = 1, .ch = {.class_id = class_id, .nvmap_fd = -1}};
                 if (kind == DEV_CHANNEL) fds[i].ch.eng = media_engine_new(class_id, &mem);
+                if (kind == DEV_DISP) {
+                    nvdisp_init(&fds[i].disp, disp_now_ns(), 0);
+                    fds[i].disp.syncpt = disp_syncpt;
+                }
                 snprintf(fds[i].path, sizeof fds[i].path, "%s", p);
                 fd = i;
                 err = NV_OK;
@@ -561,7 +581,8 @@ static uint32_t ctrl_gpu_ioctl(unsigned nr, uint8_t *data, unsigned size) {
         memcpy(c + 0x38, &flags, 8);
         uint32_t t[] = {2, 0x20, 0x20000, 0x20000, 0x1b, 0x30000}; /* TPC per GPC, AXI bus, big page 128K, compression page 128K, PDE bits, big page sizes */
         memcpy(c + 0x20, t, sizeof t);
-        uint32_t cls[] = {0x902d, 0xb197, 0xb1c0, 0xb06f, 0xa140, 0xb0b5, 1, 0x503, 0x503, 0x20}; /* 2D, 3D, compute, gpfifo, i2m, copy; gpc mask, SM arch, warps */
+        uint32_t cls[] = {0x902d, 0xb197, 0xb1c0, 0xb06f, 0xa140,
+                          0xb0b5, 1,      0x503,  0x503,  0x20}; /* 2D, 3D, compute, gpfifo, i2m, copy; gpc mask, SM arch, warps */
         memcpy(c + 0x40, cls, sizeof cls);
         uint64_t chip = 0x6230326d67; /* "gm20b" */
         memcpy(c + 0x88, &chip, 8);
@@ -596,6 +617,10 @@ static void do_ioctl(IpcCall *c, unsigned in_idx, unsigned out_idx) {
         case DEV_NVMAP: err = type == 1 ? nvmap_ioctl(nr, tmp, size) : NV_NOT_IMPLEMENTED; break;
         case DEV_CTRL: err = type == 0 ? ctrl_ioctl(nr, tmp, size) : NV_NOT_IMPLEMENTED; break;
         case DEV_CHANNEL: err = channel_ioctl(&fds[fd].ch, type, nr, tmp, size); break;
+        case DEV_DISP:
+            err = type == NVDISP_IOCTL_TYPE ? nvdisp_ioctl(&fds[fd].disp, nr, tmp, size, disp_now_ns()) : NV_NOT_IMPLEMENTED;
+            if (err == NVDISP_BAD_PARAMETER) err = NV_BAD_PARAMETER;
+            break;
         default:
             if (!strcmp(fds[fd].path, "/dev/nvhost-ctrl-gpu") && type == 0x47) err = ctrl_gpu_ioctl(nr, tmp, size);
             break;
@@ -675,9 +700,20 @@ static void nv_set_aruid(IpcObject *s, IpcCall *c) {
     uint32_t err = NV_OK;
     IPC_OUT(c, err);
 }
-static void nv_noop(IpcObject *s, IpcCall *c) {
+/* DumpGraphicsMemoryInfo: the console writes its graphics memory table to the debug log; here the nvmap bookkeeping goes to the verbose log. No reply data. */
+static void nv_dump_memory(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
+    uint64_t bytes = 0;
+    unsigned live = 0;
+    pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < MAX_NVMAP; i++)
+        if (nvmap[i].used) {
+            live++;
+            bytes += nvmap[i].size;
+        }
+    pthread_mutex_unlock(&lock);
+    LOGV("nvdrv", "DumpGraphicsMemoryInfo: %u nvmap handles, %llu bytes", live, (unsigned long long)bytes);
 }
 static void nv_cmd13(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -692,16 +728,16 @@ static const IpcCmd nv_cmds[] = {
     {1, "Ioctl", nv_ioctl, IPC_IMPL},
     {2, "Close", nv_close, IPC_IMPL},
     {3, "Initialize", nv_initialize, IPC_IMPL},
-    {4, "QueryEvent", nv_query_event, IPC_STUB},
-    {5, "MapSharedMemory", nv_set_aruid, IPC_STUB},
-    {6, "GetStatus", nv_status, IPC_STUB},
-    {7, "SetAruid", nv_set_aruid, IPC_STUB},
-    {8, "DumpGraphicsMemoryInfo", nv_noop, IPC_STUB},
-    {9, "InitializeDevtools", nv_set_aruid, IPC_STUB},
+    {4, "QueryEvent", nv_query_event, IPC_IMPL},
+    {5, "MapSharedMemory", nv_set_aruid, IPC_IMPL}, /* nvmap works on the guest's own memory: there is no transfer memory to map, success is the whole answer */
+    {6, "GetStatus", nv_status, IPC_IMPL}, /* the host has no graphics memory budget: an all-zero status ("nothing in use / no pressure") is the true answer */
+    {7, "SetAruid", nv_set_aruid, IPC_IMPL}, /* one process, one applet resource user id: nothing to remember */
+    {8, "DumpGraphicsMemoryInfo", nv_dump_memory, IPC_IMPL},
+    {9, "InitializeDevtools", nv_set_aruid, IPC_IMPL}, /* the devtools backend does not exist on the host: accepted, there is nothing to initialise */
     {10, "Ioctl2", nv_ioctl2, IPC_IMPL},
     {11, "Ioctl3", nv_ioctl3, IPC_IMPL},
     {12, "Ioctl3", nv_ioctl3, IPC_IMPL},
-    {13, "Unknown13", nv_cmd13, IPC_STUB},
+    {13, "Unknown13", nv_cmd13, IPC_STUB}, /* no public description of the command (reply-less on the console builds seen so far); stays a stub on purpose */
 };
 static IpcObject *nv_new(void) { return IPC_OBJECT("nvdrv", nv_cmds, NULL, NULL); }
 void service_register_nvdrv(void) {

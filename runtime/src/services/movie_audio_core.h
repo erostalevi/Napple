@@ -15,6 +15,11 @@ void vorbispcm_destroy(VorbisPcm *v);
 /* csd-0 style blob: u8 count-1 (2), Xiph-laced lengths of the first two packets, then the three header packets back to back. Returns AUDIO_OK once
  * the decoder is ready, AUDIO_BAD on a malformed blob. */
 int vorbispcm_set_headers_xiph(VorbisPcm *v, const uint8_t *blob, size_t size);
+/* Out-of-band headers as the movie library hands them over in the format metadata (csd-0, csd-1, csd-2; NULL/0 for a missing key). Each blob is a Xiph-laced bundle
+ * of all three packets, or one header packet; the usual Android layouts all work: csd-0 = bundle, csd-0 + csd-1 = identification + setup (the comment header is
+ * synthesised), csd-0..2 = the three packets. Returns AUDIO_OK once the decoder is ready, AUDIO_NEED_MORE when the headers are incomplete so far (the rest may
+ * still arrive as the first input buffers), AUDIO_BAD on a malformed blob. */
+int vorbispcm_set_headers_csd(VorbisPcm *v, const uint8_t *const blobs[3], const size_t sizes[3]);
 /* One packet: a header packet (first byte odd, "vorbis" at 1..6) is collected until all three are in, an audio packet is decoded. Writes up to
  * max_frames interleaved sample frames to out and sets *frames (0 for headers and for the first audio packet, which only primes the overlap).
  * Returns AUDIO_OK, AUDIO_BAD (corrupt packet), AUDIO_NEED_MORE (audio before the headers were complete), AUDIO_NOMEM. */

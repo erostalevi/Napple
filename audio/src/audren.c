@@ -286,21 +286,31 @@ static uint32_t effect_out_bytes(const AudioRenderer *r) { return revision_numbe
  * laid out back to back from start time 0. The 0x10 block in the update output carries the byte count of the frame written to the
  * performance buffer (0 when the title supplied no buffer). The buffer holds one frame: a header, then 0x10-byte entries
  * {u32 node id, u32 start time (us), u32 processing time (us), u32 type (1 voice, 2 submix, 3 final mix, 4 sink)}. No detail entries are
- * produced (detail_count 0), so a title that asks for detail types sees none. Header, from the author's memory of the public description of
+ * produced unless the title names a target node (see below). Header, from the author's memory of the public description of
  * the performance frame (unverified; the two sizes and field order are the part to compare first if a title reads it back):
  *   format 1 (REV1..REV4), 0x10 bytes: u32 entry_count, u32 detail_count, u32 next_offset (bytes from the frame start to the next frame =
  *     the frame size), u32 total_processing_time.
  *   format 2 (REV5+), 0x20 bytes: u32 magic 'PERF', u32 entry_count, u32 detail_count, u32 next_offset, u32 total_processing_time,
- *     u32 voices_dropped, u32 start_time (0), u32 frame_index (renderer frames elapsed, low 32 bits). */
+ *     u32 voices_dropped, u32 start_time (0), u32 frame_index (renderer frames elapsed, low 32 bits).
+ * Node ids: the id the title put in the voice / mix / sink parameters (nn::audio NodeId: type in bits 28..31, 1 voice, 2 sub mix, 3 final mix,
+ * 4 sink; yuzu NodeIdHelper, Ryujinx PerformanceEntryAddresses); the array index when the title left it 0.
+ * Detail entries: the update input's performance section is {s32 target_node_id, 12 bytes padding} (yuzu PerformanceInParameter). With a target
+ * that names a started voice, the frame carries, after its entries, 0x10-byte detail entries {u32 node id, u32 start time, u32 processing time,
+ * u8 detail type, u8 parent entry type, 2 bytes padding} for what the voice's DSP commands cost: the data source (PcmInt16 / Adpcm / PcmFloat),
+ * the volume ramp and the mix. A target naming a sub mix gets one Mix detail. The detail type numbers follow the order of yuzu's
+ * PerformanceDetailType (Ryujinx PerformanceDetailType). All recalled without network access: unverified. */
+enum { PERF_DETAIL_ENTRY = 0x10, PERF_DETAIL_US = 8 };
+enum { PERF_D_PCM16 = 1, PERF_D_ADPCM = 2, PERF_D_RAMP = 3, PERF_D_BIQUAD = 4, PERF_D_MIX = 5, PERF_D_PCMF32 = 10 };
 enum { PERF_VOICE = 1, PERF_SUBMIX = 2, PERF_FINAL_MIX = 3, PERF_SINK = 4 };
 enum { PERF_VOICE_US = 24, PERF_MIX_US = 40, PERF_SINK_US = 16, PERF_HEADER_V1 = 0x10, PERF_HEADER_V2 = 0x20, PERF_ENTRY = 0x10, PERF_MAGIC = 0x46524550 };
-static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t perf_size) {
+static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t perf_size, int32_t target) {
     const int v2 = revision_number(r->revision) >= 5;
     const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
     if (!perf || perf_size < header) return 0;
     const uint32_t max_entries = (uint32_t)((perf_size - header) / PERF_ENTRY);
-    uint32_t n = 0, t = 0, dropped = 0;
+    uint32_t n = 0, t = 0, dropped = 0, nd = 0;
     uint8_t *w = perf + header;
+    uint32_t det_start[64], det_node[64], det_count = 0; /* entries a detail target matched, in order */
 #define PERF_ADD(node, us, kind)                                                                                                                               \
     do {                                                                                                                                                       \
         if (n < max_entries) {                                                                                                                                 \
@@ -314,18 +324,50 @@ static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t 
     for (int i = 0; i < r->param.voice_count; i++) {
         if (r->voices[i].state != SV_STARTED) continue;
         if (r->voices[i].dropped) dropped++;
-        else PERF_ADD(i, PERF_VOICE_US, PERF_VOICE);
+        else {
+            uint32_t id = r->voices[i].in.node_id ? r->voices[i].in.node_id : (uint32_t)i;
+            if (target && (uint32_t)target == id && det_count < 64) det_start[det_count] = t, det_node[det_count++] = (uint32_t)i | 0x80000000u;
+            PERF_ADD(id, PERF_VOICE_US, PERF_VOICE);
+        }
     }
-    for (int i = 0; i < r->param.submix_count; i++) PERF_ADD(i, PERF_MIX_US, PERF_SUBMIX);
-    PERF_ADD(r->param.submix_count, PERF_MIX_US, PERF_FINAL_MIX);
-    for (int i = 0; i < r->param.sink_count; i++) PERF_ADD(i, PERF_SINK_US, PERF_SINK);
+    for (int i = 0; i < r->param.submix_count; i++) {
+        uint32_t id = r->mixes[i].node_id ? r->mixes[i].node_id : (uint32_t)i;
+        if (target && (uint32_t)target == id && det_count < 64) det_start[det_count] = t, det_node[det_count++] = (uint32_t)i;
+        PERF_ADD(id, PERF_MIX_US, PERF_SUBMIX);
+    }
+    PERF_ADD(r->mixes[r->param.submix_count].node_id ? r->mixes[r->param.submix_count].node_id : (uint32_t)r->param.submix_count, PERF_MIX_US, PERF_FINAL_MIX);
+    for (int i = 0; i < r->param.sink_count; i++) PERF_ADD(r->sinks[i].node_id ? r->sinks[i].node_id : (uint32_t)i, PERF_SINK_US, PERF_SINK);
 #undef PERF_ADD
-    uint32_t bytes = header + n * PERF_ENTRY;
+    {
+        uint32_t room = (uint32_t)((perf_size - header) / PERF_ENTRY) - n; /* detail entries share the buffer with the entries */
+        uint8_t *dw = w;
+        for (uint32_t k = 0; k < det_count; k++) {
+            uint32_t kinds[3], nk = 0;
+            uint32_t id, parent = PERF_SUBMIX;
+            if (det_node[k] & 0x80000000u) {
+                const ServerVoice *v = &r->voices[det_node[k] & 0x7fffffffu];
+                id = v->in.node_id ? v->in.node_id : (det_node[k] & 0x7fffffffu);
+                parent = PERF_VOICE;
+                kinds[nk++] = v->in.sample_format == FMT_ADPCM ? PERF_D_ADPCM : v->in.sample_format == FMT_PCMF32 ? PERF_D_PCMF32 : PERF_D_PCM16;
+                kinds[nk++] = PERF_D_RAMP;
+                kinds[nk++] = PERF_D_MIX;
+            } else {
+                id = r->mixes[det_node[k]].node_id ? r->mixes[det_node[k]].node_id : det_node[k];
+                kinds[nk++] = PERF_D_MIX;
+            }
+            for (uint32_t j = 0; j < nk && nd < room; j++, nd++) {
+                uint32_t e[4] = {id, det_start[k] + j * PERF_DETAIL_US, PERF_DETAIL_US, kinds[j] | (parent << 8)};
+                memcpy(dw, e, sizeof e);
+                dw += PERF_DETAIL_ENTRY;
+            }
+        }
+    }
+    uint32_t bytes = header + (n + nd) * PERF_ENTRY;
     if (v2) {
-        uint32_t hdr[8] = {PERF_MAGIC, n, 0, bytes, t, dropped, 0, (uint32_t)r->elapsed_frames};
+        uint32_t hdr[8] = {PERF_MAGIC, n, nd, bytes, t, dropped, 0, (uint32_t)r->elapsed_frames};
         memcpy(perf, hdr, sizeof hdr);
     } else {
-        uint32_t hdr[4] = {n, 0, bytes, t};
+        uint32_t hdr[4] = {n, nd, bytes, t};
         memcpy(perf, hdr, sizeof hdr);
     }
     return bytes;
@@ -335,13 +377,13 @@ static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t 
  * collects them: each update appends its frame, then every whole held frame, oldest first, that fits in the guest's buffer is copied out and dropped, and
  * the byte total is reported. A buffer too small for even the oldest frame gets the newest frame with its entries capped (the single-frame behaviour), and
  * the history restarts. Frames chain through next_offset (the frame size), so a reader walks them back to back. */
-static int perf_append_frame(AudioRenderer *r) {
+static int perf_append_frame(AudioRenderer *r, int32_t target) {
     const int v2 = revision_number(r->revision) >= 5;
     const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
-    const size_t full = header + (size_t)(r->param.voice_count + r->param.submix_count + 1 + r->param.sink_count) * PERF_ENTRY;
+    const size_t full = header + (size_t)(r->param.voice_count * 4 + r->param.submix_count * 2 + 1 + r->param.sink_count) * PERF_ENTRY;
     uint8_t *frame = malloc(full);
     if (!frame) return -1;
-    const uint32_t flen = write_performance(r, frame, full);
+    const uint32_t flen = write_performance(r, frame, full, target);
     uint32_t keep = r->param.performance_frame_count > 1 ? (uint32_t)r->param.performance_frame_count : 1;
     if (keep > 64) keep = 64;
     while (r->perf_nframes >= keep) { /* drop the oldest */
@@ -362,7 +404,7 @@ static int perf_append_frame(AudioRenderer *r) {
     free(frame);
     return 0;
 }
-static uint32_t collect_performance(AudioRenderer *r, uint8_t *perf, size_t perf_size) {
+static uint32_t collect_performance(AudioRenderer *r, uint8_t *perf, size_t perf_size, int32_t target) {
     const int v2 = revision_number(r->revision) >= 5;
     const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
     const int have_buffer = perf && perf_size >= header;
@@ -371,7 +413,7 @@ static uint32_t collect_performance(AudioRenderer *r, uint8_t *perf, size_t perf
         r->perf_nframes = 0;
         return 0;
     }
-    if (perf_append_frame(r)) return have_buffer ? write_performance(r, perf, perf_size) : 0;
+    if (perf_append_frame(r, target)) return have_buffer ? write_performance(r, perf, perf_size, target) : 0;
     if (!have_buffer) return 0; /* the frame waits for the next update that brings a buffer */
     size_t copied = 0;
     uint32_t taken = 0;
@@ -379,7 +421,7 @@ static uint32_t collect_performance(AudioRenderer *r, uint8_t *perf, size_t perf
     if (!taken) { /* the buffer cannot hold a whole frame */
         r->perf_hist_len = 0;
         r->perf_nframes = 0;
-        return write_performance(r, perf, perf_size);
+        return write_performance(r, perf, perf_size, target);
     }
     memcpy(perf, r->perf_hist, copied);
     memmove(r->perf_hist, r->perf_hist + copied, r->perf_hist_len - copied);
@@ -419,7 +461,9 @@ static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_si
     const uint8_t *mixes = take(&in, h.mixes, "mixes");
     need(h.sinks == (uint32_t)sc * sizeof(AudrenSinkIn), "sink section size");
     const uint8_t *sinks = take(&in, h.sinks, "sinks");
-    take(&in, h.performance, "performance");
+    const uint8_t *perf_in = take(&in, h.performance, "performance");
+    int32_t perf_target = 0; /* PerformanceInParameter.target_node_id */
+    if (h.performance >= 4) memcpy(&perf_target, perf_in, 4);
     take(&in, h.render_info, "render info");
     need(in.p == in.end, "unconsumed update input");
 
@@ -510,7 +554,7 @@ static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_si
         w += sizeof so;
     }
     {
-        uint32_t pb = collect_performance(r, perf, perf_size);
+        uint32_t pb = collect_performance(r, perf, perf_size, perf_target);
         memcpy(w, &pb, 4);
     } /* performance: bytes of history in the perf buffer */
     w += 0x10;

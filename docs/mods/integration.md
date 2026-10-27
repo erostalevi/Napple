@@ -54,10 +54,21 @@ Caveats for the integrator:
 * A miss in a *requested* patch should fail the build when the user asked for strict mode, and warn otherwise.
 * AArch32 modules (MK8D) go through `tables32` instead of the rewriter; the same hook works on their segments (offsets are file offsets as well).
 
+## Status of the build glue (2026-10-27, mod-glue-core)
+
+Done (tested on Linux, not verified on a Mac): `napple build --mods <a.napmod,dir,...>` (comma list, option may repeat).
+
+* `napple_mods::buildglue::ModSet` loads and validates every path (a validation error or a mod for another title fails the build, id twice fails), resolves with `enabled + code_patches + cheats + shaders` (naming a mod on the command line is the explicit enable), and exposes `key()`, `apply()`, `manifest_json()` and `write_overlay()`.
+* `pipeline.rs` `rewrite_version_mods` applies the patches right after `Nso::parse` and before the AArch32 check and the AOT rewrite; per module reports go to `modules/<name>.mods.json`; misses become build notes. Tables are still read from the original NSO bytes (see the caveat above: patches on `.dynsym`/`.dynamic`/relocation data are not seen by the tables).
+* The data directory keeps its unpatched name (`<buildid16>`); the applied set is in `manifest.json` (`mod_set` = hash of ids, versions, content hashes and selections; `mods` = id, version, content hash, per-module hits and misses; `mods_overlay` when a romfs overlay exists). The RomFS stream cache directory name includes the mod key, so a different mod set never reuses another set's cache. Building a different mod set into the same output folder rewrites that data directory.
+* `<data dir>/mods/overlay.json` (one entry per line: `{"path":"/a/b","file":"mods/files/<n>/a/b","size":N}` or `{"delete":"/a/b"}`) plus the copied files below `mods/files/<n>/`. Paths with quotes, backslashes or control characters are refused at build time.
+* Runtime: `romfs_overlay_load/lookup/child/free` in `runtime/src/services/romfs_map.c` (portable C; `make -C runtime build/host/test_romfs_overlay`). The lookup is not yet called from `fs.c` (the RomFS is served as a raw IStorage image, so a path-level overlay needs a romfs directory/file reader in front of it, or the builder re-packing the image): open item 2 below.
+* `napple build` also writes `<data dir>/control.nacp` (the raw NACP of the newest version with a control NCA) for ns 400/21/23.
+
 ## Mac follow-up list
 
-1. **Build integration**: add a `--mods <file.napmod|dir>...` option (and a Studio field) to `napple build`; load with `LoadedMod::load`, `validate`, `resolve(Selection)`, call the hook as above, store the reports, and key the data directory and caches by the applied mod set.
-2. **Runtime romfs overlay**: `runtime/src/services/romfs_map.c` (fsp-srv romfs lookup) should resolve paths through an `OverlayMap`. Suggested shape: the build step writes `<datadir>/mods/overlay.json` (`romfs path -> file inside the app bundle`, plus tombstones) and the runtime consults it before the RomFS image for `OpenFile`, `GetEntryType`, directory listings (merge and hide). Keeping this a data file keeps the runtime free of zip code.
+1. **Build integration** (done for the CLI, see above; Studio field still open): add a `--mods <file.napmod|dir>...` option (and a Studio field) to `napple build`; load with `LoadedMod::load`, `validate`, `resolve(Selection)`, call the hook as above, store the reports, and key the data directory and caches by the applied mod set.
+2. **Runtime romfs overlay** (data file and lookup done; the fs.c hook is open):  `runtime/src/services/romfs_map.c` (fsp-srv romfs lookup) should resolve paths through an `OverlayMap`. Suggested shape: the build step writes `<datadir>/mods/overlay.json` (`romfs path -> file inside the app bundle`, plus tombstones) and the runtime consults it before the RomFS image for `OpenFile`, `GetEntryType`, directory listings (merge and hide). Keeping this a data file keeps the runtime free of zip code.
 3. **Cheats**: the runtime supplies a `CheatMemory` over the guest address space (main module base, heap, alias, aslr) and runs `cheats::run` or a C port at a safe point once per frame; a C port needs the same opcode table (see [format](format.md#cheat-opcode-subset)).
 4. **Config**: apply `merge`d `ModConfig` as per-title settings (render scale in gfx, aspect, fps mode, fix toggles named by the title page).
 5. **Shaders**: the gfx shader cache looks up `shaders/<hash>.msl` by program hash before translating; compile errors must fall back to the translated shader and log once.

@@ -73,6 +73,13 @@ typedef struct {
     uint32_t cbuf_need[18];   // highest constant vec4 index + 1 per cbuf
     int reg_cb[256];          // register -> (cbuf << 24 | byte offset) it was last loaded from (-1 = unknown): resolves bindless (.B) texture handles
     int bl_n, bl_cb[64], bl_off[64], bl_slot[64];   // bindless handles read from user uniform buffers (index 8192 + n in tex_slot)
+    uint64_t gs_slots;      // geometry / tess control: record slots stored (STAGE_SLOT bits); tess control: patch slots in patch_slots
+    uint64_t patch_slots;
+    bool uses_vsys;         // vertex: system value outputs (attribute 0x60..0x6F) are kept in a local for stage_out / xfb
+    bool uses_gs_emit;      // geometry: OUT present
+    bool uses_vabsdiff4, uses_isel;   // helper functions to emit
+    int ald_vertex;         // register holding the vertex index of the ALD/AST being translated (RZ = none), set by the handler
+    bool ald_patch, ald_out, ald_vlatched;   // ald_vlatched: the vertex index was copied to `vx` (the destination registers may overlap it)
 } Ctx;
 
 static uint64_t bits(uint64_t w, int lo, int n) { return (w >> lo) & ((n == 64) ? ~0ull : ((1ull << n) - 1)); }
@@ -295,8 +302,75 @@ static void icmp_expr(char *out, int op, const char *a, const char *b, bool is_s
 // ------------------------------------------------------------------ attributes
 // Maxwell attribute space: 0x70 position, 0x80 + 16*i generic attribute i, 0x2F8 instance id,
 // 0x2FC vertex id, 0x3FC front facing, 0x6C point size.
+/* Stage-to-stage record slot of an attribute address (-1: not stored in a record). Patch records use their own map. */
+static int stage_slot(uint32_t addr) {
+    if (addr >= 0x60 && addr < 0x70) return STAGE_SLOT_SYS;
+    if (addr >= 0x70 && addr < 0x80) return STAGE_SLOT_POS;
+    if (addr >= 0x80 && addr < 0x280) return STAGE_SLOT_GENERIC + (int)((addr - 0x80) >> 4);
+    return -1;
+}
+static int patch_slot(uint32_t addr) {
+    if (addr < 0x10) return 0;
+    if (addr < 0x20) return 1;
+    if (addr < 0x220) return 2 + (int)((addr - 0x20) >> 4);
+    return -1;
+}
+
+static int gs_in_verts(const Ctx *c) { return c->key && c->key->gs_in_vertices ? c->key->gs_in_vertices : 3; }
+
+/* ALD in the geometry, tess control and tess eval stages. `vtx` is the vertex index register (RZ: vertex 0), `idx` the run-time attribute address expression of
+ * an indexed read (NULL for a constant address). */
+static void attr_load_staged(Ctx *c, int dst, uint32_t addr, const char *idx) {
+    char e[400], vtx[40], sl[160], cm[160];
+    const char *vexp = c->ald_vertex == RZ ? "0u" : c->ald_vlatched ? "vx" : reg(c, c->ald_vertex, vtx);
+    bool patch = c->ald_patch;
+    if (idx) {
+        if (patch) sprintf(sl, "min(((%s) < 0x20u ? ((%s) >> 4) : 2u + (((%s) - 0x20u) >> 4)), %uu)", idx, idx, idx, STAGE_SLOTS - 1);
+        else sprintf(sl, "min(((%s) < 0x70u ? 0u : ((%s) < 0x80u ? 1u : 2u + (((%s) - 0x80u) >> 4))), %uu)", idx, idx, idx, STAGE_SLOTS - 1);
+        sprintf(cm, "((%s) >> 2) & 3u", idx);
+    } else if (c->stage == STAGE_TESS_EVAL && !patch && (addr == 0x2F0 || addr == 0x2F4)) {
+        sprintf(e, "as_type<uint>(tess_coord[%d])", (addr >> 2) & 1);
+        set_reg(c, dst, e);
+        return;
+    } else {
+        int sv = patch ? patch_slot(addr) : stage_slot(addr);
+        if (sv < 0) {
+            sprintf(e, "0u /* attr %#x */", addr);
+            set_reg(c, dst, e);
+            return;
+        }
+        sprintf(sl, "%uu", sv);
+        sprintf(cm, "%uu", (addr >> 2) & 3);
+        if (!patch && sv >= STAGE_SLOT_GENERIC) c->in_attr_mask |= 1u << (sv - STAGE_SLOT_GENERIC);
+    }
+    if (idx && !patch) c->in_attr_mask = 0xffffffffu;
+    if (c->stage == STAGE_GEOMETRY) {
+        if (!idx && addr == 0x60 && !patch) {
+            sprintf(e, "(sp[2] + gid)");
+        } else if (patch) {
+            sprintf(e, "0u /* patch attribute in a geometry shader */");
+        } else {
+            sprintf(e, "as_type<uint>(stage_in[(sp[1] + gid * %uu + %s) * %uu + %s][%s])", gs_in_verts(c), vexp, STAGE_SLOTS, sl, cm);
+        }
+    } else if (c->stage == STAGE_TESS_CTRL) {
+        if (!idx && addr == 0x60 && !patch) sprintf(e, "(sp[2] + pid)");
+        else if (patch) sprintf(e, "as_type<uint>(tess_patch[pid * %uu + %s][%s])", STAGE_SLOTS, sl, cm);
+        else if (c->ald_out) sprintf(e, "as_type<uint>(tess_vtx[(pid * %uu + %s) * %uu + %s][%s])", c->key ? c->key->tess_out_vertices : 1u, vexp, STAGE_SLOTS, sl, cm);
+        else sprintf(e, "as_type<uint>(stage_in[(sp[1] + pid * %uu + %s) * %uu + %s][%s])", c->key ? c->key->tess_in_vertices : 1u, vexp, STAGE_SLOTS, sl, cm);
+    } else {   // STAGE_TESS_EVAL
+        if (!idx && addr == 0x60 && !patch) strcpy(e, "(sp[2] + patch_id)");
+        else if (patch) sprintf(e, "as_type<uint>(tess_patch[patch_id * %uu + %s][%s])", STAGE_SLOTS, sl, cm);
+        else sprintf(e, "as_type<uint>(tess_vtx[(patch_id * %uu + %s) * %uu + %s][%s])", c->key ? c->key->tess_out_vertices : 1u, vexp, STAGE_SLOTS, sl, cm);
+    }
+    set_reg(c, dst, e);
+}
+
 static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
     char e[256];
+    if (c->stage == STAGE_GEOMETRY || c->stage == STAGE_TESS_CTRL || c->stage == STAGE_TESS_EVAL) {
+        attr_load_staged(c, dst, addr, idx);
+        return;
+    }
     if (idx) {
         /* Interpolated input read through a register address (AL2P + IPA with the index flag; decal_uber): all varyings the vertex shader provides are
          * mirrored in a local array and the register (a physical attribute address, 0x80 + 16 * n + 4 * comp) selects the element. */
@@ -384,16 +458,48 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
     set_reg(c, dst, e);
 }
 
+/* AST in the geometry (current output vertex) and tess control (own control point, or the patch record with the P bit) stages. */
+static void attr_store_staged(Ctx *c, int src, uint32_t addr) {
+    char b[16], vb[40];
+    const char *v = reg(c, src, b);
+    int sv = c->ald_patch ? patch_slot(addr) : stage_slot(addr);
+    if (sv < 0) {
+        sp(&c->body, "    /* store attr %#x */\n", addr);
+        return;
+    }
+    int comp = (addr >> 2) & 3;
+    if (c->stage == STAGE_GEOMETRY) {
+        c->gs_slots |= 1ull << sv;
+        sp(&c->body, "    gso[%d][%d] = as_type<float>(%s);\n", sv, comp, v);
+    } else if (c->ald_patch) {
+        c->patch_slots |= 1ull << sv;
+        sp(&c->body, "    tess_patch[pid * %uu + %d][%d] = as_type<float>(%s);\n", STAGE_SLOTS, sv, comp, v);
+    } else {
+        c->gs_slots |= 1ull << sv;
+        (void)vb;
+        sp(&c->body, "    tess_vtx[(pid * %uu + inv) * %uu + %d][%d] = as_type<float>(%s);\n", c->key ? c->key->tess_out_vertices : 1u, STAGE_SLOTS, sv, comp, v);
+    }
+}
+
 static void attr_store(Ctx *c, int src, uint32_t addr) {
     char b[16];
     const char *v = reg(c, src, b);
-    if (addr >= 0x70 && addr < 0x80) {
+    if (c->stage == STAGE_GEOMETRY || c->stage == STAGE_TESS_CTRL) {
+        attr_store_staged(c, src, addr);
+        return;
+    }
+    if (addr >= 0x60 && addr < 0x6C) {   // primitive id / layer / viewport index: kept for the stage-out record
+        c->uses_vsys = true;
+        sp(&c->body, "    vsys[%d] = as_type<float>(%s);\n", (addr >> 2) & 3, v);
+    } else if (addr >= 0x70 && addr < 0x80) {
         sp(&c->body, "    out.pos[%d] = as_type<float>(%s);\n", (addr >> 2) & 3, v);
     } else if (addr >= 0x80 && addr < 0x280) {
         int a = (addr - 0x80) >> 4;
         c->out_attr_mask |= 1u << a;
         sp(&c->body, "    out.v%d[%d] = as_type<float>(%s);\n", a, (addr >> 2) & 3, v);
     } else if (addr == 0x6C) {
+        c->uses_vsys = true;
+        sp(&c->body, "    vsys[3] = as_type<float>(%s);\n", v);
         if (c->key && c->key->point_prim) {   // Metal rejects [[point_size]] in pipelines whose topology class is not point
             c->info->writes_point_size = true;
             sp(&c->body, "    out.psize = as_type<float>(%s);\n", v);
@@ -1376,6 +1482,12 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         int n = 1 + (int)bits(w, 47, 2);
         uint32_t addr = (uint32_t)bits(w, 20, 10);
         int ia = (int)bits(w, 8, 8);
+        c->ald_vertex = (int)bits(w, 39, 8);   // geometry / tessellation: the vertex index register
+        c->ald_patch = bits(w, 31, 1);
+        c->ald_out = bits(w, 32, 1);
+        bool staged = c->stage == STAGE_GEOMETRY || c->stage == STAGE_TESS_CTRL || c->stage == STAGE_TESS_EVAL;
+        c->ald_vlatched = staged && c->ald_vertex != RZ;
+        if (c->ald_vlatched) sp(&c->body, "    { uint vx = %s;\n", R(c->ald_vertex));
         if (ia != RZ) {
             /* a[Ra + imm]: the index is latched first, the destination may overlap Ra */
             sp(&c->body, "    { uint ix = %s;\n", R(ia));
@@ -1387,9 +1499,14 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             sp(&c->body, "    }\n");
         } else
             for (int i = 0; i < n; i++) attr_load(c, d + i, addr + 4 * i, NULL);
+        if (c->ald_vlatched) sp(&c->body, "    }\n");
+        c->ald_vlatched = false;
     } else if (OPM(0xeff0000000000000ull, 0xfff8000000000000ull)) {   // ST attribute
         int n = 1 + (int)bits(w, 47, 2);
         uint32_t addr = (uint32_t)bits(w, 20, 10);
+        c->ald_vertex = RZ;
+        c->ald_patch = bits(w, 31, 1);
+        c->ald_out = false;
         for (int i = 0; i < n; i++) attr_store(c, d + i, addr + 4 * i);
     } else if (OPM(0xef90000000000000ull, 0xfff8000000000000ull)) {   // LD c[idx][reg + imm]
         int idx = (int)bits(w, 36, 5);
@@ -1439,7 +1556,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         emit_tld4_tmml(c, w, true, true);
     } else if (OPM(0xdf00000000000000ull, 0xff40000000000000ull)) {   // TLD4S
         emit_tld4s(c, w);
-    } else if (OPM(0xdf48000000000000ull, 0xfff8000000000000ull)) {   // TXQ
+    } else if (OPM(0xdf48000000000000ull, 0xfff8000000000000ull) || OPM(0xdf40000000000000ull, 0xfff8000000000000ull)) {   // TXQ, TXA
+        /* TXA (texture attribute query) is read like TXQ: same index / selector / mask fields, and the attributes Metal can answer are the ones TXQ names
+         * (selector 1: width, height, depth or layers, mip count). Other selectors are refused by name. */
+        const char *qn = (w >> 52 & 0xf) == 0x4 ? "txa" : "txq";
         uint32_t index = (uint32_t)bits(w, 36, 13);
         int qt = (int)bits(w, 22, 6);
         uint32_t mask = (uint32_t)bits(w, 31, 4);
@@ -1464,7 +1584,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                 }
             sp(&c->body, "    }\n");
         } else {
-            fail(c, "txq type %d", qt);
+            fail(c, "%s type %d", qn, qt);
         }
     } else if (OPM(0x5080000000000000ull, 0xfff8000000000000ull)) {   // MUFU
         int fn = (int)bits(w, 20, 4);
@@ -2038,7 +2158,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             /* SR_Y_DIRECTION: -1 under the lower-left window origin (NVN's default; LASRecomp answers -1 for LAS, nxnative LAS notes), +1 under upper-left
          * (Ryujinx's constant, right for the upper-left titles it runs). The origin is the guest's, from the pipeline key. */
             case 0x12: set_reg(c, d, c->key && c->key->upper_left ? "0x3f800000u" : "0xbf800000u"); break;
-            case 0x21: set_reg(c, d, "tid.x"); break;
+            case 0x11: set_reg(c, d, c->stage == STAGE_TESS_CTRL ? "inv" : "0u"); break;   // SR_INVOCATION_ID: the output control point of a tess control thread
+            case 0x21: set_reg(c, d, c->stage == STAGE_COMPUTE || c->stage == STAGE_TESS_CTRL ? "tid.x" : "0u"); break;
             case 0x22: set_reg(c, d, "tid.y"); break;
             case 0x23: set_reg(c, d, "tid.z"); break;
             case 0x25: set_reg(c, d, "ctaid.x"); break;
@@ -2480,7 +2601,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
                 sp(&c->body, "    r%d = 0u;\n", d + k);
             }
     } else if (OPM(0xf0a8000000000000ull, 0xfff8000000000000ull)) {   // BAR
-        sp(&c->body, "    threadgroup_barrier(mem_flags::mem_threadgroup);\n");
+        // tess control invocations exchange their outputs through device memory, so the barrier orders those writes too
+        sp(&c->body, "    threadgroup_barrier(%s);\n", c->stage == STAGE_TESS_CTRL ? "mem_flags::mem_device | mem_flags::mem_threadgroup" : "mem_flags::mem_threadgroup");
     } else if (OPM(0x5c70000000000000ull, 0xfff8000000000000ull) || OPM(0x4c70000000000000ull, 0xfff8000000000000ull) ||
                OPM(0x3870000000000000ull, 0xfef8000000000000ull)) {   // DADD (rounding 39-40, neg B 45, abs A 46, neg A 48, abs B 49)
         sprintf(t, "sd_add(%s, %s, %uu)", DNA(DR(a), bits(w, 48, 1), bits(w, 46, 1)), DNA(DB(), bits(w, 45, 1), bits(w, 49, 1)), (unsigned)bits(w, 39, 2));
@@ -2614,15 +2736,56 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sp(&c->body, "    if (cal_n == 0u) { exit_now = true; break; }\n    pc = cal[--cal_n]; continue;\n");
     } else if (OPM(0xef60000000000000ull, 0xfff8000000000000ull) || OPM(0xef80000000000000ull, 0xfff8000000000000ull)) {
         // CCTL / CCTLL: cache control (invalidate, write back): no effect on the emulated memory
-    } else if (OPM(0x5000000000000000ull, 0xff80000000000000ull)) {
-        fail(c, "VABSDIFF4 is not translated (four-lane byte absolute difference: no application shader uses it)");
-    } else if (OPM(0xdf40000000000000ull, 0xfff8000000000000ull)) {
-        fail(c, "TXA is not translated (texture attribute query: no application shader uses it)");
+    } else if (OPM(0x5000000000000000ull, 0xff80000000000000ull)) {   // VABSDIFF4
+        /* Four-lane byte absolute difference. Field layout (pinned by tests/t_xlate_stages.inc; the lane selectors follow VMNMX): A = [8,16), B = register [20,28)
+         * when bit 50 is set else the 16-bit immediate at 20, C = [39,47), A signed 48, B signed 49, combine op [51,54): 0 = four packed byte differences
+         * (C unused), 1 = ADD (sum of the four differences + C), 2 = MIN and 3 = MAX (per byte against C), SAT 54 (the ADD sum saturates at 2^32 - 1).
+         * Lane selectors A [36,39) and B [28,31) must be 0 (the whole word). */
+        int op = (int)bits(w, 51, 3);
+        if (bits(w, 36, 3) || (bits(w, 50, 1) && bits(w, 28, 3))) {
+            fail(c, "VABSDIFF4 with a lane selector (only the four-byte word form is translated)");
+            return;
+        }
+        if (op > 3) {
+            fail(c, "VABSDIFF4 combine op %d", op);
+            return;
+        }
+        c->uses_vabsdiff4 = true;
+        char eb[64];
+        if (bits(w, 50, 1)) strcpy(eb, R((int)bits(w, 20, 8)));
+        else sprintf(eb, "0x%xu", (uint32_t)bits(w, 20, 16));
+        sprintf(t, "vabsdiff4(%s, %s, %s, %s, %s, %uu, %s)", R(a), eb, R((int)bits(w, 39, 8)), bits(w, 48, 1) ? "true" : "false", bits(w, 49, 1) ? "true" : "false",
+                (unsigned)op, bits(w, 54, 1) ? "true" : "false");
+        set_reg(c, d, t);
     } else if (OPM(0x53f8000000000000ull, 0xfff8000000000000ull) || OPM(0x53d8000000000000ull, 0xfff8000000000000ull)) {
         fail(c, "IDP is not translated (integer dot product exists from SM 6.0 only; Maxwell SM 5.x has none)");
     } else if (OPM(0x5a80000000000000ull, 0xff80000000000000ull) || OPM(0x5280000000000000ull, 0xff80000000000000ull) ||
-               OPM(0x4a80000000000000ull, 0xff80000000000000ull) || OPM(0x3480000000000000ull, 0xfe80000000000000ull)) {
-        fail(c, "IMADSP is not translated (multiply-add with sub-word operand selectors: compilers emit XMAD instead)");
+               OPM(0x4a80000000000000ull, 0xff80000000000000ull) || OPM(0x3480000000000000ull, 0xfe80000000000000ull)) {   // IMADSP
+        /* Multiply-add with sub-word operand selectors: d = sel_a(Ra) * sel_b(B) + C, low 32 bits. Layout (pinned by tests/t_xlate_stages.inc): B by the opcode
+         * class (reg 0x5a, cbuf 0x4a, imm 0x34; the 0x52 form has B = REG_39 and C = a cbuf, as IMAD), C = REG_39, A selector [48,51), B selector [51,54), each
+         * 0 U32, 1 S32, 2 U8, 3 S8, 4 U16, 5 S16 (the low byte / half of the operand, zero- or sign-extended). The .CC, .HI and .SAT forms (bits 47, 54, 55 of the
+         * class) are refused. */
+        int as = (int)bits(w, 48, 3), bs = (int)bits(w, 51, 3);
+        if (as > 5 || bs > 5) {
+            fail(c, "IMADSP operand selector %d", as > 5 ? as : bs);
+            return;
+        }
+        if (bits(w, 47, 1) || bits(w, 54, 1)) {
+            fail(c, "IMADSP carry/high forms (.CC/.HI)");
+            return;
+        }
+        char cb[128];
+        const char *bv, *cv;
+        if ((w >> 56) == 0x52) {
+            bv = R((int)bits(w, 39, 8));
+            cv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+        } else {
+            bv = B(false);
+            cv = R((int)bits(w, 39, 8));
+        }
+        c->uses_isel = true;
+        sprintf(t, "(isel(%s, %uu) * isel(%s, %uu) + %s)", R(a), (unsigned)as, bv, (unsigned)bs, cv);
+        set_reg(c, d, t);
     } else if (OPM(0xf0b8000000000000ull, 0xfff8000000000000ull) || OPM(0xf0c0000000000000ull, 0xfff8000000000000ull) ||
                OPM(0xe3a0000000000000ull, 0xfff0000000000000ull) || OPM(0xe390000000000000ull, 0xfff0000000000000ull) ||
                OPM(0xe380000000000000ull, 0xfff0000000000000ull) || OPM(0xe370000000000000ull, 0xfff0000000000000ull) ||
@@ -2635,8 +2798,22 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             c,
             "control/system instruction %03x (B2R R2B BPT IDE RAM SAM RTT GET/SETCRSPTR GET/SETLMEMBASE PEXIT LONGJMP PLONGJMP ISBERD STP) is not translated: debugger, trap, call-return-stack, tessellation and geometry plumbing no application shader reaches",
             (unsigned)(w >> 52));
-    } else if (OPM(0xfbe0000000000000ull, 0xfff8000000000000ull)) {
-        fail(c, "OUT: geometry shader output is not supported (Metal has no geometry stage)");
+    } else if (OPM(0xfbe0000000000000ull, 0xfff8000000000000ull) || OPM(0xf6e0000000000000ull, 0xfff8000000000000ull) ||
+               OPM(0xebe0000000000000ull, 0xfff8000000000000ull)) {   // OUT (reg, imm, cbuf forms)
+        /* Geometry shader output: mode [39,41) 1 EMIT (append the current output vertex to the strip), 2 CUT (end the strip), 3 EMIT then CUT. The stream
+         * operand is ignored (stream 0 only). Rd receives the number of vertices emitted so far. Emulated per input primitive in the geometry compute kernel. */
+        if (c->stage != STAGE_GEOMETRY) {
+            fail(c, "OUT: geometry shader output outside a geometry shader (stage %d)", c->stage);
+            return;
+        }
+        int mode = (int)bits(w, 39, 2);
+        c->uses_gs_emit = true;
+        if (mode & 1)
+            sp(&c->body,
+               "    if (gs_n < GS_MAXV) { gs_put(gs_vtx + (gid * GS_MAXV + gs_n) * %uu, gso); gs_idx[gid * 2u * GS_MAXV + gs_ic++] = gid * GS_MAXV + gs_n; gs_n++; gs_open = true; }\n",
+               STAGE_SLOTS);
+        if (mode & 2) sp(&c->body, "    if (gs_open) { gs_ic++; gs_open = false; }\n");
+        if (d != RZ) set_reg(c, d, "gs_n");
     } else if ((w >> 53) == (0xeb0 >> 1) || (w >> 53) == (0xeb2 >> 1) || (w >> 53) == (0xeb4 >> 1) || (w >> 53) == (0xea0 >> 1)) {   // SULD / SUST / SURED / SUATOM (+ .B)
         unsigned top = (unsigned)(w >> 52);
         emit_surface(c, w, top >> 1 == 0xeb0 >> 1 ? SF_SULD : top >> 1 == 0xeb2 >> 1 ? SF_SUST : top >> 1 == 0xeb4 >> 1 ? SF_SURED : SF_SUATOM, top & 1);
@@ -2669,6 +2846,82 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     }
     (void)op13;
     if (guarded) sp(&c->body, "  }\n");
+}
+
+// ------------------------------------------------------------------ stages beyond vertex / fragment / compute
+// Requirements of the geometry, tessellation and vertex-capture keys; the contract is in maxwell.h and docs/architecture/gfx.md.
+static void stage_check(Ctx *c) {
+    const ShaderKey *k = c->key;
+    int st = c->stage;
+    if (st == STAGE_GEOMETRY) {
+        if (!k || k->gs_max_vertices == 0) fail(c, "geometry shader without ShaderKey.gs_max_vertices");
+        else if (k->gs_max_vertices > 1024) fail(c, "geometry shader declares %u output vertices (the hardware maximum is 1024)", (unsigned)k->gs_max_vertices);
+        else if (k->gs_in_vertices && k->gs_in_vertices != 1 && k->gs_in_vertices != 2 && k->gs_in_vertices != 3 && k->gs_in_vertices != 4 && k->gs_in_vertices != 6)
+            fail(c, "geometry shader input primitive of %u vertices", (unsigned)k->gs_in_vertices);
+        else if (k->gs_out_topology > GS_OUT_LINE_STRIP) fail(c, "geometry shader output topology %u", (unsigned)k->gs_out_topology);
+    } else if (st == STAGE_TESS_CTRL || st == STAGE_TESS_EVAL) {
+        if (!k || k->tess_out_vertices < 1 || k->tess_out_vertices > 32) fail(c, "tessellation needs ShaderKey.tess_out_vertices in 1..32");
+        else if (st == STAGE_TESS_CTRL && (k->tess_in_vertices < 1 || k->tess_in_vertices > 32)) fail(c, "tess control needs ShaderKey.tess_in_vertices in 1..32");
+        else if (k->tess_domain == TESS_DOMAIN_ISOLINE) fail(c, "isoline tessellation (Metal has quad and triangle patches only)");
+        else if (k->tess_domain > TESS_DOMAIN_ISOLINE) fail(c, "tessellation domain %u", (unsigned)k->tess_domain);
+        else if (st == STAGE_TESS_EVAL && (k->xfb_count || k->stage_out))
+            fail(c, "transform feedback from a tessellation evaluation shader (the vertex count exists only after tessellation: capture it with a following vertex-only pass)");
+    } else if (st == STAGE_FRAGMENT || st == STAGE_COMPUTE) {
+        if (k && (k->xfb_count || k->stage_out)) fail(c, "transform feedback / stage-out requested for a %s shader", st == STAGE_FRAGMENT ? "fragment" : "compute");
+    }
+    if (st == STAGE_GEOMETRY && k && (k->xfb_count || k->stage_out)) fail(c, "transform feedback from a geometry shader is captured by the replay from gs_vtx / gs_idx (same record layout), not in the shader");
+}
+
+// The vertex-stage epilogue that writes the stage-out record and the captured transform feedback components (before the clip-space flips: the values are the
+// shader's own). `xo` is the vertex ordinal of the capture: xfb_ctl[0] * instance + (vertex id - xfb_ctl[1]).
+static void xfb_epilogue(Ctx *c, Str *e) {
+    const ShaderKey *k = c->key;
+    if (!k || (!k->xfb_count && !k->stage_out)) return;
+    if (k->xfb_count > MAX_XFB_ENTRIES) {
+        fail(c, "%u transform feedback entries (maximum %d)", (unsigned)k->xfb_count, MAX_XFB_ENTRIES);
+        return;
+    }
+    sp(e, "  { uint xo = xfb_ctl[0] * iid + (vid - xfb_ctl[1]);\n");
+    c->info->uses_xfb = k->xfb_count != 0;
+    if (k->stage_out) {
+        c->info->uses_stage_out = true;
+        c->info->stage_slot_mask |= 1ull << STAGE_SLOT_POS;
+        sp(e, "    stage_out[xo * %uu + %d] = out.pos;\n", STAGE_SLOTS, STAGE_SLOT_POS);
+        if (c->uses_vsys) {
+            c->info->stage_slot_mask |= 1ull << STAGE_SLOT_SYS;
+            sp(e, "    stage_out[xo * %uu + %d] = vsys;\n", STAGE_SLOTS, STAGE_SLOT_SYS);
+        }
+        for (int i = 0; i < 32; i++)
+            if (c->out_attr_mask & (1u << i)) {
+                c->info->stage_slot_mask |= 1ull << (STAGE_SLOT_GENERIC + i);
+                sp(e, "    stage_out[xo * %uu + %d] = out.v%d;\n", STAGE_SLOTS, STAGE_SLOT_GENERIC + i, i);
+            }
+    }
+    for (int n = 0; n < k->xfb_count; n++) {
+        const ShaderXfbEntry *x = &k->xfb[n];
+        unsigned stride = x->buffer < MAX_XFB_BUFFERS ? k->xfb_stride[x->buffer] : 0;
+        if (x->buffer >= MAX_XFB_BUFFERS || x->comps < 1 || x->comps > 4 || (x->addr & 3) || (x->offset & 3) || stride == 0 || (stride & 3) ||
+            (unsigned)x->offset + 4u * x->comps > stride) {
+            fail(c, "bad transform feedback entry %d (buffer %u, %u components at %#x, offset %u, stride %u)", n, (unsigned)x->buffer, (unsigned)x->comps, (unsigned)x->addr,
+                 (unsigned)x->offset, stride);
+            return;
+        }
+        c->info->xfb_buffer_mask |= 1u << x->buffer;
+        for (int j = 0; j < x->comps; j++) {
+            uint32_t a = x->addr + 4u * (uint32_t)j;
+            char v[48];
+            int comp = (a >> 2) & 3;
+            if (a >= 0x60 && a < 0x70) {
+                c->uses_vsys = true;
+                sprintf(v, "vsys[%d]", comp);
+            }
+            else if (a >= 0x70 && a < 0x80) sprintf(v, "out.pos[%d]", comp);
+            else if (a >= 0x80 && a < 0x280 && (c->out_attr_mask & (1u << ((a - 0x80) >> 4)))) sprintf(v, "out.v%u[%d]", (a - 0x80) >> 4, comp);
+            else strcpy(v, "0.0f");   // an output the program never wrote
+            sp(e, "    xfb%d[xfb_ctl[%d] + xo * %uu + %uu] = as_type<uint>(%s);\n", x->buffer, 2 + x->buffer, stride / 4, x->offset / 4 + (unsigned)j, v);
+        }
+    }
+    sp(e, "  }\n");
 }
 
 // ------------------------------------------------------------------ program assembly
@@ -2764,8 +3017,17 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (sz > 32768u) fail(c, "shared memory of %u bytes exceeds Metal's 32 KB threadgroup limit", sz);
         info->shared_mem = sz;
     }
+    stage_check(c);
     if (c->fail) {
         free(c->body.buf);
+        free(c);
+        return info;
+    }
+    Str xfb_epi = {0};
+    if (stage == STAGE_VERTEX) xfb_epilogue(c, &xfb_epi);
+    if (c->fail) {
+        free(c->body.buf);
+        free(xfb_epi.buf);
         free(c);
         return info;
     }
@@ -2824,16 +3086,53 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         }
     }
     if (c->uses_smem) sp(&s, "constant uint SMEM_BYTES = %uu;\n", info->shared_mem);
+    if (c->uses_vabsdiff4)
+        sp(&s,
+           "static inline uint vabsdiff4(uint a, uint b, uint c, bool sa, bool sb, uint op, bool sat) {\n  uint r = 0u, sum = 0u;\n"
+           "  for (uint i = 0u; i < 4u; i++) {\n    int x = sa ? int(char(a >> (i * 8u))) : int((a >> (i * 8u)) & 0xFFu);\n"
+           "    int y = sb ? int(char(b >> (i * 8u))) : int((b >> (i * 8u)) & 0xFFu);\n    uint dl = uint(abs(x - y)), cl = (c >> (i * 8u)) & 0xFFu;\n"
+           "    sum += dl;\n    r |= ((op == 2u ? min(dl, cl) : (op == 3u ? max(dl, cl) : dl)) & 0xFFu) << (i * 8u);\n  }\n"
+           "  if (op == 1u) { uint t = sum + c; return (sat && t < sum) ? 0xFFFFFFFFu : t; }\n  return r;\n}\n");
+    if (c->uses_isel)
+        sp(&s,
+           "static inline uint isel(uint v, uint s) { switch (s) { case 2u: return v & 0xFFu; case 3u: return uint(int(char(v))); case 4u: return v & 0xFFFFu; "
+           "case 5u: return uint(int(short(v))); default: return v; } }\n");
+    if (stage == STAGE_GEOMETRY) {
+        /* the output vertex copy: only the slots the program stores; the position gets the clip-space conversions the vertex stage would apply */
+        sp(&s, "constant uint GS_MAXV = %uu;\n", (unsigned)key->gs_max_vertices);
+        sp(&s, "static inline void gs_put(device float4 *dst, thread const float4 *src) {\n");
+        info->stage_slot_mask |= c->gs_slots | (1ull << STAGE_SLOT_POS);
+        for (int i = 0; i < STAGE_SLOTS; i++) {
+            if (!(info->stage_slot_mask & (1ull << i))) continue;
+            if (i == STAGE_SLOT_POS) {
+                sp(&s, "  float4 p = src[%d];\n", i);
+                if (key->flip_y) sp(&s, "  p.y = -p.y;\n");
+                if (key->depth_minus_one) sp(&s, "  p.z = (p.z + p.w) * 0.5f;\n");
+                sp(&s, "  dst[%d] = p;\n", i);
+            } else sp(&s, "  dst[%d] = src[%d];\n", i, i);
+        }
+        sp(&s, "}\n");
+        info->gs_max_vertices = key->gs_max_vertices;
+        info->gs_out_topology = key->gs_out_topology;
+    }
+    if (stage == STAGE_TESS_CTRL || stage == STAGE_TESS_EVAL) {
+        info->tess_domain = key->tess_domain;
+        info->tess_out_vertices = key->tess_out_vertices;
+        info->stage_slot_mask |= c->gs_slots;
+        info->patch_slot_mask |= c->patch_slots;
+    }
 
     // inputs/outputs
-    if (stage == STAGE_VERTEX) {
-        sp(&s, "struct VIn {\n");
-        for (int i = 0; i < 32; i++) {
-            if (!(c->in_attr_mask & (1u << i))) continue;
-            int kind = key ? key->attr_kind[i] : 0;
-            sp(&s, "  %s4 a%d [[attribute(%d)]];\n", kind == 1 ? "int" : kind == 2 ? "uint" : "float", i, i);
+    if (stage == STAGE_VERTEX || stage == STAGE_TESS_EVAL) {
+        if (stage == STAGE_VERTEX) {
+            sp(&s, "struct VIn {\n");
+            for (int i = 0; i < 32; i++) {
+                if (!(c->in_attr_mask & (1u << i))) continue;
+                int kind = key ? key->attr_kind[i] : 0;
+                sp(&s, "  %s4 a%d [[attribute(%d)]];\n", kind == 1 ? "int" : kind == 2 ? "uint" : "float", i, i);
+            }
+            sp(&s, "};\n");
         }
-        sp(&s, "};\n");
         sp(&s, "struct VOut {\n  float4 pos [[position, invariant]];\n");   // depth pre-pass + EQUAL test needs identical positions
         for (int i = 0; i < 32; i++)
             if (c->out_attr_mask & (1u << i)) sp(&s, "  float4 v%d [[user(locn%d)]];\n", i, i);
@@ -2887,6 +3186,12 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (i < 16) sp(&args, ", sampler s%d [[sampler(%d)]]", i, i);
     }
     emit_image_args(&args, info);
+    if (stage == STAGE_VERTEX && key && (key->xfb_count || key->stage_out)) {
+        sp(&args, ", constant uint *xfb_ctl [[buffer(%d)]]", XFB_CTL_BUFFER_INDEX);
+        if (key->stage_out) sp(&args, ", device float4 *stage_out [[buffer(%d)]]", STAGE_OUT_BUFFER_INDEX);
+        for (int k = 0; k < MAX_XFB_BUFFERS; k++)
+            if (info->xfb_buffer_mask & (1u << k)) sp(&args, ", device uint *xfb%d [[buffer(%d)]]", k, XFB_BUFFER_BASE + k);
+    }
     if (stage == STAGE_VERTEX) {
         sp(&s, "vertex VOut main0(VIn in [[stage_in]], uint vid [[vertex_id]], uint iid [[instance_id]]%s%s) {\n", "", args.buf ? args.buf : "");
         sp(&s, "  VOut out = {};\n  out.pos = float4(0, 0, 0, 1);\n");
@@ -2896,6 +3201,29 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         sp(&s, "fragment FOut main0(FIn in [[stage_in]], bool front_facing [[front_facing]]%s%s%s) {\n",
            c->uses_lane ? ", uint lane [[thread_index_in_simdgroup]]" : "", c->uses_point_coord ? ", float2 point_coord [[point_coord]]" : "",
            args.buf ? args.buf : "");
+    } else if (stage == STAGE_GEOMETRY) {
+        sp(&s,
+           "kernel void main0(uint gid [[thread_position_in_grid]], constant uint *sp [[buffer(%d)]], device const float4 *stage_in [[buffer(%d)]], "
+           "device float4 *gs_vtx [[buffer(%d)]], device uint *gs_idx [[buffer(%d)]]%s) {\n",
+           STAGE_PARAM_BUFFER_INDEX, STAGE_IN_BUFFER_INDEX, GS_VERTEX_BUFFER_INDEX, GS_INDEX_BUFFER_INDEX, args.buf ? args.buf : "");
+        sp(&s, "  if (gid >= sp[0]) return;\n  float4 gso[%d];\n  for (uint i = 0u; i < %uu; i++) gso[i] = float4(0.0f, 0.0f, 0.0f, 1.0f);\n", STAGE_SLOTS, STAGE_SLOTS);
+        sp(&s, "  for (uint i = 0u; i < 2u * GS_MAXV; i++) gs_idx[gid * 2u * GS_MAXV + i] = 0xFFFFFFFFu;\n  uint gs_n = 0u, gs_ic = 0u;\n  bool gs_open = false;\n");
+    } else if (stage == STAGE_TESS_CTRL) {
+        sp(&s,
+           "kernel void main0(uint3 tid [[thread_position_in_threadgroup]], uint3 ctaid [[threadgroup_position_in_grid]], constant uint *sp [[buffer(%d)]], "
+           "device const float4 *stage_in [[buffer(%d)]], device float4 *tess_vtx [[buffer(%d)]], device float4 *tess_patch [[buffer(%d)]], "
+           "device half *tess_fac [[buffer(%d)]]%s) {\n",
+           STAGE_PARAM_BUFFER_INDEX, STAGE_IN_BUFFER_INDEX, TESS_VERTEX_BUFFER_INDEX, TESS_PATCH_BUFFER_INDEX, TESS_FACTOR_BUFFER_INDEX, args.buf ? args.buf : "");
+        sp(&s, "  uint inv = tid.x, pid = ctaid.x;\n  if (pid >= sp[0]) return;\n");
+    } else if (stage == STAGE_TESS_EVAL) {
+        sp(&s,
+           "[[patch(%s, %u)]] vertex VOut main0(uint patch_id [[patch_id]], %s tess_coord [[position_in_patch]], constant uint *sp [[buffer(%d)]], "
+           "device const float4 *tess_vtx [[buffer(%d)]], device const float4 *tess_patch [[buffer(%d)]]%s) {\n",
+           key->tess_domain == TESS_DOMAIN_TRIANGLE ? "triangle" : "quad", (unsigned)key->tess_out_vertices, key->tess_domain == TESS_DOMAIN_TRIANGLE ? "float3" : "float2",
+           STAGE_PARAM_BUFFER_INDEX, TESS_VERTEX_BUFFER_INDEX, TESS_PATCH_BUFFER_INDEX, args.buf ? args.buf : "");
+        sp(&s, "  VOut out = {};\n  out.pos = float4(0, 0, 0, 1);\n");
+        for (int i = 0; i < 32; i++)
+            if (c->out_attr_mask & (1u << i)) sp(&s, "  out.v%d = float4(0, 0, 0, 1);\n", i);
     } else {
         sp(&s, "kernel void main0(uint3 tid [[thread_position_in_threadgroup]], uint3 ctaid [[threadgroup_position_in_grid]]%s) {\n", args.buf ? args.buf : "");
     }
@@ -2926,6 +3254,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             sp(&s, "  for (uint k = 0; k < 4; k++) vattr_arr[%d + k] = as_type<uint>(in.a%d[k]);\n", i * 4, i);
         }
     }
+    if (c->uses_vsys) sp(&s, "  float4 vsys = float4(0.0f);\n");
     if (c->uses_cc) sp(&s, "  uint cc = 0; bool ccz = false, ccs = false;\n");
     if (c->uses_local) sp(&s, "  uint lmem[%d] = {};\n", LMEM_WORDS);
     if (any_branch) {
@@ -2937,7 +3266,8 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     } else {
         sp(&s, "  do {\n%s  } while (false);\n", c->body.buf ? c->body.buf : "");
     }
-    if (stage == STAGE_VERTEX) {
+    if (stage == STAGE_VERTEX || stage == STAGE_TESS_EVAL) {
+        if (xfb_epi.buf) sp(&s, "%s", xfb_epi.buf);
         if (key && key->flip_y) sp(&s, "  out.pos.y = -out.pos.y;\n");
         if (key && key->depth_minus_one) sp(&s, "  out.pos.z = (out.pos.z + out.pos.w) * 0.5f;\n");
         sp(&s, "  return out;\n}\n");
@@ -2964,9 +3294,27 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             else sp(&s, "  o.depth = in.pos.z;\n");
         }
         sp(&s, "  return o;\n}\n");
+    } else if (stage == STAGE_TESS_CTRL) {
+        /* the factors the tessellator reads: written from the patch record's level slots once every invocation has stored its share */
+        sp(&s, "  threadgroup_barrier(mem_flags::mem_device | mem_flags::mem_threadgroup);\n");
+        if (c->patch_slots & 3ull) {
+            const char *dom = key->tess_domain == TESS_DOMAIN_TRIANGLE ? "triangle" : "quad";
+            if (key->tess_domain == TESS_DOMAIN_TRIANGLE)
+                sp(&s,
+                   "  if (inv == 0u) { // %s: edge[3], inside[1] halves per patch\n    for (uint i = 0u; i < 3u; i++) tess_fac[pid * 4u + i] = half(tess_patch[pid * %uu + 0u][i]);\n"
+                   "    tess_fac[pid * 4u + 3u] = half(tess_patch[pid * %uu + 1u][0]);\n  }\n",
+                   dom, STAGE_SLOTS, STAGE_SLOTS);
+            else
+                sp(&s,
+                   "  if (inv == 0u) { // %s: edge[4], inside[2] halves per patch\n    for (uint i = 0u; i < 4u; i++) tess_fac[pid * 6u + i] = half(tess_patch[pid * %uu + 0u][i]);\n"
+                   "    for (uint i = 0u; i < 2u; i++) tess_fac[pid * 6u + 4u + i] = half(tess_patch[pid * %uu + 1u][i]);\n  }\n",
+                   dom, STAGE_SLOTS, STAGE_SLOTS);
+        }
+        sp(&s, "}\n");
     } else {
         sp(&s, "  return;\n}\n");
     }
+    free(xfb_epi.buf);
     info->msl = s.buf;
     info->attr_mask = c->in_attr_mask;
     info->out_mask = stage == STAGE_FRAGMENT ? c->omap_target : c->out_attr_mask;

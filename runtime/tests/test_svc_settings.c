@@ -43,6 +43,20 @@ int main(void) {
     uint8_t fw[0x100]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, fw, sizeof fw); svc_call_c(sys, 3, &c);
     CHECK(c.result == 0 && fw[0] == 18 && !strcmp((char *)fw + 0x68, "18.1.0"), "firmware version 18.1.0");
     uint8_t small[0x10]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, small, sizeof small); svc_call_c(sys, 3, &c); CHECK(c.result != 0, "buffer too small");
+    { /* key code maps: the US layout, 16 bytes per HID usage */
+        uint8_t km[SET_KEYMAP_SIZE]; unsigned ids[3] = {7, 9, 11};
+        for (int i = 0; i < 3; i++) {
+            memset(km, 0xcc, sizeof km); memset(&c, 0, sizeof c); svc_set_out_buf(&c, km, sizeof km); svc_call_c(set, ids[i], &c);
+            const uint8_t *a = km + 0x04 * SET_KEYMAP_ENTRY, *one = km + 0x1e * SET_KEYMAP_ENTRY, *zero = km + 0x27 * SET_KEYMAP_ENTRY, *none = km + 0x01 * SET_KEYMAP_ENTRY;
+            CHECK(c.result == 0 && a[0] == 'a' && a[2] == 'A' && a[8] == 1 && one[0] == '1' && one[2] == '!' && zero[0] == '0' && zero[2] == ')' && none[0] == 0 && none[8] == 0, "GetKeyCodeMap %u: letters, digits and shifted forms", ids[i]);
+        }
+        const uint8_t *sp = km + 0x2c * SET_KEYMAP_ENTRY, *en = km + 0x28 * SET_KEYMAP_ENTRY, *sl = km + 0x38 * SET_KEYMAP_ENTRY;
+        CHECK(sp[0] == ' ' && en[0] == '\n' && sl[0] == '/' && sl[2] == '?', "space, enter and punctuation");
+        uint8_t part[0x30]; memset(part, 0xcc, sizeof part); memset(&c, 0, sizeof c); svc_set_out_buf(&c, part, sizeof part); svc_call_c(set, 7, &c);
+        CHECK(c.result == 0 && !memcmp(part, km, sizeof part), "a short buffer gets a prefix");
+        uint8_t big[SET_KEYMAP_SIZE + 16]; memset(big, 0xcc, sizeof big); memset(&c, 0, sizeof c); svc_set_out_buf(&c, big, sizeof big); svc_call_c(set, 7, &c);
+        CHECK(!memcmp(big, km, SET_KEYMAP_SIZE) && big[SET_KEYMAP_SIZE] == 0xcc, "a long buffer is written only up to the map size");
+    }
     printf("{\"test\":\"svc_settings\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

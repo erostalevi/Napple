@@ -80,16 +80,41 @@ static int open_decoder(VorbisPcm *v) {
     v->seq = 3;
     return v->f ? AUDIO_OK : AUDIO_BAD;
 }
-static int add_header(VorbisPcm *v, const uint8_t *pkt, size_t n) {
-    static const uint8_t want[3] = {1, 3, 5};
-    if (n < 7 || pkt[0] != want[v->nhdr] || memcmp(pkt + 1, "vorbis", 6) || n > MAX_PACKET) return AUDIO_BAD;
+static int store_header(VorbisPcm *v, const uint8_t *pkt, size_t n) {
     v->hdr[v->nhdr] = malloc(n);
     if (!v->hdr[v->nhdr]) return AUDIO_NOMEM;
     memcpy(v->hdr[v->nhdr], pkt, n);
     v->hdr_size[v->nhdr++] = n;
+    return AUDIO_OK;
+}
+static int add_header_(VorbisPcm *v, const uint8_t *pkt, size_t n) {
+    static const uint8_t want[3] = {1, 3, 5};
+    /* Android's MediaCodec Vorbis convention (csd-0 = identification, csd-1 = setup) leaves the comment header out: it carries nothing the decoder
+     * needs, so a setup header that follows the identification header gets an empty comment header (no vendor, no comments, framing bit) in front. */
+    if (v->nhdr == 1 && n >= 7 && pkt[0] == 5 && !memcmp(pkt + 1, "vorbis", 6)) {
+        static const uint8_t empty_comment[16] = {3, 'v', 'o', 'r', 'b', 'i', 's', 0, 0, 0, 0, 0, 0, 0, 0, 1};
+        int r = store_header(v, empty_comment, sizeof empty_comment);
+        if (r < 0) return r;
+    }
+    if (v->nhdr > 2 || n < 7 || pkt[0] != want[v->nhdr] || memcmp(pkt + 1, "vorbis", 6) || n > MAX_PACKET) return AUDIO_BAD;
+    int r = store_header(v, pkt, n);
+    if (r < 0) return r;
     return v->nhdr == 3 ? open_decoder(v) : AUDIO_NEED_MORE;
 }
-int vorbispcm_set_headers_xiph(VorbisPcm *v, const uint8_t *blob, size_t size) {
+/* A rejected header leaves the collection as it was (a synthesised comment header included). */
+static int add_header(VorbisPcm *v, const uint8_t *pkt, size_t n) {
+    int had = v->nhdr, r = add_header_(v, pkt, n);
+    if (r < 0 && !v->f)
+        while (v->nhdr > had) free(v->hdr[--v->nhdr]), v->hdr[v->nhdr] = NULL;
+    return r;
+}
+static void vorbispcm_forget_headers(VorbisPcm *v) {
+    for (int i = 0; i < 3; i++) free(v->hdr[i]), v->hdr[i] = NULL;
+    v->nhdr = 0;
+    close_decoder(v);
+}
+/* Parses the Xiph-laced blob into the pieces and feeds the packets in; `reset` starts from no headers. */
+static int xiph_headers(VorbisPcm *v, const uint8_t *blob, size_t size, int reset) {
     if (!v || size < 3 || blob[0] != 2) return AUDIO_BAD;
     size_t p = 1, len[3] = {0, 0, 0};
     for (int i = 0; i < 2; i++) {
@@ -102,9 +127,7 @@ int vorbispcm_set_headers_xiph(VorbisPcm *v, const uint8_t *blob, size_t size) {
     }
     if (p > size || len[0] + len[1] > size - p) return AUDIO_BAD;
     len[2] = size - p - len[0] - len[1];
-    for (int i = 0; i < v->nhdr; i++) free(v->hdr[i]);
-    v->nhdr = 0;
-    close_decoder(v);
+    if (reset) vorbispcm_forget_headers(v);
     int r = AUDIO_NEED_MORE;
     for (int i = 0; i < 3; i++) {
         r = add_header(v, blob + p, len[i]);
@@ -112,6 +135,26 @@ int vorbispcm_set_headers_xiph(VorbisPcm *v, const uint8_t *blob, size_t size) {
         p += len[i];
     }
     return r;
+}
+int vorbispcm_set_headers_xiph(VorbisPcm *v, const uint8_t *blob, size_t size) { return xiph_headers(v, blob, size, 1); }
+/* One out-of-band blob: a Xiph-laced bundle (first byte 2) or a single header packet (first byte 1, 3 or 5). */
+static int csd_blob(VorbisPcm *v, const uint8_t *blob, size_t size) {
+    if (!blob || !size) return AUDIO_OK;
+    if (blob[0] == 2) return xiph_headers(v, blob, size, 0);
+    int r = add_header(v, blob, size);
+    return r == AUDIO_NEED_MORE ? AUDIO_OK : r;
+}
+int vorbispcm_set_headers_csd(VorbisPcm *v, const uint8_t *const blobs[3], const size_t sizes[3]) {
+    if (!v) return AUDIO_BAD;
+    vorbispcm_forget_headers(v);
+    for (int i = 0; i < 3; i++) {
+        int r = csd_blob(v, blobs[i], sizes[i]);
+        if (r < 0) {
+            vorbispcm_forget_headers(v);
+            return r;
+        }
+    }
+    return v->f ? AUDIO_OK : AUDIO_NEED_MORE;
 }
 int vorbispcm_packet(VorbisPcm *v, const uint8_t *pkt, size_t n, int16_t *out, int max_frames, int *frames) {
     *frames = 0;

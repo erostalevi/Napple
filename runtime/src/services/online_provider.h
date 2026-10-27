@@ -23,6 +23,8 @@ enum {
     ONLINE_CAP_FRIENDS = 1u << 4, /* friend */
     ONLINE_CAP_REPORTS = 1u << 5, /* prepo */
     ONLINE_CAP_NSD = 1u << 6,     /* nsd name resolution is provider-defined */
+    ONLINE_CAP_LDN = 1u << 7,     /* ldn: a local-wireless transport (scan, host, join) */
+    ONLINE_CAP_ACCOUNT = 1u << 8, /* acc: the local user can be linked to a network account kept by the provider */
 };
 
 /* A socket address in host byte order (the services convert from and to the guest's sockaddr layout). */
@@ -60,6 +62,34 @@ typedef struct {
     uint8_t presence;
     uint8_t pad[6];
 } OnlineFriend;
+
+/* ldn: one visible or joined local-wireless network. The provider owns the transport (radio, LAN, relay); the service only keeps the state machine
+ * (ldn_core.c) and encodes what it gets. ids and addresses are provider-defined; everything is host byte order. */
+#define ONLINE_LDN_ADVERTISE_MAX 0x180
+#define ONLINE_LDN_MAX_NETWORKS 24
+typedef struct {
+    uint64_t local_communication_id; /* the title's id; a scan only returns networks of the same game */
+    uint16_t scene_id;
+    uint16_t advertise_len;
+    uint8_t bssid[6];
+    uint8_t channel;
+    uint8_t node_count, node_count_max;
+    uint8_t security_mode;
+    uint16_t local_communication_version;
+    uint8_t security_param[16]; /* what the host handed out for the join handshake; opaque */
+    char ssid[33];              /* UTF-8, NUL-terminated */
+    char host_name[33];         /* user name of the host */
+    uint32_t ipv4;              /* this node's address once joined or hosting, 0 before */
+    uint8_t advertise[ONLINE_LDN_ADVERTISE_MAX];
+} OnlineLdnNetwork;
+
+/* acc: what the provider knows about a local user's network account. `id` and `resource_cache` are opaque to the service (it hands them to the guest). */
+#define ONLINE_ACCOUNT_CACHE_SIZE 0x68u
+typedef struct {
+    uint8_t linked, pad[7];
+    uint64_t id;
+    uint8_t resource_cache[ONLINE_ACCOUNT_CACHE_SIZE];
+} OnlineAccountInfo;
 
 /* TLS: the provider owns the whole connection state. sock is a provider socket handle (see sockets) or -1. */
 typedef struct OnlineProvider {
@@ -115,6 +145,23 @@ typedef struct OnlineProvider {
     /* ---- prepo / nsd ---- */
     void (*report)(void *ctx, const void *record, size_t n);                   /* a play report; the NullProvider drops it */
     int (*nsd_resolve)(void *ctx, const char *in, char *out, size_t out_size); /* 0 = out filled; the NullProvider returns the name unchanged */
+
+    /* ---- ldn (ONLINE_CAP_LDN; added after ABI 1 shipped: modules built with a smaller struct_size simply lack these, ONLINE_FN returns NULL) ----
+     * Calls return 0 or a Horizon result code for the guest. */
+    /* Networks visible to a station: the count written to out (<= max), or a negative value when the radio is unavailable. */
+    int (*ldn_scan)(void *ctx, uint64_t local_communication_id, OnlineLdnNetwork *out, uint32_t max);
+    uint32_t (*ldn_create)(void *ctx, const OnlineLdnNetwork *cfg);  /* start hosting `cfg` (ssid/channel/security chosen by the provider where 0) */
+    void (*ldn_destroy)(void *ctx);                                  /* stop hosting */
+    uint32_t (*ldn_connect)(void *ctx, const OnlineLdnNetwork *net); /* join `net` as a station */
+    void (*ldn_disconnect)(void *ctx);
+    /* The network currently hosted or joined: 0 and *out filled, else a Horizon result (no network). *disconnect_reason: why the last connection ended (0 = none). */
+    uint32_t (*ldn_get_network)(void *ctx, OnlineLdnNetwork *out, uint16_t *disconnect_reason);
+    uint32_t (*ldn_set_advertise)(void *ctx, const void *data, uint32_t n); /* host: replace the advertised data */
+    uint32_t (*ldn_reject)(void *ctx, uint32_t ipv4);                       /* host: kick the station at `ipv4` */
+
+    /* ---- acc (ONLINE_CAP_ACCOUNT) ---- */
+    /* Network-account state of the local user `user_id` (16 bytes): 0 and *out filled, nonzero = not available (treated as not linked). */
+    int (*account_info)(void *ctx, const uint8_t user_id[16], OnlineAccountInfo *out);
 } OnlineProvider;
 
 /* The active provider; never NULL. The first call loads ONLINE_ENV_PROVIDER once (a failure is logged and falls back to the NullProvider). */

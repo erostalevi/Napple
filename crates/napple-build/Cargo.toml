@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 napple-core = { path = "../napple-core" }
 napple-rewrite = { path = "../napple-rewrite" }
+napple-mods = { path = "../napple-mods" }
 aes = "0.8"
 ctr = "0.9"
 cipher = "0.4"

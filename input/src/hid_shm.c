@@ -28,6 +28,7 @@
 #define NPAD_ENTRY_SIZE 0x5000u
 #define DEBUGPAD_STATE 0x20u
 #define GESTURE_STATE 0x60u
+#define GC_TRIGGER_STATE 0x10u
 
 uint32_t napple_hid_lifo_bytes(uint32_t state_size) { return 0x20 + RING * (8 + state_size); }
 
@@ -56,6 +57,9 @@ void napple_hid_layout_for(int profile, napple_hid_layout *l) {
     l->npad_system_properties = at + 8;
     l->npad_button_properties = at + 16;
     l->npad_battery = at + 20;
+    /* GC trigger lifo: 17 entries of {u64 sampling, u32 l, u32 r} (entry 0x18) at 0x4C20 of the 0x5000 entry, followed by the NpadLarkType words (switchbrew
+       "HID services" NpadInternalState / yuzu NpadInternalState; recalled, unverified). Older firmware has neither. */
+    if (profile != NAPPLE_HID_LAYOUT_COMPAT) l->npad_gc_trigger = 0x4C20;
     l->revision = (uint32_t)profile;
     l->gesture = l->npad_base + 10 * l->npad_stride; /* right after the ten npad entries; section size 0x800 */
     l->console_sixaxis = l->gesture + 0x800;
@@ -138,6 +142,7 @@ void napple_hid_init(uint8_t *shm, const napple_hid_layout *l) {
             if (l->npad_lifo[i]) ring_prefill(shm, base + l->npad_lifo[i], NPAD_STATE, 0);
         for (int i = 0; i < 6; i++)
             if (l->npad_sixaxis[i]) ring_prefill(shm, base + l->npad_sixaxis[i], SIX_STATE, 1);
+        if (l->npad_gc_trigger) ring_prefill(shm, base + l->npad_gc_trigger, GC_TRIGGER_STATE, 0);
     }
 }
 
@@ -171,17 +176,11 @@ static int style_index(uint32_t style) {
         case NAPPLE_STYLE_PALMA: return 5;
         /* GameCube and the retro pads report through the FullKey lifo, their handheld forms through the Handheld one (yuzu npad.cpp; unverified) */
         case NAPPLE_STYLE_GC:
-        case NAPPLE_STYLE_LARK_HVC_LEFT:
-        case NAPPLE_STYLE_LARK_HVC_RIGHT:
-        case NAPPLE_STYLE_LARK_NES_LEFT:
-        case NAPPLE_STYLE_LARK_NES_RIGHT:
+        case NAPPLE_STYLE_LARK:
         case NAPPLE_STYLE_LUCIA:
         case NAPPLE_STYLE_LAGON:
         case NAPPLE_STYLE_LAGER: return 0;
-        case NAPPLE_STYLE_HANDHELD_LARK_HVC_LEFT:
-        case NAPPLE_STYLE_HANDHELD_LARK_HVC_RIGHT:
-        case NAPPLE_STYLE_HANDHELD_LARK_NES_LEFT:
-        case NAPPLE_STYLE_HANDHELD_LARK_NES_RIGHT: return 1;
+        case NAPPLE_STYLE_HANDHELD_LARK: return 1;
         case NAPPLE_STYLE_SYSTEM_EXT:
         case NAPPLE_STYLE_SYSTEM: return 6;
         default: return -1;
@@ -205,6 +204,20 @@ static void push_npad_lifo(uint8_t *shm, const napple_hid_layout *l, int slot, i
     put32(s.state + 0x1c, (uint32_t)st->right.y);
     put32(s.state + 0x20, st->attributes);
     ring_commit(&s);
+}
+
+void napple_hid_push_gc_trigger(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t left, uint32_t right) {
+    if (slot < 0 || slot > 9 || !l->npad_gc_trigger) return;
+    Slot s = ring_begin(shm, l->npad_base + (uint32_t)slot * l->npad_stride + l->npad_gc_trigger, GC_TRIGGER_STATE);
+    put32(s.state + 8, left > 0x7fff ? 0x7fff : left);
+    put32(s.state + 12, right > 0x7fff ? 0x7fff : right);
+    ring_commit(&s);
+}
+void napple_hid_set_lark_type(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t left_and_main, uint32_t right) {
+    if (slot < 0 || slot > 9 || !l->npad_gc_trigger) return;
+    uint8_t *b = shm + l->npad_base + (uint32_t)slot * l->npad_stride + l->npad_gc_trigger + napple_hid_lifo_bytes(GC_TRIGGER_STATE);
+    put32(b, left_and_main);
+    put32(b + 4, right);
 }
 
 void napple_hid_push_sixaxis(uint8_t *shm, const napple_hid_layout *l, int slot, int idx, const napple_sixaxis_state *st) {

@@ -20,6 +20,9 @@ use napple_core::infrastructure::io::Src;
 use napple_core::infrastructure::nca::{self, Enc, FsType, Nca};
 use napple_core::infrastructure::nso::Nso;
 use napple_core::infrastructure::romfs::RomFs;
+use napple_mods::ResolvedMod;
+use napple_mods::apply::{ApplyReport, ModuleBytes};
+use napple_mods::buildglue::ModSet;
 use napple_rewrite::check;
 use napple_rewrite::image::ModuleImage;
 use napple_rewrite::types::RewriteOptions;
@@ -61,6 +64,8 @@ pub struct Opts {
     pub signing: crate::ios::Signing,
     /// iOS: launch the app after `--install`.
     pub launch: bool,
+    /// `--mods`: `.napmod` files or folders applied to the modules before the AOT rewrite (and as a romfs overlay).
+    pub mods: Vec<PathBuf>,
 }
 
 // Overall progress budget (percent).
@@ -71,6 +76,9 @@ const P_ROMFS: (f64, f64) = (24.0, 88.0);
 const P_FONTS: f64 = 90.0;
 const P_BUNDLE: f64 = 94.0;
 const P_SIGN: f64 = 99.0;
+
+/// Per-module results of applying the `--mods` patches: (module name, report).
+pub(crate) type ModReports = Vec<(String, ApplyReport)>;
 
 pub(crate) struct ModOut {
     pub(crate) name: String,
@@ -149,6 +157,31 @@ pub(crate) fn rewrite_version(
     lo: f64,
     hi: f64,
 ) -> Result<Vec<ModOut>> {
+    Ok(rewrite_version_mods(exefs, dir, label, lo, hi, &[])?.0)
+}
+
+/// Applies the code patches of `set` to one parsed module (its own build id) before the rewrite sees it.
+pub(crate) fn apply_mods_to_nso(mods: &[ResolvedMod], nso: &mut Nso) -> ApplyReport {
+    let mut seg = ModuleBytes::from_segments([
+        (nso.text.mem_offset, std::mem::take(&mut nso.text.data)),
+        (nso.rodata.mem_offset, std::mem::take(&mut nso.rodata.data)),
+        (nso.data.mem_offset, std::mem::take(&mut nso.data.data)),
+    ]);
+    let rep = napple_mods::apply_mods_to_module(&nso.build_id, &mut seg, mods);
+    [nso.text.data, nso.rodata.data, nso.data.data] = seg.into_segments();
+    rep
+}
+
+/// [`rewrite_version`] with `--mods`: patches are applied BEFORE the rewrite; the per-module reports come back too.
+pub(crate) fn rewrite_version_mods(
+    exefs: &[(String, Vec<u8>)],
+    dir: &Path,
+    label: &str,
+    lo: f64,
+    hi: f64,
+    patch_mods: &[ResolvedMod],
+) -> Result<(Vec<ModOut>, ModReports)> {
+    let reports: std::sync::Mutex<Vec<(String, ApplyReport)>> = Default::default();
     let mods: Vec<&(String, Vec<u8>)> = exefs.iter().filter(|(n, _)| is_module(n)).collect();
     if !mods.iter().any(|(n, _)| n == "main") {
         return Err(BuildError::new(
@@ -164,7 +197,12 @@ pub(crate) fn rewrite_version(
         .par_iter()
         .map(|(name, bytes)| {
             check_cancel()?;
-            let nso = Nso::parse(bytes).map_err(|e| BuildError::new("container", format!("{label} {name}: {e}")))?;
+            let mut nso = Nso::parse(bytes).map_err(|e| BuildError::new("container", format!("{label} {name}: {e}")))?;
+            if !patch_mods.is_empty() {
+                let rep = apply_mods_to_nso(patch_mods, &mut nso);
+                progress("mods", lo, &format!("{label} {name}: {}", napple_mods::buildglue::summary(&rep)));
+                reports.lock().unwrap().push((name.clone(), rep));
+            }
             if crate::tables32::is_elf32(&nso) {      // AArch32 module (MK8D): no AArch64 rewrite; plain image + NTB2 tables
                 let (image, tables, st) = crate::tables32::build_module32(name, &nso, bytes)?;
                 std::fs::write(mdir.join(format!("{name}.patched.bin")), &image).map_err(|e| BuildError::io("write module", e))?;
@@ -211,7 +249,13 @@ pub(crate) fn rewrite_version(
             .unwrap_or(usize::MAX)
     });
     crate::tables32::recompile_if_requested(&mdir)?; // AArch32 titles: writes modules/a32jit.dylib (NAPPLE_A32_RECOMPILE=0 skips)
-    Ok(v)
+    let mut reps = reports.into_inner().unwrap_or_default();
+    reps.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, rep) in &reps {
+        std::fs::write(mdir.join(format!("{name}.mods.json")), rep.to_json())
+            .map_err(|e| BuildError::io("write mods report", e))?;
+    }
+    Ok((v, reps))
 }
 
 fn ivfc_data_off(hash_data: &[u8]) -> Option<u64> {
@@ -389,15 +433,22 @@ fn write_delta(
 /// and a retry of the same command finds its cache again.
 /// Name of the RomFS cache directory under `<staging root>/.napple-cache.nosync` for one set of inputs and output dir.
 pub fn cache_dir_name(app_id: u64, files: &[PathBuf], out: &Path) -> String {
-    format!("{app_id:016X}-{:08x}", cache_tag(files, out))
+    cache_dir_name_mods(app_id, files, out, "")
 }
 
-fn cache_tag(files: &[PathBuf], out: &Path) -> u32 {
+/// Same, keyed by the applied mod set too (`ModSet::key`, empty for none: the name is then the plain one).
+pub fn cache_dir_name_mods(app_id: u64, files: &[PathBuf], out: &Path, mods_key: &str) -> String {
+    format!("{app_id:016X}-{:08x}", cache_tag(files, out, mods_key))
+}
+
+fn cache_tag(files: &[PathBuf], out: &Path, mods_key: &str) -> u32 {
     let mut h: u64 = 0xcbf29ce484222325;
+    let key = (!mods_key.is_empty()).then(|| PathBuf::from(format!("mods:{mods_key}")));
     for f in files
         .iter()
         .map(|f| std::path::absolute(f).unwrap_or_else(|_| f.clone()))
         .chain(std::iter::once(out.to_path_buf()))
+        .chain(key)
     {
         for b in f.as_os_str().as_encoded_bytes().iter().chain(&[0u8]) {
             h = (h ^ *b as u64).wrapping_mul(0x100000001b3);
@@ -569,7 +620,7 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
     let upd: Vec<usize> = plan.pick_updates(&o.updates);
     let dlc: Vec<usize> = plan.pick_dlcs(&o.dlc);
     let app_id = plan.packs[base_i].meta.title_id;
-    let mut conts = Containers::default();
+    let mut conts = Containers::with_keys(&keys);
     progress(
         "ingest",
         P_INGEST,
@@ -591,6 +642,11 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             control = Some(ctl);
             break;
         }
+    }
+    let modset =
+        ModSet::load(&o.mods, Some(app_id)).map_err(|e| BuildError::new("mods", e.to_string()))?;
+    for w in &modset.warnings {
+        progress("mods", P_INGEST, &format!("warning: {w}"));
     }
     let app_name = o
         .name
@@ -753,9 +809,12 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             "--update-romfs in-place is for --data-only development builds (the map holds decryption keys)",
         ));
     }
-    let cache_dir = root
-        .join(".napple-cache.nosync")
-        .join(cache_dir_name(app_id, &o.files, &out));
+    let cache_dir = root.join(".napple-cache.nosync").join(cache_dir_name_mods(
+        app_id,
+        &o.files,
+        &out,
+        &modset.key(),
+    ));
     let mut need: u64 = 256 << 20;
     let mut jobs_total: u64 = 0;
     let mut sized: Vec<(String, u64)> = Vec::new();
@@ -820,6 +879,7 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
 
     // rewrite + tables
     let mut mods_by_version: Vec<Vec<ModOut>> = Vec::new();
+    let mut mod_reports_by_version: Vec<ModReports> = Vec::new();
     let nv = versions.len() as f64;
     for (k, v) in versions.iter().enumerate() {
         let (lo, hi) = (
@@ -827,7 +887,14 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             P_REWRITE.0 + (P_REWRITE.1 - P_REWRITE.0) * (k + 1) as f64 / nv,
         );
         let dir = game.join(&v.dir);
-        let mods = rewrite_version(&v.exefs, &dir, &v.label, lo, hi)?;
+        let (mods, mod_reports) =
+            rewrite_version_mods(&v.exefs, &dir, &v.label, lo, hi, &modset.resolved)?;
+        for (name, rep) in &mod_reports {
+            if !rep.misses.is_empty() {
+                notes.push(format!("{} {name}: {} mod patch record(s) did not apply (see modules/{name}.mods.json)", v.label, rep.misses.len()));
+            }
+        }
+        mod_reports_by_version.push(mod_reports);
         match v.exefs.iter().find(|(n, _)| n == "main.npdm") {
             Some((_, d)) => std::fs::write(dir.join("main.npdm"), d)
                 .map_err(|e| BuildError::io("write main.npdm", e))?,
@@ -1092,11 +1159,12 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         })
         .collect();
     let mut ver_json = Vec::new();
-    for (((v, mods), ro), nros) in versions
+    for ((((v, mods), ro), nros), mod_reports) in versions
         .iter()
         .zip(&mods_by_version)
         .zip(&romfs_out)
         .zip(&nros_by_version)
+        .zip(&mod_reports_by_version)
     {
         let order = load_order(&mods.iter().map(|m| m.name.clone()).collect::<Vec<_>>());
         let mod_json: Vec<String> = mods
@@ -1132,35 +1200,49 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             ],
             false,
         );
-        let manifest = obj(
-            &[
-                ("format", "1".into()),
-                ("title_id", jstr(&format!("{app_id:016X}"))),
-                ("build_id", jstr(&v.main_build16)),
-                ("kind", jstr(v.kind)),
-                ("version", v.version.to_string()),
-                ("label", jstr(&v.label)),
-                (
-                    "load_order",
-                    arr(&order.iter().map(|n| jstr(n)).collect::<Vec<_>>()),
-                ),
-                ("modules", arr(&mod_json)),
-                (
-                    "nro",
-                    arr(&nros.iter().map(|n| n.json()).collect::<Vec<_>>()),
-                ),
-                ("romfs", rom_desc),
-                ("system_dir", jstr("../system")),
-                (
-                    "dlc",
-                    arr(&dlc_json
-                        .iter()
-                        .map(|d| d.replace("\"dir\":\"dlc/", "\"dir\":\"../dlc/"))
-                        .collect::<Vec<_>>()),
-                ),
-            ],
-            true,
-        ) + "\n";
+        let mut mod_fields: Vec<(&str, String)> = Vec::new();
+        if !modset.is_empty() {
+            mod_fields.push(("mod_set", jstr(&modset.key())));
+            mod_fields.push(("mods", modset.manifest_json(mod_reports)));
+            let n = modset
+                .write_overlay(&game.join(&v.dir))
+                .map_err(|e| BuildError::new("mods", e.to_string()))?;
+            if n > 0 {
+                mod_fields.push(("mods_overlay", jstr(napple_mods::buildglue::OVERLAY_JSON)));
+            }
+        }
+        if let Some(raw) = control.as_ref().and_then(|c| c.nacp_raw.as_ref()) {
+            std::fs::write(game.join(&v.dir).join("control.nacp"), raw)
+                .map_err(|e| BuildError::io("write control.nacp", e))?;
+        }
+        let mut fields: Vec<(&str, String)> = vec![
+            ("format", "1".into()),
+            ("title_id", jstr(&format!("{app_id:016X}"))),
+            ("build_id", jstr(&v.main_build16)),
+            ("kind", jstr(v.kind)),
+            ("version", v.version.to_string()),
+            ("label", jstr(&v.label)),
+            (
+                "load_order",
+                arr(&order.iter().map(|n| jstr(n)).collect::<Vec<_>>()),
+            ),
+            ("modules", arr(&mod_json)),
+            (
+                "nro",
+                arr(&nros.iter().map(|n| n.json()).collect::<Vec<_>>()),
+            ),
+            ("romfs", rom_desc),
+            ("system_dir", jstr("../system")),
+            (
+                "dlc",
+                arr(&dlc_json
+                    .iter()
+                    .map(|d| d.replace("\"dir\":\"dlc/", "\"dir\":\"../dlc/"))
+                    .collect::<Vec<_>>()),
+            ),
+        ];
+        fields.extend(mod_fields);
+        let manifest = obj(&fields, true) + "\n";
         std::fs::write(game.join(&v.dir).join("manifest.json"), manifest)
             .map_err(|e| BuildError::io("write manifest.json", e))?;
         ver_json.push(obj(
@@ -1480,10 +1562,10 @@ mod tests {
 
     #[test]
     fn cache_tag_is_stable_and_input_specific() {
-        let a = cache_tag(&["/x/a.nsp".into()], Path::new("/out"));
-        assert_eq!(a, cache_tag(&["/x/a.nsp".into()], Path::new("/out")));
-        assert_ne!(a, cache_tag(&["/x/b.nsp".into()], Path::new("/out")));
-        assert_ne!(a, cache_tag(&["/x/a.nsp".into()], Path::new("/out2")));
+        let a = cache_tag(&["/x/a.nsp".into()], Path::new("/out"), "");
+        assert_eq!(a, cache_tag(&["/x/a.nsp".into()], Path::new("/out"), ""));
+        assert_ne!(a, cache_tag(&["/x/b.nsp".into()], Path::new("/out"), ""));
+        assert_ne!(a, cache_tag(&["/x/a.nsp".into()], Path::new("/out2"), ""));
     }
 
     #[test]

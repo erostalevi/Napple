@@ -101,6 +101,23 @@ int main(void) {
     { static uint8_t wide[1280 * 360 * 3]; memset(wide, 0, sizeof wide); for (int y = 0; y < 360; y++) for (int x = 320; x < 960; x++) wide[(y * 1280 + x) * 3] = wide[(y * 1280 + x) * 3 + 1] = wide[(y * 1280 + x) * 3 + 2] = 200;
       ao = (IrAdapterOpts){0, 0, 0, 0}; irs_adapter_rgb_to_ir(wide, 1280, 360, 1280 * 3, 3, 0, &ao, ir); CHECK(ir[0] == 200 && ir[IR_W - 1] == 200, "a 32:9 frame is cropped to its central 4:3"); }
 
+    /* ---- tera plugin / pointing (DPD) ---- */
+    { uint8_t td[IR_TERA_DATA]; IrTeraConfig tc = {1, {0}}; fill(0); rect(0, 0, 16, 16, 200); ir_tera_compute(F, &tc, td);
+      CHECK(td[0] == 200 && td[1] == 0 && td[20] == 0 && td[299] == 0, "tera: 20x15 box-downsampled frame (16x16 boxes)");
+      fill(77); ir_tera_compute(F, &tc, td); CHECK(td[0] == 77 && td[299] == 77, "tera: flat frame");
+      tc.mode = 0; ir_tera_compute(F, &tc, td); CHECK(td[0] == 0 && td[150] == 0, "tera: mode 0 reports nothing");
+      IrDpdMarker mk[IR_DPD_MARKERS]; float px, py; IrDpdConfig dc; memset(&dc, 0, sizeof dc);
+      fill(0); CHECK(ir_dpd_compute(F, &dc, mk, &px, &py) == 0 && px == 0 && py == 0, "dpd: dark frame, no markers");
+      rect(40, 100, 6, 6, 255); rect(260, 100, 4, 4, 255);
+      CHECK(ir_dpd_compute(F, &dc, mk, &px, &py) == 2 && mk[0].size == 36 && mk[1].size == 16 && mk[0].x < 0 && mk[1].x > 0, "dpd: two markers, largest first");
+      CHECK(near(mk[0].x, (42.5 - 159.5) / 160.0) && near(mk[0].y, (102.5 - 119.5) / 120.0), "dpd: marker position normalised to -1..1");
+      CHECK(near(px, (mk[0].x + mk[1].x) / 2) && near(py, (mk[0].y + mk[1].y) / 2), "dpd: pointer is the midpoint of the two brightest markers");
+      fill(0); rect(160, 120, 3, 3, 255); CHECK(ir_dpd_compute(F, &dc, mk, &px, &py) == 1 && near(px, mk[0].x), "dpd: one marker is the pointer");
+      fill(0); for (int i = 0; i < 6; i++) rect(10 + i * 50, 10, 3, 3, 255);
+      CHECK(ir_dpd_compute(F, &dc, mk, &px, &py) == IR_DPD_MARKERS, "dpd: at most four markers");
+      fill(0); rect(50, 50, 4, 4, 100); CHECK(ir_dpd_compute(F, &dc, mk, &px, &py) == 0, "dpd: default intensity floor 128");
+      dc.intensity_min = 50; CHECK(ir_dpd_compute(F, &dc, mk, &px, &py) == 1, "dpd: intensity_min configurable"); }
+
     /* ---- scripted sources ---- */
     IrFrameSource ss; uint64_t ts;
     CHECK(irs_source_from_spec("blob:100,80,10,2,0", &ss) == 0 && ss.get_frame(ss.ctx, F, &ts) == 1 && F[80 * IR_W + 100] == 255 && F[80 * IR_W + 90] == 255 && F[80 * IR_W + 89] == 0, "blob source draws a disc");
@@ -164,6 +181,18 @@ int main(void) {
       svc_set_out_buf(&g, out, sizeof out); svc_call_c(o, 309, &g); CHECK(g.result == 0 && !memcmp(tmem, out, 80 * 60) && tmem[0] == 0, "Ex transfer fills the transfer memory with the same trimmed image");
       uint8_t led[16] = {0}; svc_call(o, 317, led, sizeof led, &g); CHECK(g.result == 0, "RunIrLedProcessor accepted with a source");
       id = 0; svc_call(o, 303, NULL, 0, &g); CHECK(irs_core_running(&core) == 0 && !thread_live, "DeactivateIrsensor stops everything"); }
+    { uint8_t in[16 + sizeof(IrTeraConfig)] = {0}; in[0] = 4; in[16] = 1; svc_call(o, 310, in, sizeof in, &c); CHECK(c.result == 0 && irs_core_running(&core) == 1, "RunTeraPluginProcessor starts (310)");
+      for (int i = 0; i < 100 && !((const IrTeraState *)(shm_host + 4 * IR_SLOT_SIZE + IR_SLOT_TERA))->sampling_number; i++) usleep(20000);
+      const IrTeraState *ts2 = (const IrTeraState *)(shm_host + 4 * IR_SLOT_SIZE + IR_SLOT_TERA);
+      CHECK(ts2->sampling_number >= 1 && (ts2->seq & 1) == 0 && ts2->data[5 * 20 + 6] > 0, "tera state in slot 4 holds the downsampled disc (box 6,5 at (100,80))");
+      uint32_t mode; memcpy(&mode, shm_host + 4 * IR_SLOT_SIZE, 4); CHECK(mode == IR_MODE_TERA, "slot header carries the tera mode");
+      id = 4; svc_call(o, 305, &id, 4, &c); }
+    { uint8_t in[16 + sizeof(IrDpdConfig)] = {0}; in[0] = 5; svc_call(o, 312, in, sizeof in, &c); CHECK(c.result == 0 && irs_core_running(&core) == 1, "RunDpdProcessor starts (312)");
+      const IrDpdState *ds = (const IrDpdState *)(shm_host + 5 * IR_SLOT_SIZE + IR_SLOT_DPD);
+      for (int i = 0; i < 100 && !ds->sampling_number; i++) usleep(20000);
+      CHECK(ds->sampling_number >= 1 && ds->count == 1 && near(ds->point_x, (100 - 159.5) / 160.0) && near(ds->point_y, (80 - 119.5) / 120.0), "dpd state: the disc is the pointer");
+      id = 5; svc_call(o, 305, &id, 4, &c); CHECK(irs_core_running(&core) == 0, "stopped"); }
+    pump_stop_if_idle();
     irs_service_set_source(NULL);
     svc_call(o, 306, NULL, 0, &c); CHECK(c.result == HZ_R_IRSENSOR_NOT_CONNECTED, "removing the source restores the not-connected answers");
     printf("{\"test\":\"svc_irs_sim\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);

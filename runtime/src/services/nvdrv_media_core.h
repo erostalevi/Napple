@@ -16,7 +16,7 @@ typedef struct {
     void *ctx;
 } NvMediaMem;
 typedef struct {
-    uint64_t words, ops, regwrites, executes, frames, errors, unknown_regs, foreign_writes, syncpt_incrs;
+    uint64_t words, ops, regwrites, executes, frames, errors, unknown_regs, foreign_writes, syncpt_incrs, configures;
     uint32_t last_unknown_reg, last_error;
 } MediaStats;
 typedef struct MediaEngine MediaEngine;
@@ -30,3 +30,27 @@ int media_engine_run(MediaEngine *e, const uint32_t *words, uint32_t n);
 const MediaStats *media_engine_stats(const MediaEngine *e);
 uint32_t media_engine_reg(const MediaEngine *e, uint32_t offset); /* last value written to a register of the engine class (tests, traces) */
 uint32_t media_engine_class(const MediaEngine *e);
+
+/* ---- /dev/nvdisp-disp0 (portable) ----------------------------------------------------------------------------------------------------
+ * The display controller's query surface. Napple presents through the host (vi/NVN), so there is no scanout hardware to drive; the device answers what a
+ * guest asks of a display: its mode, the vblank counter and the vblank syncpoint. The ioctl numbers and structs below are PROPOSED (the public driver sources
+ * do not document a stable nvdisp ABI; nothing here is verified against real traces). All ioctls use type NVDISP_IOCTL_TYPE ('D'); sizes are the struct sizes.
+ *   nr 1 GET_MODE     out: u32 width, height, refresh_mhz (milli-Hz), bpp; u32 flags (bit0 docked); u32 pad[3]          (32 bytes)
+ *   nr 2 GET_VBLANK   out: u64 count, u64 timestamp_ns                                                                   (16 bytes)
+ *   nr 3 WAIT_VBLANK  in: u32 timeout_ms, u32 pad; out: u64 count at +8, u64 timestamp_ns at +16. Does not block: it reports the next vblank (count is strictly
+ *                     increasing per call even when the host clock has not moved a frame)                                (24 bytes)
+ *   nr 4 GET_SYNCPT   out: u32 syncpt id, u32 current value                                                              (8 bytes; id set by nvdisp_set_syncpt)
+ *   nr 5 GET_STATUS   out: u32 connected, powered, docked, vblank_enabled                                                (16 bytes)
+ * Anything else is NotImplemented (the caller logs it in the compat summary). Time is passed in so the tests are deterministic. */
+enum { NVDISP_IOCTL_TYPE = 'D', NVDISP_GET_MODE = 1, NVDISP_GET_VBLANK = 2, NVDISP_WAIT_VBLANK = 3, NVDISP_GET_SYNCPT = 4, NVDISP_GET_STATUS = 5 };
+enum { NVDISP_OK = 0, NVDISP_NOT_IMPLEMENTED = 1, NVDISP_BAD_PARAMETER = 4 };
+typedef struct {
+    uint32_t width, height, refresh_mhz, docked;
+    uint32_t syncpt;
+    uint64_t t0_ns, last_wait;
+} NvDisp;
+/* Handheld 1280x720 at 60 Hz unless docked (1920x1080). t0 is the time the counter starts at 0. */
+void nvdisp_init(NvDisp *d, uint64_t now_ns, int docked);
+uint64_t nvdisp_vblank_count(const NvDisp *d, uint64_t now_ns);
+/* data is the in/out buffer (size bytes, at least the struct size of the ioctl). Returns an NVDISP_* code. */
+int nvdisp_ioctl(NvDisp *d, unsigned nr, uint8_t *data, unsigned size, uint64_t now_ns);

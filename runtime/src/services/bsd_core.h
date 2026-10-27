@@ -21,6 +21,8 @@ int bsdg_handle(BsdGuest *g, int fd); /* provider handle of a guest descriptor, 
 /* Each returns the result of the call (descriptor, count or 0) or -1 with *err set to a BSD errno. */
 int bsdg_socket(BsdGuest *g, int domain, int type, int protocol, int *err);
 int bsdg_close(BsdGuest *g, int fd, int *err);
+/* DuplicateSocket: a second descriptor for the same provider socket (lowest free number). The provider socket is closed with the last descriptor. */
+int bsdg_dup(BsdGuest *g, int fd, int *err);
 int bsdg_bind(BsdGuest *g, int fd, const OnlineAddr *a, int *err);
 int bsdg_listen(BsdGuest *g, int fd, int backlog, int *err);
 int bsdg_accept(BsdGuest *g, int fd, OnlineAddr *peer, int *err);

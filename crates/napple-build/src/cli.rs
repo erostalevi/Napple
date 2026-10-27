@@ -22,6 +22,7 @@ pub const USAGE: &str = "usage:
       --launcher <path>             launcher binary (default: packaging/build/napple-launcher)
       --make-runtime                run make -C runtime and make -C packaging first (checkout only)
       --update-romfs materialize|delta|in-place  one patched romfs.bin per update (default), a BKTR delta layer, or (with --data-only, development) a romfs.map per version that reads the RomFS straight out of the game files (no copy; the map holds decryption keys)
+      --mods <a.napmod,dir,...>     apply community mods (code patches before the rewrite, romfs overlay, cheats); passing a mod enables it; manifest.json records the set
       --keep-cache                  keep <outdir>/.napple-cache (resumable RomFS copies)
       --no-sign                     skip codesign (macOS: no signature; iOS: unsigned app/IPA for an external signer)
       --data-only                   write <outdir>/<titleid>/<buildid16>/ data directories only (runtime development; no .app)
@@ -83,6 +84,7 @@ pub fn parse(args: &[String]) -> Result<Opts> {
         data_only: false,
         signing: Signing::default(),
         launch: false,
+        mods: vec![],
     };
     let (mut have_keys, mut have_out) = (false, false);
     let mut it = args.iter();
@@ -128,6 +130,11 @@ pub fn parse(args: &[String]) -> Result<Opts> {
             "--ipa" => o.signing.ipa = true,
             "--install" => o.signing.install = Some(val()?),
             "--launch" => o.launch = true,
+            "--mods" => {
+                for m in val()?.split(',').filter(|m| !m.is_empty()) {
+                    o.mods.push(m.into());
+                }
+            }
             "--update-romfs" => {
                 o.update_romfs = match val()?.as_str() {
                     "materialize" => UpdateRomfs::Materialize,

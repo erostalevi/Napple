@@ -53,6 +53,34 @@ static int decode_all(const uint8_t *ogg, size_t n, int use_xiph, int16_t **pcm,
     vorbispcm_destroy(v);
     return np;
 }
+/* Out-of-band headers the way the movie library's format metadata carries them (csd-0..2); mode 1 = one Xiph bundle, 2 = identification + setup (no comment
+ * header), 3 = the three packets, 4 = identification only, the other two arrive as the first input buffers. Returns the decoded frames. */
+static int decode_csd(const uint8_t *ogg, size_t n, int mode, int expect_rc, int *ch, int *rate, double *hz) {
+    static Pkt pk[400]; int np = demux(ogg, n, pk, 400);
+    static uint8_t blob[16384]; size_t at = 0;
+    const uint8_t *b[3] = {0, 0, 0}; size_t sz[3] = {0, 0, 0}; int first = 3;
+    if (mode == 1) {
+        blob[at++] = 2;
+        for (int i = 0; i < 2; i++) { size_t l = pk[i].n; while (l >= 255) { blob[at++] = 255; l -= 255; } blob[at++] = (uint8_t)l; }
+        for (int i = 0; i < 3; i++) { memcpy(blob + at, pk[i].p, pk[i].n); at += pk[i].n; }
+        b[0] = blob; sz[0] = at;
+    } else if (mode == 2) { b[0] = pk[0].p; sz[0] = pk[0].n; b[1] = pk[2].p; sz[1] = pk[2].n; }
+    else if (mode == 3) { for (int i = 0; i < 3; i++) { b[i] = pk[i].p; sz[i] = pk[i].n; } }
+    else { b[0] = pk[0].p; sz[0] = pk[0].n; first = 1; }
+    VorbisPcm *v = vorbispcm_create(); int total = 0; int16_t *pcm = malloc(sizeof(int16_t) * 2 * 60000); static int16_t buf[VORBISPCM_MAX_FRAMES * 2];
+    int rc = vorbispcm_set_headers_csd(v, b, sz);
+    CHECK(rc == expect_rc, "csd mode %d: set_headers_csd -> %d (want %d)", mode, rc, expect_rc);
+    for (int i = mode == 4 ? 1 : 3; i < np; i++) {
+        int fr = 0; rc = vorbispcm_packet(v, pk[i].p, pk[i].n, buf, VORBISPCM_MAX_FRAMES, &fr);
+        if (rc < 0) { CHECK(0, "csd mode %d packet %d failed (%d)", mode, i, rc); break; }
+        if (fr) { memcpy(pcm + (size_t)total * vorbispcm_channels(v), buf, sizeof(int16_t) * (size_t)fr * vorbispcm_channels(v)); total += fr; }
+    }
+    (void)first;
+    *ch = vorbispcm_channels(v); *rate = vorbispcm_rate(v);
+    double amp; *hz = total ? tone_hz(pcm, total, *ch > 0 ? *ch : 1, *rate, &amp) : 0;
+    free(pcm); vorbispcm_destroy(v);
+    return total;
+}
 int main(void) {
     int16_t *pcm; int frames, ch, rate; double amp;
     int np = decode_all(mono_ogg, sizeof mono_ogg, 0, &pcm, &frames, &ch, &rate);
@@ -72,6 +100,23 @@ int main(void) {
     CHECK(fabs(hz - 1000.0) < 12.0 && amp > 0.05 && amp_r > amp * 0.35 && amp_r < amp * 0.65, "stereo: left %.0f Hz peak %.2f, right peak %.2f (about half)", hz, amp, amp_r);
     free(pcm);
 
+    { /* out-of-band headers (SDK-style container: the format metadata holds the headers, the inputs are bare audio packets) */
+        int ch2, rate2; double hz2; int ref = frames;
+        decode_all(mono_ogg, sizeof mono_ogg, 0, &pcm, &frames, &ch, &rate); ref = frames; free(pcm);
+        for (int mode = 1; mode <= 4; mode++) {
+            int f = decode_csd(mono_ogg, sizeof mono_ogg, mode, mode == 4 ? AUDIO_NEED_MORE : AUDIO_OK, &ch2, &rate2, &hz2);
+            CHECK(ch2 == 1 && rate2 == 22050 && f == ref && fabs(hz2 - 440.0) < 6.0, "csd mode %d: %d frames (in-band %d), %.1f Hz", mode, f, ref, hz2);
+        }
+        int f = decode_csd(st_ogg, sizeof st_ogg, 2, AUDIO_OK, &ch2, &rate2, &hz2);
+        CHECK(ch2 == 2 && rate2 == 44100 && f > 44100 * 0.4 && fabs(hz2 - 1000.0) < 12.0, "csd identification + setup, stereo: %d frames %.0f Hz", f, hz2);
+        VorbisPcm *v = vorbispcm_create(); const uint8_t junk[8] = {2, 5, 5, 1, 2, 3, 4, 5}; const uint8_t *b[3] = {junk, 0, 0}; size_t sz[3] = {8, 0, 0};
+        CHECK(vorbispcm_set_headers_csd(v, b, sz) == AUDIO_BAD && !vorbispcm_ready(v), "csd: malformed bundle refused");
+        const uint8_t setup_first[8] = {5, 'v', 'o', 'r', 'b', 'i', 's', 0}; b[0] = setup_first; sz[0] = 8;
+        CHECK(vorbispcm_set_headers_csd(v, b, sz) == AUDIO_BAD, "csd: setup header without an identification header refused");
+        const uint8_t *none[3] = {0, 0, 0}; size_t zero[3] = {0, 0, 0};
+        CHECK(vorbispcm_set_headers_csd(v, none, zero) == AUDIO_NEED_MORE, "csd: no blobs: still waiting for headers");
+        vorbispcm_destroy(v);
+    }
     { /* error handling */
         VorbisPcm *v = vorbispcm_create(); int fr = 7; int16_t out[64]; uint8_t audio[8] = {0x00, 1, 2, 3};
         CHECK(vorbispcm_packet(v, audio, 4, out, 64, &fr) == AUDIO_NEED_MORE && fr == 0, "audio before the headers: need more");

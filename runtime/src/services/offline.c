@@ -625,10 +625,102 @@ static void bsd_fcntl(IpcObject *s, IpcCall *c) {
     }
     bsd_reply(c, 0, 0);
 }
+/* DuplicateSocket(fd) -> {new fd, errno}: a second descriptor for the same provider socket (bsdg_dup). */
 static void bsd_dup(IpcObject *s, IpcCall *c) {
     (void)s;
-    int h = bsdg_handle(bsd_g(), bsd_in_fd(c));
-    bsd_fail(c, h < 0 ? HZ_EBADF : HZ_EOPNOTSUPP);
+    int err = 0;
+    int r = bsdg_dup(bsd_g(), bsd_in_fd(c), &err);
+    bsd_reply(c, r, err);
+}
+/* SendMMsg / RecvMMsg(fd, vlen, flags): the mmsghdr array is in buffer 0 (an input buffer for send, the output buffer for recv). Layout is FreeBSD's LP64 one
+ * (msghdr 0x30 bytes: name@0 namelen@8 iov@0x10 iovlen@0x18 control@0x20 controllen@0x28 flags@0x2c, then u32 msg_len@0x30, 0x38 bytes per entry; iovec {base, len});
+ * guest pointers are read through ipc_buf_ptr [unverified against a console: no SDK path was observed to use it]. Control data is ignored. */
+#define MMSG_SIZE 0x38u
+#define MMSG_MAX_VLEN 32u
+#define MMSG_MAX_IOV 16u
+#define MMSG_MAX_BYTES 0x20000u
+static void *mmsg_ptr(uint64_t addr, uint64_t size) {
+    IpcBuf b = {addr, size, 0};
+    return addr && size ? ipc_buf_ptr(&b) : NULL;
+}
+static void mmsg_common(IpcCall *c, int recv) {
+    int err = 0;
+    const IpcBuf *b = recv ? ipc_out_buf(c, 0) : ipc_in_buf(c, 0);
+    uint32_t vlen = (uint32_t)bsd_in32(c, 4, 0);
+    int flags = bsd_in32(c, 8, 0), fd = bsd_in_fd(c);
+    if (vlen > MMSG_MAX_VLEN) vlen = MMSG_MAX_VLEN;
+    uint8_t *mm = b && b->size >= MMSG_SIZE ? ipc_buf_ptr(b) : NULL;
+    if (mm && (uint64_t)vlen * MMSG_SIZE > b->size) vlen = (uint32_t)(b->size / MMSG_SIZE);
+    if (!mm || !vlen) {
+        bsd_reply(c, bsdg_handle(bsd_g(), fd) < 0 ? -1 : 0, bsdg_handle(bsd_g(), fd) < 0 ? HZ_EBADF : 0);
+        return;
+    }
+    static __thread uint8_t buf[MMSG_MAX_BYTES];
+    uint32_t done = 0;
+    for (; done < vlen; done++) {
+        uint8_t *h = mm + (size_t)done * MMSG_SIZE;
+        uint64_t name_p, iov_p;
+        uint32_t namelen;
+        int32_t iovlen;
+        memcpy(&name_p, h, 8), memcpy(&namelen, h + 8, 4), memcpy(&iov_p, h + 0x10, 8), memcpy(&iovlen, h + 0x18, 4);
+        if (iovlen < 0 || (uint32_t)iovlen > MMSG_MAX_IOV) iovlen = (int32_t)MMSG_MAX_IOV;
+        uint8_t *iov = iovlen ? mmsg_ptr(iov_p, (uint64_t)iovlen * 16) : NULL;
+        size_t total = 0;
+        struct {
+            uint8_t *p;
+            size_t n;
+        } seg[MMSG_MAX_IOV];
+        int nseg = 0;
+        for (int i = 0; iov && i < iovlen && total < MMSG_MAX_BYTES; i++) {
+            uint64_t base, len;
+            memcpy(&base, iov + (size_t)i * 16, 8), memcpy(&len, iov + (size_t)i * 16 + 8, 8);
+            if (len > MMSG_MAX_BYTES - total) len = MMSG_MAX_BYTES - total;
+            uint8_t *p = len ? mmsg_ptr(base, len) : NULL;
+            if (!p) continue;
+            seg[nseg].p = p, seg[nseg].n = (size_t)len, nseg++;
+            total += (size_t)len;
+        }
+        OnlineAddr peer;
+        memset(&peer, 0, sizeof peer);
+        int64_t r;
+        uint8_t *name = namelen >= 8 ? mmsg_ptr(name_p, namelen) : NULL;
+        if (recv) {
+            /* only the first message may block: later ones return what is already queued */
+            r = bsdg_recv(bsd_g(), fd, buf, total, done ? (flags | 0x80) : flags, name ? &peer : NULL, &err); /* 0x80 = MSG_DONTWAIT */
+            if (r > 0) {
+                size_t off = 0;
+                for (int i = 0; i < nseg && off < (size_t)r; i++) {
+                    size_t k = (size_t)r - off < seg[i].n ? (size_t)r - off : seg[i].n;
+                    memcpy(seg[i].p, buf + off, k), off += k;
+                }
+                if (name) {
+                    uint8_t enc[28];
+                    size_t len = bsd_sockaddr_encode(&peer, enc, sizeof enc);
+                    memcpy(name, enc, len < namelen ? len : namelen);
+                    uint32_t nl = (uint32_t)len;
+                    memcpy(h + 8, &nl, 4);
+                }
+            }
+        } else {
+            size_t off = 0;
+            for (int i = 0; i < nseg; i++) memcpy(buf + off, seg[i].p, seg[i].n), off += seg[i].n;
+            OnlineAddr to;
+            r = bsdg_send(bsd_g(), fd, buf, total, flags, name && bsd_sockaddr_decode(name, namelen, &to) == 0 ? &to : NULL, &err);
+        }
+        if (r < 0) break;
+        uint32_t ml = (uint32_t)r;
+        memcpy(h + 0x30, &ml, 4);
+    }
+    if (done == 0) bsd_reply(c, -1, err);
+    else bsd_reply(c, (int)done, 0); /* a failure after the first message reports the messages that went through */
+}
+static void bsd_recvmmsg(IpcObject *s, IpcCall *c) {
+    (void)s;
+    mmsg_common(c, 1);
+}
+static void bsd_sendmmsg(IpcObject *s, IpcCall *c) {
+    (void)s;
+    mmsg_common(c, 0);
 }
 /* Poll(nfds, timeout ms) with the pollfd array in an input buffer (s32 fd, s16 events, s16 revents) and the result array in an output buffer. */
 static void bsd_poll(IpcObject *s, IpcCall *c) {
@@ -714,11 +806,10 @@ static const IpcCmd bsd_cmds[] = {
     {24, "Write", bsd_send, IPC_IMPL},
     {25, "Read", bsd_recv, IPC_IMPL},
     {26, "Close", bsd_close_call, IPC_IMPL},
-    /* Class d, kept as stubs: DuplicateSocket and the *MMsg calls need descriptor aliasing in bsd_core / mmsghdr marshalling and no SDK path reaches them. */
-    {27, "DuplicateSocket", bsd_dup, IPC_STUB},
+    {27, "DuplicateSocket", bsd_dup, IPC_IMPL},
     {29, "GetResourceStatistics", bsd_resource_stats, IPC_IMPL},
-    {30, "RecvMMsg", bsd_recv, IPC_STUB},
-    {31, "SendMMsg", bsd_send, IPC_STUB},
+    {30, "RecvMMsg", bsd_recvmmsg, IPC_IMPL},
+    {31, "SendMMsg", bsd_sendmmsg, IPC_IMPL},
 };
 static IpcObject *bsd_open(void) { return IPC_OBJECT("bsd:u", bsd_cmds, NULL, NULL); }
 

@@ -671,7 +671,7 @@ static void map_slot(const napple_input *in, int slot, napple_npad_state *st) {
     if (st->right.y < -half) st->buttons |= NAPPLE_BTN_MASK(NAPPLE_BTN_STICK_R_DOWN);
 }
 
-#define NES_STYLES (NAPPLE_STYLE_LARK_HVC_LEFT | NAPPLE_STYLE_LARK_HVC_RIGHT | NAPPLE_STYLE_LARK_NES_LEFT | NAPPLE_STYLE_LARK_NES_RIGHT)
+#define NES_STYLES NAPPLE_STYLE_LARK
 #define RETRO_STYLES (NES_STYLES | NAPPLE_STYLE_LUCIA | NAPPLE_STYLE_LAGON | NAPPLE_STYLE_LAGER)
 static uint32_t first_bit(uint32_t v) { return v & (~v + 1u); }
 static uint32_t choose_style(uint32_t supported, int pref, int *handheld_only) {
@@ -721,10 +721,7 @@ static uint32_t attrs_for(uint32_t style) {
         case NAPPLE_STYLE_JOY_LEFT: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_LEFT_CONNECTED;
         case NAPPLE_STYLE_JOY_RIGHT: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_RIGHT_CONNECTED;
         case NAPPLE_STYLE_GC: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_WIRED; /* the GameCube adapter is a cable */
-        case NAPPLE_STYLE_LARK_HVC_LEFT:
-        case NAPPLE_STYLE_LARK_NES_LEFT: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_LEFT_CONNECTED;
-        case NAPPLE_STYLE_LARK_HVC_RIGHT:
-        case NAPPLE_STYLE_LARK_NES_RIGHT: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_RIGHT_CONNECTED;
+        case NAPPLE_STYLE_LARK: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_LEFT_CONNECTED; /* the simulated pad is the NES left one (NpadLarkType NL) */
         default: return NAPPLE_ATTR_CONNECTED;
     }
 }
@@ -786,6 +783,15 @@ void napple_input_update(napple_input *in, uint64_t now) {
             napple_hid_set_npad_colors(shm, l, slot, 0x00828282 /* grey body */, 0x00ffffff);
         }
         napple_hid_push_npad(shm, l, slot, style, &st);
+        if (style == NAPPLE_STYLE_GC) { /* analog L / R of the GameCube pad: the controller's trigger travel, else the digital ZL / ZR as a full press */
+            float lt = (st.buttons & NAPPLE_BTN_MASK(NAPPLE_BTN_ZL)) ? 1.0f : 0.0f, rt = (st.buttons & NAPPLE_BTN_MASK(NAPPLE_BTN_ZR)) ? 1.0f : 0.0f;
+            if (src < in->npads && !neutral) {
+                if (in->pads[src].lt > lt) lt = in->pads[src].lt;
+                if (in->pads[src].rt > rt) rt = in->pads[src].rt;
+            }
+            napple_hid_push_gc_trigger(shm, l, slot, (uint32_t)(lt * 0x7fff), (uint32_t)(rt * 0x7fff));
+        }
+        if (style == NAPPLE_STYLE_LARK) napple_hid_set_lark_type(shm, l, slot, NAPPLE_LARK_NL, NAPPLE_LARK_INVALID);
         if (handheld_only && slot == 0) { /* handheld-only titles read npad id 0x20 */
             if (in->slot_style[9] != (int)style) {
                 in->slot_style[9] = (int)style;

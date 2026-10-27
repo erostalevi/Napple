@@ -34,6 +34,7 @@ void applet_push_message(uint32_t message) {
         signal_events();
     }
     pthread_mutex_unlock(&lock);
+    if (message == MSG_OPERATION_MODE_CHANGED) applet_display_resolution_changed();
 }
 /* While a library applet is on screen the application is out of focus (FocusState 2, message FocusStateChanged): on the console that is what
  * makes it stop drawing (it would otherwise alternate frames with the applet on the one screen); back to InFocus when the applet returns. */
@@ -65,6 +66,36 @@ static uint32_t new_message_event(void) {
     pthread_mutex_unlock(&lock);
     return readable;
 }
+/* Events the guest holds that the host signals later: one list per kind (the writable ends), so a state change can wake every holder. */
+enum { EV_SLEEP_LOCK, EV_RESOLUTION, EV_SUSPENDED_TICK, EV_GPU_ERROR, EV_FRIEND_INVITE, EV_AF_210, EV_KINDS };
+#define EV_MAX 8
+static uint32_t tracked_ev[EV_KINDS][EV_MAX];
+static unsigned ntracked_ev[EV_KINDS];
+static uint32_t plain_event(int signaled);
+static uint32_t tracked_event(unsigned kind, int signaled) {
+    uint32_t readable = 0, writable = event_create(&readable);
+    pthread_mutex_lock(&lock);
+    if (ntracked_ev[kind] < EV_MAX) tracked_ev[kind][ntracked_ev[kind]++] = writable;
+    pthread_mutex_unlock(&lock);
+    if (signaled) event_signal_handle(writable);
+    return readable;
+}
+static void signal_tracked(unsigned kind) {
+    pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < ntracked_ev[kind]; i++) event_signal_handle(tracked_ev[kind][i]);
+    pthread_mutex_unlock(&lock);
+}
+static void clear_tracked(unsigned kind) {
+    pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < ntracked_ev[kind]; i++) event_clear_handle(tracked_ev[kind][i]);
+    pthread_mutex_unlock(&lock);
+}
+/* Raise the system events the SDK polls but that nothing in an offline run triggers by itself (the GPU error event, a friend invitation); hooks for the
+ * frontend/tests, and the way the rows stay honest: the event is real and signals when its cause happens. */
+void applet_signal_gpu_error(void) { signal_tracked(EV_GPU_ERROR); }
+void applet_signal_friend_invitation(void) { signal_tracked(EV_FRIEND_INVITE); }
+/* The display resolution changed (docked/handheld switch): wakes GetDefaultDisplayResolutionChangeEvent. */
+void applet_display_resolution_changed(void) { signal_tracked(EV_RESOLUTION); }
 static uint32_t plain_event(int signaled) {
     uint32_t readable = 0, writable = event_create(&readable);
     if (signaled) event_signal_handle(writable);
@@ -80,6 +111,10 @@ static AppletState *AS(void) {
     if (!astate_ready) {
         applet_state_init(&astate);
         astate_ready = 1;
+        const char *e = getenv("NAPPLE_ILLUMINANCE"); /* a host light sensor value (lux): the sensor is reported as present */
+        if (e && *e) applet_illuminance_set(&astate, 1, (float)atof(e));
+        e = getenv("NAPPLE_PLATFORM_REGION");
+        if (e && atoi(e) == 2) astate.platform_region = 2;
     }
     return &astate;
 }
@@ -154,11 +189,45 @@ static void csg_get_resolution(IpcObject *s, IpcCall *c) {
 }
 static void csg_get_resolution_event(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_copy_handle(c, plain_event(0));
+    ipc_out_copy_handle(c, tracked_event(EV_RESOLUTION, 0));
+}
+/* Sleep: AllowToEnterSleep/DisallowToEnterSleep set a flag the host's idle-sleep handling reads (applet_sleep_disallowed); the sleep lock is acquired at
+ * once (nothing contends for it) and its event is signalled while the lock is held. */
+int applet_sleep_disallowed(void) { return AS()->sleep_disallowed || AS()->sleep_lock_held || AS()->auto_sleep_disabled; }
+static void csg_allow_sleep(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->sleep_disallowed = 0;
+}
+static void csg_disallow_sleep(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->sleep_disallowed = 1;
+}
+static void csg_acquire_sleep_lock(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    if (applet_sleep_lock_acquire(AS())) signal_tracked(EV_SLEEP_LOCK);
+}
+static void csg_release_sleep_lock(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    applet_sleep_lock_release(AS());
+    clear_tracked(EV_SLEEP_LOCK);
+}
+static void csg_release_sleep_lock_transiently(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    applet_sleep_lock_release_transiently(AS());
+    clear_tracked(EV_SLEEP_LOCK);
 }
 static void csg_get_sleep_lock_event(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_copy_handle(c, plain_event(0));
+    ipc_out_copy_handle(c, tracked_event(EV_SLEEP_LOCK, AS()->sleep_lock_held && !AS()->sleep_lock_transient));
+}
+static void csg_set_request_exit_to_la(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) AS()->request_exit_to_library_applet = IPC_IN(c, uint8_t, 0) != 0;
 }
 static void csg_is_vr_mode(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -198,33 +267,33 @@ static void csg_get_builtin_display_type(IpcObject *s, IpcCall *c) {
 /* GetSettingsPlatformRegion (300): 1 Global, 2 China. */
 static void csg_get_platform_region(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint32_t v = 1;
+    uint32_t v = AS()->platform_region;
     IPC_OUT(c, v);
 }
 static const IpcCmd csg_cmds[] = {
-    {300, "GetSettingsPlatformRegion", csg_get_platform_region, IPC_STUB},
+    {300, "GetSettingsPlatformRegion", csg_get_platform_region, IPC_IMPL},
     {0, "GetEventHandle", csg_get_event_handle, IPC_IMPL},
     {1, "ReceiveMessage", csg_receive_message, IPC_IMPL},
     {2, "GetThisAppletKind", csg_get_this_applet_kind, IPC_IMPL},
-    {3, "AllowToEnterSleep", csg_noop, IPC_STUB},
-    {4, "DisallowToEnterSleep", csg_noop, IPC_STUB},
+    {3, "AllowToEnterSleep", csg_allow_sleep, IPC_IMPL},
+    {4, "DisallowToEnterSleep", csg_disallow_sleep, IPC_IMPL},
     {5, "GetOperationMode", csg_get_operation_mode, IPC_IMPL},
     {6, "GetPerformanceMode", csg_get_performance_mode, IPC_IMPL},
     {7, "GetCradleStatus", csg_get_cradle_status, IPC_IMPL},
     {8, "GetBootMode", csg_get_boot_mode, IPC_IMPL},
     {9, "GetCurrentFocusState", csg_get_focus_state, IPC_IMPL},
-    {10, "RequestToAcquireSleepLock", csg_noop, IPC_STUB},
-    {11, "ReleaseSleepLock", csg_noop, IPC_STUB},
-    {12, "ReleaseSleepLockTransiently", csg_noop, IPC_STUB},
-    {13, "GetAcquiredSleepLockEvent", csg_get_sleep_lock_event, IPC_STUB},
+    {10, "RequestToAcquireSleepLock", csg_acquire_sleep_lock, IPC_IMPL},
+    {11, "ReleaseSleepLock", csg_release_sleep_lock, IPC_IMPL},
+    {12, "ReleaseSleepLockTransiently", csg_release_sleep_lock_transiently, IPC_IMPL},
+    {13, "GetAcquiredSleepLockEvent", csg_get_sleep_lock_event, IPC_IMPL},
     {50, "IsVrModeEnabled", csg_is_vr_mode, IPC_IMPL},
     {51, "SetVrModeEnabled", csg_set_vr_mode, IPC_IMPL},
     {60, "GetDefaultDisplayResolution", csg_get_resolution, IPC_IMPL},
-    {61, "GetDefaultDisplayResolutionChangeEvent", csg_get_resolution_event, IPC_STUB},
+    {61, "GetDefaultDisplayResolutionChangeEvent", csg_get_resolution_event, IPC_IMPL},
     {66, "SetCpuBoostMode", csg_set_cpu_boost, IPC_IMPL},
     {67, "CancelCpuBoostMode", csg_cancel_cpu_boost, IPC_IMPL},
     {68, "GetBuiltInDisplayType", csg_get_builtin_display_type, IPC_IMPL},
-    {900, "SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled", csg_noop, IPC_STUB},
+    {900, "SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled", csg_set_request_exit_to_la, IPC_IMPL},
     {90, "SetPerformanceConfigurationChangedNotification", csg_set_perf_notification, IPC_IMPL},
     {91, "GetCurrentPerformanceConfiguration", csg_get_current_perf_config, IPC_IMPL},
 };
@@ -317,18 +386,80 @@ static void sc_set_album_notification(IpcObject *s, IpcCall *c) {
 }
 static void sc_get_illuminance(IpcObject *s, IpcCall *c) {
     (void)s;
-    float v = 100.0f;
+    float v = applet_illuminance_get(AS(), NULL);
     IPC_OUT(c, v);
+}
+/* GetCurrentIlluminanceEx: {f32 lux, bool over the sensor's limit} [layout unverified]. */
+static void sc_get_illuminance_ex(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int over;
+    float v = applet_illuminance_get(AS(), &over);
+    uint8_t o = (uint8_t)over;
+    IPC_OUT(c, v);
+    IPC_OUT(c, o);
 }
 static void sc_is_illuminance_available(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint8_t v = 0;
+    uint8_t v = (uint8_t)AS()->illuminance_available;
     IPC_OUT(c, v);
 }
 static void sc_suspended_tick_value(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint64_t v = 0;
+    uint64_t v = AS()->suspended_ticks;
     IPC_OUT(c, v);
+}
+static void sc_suspended_tick_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_copy_handle(c, tracked_event(EV_SUSPENDED_TICK, 0));
+}
+static void sc_enter_fatal(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    applet_fatal_enter(AS());
+}
+static void sc_leave_fatal(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    applet_fatal_leave(AS());
+}
+static void sc_set_screenshot_identity(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < sizeof AS()->screenshot_identity) return;
+    memcpy(AS()->screenshot_identity, c->in, sizeof AS()->screenshot_identity);
+    AS()->screenshot_identity_set = 1;
+}
+static void sc_set_handles_request_to_display(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) AS()->handles_request_to_display = IPC_IN(c, uint8_t, 0) != 0;
+}
+static void sc_approve_to_display(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->approve_to_display_count++;
+    AS()->window_visible = 1;
+}
+static void sc_override_auto_sleep(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 15, uint8_t)) return;
+    for (unsigned i = 0; i < 4; i++) AS()->auto_sleep_override[i] = IPC_IN(c, int32_t, 4 * i);
+    AS()->auto_sleep_overridden = 1;
+}
+static void sc_report_multimedia_error(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint32_t)) AS()->last_multimedia_error = IPC_IN(c, uint32_t, 0);
+    AS()->multimedia_error_reports++;
+    LOG("applet", "ReportMultimediaError %#x", AS()->last_multimedia_error);
+}
+/* SetApplicationAlbumUserData: the album user data blob (a 0x400-byte buffer in the SDK): kept as size and an FNV-1a hash (the host album does not store it). */
+static void sc_set_album_user_data(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b ? ipc_buf_ptr(b) : NULL;
+    if (!p) return;
+    uint64_t h = 1469598103934665603ull;
+    for (uint64_t i = 0; i < b->size; i++) h = (h ^ p[i]) * 1099511628211ull;
+    AS()->album_user_data_size = b->size;
+    AS()->album_user_data_hash = h;
 }
 static void sc_exit(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -337,7 +468,8 @@ static void sc_exit(IpcObject *s, IpcCall *c) {
     summary_note("guest called appletExit");
 }
 /* GetSystemSharedLayerHandle: {shared buffer handle, shared layer handle}; a firmware applet that shares the system buffer gets layer 1 (the window's). */
-/* No system compositor shares buffers with this process: report sharing as unavailable (a failing result) so the applet draws into its own layer. */
+/* Kept stub (IsSystemBufferSharingEnabled / GetSystemSharedLayerHandle): no system compositor shares buffers with this process, so sharing is reported as unavailable
+ * (a failing result) and the applet draws into its own layer. */
 static void sc_no_shared_buffers(IpcObject *s, IpcCall *c) {
     (void)s;
     c->result = 0x1480;
@@ -351,15 +483,15 @@ static const IpcCmd sc_cmds[] = {
     {0, "Exit", sc_exit, IPC_IMPL},
     {1, "LockExit", csg_noop, IPC_IMPL},
     {2, "UnlockExit", csg_noop, IPC_IMPL},
-    {3, "EnterFatalSection", csg_noop, IPC_STUB},
-    {4, "LeaveFatalSection", csg_noop, IPC_STUB},
-    {9, "GetLibraryAppletLaunchableEvent", sc_launchable_event, IPC_STUB},
+    {3, "EnterFatalSection", sc_enter_fatal, IPC_IMPL},
+    {4, "LeaveFatalSection", sc_leave_fatal, IPC_IMPL},
+    {9, "GetLibraryAppletLaunchableEvent", sc_launchable_event, IPC_IMPL},
     {10, "SetScreenShotPermission", sc_set_screenshot_permission, IPC_IMPL},
     {11, "SetOperationModeChangedNotification", csg_noop, IPC_IMPL},
     {12, "SetPerformanceModeChangedNotification", csg_noop, IPC_IMPL},
     {13, "SetFocusHandlingMode", csg_noop, IPC_IMPL},
     {14, "SetRestartMessageEnabled", sc_set_restart_message, IPC_IMPL},
-    {15, "SetScreenShotAppletIdentityInfo", csg_noop, IPC_STUB},
+    {15, "SetScreenShotAppletIdentityInfo", sc_set_screenshot_identity, IPC_IMPL},
     {16, "SetOutOfFocusSuspendingEnabled", csg_noop, IPC_IMPL},
     {17, "SetControllerFirmwareUpdateSection", sc_set_fw_update_section, IPC_IMPL},
     {18, "SetRequiresCaptureButtonShortPressedMessage", sc_set_capture_short_press, IPC_IMPL},
@@ -369,25 +501,25 @@ static const IpcCmd sc_cmds[] = {
     {42, "GetSystemSharedLayerHandle", sc_shared_layer, IPC_STUB},
     {40, "CreateManagedDisplayLayer", sc_create_managed_layer, IPC_IMPL},
     {44, "CreateManagedDisplaySeparableLayer", sc_create_separable_layer, IPC_IMPL},
-    {50, "SetHandlesRequestToDisplay", csg_noop, IPC_STUB},
-    {51, "ApproveToDisplay", csg_noop, IPC_STUB},
-    {60, "OverrideAutoSleepTimeAndDimmingTime", csg_noop, IPC_STUB},
+    {50, "SetHandlesRequestToDisplay", sc_set_handles_request_to_display, IPC_IMPL},
+    {51, "ApproveToDisplay", sc_approve_to_display, IPC_IMPL},
+    {60, "OverrideAutoSleepTimeAndDimmingTime", sc_override_auto_sleep, IPC_IMPL},
     {61, "SetMediaPlaybackState", sc_set_media_playback, IPC_IMPL},
     {62, "SetIdleTimeDetectionExtension", sc_set_idle_ext, IPC_IMPL},
     {63, "GetIdleTimeDetectionExtension", sc_get_idle_ext, IPC_IMPL},
     {64, "SetInputDetectionSourceSet", sc_set_input_sources, IPC_IMPL},
     {65, "ReportUserIsActive", sc_report_user_active, IPC_IMPL},
-    {66, "GetCurrentIlluminance", sc_get_illuminance, IPC_STUB},
-    {67, "IsIlluminanceAvailable", sc_is_illuminance_available, IPC_STUB},
+    {66, "GetCurrentIlluminance", sc_get_illuminance, IPC_IMPL},
+    {67, "IsIlluminanceAvailable", sc_is_illuminance_available, IPC_IMPL},
     {68, "SetAutoSleepDisabled", sc_set_auto_sleep_disabled, IPC_IMPL},
     {69, "IsAutoSleepDisabled", sc_is_auto_sleep_disabled, IPC_IMPL},
-    {70, "ReportMultimediaError", csg_noop, IPC_STUB},
-    {71, "GetCurrentIlluminanceEx", sc_get_illuminance, IPC_STUB},
+    {70, "ReportMultimediaError", sc_report_multimedia_error, IPC_IMPL},
+    {71, "GetCurrentIlluminanceEx", sc_get_illuminance_ex, IPC_IMPL},
     {80, "SetWirelessPriorityMode", sc_set_wireless_priority, IPC_IMPL},
-    {90, "GetAccumulatedSuspendedTickValue", sc_suspended_tick_value, IPC_STUB},
-    {91, "GetAccumulatedSuspendedTickChangedEvent", sc_launchable_event, IPC_STUB},
+    {90, "GetAccumulatedSuspendedTickValue", sc_suspended_tick_value, IPC_IMPL},
+    {91, "GetAccumulatedSuspendedTickChangedEvent", sc_suspended_tick_event, IPC_IMPL},
     {100, "SetAlbumImageTakenNotificationEnabled", sc_set_album_notification, IPC_IMPL},
-    {110, "SetApplicationAlbumUserData", csg_noop, IPC_STUB},
+    {110, "SetApplicationAlbumUserData", sc_set_album_user_data, IPC_IMPL},
 };
 
 /* ---- IWindowController / IAudioController / IDisplayController ------------------------------------------------------------ */
@@ -396,13 +528,32 @@ static void wc_get_resource_user_id(IpcObject *s, IpcCall *c) {
     uint64_t v = 0x1000;
     IPC_OUT(c, v);
 }
+static void wc_acquire_foreground(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->foreground_rights = 1;
+}
+static void wc_release_foreground(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->foreground_rights = 0;
+}
+static void wc_reject_background(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) AS()->reject_background = IPC_IN(c, uint8_t, 0) != 0;
+}
+static void wc_set_window_visibility(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) AS()->window_visible = IPC_IN(c, uint8_t, 0) != 0;
+}
+static void wc_set_gpu_time_slice(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint64_t)) AS()->gpu_time_slice = IPC_IN(c, uint64_t, 0);
+}
 static const IpcCmd wc_cmds[] = {
-    {1, "GetAppletResourceUserId", wc_get_resource_user_id, IPC_IMPL},
-    {10, "AcquireForegroundRights", csg_noop, IPC_IMPL},
-    {11, "ReleaseForegroundRights", csg_noop, IPC_STUB},
-    {12, "RejectToChangeIntoBackground", csg_noop, IPC_STUB},
-    {20, "SetAppletWindowVisibility", csg_noop, IPC_STUB},
-    {21, "SetAppletGpuTimeSlice", csg_noop, IPC_STUB},
+    {1, "GetAppletResourceUserId", wc_get_resource_user_id, IPC_IMPL},     {10, "AcquireForegroundRights", wc_acquire_foreground, IPC_IMPL},
+    {11, "ReleaseForegroundRights", wc_release_foreground, IPC_IMPL},      {12, "RejectToChangeIntoBackground", wc_reject_background, IPC_IMPL},
+    {20, "SetAppletWindowVisibility", wc_set_window_visibility, IPC_IMPL}, {21, "SetAppletGpuTimeSlice", wc_set_gpu_time_slice, IPC_IMPL},
 };
 static void ac_set_volumes(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -435,23 +586,83 @@ static const IpcCmd ac_cmds[] = {
     {3, "ChangeMainAppletMasterVolume", ac_change_main_volume, IPC_IMPL},
     {4, "SetTransparentVolumeRate", ac_set_transparent_rate, IPC_IMPL},
 };
-static void dc_noop_result(IpcObject *s, IpcCall *c) {
+/* IDisplayController capture images: three 1280x720 RGBA slots (applet_core.h) filled from the last presented frame when the frontend registered a frame source
+ * (applet_capture_set_source), else opaque black. Get* write the slot to the output buffer and return {bool has_frame}; layouts [unverified against a title]. */
+static void dc_get_slot(IpcCall *c, unsigned slot) {
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b && b->size) {
+        uint8_t *tmp = malloc(b->size);
+        int has = 0;
+        size_t n = applet_capture_read(slot, tmp, b->size, &has);
+        if (n < b->size) memset(tmp + n, 0, b->size - n);
+        ipc_write_buf(c, b, tmp, b->size);
+        free(tmp);
+        uint8_t v = (uint8_t)has;
+        IPC_OUT(c, v);
+    } else {
+        uint8_t v = (uint8_t)applet_capture_has_frame(slot);
+        IPC_OUT(c, v);
+    }
+}
+static void dc_get_last_foreground(IpcObject *s, IpcCall *c) {
     (void)s;
-    c->result = 0x1680;
-} /* no capture image available */
+    dc_get_slot(c, APPLET_CAP_LAST_FOREGROUND);
+}
+static void dc_get_last_application(IpcObject *s, IpcCall *c) {
+    (void)s;
+    dc_get_slot(c, APPLET_CAP_LAST_APPLICATION);
+}
+static void dc_get_caller_applet(IpcObject *s, IpcCall *c) {
+    (void)s;
+    dc_get_slot(c, APPLET_CAP_CALLER_APPLET);
+}
+static void dc_update_last_foreground(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    applet_capture_update(APPLET_CAP_LAST_FOREGROUND);
+}
+static void dc_update_caller_applet(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    applet_capture_update(APPLET_CAP_CALLER_APPLET);
+}
+/* TakeScreenShotOfOwnLayer: refreshes the application slot unless the guest forbade screenshots (SetScreenShotPermission). */
+static void dc_take_own_layer(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    if (!applet_screenshot_allowed(AS())) {
+        LOGV("applet", "TakeScreenShotOfOwnLayer: screenshots are disabled by the guest");
+        return;
+    }
+    applet_capture_update(APPLET_CAP_LAST_APPLICATION);
+}
+/* CopyBetweenCaptureBuffers(dst, src): slot numbers as the capture buffer indices (0 foreground, 1 application, 2 caller); a bad index is an invalid argument. */
+static void dc_copy_between(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 4, uint32_t) || !applet_capture_copy(IPC_IN(c, uint32_t, 0), IPC_IN(c, uint32_t, 4))) c->result = 0x1d80;
+}
+static void dc_acquire_app_buffer(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!applet_capture_acquire_app_buffer()) c->result = 0x1480; /* already held */
+}
+static void dc_release_app_buffer(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    applet_capture_release_app_buffer();
+}
 static const IpcCmd dc_cmds[] = {
-    {0, "GetLastForegroundCaptureImage", dc_noop_result, IPC_STUB},
-    {1, "UpdateLastForegroundCaptureImage", csg_noop, IPC_STUB},
-    {2, "GetLastApplicationCaptureImage", dc_noop_result, IPC_STUB},
-    {5, "GetLastForegroundCaptureImageEx", dc_noop_result, IPC_STUB},
-    {3, "GetCallerAppletCaptureImage", dc_noop_result, IPC_STUB},
-    {4, "UpdateCallerAppletCaptureImage", csg_noop, IPC_STUB},
-    {6, "GetLastApplicationCaptureImageEx", dc_noop_result, IPC_STUB},
-    {7, "GetCallerAppletCaptureImageEx", dc_noop_result, IPC_STUB},
-    {8, "TakeScreenShotOfOwnLayer", csg_noop, IPC_STUB},
-    {9, "CopyBetweenCaptureBuffers", csg_noop, IPC_STUB},
-    {10, "AcquireLastApplicationCaptureBuffer", csg_noop, IPC_STUB},
-    {11, "ReleaseLastApplicationCaptureBuffer", csg_noop, IPC_STUB},
+    {0, "GetLastForegroundCaptureImage", dc_get_last_foreground, IPC_IMPL},
+    {1, "UpdateLastForegroundCaptureImage", dc_update_last_foreground, IPC_IMPL},
+    {2, "GetLastApplicationCaptureImage", dc_get_last_application, IPC_IMPL},
+    {5, "GetLastForegroundCaptureImageEx", dc_get_last_foreground, IPC_IMPL},
+    {3, "GetCallerAppletCaptureImage", dc_get_caller_applet, IPC_IMPL},
+    {4, "UpdateCallerAppletCaptureImage", dc_update_caller_applet, IPC_IMPL},
+    {6, "GetLastApplicationCaptureImageEx", dc_get_last_application, IPC_IMPL},
+    {7, "GetCallerAppletCaptureImageEx", dc_get_caller_applet, IPC_IMPL},
+    {8, "TakeScreenShotOfOwnLayer", dc_take_own_layer, IPC_IMPL},
+    {9, "CopyBetweenCaptureBuffers", dc_copy_between, IPC_IMPL},
+    {10, "AcquireLastApplicationCaptureBuffer", dc_acquire_app_buffer, IPC_IMPL},
+    {11, "ReleaseLastApplicationCaptureBuffer", dc_release_app_buffer, IPC_IMPL},
 };
 
 /* ---- IStorage / IStorageAccessor: launch parameters and library-applet storage ------------------------------------------------- */
@@ -523,24 +734,77 @@ static IpcObject *storage_new(uint64_t size) {
  * +0x3B4 password mode, +0x3C0/+0x3C4 initial string offset (bytes) and length (characters) inside the work buffer. */
 enum { APPLET_ID_SWKBD = LIBAPPLET_ID_SWKBD, APPLET_ID_CONTROLLER = LIBAPPLET_ID_CONTROLLER };
 #define SWKBD_OUT_SIZE 0x800u
+#define LA_MAX 8
 typedef struct {
     uint32_t applet_id, mode;
-    Storage in[8];
-    unsigned nin;
-    Storage *out;
+    Storage in[LA_MAX], iin[LA_MAX], extra[LA_MAX]; /* pushed: PushInData, PushInteractiveInData, PushExtraStorage */
+    unsigned nin, niin, nextra;
+    Storage *outq[LA_MAX], *ioutq[LA_MAX]; /* answers: PopOutData / PopInteractiveOutData pop from the head */
+    unsigned nout, out_head, niout, iout_head;
     int started, done;
     uint32_t result;
-    uint32_t ev_state_w, ev_out_w;
+    uint32_t ev_state_w, ev_out_w, ev_iout_w;
     int unsupported;
+    int exit_requested, terminated, gpu_slice_zero, foreground_requested;
+    int kbd_active; /* the inline keyboard: running until the game finalizes it */
+    AppletSwkbdInline kbd;
 } LibApplet;
+/* The live accessors (TerminateAllLibraryApplets / AreAnyLibraryAppletsLeft walk this list). */
+static LibApplet *live_las[32];
+static void la_register(LibApplet *a) {
+    pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < 32; i++)
+        if (!live_las[i]) {
+            live_las[i] = a;
+            break;
+        }
+    pthread_mutex_unlock(&lock);
+}
+static void la_unregister(LibApplet *a) {
+    pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < 32; i++)
+        if (live_las[i] == a) live_las[i] = NULL;
+    pthread_mutex_unlock(&lock);
+}
+static void la_free_storage(Storage *st) {
+    if (!st) return;
+    free(st->data);
+    free(st);
+}
+/* Queue an output storage the game pops; takes ownership of `o`. A full queue drops the oldest-unpopped newest answer (logged). */
+static void la_push_out(LibApplet *a, Storage *o) {
+    if (a->nout >= LA_MAX) {
+        LOG("applet", "library applet %#x: output queue full, dropping a storage", a->applet_id);
+        la_free_storage(o);
+        return;
+    }
+    a->outq[a->nout++] = o;
+}
+static void la_push_iout(LibApplet *a, Storage *o) {
+    if (a->niout >= LA_MAX) {
+        LOG("applet", "library applet %#x: interactive output queue full, dropping a storage", a->applet_id);
+        la_free_storage(o);
+        return;
+    }
+    a->ioutq[a->niout++] = o;
+    if (a->ev_iout_w) event_signal_handle(a->ev_iout_w);
+}
+static Storage *la_storage_from(const void *data, size_t size) {
+    Storage *o = calloc(1, sizeof *o);
+    o->size = size;
+    o->data = calloc(1, size ? size : 1);
+    if (data && size) memcpy(o->data, data, size);
+    return o;
+}
 static void libapplet_destroy(IpcObject *o) {
     LibApplet *a = o->state;
     if (!a) return;
+    la_unregister(a);
     for (unsigned i = 0; i < a->nin; i++) free(a->in[i].data);
-    if (a->out) {
-        free(a->out->data);
-        free(a->out);
-    }
+    for (unsigned i = 0; i < a->niin; i++) free(a->iin[i].data);
+    for (unsigned i = 0; i < a->nextra; i++) free(a->extra[i].data);
+    for (unsigned i = a->out_head; i < a->nout; i++) la_free_storage(a->outq[i]);
+    for (unsigned i = a->iout_head; i < a->niout; i++) la_free_storage(a->ioutq[i]);
     free(a);
 }
 static void utf16_to_utf8(const uint8_t *p, unsigned max_units, char *out, size_t cap) {
@@ -611,7 +875,7 @@ static void libapplet_run_swkbd(LibApplet *a) {
             memcpy(o->data + 4, u16, n * 2);
         }
     }
-    a->out = o;
+    la_push_out(a, o);
     a->result = 0;
     LOG("applet", "swkbd: %s%s%s", ok ? "entered \"" : "cancelled", ok ? text : "", ok ? "\"" : "");
 }
@@ -635,11 +899,14 @@ static void libapplet_run_controller(LibApplet *a) {
     Storage *o = calloc(1, sizeof *o);
     o->size = APPLET_CONTROLLER_OUT_SIZE;
     o->data = calloc(1, APPLET_CONTROLLER_OUT_SIZE);
-    applet_controller_encode(&ans, o->data);
-    a->out = o;
+    uint32_t cres;
+    applet_controller_apply_policy(getenv("NAPPLE_CONTROLLER_SUPPORT"), &ans, &cres);
+    applet_controller_encode_result(&ans, cres, o->data);
+    la_push_out(a, o);
     a->result = 0;
-    LOG("applet", "controller support: confirmed with %d player(s) of %d connected (game asked %u..%u%s%s), selected id %#x", ans.players, ans.connected,
-        ans.min, ans.max, ans.single_mode ? ", single mode" : "", ans.short_of_min ? ", fewer pads than asked" : "", ans.selected_id);
+    LOG("applet", "controller support: %s with %d player(s) of %d connected (game asked %u..%u%s%s), selected id %#x", cres ? "cancelled" : "confirmed",
+        ans.players, ans.connected, ans.min, ans.max, ans.single_mode ? ", single mode" : "", ans.short_of_min ? ", fewer pads than asked" : "",
+        ans.selected_id);
 }
 /* Error applet (id 0xe, libnx errorCodeShow / errorResultShow / the SDK's error viewer): nothing to read back; the guest waits for it to end. The
  * headless answer is "the user dismissed it" and the request is logged and noted in the run summary, since a game that shows an error screen
@@ -664,7 +931,7 @@ static void libapplet_run_error(LibApplet *a) {
     char code[32];
     applet_error_code_text(&e, code, sizeof code);
     LOG("applet", "error applet: %s%s%s (dismissed)", d, code[0] ? ", code " : "", code);
-    {
+    if (!applet_error_notify(&e, code, d)) { /* no frontend hook registered: the generic alert */
         char msg[300];
         snprintf(msg, sizeof msg, "The game reported an error%s%s.\n%s", code[0] ? " " : "", code, d);
         frontend_alert("Napple: error applet", msg);
@@ -679,16 +946,18 @@ static void libapplet_run_player_select(LibApplet *a) {
     Storage *o = calloc(1, sizeof *o);
     o->size = APPLET_PLAYER_SELECT_OUT_SIZE;
     o->data = calloc(1, APPLET_PLAYER_SELECT_OUT_SIZE);
-    /* NAPPLE_PLAYER_SELECT = <index> | cancel. The profile list is the account service's (one profile today; account.c is ac-games' area). */
-    const char *pe = getenv("NAPPLE_PLAYER_SELECT");
-    int cancel = pe && !strcmp(pe, "cancel");
-    uint8_t tab[1][16];
-    memcpy(tab[0], g_user_id, 16);
-    const uint8_t *uid = applet_player_select_pick((const uint8_t(*)[16])tab, 1, pe && !cancel ? atoi(pe) : 0, cancel);
+    /* NAPPLE_PLAYER_SELECT = <index> | cancel. The profile list is the account service's (it registers applet_set_profile_lister); without one the local
+     * user is the only profile. */
+    uint8_t tab[8][16];
+    unsigned np = applet_profiles(tab, 8, g_user_id);
+    int index;
+    int cancel = applet_player_select_spec(getenv("NAPPLE_PLAYER_SELECT"), &index);
+    const uint8_t *uid = applet_player_select_pick((const uint8_t(*)[16])tab, np, index, cancel);
     applet_player_select_answer(uid, uid == NULL, o->data);
-    a->out = o;
+    la_push_out(a, o);
     a->result = 0;
-    LOG("applet", uid ? "player select: confirmed with the only profile" : "player select: cancelled");
+    if (uid) LOG("applet", "player select: confirmed with profile %d of %u", index >= 0 && (unsigned)index < np ? index : 0, np);
+    else LOG("applet", "player select: cancelled");
 }
 /* ---- the firmware applet host (parent side) --------------------------------------------------------------------------------------------------
  * A library applet that has a program in the user's firmware (the Mii Maker, applet id 0x12) can run for real: `napple build` wrote it beside the game as
@@ -738,6 +1007,12 @@ static void remove_run_dir(const char *work, const char *in_dir, const char *out
         remove(p);
         snprintf(p, sizeof p, "%s/out%u.bin", out_dir, i);
         remove(p);
+        snprintf(p, sizeof p, "%s/iin%u.bin", in_dir, i);
+        remove(p);
+        snprintf(p, sizeof p, "%s/extra%u.bin", in_dir, i);
+        remove(p);
+        snprintf(p, sizeof p, "%s/iout%u.bin", out_dir, i);
+        remove(p);
     }
     snprintf(p, sizeof p, "%s/result.txt", out_dir);
     remove(p);
@@ -745,7 +1020,7 @@ static void remove_run_dir(const char *work, const char *in_dir, const char *out
     rmdir(out_dir);
     rmdir(work);
 }
-/* Returns 1 when the child ran to completion with output storages (a->out set), 0 otherwise. */
+/* Returns 1 when the child ran to completion (output storages queued on the accessor, or its result file written), 0 otherwise. */
 /* In-process mode (iOS always, macOS with NAPPLE_APPLET_INPROC=1): iOS cannot spawn a process, so the applet runs as a second copy of this runtime, loaded from
  * libnapple-applet.dylib (make applet-lib; NAPPLE_APPLET_LIB overrides the path, default: beside the executable, then ../Frameworks) with its own globals,
  * on a thread of this process. Same storage-file protocol as the child process. The applet's guest ending returns napple_applet_main (src/libmode.c). */
@@ -789,9 +1064,7 @@ static int inproc_run(const char *dir) {
     InprocRun r = {.entry = dlsym(h, "napple_applet_main")};
     if (!r.entry) return 0;
     void (*attach)(void *, void *) = dlsym(h, "napple_applet_attach");
-    if (attach) {
-        attach(g_cfg.headless ? NULL : frontend_metal_layer(), hid_input_get());
-    }
+    if (attach) { attach(g_cfg.headless ? NULL : frontend_metal_layer(), hid_input_get()); }
     char *argv[10];
     int n = 0;
     argv[n++] = (char *)"napple-applet";
@@ -832,6 +1105,20 @@ static int libapplet_run_firmware(LibApplet *a, const char *program_id) {
     for (unsigned i = 0; i < a->nin; i++) {
         snprintf(path, sizeof path, "%s/in%u.bin", in_dir, i);
         if (write_file(path, storage_bytes(&a->in[i]), a->in[i].size)) {
+            LOG("applet", "firmware applet: cannot write %s", path);
+            return 0;
+        }
+    }
+    for (unsigned i = 0; i < a->niin; i++) { /* the interactive channel: popped by PopInteractiveInData of the applet */
+        snprintf(path, sizeof path, "%s/iin%u.bin", in_dir, i);
+        if (write_file(path, storage_bytes(&a->iin[i]), a->iin[i].size)) {
+            LOG("applet", "firmware applet: cannot write %s", path);
+            return 0;
+        }
+    }
+    for (unsigned i = 0; i < a->nextra; i++) {
+        snprintf(path, sizeof path, "%s/extra%u.bin", in_dir, i);
+        if (write_file(path, storage_bytes(&a->extra[i]), a->extra[i].size)) {
             LOG("applet", "firmware applet: cannot write %s", path);
             return 0;
         }
@@ -930,39 +1217,65 @@ static int libapplet_run_firmware(LibApplet *a, const char *program_id) {
     LOG("applet", "firmware applet exited (status %d)", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
 collect:
     applet_set_focus(1);
-    snprintf(path, sizeof path, "%s/out0.bin", out_dir);
-    FILE *f = fopen(path, "rb");
-    if (!f) {
-        remove_run_dir(work, in_dir, out_dir);
-        return 0;
+    /* Everything the applet pushed: out<N>.bin / iout<N>.bin in order, and result.txt (written by ExitProcessAndReturn: the exit result). An applet that
+     * answered nothing and left no result (a crash, a kill) is a failed run: the caller falls back to the built-in answer. */
+    unsigned nfound = 0, nifound = 0;
+    int have_result = 0;
+    uint32_t exit_result = 0;
+    for (unsigned i = 0; i < LA_MAX; i++) {
+        snprintf(path, sizeof path, "%s/out%u.bin", out_dir, i);
+        FILE *f = fopen(path, "rb");
+        if (!f) break;
+        fseek(f, 0, SEEK_END);
+        long len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        Storage *o = calloc(1, sizeof *o);
+        o->size = len > 0 ? (uint64_t)len : 0;
+        o->data = calloc(1, o->size ? o->size : 1);
+        int ok = o->size == 0 || fread(o->data, 1, o->size, f) == o->size;
+        fclose(f);
+        if (!ok) la_free_storage(o);
+        else {
+            la_push_out(a, o);
+            nfound++;
+        }
     }
-    fseek(f, 0, SEEK_END);
-    long len = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    Storage *o = calloc(1, sizeof *o);
-    o->size = len > 0 ? (uint64_t)len : 0;
-    o->data = calloc(1, o->size ? o->size : 1);
-    int ok = o->size == 0 || fread(o->data, 1, o->size, f) == o->size;
-    fclose(f);
+    for (unsigned i = 0; i < LA_MAX; i++) {
+        snprintf(path, sizeof path, "%s/iout%u.bin", out_dir, i);
+        FILE *f = fopen(path, "rb");
+        if (!f) break;
+        fseek(f, 0, SEEK_END);
+        long len = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        Storage *o = calloc(1, sizeof *o);
+        o->size = len > 0 ? (uint64_t)len : 0;
+        o->data = calloc(1, o->size ? o->size : 1);
+        int ok = o->size == 0 || fread(o->data, 1, o->size, f) == o->size;
+        fclose(f);
+        if (!ok) la_free_storage(o);
+        else {
+            la_push_iout(a, o);
+            nifound++;
+        }
+    }
+    snprintf(path, sizeof path, "%s/result.txt", out_dir);
+    FILE *rf = fopen(path, "r");
+    if (rf) {
+        unsigned long v = 0;
+        have_result = 1;
+        if (fscanf(rf, "%lu", &v) == 1) exit_result = (uint32_t)v;
+        fclose(rf);
+    }
     remove_run_dir(work, in_dir, out_dir);
-    if (!ok) {
-        free(o->data);
-        free(o);
-        return 0;
-    }
-    a->out = o;
-    a->result = 0;
+    if (!nfound && !have_result) return 0;
+    a->result = exit_result;
+    LOG("applet", "firmware applet %s: %u output storage(s), %u interactive, result %#x", program_id, nfound, nifound, exit_result);
     return 1;
 }
 static void la_state_event(IpcObject *s, IpcCall *c) {
     LibApplet *a = s->state;
     uint32_t r = 0;
-    if (!a->ev_state_w) {
-        a->ev_state_w = event_create(&r);
-    } else {
-        uint32_t w = event_create(&r);
-        (void)w;
-    }
+    a->ev_state_w = event_create(&r);
     if (a->done) event_signal_handle(a->ev_state_w);
     ipc_out_copy_handle(c, r);
 }
@@ -971,75 +1284,239 @@ static void la_is_completed(IpcObject *s, IpcCall *c) {
     uint8_t v = a->done;
     IPC_OUT(c, v);
 }
+/* A handler registered with libapplet_register_handler (applet_lib_core.h) answers before the built-in applets. */
+static int libapplet_run_registered(LibApplet *a) {
+    if (!libapplet_find_handler(a->applet_id)) return 0;
+    LibAppletCall call;
+    memset(&call, 0, sizeof call);
+    call.applet_id = a->applet_id;
+    call.mode = a->mode;
+    for (unsigned i = 0; i < a->nin && i < LIBAPPLET_MAX_IN; i++) {
+        call.in[call.nin].data = a->in[i].gaddr ? NULL : a->in[i].data;
+        call.in[call.nin].size = a->in[i].size;
+        call.in[call.nin++].transfer_memory = a->in[i].gaddr != 0;
+    }
+    for (unsigned i = 0; i < a->niin && i < LIBAPPLET_MAX_IN; i++) {
+        call.interactive_in[call.ninteractive_in].data = a->iin[i].gaddr ? NULL : a->iin[i].data;
+        call.interactive_in[call.ninteractive_in].size = a->iin[i].size;
+        call.interactive_in[call.ninteractive_in++].transfer_memory = a->iin[i].gaddr != 0;
+    }
+    if (!libapplet_dispatch(&call)) {
+        libapplet_call_free(&call);
+        return 0;
+    }
+    if (call.out) {
+        Storage *o = calloc(1, sizeof *o);
+        o->size = call.out_size;
+        o->data = call.out;
+        la_push_out(a, o);
+        call.out = NULL;
+    }
+    for (unsigned i = 0; i < call.ninteractive_out; i++) {
+        Storage *o = calloc(1, sizeof *o);
+        o->size = call.interactive_out_size[i];
+        o->data = call.interactive_out[i];
+        la_push_iout(a, o);
+    }
+    call.ninteractive_out = 0;
+    a->result = call.result;
+    a->unsupported = call.unsupported;
+    LOG("applet", "library applet %#x answered by a registered handler", a->applet_id);
+    return 1;
+}
+/* The library applet is finished: wake everything waiting on it. */
+static void la_finish(LibApplet *a) {
+    a->done = 1;
+    a->kbd_active = 0;
+    if (a->ev_state_w) event_signal_handle(a->ev_state_w);
+    if (a->ev_out_w && a->out_head < a->nout) event_signal_handle(a->ev_out_w);
+}
+/* Software keyboard, inline mode (the game started it in a background mode): Start parses the config, answers FinishedInitialize and leaves the keyboard
+ * running; requests arrive with PushInteractiveInData (la_push_interactive) and the replies are popped with PopInteractiveOutData. */
+static void libapplet_start_swkbd_inline(LibApplet *a) {
+    const Storage *cfg = NULL;
+    for (unsigned i = 0; i < a->nin; i++)
+        if (a->in[i].size >= 0x4C8 && !a->in[i].gaddr && !cfg) cfg = &a->in[i];
+    AppletSwkbdConfig sc;
+    applet_swkbd_parse(cfg ? cfg->data : NULL, cfg ? cfg->size : 0, &sc);
+    applet_swkbd_inline_init(&a->kbd, &sc);
+    a->kbd.initialized = 1;
+    a->kbd_active = 1;
+    LibAppletCall call;
+    memset(&call, 0, sizeof call);
+    applet_swkbd_inline_reply(&call, APPLET_SWKBD_REPLY_FINISHED_INITIALIZE, NULL);
+    for (unsigned i = 0; i < call.ninteractive_out; i++) la_push_iout(a, la_storage_from(call.interactive_out[i], call.interactive_out_size[i]));
+    libapplet_call_free(&call);
+    LOG("applet", "swkbd inline: started (mode %u, length %u..%u), waiting for requests", a->mode, sc.min_len, sc.max_len);
+}
 static void la_start(IpcObject *s, IpcCall *c) {
     (void)c;
     LibApplet *a = s->state;
     a->started = 1;
-    if (a->applet_id == APPLET_ID_SWKBD) libapplet_run_swkbd(a);
+    const LibAppletProgram *prog = libapplet_program_for(a->applet_id);
+    int fw = prog && libapplet_firmware_enabled(prog, getenv("NAPPLE_FIRMWARE_APPLETS"), getenv("NAPPLE_FIRMWARE_APPLET_IDS"));
+    if (libapplet_run_registered(a)) {
+    } else if (fw && libapplet_run_firmware(a, prog->program_id)) { /* the applet of the user's firmware, run for real (Mii Maker by default) */
+    } else if (a->applet_id == APPLET_ID_SWKBD && libapplet_mode_is_inline(a->mode)) {
+        libapplet_start_swkbd_inline(a);
+        return; /* still running: finished by the Finalize request */
+    } else if (a->applet_id == APPLET_ID_SWKBD) libapplet_run_swkbd(a);
     else if (a->applet_id == APPLET_ID_CONTROLLER) libapplet_run_controller(a);
     else if (a->applet_id == LIBAPPLET_ID_ERROR) libapplet_run_error(a);
     else if (a->applet_id == LIBAPPLET_ID_PLAYER_SELECT) libapplet_run_player_select(a);
-    else if (a->applet_id == 0x12 && libapplet_run_firmware(a, "0100000000001009")) { /* the Mii Maker, run for real */
-    } else { /* unknown library applet: the guest sees it terminate without output (as if the user cancelled), instead of the process dying */
+    else { /* unknown library applet: the guest sees it terminate without output (as if the user cancelled), instead of the process dying */
         LOG("applet", "library applet %#x is not implemented: reporting it as cancelled", a->applet_id);
         a->unsupported = 1;
         a->result = 0x1480;
     }
-    a->done = 1;
-    if (a->ev_state_w) event_signal_handle(a->ev_state_w);
-    if (a->ev_out_w) event_signal_handle(a->ev_out_w);
+    la_finish(a);
 }
 static void la_get_result(IpcObject *s, IpcCall *c) {
     LibApplet *a = s->state;
-    if (a && a->unsupported) c->result = a->result;
+    if (a && a->result) c->result = a->result;
 }
-static void la_push_in(IpcObject *s, IpcCall *c) {
+/* RequestExit: the caller asks the applet to leave; an applet still running (the inline keyboard) ends at once, a finished one ignores it.
+ * Terminate: the applet is killed; its pending answers stay poppable. */
+static void la_request_exit(IpcObject *s, IpcCall *c) {
+    (void)c;
     LibApplet *a = s->state;
-    if (!c->nin_objects || !c->in_objects[0] || a->nin >= 8) {
-        c->result = 0x1480;
-        return;
-    }
+    a->exit_requested = 1;
+    if (a->started && !a->done) la_finish(a);
+}
+static void la_terminate(IpcObject *s, IpcCall *c) {
+    (void)c;
+    LibApplet *a = s->state;
+    a->terminated = 1;
+    if (a->started && !a->done) la_finish(a);
+}
+static void la_preset_gpu_zero(IpcObject *s, IpcCall *c) {
+    (void)c;
+    ((LibApplet *)s->state)->gpu_slice_zero = 1;
+}
+static void la_request_foreground(IpcObject *s, IpcCall *c) {
+    (void)c;
+    ((LibApplet *)s->state)->foreground_requested = 1;
+}
+static Storage *la_copy_in(IpcCall *c) {
+    if (!c->nin_objects || !c->in_objects[0]) return NULL;
     const Storage *src = c->in_objects[0]->state;
-    Storage *d = &a->in[a->nin++];
+    Storage *d = calloc(1, sizeof *d);
     *d = *src;
     if (!src->gaddr) {
         d->data = malloc(src->size ? src->size : 1);
         memcpy(d->data, src->data, src->size);
     } else d->data = NULL;
+    return d;
+}
+static void la_push_in(IpcObject *s, IpcCall *c) {
+    LibApplet *a = s->state;
+    Storage *d = la_copy_in(c);
+    if (!d || a->nin >= LA_MAX) {
+        if (d) {
+            free(d->data);
+            free(d);
+        }
+        c->result = 0x1480;
+        return;
+    }
+    a->in[a->nin++] = *d;
     LOGV("applet", "library applet %#x: PushInData %llu bytes (%s)", a->applet_id, (unsigned long long)d->size, d->gaddr ? "transfer memory" : "data");
+    free(d);
+}
+static void la_push_extra(IpcObject *s, IpcCall *c) {
+    LibApplet *a = s->state;
+    Storage *d = la_copy_in(c);
+    if (!d || a->nextra >= LA_MAX) {
+        if (d) {
+            free(d->data);
+            free(d);
+        }
+        c->result = 0x1480;
+        return;
+    }
+    a->extra[a->nextra++] = *d;
+    free(d);
+}
+/* PushInteractiveInData: a request to the running applet. The inline keyboard answers at once (replies queue for PopInteractiveOutData); a firmware applet
+ * gets it as iin<N>.bin when it starts (the host runs it to completion inside Start, so the channel is one-shot there); the other built-in applets
+ * ignore it. */
+static void la_push_interactive(IpcObject *s, IpcCall *c) {
+    LibApplet *a = s->state;
+    Storage *d = la_copy_in(c);
+    if (!d) {
+        c->result = 0x1480;
+        return;
+    }
+    if (a->kbd_active) {
+        LibAppletCall call;
+        memset(&call, 0, sizeof call);
+        char text[1500] = "";
+        uint32_t cmd = d->size >= 4 && d->data ? *(uint32_t *)d->data : 0;
+        int typed = 0;
+        if (cmd == APPLET_SWKBD_CMD_CALC) /* the keyboard appears: the user types through the host text bar (or the headless script) */
+            typed = frontend_text_input("", "", "", "", a->kbd.cfg.max_len, a->kbd.cfg.min_len, a->kbd.cfg.password, a->kbd.cfg.numeric, text, sizeof text);
+        applet_swkbd_inline_request(&a->kbd, d->data, d->size, typed ? text : NULL, &call);
+        for (unsigned i = 0; i < call.ninteractive_out; i++) la_push_iout(a, la_storage_from(call.interactive_out[i], call.interactive_out_size[i]));
+        libapplet_call_free(&call);
+        LOGV("applet", "swkbd inline: request %#x (%s)", cmd, typed ? "text entered" : "no text");
+        if (a->kbd.finalized) la_finish(a);
+        free(d->data);
+        free(d);
+        return;
+    }
+    if (a->niin >= LA_MAX) {
+        free(d->data);
+        free(d);
+        c->result = 0x1480;
+        return;
+    }
+    a->iin[a->niin++] = *d;
+    free(d);
 }
 static void la_pop_out(IpcObject *s, IpcCall *c) {
     LibApplet *a = s->state;
-    if (!a->out) {
+    if (a->out_head >= a->nout) {
         c->result = 0x680;
         return;
     }
-    IpcObject *o = storage_new(a->out->size);
+    Storage *src = a->outq[a->out_head++];
+    IpcObject *o = storage_new(src->size);
     Storage *st = o->state;
-    memcpy(st->data, a->out->data, a->out->size);
-    free(a->out->data);
-    free(a->out);
-    a->out = NULL;
+    memcpy(st->data, src->data, src->size);
+    la_free_storage(src);
+    ipc_out_object(c, o);
+}
+static void la_pop_interactive_out(IpcObject *s, IpcCall *c) {
+    LibApplet *a = s->state;
+    if (a->iout_head >= a->niout) {
+        c->result = 0x680;
+        return;
+    }
+    Storage *src = a->ioutq[a->iout_head++];
+    IpcObject *o = storage_new(src->size);
+    Storage *st = o->state;
+    memcpy(st->data, src->data, src->size);
+    la_free_storage(src);
+    if (a->iout_head >= a->niout && a->ev_iout_w) event_clear_handle(a->ev_iout_w);
     ipc_out_object(c, o);
 }
 static void la_pop_out_event(IpcObject *s, IpcCall *c) {
     LibApplet *a = s->state;
     uint32_t r = 0;
     a->ev_out_w = event_create(&r);
-    if (a->out) event_signal_handle(a->ev_out_w);
+    if (a->out_head < a->nout) event_signal_handle(a->ev_out_w);
     ipc_out_copy_handle(c, r);
 }
-static void la_event0(IpcObject *s, IpcCall *c) {
-    (void)s;
-    ipc_out_copy_handle(c, plain_event(0));
-}
-static void la_no_data(IpcObject *s, IpcCall *c) {
-    (void)s;
-    c->result = 0x680;
+static void la_pop_interactive_out_event(IpcObject *s, IpcCall *c) {
+    LibApplet *a = s->state;
+    uint32_t r = 0;
+    a->ev_iout_w = event_create(&r);
+    if (a->iout_head < a->niout) event_signal_handle(a->ev_iout_w);
+    ipc_out_copy_handle(c, r);
 }
 static void la_needs_exit(IpcObject *s, IpcCall *c) {
-    (void)s;
-    uint8_t v = 0;
+    LibApplet *a = s->state;
+    uint8_t v = (uint8_t)(a->exit_requested || a->terminated);
     IPC_OUT(c, v);
 }
 static void la_info(IpcObject *s, IpcCall *c) {
@@ -1051,20 +1528,20 @@ static const IpcCmd la_cmds[] = {
     {0, "GetAppletStateChangedEvent", la_state_event, IPC_IMPL},
     {1, "IsCompleted", la_is_completed, IPC_IMPL},
     {10, "Start", la_start, IPC_IMPL},
-    {20, "RequestExit", la_get_result, IPC_STUB},
-    {25, "Terminate", la_get_result, IPC_STUB},
+    {20, "RequestExit", la_request_exit, IPC_IMPL},
+    {25, "Terminate", la_terminate, IPC_IMPL},
     {30, "GetResult", la_get_result, IPC_IMPL},
-    {50, "PresetLibraryAppletGpuTimeSliceZero", csg_noop, IPC_STUB},
+    {50, "PresetLibraryAppletGpuTimeSliceZero", la_preset_gpu_zero, IPC_IMPL},
     {100, "PushInData", la_push_in, IPC_IMPL},
     {101, "PopOutData", la_pop_out, IPC_IMPL},
-    {102, "PushExtraStorage", la_push_in, IPC_STUB},
-    {103, "PushInteractiveInData", la_push_in, IPC_STUB},
-    {104, "PopInteractiveOutData", la_no_data, IPC_STUB},
+    {102, "PushExtraStorage", la_push_extra, IPC_IMPL},
+    {103, "PushInteractiveInData", la_push_interactive, IPC_IMPL},
+    {104, "PopInteractiveOutData", la_pop_interactive_out, IPC_IMPL},
     {105, "GetPopOutDataEvent", la_pop_out_event, IPC_IMPL},
-    {106, "GetPopInteractiveOutDataEvent", la_event0, IPC_STUB},
-    {110, "NeedsToExitProcess", la_needs_exit, IPC_STUB},
-    {120, "GetLibraryAppletInfo", la_info, IPC_STUB},
-    {150, "RequestForAppletToGetForeground", csg_noop, IPC_STUB},
+    {106, "GetPopInteractiveOutDataEvent", la_pop_interactive_out_event, IPC_IMPL},
+    {110, "NeedsToExitProcess", la_needs_exit, IPC_IMPL},
+    {120, "GetLibraryAppletInfo", la_info, IPC_IMPL},
+    {150, "RequestForAppletToGetForeground", la_request_foreground, IPC_IMPL},
 };
 static void lac_create_library_applet(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -1076,6 +1553,7 @@ static void lac_create_library_applet(IpcObject *s, IpcCall *c) {
         extern void ipc_trace_guest(unsigned);
         ipc_trace_guest(10);
     }
+    la_register(a);
     ipc_out_object(c, IPC_OBJECT("ILibraryAppletAccessor", la_cmds, a, libapplet_destroy));
 }
 static void lac_create_storage(IpcObject *s, IpcCall *c) {
@@ -1098,15 +1576,35 @@ static void lac_create_tmem_storage(IpcObject *s, IpcCall *c) {
     st->gaddr = t->addr;
     ipc_out_object(c, o);
 }
+/* AreAnyLibraryAppletsLeft: some accessor was started and has not finished (only the inline keyboard stays running past Start). */
 static void lac_are_any_left(IpcObject *s, IpcCall *c) {
     (void)s;
     uint8_t v = 0;
+    pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < 32; i++)
+        if (live_las[i] && live_las[i]->started && !live_las[i]->done) v = 1;
+    pthread_mutex_unlock(&lock);
     IPC_OUT(c, v);
+}
+static void lac_terminate_all(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&lock);
+    for (unsigned i = 0; i < 32; i++) {
+        LibApplet *a = live_las[i];
+        if (a && a->started && !a->done) {
+            a->terminated = 1;
+            a->done = 1;
+            a->kbd_active = 0;
+            if (a->ev_state_w) event_signal_handle(a->ev_state_w);
+        }
+    }
+    pthread_mutex_unlock(&lock);
 }
 static const IpcCmd lac_cmds[] = {
     {0, "CreateLibraryApplet", lac_create_library_applet, IPC_IMPL},
-    {1, "TerminateAllLibraryApplets", csg_noop, IPC_STUB},
-    {2, "AreAnyLibraryAppletsLeft", lac_are_any_left, IPC_STUB},
+    {1, "TerminateAllLibraryApplets", lac_terminate_all, IPC_IMPL},
+    {2, "AreAnyLibraryAppletsLeft", lac_are_any_left, IPC_IMPL},
     {10, "CreateStorage", lac_create_storage, IPC_IMPL},
     {11, "CreateTransferMemoryStorage", lac_create_tmem_storage, IPC_IMPL},
 };
@@ -1168,10 +1666,48 @@ static void af_get_save_data_size(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, a);
     IPC_OUT(c, b);
 }
+/* Game play recording (the console's "save the last 30 s of video" feature) is not offered: IsGamePlayRecordingSupported says no, and the Initialize/Flush
+ * calls are accepted and counted. */
 static void af_is_recording_supported(IpcObject *s, IpcCall *c) {
     (void)s;
     uint8_t v = 0;
     IPC_OUT(c, v);
+}
+static void af_init_recording(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->game_play_recording_initialized = 1;
+}
+static void af_flush_recording(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->game_play_recording_flushes++;
+}
+static void af_set_media_playback(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) AS()->media_playback_state = IPC_IN(c, uint8_t, 0);
+}
+static void af_init_copyright_fb(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->copyright_frame_buffer_initialized = 1;
+}
+static void af_set_copyright_image(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    if (b) AS()->copyright_image_size = b->size;
+}
+static void af_gpu_error_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_copy_handle(c, tracked_event(EV_GPU_ERROR, 0));
+}
+static void af_friend_invite_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_copy_handle(c, tracked_event(EV_FRIEND_INVITE, 0));
+}
+static void af_event_210(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_copy_handle(c, tracked_event(EV_AF_210, 0));
 }
 static void af_get_previous_program_index(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -1217,6 +1753,8 @@ static void af_event(IpcObject *s, IpcCall *c) {
 /* cmd 210 on IApplicationFunctions returns a copy handle to a system event (the SDK's nn::oe layer polls it with WaitSynchronization(timeout 0) right
  * after apm OpenSession). An earlier revision answered with an IMovieMaker object: the reply then carried no handle, the guest kept handle 0 and the
  * boot thread of Animal Crossing 3.0.3 spun on WaitSynchronization(0) forever. Never signalled: no capture or error event is ever raised. */
+/* Kept stubs in this table, each with its reason: PopLaunchParameter (only the preselected-account parameter exists; no ExecuteProgram / deep links),
+ * EnsureSaveData and GetSaveDataSize (the data lives in fs.c, which owns it: the answer here is a fixed size), GetPreviousProgramIndex (no program switching, always -1). */
 static const IpcCmd af_cmds[] = {
     {1, "PopLaunchParameter", af_pop_launch_parameter, IPC_STUB},
     {20, "EnsureSaveData", af_ensure_save_data, IPC_STUB},
@@ -1229,20 +1767,20 @@ static const IpcCmd af_cmds[] = {
     {32, "BeginBlockingHomeButton", af_begin_block_home, IPC_IMPL},
     {33, "EndBlockingHomeButton", af_end_block_home, IPC_IMPL},
     {40, "NotifyRunning", af_notify_running, IPC_IMPL},
-    {50, "GetPseudoDeviceId", af_get_pseudo_device_id, IPC_STUB},
-    {60, "SetMediaPlaybackStateForApplication", csg_noop, IPC_STUB},
-    {65, "IsGamePlayRecordingSupported", af_is_recording_supported, IPC_STUB},
-    {66, "InitializeGamePlayRecording", csg_noop, IPC_STUB},
+    {50, "GetPseudoDeviceId", af_get_pseudo_device_id, IPC_IMPL},
+    {60, "SetMediaPlaybackStateForApplication", af_set_media_playback, IPC_IMPL},
+    {65, "IsGamePlayRecordingSupported", af_is_recording_supported, IPC_IMPL},
+    {66, "InitializeGamePlayRecording", af_init_recording, IPC_IMPL},
     {67, "SetGamePlayRecordingState", af_set_recording_state, IPC_IMPL},
-    {68, "RequestFlushGamePlayingMovieForDebug", csg_noop, IPC_STUB},
+    {68, "RequestFlushGamePlayingMovieForDebug", af_flush_recording, IPC_IMPL},
     {90, "EnableApplicationCrashReport", af_enable_crash_report, IPC_IMPL},
-    {91, "InitializeApplicationCopyrightFrameBuffer", csg_noop, IPC_STUB},
-    {92, "SetApplicationCopyrightImage", csg_noop, IPC_STUB},
+    {91, "InitializeApplicationCopyrightFrameBuffer", af_init_copyright_fb, IPC_IMPL},
+    {92, "SetApplicationCopyrightImage", af_set_copyright_image, IPC_IMPL},
     {93, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
     {110, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_STUB},
-    {120, "GetGpuErrorDetectedSystemEvent", af_event, IPC_STUB},
-    {130, "GetFriendInvitationStorageChannelEvent", af_event, IPC_STUB},
-    {210, "GetSystemEvent210", af_event, IPC_STUB},
+    {120, "GetGpuErrorDetectedSystemEvent", af_gpu_error_event, IPC_IMPL},
+    {130, "GetFriendInvitationStorageChannelEvent", af_friend_invite_event, IPC_IMPL},
+    {210, "GetSystemEvent210", af_event_210, IPC_IMPL},
 };
 
 /* ---- IApplicationProxy ------------------------------------------------------------------------------------------------------------ */
@@ -1258,6 +1796,7 @@ SUB(proxy_audio_controller, "IAudioController", ac_cmds)
 SUB(proxy_display_controller, "IDisplayController", dc_cmds)
 SUB(proxy_library_applet_creator, "ILibraryAppletCreator", lac_cmds)
 SUB(proxy_application_functions, "IApplicationFunctions", af_cmds)
+/* Kept stub: there is no home menu to notify. */
 static const IpcCmd debug_cmds[] = {{0, "NotifyMessageToHomeMenuForDebug", csg_noop, IPC_STUB}};
 SUB(proxy_debug_functions, "IDebugFunctions", debug_cmds)
 static const IpcCmd proxy_cmds[] = {
@@ -1289,7 +1828,7 @@ static void *debug_launch_thread(void *arg) {
     a.in[0] = (Storage){.data = arg0, .size = 0x100};
     a.nin = 1;
     int ok = libapplet_run_firmware(&a, "0100000000001009");
-    LOG("applet", "debug launch: firmware applet %s, output %llu bytes", ok ? "ran" : "did not run", (unsigned long long)(a.out ? a.out->size : 0));
+    LOG("applet", "debug launch: firmware applet %s, output %llu bytes", ok ? "ran" : "did not run", (unsigned long long)(a.nout ? a.outq[0]->size : 0));
     return NULL;
 }
 void service_register_applet(void) {

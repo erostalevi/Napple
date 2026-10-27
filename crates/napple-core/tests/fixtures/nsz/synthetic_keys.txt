@@ -1,0 +1,8 @@
+aes_kek_generation_source = 4420823cfde6f1c26b30f90e371f4f3c
+aes_key_generation_source = c7dd01e4887534a20f0b0d04332be1d5
+header_key = 69da1cf6ba66d3f8b6d4b100a9ea0e755a5c2e8210242a08e7078f7f89385eb0
+key_area_key_application_source = 940bd5335f973daad8619b9196f6e3fa
+key_area_key_ocean_source = ffc911f57cced458bbbf2ce0fee296e0
+key_area_key_system_source = 3753c9bdfa0ff0169dc9575657db5791
+master_key_00 = 74066676cfb0b4eb8902c44244a03293
+titlekek_source = c36ed80e71e0fd77b07670eb2391cf29

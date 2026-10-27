@@ -14,3 +14,11 @@ uint32_t settings_region(uint64_t lang, const char *env);
 void settings_timezone_name(const char *env, char out[SET_TZ_NAME_SIZE]);
 /* Colour set id: NAPPLE_COLOR_SET "white"/"black"/"0"/"1"; default black (matches the HOME menu theme the SDK expects by default). */
 uint32_t settings_color_set(const char *env);
+
+/* Key code map (GetKeyCodeMap, 2 and 3): the US keyboard layout the on-screen/physical keyboard translation reads. The reply buffer is SET_KEYMAP_SIZE bytes: one 16-byte
+ * entry per HID keyboard usage id (0..0xff) = {u16 unshifted, u16 shifted, u16 alt-gr, u16 shift+alt-gr, u32 flags, u32 reserved}, the u16s being UTF-16 code units (0 = no
+ * character), flags bit 0 = the usage produces a character. Layout and entry shape are the author's reading of the public description (unverified on a console).
+ * A buffer smaller than the map receives its prefix; the function returns the number of bytes written. */
+#define SET_KEYMAP_SIZE 0x1000u
+#define SET_KEYMAP_ENTRY 16u
+size_t settings_keycode_map(uint8_t *out, size_t cap);

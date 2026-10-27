@@ -122,6 +122,11 @@ $(HOST_BUILD)/test_nvdrv_media: tests/test_svc_nvdrv_media.c src/services/nvdrv.
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) -DNAPPLE_HOST_TEST tests/test_svc_nvdrv_media.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c $(HOST_MEDIA) -lm -o $@
 HOST_TESTS += $(HOST_BUILD)/test_nvdrv_media
+# mod-glue-core (2026-10-27): romfs overlay lookup from mods/overlay.json
+$(HOST_BUILD)/test_romfs_overlay: tests/host/test_romfs_overlay.c src/services/romfs_map.c src/services/romfs_map.h $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_romfs_overlay.c src/services/romfs_map.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_romfs_overlay
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 

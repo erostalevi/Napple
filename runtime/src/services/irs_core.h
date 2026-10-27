@@ -110,6 +110,42 @@ typedef struct {
 } IrTransferState;
 _Static_assert(sizeof(IrMomentData) == 12 && sizeof(IrClusterData) == 24 && sizeof(IrMomentState) == 608 && sizeof(IrClusterState) == 416, "state layouts");
 
+/* Tera plugin processor (RunTeraPluginProcessor, 310) and pointing / DPD processor (RunDpdProcessor, 312).
+ * Reference: switchbrew "IRS services" (nn::irsensor TeraPluginProcessor / PointingProcessor), recalled without network access in this session; Ryujinx and yuzu
+ * do not implement either processor. Config sizes (4 and 32 bytes) and the 0x12c-byte tera data block follow that page; the field order inside the states and
+ * the way the data is derived (a 20x15 box-downsampled frame for tera, the brightest clusters for DPD) are this simulator's choice and unverified. */
+typedef struct {
+    uint8_t mode, pad[3]; /* tera plugin mode: 0 = off, nonzero = plugin active (the plugin firmware itself is not simulated) */
+} IrTeraConfig;
+typedef struct {
+    IrCameraConfig cam;
+    uint32_t intensity_min, pad; /* blobs dimmer than this are not markers (0 = 128) */
+} IrDpdConfig;
+#define IR_TERA_DATA 0x12c /* 300 = 20 x 15 */
+#define IR_DPD_MARKERS 4
+typedef struct {
+    uint64_t seq, timestamp_ns, sampling_number;
+    uint32_t ambient_noise, pad;
+    uint8_t data[IR_TERA_DATA], pad2[4];
+} IrTeraState;
+typedef struct {
+    float x, y;      /* marker position, -1..1 from the frame centre (x right, y down) */
+    uint16_t size;   /* pixel count, saturated */
+    uint8_t intensity, pad;
+} IrDpdMarker;
+typedef struct {
+    uint64_t seq, timestamp_ns, sampling_number;
+    uint8_t count, pad[3];
+    float point_x, point_y; /* pointer: midpoint of the two brightest markers (the one marker if only one), -1..1; 0 with no marker */
+    IrDpdMarker marker[IR_DPD_MARKERS];
+} IrDpdState;
+_Static_assert(sizeof(IrTeraConfig) == 4 && sizeof(IrDpdConfig) == 32 && sizeof(IrTeraState) == 0x150 && sizeof(IrDpdState) == 0x58, "tera / dpd layouts");
+#define IR_SLOT_TERA 0x440
+#define IR_SLOT_DPD 0x600
+void ir_tera_compute(const uint8_t *frame, const IrTeraConfig *cfg, uint8_t out[IR_TERA_DATA]);
+/* Returns the number of markers written (brightest cluster first); *px / *py get the pointer. */
+int ir_dpd_compute(const uint8_t *frame, const IrDpdConfig *cfg, IrDpdMarker out[IR_DPD_MARKERS], float *px, float *py);
+
 /* Shared memory (0x8000 bytes): one 0x800-byte slot per camera (controller id). Slot: +0x00 u32 mode, u32 pad, u64 frames processed; +0x10 IrMomentState;
  * +0x280 IrClusterState. A writer sets seq odd, fills the state, sets seq even (+2); a reader retries while seq is odd or changed. */
 #define IR_SHM_SIZE 0x8000
@@ -126,13 +162,15 @@ size_t ir_image_make(const uint8_t *frame, const IrTransferConfig *cfg, uint8_t 
 uint32_t ir_ambient_noise(const uint8_t *frame); /* 0 low, 1 medium, 2 high */
 
 /* ---- the simulator ------------------------------------------------------------------------------------------------------------- */
-typedef enum { IR_MODE_NONE = 0, IR_MODE_MOMENT, IR_MODE_CLUSTERING, IR_MODE_TRANSFER, IR_MODE_OTHER } IrMode;
+typedef enum { IR_MODE_NONE = 0, IR_MODE_MOMENT, IR_MODE_CLUSTERING, IR_MODE_TRANSFER, IR_MODE_OTHER, IR_MODE_TERA, IR_MODE_DPD } IrMode;
 typedef struct {
     IrMode mode;
     union {
         IrMomentConfig moment;
         IrClusteringConfig cluster;
         IrTransferConfig transfer;
+        IrTeraConfig tera;
+        IrDpdConfig dpd;
     } cfg;
     uint8_t *xfer_dst; /* the game's transfer memory (host pointer), or NULL */
     size_t xfer_size;

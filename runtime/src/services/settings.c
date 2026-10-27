@@ -66,14 +66,14 @@ static void set_get_quest_flag(IpcObject *s, IpcCall *c) {
     uint8_t v = 0;
     IPC_OUT(c, v);
 }
-/* Key code maps (the on-screen keyboard layouts a firmware applet asks for): an all-zero map, no key mapped. */
-static void set_zero_buffer(IpcObject *s, IpcCall *c) {
+/* Key code maps (the keyboard layout a firmware applet or the on-screen keyboard asks for): the US layout (settings_keycode_map); one layout serves all three calls. */
+static void set_key_code_map(IpcObject *s, IpcCall *c) {
     (void)s;
     const IpcBuf *b = ipc_out_buf(c, 0);
     if (b && b->size) {
-        uint8_t *z = calloc(1, b->size);
-        if (z) ipc_write_buf(c, b, z, b->size);
-        free(z);
+        uint8_t map[SET_KEYMAP_SIZE];
+        size_t n = settings_keycode_map(map, b->size < sizeof map ? (size_t)b->size : sizeof map);
+        ipc_write_buf(c, b, map, n);
     }
 }
 static const IpcCmd set_cmds[] = {
@@ -84,9 +84,9 @@ static const IpcCmd set_cmds[] = {
     {4, "GetRegionCode", set_get_region_code, IPC_IMPL},
     {5, "GetAvailableLanguageCodes2", set_get_available2, IPC_IMPL},
     {6, "GetAvailableLanguageCodeCount2", set_count18, IPC_IMPL},
-    {7, "GetKeyCodeMap", set_zero_buffer, IPC_STUB},
-    {9, "GetKeyCodeMap2", set_zero_buffer, IPC_STUB},
-    {11, "GetKeyCodeMap3", set_zero_buffer, IPC_STUB},
+    {7, "GetKeyCodeMap", set_key_code_map, IPC_IMPL},
+    {9, "GetKeyCodeMap2", set_key_code_map, IPC_IMPL},
+    {11, "GetKeyCodeMap3", set_key_code_map, IPC_IMPL},
     {8, "GetQuestFlag", set_get_quest_flag, IPC_IMPL}, /* a retail console is never a quest unit */
 };
 static IpcObject *set_open(void) { return IPC_OBJECT("set", set_cmds, NULL, NULL); }

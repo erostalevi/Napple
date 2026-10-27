@@ -51,8 +51,11 @@ int main(void) {
     r = BS(b0, 5, 0, 0, 0); CHECK(ri(r, 0) == 0 && ri(r, 1) == 0, "Select without sets: timeout");
     r = BS(b0, 17, 0, 1, 4); CHECK(ri(r, 0) == 0, "GetSockOpt: ok"); r = BS(b0, 21, 0, 1, 4); CHECK(ri(r, 0) == 0, "SetSockOpt: ok");
     r = BS(b0, 20, 0, 4, 4); CHECK(ri(r, 0) == 0, "Fcntl(F_SETFL): ok"); r = BS(b0, 20, 0, 3, 0); CHECK(ri(r, 0) == 4, "Fcntl(F_GETFL) returns O_NONBLOCK once set");
-    r = BS(b0, 27, 0, 0, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_EOPNOTSUPP, "Duplicate: not supported");
-    r = BS(b0, 26, 0, 0, 0); CHECK(ri(r, 0) == 0, "Close"); r = BS(b0, 26, 0, 0, 0); CHECK(ri(r, 1) == HZ_EBADF, "Close again: EBADF");
+    r = BS(b0, 27, 0, 0, 0); CHECK(ri(r, 0) == 2 && ri(r, 1) == 0, "DuplicateSocket: the lowest free descriptor (0 and 1 are open)");
+    r = BS(b0, 27, 77, 0, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_EBADF, "DuplicateSocket of an unknown descriptor: EBADF");
+    r = BS(b0, 20, 2, 3, 0); CHECK(ri(r, 0) == 4, "the duplicate shares the non-blocking flag");
+    r = BS(b0, 26, 0, 0, 0); CHECK(ri(r, 0) == 0, "Close the original"); r = BS(b0, 20, 2, 3, 0); CHECK(ri(r, 0) == 4, "the duplicate outlives the original");
+    r = BS(b0, 26, 2, 0, 0); CHECK(ri(r, 0) == 0, "Close the duplicate"); r = BS(b0, 26, 0, 0, 0); CHECK(ri(r, 1) == HZ_EBADF, "Close again: EBADF");
     bsdg_reset(bsd_g());
     { /* nifm */
         IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0];
@@ -229,6 +232,40 @@ int main(void) {
     bsdg_reset(bsd_g()); online_null_reset();
     { IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0]; svc_call(gen, 4, NULL, 0, &c); IpcObject *rq = c.out_objects[0];
       svc_call(rq, 4, NULL, 0, &c); svc_call(rq, 1, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "offline again after uninstalling"); }
+    { /* DuplicateSocket and the mmsg calls over the loopback provider */
+        memset(&lb, 0, sizeof lb); online_provider_install(&lb_provider); bsdg_reset(bsd_g());
+        IpcObject *bs2 = bsd_open(); IpcCall *r2;
+        r2 = BS(bs2, 2, 2, 1, 6); int ls = ri(r2, 0); r2 = BS(bs2, 2, 2, 1, 6); int cl = ri(r2, 0);
+        uint8_t ad[16]; sin_addr(ad, 7100, 127, 0, 0, 1);
+        bs(bs2, 13, ls, 0, 0, ad, 16, NULL, 0, NULL, 0, NULL, 0); BS(bs2, 18, ls, 4, 0); bs(bs2, 14, cl, 0, 0, ad, 16, NULL, 0, NULL, 0, NULL, 0);
+        r2 = bs(bs2, 12, ls, 0, 0, NULL, 0, NULL, 0, enc, sizeof enc, NULL, 0); int sv = ri(r2, 0);
+        r2 = BS(bs2, 27, cl, 0, 0); int cl2 = ri(r2, 0); CHECK(cl2 > cl && ri(r2, 1) == 0, "DuplicateSocket on a provider socket");
+        unsigned used = 0; for (int i = 0; i < LB_MAX; i++) used += lb.s[i].used;
+        BS(bs2, 26, cl, 0, 0); unsigned used2 = 0; for (int i = 0; i < LB_MAX; i++) used2 += lb.s[i].used;
+        CHECK(used == used2, "closing one alias keeps the provider socket open");
+        char m1[] = "dup-send"; r2 = bs(bs2, 10, cl2, 0, 0, m1, sizeof m1, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r2, 0) == (int)sizeof m1, "the duplicate can send");
+        char rb[32] = {0}; r2 = bs(bs2, 8, sv, 0, 0, NULL, 0, NULL, 0, rb, sizeof rb, NULL, 0); CHECK(!strcmp(rb, m1), "the peer receives it");
+        BS(bs2, 26, cl2, 0, 0); unsigned used3 = 0; for (int i = 0; i < LB_MAX; i++) used3 += lb.s[i].used;
+        CHECK(used3 == used2 - 1, "the last close reaches the provider");
+        /* SendMMsg: two messages, the first with two iovecs. FreeBSD LP64 mmsghdr, 0x38 bytes each. */
+        BS(bs2, 14, 0, 0, 0); r2 = BS(bs2, 2, 2, 1, 6); int c3 = ri(r2, 0); bs(bs2, 14, c3, 0, 0, ad, 16, NULL, 0, NULL, 0, NULL, 0);
+        r2 = bs(bs2, 12, ls, 0, 0, NULL, 0, NULL, 0, enc, sizeof enc, NULL, 0); int s3 = ri(r2, 0);
+        char p1[] = "ab", p2[] = "cdef", p3[] = "XYZ"; uint64_t iov[6] = {(uint64_t)(uintptr_t)p1, 2, (uint64_t)(uintptr_t)p2, 4, (uint64_t)(uintptr_t)p3, 3};
+        uint8_t mm[0x38 * 2] = {0}; uint64_t ip0 = (uint64_t)(uintptr_t)iov, ip1 = (uint64_t)(uintptr_t)(iov + 4); int32_t n2 = 2, n1 = 1;
+        memcpy(mm + 0x10, &ip0, 8); memcpy(mm + 0x18, &n2, 4); memcpy(mm + 0x38 + 0x10, &ip1, 8); memcpy(mm + 0x38 + 0x18, &n1, 4);
+        r2 = bs(bs2, 31, c3, 2, 0, mm, sizeof mm, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r2, 0) == 2 && ri(r2, 1) == 0, "SendMMsg sends both messages");
+        uint32_t l0, l1; memcpy(&l0, mm + 0x30, 4); memcpy(&l1, mm + 0x38 + 0x30, 4); CHECK(l0 == 6 && l1 == 3, "msg_len holds the bytes of each message");
+        char gather[16] = {0}; r2 = bs(bs2, 8, s3, 0, 0, NULL, 0, NULL, 0, gather, sizeof gather, NULL, 0); CHECK(ri(r2, 0) == 9 && !memcmp(gather, "abcdefXYZ", 9), "the iovecs were gathered in order");
+        /* RecvMMsg into two buffers */
+        r2 = bs(bs2, 10, c3, 0, 0, "12345678", 8, NULL, 0, NULL, 0, NULL, 0);
+        char q1[3] = {0}, q2[16] = {0}; uint64_t riov[4] = {(uint64_t)(uintptr_t)q1, 3, (uint64_t)(uintptr_t)q2, 16}; uint8_t rm[0x38] = {0}; uint64_t rp = (uint64_t)(uintptr_t)riov; int32_t rn = 2;
+        memcpy(rm + 0x10, &rp, 8); memcpy(rm + 0x18, &rn, 4);
+        r2 = bs(bs2, 30, s3, 1, 0, NULL, 0, NULL, 0, rm, sizeof rm, NULL, 0); CHECK(ri(r2, 0) == 1, "RecvMMsg returns one message");
+        uint32_t rl; memcpy(&rl, rm + 0x30, 4); CHECK(rl == 8 && !memcmp(q1, "123", 3) && !strcmp(q2, "45678"), "RecvMMsg scatters across the iovecs");
+        r2 = bs(bs2, 30, s3, 1, 0, NULL, 0, NULL, 0, rm, sizeof rm, NULL, 0); CHECK(ri(r2, 0) == -1 && ri(r2, 1) == HZ_EAGAIN, "RecvMMsg with nothing queued: EAGAIN");
+        r2 = bs(bs2, 31, 99, 1, 0, mm, sizeof mm, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r2, 0) == -1 && ri(r2, 1) == HZ_EBADF, "SendMMsg on an unknown descriptor: EBADF");
+        bsdg_reset(bsd_g()); online_provider_install(NULL);
+    }
     printf("{\"test\":\"svc_online\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

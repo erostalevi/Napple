@@ -22,6 +22,18 @@ int bcat_valid_directory_name(const char name[BCAT_NAME_SIZE]);
 int bcat_valid_file_name(const char name[BCAT_NAME_SIZE]);
 /* DeliveryCacheProgressImpl: u32 status at +0, u32 result at +4, everything else 0 (nothing was transferred). */
 void bcat_make_progress(uint32_t status, uint32_t result, uint8_t out[BCAT_PROGRESS_SIZE]);
+/* Full DeliveryCacheProgressImpl (0x200 bytes), layout per switchbrew "BCAT services" (DeliveryCacheProgressImpl) and Ryujinx IDeliveryCacheProgressService, recalled
+ * without network access: +0x00 u32 status, +0x04 u32 result, +0x08 char current_directory[0x20], +0x28 char current_file[0x20], +0x48 s64 current_downloaded,
+ * +0x50 s64 current_total, +0x58 s64 total_downloaded, +0x60 s64 total_total, the rest reserved zero. The names are NUL terminated (at most 0x1f characters). */
+#define BCAT_PROGRESS_DIR 0x08u
+#define BCAT_PROGRESS_FILE 0x28u
+#define BCAT_PROGRESS_CUR_DONE 0x48u
+typedef struct {
+    uint32_t status, result;
+    const char *directory, *file; /* NULL = empty */
+    int64_t current_downloaded, current_total, total_downloaded, total_total;
+} BcatProgress;
+void bcat_make_progress_full(const BcatProgress *p, uint8_t out[BCAT_PROGRESS_SIZE]);
 /* A passphrase buffer holds at most 0x40 characters plus the NUL terminator. */
 static inline int bcat_valid_passphrase_size(uint64_t size) { return size >= 1 && size <= 0x41; }
 
@@ -47,4 +59,7 @@ void bcat_set_provider(const BcatProvider *p);
 const BcatProvider *bcat_provider(void);
 /* A provider over a host folder: directories are its sub-folders, files their regular files (at most the limits above, valid names only). */
 BcatProvider bcat_dir_provider(const char *root);
+/* Writes one 0x38-byte DeliveryCacheDirectoryEntry: char name[0x20] at +0, s64 size at +0x20, u8 md5[0x10] at +0x28 (switchbrew "BCAT services"; Ryujinx's
+ * DeliveryCacheFileMetaEntry is the same record). */
+void bcat_pack_entry(const BcatFile *f, uint8_t out[BCAT_ENTRY_SIZE]);
 void bcat_md5(const void *data, size_t n, uint8_t out[16]);

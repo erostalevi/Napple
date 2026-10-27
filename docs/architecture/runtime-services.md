@@ -311,3 +311,33 @@ request table, friend/nifm/nsd/prepo/ssl/nfc state; left as stubs: `DuplicateSoc
 (application record list of the running title; `GetApplicationControlData` and the two content-path rows need build-layout data), `ncm` 4 → 0 (content infos parsed from the stored
 meta by `ncm_core.c`), `sfdnsres` 4 → 0, `ngc` 2 → 0 (`ngc_core.c`; real matching with a user-supplied `NAPPLE_NGC_WORDLIST`, nothing is shipped), `push` 1 → 0. Inventory and reasons:
 `docs/archive/changes/2026-10-27-claude-ipc-depth-rest-2026-10-27.md`. Layouts of the new rows are the author's memory of the public documentation (unverified); tested on Linux only.
+
+### media-nvdrv (2026-10-27): Vorbis out-of-band headers, nvdisp-disp0, nvdrv rows, frozen DecoderBackend contract
+
+Status of everything here: *tested* on Linux (`tools/linux-check`), *unbuilt* on macOS, never run against the SDK movie library or a real title.
+
+| Piece | Where | What |
+|---|---|---|
+| Vorbis out-of-band headers | `movie_audio_core` `vorbispcm_set_headers_csd`, `movie.c` Configure | the format's `csd-0..2` buffers are read in Configure: one Xiph bundle, three single packets, or identification + setup (the empty comment header is synthesised, Android MediaCodec layout). A rejected header leaves the collection untouched. Audio packets before the headers are still dropped with one log line. **On by default** now (`MOVIE_VORBIS_DEFAULT 1`); `NAPPLE_MOVIE_VORBIS=0` is the opt-out |
+| `/dev/nvdisp-disp0`, `-disp1` | `nvdrv_media_core` `nvdisp_*`, `nvdrv.c` `DEV_DISP` | query surface only, **proposed ABI** (no public nvdisp ABI): type `'D'`, nr 1 GET_MODE (1280x720@60 handheld), 2 GET_VBLANK, 3 WAIT_VBLANK (never blocks, strictly increasing), 4 GET_SYNCPT (26 / 27), 5 GET_STATUS. Other ioctls stay NotImplemented and are listed in `missing_ipc` |
+| `nvdrv` command rows | `nvdrv.c` | `IPC_STUB` rows 7 -> 1: QueryEvent, MapSharedMemory, GetStatus, SetAruid, DumpGraphicsMemoryInfo (verbose log of the nvmap totals), InitializeDevtools are implemented answers with the reason in the table; `Unknown13` stays a stub (no public description) |
+| DecoderBackend ABI 1 | `decoder_backend.h` | frozen: `open/close/decode` + optional `reset/configure`, `abi` field checked by `decoder_backend_install` (returns -1 on mismatch), call order and the synchronous in-decode-order rule are in the header comment |
+| Parameter-set hand-off | `nvdrv_media_core` `nvdec_configure`, `codec_headers_core` | H.264 SPS+PPS found in the NVDEC bitstream and VP9 key-frame configs reach `configure()` once per change (reset first); `DecoderConfig` carries the NAL units, the Annex B form for `vth264_config` and the vpcC record. `MediaStats.configures` counts them. The writers `h264_build_sps/pps` exist for the day the NVDEC picture-info layout is known (SPS/PPS synthesis for streams without in-band sets); they are tested only as round trips through the parsers |
+
+Tests: `test_svc_movie_audio` 37 checks, `test_svc_nvdrv_media` 115 checks (Linux).
+## Library applet host (applets-host, 2026-10-27)
+
+Supersedes the `appletOE` row above and the library applet notes of the plan5 section: `applet.c` + `applet_ae.c` went from 84 to 10 `IPC_STUB` rows (`appletOE` 68 → 7, `appletAE` 16 → 3; kept stubs with reasons are listed in the change note). Status: *tested* on Linux (`runtime/tests/linux/run_applet.sh`: `test_svc_applet`, `_libs`, `_host`, `_ae`); *unbuilt* on macOS. Layouts of rows marked [unverified] in the sources are the author's memory of the public documentation.
+
+* **Handler registry**: `libapplet_register_handler(id, handler)` (`applet_lib_core.h`) answers a library applet id before any built-in answer; the handler sees the pushed and interactive storages and returns output storages on both channels.
+* **Firmware applet table**: `libapplet_program_for(id)` maps applet ids 0x0A–0x1A to the firmware program ids (`0100000000001001`…); a firmware applet runs through the host (child process / in-process) when `libapplet_firmware_enabled` says so: the Mii Maker (0x12) by default, any other entry with `NAPPLE_FIRMWARE_APPLET_IDS=0x11,controller,…` or `NAPPLE_FIRMWARE_APPLETS=all`; `NAPPLE_FIRMWARE_APPLETS=0` turns all off. Without the firmware the built-in (HLE) answer is used.
+* **Interactive channel**: `PushInteractiveInData` / `PopInteractiveOutData` / `GetPopInteractiveOutDataEvent` are real; a firmware applet gets `iin<N>.bin`, answers `iout<N>.bin` (`PopInteractiveInData` / `PushInteractiveOutData` of `applet_ae.c`); output storages are a queue (`out0..out7`), `GetResult` returns the applet's exit result (`result.txt`).
+* **Built-in applets**: swkbd foreground and inline (background mode: replies over the interactive channel until Finalize), controller support (connected pads, min/max, `NAPPLE_CONTROLLER_SUPPORT=cancel|strict`), player select (profile list from `applet_set_profile_lister`, `NAPPLE_PLAYER_SELECT=<index>|cancel`), error applet (frontend hook `applet_set_error_hook`, default none → the generic alert).
+* **State rows**: sleep lock + event, fatal section, window visibility / foreground rights / GPU time slice, auto sleep override, illuminance (`NAPPLE_ILLUMINANCE=<lux>` makes the sensor present), capture image slots (`applet_capture_set_source` registers the frame source; none = opaque black), host events (`applet_signal_gpu_error`, `applet_signal_friend_invitation`, `applet_display_resolution_changed`).
+Depth changes (ipc-depth-rest2, 2026-10-27, IPC_STUB rows before → after, scan count over the owned files 29 → 2): `account` 8 → 0 (network-account rows routed through `OnlineProvider.account_info`,
+NullProvider answers unchanged; `InitializeApplicationInfo*` remembered per connection), `vi` 8 → 2 (layer table, scaling modes, display enable, binder refcounts and the system/manager display
+rows in `vi_core.c`; `TransactParcel`/`TransactParcelAuto` stay stubs: the graphics back end never uses the producer), `mii_img` 4 → 0 (in-memory image database with generated 96x96 faces,
+`mii_img_core.c`), `ns` 3 → 0 (`GetApplicationControlData` and the content-path rows read `<data_dir>/control.nacp`), `settings` 3 → 0 (US key code map, `settings_keycode_map`), `offline.c` 3 → 0
+(`DuplicateSocket` aliases the descriptor in `bsd_core.c`; `SendMMsg`/`RecvMMsg` marshal FreeBSD LP64 mmsghdr arrays), `ldn` network rows routed through the provider (`ONLINE_CAP_LDN`).
+`bsd:u` `RegisterClient` still answers 0 (a nonzero id broke SMO boot). Layouts are the author's memory of the public documentation (unverified); tested on Linux only. See
+`docs/archive/changes/2026-10-27-claude-ipc-depth-rest2-2026-10-27.md`.

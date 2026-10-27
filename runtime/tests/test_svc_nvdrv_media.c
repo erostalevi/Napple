@@ -3,6 +3,7 @@
  * malformed streams, unmapped surfaces. Register numbers come from nvdrv_media_regs.h (unverified against real traces). */
 #include "../src/services/nvdrv.c"
 #include "../src/services/nvdrv_media_regs.h"
+#include "../src/services/codec_headers_core.h"
 #include "../src/services/jpeg_core.h"
 #include "check.h"
 #include "codec_vectors.h"
@@ -73,14 +74,16 @@ static uint32_t submit(uint32_t chan, Buf *cb, const uint32_t *words, uint32_t n
 static const MediaStats *stats(uint32_t fd) { return media_engine_stats(fds[fd].ch.eng); }
 
 /* A backend that records what it is asked and produces a 16x16 frame. */
-static struct { int opened, closed, decoded, codec; DecodeRequest last; uint8_t pic_head[8]; } rec;
+static struct { int opened, closed, decoded, codec, resets, configures, refuse; DecodeRequest last; DecoderConfig cfg; uint8_t pic_head[8]; } rec;
 static void *rec_open(int codec) { rec.opened++; rec.codec = codec; return &rec; }
 static void rec_close(void *c) { (void)c; rec.closed++; }
 static int rec_decode(void *c, const DecodeRequest *r, DecodeResult *o) {
     (void)c; rec.decoded++; rec.last = *r; if (r->pic) memcpy(rec.pic_head, r->pic, 8);
     memset(r->luma, 0x55, 16 * 16); memset(r->chroma, 0x66, 16 * 8); *o = (DecodeResult){16, 16, 16, 0, 0}; return 0;
 }
-static const DecoderBackend rec_backend = {"recording", rec_open, rec_close, rec_decode, NULL};
+static void rec_reset(void *c) { (void)c; rec.resets++; }
+static int rec_configure(void *c, const DecoderConfig *cfg) { (void)c; rec.configures++; rec.cfg = *cfg; return rec.refuse ? -1 : 0; }
+static const DecoderBackend rec_backend = {"recording", rec_open, rec_close, rec_decode, rec_reset, rec_configure, DECODER_BACKEND_ABI};
 
 static double psnr(const uint8_t *a, const uint8_t *b, size_t n4) {
     double se = 0; size_t k = 0;
@@ -224,6 +227,47 @@ int main(void) {
     close_(dec2); CHECK(rec.closed == 2, "closing the channel closes the backend decoder");
     decoder_backend_install(NULL);
 
+    /* the configure hand-off: parameter sets found in the stream reach the backend once per change, reset first; a refusal stops the decode */
+    {
+        memset(&rec, 0, sizeof rec); decoder_backend_install(&rec_backend);
+        uint32_t d3 = open_("/dev/nvhost-nvdec"); Buf cb3 = mkbuf(d3, 0x1000);
+        memcpy(bs.mem, h264_64x48, sizeof h264_64x48); len = sizeof h264_64x48; memcpy(pic.mem + 18 * 4, &len, 4);
+        uint32_t p4[] = {SETCL(MEDIA_CLASS_NVDEC), NONINCR(NVM_SET_APPLICATION_ID, 1), DEC_CODEC_H264, INCR(NVDEC_SET_DRV_PIC_SETUP_OFFSET, 3), pic.iova >> 8, bs.iova >> 8, 0,
+                         INCR(NVDEC_SET_DISPLAY_BUF_LUMA_OFFSET, 2), luma.iova >> 8, chroma.iova >> 8, INCR(NVDEC_SET_STATUS_OFFSET, 1), st.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        submit(d3, &cb3, p4, sizeof p4 / 4, NULL, 0);
+        CHECK(rec.configures == 1 && rec.resets == 1 && rec.decoded == 1 && stats(d3)->configures == 1, "H.264: parameter sets configure the backend before the first decode (%d configures, %d resets)", rec.configures, rec.resets);
+        CHECK(rec.cfg.codec == DEC_CODEC_H264 && rec.cfg.h264.nsps == 1 && rec.cfg.h264.npps == 1 && rec.cfg.width == 64 && rec.cfg.height == 48 && rec.cfg.h264.sps[0][0] == 0x67 &&
+              rec.cfg.h264_annexb_size == 8 + 22 + 5 && !memcmp(rec.cfg.h264_annexb + 4, h264_64x48 + 4, 22), "H.264 config: one SPS, one PPS, 64x48, Annex B form for vth264_config");
+        submit(d3, &cb3, p4, sizeof p4 / 4, NULL, 0);
+        CHECK(rec.configures == 1 && rec.decoded == 2, "the same parameter sets again: no new configure");
+        memcpy(bs.mem, h264_208x112_high, sizeof h264_208x112_high); len = sizeof h264_208x112_high; memcpy(pic.mem + 18 * 4, &len, 4);
+        submit(d3, &cb3, p4, sizeof p4 / 4, NULL, 0);
+        CHECK(rec.configures == 2 && rec.resets == 2 && rec.cfg.width == 208 && rec.cfg.height == 112, "new parameter sets: reset then configure again (%dx%d)", rec.cfg.width, rec.cfg.height);
+        memcpy(bs.mem, h264_64x48 + 30, 64); len = 64; memcpy(pic.mem + 18 * 4, &len, 4); /* slices only: nothing to hand over */
+        submit(d3, &cb3, p4, sizeof p4 / 4, NULL, 0);
+        CHECK(rec.configures == 2 && rec.decoded == 4, "a stream without parameter sets keeps the backend's configuration");
+        rec.refuse = 1; memcpy(bs.mem, h264_50x30_crop, sizeof h264_50x30_crop); len = sizeof h264_50x30_crop; memcpy(pic.mem + 18 * 4, &len, 4); int dec_before = rec.decoded; memset(st.mem, 0, 32);
+        submit(d3, &cb3, p4, sizeof p4 / 4, NULL, 0); uint32_t stw[8]; memcpy(stw, st.mem, 32);
+        CHECK(rec.configures == 3 && rec.decoded == dec_before && stw[3] == 4 && stats(d3)->errors > 0, "a refused configure stops the decode and reports error 4 (status word %u)", stw[3]);
+        rec.refuse = 0;
+        /* VP9: a key frame configures with a vpcC record, an inter frame does not */
+        uint32_t p5[sizeof p4 / 4]; memcpy(p5, p4, sizeof p4); p5[2] = DEC_CODEC_VP9;
+        memset(bs.mem, 0, 0x2000); memcpy(bs.mem, vp9_key_70x38, sizeof vp9_key_70x38); len = sizeof vp9_key_70x38; memset(pic.mem, 0, 0x100); memcpy(pic.mem + 12 * 4, &len, 4);
+        int c0 = rec.configures; submit(d3, &cb3, p5, sizeof p5 / 4, NULL, 0);
+        CHECK(rec.configures == c0 + 1 && rec.cfg.codec == DEC_CODEC_VP9 && rec.cfg.width == 70 && rec.cfg.height == 38 && rec.cfg.vpcc_size == VP9_VPCC_SIZE && rec.cfg.vpcc[0] == 1 && rec.cfg.vpcc[5] == 10,
+              "VP9 key frame: configure with %dx%d and a vpcC record", rec.cfg.width, rec.cfg.height);
+        memset(bs.mem, 0, 0x2000); memcpy(bs.mem, vp9_inter, sizeof vp9_inter); len = sizeof vp9_inter; memcpy(pic.mem + 12 * 4, &len, 4);
+        submit(d3, &cb3, p5, sizeof p5 / 4, NULL, 0);
+        CHECK(rec.configures == c0 + 1, "VP9 inter frame: no configure");
+        close_(d3);
+        CHECK(stats(dec)->configures >= 1 && stats(dec)->frames > 0, "the null backend takes the configure hand-off too (%llu configures on the first channel)", (unsigned long long)stats(dec)->configures);
+        /* contract checks of install */
+        DecoderBackend bad = rec_backend; bad.abi = 2; CHECK(decoder_backend_install(&bad) == -1 && decoder_backend_current() == &rec_backend, "install refuses a backend with another ABI and keeps the current one");
+        bad = rec_backend; bad.decode = NULL; CHECK(decoder_backend_install(&bad) == -1, "install refuses a backend without decode");
+        bad = rec_backend; bad.configure = NULL; bad.reset = NULL; CHECK(decoder_backend_install(&bad) == 0, "configure and reset are optional");
+        CHECK(decoder_backend_install(NULL) == 0 && decoder_backend_current() == &decoder_backend_null && decoder_backend_null.abi == DECODER_BACKEND_ABI, "NULL restores the null backend");
+    }
+
     /* ---- VIC ---- */
     Buf vcb = mkbuf(vic, 0x1000), cfg = mkbuf(vic, 0x1000), yin = mkbuf(vic, 0x1000), cin = mkbuf(vic, 0x1000), out = mkbuf(vic, 0x10000);
     memset(yin.mem, 81, 16 * 8); memset(cin.mem, 90, 16 * 4); for (int i = 0; i < 16 * 4; i += 2) cin.mem[i + 1] = 240; /* BT.601 limited red: Y 81, U 90, V 240 */
@@ -272,6 +316,121 @@ int main(void) {
     Buf ecb = mkbuf(enc, 0x1000), est = mkbuf(enc, 0x100); memset(est.mem, 0xff, 16);
     uint32_t eprog[] = {SETCL(MEDIA_CLASS_MSENC), INCR(MSENC_SET_STATUS_OFFSET, 1), est.iova >> 8, IMM(NVM_EXECUTE, 0)};
     CHECK(submit(enc, &ecb, eprog, 4, NULL, 0) == NV_OK && stats(enc)->executes == 1 && est.mem[0] == 0 && est.mem[12] == 0, "MSENC execute accepted, status reports no bitstream");
+
+    { /* command table depth: only the undocumented command 13 stays a stub */
+        int stubs = 0, rows = (int)(sizeof nv_cmds / sizeof *nv_cmds); unsigned stub_cmd = 0;
+        for (int i = 0; i < rows; i++) if (nv_cmds[i].status == IPC_STUB) { stubs++; stub_cmd = nv_cmds[i].cmd; }
+        CHECK(rows == 14 && stubs == 1 && stub_cmd == 13, "nvdrv command table: %d rows, %d stub (cmd %u)", rows, stubs, stub_cmd);
+        memset(&call, 0, sizeof call); args[0] = 0; call.object = nv; call.in = (const uint8_t *)args; call.in_size = 8; nv_cmds[8].fn(nv, &call);
+        CHECK(call.out_size == 0, "DumpGraphicsMemoryInfo replies with nothing");
+        memset(&call, 0, sizeof call); call.object = nv; nv_cmds[6].fn(nv, &call);
+        CHECK(call.out_size >= 0x20, "GetStatus replies with a 0x20-byte status");
+    }
+    /* ---- parameter sets for a VideoToolbox backend (codec_headers_core) ---- */
+    {
+        H264ParamSets ps; uint8_t ann[256], avcc[256], nal[128];
+        CHECK(h264_find_param_sets(h264_64x48, sizeof h264_64x48, &ps) == 0 && ps.nsps == 1 && ps.npps == 1, "param sets: SPS and PPS found in an Annex B stream");
+        CHECK(ps.sps[0][0] == 0x67 && ps.sps_size[0] == 22 && ps.pps[0][0] == 0x68 && ps.pps_size[0] == 5, "param sets: NAL units start at their header byte (%zu, %zu bytes)", ps.sps_size[0], ps.pps_size[0]);
+        H264Sps sp; CHECK(h264_parse_sps(ps.sps[0] + 1, ps.sps_size[0] - 1, &sp) == 0 && sp.width == 64 && sp.height == 48, "param sets: the found SPS parses (%dx%d)", sp.width, sp.height);
+        size_t an = h264_param_sets_annexb(&ps, ann, sizeof ann);
+        H264Sps sp2; CHECK(an == 8 + ps.sps_size[0] + ps.pps_size[0] && !h264_find_sps(ann, an, &sp2) && sp2.width == 64, "param sets: Annex B form for vth264_config (%zu bytes)", an);
+        CHECK(h264_param_sets_annexb(&ps, ann, 10) == 0, "param sets: too small a buffer gives 0");
+        size_t ac = h264_param_sets_avcc(&ps, avcc, sizeof avcc);
+        H264ParamSets back; CHECK(ac && h264_parse_avcc(avcc, ac, &back) == 0 && back.nal_length_size == 4 && back.nsps == 1 && back.npps == 1 &&
+              back.sps_size[0] == ps.sps_size[0] && !memcmp(back.sps[0], ps.sps[0], ps.sps_size[0]) && !memcmp(back.pps[0], ps.pps[0], ps.pps_size[0]), "param sets: avcC round trip (%zu bytes)", ac);
+        CHECK(avcc[1] == 66 && avcc[3] == 10 && avcc[4] == 0xff && avcc[5] == 0xe1, "param sets: avcC profile/level/length-size bytes");
+        for (size_t cut = 0; cut < ac; cut += 3) { uint8_t t[256]; memcpy(t, avcc, cut); if (h264_parse_avcc(t, cut, &back) == 0) { CHECK(0, "truncated avcC (%zu of %zu) accepted", cut, ac); break; } }
+        uint8_t bad[8] = {2, 0, 0, 0, 0xff, 0xe0, 0, 0}; CHECK(h264_parse_avcc(bad, 8, &back) == -1, "param sets: avcC with a wrong version refused");
+        static const uint8_t only_sps[] = {0,0,0,1,0x67,66,192,10,218,17,236,4,64,0,0,3,0,64,0,0,3,2,131,196,137,168};
+        CHECK(h264_find_param_sets(only_sps, sizeof only_sps, &ps) == 1 && ps.nsps == 1 && ps.npps == 0, "param sets: an SPS without a PPS is reported as incomplete (1)");
+        CHECK(h264_find_param_sets(h265_96x64, sizeof h265_96x64, &ps) == -1, "param sets: a stream without any H.264 parameter sets: -1");
+        H264Pps pp; CHECK(h264_parse_pps(h264_64x48 + 4 + 22 + 4 + 1, 4, &pp) == 0 && pp.pps_id == 0 && pp.sps_id == 0 && pp.cabac == 0 && pp.num_ref_idx_l0 == 1 && !pp.transform_8x8,
+                           "PPS parse of the x264 vector: ids 0/0, CAVLC, one reference");
+        /* writers: SPS and PPS built from fields come back through the parsers */
+        static const struct { int w, h, refs; } sizes[] = {{64, 48, 1}, {1280, 720, 4}, {1920, 1080, 4}, {50, 30, 2}, {3840, 2160, 5}, {16, 16, 0}, {854, 480, 3}};
+        for (unsigned i = 0; i < sizeof sizes / sizeof *sizes; i++) {
+            H264SpsFields f; h264_sps_fields_default(&f, sizes[i].w, sizes[i].h, sizes[i].refs);
+            size_t n = h264_build_sps(&f, nal, sizeof nal); H264Sps r;
+            CHECK(n > 4 && nal[0] == 0x67 && !h264_parse_sps(nal + 1, n - 1, &r) && r.width == sizes[i].w && r.height == sizes[i].h && r.num_ref_frames == sizes[i].refs &&
+                  r.profile_idc == 100 && r.chroma_format_idc == 1 && r.bit_depth == 8 && r.frame_mbs_only == 1 && r.poc_type == 2,
+                  "built SPS %dx%d parses back (%zu bytes, %dx%d, level %d)", sizes[i].w, sizes[i].h, n, r.width, r.height, r.level_idc);
+        }
+        { H264SpsFields f; h264_sps_fields_default(&f, 1280, 720, 4); f.profile_idc = 66; f.poc_type = 0; f.log2_max_poc_lsb = 8; f.frame_mbs_only = 0; f.height_map_units = 23; f.mb_adaptive_frame_field = 1; f.crop_bottom = 0;
+          size_t n = h264_build_sps(&f, nal, sizeof nal); H264Sps r;
+          CHECK(n && !h264_parse_sps(nal + 1, n - 1, &r) && r.profile_idc == 66 && r.poc_type == 0 && r.frame_mbs_only == 0 && r.width == 1280 && r.height == 2 * 23 * 16 && r.chroma_format_idc == 1,
+                "built SPS: Baseline profile, poc type 0, interlaced (%dx%d)", r.width, r.height);
+          f.poc_type = 1; CHECK(h264_build_sps(&f, nal, sizeof nal) == 0, "built SPS: poc type 1 is not writable"); f.poc_type = 2; f.width_mbs = 0; CHECK(h264_build_sps(&f, nal, sizeof nal) == 0, "built SPS: zero width refused");
+          h264_sps_fields_default(&f, 640, 480, 2); CHECK(h264_build_sps(&f, nal, 5) == 0, "built SPS: too small an output buffer gives 0"); }
+        { H264SpsFields f; h264_sps_fields_default(&f, 1920, 1080, 4); f.profile_idc = 110; f.bit_depth = 10; f.chroma_format_idc = 2; f.crop_bottom = 8; /* 4:2:2 crop unit is one row */ size_t n = h264_build_sps(&f, nal, sizeof nal); H264Sps r;
+          CHECK(n && !h264_parse_sps(nal + 1, n - 1, &r) && r.bit_depth == 10 && r.chroma_format_idc == 2 && r.width == 1920 && r.height == 1080, "built SPS: High 4:2:2 10-bit (%dx%d, depth %d)", r.width, r.height, r.bit_depth); }
+        for (int ext = 0; ext < 2; ext++) {
+            H264Pps in = {.pps_id = 3, .sps_id = 1, .cabac = 1, .bottom_field_pic_order = 0, .num_slice_groups = 1, .num_ref_idx_l0 = 4, .num_ref_idx_l1 = 2, .weighted_pred = 1, .weighted_bipred_idc = 2,
+                          .pic_init_qp = 20, .pic_init_qs = 30, .chroma_qp_index_offset = -3, .deblocking_filter_control = 1, .constrained_intra_pred = 0, .redundant_pic_cnt = 0,
+                          .transform_8x8 = ext, .second_chroma_qp_index_offset = ext ? 5 : -3};
+            size_t n = h264_build_pps(&in, nal, sizeof nal); H264Pps out;
+            CHECK(n && nal[0] == 0x68 && !h264_parse_pps(nal + 1, n - 1, &out) && out.pps_id == 3 && out.sps_id == 1 && out.cabac == 1 && out.num_ref_idx_l0 == 4 && out.num_ref_idx_l1 == 2 &&
+                  out.weighted_pred == 1 && out.weighted_bipred_idc == 2 && out.pic_init_qp == 20 && out.pic_init_qs == 30 && out.chroma_qp_index_offset == -3 && out.deblocking_filter_control == 1 &&
+                  out.transform_8x8 == ext && out.second_chroma_qp_index_offset == (ext ? 5 : -3), "built PPS (extension %d) parses back (%zu bytes)", ext, n);
+        }
+        { H264Pps bad_pps = {.num_slice_groups = 1, .num_ref_idx_l0 = 0, .num_ref_idx_l1 = 1}; CHECK(h264_build_pps(&bad_pps, nal, sizeof nal) == 0, "built PPS: zero reference count refused"); }
+        { /* a built SPS + PPS pair makes a stream the null backend and the finder both accept */
+            H264SpsFields f; h264_sps_fields_default(&f, 320, 240, 2); uint8_t st[128]; size_t at = 0;
+            st[at++] = 0; st[at++] = 0; st[at++] = 0; st[at++] = 1; at += h264_build_sps(&f, st + at, sizeof st - at);
+            H264Pps p = {.num_slice_groups = 1, .num_ref_idx_l0 = 1, .num_ref_idx_l1 = 1, .pic_init_qp = 26, .pic_init_qs = 26};
+            st[at++] = 0; st[at++] = 0; st[at++] = 0; st[at++] = 1; at += h264_build_pps(&p, st + at, sizeof st - at);
+            H264Sps r; CHECK(h264_find_param_sets(st, at, &ps) == 0 && !h264_find_sps(st, at, &r) && r.width == 320 && r.height == 240, "built SPS + PPS in one Annex B stream: found and parsed (%zu bytes)", at);
+        }
+        /* VP9: vpcC from a key frame */
+        Vp9Header vh; uint8_t vpcc[VP9_VPCC_SIZE];
+        CHECK(vp9_parse_header(vp9_key_70x38, sizeof vp9_key_70x38, &vh) == 0 && vh.key_frame && vh.width == 70 && vh.height == 38 && vh.subsampling_x == 1 && vh.subsampling_y == 1, "VP9 key frame: 4:2:0");
+        CHECK(vp9_build_vpcc(&vh, vpcc) == VP9_VPCC_SIZE && vpcc[0] == 1 && vpcc[1] == 0 && vpcc[4] == 0 && vpcc[5] == 10 && (vpcc[6] >> 4) == 8 && ((vpcc[6] >> 1) & 7) == 1 && !vpcc[10] && !vpcc[11],
+              "vpcC: version 1, profile 0, level 1.0, 8-bit 4:2:0 (%02x %02x %02x)", vpcc[4], vpcc[5], vpcc[6]);
+        Vp9Header inter; vp9_parse_header(vp9_inter, sizeof vp9_inter, &inter);
+        CHECK(vp9_build_vpcc(&inter, vpcc) == 0, "vpcC: an inter frame has no size, no record");
+        CHECK(vp9_level_for(1280, 720) == 31 && vp9_level_for(1920, 1080) == 40 && vp9_level_for(3840, 2160) == 50 && vp9_level_for(64, 64) == 10, "VP9 levels by picture size");
+    }
+
+    /* ---- /dev/nvdisp-disp0: display, vblank and syncpoint queries (proposed ABI, see nvdrv_media_core.h) ---- */
+    {
+        NvDisp d; uint8_t b[32]; uint64_t T = 5000000000ull;
+        nvdisp_init(&d, T, 0);
+        memset(b, 0xee, sizeof b);
+        CHECK(nvdisp_ioctl(&d, NVDISP_GET_MODE, b, 32, T) == NVDISP_OK, "disp core: GET_MODE");
+        uint32_t m[8]; memcpy(m, b, 32);
+        CHECK(m[0] == 1280 && m[1] == 720 && m[2] == 60000 && m[3] == 32 && m[4] == 0 && m[5] == 0, "disp core: handheld 1280x720 at 60 Hz, not docked");
+        nvdisp_init(&d, T, 1); nvdisp_ioctl(&d, NVDISP_GET_MODE, b, 32, T); memcpy(m, b, 32);
+        CHECK(m[0] == 1920 && m[1] == 1080 && m[4] == 1, "disp core: docked 1920x1080");
+        CHECK(nvdisp_vblank_count(&d, T) == 0 && nvdisp_vblank_count(&d, T + 1000000000ull) == 60 && nvdisp_vblank_count(&d, T + 500000000ull) == 30, "disp core: 60 vblanks per second");
+        CHECK(nvdisp_vblank_count(&d, T - 1) == 0, "disp core: a clock before the start reads 0");
+        uint64_t c, ts; nvdisp_ioctl(&d, NVDISP_GET_VBLANK, b, 16, T + 100000000ull); memcpy(&c, b, 8); memcpy(&ts, b + 8, 8);
+        CHECK(c == 6 && ts == T + 100000000ull, "disp core: vblank 6 at +100 ms (count %llu ts %llu)", (unsigned long long)c, (unsigned long long)(ts - T));
+        uint8_t w[24] = {0}; uint64_t n1, n2, t2;
+        nvdisp_ioctl(&d, NVDISP_WAIT_VBLANK, w, 24, T + 100000000ull); memcpy(&n1, w + 8, 8);
+        nvdisp_ioctl(&d, NVDISP_WAIT_VBLANK, w, 24, T + 100000000ull); memcpy(&n2, w + 8, 8); memcpy(&t2, w + 16, 8);
+        CHECK(n1 == 7 && n2 == 8 && t2 > T + 100000000ull, "disp core: WAIT_VBLANK reports the next vblank and never repeats one (%llu then %llu)", (unsigned long long)n1, (unsigned long long)n2);
+        CHECK(nvdisp_ioctl(&d, NVDISP_GET_MODE, b, 8, T) == NVDISP_BAD_PARAMETER && nvdisp_ioctl(&d, NVDISP_WAIT_VBLANK, w, 16, T) == NVDISP_BAD_PARAMETER, "disp core: short buffers refused");
+        CHECK(nvdisp_ioctl(&d, 0x77, b, 32, T) == NVDISP_NOT_IMPLEMENTED, "disp core: unknown nr is NotImplemented");
+        nvdisp_ioctl(&d, NVDISP_GET_STATUS, b, 16, T); memcpy(m, b, 16);
+        CHECK(m[0] == 1 && m[1] == 1 && m[2] == 1 && m[3] == 1, "disp core: connected, powered, docked, vblank enabled");
+    }
+    {
+        uint32_t d0 = open_("/dev/nvdisp-disp0"), d1 = open_("/dev/nvdisp-disp1");
+        CHECK(d0 && d1 && d0 != d1 && fds[d0].kind == DEV_DISP && fds[d1].kind == DEV_DISP, "nvdisp-disp0/1 open as display devices (fds %u %u)", d0, d1);
+        uint32_t mode[8] = {0};
+        uint32_t e = ioctl_(d0, cmd_id(2, 32, NVDISP_IOCTL_TYPE, NVDISP_GET_MODE), mode, 32);
+        CHECK(e == 0 && mode[0] == 1280 && mode[1] == 720, "nvdisp-disp0 GET_MODE through the ioctl handler: %ux%u", mode[0], mode[1]);
+        uint32_t sp[2] = {0};
+        e = ioctl_(d0, cmd_id(2, 8, NVDISP_IOCTL_TYPE, NVDISP_GET_SYNCPT), sp, 8); uint32_t sp1[2] = {0};
+        ioctl_(d1, cmd_id(2, 8, NVDISP_IOCTL_TYPE, NVDISP_GET_SYNCPT), sp1, 8);
+        CHECK(e == 0 && sp[0] == 26 && sp1[0] == 27, "nvdisp vblank syncpoints 26 and 27 (got %u %u)", sp[0], sp1[0]);
+        uint64_t v1[3] = {0}, v2[3] = {0};
+        ioctl_(d0, cmd_id(3, 24, NVDISP_IOCTL_TYPE, NVDISP_WAIT_VBLANK), v1, 24); ioctl_(d0, cmd_id(3, 24, NVDISP_IOCTL_TYPE, NVDISP_WAIT_VBLANK), v2, 24);
+        CHECK(v1[1] && v2[1] == v1[1] + 1, "nvdisp WAIT_VBLANK counts up through the handler (%llu, %llu)", (unsigned long long)v1[1], (unsigned long long)v2[1]);
+        uint32_t junk[4] = {0};
+        CHECK(ioctl_(d0, cmd_id(3, 16, 'X', 1), junk, 16) == NV_NOT_IMPLEMENTED, "nvdisp: another ioctl type is NotImplemented");
+        CHECK(ioctl_(d0, cmd_id(3, 8, NVDISP_IOCTL_TYPE, NVDISP_GET_MODE), junk, 8) == NV_BAD_PARAMETER, "nvdisp: a too-small struct is BadParameter");
+        close_(d0); close_(d1);
+    }
 
     /* close frees the engines; a submit on a channel without addresses still behaves as before */
     close_(dec); close_(vic); close_(jpg); close_(enc);
