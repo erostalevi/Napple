@@ -9,7 +9,7 @@ napple-core = { path = "../napple-core" }
 napple-rewrite = { path = "../napple-rewrite" }
 napple-mods = { path = "../napple-mods" }
 aes = "0.8"
-ctr = "0.9"
+ctr = "0.10"
 cipher = "0.4"
 xts-mode = "0.5"
 sha2 = "0.10"
