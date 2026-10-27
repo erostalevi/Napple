@@ -10,7 +10,7 @@ napple-rewrite = { path = "../napple-rewrite" }
 napple-mods = { path = "../napple-mods" }
 aes = "0.8"
 ctr = "0.9"
-cipher = "0.4"
+cipher = "0.5"
 xts-mode = "0.5"
 sha2 = "0.10"
 flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
