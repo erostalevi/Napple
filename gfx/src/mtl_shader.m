@@ -13,7 +13,7 @@
 #import "mtl_priv.h"
 #include "cache_trim.h"
 
-#define TRANSLATOR_VERSION 8u /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 10u /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader
 @end
@@ -55,6 +55,21 @@ static id<MTLBinaryArchive> g_out; /* g_archive_q only, like everything below */
 static NSMutableArray *g_out_desc; /* descriptors in g_out, in add order */
 static int g_archive_dirty, g_archive_save_queued, g_archive_broken;
 static unsigned g_archive_dropped;
+/* A big archive file is loaded in the background: Metal needs seconds (Mario Kart 8: a 59 MB file took 65 s once) to read one, and the first frames must not wait for it.
+ * Until it is ready every pipeline is compiled as if there were no file (and still added to g_out, so the next run's file has it). g_archive is only read through
+ * archive_get(). NAPPLE_GFX_ARCHIVE_MAX_MB (default 64) bounds the file: when a save is bigger, the oldest quarter of the pipelines is left out of the next one. */
+static pthread_mutex_t g_ar_mu = PTHREAD_MUTEX_INITIALIZER;
+static int g_archive_on;
+static uint64_t archive_max_bytes(void) {
+    const char *e = getenv("NAPPLE_GFX_ARCHIVE_MAX_MB");
+    return (e && *e ? (uint64_t)atoll(e) : 64ull) << 20;
+}
+static id<MTLBinaryArchive> archive_get(void) {
+    pthread_mutex_lock(&g_ar_mu);
+    id<MTLBinaryArchive> a = g_archive;
+    pthread_mutex_unlock(&g_ar_mu);
+    return a;
+}
 static void archive_open(void) {
 #if TARGET_OS_SIMULATOR
     LOGI("binary archive: disabled on the iOS Simulator (its GPU has no target architecture; saving asserts)");
@@ -64,25 +79,40 @@ static void archive_open(void) {
     g_archive_url = [NSURL fileURLWithPath:[NSString stringWithFormat:@"%s/pipelines-v%u.metalar", g_gfx.cfg.cache_dir, TRANSLATOR_VERSION]];
     MTLBinaryArchiveDescriptor *d = [MTLBinaryArchiveDescriptor new];
     NSError *err = nil;
-    if ([NSFileManager.defaultManager fileExistsAtPath:g_archive_url.path]) {
-        d.url = g_archive_url;
-        g_archive = [g_mtl.dev newBinaryArchiveWithDescriptor:d error:&err];
-        if (!g_archive) {
-            LOGW("binary archive %s not usable (%s): rebuilding it", g_archive_url.path.UTF8String, err.localizedDescription.UTF8String);
-            [NSFileManager.defaultManager removeItemAtURL:g_archive_url error:nil];
-        }
-    }
-    d.url = nil;
-    err = nil;
-    if (!g_archive) g_archive = [g_mtl.dev newBinaryArchiveWithDescriptor:d error:&err];
     g_out = [g_mtl.dev newBinaryArchiveWithDescriptor:d error:&err];
-    if (!g_archive || !g_out) {
+    if (!g_out) {
         LOGW("binary archive unavailable: %s", err.localizedDescription.UTF8String);
-        g_archive = nil;
         return;
     }
+    g_archive_on = 1;
     g_out_desc = [NSMutableArray array];
     g_archive_q = dispatch_queue_create("napple.gfx.archive", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
+    NSString *path = g_archive_url.path;
+    if ([NSFileManager.defaultManager fileExistsAtPath:path]) {
+        NSURL *url = g_archive_url;
+        /* A small file loads in well under a second: load it here so the first pipelines already hit it. Only a big one (default over 16 MB) goes to the background. */
+        uint64_t fsz = [[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil] fileSize];
+        void (^load)(void) = ^{
+            uint64_t t0 = gfx_now_ns();
+            MTLBinaryArchiveDescriptor *ld = [MTLBinaryArchiveDescriptor new];
+            ld.url = url;
+            NSError *e2 = nil;
+            id<MTLBinaryArchive> a = [g_mtl.dev newBinaryArchiveWithDescriptor:ld error:&e2];
+            if (!a) {
+                LOGW("binary archive %s not usable (%s): rebuilding it", url.path.UTF8String, e2.localizedDescription.UTF8String);
+                [NSFileManager.defaultManager removeItemAtURL:url error:nil];
+                return;
+            }
+            pthread_mutex_lock(&g_ar_mu);
+            g_archive = a;
+            pthread_mutex_unlock(&g_ar_mu);
+            if (gfx_now_ns() - t0 > 500000000ull) LOGI("binary archive loaded in %.1f s", (double)(gfx_now_ns() - t0) / 1e9);
+        };
+        if (fsz > (16ull << 20) && !getenv("NAPPLE_GFX_ARCHIVE_SYNC"))
+            dispatch_async(
+                dispatch_queue_create("napple.gfx.archive-load", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0)), load);
+        else load();
+    }
 }
 static BOOL out_add(id<MTLBinaryArchive> a, id desc, NSError **err) {
     return [desc isKindOfClass:MTLRenderPipelineDescriptor.class] ? [a addRenderPipelineFunctionsWithDescriptor:desc error:err]
@@ -94,6 +124,24 @@ static void archive_save(void) {
         NSError *err = nil;
         if ([g_out serializeToURL:g_archive_url error:&err]) {
             g_archive_dirty = 0;
+            NSDictionary *at = [NSFileManager.defaultManager attributesOfItemAtPath:g_archive_url.path error:nil];
+            if ([at fileSize] > archive_max_bytes() && g_out_desc.count > 8) { /* over the cap: leave the oldest quarter out of the next save */
+                NSUInteger cut = g_out_desc.count / 4;
+                [g_out_desc removeObjectsInRange:NSMakeRange(0, cut)];
+                g_archive_dropped += (unsigned)cut;
+                MTLBinaryArchiveDescriptor *nd = [MTLBinaryArchiveDescriptor new];
+                NSError *e3 = nil;
+                id<MTLBinaryArchive> ng = [g_mtl.dev newBinaryArchiveWithDescriptor:nd error:&e3];
+                int ok = ng != nil;
+                for (id desc in g_out_desc)
+                    if (ok && !out_add(ng, desc, &e3)) ok = 0;
+                if (ok) {
+                    g_out = ng;
+                    g_archive_dirty = 1;
+                    LOGI("binary archive was %llu MB (cap %llu MB): %lu oldest pipelines left out of the next save", (unsigned long long)([at fileSize] >> 20),
+                         (unsigned long long)(archive_max_bytes() >> 20), (unsigned long)cut);
+                }
+            }
             return;
         }
         NSString *m = err.localizedDescription;
@@ -119,7 +167,7 @@ static void archive_save(void) {
     g_archive_broken = 1;
 }
 static void archive_add(id desc) { /* every pipeline the run builds (render or compute descriptor) */
-    if (!g_archive) return;
+    if (!g_archive_on) return;
     dispatch_async(g_archive_q, ^{
         if (g_archive_broken) return;
         NSError *err = nil;
@@ -144,7 +192,7 @@ void mtl_shader_shutdown(void) {
     shader_progress_summary();
     LOGI("pipeline lookups changed by key normalisation: %llu; speculative shader variants: %llu compiled, %llu used by draws",
          (unsigned long long)atomic_load(&g_norm_n), (unsigned long long)atomic_load(&g_spec_n), (unsigned long long)atomic_load(&g_spec_used));
-    if (!g_archive) return;
+    if (!g_archive_on) return;
     dispatch_sync(g_archive_q, ^{
         archive_save();
         LOGI("binary archive: %llu of %lu pipelines loaded precompiled this run, %u left out (fragment stage dropped by Metal)%s",
@@ -156,9 +204,9 @@ void mtl_shader_shutdown(void) {
 /* Functions compiled by the launch-time prewarm, by cache file path: build_shader takes them instead of compiling the MSL again. */
 static NSMutableDictionary<NSString *, id<MTLFunction>> *g_prewarmed;
 static pthread_mutex_t g_prewarm_mu = PTHREAD_MUTEX_INITIALIZER;
-static MTLCompileOptions *compile_options(void) {
+static MTLCompileOptions *compile_options_v(int msl31) {
     MTLCompileOptions *o = [MTLCompileOptions new];
-    o.languageVersion = MTLLanguageVersion3_0;
+    o.languageVersion = msl31 ? MTLLanguageVersion3_1 : MTLLanguageVersion3_0; /* 3.1: texture atomics (surface images, ShaderInfo.needs_msl31) */
     o.preserveInvariance = YES; /* depth pre-pass + EQUAL test needs identical positions */
     o.fastMathEnabled = NO; /* Maxwell NaN / inf semantics */
     /* NAPPLE_GFX_MATH=safe (default on every platform) | relaxed | fast. Measured on Apple GPUs (docs/archive/changes/2026-10-25-nx-shader.md): relaxed already folds
@@ -368,7 +416,7 @@ void mtl_shader_init(void) {
     }
     archive_open();
     shader_progress_start();
-    LOGI("shader compile: %u background queue(s) (%u performance cores); binary archive %s", g_ncompile_q, pc, g_archive ? "on" : "off");
+    LOGI("shader compile: %u background queue(s) (%u performance cores); binary archive %s", g_ncompile_q, pc, g_archive_on ? "on" : "off");
     g_shaders = [NSMutableDictionary dictionary];
     g_pipes = [NSMutableDictionary dictionary];
     g_stored = [NSMutableDictionary dictionary];
@@ -409,7 +457,7 @@ void mtl_shader_init(void) {
                     if (cache_load(path, &info)) {
                         st_note_first();
                         uint64_t c0 = gfx_now_ns();
-                        id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:@(info.msl) options:compile_options() error:nil];
+                        id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:@(info.msl) options:compile_options_v(info.needs_msl31) error:nil];
                         id<MTLFunction> fn = [lib newFunctionWithName:@"main0"];
                         free(info.msl);
                         {
@@ -550,7 +598,7 @@ static int build_shader(GfxShader *s, const shader_blob *b, ShaderKey key) {
         NSError *err = nil;
         NSString *src = [NSString stringWithUTF8String:s->info.msl];
         uint64_t c0 = gfx_now_ns();
-        id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:src options:compile_options() error:&err];
+        id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:src options:compile_options_v(s->info.needs_msl31) error:&err];
         {
             uint64_t dt = gfx_now_ns() - c0;
             atomic_fetch_add(&g_st_cmp_n, 1);
@@ -811,6 +859,8 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     ShaderKey vk = {0};
     memcpy(vk.attr_kind, k.attr_kind, sizeof vk.attr_kind);
     vk.depth_slots = k.depth_slots[0];
+    vk.image_int_mask = k.img_int[0];
+    vk.image_uint_mask = k.img_uint[0];
     vk.point_prim = k.topo == MTLPrimitiveTopologyClassPoint;
     vk.flip_y = k.flip_y;
     vk.depth_minus_one = k.depth_mode == 0;
@@ -830,6 +880,8 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
      * without it (NAPPLE_ORIGIN_FLIP=0, debug) the key does not carry the origin and the register keeps the lower-left answer */
     fk.upper_left = g_gfx.origin_flip && !k.flip_y;
     fk.depth_slots = k.depth_slots[1];
+    fk.image_int_mask = k.img_int[1];
+    fk.image_uint_mask = k.img_uint[1];
     { /* NAPPLE_SHADER_PROBE=<fragment program hash hex>:<pc hex>:<rA>:<rB>:<rC>[:<scale>][;<next probe>...]: the fragment program draws those registers as its colour
          * (debugging aid; several probes are cycled every 30 frames so one run can capture them all) */
         const char *pr = getenv("NAPPLE_SHADER_PROBE");
@@ -906,6 +958,9 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
         for (int i = 0; i < k.nattr && i < 32; i++) {
             int kind;
             uint32_t vf = mtl_vertex_format((int)k.attr[i].fmt, &kind);
+            if (!vf && (used & (1u << i)) && k.attr[i].fmt)
+                LOG_ONCE(NAPPLE_LOG_WARN, "vertex attribute %d: NVN format %#x has no Metal vertex format (vs %016llx): the input reads zeros", i,
+                         (unsigned)k.attr[i].fmt, (unsigned long long)k.vs);
             if (!vf || !(used & (1u << i))) continue;
             vd.attributes[i].format = (MTLVertexFormat)vf;
             vd.attributes[i].offset = k.attr[i].offset;
@@ -949,8 +1004,9 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
         d.vertexDescriptor = vd;
         NSError *err = nil;
         uint64_t pt0 = gfx_now_ns();
-        if (g_archive) {
-            d.binaryArchives = @[ g_archive ];
+        id<MTLBinaryArchive> ar = archive_get();
+        if (ar) {
+            d.binaryArchives = @[ ar ];
             p->ps = [g_mtl.dev newRenderPipelineStateWithDescriptor:d options:MTLPipelineOptionFailOnBinaryArchiveMiss reflection:nil error:nil];
             if (p->ps) {
                 atomic_fetch_add(&g_gfx.archive_hits, 1);
@@ -1042,6 +1098,27 @@ void mtl_pipe_prewarm(uint64_t blob_hash) {
     }
 }
 
+/* Submission look-ahead (mtl_replay.m prediction pass): a draw's pipeline is requested before the replay reaches it. An unknown key gets its entry and a
+ * background build on g_pipe_q; the draw then finds it built or being built (and waits for the remainder) instead of compiling it all on the replay thread. */
+void mtl_pipe_prefetch(const pipe_key *k0) {
+    if (getenv("NAPPLE_GFX_PIPE_SKIP")) return; /* skip mode already builds everything asynchronously */
+    pipe_key kn = *k0;
+    pipe_key_normalize(&kn);
+    uint64_t h = fnv1a(&kn, sizeof kn, FNV_INIT);
+    NSNumber *key = @(h);
+    pthread_mutex_lock(&g_sh_mu);
+    GfxPipe *p = g_pipes[key];
+    int create = !p;
+    if (create) {
+        p = [GfxPipe new];
+        g_pipes[key] = p;
+    }
+    pthread_mutex_unlock(&g_sh_mu);
+    if (!create) return; /* not counted as a prewarm: pipelines_prewarmed is the persisted-key count the tests check */
+    pipe_persist(&kn, h);
+    dispatch_async(g_pipe_q, ^{ build_pipe(p, kn); });
+}
+
 GfxPipe *mtl_pipe_get(const pipe_key *k0) {
     pipe_key kn = *k0;
     pipe_key_normalize(&kn);
@@ -1094,8 +1171,10 @@ GfxPipe *mtl_pipe_get(const pipe_key *k0) {
  * Compute pipelines
  * --------------------------------------------------------------------------------------------------------------- */
 static NSMutableDictionary<NSNumber *, id> *g_cpipes;
-id<MTLComputePipelineState> mtl_compute_pipe(uint64_t hash, GfxShader *__autoreleasing *sh) {
+id<MTLComputePipelineState> mtl_compute_pipe(uint64_t hash, uint32_t img_int, uint32_t img_uint, GfxShader *__autoreleasing *sh) {
     ShaderKey key = {0};
+    key.image_int_mask = img_int;
+    key.image_uint_mask = img_uint;
     GfxShader *s = shader_variant(hash, &key, 0);
     if (__atomic_load_n(&s->state, __ATOMIC_ACQUIRE) == 0) {
         atomic_fetch_add(&g_gfx.compiles_blocking, 1);
@@ -1104,7 +1183,7 @@ id<MTLComputePipelineState> mtl_compute_pipe(uint64_t hash, GfxShader *__autorel
     }
     *sh = s;
     if (s->state != 1) return nil;
-    NSNumber *k = @(hash);
+    NSNumber *k = @(hash ^ ((uint64_t)img_int << 32) ^ ((uint64_t)img_uint * 0x9E3779B97F4A7C15ull));
     pthread_mutex_lock(&g_sh_mu);
     if (!g_cpipes) g_cpipes = [NSMutableDictionary dictionary];
     id cp = g_cpipes[k];
@@ -1115,8 +1194,9 @@ id<MTLComputePipelineState> mtl_compute_pipe(uint64_t hash, GfxShader *__autorel
     cd.computeFunction = s->fn;
     id<MTLComputePipelineState> ps = nil;
     atomic_fetch_add(&g_gfx.compiles_blocking, 1);
-    if (g_archive) {
-        cd.binaryArchives = @[ g_archive ];
+    id<MTLBinaryArchive> car = archive_get();
+    if (car) {
+        cd.binaryArchives = @[ car ];
         ps = [g_mtl.dev newComputePipelineStateWithDescriptor:cd options:MTLPipelineOptionFailOnBinaryArchiveMiss reflection:nil error:nil];
         if (ps) {
             atomic_fetch_add(&g_gfx.archive_hits, 1);

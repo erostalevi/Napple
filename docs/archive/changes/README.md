@@ -56,6 +56,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-10-24-shader-isa-INTEGRATE](2026-10-24-shader-isa-INTEGRATE.md) | How the shader ISA branch was landed. |
 | [2026-10-25-nx-shader](2026-10-25-nx-shader.md) | Translator items from the nxnative review (VMNMX and others), SMO glitch triage. |
 | [2026-10-26-nx-gfx](2026-10-26-nx-gfx.md) | Animal Crossing window pass investigation; wrapped up early. |
+| [2026-10-26-claude-gfx-correctness-2026-10-26-macos1](2026-10-26-claude-gfx-correctness-2026-10-26-macos1.md) | gfx correctness (macOS-100% batch 1): command-list lifetime, block-compressed render targets, D24/integer MSAA, golden-frame harness, ACNH window-pass root cause. |
 
 ## Audio, input, media
 | Note | Summary |

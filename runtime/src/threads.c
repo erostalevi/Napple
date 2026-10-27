@@ -507,11 +507,18 @@ static void *pcprof_main(void *arg) {
 static int sync_state(uint32_t h);
 void thread_dump_all(void) {
     pthread_mutex_lock(&G);
+    for (int i = 0; i < NCORE; i++)
+        LOG("threads", "core %d owner %#llx reserved for %#llx", i, g_core_owner[i] ? (unsigned long long)g_core_owner[i]->id : 0ull, g_core_resv[i] ? (unsigned long long)g_core_resv[i]->id : 0ull);
     for (Thread *t = g_all; t; t = t->all) {
         char where[96];
         module_describe(t->last_lr, where, sizeof where);
         LOG("threads", "thread %#x id=%#llx prio=%d core=%d cur_core=%d wait=%d svc=%#x calls=%llu last caller %s%s", t->handle, (unsigned long long)t->id,
             t->prio, t->core, t->cur_core, t->wkind, t->last_svc, (unsigned long long)t->nsvc, where, t->exited ? " (exited)" : "");
+        {
+            volatile uint16_t *dc = tlr_word(t, TLR_DISABLE_COUNT), *ifl = tlr_word(t, TLR_INTERRUPT_FLAG);
+            LOG("threads", "  mask %#llx preempt %d disable_count %d interrupt_flag %d on core wait list %d", (unsigned long long)t->mask, (int)t->preempt, dc ? (int)*dc : -1,
+                ifl ? (int)*ifl : -1, t->cur_core < 0 && t->wkind == 0 && !t->exited);
+        }
         if (t->wkind == 4) {
             for (int i = 0; i < t->nwh && i < 4; i++)
                 LOG("threads", "  waits on handle %#x (type %d, state %d)", t->wh[i], (int)handle_type(t->wh[i]), sync_state(t->wh[i]));

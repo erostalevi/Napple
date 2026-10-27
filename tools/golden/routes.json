@@ -1,0 +1,115 @@
+{
+  "_doc": "Scripted routes for the golden-frame harness (tools/golden/golden.py). Times in `input` are seconds after the guest configures HID (NAPPLE_INPUT_SCRIPT); `frames` are presented frame numbers captured with NAPPLE_SCREENSHOT_FRAMES. Frame numbers depend on the machine's speed: routes are for an otherwise idle Mac (headless runs at 58-60 fps). Goldens are game screenshots and live OUTSIDE the repo (~/Library/Application Support/Napple/goldens/<title>/<route>/<frame>.png, or --golden-root); only this manifest is committed. `tolerance`: mean absolute difference per channel (0-255) on a 64x36 downsample, and `max_block`: the largest 8x8-block mean difference; either exceeded = the frame differs.",
+  "defaults": {
+    "mean": 3.0,
+    "max_block": 40.0,
+    "validation": true
+  },
+  "titles": {
+    "las": {
+      "title_id": "01006BB00C6F0000",
+      "name": "Link's Awakening",
+      "nsp": [
+        "The Legend of Zelda Link’s Awakening [01006BB00C6F0000][v0].nsp"
+      ],
+      "routes": {
+        "boot-to-village": {
+          "seconds": 150,
+          "input": "20:A:0.3,24:A:0.3,28:A:0.3,40:A:0.3,50:A:0.3,60:A:0.3,70:A:0.3,80:A:0.3,90:A:0.3",
+          "frames": [
+            1500,
+            3000,
+            4500,
+            6000
+          ],
+          "notes": "title, file select, intro, beach/village; refine frames when a route is approved"
+        }
+      }
+    },
+    "smo": {
+      "title_id": "0100000000010000",
+      "name": "Super Mario Odyssey",
+      "nsp": [
+        "Super Mario Odyssey™ [0100000000010000][v0][Base].nsp"
+      ],
+      "routes": {
+        "title-and-kingdom": {
+          "seconds": 260,
+          "input": "30:A:0.3,45:A:0.3,60:A:0.3",
+          "frames": [
+            1500,
+            4000,
+            8000,
+            9000
+          ],
+          "notes": "title menu, intro, first kingdom; 8000 and 9000 are the sleep/parrot scene (exploded-geometry regression)"
+        }
+      }
+    },
+    "acnh": {
+      "title_id": "01006F8002326000",
+      "name": "Animal Crossing: New Horizons",
+      "nsp": [
+        "AnimalCrossing+Updates+DLC"
+      ],
+      "routes": {
+        "airport-counter": {
+          "seconds": 90,
+          "input": "20:A:0.3,30:A:0.3,40:A:0.3,50:A:0.3",
+          "frames": [
+            300,
+            600,
+            1200
+          ],
+          "notes": "airport counter, dialogue; name entry and island arrival need a longer route"
+        }
+      }
+    },
+    "mk8d": {
+      "title_id": "0100152000022000",
+      "name": "Mario Kart 8 Deluxe",
+      "nsp": [
+        "Mario Kart 8 Deluxe (NSP)(Base Game + UPDATE + DLC Boost Pack)"
+      ],
+      "routes": {
+        "title-menus-race": {
+          "seconds": 150,
+          "input": "15:A,19:A,23:A,27:A,31:A,35:A,39:A,43:A,47:A,51:A,55:A,59:A,63:A,67:A,71:A,75:A,79:A,83:A,87:A,91:A,95:A,99:A,103:A,107:A,111:A,115:A,119:A,123:A,127:A,131:A,135:A,139:A",
+          "frames": [
+            600,
+            1500,
+            3000,
+            4500
+          ],
+          "notes": "title, menus, cup select, race"
+        }
+      }
+    }
+  },
+  "warning_patterns": [
+    "stale or invalid command handle",
+    "storage out of range",
+    "unsupported",
+    "unimplemented",
+    "orphan render target",
+    "EndRecording without BeginRecording",
+    "shader .* failed",
+    "could not be translated",
+    "is not inside a memory pool",
+    "not a mapped address",
+    "render target view format .* is not view-compatible",
+    "texture view not expressible",
+    "command list unpack failed"
+  ],
+  "validation_patterns": [
+    "MTLDebug",
+    "failed assertion",
+    "validation failure",
+    "Shader validation",
+    "Execution of the command buffer was aborted",
+    "IOGPUMetalError",
+    "Metal API error",
+    "GPU Hang",
+    "kIOGPUCommandBufferCallbackError"
+  ]
+}

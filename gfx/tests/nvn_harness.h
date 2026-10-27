@@ -68,6 +68,8 @@ static __attribute__((unused)) int h_finish(const char *name, H *h) {
 }
 /* A red triangle (colour 1,0,0,1; vertices (-.5,-.5) (.5,-.5) (0,.5)) as in t_triangle. Shaders and vertices live in the first 0x10000 bytes of the pool. Records into h->cb:
  * set render target `tex` (64x64), viewport, state, draw. The caller begins/submits. `fs_g` != 0 makes it green. */
+static const NVNtexture *g_h_depth_tex __attribute__((unused));   /* h_triangle attaches it as the depth target */
+static int g_h_depth_test __attribute__((unused));      /* h_triangle: depth test LESS (no depth write) against the depth target the caller attached */
 static __attribute__((unused)) void h_triangle(H *h, NVNtexture *tex, int green) {
     float tri[12] = { -0.5f, -0.5f, 0, 1, 0.5f, -0.5f, 0, 1, 0.0f, 0.5f, 0, 1 };
     memcpy(h->mem, tri, sizeof tri);
@@ -82,9 +84,10 @@ static __attribute__((unused)) void h_triangle(H *h, NVNtexture *tex, int green)
     CHECK(L(nvnProgramSetShaders)(prog, 2, sd), "set shaders");
     NVNcommandBuffer *cb = h->cb;
     const NVNtexture *rts[1] = { tex };
-    L(nvnCommandBufferSetRenderTargets)(cb, 1, rts, NULL, NULL, NULL);
+    L(nvnCommandBufferSetRenderTargets)(cb, 1, rts, NULL, g_h_depth_tex, NULL);
     L(nvnCommandBufferSetViewport)(cb, 0, 0, 64, 64); L(nvnCommandBufferSetScissor)(cb, 0, 0, 64, 64);
-    NVNdepthStencilState dss; L(nvnDepthStencilStateSetDefaults)(&dss); L(nvnDepthStencilStateSetDepthTestEnable)(&dss, 0); L(nvnDepthStencilStateSetDepthWriteEnable)(&dss, 0);
+    NVNdepthStencilState dss; L(nvnDepthStencilStateSetDefaults)(&dss); L(nvnDepthStencilStateSetDepthTestEnable)(&dss, g_h_depth_test); L(nvnDepthStencilStateSetDepthWriteEnable)(&dss, 0);
+    if (g_h_depth_test) L(nvnDepthStencilStateSetDepthFunc)(&dss, NVN_DEPTH_FUNC_LESS);
     L(nvnCommandBufferBindDepthStencilState)(cb, &dss);
     NVNpolygonState ps; L(nvnPolygonStateSetDefaults)(&ps); L(nvnCommandBufferBindPolygonState)(cb, &ps);
     NVNcolorState cs; L(nvnColorStateSetDefaults)(&cs); L(nvnCommandBufferBindColorState)(cb, &cs);

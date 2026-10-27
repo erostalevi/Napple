@@ -124,7 +124,8 @@ static const char *cbuf_ref(Ctx *c, int idx, int64_t off, const char *dyn, char 
     if (off + 16 > (int64_t)c->info->cbuf_size[idx]) c->info->cbuf_size[idx] = (uint32_t)((off + 16 + 255) & ~255);
     if (dyn) c->info->cbuf_dynamic |= 1u << idx;
     if (!dyn && idx < 18 && off >= 0 && (uint32_t)(off >> 4) + 1 > c->cbuf_need[idx]) c->cbuf_need[idx] = (uint32_t)(off >> 4) + 1;
-    if (dyn) sprintf(buf, "cbr(cb%d, cbsz[%d], (%s) + %lldu)", idx, idx, dyn, (long long)off);
+    if (dyn) sprintf(buf, off < 0 ? "cbr(cb%d, cbsz[%d], (%s) - %lluu)" : "cbr(cb%d, cbsz[%d], (%s) + %lluu)", idx, idx, dyn, (unsigned long long)(off < 0 ? -off : off));
+    else if (off < 0) sprintf(buf, "0u /* c[%d][%lld] */", idx, (long long)off);   /* a negative offset without a register: nothing to read */
     else sprintf(buf, "cb%d[%lld][%lld]", idx, (long long)(off >> 4), (long long)((off >> 2) & 3));
     return buf;
 }
@@ -1392,7 +1393,8 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         for (int i = 0; i < n; i++) attr_store(c, d + i, addr + 4 * i);
     } else if (OPM(0xef90000000000000ull, 0xfff8000000000000ull)) {   // LD c[idx][reg + imm]
         int idx = (int)bits(w, 36, 5);
-        int64_t off = (int64_t)bits(w, 20, 16);   // unsigned (Ryujinx InstLdc.CbufOffset)
+        int64_t off = (int64_t)(int16_t)bits(w, 20, 16);   // signed 16 bits (yuzu ldc.offset s64; nvdisasm prints c[6][R19-0x10]): Animal Crossing's skinning reads the
+                                                            // bone matrix at R19 - 0x10; as 0xfff0 that is past every buffer, cbr() gave 0 and the characters collapsed
         int sz = (int)bits(w, 48, 3);
         int n = sz == 5 ? 2 : 1;
         char rb[16];

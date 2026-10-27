@@ -293,6 +293,22 @@ int main(void) {
             maxwell_free(l);
         }
 
+        /* LDC R10, c[6][R19 - 0x10]: the 16-bit immediate is signed (Animal Crossing's skinning reads bone rows below the index register; read as +0xfff0 every
+         * row was out of range and the characters collapsed to nothing) */
+        {
+            uint64_t ldc = 0xef90000000000000ull | (6ull << 36) | (0xfff0ull << 20) | (19ull << 8) | 10ull | PT_BITS;
+            uint64_t lv[] = {ins_ald(19, 0x80, 1), ldc, ins_ast(10, 0x70, 1), ins_exit()};
+            build_shader(code, ctl, 0, lv, 4, 0);
+            ShaderKey lk = {0};
+            ShaderInfo *l = xl(code, 0x400, STAGE_VERTEX, lk);
+            CHECK(l->msl != NULL, "LDC negative offset translation: %s", l->error);
+            if (l->msl) {
+                CHECK(strstr(l->msl, "cbr(cb6, cbsz[6], (r19) - 16u)") != NULL, "LDC c[6][R19 - 0x10] reads 16 bytes below the register, not 65520 above it");
+                MSL_COMPILES(l->msl, "LDC negative offset");
+            }
+            maxwell_free(l);
+        }
+
         /* fragment: constant colour, plus a texture fetch declares slot 0 at c2+0x20 */
         uint64_t fs[] = {ins_mov32i(4, 0x3e800000), ins_mov32i(5, 0x3f400000), ins_tex2d_lz(0, 4, 4, 8), ins_exit()};
         build_shader(code, ctl, 1, fs, 4, 0xf);

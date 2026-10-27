@@ -22,6 +22,7 @@ void  gfx_mtl_pool_remove(void *rec);
 void gfx_mtl_tex_invalidate(const texsnap *t);
 
 /* Shader blobs: the API layer hands the code of every program stage to the shader module, which translates it in the background. */
+uint64_t gfx_prog_resolve_hash(uint64_t h);   /* placeholder (high word PLCH) hash of a pool-offset stage -> blob hash, 0 while unresolvable */
 uint64_t gfx_shader_register(int stage, uint64_t code_addr, const uint8_t *control);   /* returns the blob hash (0 on failure) */
 
 /* Submission. Each call returns the timeline value that completes when the GPU finished the work (monotonic, 1-based). */

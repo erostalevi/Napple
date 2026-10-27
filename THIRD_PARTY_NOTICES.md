@@ -65,6 +65,10 @@ Behaviour (not code) of nxnative (MIT, copyright seedds) docs/reference/threads.
 ## mii-firmware (2026-10-26)
 No code copied. The Mii layouts and the default Mii parameters were read from the user's own firmware (sdb) at development time; the default-Mii values are facts of the console data. nxnative (MIT, copyright seedds) docs were consulted for the Miis section of its MK8D notes.
 
+## gfx-correctness (2026-10-26): block-compressed render targets
+`gfx/src/mtl_tex.m` (`mtl_tex_attach_view`, `mtl_bcrt_flush`) renders into block-compressed textures through a shadow texture of the block grid and copies the blocks back after the
+pass. The design follows nxnative (MIT, copyright (c) seedds, https://github.com/seedds/nxnative) `dm/gfx/nvn/nvn_mtl.m` (`bcrt_attach`, `bcrt_flush`); the code is written fresh against this
+repository's replay layer, no source lines were copied. Licence text: see nxnative/LICENSE.
 ## gfx/src/shader (envytools, 2026-10-26)
 The bit layouts of the video ALU ops (VADD, VMAD, VABSDIFF, VSHL, VSHR, VSET, VSETP), FCHK, PIXLD, IMAD/IMAD32I, DSET and the call/jump family in maxwell_translate.c were checked against the Maxwell
 disassembler tables of envytools (envydis gm107.c, MIT, Copyright 2014 Red Hat Inc., https://github.com/envytools/envytools). Only the encoding facts (bit positions and operand roles) were read; no source text was copied.

@@ -7,7 +7,7 @@ Symptom lookup: [../symptoms.md](../symptoms.md). Status as of 2026-10-26; later
 |---|---|---|---|---|
 | Link's Awakening (LAS) | 01006BB00C6F0000 | plays, ~58 fps headless, 60 fps live | title screen (2026-10-26 re-run) | [01006BB00C6F0000](01006BB00C6F0000.md) |
 | Super Mario Odyssey (SMO) | 0100000000010000 | plays, 60 fps live | start menu; abort on A (48-byte colour attachments) | [0100000000010000](0100000000010000.md) |
-| Animal Crossing: New Horizons (ACNH) | 01006F8002326000 | boots through the opening and shows its picture (stopgap present), ~30 fps | abort at ~2 s (48-byte colour attachments) | [01006F8002326000](01006F8002326000.md) |
+| Animal Crossing: New Horizons (ACNH) | 01006F8002326000 | boots through the opening and shows its picture through the game's own window pass, ~30 fps | abort at ~2 s (48-byte colour attachments) | [01006F8002326000](01006F8002326000.md) |
 | Mario Kart 8 Deluxe (MK8D) | 0100152000022000 | update + DLC runs races at 40-47 fps | 3.0.5 aborts at ~2 s (48-byte colour attachments; time:u fixed) | [0100152000022000](0100152000022000.md) |
 
 ## Building test data without disk pain (all titles)

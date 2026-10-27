@@ -421,17 +421,6 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
         extern id<MTLTexture> mtl_dbg_composite(void);
         if (getenv("NAPPLE_SHOT_COMPOSITE") && mtl_dbg_composite()) src = mtl_dbg_composite();
     }
-    {
-        extern id<MTLTexture> mtl_frame_present_pick(uint32_t, uint32_t);
-        id<MTLTexture> alt = mtl_frame_present_pick((uint32_t)snap->d.width, (uint32_t)snap->d.height);
-        if (alt) {
-            src = alt;
-            static int once;
-            if (!once++)
-                LOGW("presenting the orphan render target (%lux%lu) instead of the window texture: the frame's picture was never copied to it",
-                     (unsigned long)alt.width, (unsigned long)alt.height);
-        }
-    }
     uint32_t interval_eff = st.present_interval_override ? st.present_interval_override : (interval ? interval : 1);
     double speed = ds.speed > 0.05f ? ds.speed : 1.0;
     double min_dur = 0;

@@ -37,6 +37,87 @@ NVN(nvnMemoryPoolBuilderGetMemory, void *, const NVNmemoryPoolBuilder *b) { retu
 NVN(nvnMemoryPoolBuilderGetSize, size_t, const NVNmemoryPoolBuilder *b) { return (size_t)CPB(b)->size; }
 NVN(nvnMemoryPoolBuilderGetFlags, int, const NVNmemoryPoolBuilder *b) { return (int)CPB(b)->flags; }
 
+static pool_t *g_allp[8192]; static uint32_t g_nallp;
+/* Shader code pools, newest last: ProgramSetShaders may name code by a bare pool offset (see gfx_find_code_pool). */
+#include <pthread.h>
+static pthread_mutex_t g_cp_mu = PTHREAD_MUTEX_INITIALIZER;
+static pool_t *g_cp[256]; static uint64_t g_cps[256]; static uint32_t g_ncp; static uint64_t g_cp_seq;
+uint64_t gfx_code_pool_seq(void) { return g_cp_seq; }
+static void cp_add(pool_t *o) {
+    pthread_mutex_lock(&g_cp_mu);
+    for (uint32_t i = 0; i < g_ncp; i++) if (g_cp[i] == o) { memmove(g_cp + i, g_cp + i + 1, (g_ncp - i - 1) * sizeof *g_cp); memmove(g_cps + i, g_cps + i + 1, (g_ncp - i - 1) * sizeof *g_cps); g_ncp--; break; }
+    if (g_ncp == 256) { memmove(g_cp, g_cp + 1, 255 * sizeof *g_cp); memmove(g_cps, g_cps + 1, 255 * sizeof *g_cps); g_ncp--; }
+    g_cps[g_ncp] = ++g_cp_seq; g_cp[g_ncp++] = o;
+    pthread_mutex_unlock(&g_cp_mu);
+}
+static void cp_remove(pool_t *o) {
+    pthread_mutex_lock(&g_cp_mu);
+    for (uint32_t i = 0; i < g_ncp; i++) if (g_cp[i] == o) { memmove(g_cp + i, g_cp + i + 1, (g_ncp - i - 1) * sizeof *g_cp); memmove(g_cps + i, g_cps + i + 1, (g_ncp - i - 1) * sizeof *g_cps); g_ncp--; break; }
+    pthread_mutex_unlock(&g_cp_mu);
+}
+/* The oldest shader-code pool that has an NVN shader header (magic 0x12345678) at every one of the `n` offsets of a program: a program's stages come from one
+ * shader archive, so one pool holds all of them (a single offset matches several pools by chance). Returns the pool's memory, NULL when none matches (yet). */
+const uint8_t *gfx_find_code_pool_multi(const uint64_t *offs, const uint64_t *need, const int *stage, int n) {
+    const uint8_t *r = NULL;
+    pthread_mutex_lock(&g_cp_mu);
+    for (uint32_t i = 0; i < g_ncp && !r; i++) {
+        const pool_t *o = g_cp[i];
+        int ok = o->mem && !(o->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS);
+        for (int k = 0; ok && k < n; k++) {
+            ok = offs[k] + need[k] <= o->size && *(const uint32_t *)(o->mem + offs[k]) == 0x12345678u;
+            /* the program header (SPH, at +0x30) names the stage in its low 5 bits: 1 vertex, 2 fragment (seen on Animal Crossing's shaders); a header of another stage is another program's code */
+            {
+                uint32_t sw = ok ? *(const uint32_t *)(o->mem + offs[k] + 0x30) : 0;
+                if (sw && (stage[k] == 0 || stage[k] == 1) && (sw & 0x1f) != (uint32_t)(stage[k] + 1)) ok = 0;
+            }
+        }
+        if (ok) r = o->mem;
+    }
+    pthread_mutex_unlock(&g_cp_mu);
+    return r;
+}
+/* A shader's code starts with the NVN shader header magic. The pool for a bare offset: the first shader-code pool created after sequence number `after` that has a
+ * header at `off` (the usual case: the game creates the pool right after the program) (an older pool is never guessed: the code is not in it). */
+const uint8_t *gfx_find_code_pool(uint64_t off, uint64_t need, uint64_t after) {
+    const uint8_t *r = NULL;
+    pthread_mutex_lock(&g_cp_mu);
+    for (int pass = 0; pass < 1 && !r; pass++)
+        for (int k = 0; k < (int)g_ncp && !r; k++) {
+            int i = pass == 0 ? k : (int)g_ncp - 1 - k;
+            pool_t *o = g_cp[i];
+            if ((pass == 0) != (g_cps[i] > after) || !o->mem || (o->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS) || off + need > o->size) continue;
+            if (*(const uint32_t *)(o->mem + off) == 0x12345678u) { if (getenv("NAPPLE_POOLLOG")) fprintf(stderr, "[poollog] code pool candidate for off %#llx (after seq %llu): seq %llu pool %p mem %p size %#llx flags %#x pass %d\n", (unsigned long long)off, (unsigned long long)after, (unsigned long long)g_cps[i], (void *)o, (void *)o->mem, (unsigned long long)o->size, o->flags, pass); r = o->mem + off; }
+        }
+    if (!r && getenv("NAPPLE_POOLLOG") && off == 0xe00) {
+        static int k; if (k++ < 3) for (uint32_t i = 0; i < g_nallp; i++) { const pool_t *o = g_allp[i]; if (o->mem && !(o->flags & 1) && off + 4 <= o->size && *(const uint32_t *)(o->mem + off) == 0x12345678u) fprintf(stderr, "[poollog] ANY-pool header at %#llx: pool %p mem %p size %#llx flags %#x idx %u\n", (unsigned long long)off, (const void *)o, (void *)o->mem, (unsigned long long)o->size, o->flags, i); }
+    }
+    if (!r && getenv("NAPPLE_POOLLOG"))
+        for (uint32_t i = 0; i < g_ncp; i++) if (g_cps[i] > after && g_cp[i]->mem && off + 16 <= g_cp[i]->size) { const uint32_t *w = (const uint32_t *)(g_cp[i]->mem + off); fprintf(stderr, "[poollog] no header at off %#llx in pool seq %llu mem %p size %#llx flags %#x: %08x %08x %08x %08x\n", (unsigned long long)off, (unsigned long long)g_cps[i], (void *)g_cp[i]->mem, (unsigned long long)g_cp[i]->size, g_cp[i]->flags, w[0], w[1], w[2], w[3]); }
+    pthread_mutex_unlock(&g_cp_mu);
+    return r;
+}
+/* Every live pool, for diagnostics: which pool (if any) holds an address the replay could not resolve. */
+static void ap_add(pool_t *o) { pthread_mutex_lock(&g_cp_mu); if (g_nallp < 8192) g_allp[g_nallp++] = o; pthread_mutex_unlock(&g_cp_mu); }
+static struct { uint64_t lo, hi; uint32_t flags; } g_dead[64]; static uint32_t g_ndead;
+static void ap_remove2(pool_t *o);
+static void ap_remove(pool_t *o) {
+    pthread_mutex_lock(&g_cp_mu); g_dead[g_ndead++ & 63] = (typeof(g_dead[0])){ (uint64_t)(uintptr_t)o->mem, (uint64_t)(uintptr_t)o->mem + o->size, o->flags }; pthread_mutex_unlock(&g_cp_mu);
+    ap_remove2(o);
+}
+static void ap_remove2(pool_t *o) { pthread_mutex_lock(&g_cp_mu); for (uint32_t i = 0; i < g_nallp; i++) if (g_allp[i] == o) { g_allp[i] = g_allp[--g_nallp]; break; } pthread_mutex_unlock(&g_cp_mu); }
+void gfx_pool_describe(uint64_t addr, char *out, size_t n) {
+    out[0] = 0;
+    pthread_mutex_lock(&g_cp_mu);
+    for (uint32_t i = 0; i < g_nallp; i++) {
+        const pool_t *o = g_allp[i];
+        if (o->magic == POOL_MAGIC && o->mem && addr >= (uint64_t)(uintptr_t)o->mem && addr < (uint64_t)(uintptr_t)o->mem + o->size) {
+            snprintf(out, n, "inside pool %p (%p+%#llx flags %#x%s)", (const void *)o, (void *)o->mem, (unsigned long long)o->size, o->flags, o->mtl ? "" : ", NOT registered with Metal");
+            break;
+        }
+    }
+    if (!out[0]) for (uint32_t i = 0; i < 64 && i < g_ndead; i++) if (addr >= g_dead[i].lo && addr < g_dead[i].hi) { snprintf(out, n, "inside a FINALIZED pool (%#llx+%#llx flags %#x)", (unsigned long long)g_dead[i].lo, (unsigned long long)(g_dead[i].hi - g_dead[i].lo), g_dead[i].flags); break; }
+    pthread_mutex_unlock(&g_cp_mu);
+}
 static uint64_t g_last_phys_mis;      /* start address of the most recent physical pool (its misalignment is copied by virtual pools) */
 NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
     const pool_builder_t *s = CPB(b);
@@ -55,6 +136,7 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
         if (m == MAP_FAILED) { LOGE("virtual MemoryPool: cannot reserve %#llx bytes", (unsigned long long)raw_size); return 0; }
         o->magic = POOL_MAGIC; o->flags = s->flags; o->vraw = m; o->vraw_size = raw_size;
         o->mem = (uint8_t *)m + slack + (g_last_phys_mis & (pg - 1)); o->size = s->size;
+        ap_add(o);
         LOGD("virtual MemoryPool %p range=%p size=%#llx flags=%#x", (void *)p, m, (unsigned long long)o->size, o->flags);
         return 1;
     }
@@ -63,6 +145,7 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
         if (!s->mem || !s->size) { LOGE("physical MemoryPool without storage (flags=%#x size=%#llx)", s->flags, (unsigned long long)s->size); return 0; }
         o->magic = POOL_MAGIC; o->flags = s->flags; o->mem = s->mem; o->size = s->size;
         g_last_phys_mis = (uint64_t)(uintptr_t)s->mem;
+        ap_add(o);
         LOGD("physical MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, (unsigned long long)o->size, o->flags);
         return 1;
     }
@@ -75,6 +158,8 @@ NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBu
         o->mtl = gfx_mtl_pool_add(o->mem, o->size, o->flags);
         if (o->mtl) dirty_add_range(o->mem, o->size);          /* removed in Finalize under the same condition */
     }
+    if (o->flags & 0x40) cp_add(o);
+    ap_add(o);
     LOGD("MemoryPool %p mem=%p size=%#llx flags=%#x", (void *)p, (void *)o->mem, (unsigned long long)o->size, o->flags);
     return 1;
 }
@@ -146,6 +231,9 @@ NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappi
 NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) {
     pool_t *o = (pool_t *)p;
     if (o->magic != POOL_MAGIC) return;
+    if (o->flags & 0x40) cp_remove(o);
+    ap_remove(o);
+    if (o->mem) gfx_cmdrec_pool_freed(o->mem, (size_t)o->size);      /* command lists recorded into this memory die with it */
     if (o->mtl) { dirty_remove_range(o->mem, (size_t)o->size); gfx_mtl_pool_remove(o->mtl); }
     if (o->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL) {
         for (uint32_t i = 0; i < o->nmaps; i++) vmap_drop(&o->maps[i], o);
@@ -158,15 +246,20 @@ NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) {
 }
 NVN(nvnMemoryPoolMap, void *, const NVNmemoryPool *p) {
     const pool_t *o = (const pool_t *)p;
+    { static int pl = -1; if (pl < 0) pl = getenv("NAPPLE_POOLLOG") != NULL; if (pl) fprintf(stderr, "[poollog] Map pool %p flags %#x mem %p\n", (const void *)p, o->flags, (void *)o->mem); }
     if (o->magic != POOL_MAGIC || (o->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS)) return NULL;
     return o->mem;
 }
 /* CPU and GPU share memory and caches on Apple silicon: flush and invalidate have nothing to do. */
-NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { (void)p; (void)off; (void)n; }
+NVN(nvnMemoryPoolFlushMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) {
+    static int pl = -1; if (pl < 0) pl = getenv("NAPPLE_POOLLOG") != NULL;
+    if (pl) fprintf(stderr, "[poollog] Flush pool %p flags %#x off %#llx n %#llx\n", (const void *)p, ((const pool_t *)p)->flags, (unsigned long long)off, (unsigned long long)n);
+}
 NVN(nvnMemoryPoolInvalidateMappedRange, void, const NVNmemoryPool *p, ptrdiff_t off, size_t n) { (void)p; (void)off; (void)n; }
-NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { const pool_t *o = (const pool_t *)p; if (!o->mem) LOGW("MemoryPoolGetBufferAddress: pool %p has no storage (magic %#x flags %#x size %#llx)", (const void *)p, o->magic, o->flags, (unsigned long long)o->size); return (NVNbufferAddress)(uintptr_t)o->mem; }
-NVN(nvnMemoryPoolGetSize, size_t, const NVNmemoryPool *p) { return (size_t)((const pool_t *)p)->size; }
-NVN(nvnMemoryPoolGetFlags, NVNmemoryPoolFlags, const NVNmemoryPool *p) { return (NVNmemoryPoolFlags)((const pool_t *)p)->flags; }
+NVN(nvnMemoryPoolGetBufferAddress, NVNbufferAddress, const NVNmemoryPool *p) { const pool_t *o = (const pool_t *)p;
+    { static int pl = -1; if (pl < 0) pl = getenv("NAPPLE_POOLLOG") != NULL; if (pl) fprintf(stderr, "[poollog] GetBufferAddress pool %p magic %#x flags %#x mem %p size %#llx\n", (const void *)p, o->magic, o->flags, (void *)o->mem, (unsigned long long)o->size); } if (!o->mem) LOGW("MemoryPoolGetBufferAddress: pool %p has no storage (magic %#x flags %#x size %#llx)", (const void *)p, o->magic, o->flags, (unsigned long long)o->size); return (NVNbufferAddress)(uintptr_t)o->mem; }
+NVN(nvnMemoryPoolGetSize, size_t, const NVNmemoryPool *p) { if (getenv("NAPPLE_POOLLOG")) fprintf(stderr, "[poollog] GetSize pool %p flags %#x\n", (const void *)p, ((const pool_t *)p)->flags); return (size_t)((const pool_t *)p)->size; }
+NVN(nvnMemoryPoolGetFlags, NVNmemoryPoolFlags, const NVNmemoryPool *p) { if (getenv("NAPPLE_POOLLOG")) fprintf(stderr, "[poollog] GetFlags pool %p\n", (const void *)p); return (NVNmemoryPoolFlags)((const pool_t *)p)->flags; }
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Buffers
@@ -196,7 +289,8 @@ NVN(nvnBufferMap, void *, const NVNbuffer *b) {
     if (v->magic != BUF_MAGIC || (v->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS)) return NULL;
     return v->pool->mem + v->off;
 }
-NVN(nvnBufferGetAddress, NVNbufferAddress, const NVNbuffer *b) { const buf_t *v = (const buf_t *)b; if (!v->pool || !v->pool->mem) LOGW("BufferGetAddress: buffer %p has no pool storage (pool %p off %#llx)", (const void *)b, (const void *)v->pool, (unsigned long long)v->off); return (NVNbufferAddress)(uintptr_t)(v->pool->mem + v->off); }
+NVN(nvnBufferGetAddress, NVNbufferAddress, const NVNbuffer *b) { const buf_t *v = (const buf_t *)b;
+    { static int pl = -1; if (pl < 0) pl = getenv("NAPPLE_POOLLOG") != NULL; if (pl) fprintf(stderr, "[poollog] BufferGetAddress buf %p magic %#x pool %p flags %#x off %#llx size %#llx\n", (const void *)b, v->magic, (const void *)v->pool, v->pool ? v->pool->flags : 0, (unsigned long long)v->off, (unsigned long long)v->size); } if (!v->pool || !v->pool->mem) LOGW("BufferGetAddress: buffer %p has no pool storage (pool %p off %#llx)", (const void *)b, (const void *)v->pool, (unsigned long long)v->off); return (NVNbufferAddress)(uintptr_t)(v->pool->mem + v->off); }
 NVN(nvnBufferFlushMappedRange, void, const NVNbuffer *b, ptrdiff_t off, size_t size) { (void)b; (void)off; (void)size; }
 NVN(nvnBufferInvalidateMappedRange, void, const NVNbuffer *b, ptrdiff_t off, size_t size) { (void)b; (void)off; (void)size; }
 NVN(nvnBufferGetMemoryPool, NVNmemoryPool *, const NVNbuffer *b) { return (NVNmemoryPool *)((const buf_t *)b)->pool; }

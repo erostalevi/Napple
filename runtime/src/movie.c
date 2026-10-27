@@ -214,6 +214,8 @@ static void guest_init(void) {
     pthread_mutex_unlock(&g_lock);
 }
 
+static unsigned g_tc[32]; static const char *const g_tcn[32] = {"h_start","h_stop","h_reset","h_flush","h_acquire_input","h_get_input","h_send_input","h_acquire_output","h_get_output","h_release_output","h_get_last_error","h_get_output_size","h_get_output_buffer_format","h_register_events","h_get_output_format","h_configure"};
+#define TC(i) __atomic_fetch_add(&g_tc[i], 1, __ATOMIC_RELAXED)
 static Movie *find(const void *guest) {
     if (!g_ready) guest_init();
     pthread_mutex_lock(&g_lock);
@@ -306,7 +308,24 @@ static void release_due(Movie *m, Signals *s, uint64_t now) {
     m->ready[m->nready++] = d;
     note(m, s, EV_OUTPUT);
 }
-void movie_host_tick(void) { /* lock order g_lock -> Movie.mu, as in destroy; events fire after both are released */
+static void tc_report(void) {
+    static uint64_t last;
+    uint64_t n = now_ns();
+    if (!getenv("NAPPLE_MOVIE_TC") || n - last < 2000000000ull) return;
+    last = n;
+    char b[600] = "";
+    for (int i = 0; i < 16; i++) if (g_tc[i]) snprintf(b + strlen(b), sizeof b - strlen(b), " %s=%u", g_tcn[i], g_tc[i]);
+    MLOG("calls:%s", b);
+    for (int i = 0; i < MAX_MOVIES; i++)
+        if (g_movies[i]) {
+            Movie *m = g_movies[i];
+            int held = 0;
+            for (int k = 0; k < OUT_BUFS; k++) held += m->out_held[k];
+            MLOG("movie %d: frames %llu errors %llu decoded %d ready %d held %d pending %d in_free %d eos_in %d started %d t0 %llu", i, (unsigned long long)m->frames,
+                 (unsigned long long)m->errors, m->ndecoded, m->nready, held, m->npending, m->nin_free, m->eos_in, m->started, (unsigned long long)m->t0);
+        }
+}
+void movie_host_tick(void) { tc_report(); /* lock order g_lock -> Movie.mu, as in destroy; events fire after both are released */
     Signals s = {0};
     pthread_mutex_lock(&g_lock);
     for (int i = 0; i < MAX_MOVIES; i++) {
@@ -387,6 +406,9 @@ static int decode_one(Movie *m, Signals *s, const Pending *p) {
             if (m->errors <= 4) MLOG("H.264 decode error on a %d-byte access unit at %lld us", p->size, (long long)p->time);
         }
         m->decode_ns += now_ns() - t0;
+        /* No parameter sets yet (MK8D's menu clips keep them out of band): behave like a decoder that has not got going, the input stays queued.
+         * Handing every buffer straight back made the game feed the decoder at 40 000 buffers a second and starve its own main thread. */
+        if (!vth264_width(m->vt) && !m->frames) return 0;
     } else if (p->size > 0) {
         uint64_t t0 = now_ns();
         vpx_codec_err_t e = vpx_codec_decode(&m->vpx, m->in[p->index] + p->offset, (unsigned)p->size, NULL, 0);
@@ -524,6 +546,8 @@ static void h_ctor(void *obj, int type, int format, int mode, int priority) {
 }
 /* Older movie libraries construct with (type, output format) only: buffer mode, default priority. */
 static void h_ctor_old(void *obj, int type, int format) { h_ctor(obj, type, format, MODE_BUFFER, 0); }
+/* Mario Kart 8 Deluxe's main imports the three-argument constructor (type, output format, mode: no priority), which its movie library does not export under that name. */
+static void h_ctor_mode(void *obj, int type, int format, int mode) { h_ctor(obj, type, format, mode, 0); }
 static void destroy(void *obj) {
     pthread_mutex_lock(&g_lock);
     Movie *m = NULL;
@@ -561,6 +585,7 @@ static void h_d0(void *obj) {
 
 typedef int (*md_fn)(void *, void *);
 static int h_configure(void *obj, void *format) {
+    TC(15);
     Movie *m = find(obj);
     if (!m) { /* a decoder left to the library: log what it is asked to decode (identifies unknown DecoderType values) */
         if (format) {
@@ -620,6 +645,31 @@ static int h_configure(void *obj, void *format) {
     m->h = h;
     if (m->h264) {
         if (!(m->vt = vth264_create())) runtime_fail("H.264 decoder allocation");
+        /* Some streams (Mario Kart 8 menu clips) carry no in-band parameter sets: the format holds them as csd-0 (SPS) and csd-1 (PPS). */
+        static int (*find_buffer)(const void *, const char *, void **);
+        static void *(*buf_data)(const void *);
+        static size_t (*buf_size)(const void *);
+        if (!find_buffer) {
+            find_buffer = module_find_symbol("_ZNK5movie9MediaData10FindBufferEPKcPPNS_6BufferE");
+            buf_data = module_find_symbol("_ZNK5movie6Buffer4DataEv");
+            buf_size = module_find_symbol("_ZNK5movie6Buffer4SizeEv");
+        }
+        {
+            int (*contains)(const void *, const char *) = module_find_symbol("_ZNK5movie9MediaData8ContainsEPKc");
+            int (*count)(const void *) = module_find_symbol("_ZNK5movie9MediaData12CountEntriesEv");
+            static const char *const K[] = {"csd-0", "csd-1", "csd", "avcC", "header", "headers", "extradata", "sps", "pps", "profile", "level", "mime", "width", "height", "frame-rate", "max-input-size", "bitrate", "color-format", "stride", "slice-height", "crop"};
+            MLOG("format entries %d (symbols: contains %p count %p find_buffer %p)", count ? count(format) : -1, (void *)contains, (void *)count, (void *)find_buffer);
+            for (unsigned k = 0; contains && k < sizeof K / sizeof *K; k++) if (contains(format, K[k])) MLOG("format has %s", K[k]);
+        }
+        for (int c = 0; find_buffer && buf_data && buf_size && c < 2; c++) {
+            void *b = NULL;
+            char key[8];
+            snprintf(key, sizeof key, "csd-%d", c);
+            if (find_buffer(format, key, &b) && b && buf_data(b) && buf_size(b)) {
+                int rc = vth264_config(m->vt, buf_data(b), buf_size(b));
+                MLOG("%s: %zu bytes, parameter sets %s", key, buf_size(b), rc ? "incomplete so far" : "complete");
+            }
+        }
     } else {
         vpx_codec_dec_cfg_t cfg = {.threads = 4, .w = (unsigned)w, .h = (unsigned)h};
         if (vpx_codec_dec_init(&m->vpx, vpx_codec_vp9_dx(), &cfg, 0) != VPX_CODEC_OK) runtime_fail("libvpx VP9 decoder initialisation");
@@ -639,6 +689,7 @@ static int h_configure(void *obj, void *format) {
     return ST_OK;
 }
 static int h_register_events(void *obj, void *events) {
+    TC(13);
     Movie *m = find(obj);
     if (!m) return ((md_fn)G.orig[MOVIE_REGISTER_EVENTS])(obj, events);
     m->events = events;
@@ -668,6 +719,7 @@ static void set_format(Movie *m, void *md) {
     G.md_set_int32(md, "nv12-colorspace", 0);
 }
 static int h_get_output_format(void *obj, void *md) {
+    TC(14);
     Movie *m = find(obj);
     if (!m) return ((md_fn)G.orig[MOVIE_GET_OUTPUT_FORMAT])(obj, md);
     if (!md) return ST_NULL;
@@ -677,6 +729,7 @@ static int h_get_output_format(void *obj, void *md) {
 }
 typedef int (*int_fn)(void *);
 static int h_start(void *obj) {
+    TC(0);
     Movie *m = find(obj);
     if (!m) return ((int_fn)G.orig[MOVIE_START])(obj);
     Signals s = {0};
@@ -692,6 +745,7 @@ static int h_start(void *obj) {
     return ST_OK;
 }
 static int h_stop(void *obj) {
+    TC(1);
     Movie *m = find(obj);
     if (!m) return ((int_fn)G.orig[MOVIE_STOP])(obj);
     pthread_mutex_lock(&m->mu);
@@ -701,6 +755,7 @@ static int h_stop(void *obj) {
     return ST_OK;
 }
 static int h_reset(void *obj) {
+    TC(2);
     Movie *m = find(obj);
     if (!m) return ((int_fn)G.orig[MOVIE_RESET])(obj);
     pthread_mutex_lock(&m->mu);
@@ -710,6 +765,7 @@ static int h_reset(void *obj) {
     return ST_OK;
 }
 static int h_flush(void *obj) {
+    TC(3);
     Movie *m = find(obj);
     if (!m) return ((int_fn)G.orig[MOVIE_FLUSH])(obj);
     pthread_mutex_lock(&m->mu);
@@ -733,6 +789,7 @@ static int h_flush(void *obj) {
 }
 typedef int (*pp_fn)(void *, int *, int *);
 static int h_acquire_input(void *obj, int *index, int *remaining) {
+    TC(4);
     Movie *m = find(obj);
     if (!m) return ((pp_fn)G.orig[MOVIE_ACQUIRE_INPUT])(obj, index, remaining);
     if (!index || !remaining) return ST_NULL;
@@ -751,6 +808,7 @@ static int h_acquire_input(void *obj, int *index, int *remaining) {
 }
 typedef int (*ib_fn)(void *, int, void *);
 static int h_get_input(void *obj, int index, void *buf) {
+    TC(5);
     Movie *m = find(obj);
     if (!m) return ((ib_fn)G.orig[MOVIE_GET_INPUT])(obj, index, buf);
     if (!buf) return ST_NULL;
@@ -765,6 +823,7 @@ static int h_get_input(void *obj, int index, void *buf) {
 }
 typedef int (*send_fn)(void *, int, int, int, int64_t, unsigned);
 static int h_send_input(void *obj, int index, int offset, int size, int64_t time, unsigned flags) {
+    TC(6);
     Movie *m = find(obj);
     if (!m) return ((send_fn)G.orig[MOVIE_SEND_INPUT])(obj, index, offset, size, time, flags);
     if (index < 0 || index >= IN_BUFS || offset < 0 || size < 0 || (int64_t)offset + size > IN_CAP) return ST_ERROR;
@@ -775,6 +834,13 @@ static int h_send_input(void *obj, int index, int offset, int size, int64_t time
         return ST_ERROR;
     }
     Pending p = {index, offset, size, time, flags};
+    {
+        static int said;
+        if (said < 12 && getenv("NAPPLE_MOVIE_TC")) {
+            said++;
+            MLOG("send_input index %d offset %d size %d time %lld flags %#x eos_in %d npending %d", index, offset, size, (long long)time, flags, m->eos_in, m->npending);
+        }
+    }
     if (m->eos_in) {
         m->in_free[m->nin_free++] = index;
         note(m, &s, EV_INPUT);
@@ -787,6 +853,7 @@ static int h_send_input(void *obj, int index, int offset, int size, int64_t time
 }
 typedef int (*acq_fn)(void *, int *, int64_t *, unsigned *, int *);
 static int h_acquire_output(void *obj, int *index, int64_t *time, unsigned *flags, int *remaining) {
+    TC(7);
     Movie *m = find(obj);
     if (!m) return ((acq_fn)G.orig[MOVIE_ACQUIRE_OUTPUT])(obj, index, time, flags, remaining);
     if (!index || !time || !flags || !remaining) return ST_NULL;
@@ -829,6 +896,7 @@ static void nv12_to_rgba(const uint8_t *nv12, int w, int h, int cs, int full, ui
     }
 }
 static int h_get_output(void *obj, int index, void *buf) {
+    TC(8);
     Movie *m = find(obj);
     if (!m) return ((ib_fn)G.orig[MOVIE_GET_OUTPUT])(obj, index, buf);
     if (!buf) return ST_NULL;
@@ -869,6 +937,7 @@ static int h_get_output(void *obj, int index, void *buf) {
     return st;
 }
 static int h_get_output_size(void *obj, int *size, int *count) {
+    TC(11);
     Movie *m = find(obj);
     if (!m) return ((pp_fn)G.orig[MOVIE_GET_OUTPUT_SIZE])(obj, size, count);
     if (!size || !count) return ST_NULL;
@@ -878,6 +947,7 @@ static int h_get_output_size(void *obj, int *size, int *count) {
 }
 typedef int (*i_fn)(void *, int);
 static int h_release_output(void *obj, int index) {
+    TC(9);
     Movie *m = find(obj);
     if (!m) return ((i_fn)G.orig[MOVIE_RELEASE_OUTPUT])(obj, index);
     Signals s = {0};
@@ -898,12 +968,14 @@ static int h_release_output(void *obj, int index) {
     return st;
 }
 static int h_get_last_error(void *obj) {
+    TC(10);
     Movie *m = find(obj);
     if (!m) return ((int_fn)G.orig[MOVIE_GET_LAST_ERROR])(obj);
     return m->last_error;
 }
 typedef int (*ibm_fn)(void *, int, void *, void *);
 static int h_get_output_buffer_format(void *obj, int index, void *md) {
+    TC(12);
     Movie *m = find(obj);
     if (!m) return ((ib_fn)G.orig[MOVIE_GET_OUTPUT_BUFFER_FORMAT])(obj, index, md);
     if (!md) return ST_NULL;
@@ -943,7 +1015,7 @@ static void *const ENTRIES[MOVIE_ENTRIES] = {h_ctor,
 /* Every movie::Decoder symbol the library's vtable and callers bind by name, including the base-object / complete-object aliases that share
  * code with the entries above. host_symbols_register makes the loader bind them (vtable slots and imports) to the wrappers of these. */
 void movie_register_overrides(void) {
-    static HostSymbol table[MOVIE_ENTRIES + 4];
+    static HostSymbol table[MOVIE_ENTRIES + 5];
     const char *off = getenv("NAPPLE_MOVIE_HOST");
     if (off && !strcmp(off, "0")) return;
     for (int i = 0; i < MOVIE_ENTRIES; i++) table[i] = (HostSymbol){NAMES[i], ENTRIES[i]};
@@ -951,6 +1023,7 @@ void movie_register_overrides(void) {
     table[MOVIE_ENTRIES + 1] = (HostSymbol){"_ZN5movie7DecoderD1Ev", h_d2};
     table[MOVIE_ENTRIES + 2] = (HostSymbol){OLD_CTOR_C1, h_ctor_old};
     table[MOVIE_ENTRIES + 3] = (HostSymbol){OLD_CTOR_C2, h_ctor_old};
-    host_symbols_register(table, MOVIE_ENTRIES + 4);
+    table[MOVIE_ENTRIES + 4] = (HostSymbol){"_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeE", h_ctor_mode};
+    host_symbols_register(table, getenv("NAPPLE_MOVIE_MODECTOR") ? MOVIE_ENTRIES + 5 : MOVIE_ENTRIES + 4);
 }
 #endif /* libvpx */

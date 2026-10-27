@@ -6,6 +6,7 @@
 #include <CoreVideo/CoreVideo.h>
 #include <ImageIO/ImageIO.h>
 #include <VideoToolbox/VideoToolbox.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -240,6 +241,11 @@ int vth264_decode(VtH264 *d, const uint8_t *data, size_t size, int64_t pts, VtH2
     int annexb = is_annexb(data, size);
     Scan s = {d, 0, 0, 0};
     if (!each_nal(data, size, annexb, scan_nal, &s)) return -1;
+    if (getenv("NAPPLE_MOVIE_TC")) {
+        static int said;
+        if (said < 3) { fprintf(stderr, "[vth264] head:"); for (size_t i = 0; i < 48 && i < size; i++) fprintf(stderr, " %02x", data[i]); fprintf(stderr, "\n"); }
+        if (said++ < 10) fprintf(stderr, "[vth264] size %zu annexb %d changed %d slice %d idr %d vt %p nsps %d npps %d w %d h %d depth %d nheld %d\n", size, annexb, s.changed, s.slice, s.idr, (void *)d->vt, d->nsps, d->npps, d->w, d->h, d->depth, d->nheld);
+    }
     if (s.changed || (!d->vt && s.slice)) {
         if (s.changed && d->vt) vth264_flush(d, cb, user); /* parameter sets changed: finish the old stream first */
         if (!make_session(d)) return s.slice ? 0 : (d->nsps && d->npps ? -1 : 0);

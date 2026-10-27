@@ -31,7 +31,7 @@ FRAMEWORKS := -framework Cocoa -framework QuartzCore -framework CoreVideo -frame
 LDFLAGS ?= -Wl,-dead_strip -Wl,-x
 OPUS ?= /opt/homebrew/opt/opus/lib/libopus.a
 VPX ?= /opt/homebrew/opt/libvpx/lib/libvpx.a
-FRAMEWORKS += -framework VideoToolbox -framework CoreMedia -framework ImageIO
+FRAMEWORKS += -framework VideoToolbox -framework CoreMedia -framework ImageIO -lcompression
 EXTRA_LIBS ?= -L$(ROOT)/frontend -lnapple_frontend -L$(ROOT)/input -lnapple_input -L$(ROOT)/audio -lnapple_audio $(OPUS) $(VPX) -framework CoreHaptics -framework IOKit
 
 all: $(BUILD)/napple-runtime

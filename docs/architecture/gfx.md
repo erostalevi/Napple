@@ -136,7 +136,7 @@ Pending: runtime/ has no loader yet (empty directory when this was written). Whe
 - The adapter builds its override table lazily: the runtime registers overrides before `gfx_init`.
 - Window origin: "lower-left" (the NVN default) changes only window coordinates (viewport, scissor, fragment coordinate y = H - y_top via the rscale table); NDC +y renders to the top row in both modes. The former vertex-shader Y negation produced upside-down images in real games and was removed.
 - `CopyTextureToTexture` with a different size or format is done by a draw (format conversion and scaling); depth/MSAA/3D variants are still not implemented.
-- Command handles outlive their command buffer (graveyard of 1024 recordings), required by Super Mario Odyssey.
+- A recorded command list stays valid as long as the command memory it was recorded into: it ends when the game finalizes the handle, when another list is recorded at the same command-memory address, or when the pool holding that memory is finalized (never with its command buffer, by idle time or by a memory budget; Super Mario Odyssey replays lists for minutes). Idle lists are held LZ4-packed. See the [2026-10-26 gfx-correctness note](../archive/changes/2026-10-26-claude-gfx-correctness-2026-10-26-macos1.md).
 - Headless runs pace presents at the swap interval so the guest runs at real speed.
 - New host API: `napple_gfx_texture_info`, `napple_gfx_texture_write_rgba` (video decoders).
 - Per-game: `nvn_major/nvn_minor` from `game.json`.
@@ -165,11 +165,11 @@ The translator turns the Maxwell surface instructions into Metal texture `read` 
 
 **Known approximations.** A raw `.D` access without `.BA` returns the first channel(s) of the texel, not the packed texel bits; formatted UNORM/SNORM data comes back as Metal's converted float, the same value `.P` returns on hardware. Float-image `.D.32` moves the bit pattern through the float channel (NaN payloads may be canonicalised by the texture unit).
 
-**Calls the Mac glue needs** (`gfx/src/mtl_shader.m`, `mtl_replay.m`, owned by gfx-correctness; none of this exists yet):
+**The Mac glue** (`gfx/src/mtl_replay.m` `bind_stage` image loop and `image_masks`, `mtl_tex.m` `mtl_tex_image_view`, `mtl_shader.m` key masks and `compile_options_v`; 2026-10-26 gfx-correctness, test `gfx/tests/t_image.c`: a fragment SUST.D.32 into an R32UI image read back exactly) does the following:
 
 1. After `maxwell_translate`, bind each `info->img[i]` texture with `setTexture:atIndex:IMAGE_TEXTURE_BASE + i` on the compute / fragment / vertex encoder: resolve the handle from c2 at `handle_offset` (or the bound user buffer at `bindless_cbuf` / `bindless_offset`) through the same TIC lookup as sampled textures.
 2. Make the texture a view with `MTLTextureUsageShaderRead | MTLTextureUsageShaderWrite` (plus `ShaderAtomic` when `img[i].atomic`) and an integer pixel format when `kind` is `INT` / `UINT`; sRGB views cannot be written, use the linear twin.
 3. Fill `ShaderKey.image_int_mask` / `image_uint_mask` from the formats of the bound images when building the pipeline key (pipelines for the same shader with different formats are different pipelines).
 4. Compile with `MTLLanguageVersion3_1` when `needs_msl31`.
 5. `useResource:usage:` is not needed unless the images are reached through an argument buffer.
-6. Tell the dirty-tracker (`dirty.c`) that a shader-written image modifies guest memory (write-back to the guest pages).
+6. A shader-written image makes the Metal texture the owner of the data (`GfxTex.gpu_owned`, as for render targets): CPU uploads stop, reads go to the GPU copy; there is no write-back into guest pages (the same as render targets today).

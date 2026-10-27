@@ -11,7 +11,7 @@ OPT    ?= -O2
 WARN   := -Wall -Wextra -Wno-unused-parameter -Wno-missing-field-initializers
 CFLAGS := -std=gnu11 $(OPT) -g $(WARN) -fno-strict-aliasing -Iinclude -Isrc $(ARCH) $(EXTRA_CFLAGS)
 OFLAGS := $(CFLAGS) -fobjc-arc -fmodules -Wno-deprecated-declarations
-FRAMEWORKS := -framework Metal -framework Foundation -framework QuartzCore -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers
+FRAMEWORKS := -framework Metal -framework Foundation -framework QuartzCore -framework CoreGraphics -framework ImageIO -framework UniformTypeIdentifiers -lcompression
 
 C_SRC  := $(wildcard src/*.c) $(wildcard src/tex/*.c) $(wildcard src/shader/*.c)
 M_SRC  := $(wildcard src/*.m) $(wildcard src/shader/*.m)
@@ -52,10 +52,10 @@ $(OUT)/obj/gen/nvn_unimpl.o: $(OUT)/gen/nvn_unimpl.S
 T_SRC  := $(wildcard tests/t_*.c) $(wildcard tests/t_*.m)
 T_BIN  := $(patsubst tests/%.c,$(OUT)/tests/%,$(filter %.c,$(T_SRC))) $(patsubst tests/%.m,$(OUT)/tests/%,$(filter %.m,$(T_SRC)))
 
-$(OUT)/tests/%: tests/%.c $(LIB) $(wildcard tests/*.h)
+$(OUT)/tests/%: tests/%.c $(LIB) $(wildcard tests/*.h) $(wildcard tests/*.inc)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -fobjc-arc $< $(LIB) $(FRAMEWORKS) -o $@
-$(OUT)/tests/%: tests/%.m $(LIB) $(wildcard tests/*.h)
+$(OUT)/tests/%: tests/%.m $(LIB) $(wildcard tests/*.h) $(wildcard tests/*.inc)
 	@mkdir -p $(dir $@)
 	$(CC) $(OFLAGS) $< $(LIB) $(FRAMEWORKS) -o $@
 

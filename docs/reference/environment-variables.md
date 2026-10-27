@@ -124,7 +124,15 @@ Conventions used by the code, unless a row says otherwise:
 | `NAPPLE_NV_INIT_NOOP` | set = on | Adds a no-op override for `nv::InitializeGraphics`. | `gfx/adapter/gfx_napple.c` |
 | `NAPPLE_RSCALE` | `0` | `0` disables gfx-level render target scaling (the per-game escape hatch also in the display settings). | `gfx/src/mtl_scale.m` |
 | `NAPPLE_MINIMAL_LAYOUT` | `0` | In the texture layout code, textures with flag `0x200` and no packaged block height use the minimal-layout rule; `0` turns that rule off (a negative control for fresh sessions). Default on. | `gfx/src/tex/napple_layout.c` |
-| `NAPPLE_REC_BUDGET_MB` | integer MB greater than 0; default 1024 | Memory budget for finalized command list recordings before the least recently used are released. | `gfx/src/api_cmd.c` |
+| `NAPPLE_REC_BUDGET_MB` | integer MB greater than 0; default a quarter of the physical memory | Safety ceiling for recorded command lists. Lists live as long as their command memory (see [gfx](../architecture/gfx.md)); past the ceiling the least recently used are dropped with a warning, which is a bug to investigate. | `gfx/src/api_cmd.c` |
+| `NAPPLE_REC_NO_PACK` | set = on | Keeps idle command lists unpacked (by default lists idle for 12 s are held LZ4-packed). | `gfx/src/api_cmd.c` |
+| `NAPPLE_GFX_ARCHIVE_MAX_MB` | integer MB; default 64 | Size cap of the pipelines archive file: a save over the cap leaves the oldest quarter of the pipelines out of the next one. | `gfx/src/mtl_shader.m` |
+| `NAPPLE_GFX_NO_LOOKAHEAD` | set = on | Disables the submission look-ahead (the prediction pass that starts a submission's unknown pipelines building before the draws reach them). | `gfx/src/mtl_replay.m` |
+| `NAPPLE_GFX_ARCHIVE_SYNC` | set = on | Loads the pipelines archive on the calling thread even when it is over 16 MB (bigger files load in the background). | `gfx/src/mtl_shader.m` |
+| `NAPPLE_POOLLOG` | set = on | Logs pool address queries (`GetBufferAddress`, `Map`, `GetFlags`) and shader-code pool lookups. | `gfx/src/api_memory.c`, `gfx/src/api_program.c` |
+| `NAPPLE_PROGRAM_POOL_OFFSETS` | `0` = off | `nvnProgramSetShaders` calls whose code address is a bare shader-code pool offset (Animal Crossing's window pass) are accepted and resolved at the first draw; `0` restores the old rejection (the game then never binds those programs). | `gfx/src/api_program.c` |
+| `NAPPLE_WINDRAWLOG` | set = on | Logs the pipeline, viewport and scissor of draws into a 1920x1080 sRGB (window) target. | `gfx/src/mtl_replay.m` |
+| `NAPPLE_DEBUG_NOCULL` | set = on | Disables face culling for every draw (bisecting winding problems). | `gfx/src/mtl_replay.m` |
 | `NAPPLE_GFX_MATH` | `safe` (default), `relaxed`, `fast` | Metal shader math mode. `safe` disables fast math; `relaxed` and `fast` use `MTLMathMode` on macOS 15 / iOS 18 or later (`fast` also enables fast math). | `gfx/src/mtl_shader.m` |
 | `NAPPLE_GFX_NO_ARCHIVE` | set = on | Does not open the Metal binary archive `pipelines-v<N>.metalar` in the cache directory. | `gfx/src/mtl_shader.m` |
 | `NAPPLE_GFX_CACHE_MAX_MB` | integer MB, `0` = unlimited; default 1024 | Size cap of the shader cache directory (translated shaders and pipelines archive); the oldest files are removed first when it is exceeded. | `gfx/src/cache_trim.c`, `gfx/src/mtl_shader.m` |
@@ -141,7 +149,6 @@ Conventions used by the code, unless a row says otherwise:
 | `NAPPLE_SAVE_MSL` | set = on | Annotates translated MSL with the Maxwell pc and instruction word of each instruction. | `gfx/src/shader/maxwell_translate.c` |
 | `NAPPLE_DEBUG_SKIP_VS` | `<first frame>:<hash>,<hash>,...` (hashes in hex) | From that relative frame, frame `first+i` skips the draws of the i-th vertex program, to bisect which program draws a wrong shape. | `gfx/src/mtl_replay.m` |
 | `NAPPLE_DEBUG_SKIP_DRAWN` | `<first frame>:<first draw>` | Frame `first+i` skips the draw with ordinal `first draw + i`. | `gfx/src/mtl_replay.m` |
-| `NAPPLE_NO_ORPHAN` | set = on | Disables the stopgap that presents the composite render target when the window draws sample nothing large. | `gfx/src/mtl_replay.m` |
 | `NAPPLE_ORPHANLOG` | set = on | Logs the choice made by the orphan present stopgap (first 10). | `gfx/src/mtl_replay.m` |
 | `NAPPLE_SHOT_COMPOSITE` | set = on | Screenshots and presents the debug composite texture instead of the window texture. | `gfx/src/mtl_present.m` |
 | `NAPPLE_SCALE_DIAG` | set = on | Logs every pass whose attachments do not all match guest size times scale. | `gfx/src/mtl_replay.m` |
@@ -248,3 +255,7 @@ Conventions used by the code, unless a row says otherwise:
 
 `NAPPLE_CLEARLOG`, `NAPPLE_EMPTYTRACE`, `NAPPLE_RC_OFF`, `NAPPLE_UBOLOG` and `NAPPLE_WINTRACE` appear only in archived change notes under `docs/archive/`. No source file
 reads them. `NAPPLE_PACING_FIXED` and `NAPPLE_PACING_GAME` (gfx pacing) and `NAPPLE_AUDIO_E_PROTOCOL` (audio error code) are C enum constants, not environment variables.
+
+| `NAPPLE_MOVIE_MODECTOR` | Bind MK8D's three-argument `movie::Decoder` constructor to the host decoder (off: the menu preview videos stay black but the menus run; on: the game waits for video that cannot decode yet). |
+| `NAPPLE_MOVIE_TC` | Log movie decoder call counters, queue state and the first input buffers every 2 s. |
+| `NAPPLE_PREPLOG`, `NAPPLE_T2TLOG`, `NAPPLE_CUBELOG`, `NAPPLE_DEBUG_EQUAL_LEQUAL` | gfx diagnostics for the look-ahead pass, texture-to-texture copies, cube-map passes and depth EQUAL bisecting. |

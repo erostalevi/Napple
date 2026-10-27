@@ -107,7 +107,7 @@ FITS(dpool_t, NVNsamplerPool);
 /* ---------------------------------------------------------------------------------------------------------------
  * Programs
  * --------------------------------------------------------------------------------------------------------------- */
-typedef struct { uint32_t magic, nstage; NVNshaderData sd[6]; uint64_t hash[6]; } prog_t;      FITS(prog_t, NVNprogram);   /* hash[stage]: shader blob identity, 0 = none */
+typedef struct { uint32_t magic, nstage; NVNshaderData sd[6]; uint64_t hash[6]; } prog_t;      FITS(prog_t, NVNprogram);   /* hash[stage]: shader blob identity, 0 = none; a value with the high word 0x504c4348 names a stage whose code is a bare pool offset (see gfx_prog_resolve_hash) */
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Windows
@@ -200,14 +200,23 @@ typedef struct cmdrec {
     uint32_t magic, len, nchildren;
     uint64_t handle;                      /* NVNcommandHandle given to the guest */
     struct cmdrec **children;             /* recordings referenced through OP_CALL (own a reference each) */
-    _Atomic uint8_t dead;                 /* the game finalized the handle: the owning command buffer may drop its reference */
-    _Atomic uint32_t last_use;            /* cmdrec_now() of the last record / call / submit (finalized recordings are released when idle) */
-    uint8_t data[];
+    _Atomic uint8_t dead;                 /* unused (kept for layout compatibility of diagnostics) */
+    _Atomic uint32_t last_use;            /* cmdrec_now() of the last record / call / submit / read (idle recordings are held packed) */
+    uintptr_t lo, hi;                     /* command memory [lo, hi) the list was recorded into (its handle's address range) */
+    uint32_t reg_idx, zlen;               /* slot in the lifetime registry; packed size */
+    struct cmdrec *hnext;                 /* registry hash chain (by lo) */
+    _Atomic uint8_t lk;                   /* guards pack / unpack */
+    uint8_t *data;                        /* raw command records, NULL while packed: read through cmdrec_data() */
+    uint8_t *z;                           /* LZ4 packed copy while packed */
 } cmdrec;
 #define CMDREC_MAGIC MAGIC('R', 'E', 'C', '1')
 void cmdrec_retain(cmdrec *r);
 void cmdrec_release(cmdrec *r);
 cmdrec *cmdrec_from_handle(uint64_t h);   /* NULL if stale */
+const uint8_t *cmdrec_data(const cmdrec *r);   /* command records, unpacking if needed */
+void gfx_cmdrec_pool_freed(const void *mem, size_t size);     /* a memory pool was finalized: lists recorded into it are gone */
+uint64_t gfx_cmdrec_bytes(void);
+uint64_t gfx_cmdrec_packed(void);
 uint32_t cmdrec_now(void);                 /* coarse clock (seconds) for last_use */
 uint64_t gfx_cmdrec_live(void);                     /* recordings alive (diagnostics, NAPPLE_PERF_LOG) */
 

@@ -154,6 +154,9 @@ static GfxTex *tex_create(const texsnap *s, int for_gpu_write) {
     td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView;
     td.usage |= MTLTextureUsageRenderTarget;
     if (d->flags & 0x4) td.usage |= MTLTextureUsageShaderWrite; /* NVN_TEXTURE_FLAGS_IMAGE */
+    if ((d->flags & 0x4) && (t->pf == MTLPixelFormatR32Uint || t->pf == MTLPixelFormatR32Sint)) {
+        if (@available(macOS 14.0, iOS 17.0, *)) td.usage |= MTLTextureUsageShaderAtomic; /* SUATOM / SURED on an image (surface atomics) */
+    }
     if (t->samples == 1 && !t->is_depth) td.usage |= MTLTextureUsageShaderWrite;
     t->tex = [g_mtl.dev newTextureWithDescriptor:td];
     if (!t->tex) {
@@ -528,6 +531,8 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
                 pf = (MTLPixelFormat)bcpf; /* BC textures are stored decoded on GPUs without BC (same mapping as mtl_tex_format_info) */
         }
     }
+    /* a shader that samples a single 2D image of an array / cube texture (the game bound the whole texture, no layer range): its first layer */
+    if ((want == MTLTextureType2D || want == MTLTextureType1D) && ns > 1) ns = 1;
     if (l0 + nl > t->tex.mipmapLevelCount) { nl = l0 < t->tex.mipmapLevelCount ? t->tex.mipmapLevelCount - l0 : 1; }
     /* swizzle: view swizzle composed with the format component map and the texture-level swizzle */
     uint32_t m = 0;
@@ -555,7 +560,7 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
     MTLTextureSwizzleChannels sw =
         MTLTextureSwizzleChannelsMake((MTLTextureSwizzle)out[0], (MTLTextureSwizzle)out[1], (MTLTextureSwizzle)out[2], (MTLTextureSwizzle)out[3]);
     if (!view_valid(t->tex, &pf, want, l0, nl ? nl : 1, s0, ns ? ns : 1)) {
-        LOG_ONCE(NAPPLE_LOG_WARN,
+        LOG_ONCE(NAPPLE_LOG_INFO,
                  "texture view not expressible in Metal (fmt %lu->%lu type %lu->%lu levels %u+%u/%lu slices %u+%u/%lu): using the whole texture",
                  (unsigned long)t->pf, (unsigned long)pf, (unsigned long)t->tex.textureType, (unsigned long)want, l0, nl,
                  (unsigned long)t->tex.mipmapLevelCount, s0, ns, (unsigned long)t->tex.arrayLength);
@@ -575,6 +580,177 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
     return nv;
 }
 
+/* Surface image view (SULD / SUST / SUATOM, see shader/maxwell.h ShaderImage): the texture as the shader declares it, `kind` IMGKIND_FLOAT / INT / UINT and
+ * `type` TEXTYPE_*. An integer kind over a float / normalized texture is a view in the integer format of the same texel size (what the hardware does with a
+ * raw .U32 access); an sRGB texture is viewed linear (sRGB views cannot be written). nil when the Metal texture type cannot be viewed as the declared one. */
+static MTLPixelFormat image_int_format(MTLPixelFormat pf, int sint) {
+    switch (pf) {
+        case MTLPixelFormatR8Unorm:
+        case MTLPixelFormatR8Snorm:
+        case MTLPixelFormatR8Uint:
+        case MTLPixelFormatR8Sint: return sint ? MTLPixelFormatR8Sint : MTLPixelFormatR8Uint;
+        case MTLPixelFormatRG8Unorm:
+        case MTLPixelFormatRG8Snorm:
+        case MTLPixelFormatRG8Uint:
+        case MTLPixelFormatRG8Sint: return sint ? MTLPixelFormatRG8Sint : MTLPixelFormatRG8Uint;
+        case MTLPixelFormatRGBA8Unorm:
+        case MTLPixelFormatRGBA8Unorm_sRGB:
+        case MTLPixelFormatRGBA8Snorm:
+        case MTLPixelFormatRGBA8Uint:
+        case MTLPixelFormatRGBA8Sint:
+        case MTLPixelFormatBGRA8Unorm:
+        case MTLPixelFormatBGRA8Unorm_sRGB: return sint ? MTLPixelFormatRGBA8Sint : MTLPixelFormatRGBA8Uint;
+        case MTLPixelFormatR16Unorm:
+        case MTLPixelFormatR16Snorm:
+        case MTLPixelFormatR16Float:
+        case MTLPixelFormatR16Uint:
+        case MTLPixelFormatR16Sint: return sint ? MTLPixelFormatR16Sint : MTLPixelFormatR16Uint;
+        case MTLPixelFormatRG16Unorm:
+        case MTLPixelFormatRG16Snorm:
+        case MTLPixelFormatRG16Float:
+        case MTLPixelFormatRG16Uint:
+        case MTLPixelFormatRG16Sint: return sint ? MTLPixelFormatRG16Sint : MTLPixelFormatRG16Uint;
+        case MTLPixelFormatRGBA16Unorm:
+        case MTLPixelFormatRGBA16Snorm:
+        case MTLPixelFormatRGBA16Float:
+        case MTLPixelFormatRGBA16Uint:
+        case MTLPixelFormatRGBA16Sint: return sint ? MTLPixelFormatRGBA16Sint : MTLPixelFormatRGBA16Uint;
+        case MTLPixelFormatR32Float:
+        case MTLPixelFormatR32Uint:
+        case MTLPixelFormatR32Sint: return sint ? MTLPixelFormatR32Sint : MTLPixelFormatR32Uint;
+        case MTLPixelFormatRG32Float:
+        case MTLPixelFormatRG32Uint:
+        case MTLPixelFormatRG32Sint: return sint ? MTLPixelFormatRG32Sint : MTLPixelFormatRG32Uint;
+        case MTLPixelFormatRGBA32Float:
+        case MTLPixelFormatRGBA32Uint:
+        case MTLPixelFormatRGBA32Sint: return sint ? MTLPixelFormatRGBA32Sint : MTLPixelFormatRGBA32Uint;
+        case MTLPixelFormatRGB10A2Unorm:
+        case MTLPixelFormatRGB10A2Uint: return MTLPixelFormatRGB10A2Uint;
+        default: return MTLPixelFormatInvalid;
+    }
+}
+id<MTLTexture> mtl_tex_image_view(GfxTex *t, int kind, int type, int atomic) {
+    (void)atomic;
+    static const MTLTextureType tt[] = {MTLTextureType1D,           MTLTextureType2D,        MTLTextureType3D,      MTLTextureTypeCube,
+                                        MTLTextureType2DArray,      MTLTextureTypeCubeArray, MTLTextureType1DArray, MTLTextureTypeTextureBuffer,
+                                        MTLTextureType2DMultisample};
+    MTLTextureType want = tt[type & 7];
+    MTLPixelFormat pf = t->tex.pixelFormat;
+    if (kind == IMGKIND_INT || kind == IMGKIND_UINT) {
+        MTLPixelFormat ip = image_int_format(pf, kind == IMGKIND_INT);
+        if (ip == MTLPixelFormatInvalid) {
+            LOG_ONCE(NAPPLE_LOG_WARN, "surface image: no integer view of texture format %lu", (unsigned long)pf);
+            return nil;
+        }
+        pf = ip;
+    } else if (pf == MTLPixelFormatRGBA8Unorm_sRGB) pf = MTLPixelFormatRGBA8Unorm;
+    else if (pf == MTLPixelFormatBGRA8Unorm_sRGB) pf = MTLPixelFormatBGRA8Unorm;
+    if (t->is_depth || t->tex.sampleCount > 1) return nil;
+    MTLTextureType have = t->tex.textureType;
+    if (want == MTLTextureTypeTextureBuffer) {
+        if (have != MTLTextureTypeTextureBuffer && have != MTLTextureType1D) return nil;
+        want = have;
+    }
+    int ok = have == want || (want == MTLTextureType2D && (have == MTLTextureType2DArray || have == MTLTextureTypeCube)) ||
+             (want == MTLTextureType2DArray && (have == MTLTextureTypeCube || have == MTLTextureTypeCubeArray)) ||
+             (want == MTLTextureType1D && have == MTLTextureType1DArray);
+    if (!ok) return nil;
+    if (pf == t->tex.pixelFormat && want == have) return t->tex;
+    uint64_t key = (uint64_t)pf | (uint64_t)want << 12 | 1ull << 62; /* image views: bit 62 (sampled views keep it clear, attachment views use bit 63) */
+    NSNumber *k = @(key);
+    id<MTLTexture> v = t->views[k];
+    if (v) return v;
+    if (pf != t->tex.pixelFormat && !(t->tex.usage & MTLTextureUsagePixelFormatView)) return nil;
+    v = [t->tex newTextureViewWithPixelFormat:pf
+                                  textureType:want
+                                       levels:NSMakeRange(0, 1)
+                                       slices:NSMakeRange(0, want == have ? (t->tex.arrayLength ? t->tex.arrayLength : 1) : 1)];
+    if (!v) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "surface image view (format %lu type %lu) could not be created", (unsigned long)pf, (unsigned long)want);
+        return nil;
+    }
+    t->views[k] = v;
+    return v;
+}
+
+/* Render target attachment: the base texture with level / slice chosen by the view. A view with another format (an sRGB view of a UNORM target,
+ * a UINT view of a float one of the same size) renders through a format view of the whole texture; the attachment level / slice still pick the
+ * image. The format must be view-compatible (same size per pixel); otherwise the base format is used and that is reported once. */
+/* Rendering into a block-compressed texture through an uncompressed view of one block's size (one texel per 4x4 block, e.g. runtime texture compression:
+ * Mario Kart 8 renders BC4/BC7 blocks into the shadow-map and cube-map textures): Metal cannot view BC as an integer format and a BC texture is not
+ * renderable, so the pass draws into a shadow texture of the block grid (one per BC texture level / slice / view format). When the pass ends the
+ * shadow is copied back, block for block, into the compressed texture (mtl_bcrt_flush, called by the replay after the encoder closes). The copy-in
+ * (a pass that blends over the old blocks) is not done: compression passes overwrite every block. Written after nxnative's bcrt_attach / bcrt_flush
+ * (MIT, copyright seedds, NX:dm/gfx/nvn/nvn_mtl.m; see THIRD_PARTY_NOTICES.md). */
+@interface BcRt : NSObject {
+  @public
+    id<MTLTexture> base, shadow;
+    uint32_t lv, sl;
+}
+@end
+@implementation BcRt
+@end
+static NSMutableArray<BcRt *> *g_bcrt;
+static pthread_mutex_t g_bcrt_mu = PTHREAD_MUTEX_INITIALIZER;
+static void bcrt_note(id<MTLTexture> base, id<MTLTexture> shadow, uint32_t lv, uint32_t sl) {
+    pthread_mutex_lock(&g_bcrt_mu);
+    if (!g_bcrt) g_bcrt = [NSMutableArray array];
+    for (BcRt *r in g_bcrt)
+        if (r->shadow == shadow) {
+            pthread_mutex_unlock(&g_bcrt_mu);
+            return;
+        }
+    BcRt *r = [BcRt new];
+    r->base = base;
+    r->shadow = shadow;
+    r->lv = lv;
+    r->sl = sl;
+    [g_bcrt addObject:r];
+    pthread_mutex_unlock(&g_bcrt_mu);
+}
+uint32_t mtl_bcrt_pending(void) { return g_bcrt.count; }
+static NSUInteger bc_block_bytes(MTLPixelFormat f) {
+    if (f < MTLPixelFormatBC1_RGBA || f > MTLPixelFormatBC7_RGBAUnorm_sRGB) return 0;
+    return f <= MTLPixelFormatBC1_RGBA_sRGB || f == MTLPixelFormatBC4_RUnorm || f == MTLPixelFormatBC4_RSnorm ? 8 : 16;
+}
+/* Blit every pending shadow back into its compressed texture. No encoder may be open on cb. */
+void mtl_bcrt_flush(id<MTLCommandBuffer> cb) {
+    pthread_mutex_lock(&g_bcrt_mu);
+    NSArray<BcRt *> *list = [g_bcrt copy];
+    [g_bcrt removeAllObjects];
+    pthread_mutex_unlock(&g_bcrt_mu);
+    if (!list.count) return;
+    id<MTLBlitCommandEncoder> be = [cb blitCommandEncoder];
+    for (BcRt *r in list) {
+        NSUInteger bb = bc_block_bytes(r->base.pixelFormat), bw = r->shadow.width, bh = r->shadow.height;
+        if (!bb) continue;
+        id<MTLBuffer> buf = [g_mtl.dev newBufferWithLength:bw * bh * bb options:MTLResourceStorageModePrivate];
+        [be copyFromTexture:r->shadow
+                         sourceSlice:0
+                         sourceLevel:0
+                        sourceOrigin:MTLOriginMake(0, 0, 0)
+                          sourceSize:MTLSizeMake(bw, bh, 1)
+                            toBuffer:buf
+                   destinationOffset:0
+              destinationBytesPerRow:bw * bb
+            destinationBytesPerImage:bw * bh * bb];
+        NSUInteger lw = MAX(1, r->base.width >> r->lv), lh = MAX(1, r->base.height >> r->lv);
+        NSUInteger cw = MIN(bw * 4, lw),
+                   ch = MIN(bh * 4, lh); /* a level smaller than a block: the copy reaches the level's edge (Metal rejects a size beyond the level) */
+        int is3d = r->base.textureType == MTLTextureType3D;
+        [be copyFromBuffer:buf
+                   sourceOffset:0
+              sourceBytesPerRow:bw * bb
+            sourceBytesPerImage:bw * bh * bb
+                     sourceSize:MTLSizeMake(cw, ch, 1)
+                      toTexture:r->base
+               destinationSlice:is3d ? 0 : r->sl
+               destinationLevel:r->lv
+              destinationOrigin:MTLOriginMake(0, 0, is3d ? r->sl : 0)];
+    }
+    [be endEncoding];
+}
+
 /* Render target attachment: the base texture with level / slice chosen by the view. A view with another format (an sRGB view of a UNORM target,
  * a UINT view of a float one of the same size) renders through a format view of the whole texture; the attachment level / slice still pick the
  * image. The format must be view-compatible (same size per pixel); otherwise the base format is used and that is reported once. */
@@ -587,28 +763,42 @@ id<MTLTexture> mtl_tex_attach_view(GfxTex *t, const view_t *v, int has_view, uin
     uint32_t m = 0;
     if (!v->set_format || t->is_depth || !napple_fmt_to_mtl(v->format, &m, NULL) || !m || (MTLPixelFormat)m == t->pf) return t->tex;
     MTLPixelFormat pf = (MTLPixelFormat)m;
-    NSNumber *k = @((uint64_t)pf | 1ull << 63); /* not a sampled-view key (those keep bit 63 clear) */
-    id<MTLTexture> cached = t->views[k];
-    if (cached) return cached;
-    int bw, bh, bv = napple_fmt_bpb(v->format, &bw, &bh), bt = napple_fmt_bpb(t->key.d.format, &bw, &bh);
-    id<MTLTexture> nv = nil;
     MTLPixelFormat sp = t->tex.pixelFormat;
     int src_bc = sp >= MTLPixelFormatBC1_RGBA && sp <= MTLPixelFormatBC7_RGBAUnorm_sRGB,
         dst_bc = pf >= MTLPixelFormatBC1_RGBA && pf <= MTLPixelFormatBC7_RGBAUnorm_sRGB;
+    uint32_t lv = *level, sl = *slice;
+    NSNumber *k =
+        @((uint64_t)pf | 1ull << 63 |
+          (src_bc && !dst_bc ? ((uint64_t)(lv & 0xff) << 32 | (uint64_t)(sl & 0xfff) << 40) : 0)); /* not a sampled-view key (those keep bit 63 clear) */
+    id<MTLTexture> cached = t->views[k];
+    if (cached) {
+        if (src_bc && !dst_bc) {
+            bcrt_note(t->tex, cached, lv, sl);
+            *level = 0;
+            *slice = 0;
+        }
+        return cached;
+    }
+    int bw, bh, bv = napple_fmt_bpb(v->format, &bw, &bh), bt = napple_fmt_bpb(t->key.d.format, &bw, &bh);
+    id<MTLTexture> nv = nil;
     if (src_bc && !dst_bc) {
-        /* Rendering into a block-compressed texture through an integer view (one texel per 4x4 block, e.g. runtime texture compression): Metal cannot view BC as uint and a BC
-         * texture is not renderable, so the pass draws into an auxiliary texture of the block grid. TODO: copy it back into the BC texture before that is sampled. */
+        NSUInteger lw = MAX(1, t->tex.width >> lv), lh = MAX(1, t->tex.height >> lv);
         MTLTextureDescriptor *td = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:pf
-                                                                                      width:MAX(1, (t->tex.width + 3) / 4)
-                                                                                     height:MAX(1, (t->tex.height + 3) / 4)
+                                                                                      width:MAX(1, (lw + 3) / 4)
+                                                                                     height:MAX(1, (lh + 3) / 4)
                                                                                   mipmapped:NO];
         td.usage = MTLTextureUsageRenderTarget | MTLTextureUsageShaderRead;
         td.storageMode = MTLStorageModePrivate;
         nv = [g_mtl.dev newTextureWithDescriptor:td];
-        LOG_ONCE(NAPPLE_LOG_WARN,
-                 "render target view %#x of a block-compressed texture (format %#x): rendering into a block-grid texture; the result is not copied back into "
-                 "the compressed texture yet",
+        LOG_ONCE(NAPPLE_LOG_INFO, "rendering into block-compressed textures (view %#x of format %#x) through block-grid shadows copied back after each pass",
                  v->format, t->key.d.format);
+        t->views[k] = nv;
+        if (nv) {
+            bcrt_note(t->tex, nv, lv, sl);
+            *level = 0;
+            *slice = 0;
+        }
+        return nv ? nv : t->tex;
     } else if (bv && bv == bt && (t->tex.usage & MTLTextureUsagePixelFormatView)) nv = [t->tex newTextureViewWithPixelFormat:pf];
     if (!nv) {
         LOG_ONCE(NAPPLE_LOG_WARN, "render target view format %#x is not view-compatible with the texture (format %#x): drawn in the texture's format",
