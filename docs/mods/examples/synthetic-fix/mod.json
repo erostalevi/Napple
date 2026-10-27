@@ -1,0 +1,12 @@
+{
+  "format": 1,
+  "id": "example.synthetic-fix",
+  "name": "Synthetic Fix (example)",
+  "version": "1.0.0",
+  "titleId": "0100E4A100000000",
+  "buildIds": ["0123456789ABCDEF0123456789ABCDEF"],
+  "author": "Napple docs",
+  "license": "CC0-1.0",
+  "requires": { "napple": ">=0.0.1" },
+  "description": "A made-up fix for a made-up title. It shows every component of the .napmod format; it contains no game data and applies to nothing real."
+}

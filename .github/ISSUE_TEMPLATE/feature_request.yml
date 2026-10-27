@@ -1,11 +1,12 @@
 name: Feature request
 description: Suggest an improvement or a missing piece
-labels: [enhancement]
+labels: [enhancement, needs-triage]
 body:
   - type: markdown
     attributes:
       value: |
         Napple is game-agnostic: per-game behaviour belongs in data, not in code branches. Please never attach game files, keys or firmware.
+        Not sure it is a concrete request yet? Start a Discussion.
   - type: textarea
     id: problem
     attributes:
@@ -22,3 +23,9 @@ body:
     id: alternatives
     attributes:
       label: Alternatives considered
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Can you help?
+      options:
+        - label: I would like to work on this myself (maintainers will point you at the right files).

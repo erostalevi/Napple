@@ -151,23 +151,53 @@ static void res_name_info(IpcObject *o, IpcCall *c) {
     if (sb) ipc_write_buf(c, sb, svc, strlen(svc) + 1);
     out3(c, 0, 0, 0);
 }
+/* RequestCancelHandle hands out a request handle and CancelRequest(handle) marks it. Lookups finish synchronously inside the call that made them, so a
+ * cancel can only arrive for a request that has already completed: it succeeds and changes nothing, exactly as on a console when the lookup won the race. */
+#define RES_HANDLES 64
+static uint32_t res_next_handle = 1, res_cancelled[RES_HANDLES];
 static void res_cancel_handle(IpcObject *o, IpcCall *c) {
     (void)o;
-    static uint32_t next = 1;
-    uint32_t h = next++;
+    uint32_t h = res_next_handle++;
     IPC_OUT(c, h);
 }
+static void res_cancel(IpcObject *o, IpcCall *c) {
+    (void)o;
+    uint32_t h = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0;
+    if (h) res_cancelled[h % RES_HANDLES] = h;
+}
+/* Private (per-application) DNS server addresses, set by SetDnsAddressesPrivateRequest and read back by GetDnsAddressPrivateRequest. The runtime resolves
+ * through the OnlineProvider, which owns server choice, so the stored list is only a record the title can read back. */
+#define RES_DNS_MAX 0x80
+static uint8_t res_dns[RES_DNS_MAX];
+static uint32_t res_dns_len;
+static void res_set_dns(IpcObject *o, IpcCall *c) {
+    (void)o;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    uint32_t n = p ? (uint32_t)(b->size > RES_DNS_MAX ? RES_DNS_MAX : b->size) : 0;
+    if (n) memcpy(res_dns, p, n);
+    res_dns_len = n;
+    out3(c, 0, 0, 0);
+}
+static void res_get_dns(IpcObject *o, IpcCall *c) {
+    (void)o;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint32_t n = res_dns_len;
+    if (b && n > b->size) n = (uint32_t)b->size;
+    if (b && n) ipc_write_buf(c, b, res_dns, n);
+    out3(c, 0, 0, n);
+}
 static const IpcCmd res_cmds[] = {
-    {0, "SetDnsAddressesPrivateRequest", svc_noop, IPC_STUB},
-    {1, "GetDnsAddressPrivateRequest", svc_noop, IPC_STUB},
+    {0, "SetDnsAddressesPrivateRequest", res_set_dns, IPC_IMPL},
+    {1, "GetDnsAddressPrivateRequest", res_get_dns, IPC_IMPL},
     {2, "GetHostByNameRequest", res_host_by_name, IPC_IMPL},
     {3, "GetHostByAddrRequest", res_host_by_addr, IPC_IMPL},
     {4, "GetHostStringErrorRequest", res_hstrerror, IPC_IMPL},
     {5, "GetGaiStringErrorRequest", res_gai_strerror, IPC_IMPL},
     {6, "GetAddrInfoRequest", res_addr_info, IPC_IMPL},
     {7, "GetNameInfoRequest", res_name_info, IPC_IMPL},
-    {8, "RequestCancelHandleRequest", res_cancel_handle, IPC_STUB},
-    {9, "CancelRequest", svc_noop, IPC_STUB},
+    {8, "RequestCancelHandleRequest", res_cancel_handle, IPC_IMPL},
+    {9, "CancelRequest", res_cancel, IPC_IMPL},
     {10, "GetHostByNameRequestWithOptions", res_host_by_name, IPC_IMPL},
     {11, "GetHostByAddrRequestWithOptions", res_host_by_addr, IPC_IMPL},
     {12, "GetAddrInfoRequestWithOptions", res_addr_info, IPC_IMPL},

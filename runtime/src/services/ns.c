@@ -21,6 +21,28 @@ static void app_not_found(IpcObject *s, IpcCall *c) {
     c->result = HZ_R_NS_APPLICATION_NOT_FOUND;
 }
 
+/* The host runs exactly one title (g_cfg.title_id): it is the only application record. */
+static uint64_t host_app_id(void) { return ns_parse_title_id(g_cfg.title_id); }
+/* 0 ListApplicationRecord(s32 offset) -> s32 count, records in buffer 0 */
+static void am_list_records(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int32_t off = c->in_size >= 4 ? IPC_IN(c, int32_t, 0) : 0, n = 0;
+    uint64_t id = host_app_id();
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (id && off <= 0 && b && b->size >= NS_APP_RECORD_SIZE) {
+        uint8_t rec[NS_APP_RECORD_SIZE];
+        ns_app_record(id, rec);
+        ipc_write_buf(c, b, rec, sizeof rec);
+        n = 1;
+    }
+    IPC_OUT(c, n);
+}
+/* 1 GenerateApplicationRecordCount -> s32 */
+static void am_record_count(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int32_t n = host_app_id() ? 1 : 0;
+    IPC_OUT(c, n);
+}
 /* IApplicationManagerInterface */
 static void am_desired_language(IpcObject *s, IpcCall *c) { /* 401(u32 supported language flags) -> u8 ApplicationLanguage */
     (void)s;
@@ -52,9 +74,9 @@ static void am_code_to_language(IpcObject *s, IpcCall *c) { /* 403(u64) -> u8 */
     IPC_OUT(c, v);
 }
 static const IpcCmd am_cmds[] = {
-    {0, "ListApplicationRecord", ret_s32_0, IPC_STUB},
-    {1, "GenerateApplicationRecordCount", ret_s32_0, IPC_STUB},
-    {2, "GetApplicationRecordUpdateSystemEvent", svc_ret_event, IPC_STUB},
+    {0, "ListApplicationRecord", am_list_records, IPC_IMPL},
+    {1, "GenerateApplicationRecordCount", am_record_count, IPC_IMPL},
+    {2, "GetApplicationRecordUpdateSystemEvent", svc_ret_event, IPC_IMPL} /* the record list never changes: the event never fires */,
     {400, "GetApplicationControlData", app_not_found, IPC_STUB},
     {401, "GetApplicationDesiredLanguage", am_desired_language, IPC_IMPL},
     {402, "ConvertApplicationLanguageToLanguageCode", am_language_to_code, IPC_IMPL},
@@ -77,21 +99,22 @@ static void cm_free_space(IpcObject *s, IpcCall *c) {
     uint64_t v = storage_bytes(c, 0);
     IPC_OUT(c, v);
 }
+/* The running title is not installed on a console storage (it runs from the host data directory), so every storage reports zero occupied bytes. */
 static void cm_occupied(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_zero(c, 0x80);
 }
 static const IpcCmd cm_cmds[] = {
-    {11, "CalculateApplicationOccupiedSize", cm_occupied, IPC_STUB},
+    {11, "CalculateApplicationOccupiedSize", cm_occupied, IPC_IMPL},
     {43, "CheckSdCardMountStatus", svc_noop, IPC_IMPL},
     {47, "GetTotalSpaceSize", cm_total_space, IPC_IMPL},
     {48, "GetFreeSpaceSize", cm_free_space, IPC_IMPL},
 };
 
 /* IApplicationVersionInterface: the host runs the one version it was built from, so no launch version is ever required and no update list exists; auto update
- * and the eShop calls need the network and answer with the offline result. All complete answers (class c). Still stubs below: ListApplicationRecord and
- * friends (the host has no installed-application database: needs the napple-build manifest to list the running title) and GetApplicationControlData
- * / content-path queries (need control.nacp and the content layout from napple-build; follow-up for whoever owns the build layout). */
+ * and the eShop calls need the network and answer with the offline result. All complete answers (class c). The application record list is the running title.
+ * Still stubs (class d): GetApplicationControlData and the content-path queries: they need control.nacp and the content layout, which napple build does
+ * not write next to the data directory (follow-up for whoever owns the build layout). */
 static const IpcCmd ver_cmds[] = {
     {0, "GetLaunchRequiredVersion", svc_ret_u32_0, IPC_IMPL},
     {1, "UpgradeLaunchRequiredVersion", svc_noop, IPC_IMPL},

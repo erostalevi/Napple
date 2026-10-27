@@ -20,6 +20,7 @@ Everything that touches game data expects files you dumped yourself under `work/
 | `support/gen_support.py` | Generates `docs/reference/support-matrix.md`, `feature-support.md` and `support-data.json` from `compat/matrix.json`, the title notes and the coverage snapshot (`tools/support/data/`). `--check` fails on stale files (also run by `check_docs.py`); `--refresh-snapshot` imports the newest percent-analysis snapshot. Test: `python3 -I tools/support/test_gen_support.py`. | Python 3 only |
 | `check_docs.py` | Verifies every relative Markdown link and `#anchor`, the `docs/symptoms.md` table shape and that every title has a `docs/titles/<id>.md`. Runs in CI. | Python 3 only |
 | `linux-check/` | Syntax check and unit tests for the portable part of `runtime/src/services/` on Linux. See `linux-check/README.md`. | gcc or clang on Linux or macOS |
+| `check_contributor_kit.py` | Parses every `.github/ISSUE_TEMPLATE/*.yml` form and `.github/labels.yml` (issue-form schema, labels in use are listed, doc references exist) and checks the PR template and the legal and sign-off sections of `CONTRIBUTING.md`. | Python 3 with PyYAML |
 | `boot_test.sh` | Headless boot of a prepared title for N seconds; writes the compat stage file `work/compat/<titleid>/<buildid>/runtime-boot.json`. | macOS, built runtime, a prepared game under `work/games/` |
 
 ## Game preparation and data tools

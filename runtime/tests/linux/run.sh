@@ -19,4 +19,5 @@ for n in $names; do
   else skipped="$skipped $n"; fi
 done
 echo "built+ran: $built, did not build on Linux:$skipped"
+python3 -I tests/linux/check_known_calls.py || fail=1
 exit $fail

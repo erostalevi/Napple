@@ -1,0 +1,15 @@
+[package]
+name = "napple-mods"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The .napmod community mod and fix format: parsers, validation, packing and patch application (portable core)."
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"

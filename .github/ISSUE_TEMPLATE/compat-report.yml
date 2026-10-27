@@ -1,11 +1,12 @@
 name: Compatibility report
-description: Tell us how a game behaves on the Napple runtime
-labels: [compat]
+description: Tell us how a game behaves on the Napple runtime (this becomes catalogue data)
+labels: [compat, catalogue, needs-triage]
 body:
   - type: markdown
     attributes:
       value: |
-        **Never attach game files, keys or firmware**, here or anywhere else. Metadata and logs only.
+        **Never attach game files, keys, firmware or dumps**, here or anywhere else. Metadata and logs only.
+        Want to write the title page yourself? Use *Document a title* instead (docs/guides/contributing-document-a-title.md).
   - type: input
     id: game
     attributes:
@@ -24,7 +25,7 @@ body:
     id: mac
     attributes:
       label: Mac
-      placeholder: "M2 Pro, macOS 26.0"
+      placeholder: "Apple M2 Pro, macOS 26.0"
     validations:
       required: true
   - type: dropdown
@@ -34,10 +35,30 @@ body:
       options: [ingest, build-plan, rewrite, runtime boot, title screen, in game]
     validations:
       required: true
+  - type: dropdown
+    id: how
+    attributes:
+      label: How was it run?
+      description: Say what was done. Headless runs say nothing about audio or input quality.
+      options: [headless boot only, played by a person, scripted input run]
+    validations:
+      required: true
+  - type: input
+    id: frames
+    attributes:
+      label: Frames and exit code
+      description: "From a 45 s headless run: the [napple-gfx] stats: frames N line and the exit status (0 = ok, 70 = FAIL:, 128+n = CRASH)."
   - type: textarea
     id: details
     attributes:
       label: What happened
-      description: Missing services, NVN calls, crashes, glitches. Paste relevant log lines.
+      description: "Missing services, NVN calls, crashes, glitches. Paste the relevant log lines (the FAIL: or CRASH line and the 5 lines before it)."
     validations:
       required: true
+  - type: checkboxes
+    id: legal
+    attributes:
+      label: Before sending
+      options:
+        - label: Nothing here contains keys, firmware, game files, dumps or Nintendo code.
+          required: true

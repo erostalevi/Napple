@@ -6,7 +6,7 @@ CC      = clang
 CFLAGS  ?= -std=gnu11 -O2 -g -Wall -Wextra -Werror -Wno-deprecated-declarations -D_GNU_SOURCE
 INC     := -I/usr/include/opus -Iinclude -Isrc -Itests/linux/include
 SRC     := $(wildcard src/*.c)
-TESTS   := audren effects reverb3d review audout hwopus engine threads speed audin
+TESTS   := audren effects reverb3d review audout hwopus engine threads speed audin audin_source
 LIBS    := -lopus -lm -lpthread
 build/linux/test_%: tests/test_%.c $(SRC) $(wildcard src/*.h) include/napple_audio.h tests/wire.h
 	@mkdir -p build/linux

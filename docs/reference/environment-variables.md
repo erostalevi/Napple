@@ -74,6 +74,8 @@ Conventions used by the code, unless a row says otherwise:
 | `NAPPLE_AMIIBO_KEY` | path; default `~/.switch/key_retail.bin` | The user's retail key file for the optional dump import. | `runtime/src/services/amiibo_lib_core.c` |
 | `NAPPLE_AMIIBO_STORE` | folder; default `<save-root>/system/amiibo` | Where the virtual amiibo JSON files live. | `runtime/src/services/amiibo_lib_core.c` |
 | `NAPPLE_IR_SOURCE` | `blob:x,y,r[,dx,dy]`, `dark`, `flat:v`; unset = no IR camera | Scripted frame source for the IR camera simulator when the frontend installs none. | `runtime/src/services/irs.c` |
+| `NAPPLE_AUDIN_SOURCE` | `silence`, `tone[:HZ[:AMP]]`, `file:PATH` (WAV PCM16/float or raw s16le mono 48 kHz, looped), `mic`; unset = silence | Capture source for `audin:u`, installed at the first OpenAudioIn. `mic` records the default input device (macOS; needs the microphone usage description and entitlement, so it is opt-in). | `audio/src/audin_source.c`, `runtime/src/services/audio.c` |
+| `NAPPLE_BCAT_DIR` | folder laid out as `<dir>/<directory>/<file>`; unset = no delivery cache | Delivery cache provider for `bcat:u`: sub-folders are directories, regular files their files (MD5 digests computed on enumeration). Read only; never modified. | `runtime/src/services/bcat_core.c` |
 
 ## Speed, input script, screenshots (runtime glue)
 

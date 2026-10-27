@@ -6,7 +6,10 @@ use crate::infrastructure::nca::{self, ContentType, FsType, Nca, TitleKeys};
 use crate::infrastructure::ncz;
 use crate::infrastructure::pfs::{Fs, parse_pfs0};
 use crate::infrastructure::romfs::RomFs;
-use crate::infrastructure::{ticket::parse_ticket, xci::parse_xci};
+use crate::infrastructure::{
+    ticket::{encrypted_title_key, parse_ticket},
+    xci::parse_xci,
+};
 use std::path::Path;
 
 pub struct NcaInfo {
@@ -26,7 +29,7 @@ pub struct Ingested {
 }
 
 /// Collects NCAs and tickets from NSP (PFS0) or XCI (HFS0) containers.
-pub(crate) fn collect(src: Src) -> Result<(Vec<(String, Src)>, TitleKeys)> {
+pub(crate) fn collect(src: Src, keys: &KeySet) -> Result<(Vec<(String, Src)>, TitleKeys)> {
     let mut parts: Vec<Fs> = Vec::new();
     let magic = crate::infrastructure::io::read_vec(&*src, 0, 4.min(src.size() as usize))?;
     if magic == b"PFS0" {
@@ -53,8 +56,8 @@ pub(crate) fn collect(src: Src) -> Result<(Vec<(String, Src)>, TitleKeys)> {
                 ));
             } else if e.name.ends_with(".tik") {
                 let t = parse_ticket(&fs.read(&e.name)?)?;
-                if t.key_type == 0 {
-                    tks.insert(t.rights_id, t.encrypted_title_key);
+                if let Some(k) = encrypted_title_key(&t, keys)? {
+                    tks.insert(t.rights_id, k);
                 }
             }
         }
@@ -63,7 +66,7 @@ pub(crate) fn collect(src: Src) -> Result<(Vec<(String, Src)>, TitleKeys)> {
 }
 
 pub fn ingest(path: &Path, keys: &KeySet) -> Result<Ingested> {
-    let (ncas, tks) = collect(FileSource::open(path)?)?;
+    let (ncas, tks) = collect(FileSource::open(path)?, keys)?;
     ingest_sources(ncas, tks, keys)
 }
 

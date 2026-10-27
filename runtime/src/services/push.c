@@ -4,7 +4,7 @@
  * the game's own olsc:u / npns clients the same way: docs/reference/services.md "Game-linked HIPC clients", behaviour only). Without
  * these the manager refuses the name and the SDK's connect aborts. The command tables below are generous ranges of ids, not a list of
  * verified commands (unverified against hardware): an id outside the range still fails loudly through the generic unknown-command policy.
- * npns commands 5 and 7 (receive / state change events) hand out an event that never fires. */
+ * The rows are complete for an offline console (class c): nothing is ever pushed or configured. npns commands 5 and 7 (receive / state change events) hand out an event that never fires. */
 #include "svc_common.h"
 
 #define PUSH_RANGE 32
@@ -14,7 +14,7 @@ static void ok(IpcObject *s, IpcCall *c) {
     (void)c;
 }
 static void fill(IpcCmd *t, unsigned event_a, unsigned event_b) {
-    for (unsigned i = 0; i < PUSH_RANGE; i++) t[i] = (IpcCmd){i, "OfflineNoop", (i == event_a || i == event_b) ? svc_ret_event : ok, IPC_STUB};
+    for (unsigned i = 0; i < PUSH_RANGE; i++) t[i] = (IpcCmd){i, "OfflineNoop", (i == event_a || i == event_b) ? svc_ret_event : ok, IPC_IMPL};
 }
 static IpcObject *open_npns(void) { return IPC_OBJECT("npns:u", g_tables[0], NULL, NULL); }
 static IpcObject *open_notif(void) { return IPC_OBJECT("notif:a", g_tables[1], NULL, NULL); }

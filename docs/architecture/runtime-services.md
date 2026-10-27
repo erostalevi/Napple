@@ -280,3 +280,22 @@ Depth changes (runtime-depth, 2026-10-26, IPC_STUB rows before → after; scan "
 `lbl` 9 → 0, `settings` 4 → 0, `apm` 2 → 0, `pdm` 6 → 0, `misc.c` (pctl, aoc) 17 → 0, `olsc` 23 → 0, `spsm`/`ovln`/`ectx`/`fgm` → 0, `ns` 22 → 7, `ncm` 7 → 4, `time` 8 → 0,
 `audin` 2 → 0, `ngc` 4 → 2. Rows that stay stubs on purpose are listed in `docs/archive/changes/2026-10-26-runtime-depth.md` with the reason (needs a hardware simulation,
 a data drop, build-layout data, or belongs to another area).
+
+small-gaps (2026-10-27, branch `claude/small-gaps-2026-10-27`; status **tested on Linux**, nothing run on macOS or a title; layouts from memory of the public documentation, unverified; supersedes the `audin:u`, `bcat:u` and `irs` rows above and the performance note of the `audren:u` row):
+
+| Service | Status | Notes |
+|---|---|---|
+| `audin:u` | implemented | the first OpenAudioIn installs the capture source named by `NAPPLE_AUDIN_SOURCE` (silence, `tone:HZ[:AMP]`, `file:PATH`, `mic`; `audio/src/audin_source.c`). The microphone (`audin_mic.c`, an AUHAL input unit feeding a 48 kHz mono ring) is unbuilt on macOS and opt-in until the app has the usage description and entitlement |
+| `audren:u` | implemented | the performance frame is kept in a history of `performance_frame_count` frames (1 when 0) until a RequestUpdate brings a buffer; whole frames are handed over oldest first and chained through next_offset. Header layout and modelled costs unchanged and unverified |
+| `bcat:u` | implemented | delivery cache comes from a provider (`bcat_set_provider`; `NAPPLE_BCAT_DIR` = folder provider): sync requests succeed at once, Open/Read/GetCount, file Open/Read/GetSize/GetDigest (MD5) and EnumerateDeliveryCacheDirectory read from it. No provider = the offline answers as before. No server code in the repository |
+| `irs` | implemented over `IrFrameSource` | ActivateIrsensor, SetFunctionLevel, ActivateIrsensorWithFunctionLevel, RunImageTransferExProcessor (the transfer processor) and RunIrLedProcessor are no longer stubs; tera plugin (310) and pointing/DPD (312) remain stubs |
+| `hid` | implemented | GameCube, Palma and NES (Lark) styles are selected when the title announces them (alone, or by the player's binding style); GC and the retro pads report through the FullKey lifo, handheld Lark through the Handheld lifo, Palma through its own. The GC trigger lifo is not written (offset unverified) |
+
+IPC command depth: `irs.c` 11 / 7 -> 16 / 2 rows (`IPC_IMPL` / `IPC_STUB`).
+
+Depth changes (ipc-depth-rest, 2026-10-27, IPC_STUB rows before → after; supersedes the stale `mm:u`, `hidbus`, `btm:u` and `ncm` rows above): `offline.c` 89 → 3 (mm clock
+request table, friend/nifm/nsd/prepo/ssl/nfc state; left as stubs: `DuplicateSocket`, `RecvMMsg`, `SendMMsg`), `btm` 14 → 0 (scan and connection state, still no radio), `hidbus` 12 → 0
+(handle-checked "not connected" answers), `ldn` 10 → 0 (access point advertise data / accept policy / filter in `ldn_core.c`; network queries stay "not available"), `ns` 7 → 3
+(application record list of the running title; `GetApplicationControlData` and the two content-path rows need build-layout data), `ncm` 4 → 0 (content infos parsed from the stored
+meta by `ncm_core.c`), `sfdnsres` 4 → 0, `ngc` 2 → 0 (`ngc_core.c`; real matching with a user-supplied `NAPPLE_NGC_WORDLIST`, nothing is shipped), `push` 1 → 0. Inventory and reasons:
+`docs/archive/changes/2026-10-27-claude-ipc-depth-rest-2026-10-27.md`. Layouts of the new rows are the author's memory of the public documentation (unverified); tested on Linux only.

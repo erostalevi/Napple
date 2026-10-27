@@ -14,6 +14,7 @@ the repository front page is the [README](../README.md) and the title status is 
 **Contributor** (you want to change the code)
 1. [Architecture overview](architecture/overview.md), then the page of the subsystem you touch.
 2. [Contributor guides](guides/README.md): add a service, an svc, an NVN function, a Maxwell op, a game, a signature; [debugging](guides/debugging.md); [testing](guides/testing.md); [network providers](guides/network-providers.md); [hardware simulators](guides/hardware-simulators.md); [Napple Studio](guides/studio.md).
+   Community contributions (no code needed): [report a bug](guides/contributing-report-a-bug.md), [document a title](guides/contributing-document-a-title.md), [report a graphics bug](guides/contributing-report-a-graphics-bug.md), [write a mod or fix](guides/contributing-write-a-mod.md), [labels, Discussions, conduct](guides/contributing-community.md); the legal rules and sign-off are in [CONTRIBUTING.md](../CONTRIBUTING.md).
 3. [Subsystem map](reference/subsystems.md) (code, tests, debug switches per subsystem), [environment variables](reference/environment-variables.md), [glossary](reference/glossary.md).
 
 **Maintainer** (you integrate and release)
@@ -48,13 +49,20 @@ See the [guide index](guides/README.md).
 | [Environment variables](reference/environment-variables.md) | Every `NAPPLE_*` variable read by the code |
 | [Support matrix](reference/support-matrix.md) | Generated per-title status per platform (macOS now, iOS deferred) |
 | [Feature support](reference/feature-support.md) | Generated coverage by domain and what is not implemented yet ([JSON for the site](reference/support-data.json)) |
+| [Catalogue field reference](reference/catalogue-howto.md) | Where each title fact is written and what the generated support tables read |
 | [Glossary](reference/glossary.md) | Horizon, NSO, NCA, BKTR, NVN, Maxwell and the rest |
 | [Tooling](reference/tooling.md) | REA, Ghidra and the JDK used for signatures |
 | [Open work markers](todo.md) | Deferred work that used to be `TODO` comments in the source |
 
+### Mods and fixes
+- [Mods and fixes (`.napmod`)](mods/README.md): the shareable mod format, [authoring a fix](mods/authoring.md), [format reference and trust model](mods/format.md), [integration notes](mods/integration.md).
+
 ### Titles and symptoms
 - [titles/](titles/README.md): [Link's Awakening](titles/01006BB00C6F0000.md), [Super Mario Odyssey](titles/0100000000010000.md), [Animal Crossing: New Horizons](titles/01006F8002326000.md), [Mario Kart 8 Deluxe](titles/0100152000022000.md).
 - [Symptoms](symptoms.md): symptom, cause, fix, and where it was found.
+
+### Media
+- [YouTube video kit](media/youtube/README.md): script, call to action, shot list, titles and description.
 
 ### Process and history
 - [Parallel-session workflow](process/README.md)

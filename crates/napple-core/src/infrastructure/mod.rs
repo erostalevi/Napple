@@ -1,5 +1,6 @@
 pub mod cnmt;
 pub mod io;
+pub mod ivfc;
 pub mod nacp;
 pub mod nca;
 pub mod ncz;

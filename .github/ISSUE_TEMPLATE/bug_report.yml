@@ -1,12 +1,13 @@
 name: Bug report
 description: Something in Napple (CLI, runtime, Studio, build) does not work as documented
-labels: [bug]
+labels: [bug, needs-triage]
 body:
   - type: markdown
     attributes:
       value: |
-        **Never attach game files, keys or firmware**, here or anywhere else. Logs and metadata only.
-        For how a specific game behaves, use the *Compatibility report* form instead. Security problems: see SECURITY.md.
+        **Never attach game files, keys, firmware, dumps or anything derived from them**, here or anywhere else. Logs and metadata only.
+        A game that misbehaves: use the *Compatibility report* form. Wrong pixels: use *Graphics bug*. Security problems: see SECURITY.md.
+        How to capture the log and the machine details: docs/guides/contributing-report-a-bug.md.
   - type: textarea
     id: what
     attributes:
@@ -25,19 +26,38 @@ body:
     id: build
     attributes:
       label: Napple build
-      description: Release name or commit, e.g. "v0.1.42 (a1b2c3d)"
+      description: Release name or commit, e.g. "v0.1.42 (a1b2c3d)". Studio shows it in About; from source, run git rev-parse --short HEAD.
     validations:
       required: true
   - type: input
     id: mac
     attributes:
       label: Machine
-      placeholder: "M2 Pro, macOS 26.0"
+      description: "Output of: sysctl -n machdep.cpu.brand_string; sw_vers -productVersion"
+      placeholder: "Apple M2 Pro, macOS 26.0"
     validations:
       required: true
   - type: textarea
+    id: command
+    attributes:
+      label: Exact command or Studio action
+      description: The command line you ran (keys and game paths can be shortened), or the Studio pane and button.
+      render: shell
+  - type: textarea
     id: logs
     attributes:
-      label: Logs
-      description: Relevant output (runtime log, crash report). Remove personal paths and anything derived from keys.
+      label: Log
+      description: |
+        The last 100 lines of stderr plus any line containing CRASH, FAIL: or error. Capture with:
+        napple-runtime <data-dir> --headless --seconds 45 --save-root /tmp/napple-save 2> boot.log
+        Remove personal paths and anything derived from keys.
       render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before sending
+      options:
+        - label: I removed keys, firmware, game files and personal paths from everything I pasted or attached.
+          required: true
+        - label: I searched the existing issues and docs/symptoms.md.
+          required: true

@@ -260,6 +260,7 @@ fn main() {
         Some("compat") => Some(napple_compat::run),
         Some("sigs") => Some(napple_sigs::run),
         Some("build") => Some(napple_build::run),
+        Some("mods") => Some(napple_mods::run),
         Some("clean") => Some(clean::run),
         _ => None,
     };

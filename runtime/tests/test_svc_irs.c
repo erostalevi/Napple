@@ -8,7 +8,12 @@ int main(void) {
     CHECK(irs_camera_handle(0x20, &h) == 0 && h == 8 && irs_camera_handle(0x10, &h) == 0 && h == 9, "handheld and other");
     CHECK(irs_camera_handle(8, &h) == -1 && irs_camera_handle(0x21, &h) == -1, "not an npad id");
     IpcObject *o = irs_open(); IpcCall c;
-    svc_call(o, 302, NULL, 0, &c); CHECK(c.result == 0, "ActivateIrsensor");
+    svc_call(o, 302, NULL, 0, &c); CHECK(c.result == 0 && irs_active, "ActivateIrsensor");
+    uint32_t lvl = 3; svc_call(o, 315, &lvl, 4, &c); CHECK(c.result == 0 && irs_function_level == 3, "SetFunctionLevel is kept");
+    svc_call(o, 303, NULL, 0, &c); CHECK(!irs_active, "DeactivateIrsensor clears the activation");
+    uint8_t al[16] = {0}; al[0] = 2; svc_call(o, 319, al, sizeof al, &c); CHECK(c.result == 0 && irs_active && irs_function_level == 2, "ActivateIrsensorWithFunctionLevel sets both");
+    svc_call(o, 316, NULL, 0, &c); CHECK(c.result == HZ_R_IRSENSOR_NOT_CONNECTED, "RunImageTransferExProcessor: not connected without a source");
+    svc_call(o, 317, NULL, 0, &c); CHECK(c.result == HZ_R_IRSENSOR_NOT_CONNECTED, "RunIrLedProcessor: not connected without a source");
     svc_call(o, 304, NULL, 0, &c); CHECK(c.result == 0 && c.nout_copy == 1, "shared memory handle");
     IpcSharedMemory *m = handle_get(c.out_copy[0], OBJ_SHMEM); CHECK(m && m->size >= 0x8000, "shared memory is at least 0x8000 bytes");
     int zero = 1; for (uint64_t i = 0; m && i < 0x8000; i++) if (((uint8_t *)m->host)[i]) zero = 0; CHECK(zero, "shared memory is zeroed");

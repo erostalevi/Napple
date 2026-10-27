@@ -115,6 +115,11 @@ impl KeySet {
             .map_err(|_| Error::KeyFile(format!("key {name} has wrong length")))
     }
 
+    /// A key of any length (for keys that are not 16 or 32 bytes, such as the eticket device key).
+    pub fn get_vec(&self, name: &str) -> Option<&[u8]> {
+        self.0.get(&name.to_ascii_lowercase()).map(|v| v.as_slice())
+    }
+
     pub fn has(&self, name: &str) -> bool {
         self.0.contains_key(&name.to_ascii_lowercase())
     }

@@ -36,10 +36,18 @@ int main(void) {
     uint64_t code = ns_language_code(NS_LANG_KOREAN); svc_call(am, 403, &code, 8, &c); CHECK(c.out[0] == NS_LANG_KOREAN, "ConvertLanguageCodeToApplicationLanguage");
     svc_call(am, 400, NULL, 0, &c); CHECK(c.result == HZ_R_NS_APPLICATION_NOT_FOUND, "GetApplicationControlData: not found");
     svc_call(am, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no application records");
+    svc_call(am, 1, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "GenerateApplicationRecordCount = the running title");
+    { uint8_t rec[0x30] = {0}; int32_t off = 0; c = (IpcCall){0}; c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, rec, sizeof rec); svc_call_c(am, 0, &c);
+      CHECK(SVC_OUT(&c, int32_t, 0) == 1 && *(uint64_t *)rec == 0x0100ABCD12345678ull && rec[8] == 3, "ListApplicationRecord returns the running title");
+      off = 1; c = (IpcCall){0}; c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, rec, sizeof rec); svc_call_c(am, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "offset past the only record: 0");
+      off = 0; c = (IpcCall){0}; c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, rec, 8); svc_call_c(am, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "buffer too small for a record: 0"); }
+    svc_call(am, 2, NULL, 0, &c); CHECK(c.nout_copy == 1 && !event_is_signaled(c.out_copy[0]), "record update event never fires");
+    CHECK(ns_parse_title_id("0100ABCD12345678") == 0x0100ABCD12345678ull && ns_parse_title_id("0100ABCD1234567") == 0 && ns_parse_title_id("0100ABCD1234567G") == 0 && ns_parse_title_id(NULL) == 0, "title id parsing");
     svc_call(am2, 7998, NULL, 0, &c); IpcObject *cm = c.out_objects[0];
     uint8_t st = 4; svc_call(cm, 48, &st, 1, &c); uint64_t fr = SVC_OUT(&c, uint64_t, 0); svc_call(cm, 47, &st, 1, &c); uint64_t tot = SVC_OUT(&c, uint64_t, 0);
     CHECK(tot > 0 && fr <= tot, "user storage reports the host volume");
     st = 3; svc_call(cm, 47, &st, 1, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0, "system storage: 0");
+    svc_call(cm, 11, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 0x80, "CalculateApplicationOccupiedSize: zeroes");
     svc_call(am2, 7992, NULL, 0, &c); IpcObject *eci = c.out_objects[0];
     svc_call(eci, 0, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "e-commerce needs a network");
     svc_call(am2, 7993, NULL, 0, &c); IpcObject *ver = c.out_objects[0];

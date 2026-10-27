@@ -490,8 +490,9 @@ static const IpcCmd audout_cmds[] = {
 static IpcObject *audout_open(void) { return IPC_OBJECT("audout:u", audout_cmds, NULL, NULL); }
 
 /* ---- IAudioIn / audin:u ----------------------------------------------------------------------------------------------------------------
- * Capture (microphone). The library fills the guest's buffers from the capture source it was given; with none installed (the runtime installs
- * none: no microphone permission, no capture device code) every buffer is silence, so the device exists and works like a console with no headset. */
+ * Capture (microphone). The library fills the guest's buffers from the capture source; the first OpenAudioIn installs the one named by
+ * env NAPPLE_AUDIN_SOURCE (tone, file or the Mac microphone). With none every buffer is silence, so the device exists and works like a console
+ * with no headset: the microphone is opt-in until the app carries the usage description and entitlement. */
 typedef struct {
     napple_audin *i;
     EventPair *ev;
@@ -603,6 +604,7 @@ static void ain_open(IpcObject *s, IpcCall *c) {
     (void)s;
     uint32_t rate = IPC_IN(c, uint32_t, 0);
     uint16_t ch = IPC_IN(c, uint16_t, 4);
+    napple_audin_install_default_source(); /* NAPPLE_AUDIN_SOURCE: silence, tone:HZ, file:PATH or mic; unset = silence */
     AudIn *a = calloc(1, sizeof *a);
     a->ev = new_event_pair();
     napple_audio_host h = make_host(a->ev, 0);

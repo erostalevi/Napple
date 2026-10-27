@@ -1,8 +1,9 @@
 /* Services that exist on a console but have no meaning for an offline, single-user local run. Each answers a documented safe default
- * (IPC_STUB in the tables, listed in docs/architecture/runtime-services.md): the point is that the SDK's initialisation succeeds and the game falls
+ * (state where a title can observe it, otherwise a documented answer; rows still IPC_STUB are listed in docs/architecture/runtime-services.md): the point is that the SDK's initialisation succeeds and the game falls
  * back to its offline paths. Unknown commands still fail loudly through the generic policy. */
 #include "../ipc.h"
 #include "offline_core.h"
+#include "offline_state_core.h"
 #include "hz_result.h"
 #include "online_provider.h"
 #include "bsd_core.h"
@@ -21,11 +22,6 @@ static void noop(IpcObject *s, IpcCall *c) {
 static void ret_u32_0(IpcObject *s, IpcCall *c) {
     (void)s;
     uint32_t v = 0;
-    IPC_OUT(c, v);
-}
-static void ret_u32_1(IpcObject *s, IpcCall *c) {
-    (void)s;
-    uint32_t v = 1;
     IPC_OUT(c, v);
 }
 static void ret_u8_0(IpcObject *s, IpcCall *c) {
@@ -52,10 +48,66 @@ static void ret_event_signaled(IpcObject *s, IpcCall *c) {
 }
 #define NOT_AVAILABLE(mod, desc) ((mod) | ((desc) << 9))
 
-/* mm:u (nn::mmnv): multimedia clock requests. Modules are hardware clocks (VIC, NVDEC, ...): accepted, nothing to clock. */
+/* mm:u (nn::mmnv): multimedia clock requests. Modules are hardware clocks (VIC, NVDEC, ...): a request is remembered and "applied" at once (offline_state_core.c),
+ * Get reads back what was set. Argument layouts (module, priority, event-clear mode / request id, min, max) are the author's memory (unverified). */
+static MmTable mm_tab;
+static pthread_mutex_t mm_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t mm_arg(const IpcCall *c, uint32_t off) { return c->in_size >= off + 4 ? IPC_IN(c, uint32_t, off) : 0; }
+static void mm_init_old(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&mm_lock);
+    mm_module_open(&mm_tab, mm_arg(c, 0));
+    pthread_mutex_unlock(&mm_lock);
+}
+static void mm_fini_old(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&mm_lock);
+    mm_module_close(&mm_tab, mm_arg(c, 0));
+    pthread_mutex_unlock(&mm_lock);
+}
+static void mm_set_old(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&mm_lock);
+    mm_module_set(&mm_tab, mm_arg(c, 0), mm_arg(c, 4), (int32_t)mm_arg(c, 8));
+    pthread_mutex_unlock(&mm_lock);
+}
+static void mm_get_old(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&mm_lock);
+    uint32_t v = mm_module_get(&mm_tab, mm_arg(c, 0));
+    pthread_mutex_unlock(&mm_lock);
+    IPC_OUT(c, v);
+}
+static void mm_init_new(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&mm_lock);
+    uint32_t id = mm_request_open(&mm_tab, mm_arg(c, 0));
+    pthread_mutex_unlock(&mm_lock);
+    IPC_OUT(c, id);
+}
+static void mm_fini_new(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&mm_lock);
+    mm_request_close(&mm_tab, mm_arg(c, 0));
+    pthread_mutex_unlock(&mm_lock);
+}
+static void mm_set_new(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&mm_lock);
+    mm_request_set(&mm_tab, mm_arg(c, 0), mm_arg(c, 4), (int32_t)mm_arg(c, 8));
+    pthread_mutex_unlock(&mm_lock);
+}
+static void mm_get_new(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&mm_lock);
+    uint32_t v = mm_request_get(&mm_tab, mm_arg(c, 0));
+    pthread_mutex_unlock(&mm_lock);
+    IPC_OUT(c, v);
+}
 static const IpcCmd mm_cmds[] = {
-    {0, "InitializeOld", noop, IPC_STUB},   {1, "FinalizeOld", noop, IPC_STUB}, {2, "SetAndWaitOld", noop, IPC_STUB}, {3, "GetOld", ret_u32_0, IPC_STUB},
-    {4, "Initialize", ret_u32_1, IPC_STUB}, {5, "Finalize", noop, IPC_STUB},    {6, "SetAndWait", noop, IPC_STUB},    {7, "Get", ret_u32_0, IPC_STUB},
+    {0, "InitializeOld", mm_init_old, IPC_IMPL}, {1, "FinalizeOld", mm_fini_old, IPC_IMPL}, {2, "SetAndWaitOld", mm_set_old, IPC_IMPL},
+    {3, "GetOld", mm_get_old, IPC_IMPL},         {4, "Initialize", mm_init_new, IPC_IMPL},  {5, "Finalize", mm_fini_new, IPC_IMPL},
+    {6, "SetAndWait", mm_set_new, IPC_IMPL},     {7, "Get", mm_get_new, IPC_IMPL},
 };
 static IpcObject *mm_open(void) { return IPC_OBJECT("mm:u", mm_cmds, NULL, NULL); }
 
@@ -65,10 +117,11 @@ static void friend_pop_empty(IpcObject *s, IpcCall *c) {
     (void)s;
     c->result = friend_pop_notification_result();
 } /* an empty queue is an error, not a zeroed record */
+/* INotificationService: the queue is always empty (no provider pushes notifications), so Clear has nothing to drop and Pop reports the empty-queue result. */
 static const IpcCmd friend_notification_cmds[] = {
-    {0, "GetEvent", ret_event, IPC_STUB},
-    {1, "Clear", noop, IPC_STUB},
-    {2, "Pop", friend_pop_empty, IPC_STUB},
+    {0, "GetEvent", ret_event, IPC_IMPL},
+    {1, "Clear", noop, IPC_IMPL},
+    {2, "Pop", friend_pop_empty, IPC_IMPL},
 };
 static uint32_t friend_provider_count(void) {
     const OnlineProvider *p = online_provider();
@@ -127,26 +180,42 @@ static void friend_presence(IpcObject *s, IpcCall *c) {
     if (up && b && b->size && ipc_buf_ptr(b)) up(p->ctx, ipc_buf_ptr(b), (size_t)b->size);
     else if (up) up(p->ctx, c->in, c->in_size);
 }
+/* Blocked users, new friends and pending requests come from the account service; the provider has no hook for them, so the counts are 0 (class c). The
+ * online-play declarations are remembered per service object (online_play) so a title can bracket a session; the provider hears it through presence updates. */
+static void friend_declare_open(IpcObject *s, IpcCall *c) {
+    (void)c;
+    if (s->state) *(uint8_t *)s->state = 1;
+}
+static void friend_declare_close(IpcObject *s, IpcCall *c) {
+    (void)c;
+    if (s->state) *(uint8_t *)s->state = 0;
+}
 static const IpcCmd friend_service_cmds[] = {
-    {0, "GetCompletionEvent", ret_event, IPC_STUB},           {1, "Cancel", noop, IPC_STUB},
-    {10100, "GetFriendListIds", friend_list_ids, IPC_IMPL},   {10101, "GetFriendList", friend_list_records, IPC_IMPL},
-    {10400, "GetBlockedUserListIds", ret_u32_0, IPC_STUB},    {20100, "GetFriendCount", friend_count_call, IPC_IMPL},
-    {20101, "GetNewlyFriendCount", ret_u32_0, IPC_STUB},      {20200, "GetReceivedFriendRequestCount", ret_u32_0, IPC_STUB},
-    {10610, "UpdateUserPresence", friend_presence, IPC_IMPL}, {10600, "DeclareOpenOnlinePlaySession", noop, IPC_STUB},
-    {10601, "DeclareCloseOnlinePlaySession", noop, IPC_STUB},
+    {0, "GetCompletionEvent", ret_event, IPC_IMPL},
+    {1, "Cancel", noop, IPC_IMPL},
+    {10100, "GetFriendListIds", friend_list_ids, IPC_IMPL},
+    {10101, "GetFriendList", friend_list_records, IPC_IMPL},
+    {10400, "GetBlockedUserListIds", ret_u32_0, IPC_IMPL},
+    {20100, "GetFriendCount", friend_count_call, IPC_IMPL},
+    {20101, "GetNewlyFriendCount", ret_u32_0, IPC_IMPL},
+    {20200, "GetReceivedFriendRequestCount", ret_u32_0, IPC_IMPL},
+    {10610, "UpdateUserPresence", friend_presence, IPC_IMPL},
+    {10600, "DeclareOpenOnlinePlaySession", friend_declare_open, IPC_IMPL},
+    {10601, "DeclareCloseOnlinePlaySession", friend_declare_close, IPC_IMPL},
 };
+static void friend_service_destroy(IpcObject *o) { free(o->state); }
 static void friend_create_service(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, IPC_OBJECT("IFriendService", friend_service_cmds, NULL, NULL));
+    ipc_out_object(c, IPC_OBJECT("IFriendService", friend_service_cmds, calloc(1, 1), friend_service_destroy)); /* state: online_play flag */
 }
 static void friend_create_notification(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("INotificationService", friend_notification_cmds, NULL, NULL));
 }
 static const IpcCmd friend_cmds[] = {
-    {0, "CreateFriendService", friend_create_service, IPC_STUB},
-    {1, "CreateNotificationService", friend_create_notification, IPC_STUB},
-    {2, "CreateDaemonSuspendSessionService", friend_create_service, IPC_STUB},
+    {0, "CreateFriendService", friend_create_service, IPC_IMPL},
+    {1, "CreateNotificationService", friend_create_notification, IPC_IMPL},
+    {2, "CreateDaemonSuspendSessionService", friend_create_service, IPC_IMPL},
 };
 static IpcObject *friend_open(void) { return IPC_OBJECT("friend:u", friend_cmds, NULL, NULL); }
 
@@ -192,6 +261,10 @@ typedef struct {
     NifmRequest req;
     uint32_t ev_w[2];
     int counted;
+    /* parameters the title set before Submit (nothing without a network reads them, but Submit validates and they read back through the unit tests) */
+    uint32_t requirement_preset, priority, raw_priority, profile_id[4];
+    uint8_t rejectable, persistent, instant, sustainable, confirmation_option;
+    uint8_t requirement[0x10];
 } NifmReq; /* the request state machine (offline_core.c) plus the writable ends of its two events */
 static void nifm_uncount(NifmReq *q) {
     if (q->counted) __atomic_sub_fetch(&nifm_accepted_requests, 1, __ATOMIC_SEQ_CST);
@@ -242,22 +315,42 @@ static void nifm_req_cancel(IpcObject *s, IpcCall *c) {
     nifm_request_cancel(&q->req);
     nifm_uncount(q);
 }
+static uint32_t nifm_u32(const IpcCall *c) { return c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0; }
+static uint8_t nifm_u8(const IpcCall *c) { return c->in_size >= 1 ? IPC_IN(c, uint8_t, 0) : 0; }
+static void nifm_set_requirement(IpcObject *s, IpcCall *c) {
+    NifmReq *q = s->state;
+    memset(q->requirement, 0, sizeof q->requirement);
+    memcpy(q->requirement, c->in, c->in_size < sizeof q->requirement ? c->in_size : sizeof q->requirement);
+}
+static void nifm_set_preset(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->requirement_preset = nifm_u32(c); }
+static void nifm_set_priority(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->priority = nifm_u32(c); }
+static void nifm_set_profile(IpcObject *s, IpcCall *c) {
+    NifmReq *q = s->state;
+    memset(q->profile_id, 0, sizeof q->profile_id);
+    memcpy(q->profile_id, c->in, c->in_size < 16 ? c->in_size : 16);
+}
+static void nifm_set_rejectable(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->rejectable = nifm_u8(c); }
+static void nifm_set_confirmation(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->confirmation_option = nifm_u8(c); }
+static void nifm_set_persistent(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->persistent = nifm_u8(c); }
+static void nifm_set_instant(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->instant = nifm_u8(c); }
+static void nifm_set_sustainable(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->sustainable = nifm_u8(c); }
+static void nifm_set_raw_priority(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->raw_priority = nifm_u32(c); }
 static const IpcCmd nifm_request_cmds[] = {
     {0, "GetRequestState", nifm_req_state, IPC_IMPL},
     {1, "GetResult", nifm_req_result, IPC_IMPL},
     {2, "GetSystemEventReadableHandles", nifm_req_events, IPC_IMPL},
     {3, "Cancel", nifm_req_cancel, IPC_IMPL},
     {4, "Submit", nifm_req_submit, IPC_IMPL},
-    {5, "SetRequirement", noop, IPC_STUB},
-    {6, "SetRequirementPreset", noop, IPC_STUB},
-    {8, "SetPriority", noop, IPC_STUB},
-    {9, "SetNetworkProfileId", noop, IPC_STUB},
-    {10, "SetRejectable", noop, IPC_STUB},
-    {11, "SetConnectionConfirmationOption", noop, IPC_STUB},
-    {12, "SetPersistent", noop, IPC_STUB},
-    {13, "SetInstant", noop, IPC_STUB},
-    {14, "SetSustainable", noop, IPC_STUB},
-    {15, "SetRawPriority", noop, IPC_STUB},
+    {5, "SetRequirement", nifm_set_requirement, IPC_IMPL},
+    {6, "SetRequirementPreset", nifm_set_preset, IPC_IMPL},
+    {8, "SetPriority", nifm_set_priority, IPC_IMPL},
+    {9, "SetNetworkProfileId", nifm_set_profile, IPC_IMPL},
+    {10, "SetRejectable", nifm_set_rejectable, IPC_IMPL},
+    {11, "SetConnectionConfirmationOption", nifm_set_confirmation, IPC_IMPL},
+    {12, "SetPersistent", nifm_set_persistent, IPC_IMPL},
+    {13, "SetInstant", nifm_set_instant, IPC_IMPL},
+    {14, "SetSustainable", nifm_set_sustainable, IPC_IMPL},
+    {15, "SetRawPriority", nifm_set_raw_priority, IPC_IMPL},
 };
 static void nifm_create_request(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -265,13 +358,32 @@ static void nifm_create_request(IpcObject *s, IpcCall *c) {
     nifm_request_init(&q->req);
     ipc_out_object(c, IPC_OBJECT("IRequest", nifm_request_cmds, q, nifm_req_destroy));
 }
-static void ret_u128_0(IpcObject *s, IpcCall *c) {
-    (void)s;
+/* GetClientId: a stable id per general-service object (a counter in the low word, 16 bytes). SetExclusiveClient remembers the client id given. */
+typedef struct {
+    uint32_t client_id;
+    uint8_t exclusive[16];
+} NifmGen;
+static uint32_t nifm_client_counter;
+static void nifm_get_client_id(IpcObject *s, IpcCall *c) {
+    NifmGen *g = s->state;
     uint8_t v[16] = {0};
+    memcpy(v, &g->client_id, 4);
     ipc_out(c, v, 16);
 }
+static void nifm_set_exclusive(IpcObject *s, IpcCall *c) {
+    NifmGen *g = s->state;
+    memset(g->exclusive, 0, sizeof g->exclusive);
+    memcpy(g->exclusive, c->in, c->in_size < 16 ? c->in_size : 16);
+}
+/* GetDefaultIpSetting: no network profile exists, so the IpSettingData buffer is zero (DHCP, no addresses). */
+static void nifm_default_ip(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint8_t z[0x20] = {0};
+    if (b && b->size) ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
+}
 static const IpcCmd nifm_general_cmds[] = {
-    {1, "GetClientId", ret_u128_0, IPC_STUB},
+    {1, "GetClientId", nifm_get_client_id, IPC_IMPL},
     {4, "CreateRequest", nifm_create_request, IPC_IMPL},
     {12, "GetCurrentIpAddress", nifm_ip, IPC_IMPL},
     {15, "GetInternetConnectionStatus", ret_conn_status, IPC_IMPL},
@@ -279,14 +391,17 @@ static const IpcCmd nifm_general_cmds[] = {
     {17, "GetInternetConnectionStatusEx", ret_conn_status, IPC_IMPL},
     {21, "IsAnyInternetRequestAccepted", nifm_any_accepted, IPC_IMPL},
     {22, "IsAnyForegroundRequestAccepted", nifm_any_accepted, IPC_IMPL},
-    {26, "SetExclusiveClient", noop, IPC_STUB},
-    {27, "GetDefaultIpSetting", noop, IPC_STUB},
+    {26, "SetExclusiveClient", nifm_set_exclusive, IPC_IMPL},
+    {27, "GetDefaultIpSetting", nifm_default_ip, IPC_IMPL},
 };
+static void nifm_gen_destroy(IpcObject *o) { free(o->state); }
 static void nifm_create_general(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, IPC_OBJECT("IGeneralService", nifm_general_cmds, NULL, NULL));
+    NifmGen *g = calloc(1, sizeof *g);
+    g->client_id = __atomic_add_fetch(&nifm_client_counter, 1, __ATOMIC_SEQ_CST);
+    ipc_out_object(c, IPC_OBJECT("IGeneralService", nifm_general_cmds, g, nifm_gen_destroy));
 }
-static const IpcCmd nifm_cmds[] = {{4, "CreateGeneralServiceOld", nifm_create_general, IPC_STUB}, {5, "CreateGeneralService", nifm_create_general, IPC_STUB}};
+static const IpcCmd nifm_cmds[] = {{4, "CreateGeneralServiceOld", nifm_create_general, IPC_IMPL}, {5, "CreateGeneralService", nifm_create_general, IPC_IMPL}};
 static IpcObject *nifm_open(void) { return IPC_OBJECT("nifm:u", nifm_cmds, NULL, NULL); }
 
 /* bsd:u (nn::socket): the BSD socket service. Guest descriptors map to the active OnlineProvider's sockets (bsd_core.c). With the NullProvider this is the
@@ -304,19 +419,32 @@ static void bsd_reply3(IpcCall *c, int ret, int err, uint32_t extra) {
     int32_t v[3] = {ret, err, (int32_t)extra};
     ipc_out(c, v, 12);
 }
+/* RegisterClient: the library registers once per process. The reply is 0 on every registration (the guest's nn::socket initialiser treats any other value as a
+ * failure: SMO aborts in al::NetworkTaskSystemInitializer when it gets 1); registrations are only counted. StartMonitoring marks the client as monitored. */
+static uint32_t bsd_clients, bsd_monitored;
 static void bsd_register_client(IpcObject *s, IpcCall *c) {
     (void)s;
+    __atomic_add_fetch(&bsd_clients, 1, __ATOMIC_SEQ_CST);
     uint32_t v = 0;
     IPC_OUT(c, v);
+}
+static void bsd_start_monitoring(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    __atomic_store_n(&bsd_monitored, 1, __ATOMIC_SEQ_CST);
+}
+/* GetResourceStatistics: all counters zero (no socket memory is pooled on the host); {ret 0, errno 0} and a zeroed statistics block. */
+static void bsd_resource_stats(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint8_t z[0x40] = {0};
+    if (b && b->size) ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
+    bsd_reply(c, 0, 0);
 }
 static void bsd_fail(IpcCall *c, int err) { bsd_reply(c, -1, err); }
 static void bsd_enoent(IpcObject *s, IpcCall *c) {
     (void)s;
     bsd_fail(c, HZ_ENOENT);
-}
-static void bsd_unsupported(IpcObject *s, IpcCall *c) {
-    (void)s;
-    bsd_fail(c, HZ_EOPNOTSUPP);
 }
 static int32_t bsd_in32(const IpcCall *c, uint32_t off, int32_t dflt) { return c->in_size >= off + 4 ? IPC_IN(c, int32_t, off) : dflt; }
 static int bsd_in_fd(const IpcCall *c) { return bsd_in32(c, 0, -1); }
@@ -559,14 +687,14 @@ static void bsd_select(IpcObject *s, IpcCall *c) {
     bsd_reply(c, r, err);
 }
 static const IpcCmd bsd_cmds[] = {
-    {0, "RegisterClient", bsd_register_client, IPC_STUB},
-    {1, "StartMonitoring", noop, IPC_STUB},
+    {0, "RegisterClient", bsd_register_client, IPC_IMPL},
+    {1, "StartMonitoring", bsd_start_monitoring, IPC_IMPL},
     {2, "Socket", bsd_socket_call, IPC_IMPL},
     {3, "SocketExempt", bsd_socket_call, IPC_IMPL},
-    {4, "Open", bsd_enoent, IPC_STUB},
+    {4, "Open", bsd_enoent, IPC_IMPL} /* the guest has no device files: every path is ENOENT */,
     {5, "Select", bsd_select, IPC_IMPL},
     {6, "Poll", bsd_poll, IPC_IMPL},
-    {7, "Sysctl", bsd_enoent, IPC_STUB},
+    {7, "Sysctl", bsd_enoent, IPC_IMPL} /* no sysctl names exist: ENOENT */,
     {8, "Recv", bsd_recv, IPC_IMPL},
     {9, "RecvFrom", bsd_recvfrom, IPC_IMPL},
     {10, "Send", bsd_send, IPC_IMPL},
@@ -586,8 +714,9 @@ static const IpcCmd bsd_cmds[] = {
     {24, "Write", bsd_send, IPC_IMPL},
     {25, "Read", bsd_recv, IPC_IMPL},
     {26, "Close", bsd_close_call, IPC_IMPL},
+    /* Class d, kept as stubs: DuplicateSocket and the *MMsg calls need descriptor aliasing in bsd_core / mmsghdr marshalling and no SDK path reaches them. */
     {27, "DuplicateSocket", bsd_dup, IPC_STUB},
-    {29, "GetResourceStatistics", bsd_unsupported, IPC_STUB},
+    {29, "GetResourceStatistics", bsd_resource_stats, IPC_IMPL},
     {30, "RecvMMsg", bsd_recv, IPC_STUB},
     {31, "SendMMsg", bsd_send, IPC_STUB},
 };
@@ -626,26 +755,50 @@ static void nsd_resolve(IpcObject *s, IpcCall *c) {
     }
     IPC_OUT(c, r);
 }
+/* GetDeviceId: a fixed zero id (the console has none to give; the NullProvider never uses it). */
 static void nsd_device_id(IpcObject *s, IpcCall *c) {
     (void)s;
     uint8_t v[16] = {0};
     ipc_out(c, v, 16);
 }
+/* The imported settings blob: ImportSettings stores it (up to 0x100 bytes), DeleteSettings clears it. Nothing reads it back but the unit tests: the
+ * environment name stays "lp1". */
+static uint8_t nsd_import[0x100];
+static uint32_t nsd_import_len;
+static void nsd_import_settings(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    nsd_import_len = p ? (uint32_t)(b->size < sizeof nsd_import ? b->size : sizeof nsd_import) : 0;
+    if (nsd_import_len) memcpy(nsd_import, p, nsd_import_len);
+}
+static void nsd_delete_settings(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    nsd_import_len = 0;
+}
+/* GetNasServiceSetting / GetCurrentSetting: struct answers with no service configured (zero-filled to the buffer; layouts unverified). */
+static void nsd_zero_struct(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint8_t z[0x1000] = {0};
+    if (b && b->size) ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
+}
 static const IpcCmd nsd_cmds[] = {
-    {10, "GetSettingName", nsd_env_name, IPC_STUB},
-    {11, "GetEnvironmentIdentifier", nsd_env_name, IPC_STUB},
-    {12, "GetDeviceId", nsd_device_id, IPC_STUB},
-    {13, "DeleteSettings", noop, IPC_STUB},
-    {14, "ImportSettings", noop, IPC_STUB},
-    {20, "Resolve", nsd_resolve, IPC_STUB},
-    {21, "ResolveEx", nsd_resolve, IPC_STUB},
-    {30, "GetNasServiceSetting", noop, IPC_STUB},
-    {31, "GetNasServiceSettingEx", noop, IPC_STUB},
-    {40, "GetNasRequestFqdn", nsd_resolve, IPC_STUB},
-    {41, "GetNasRequestFqdnEx", nsd_resolve, IPC_STUB},
-    {42, "GetNasApiFqdn", nsd_resolve, IPC_STUB},
-    {43, "GetNasApiFqdnEx", nsd_resolve, IPC_STUB},
-    {50, "GetCurrentSetting", noop, IPC_STUB},
+    {10, "GetSettingName", nsd_env_name, IPC_IMPL},
+    {11, "GetEnvironmentIdentifier", nsd_env_name, IPC_IMPL},
+    {12, "GetDeviceId", nsd_device_id, IPC_IMPL},
+    {13, "DeleteSettings", nsd_delete_settings, IPC_IMPL},
+    {14, "ImportSettings", nsd_import_settings, IPC_IMPL},
+    {20, "Resolve", nsd_resolve, IPC_IMPL},
+    {21, "ResolveEx", nsd_resolve, IPC_IMPL},
+    {30, "GetNasServiceSetting", nsd_zero_struct, IPC_IMPL},
+    {31, "GetNasServiceSettingEx", nsd_zero_struct, IPC_IMPL},
+    {40, "GetNasRequestFqdn", nsd_resolve, IPC_IMPL},
+    {41, "GetNasRequestFqdnEx", nsd_resolve, IPC_IMPL},
+    {42, "GetNasApiFqdn", nsd_resolve, IPC_IMPL},
+    {43, "GetNasApiFqdnEx", nsd_resolve, IPC_IMPL},
+    {50, "GetCurrentSetting", nsd_zero_struct, IPC_IMPL},
 };
 static IpcObject *nsd_open(void) { return IPC_OBJECT("nsd:u", nsd_cmds, NULL, NULL); }
 
@@ -678,6 +831,7 @@ typedef struct {
     NfpDevice dev;
     uint32_t w[3][8]; /* writable ends of the activate, deactivate and availability events handed out so far */
     unsigned nw[3];
+    uint8_t keep_session; /* nfc:user KeepPassThroughSession */
 } NfpSvc;
 static NfpSvc *nfp_svcs[8];
 
@@ -1010,7 +1164,7 @@ static void nfp_create_user(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("INfpUser", nfp_user_cmds, nfp_svc_new(), nfp_svc_destroy));
 }
-static const IpcCmd nfp_cmds[] = {{0, "CreateUserInterface", nfp_create_user, IPC_STUB}};
+static const IpcCmd nfp_cmds[] = {{0, "CreateUserInterface", nfp_create_user, IPC_IMPL}};
 
 /* nfc:user INfc: 0 Initialize, 1 Finalize, 2 GetState (1 = initialized), 3 IsNfcEnabled, 100 ListDevices, 101 GetDeviceState, 102 GetNpadId, 103 AttachAvailabilityChangeEvent,
  * 104 StartDetection, 105 StopDetection, 106 GetTagInfo, 107/108 activate/deactivate events, 400 SendCommandByPassThrough (type 2 READ, FAST_READ, GET_VERSION over the
@@ -1042,6 +1196,18 @@ static void nfc_pass_through(IpcObject *s, IpcCall *c) {
     uint32_t v = (uint32_t)n;
     IPC_OUT(c, v);
 }
+/* Keep / ReleasePassThroughSession bracket a run of pass-through commands: the session flag lives in the per-object service state (the tag stays selected
+ * while it is set; with the file-backed tag source nothing else depends on it). */
+static void nfc_keep_session(IpcObject *s, IpcCall *c) {
+    NFP_SVC(s);
+    (void)c;
+    svc->keep_session = 1;
+}
+static void nfc_release_session(IpcObject *s, IpcCall *c) {
+    NFP_SVC(s);
+    (void)c;
+    svc->keep_session = 0;
+}
 static const IpcCmd nfc_user_cmds[] = {
     {0, "Initialize", nfp_initialize_call, IPC_IMPL},
     {1, "Finalize", nfp_finalize_call, IPC_IMPL},
@@ -1057,14 +1223,14 @@ static const IpcCmd nfc_user_cmds[] = {
     {107, "AttachActivateEvent", nfp_attach_activate, IPC_IMPL},
     {108, "AttachDeactivateEvent", nfp_attach_deactivate, IPC_IMPL},
     {400, "SendCommandByPassThrough", nfc_pass_through, IPC_IMPL},
-    {401, "KeepPassThroughSession", noop, IPC_STUB},
-    {402, "ReleasePassThroughSession", noop, IPC_STUB},
+    {401, "KeepPassThroughSession", nfc_keep_session, IPC_IMPL},
+    {402, "ReleasePassThroughSession", nfc_release_session, IPC_IMPL},
 };
 static void nfc_create_user(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("INfc", nfc_user_cmds, nfp_svc_new(), nfp_svc_destroy));
 }
-static const IpcCmd nfc_cmds[] = {{0, "CreateUserInterface", nfc_create_user, IPC_STUB}};
+static const IpcCmd nfc_cmds[] = {{0, "CreateUserInterface", nfc_create_user, IPC_IMPL}};
 static IpcObject *nfc_open(void) { return IPC_OBJECT("nfc:user", nfc_cmds, NULL, NULL); }
 static IpcObject *nfp_open(void) { return IPC_OBJECT("nfp:user", nfp_cmds, NULL, NULL); }
 
@@ -1080,8 +1246,8 @@ static const IpcCmd mifare_cmds[] = {
     {2, "ListDevices", nfp_list_devices, IPC_IMPL},
     {3, "StartDetection", nfp_start, IPC_IMPL},
     {4, "StopDetection", nfp_stop, IPC_IMPL},
-    {5, "Read", mf_not_supported, IPC_STUB},
-    {6, "Write", mf_not_supported, IPC_STUB},
+    {5, "Read", mf_not_supported, IPC_IMPL},
+    {6, "Write", mf_not_supported, IPC_IMPL},
     {7, "GetTagInfo", nfp_tag_info_call, IPC_IMPL},
     {8, "GetActivateEventHandle", nfp_attach_activate, IPC_IMPL},
     {9, "GetDeactivateEventHandle", nfp_attach_deactivate, IPC_IMPL},
@@ -1094,7 +1260,7 @@ static void mifare_create_user(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("IMifare", mifare_cmds, nfp_svc_new(), nfp_svc_destroy));
 }
-static const IpcCmd mifare_root_cmds[] = {{0, "CreateUserInterface", mifare_create_user, IPC_STUB}};
+static const IpcCmd mifare_root_cmds[] = {{0, "CreateUserInterface", mifare_create_user, IPC_IMPL}};
 static IpcObject *mifare_open(void) { return IPC_OBJECT("nfc:mf:u", mifare_root_cmds, NULL, NULL); }
 
 /* prepo:u (play reports): reports are accepted and dropped. */
@@ -1103,39 +1269,96 @@ static void ret_u64_1(IpcObject *s, IpcCall *c) {
     uint64_t v = 1;
     IPC_OUT(c, v);
 }
-/* The report payload (event id + a serialised buffer) goes to the provider's report hook; the NullProvider has none, so reports are dropped. */
-static void prepo_save(IpcObject *s, IpcCall *c) {
-    (void)s;
+/* The report payload (event id + a serialised buffer) goes to the provider's report hook; the NullProvider has none, so reports are dropped. Every accepted
+ * report is counted in the store (offline_state_core.c) so GetStorageUsage / ClearStorage and the transmission status mean something: nothing is ever
+ * transmitted, so the status stays 0 ("nothing pending to send"). */
+static PrepoStore prepo_store;
+static int prepo_store_ready;
+static pthread_mutex_t prepo_lock = PTHREAD_MUTEX_INITIALIZER;
+static PrepoStore *prepo_st(void) { /* caller holds prepo_lock */
+    if (!prepo_store_ready) prepo_init(&prepo_store), prepo_store_ready = 1;
+    return &prepo_store;
+}
+static void prepo_deliver(IpcCall *c, unsigned buf_index) {
     const OnlineProvider *p = online_provider();
     void (*rep)(void *, const void *, size_t) = ONLINE_FN(p, report);
-    const IpcBuf *b = ipc_in_buf(c, 1);
+    const IpcBuf *b = ipc_in_buf(c, buf_index);
     if (!b) b = ipc_in_buf(c, 0);
-    const void *d = rep && b && b->size ? ipc_buf_ptr(b) : NULL;
-    if (d) rep(p->ctx, d, (size_t)b->size);
+    const void *d = b && b->size ? ipc_buf_ptr(b) : NULL;
+    pthread_mutex_lock(&prepo_lock);
+    prepo_account(prepo_st(), d ? b->size : 0);
+    pthread_mutex_unlock(&prepo_lock);
+    if (rep && d) rep(p->ctx, d, (size_t)b->size);
+}
+static void prepo_save(IpcObject *s, IpcCall *c) {
+    (void)s;
+    prepo_deliver(c, 1);
+}
+static void prepo_save_system(IpcObject *s, IpcCall *c) {
+    (void)s;
+    prepo_deliver(c, 0);
+}
+static void prepo_storage_usage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&prepo_lock);
+    uint64_t v[2] = {prepo_st()->bytes, PREPO_STORAGE_LIMIT}; /* {used, capacity} */
+    pthread_mutex_unlock(&prepo_lock);
+    ipc_out(c, v, 16);
+}
+static void prepo_clear_storage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&prepo_lock);
+    prepo_clear(prepo_st());
+    pthread_mutex_unlock(&prepo_lock);
+}
+static void prepo_get_agreement(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&prepo_lock);
+    uint8_t v = prepo_st()->agreement_check;
+    pthread_mutex_unlock(&prepo_lock);
+    IPC_OUT(c, v);
+}
+static void prepo_set_agreement(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&prepo_lock);
+    prepo_st()->agreement_check = c->in_size >= 1 && IPC_IN(c, uint8_t, 0) ? 1 : 0;
+    pthread_mutex_unlock(&prepo_lock);
 }
 static const IpcCmd prepo_cmds[] = {
-    {10100, "SaveReport", prepo_save, IPC_STUB},
-    {10101, "SaveReportWithUser", prepo_save, IPC_STUB},
-    {10102, "SaveReportOld", prepo_save, IPC_STUB},
-    {10103, "SaveReportWithUserOld", prepo_save, IPC_STUB},
-    {10104, "SaveReportForApplication", prepo_save, IPC_STUB},
-    {10105, "SaveReportWithUserForApplication", prepo_save, IPC_STUB}, /* Animal Crossing 3.0.3 (SDK 20) reports with 10105 */
-    {10200, "RequestImmediateTransmission", noop, IPC_STUB},
-    {10300, "GetTransmissionStatus", ret_u32_0, IPC_STUB},
-    {10400, "GetSystemSessionId", ret_u64_1, IPC_STUB},
-    {20100, "SaveSystemReport", noop, IPC_STUB},
-    {20101, "SaveSystemReportWithUser", noop, IPC_STUB},
-    {40100, "IsUserAgreementCheckEnabled", ret_u8_0, IPC_STUB},
-    {40101, "SetUserAgreementCheckEnabled", noop, IPC_STUB},
-    {90100, "ClearStorage", noop, IPC_STUB},
-    {90200, "GetStorageUsage", ret_u64_0, IPC_STUB},
+    {10100, "SaveReport", prepo_save, IPC_IMPL},
+    {10101, "SaveReportWithUser", prepo_save, IPC_IMPL},
+    {10102, "SaveReportOld", prepo_save, IPC_IMPL},
+    {10103, "SaveReportWithUserOld", prepo_save, IPC_IMPL},
+    {10104, "SaveReportForApplication", prepo_save, IPC_IMPL},
+    {10105, "SaveReportWithUserForApplication", prepo_save, IPC_IMPL}, /* Animal Crossing 3.0.3 (SDK 20) reports with 10105 */
+    {10200, "RequestImmediateTransmission", noop, IPC_IMPL},           /* offline: queued reports stay queued */
+    {10300, "GetTransmissionStatus", ret_u32_0, IPC_IMPL},
+    {10400, "GetSystemSessionId", ret_u64_1, IPC_IMPL},
+    {20100, "SaveSystemReport", prepo_save_system, IPC_IMPL},
+    {20101, "SaveSystemReportWithUser", prepo_save_system, IPC_IMPL},
+    {40100, "IsUserAgreementCheckEnabled", prepo_get_agreement, IPC_IMPL},
+    {40101, "SetUserAgreementCheckEnabled", prepo_set_agreement, IPC_IMPL},
+    {90100, "ClearStorage", prepo_clear_storage, IPC_IMPL},
+    {90200, "GetStorageUsage", prepo_storage_usage, IPC_IMPL},
 };
 static IpcObject *prepo_open(void) { return IPC_OBJECT("prepo:u", prepo_cmds, NULL, NULL); }
 
 /* ssl (nn::ssl): contexts and connections can be created and configured. Handshake and I/O go through the active OnlineProvider's TLS entry points over
  * the bsd descriptor the connection was given (bsd_core.c maps it to a provider socket). With the NullProvider no handshake can complete (there is no
  * socket peer), so DoHandshake reports "not connected". Commands past 8 are the author's memory of the public description (unverified). */
+typedef struct SslCtx {
+    uint32_t refs, nconn, options[8], next_pki;
+    uint64_t pki[8]; /* ids handed out by ImportServerPki / ImportClientPki and not yet removed */
+    unsigned npki;
+} SslCtx;                     /* shared by the context object and its connections (refcounted so a connection can outlive its context object) */
+static uint32_t ssl_contexts; /* live ISslContext objects, for GetContextCount */
+static uint32_t ssl_interface_version;
+static void ssl_ctx_unref(SslCtx *x) {
+    if (x && --x->refs == 0) free(x);
+}
 typedef struct {
+    SslCtx *ctx;
     int32_t fd;
     char host[256];
     uint32_t verify, io_mode, cache_mode;
@@ -1147,6 +1370,10 @@ static void ssl_conn_destroy(IpcObject *o) {
     const OnlineProvider *p = online_provider();
     void (*fr)(void *, void *) = ONLINE_FN(p, tls_free);
     if (k->conn && fr) fr(p->ctx, k->conn);
+    if (k->ctx) {
+        if (k->ctx->nconn) k->ctx->nconn--;
+        ssl_ctx_unref(k->ctx);
+    }
     free(k);
 }
 static void ssl_set_fd(IpcObject *s, IpcCall *c) {
@@ -1267,6 +1494,10 @@ static void ssl_pending(IpcObject *s, IpcCall *c) {
     int32_t v = k->established && pd ? (int32_t)pd(p->ctx, k->conn) : 0;
     IPC_OUT(c, v);
 }
+static void ssl_flush_cache(IpcObject *s, IpcCall *c) { /* no session cache is kept: nothing to flush */
+    (void)s;
+    (void)c;
+}
 static const IpcCmd ssl_connection_cmds[] = {
     {0, "SetSocketDescriptor", ssl_set_fd, IPC_IMPL},
     {1, "SetHostName", ssl_set_host, IPC_IMPL},
@@ -1282,31 +1513,80 @@ static const IpcCmd ssl_connection_cmds[] = {
     {12, "Pending", ssl_pending, IPC_IMPL},
     {19, "SetSessionCacheMode", ssl_set_cache, IPC_IMPL},
     {20, "GetSessionCacheMode", ssl_get_cache, IPC_IMPL},
-    {21, "FlushSessionCache", noop, IPC_STUB},
+    {21, "FlushSessionCache", ssl_flush_cache, IPC_IMPL},
 };
 static void ssl_create_connection(IpcObject *s, IpcCall *c) {
-    (void)s;
     SslConn *k = calloc(1, sizeof *k);
     k->fd = -1;
+    k->ctx = s->state;
+    if (k->ctx) k->ctx->refs++, k->ctx->nconn++;
     ipc_out_object(c, IPC_OBJECT("ISslConnection", ssl_connection_cmds, k, ssl_conn_destroy));
 }
+/* ISslContext: options (SetOption(option, value) / GetOption(option) over 8 slots), connection count, and certificate imports. Importing a certificate store
+ * hands back an id and remembers it until RemovePki; no certificate is parsed or trusted because no handshake can complete without a provider. */
+static SslCtx *ssl_x(IpcObject *s) { return s->state; }
+static void ssl_set_option(IpcObject *s, IpcCall *c) {
+    if (c->in_size >= 8) {
+        uint32_t o = IPC_IN(c, uint32_t, 0);
+        if (o < 8) ssl_x(s)->options[o] = IPC_IN(c, uint32_t, 4);
+    }
+}
+static void ssl_get_option(IpcObject *s, IpcCall *c) {
+    uint32_t o = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0, v = o < 8 ? ssl_x(s)->options[o] : 0;
+    IPC_OUT(c, v);
+}
+static void ssl_conn_count(IpcObject *s, IpcCall *c) {
+    uint32_t v = ssl_x(s)->nconn;
+    IPC_OUT(c, v);
+}
+static void ssl_import_pki(IpcObject *s, IpcCall *c) {
+    SslCtx *x = ssl_x(s);
+    uint64_t id = ++x->next_pki;
+    if (x->npki < 8) x->pki[x->npki++] = id;
+    IPC_OUT(c, id);
+}
+static void ssl_remove_pki(IpcObject *s, IpcCall *c) {
+    SslCtx *x = ssl_x(s);
+    uint64_t id = c->in_size >= 8 ? IPC_IN(c, uint64_t, 0) : 0;
+    for (unsigned i = 0; i < x->npki; i++)
+        if (x->pki[i] == id) {
+            x->pki[i] = x->pki[--x->npki];
+            return;
+        }
+}
+static void ssl_ctx_destroy(IpcObject *o) {
+    if (ssl_contexts) ssl_contexts--;
+    ssl_ctx_unref(o->state);
+}
 static const IpcCmd ssl_context_cmds[] = {
-    {0, "SetOption", noop, IPC_STUB},
-    {1, "GetOption", ret_u32_0, IPC_STUB},
+    {0, "SetOption", ssl_set_option, IPC_IMPL},
+    {1, "GetOption", ssl_get_option, IPC_IMPL},
     {2, "CreateConnection", ssl_create_connection, IPC_IMPL},
-    {3, "GetConnectionCount", ret_u32_0, IPC_STUB},
-    {4, "ImportServerPki", ret_u64_0, IPC_STUB},
-    {5, "ImportClientPki", ret_u64_0, IPC_STUB},
-    {6, "RemovePki", noop, IPC_STUB},
+    {3, "GetConnectionCount", ssl_conn_count, IPC_IMPL},
+    {4, "ImportServerPki", ssl_import_pki, IPC_IMPL},
+    {5, "ImportClientPki", ssl_import_pki, IPC_IMPL},
+    {6, "RemovePki", ssl_remove_pki, IPC_IMPL},
 };
 static void ssl_create_context(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, IPC_OBJECT("ISslContext", ssl_context_cmds, NULL, NULL));
+    SslCtx *x = calloc(1, sizeof *x);
+    x->refs = 1;
+    ssl_contexts++;
+    ipc_out_object(c, IPC_OBJECT("ISslContext", ssl_context_cmds, x, ssl_ctx_destroy));
+}
+static void ssl_context_count(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = ssl_contexts;
+    IPC_OUT(c, v);
+}
+static void ssl_set_interface_version(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size >= 4) ssl_interface_version = IPC_IN(c, uint32_t, 0);
 }
 static const IpcCmd ssl_cmds[] = {
     {0, "CreateContext", ssl_create_context, IPC_IMPL},
-    {1, "GetContextCount", ret_u32_0, IPC_STUB},
-    {5, "SetInterfaceVersion", noop, IPC_STUB},
+    {1, "GetContextCount", ssl_context_count, IPC_IMPL},
+    {5, "SetInterfaceVersion", ssl_set_interface_version, IPC_IMPL},
 };
 static IpcObject *ssl_open(void) { return IPC_OBJECT("ssl", ssl_cmds, NULL, NULL); }
 

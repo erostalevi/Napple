@@ -70,6 +70,18 @@ enum {
     NAPPLE_STYLE_JOY_RIGHT = 1u << 4,
     NAPPLE_STYLE_GC = 1u << 5,
     NAPPLE_STYLE_PALMA = 1u << 6,
+    /* Famicom / NES controllers of Nintendo Switch Online (libnx HidNpadStyleTag_Lark*); bit positions from libnx, unverified on a title */
+    NAPPLE_STYLE_LARK_HVC_LEFT = 1u << 7,
+    NAPPLE_STYLE_LARK_HVC_RIGHT = 1u << 8,
+    NAPPLE_STYLE_LARK_NES_LEFT = 1u << 9,
+    NAPPLE_STYLE_LARK_NES_RIGHT = 1u << 10,
+    NAPPLE_STYLE_HANDHELD_LARK_HVC_LEFT = 1u << 11,
+    NAPPLE_STYLE_HANDHELD_LARK_HVC_RIGHT = 1u << 12,
+    NAPPLE_STYLE_HANDHELD_LARK_NES_LEFT = 1u << 13,
+    NAPPLE_STYLE_HANDHELD_LARK_NES_RIGHT = 1u << 14,
+    NAPPLE_STYLE_LUCIA = 1u << 15, /* SNES */
+    NAPPLE_STYLE_LAGON = 1u << 16, /* N64 */
+    NAPPLE_STYLE_LAGER = 1u << 17, /* Mega Drive / Genesis */
     NAPPLE_STYLE_SYSTEM_EXT = 1u << 29,
     NAPPLE_STYLE_SYSTEM = 1u << 30
 };
@@ -286,10 +298,20 @@ typedef struct napple_bindings {
     float stick_curve;       /* response exponent after the dead zone (0.5..3, default 1 = linear; >1 = finer near the centre) */
     float trigger_threshold; /* ZL/ZR press point on analog triggers (0.05..0.95, default 0.5) */
     uint8_t invert[4];       /* left X, left Y, right X, right Y (1 = inverted) */
-    int style;               /* npad style reported: 0 auto, 1 Pro Controller, 2 Joy-Con pair, 3 handheld (when the game supports it) */
-    int operation_mode;      /* 0 docked (1080p, TV), 1 handheld (720p); read by the runtime at start-up */
+    int style; /* npad style reported (NAPPLE_STYLE_PREF_*): 0 auto, 1 Pro Controller, 2 Joy-Con pair, 3 handheld, 4 GameCube, 5 Palma, 6 NES (when the game supports it) */
+    int operation_mode; /* 0 docked (1080p, TV), 1 handheld (720p); read by the runtime at start-up */
 } napple_bindings;
-enum { NAPPLE_STYLE_PREF_AUTO = 0, NAPPLE_STYLE_PREF_PRO = 1, NAPPLE_STYLE_PREF_JOYCON = 2, NAPPLE_STYLE_PREF_HANDHELD = 3 };
+/* GC / PALMA / NES are chosen only when the title supports that style (or supports none of the standard ones); like the others they fall back to automatic. */
+enum {
+    NAPPLE_STYLE_PREF_AUTO = 0,
+    NAPPLE_STYLE_PREF_PRO = 1,
+    NAPPLE_STYLE_PREF_JOYCON = 2,
+    NAPPLE_STYLE_PREF_HANDHELD = 3,
+    NAPPLE_STYLE_PREF_GC = 4,
+    NAPPLE_STYLE_PREF_PALMA = 5,
+    NAPPLE_STYLE_PREF_NES = 6,
+    NAPPLE_STYLE_PREF_COUNT
+};
 /* Physical controller elements (position based, so one binding means the same place on every pad). */
 enum {
     NAPPLE_PAD_SOUTH = 0,

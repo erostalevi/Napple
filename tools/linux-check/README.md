@@ -12,3 +12,10 @@ Run the tests under sanitizers with `ASAN_OPTIONS=detect_leaks=0 CC="gcc -fsanit
 
 Nothing here is linked into the runtime. Passing these checks says the C is well formed and the portable logic behaves as the tests
 expect; it says nothing about the macOS build, the real IPC dispatcher or a game.
+
+## audio: Apple microphone capture (audio/src/audin_mic.c)
+
+`mac/TargetConditionals.h` and `audin_mic_extra.h` let the `__APPLE__` branch of `audin_mic.c` be syntax-checked on Linux (typos and signatures only):
+
+    clang -fsyntax-only -std=gnu11 -Wall -Wextra -D__APPLE__ -D_GNU_SOURCE \
+      -Itools/linux-check/mac -Iaudio/include -Iaudio/src -Iaudio/tests/linux/include -include tools/linux-check/audin_mic_extra.h audio/src/audin_mic.c

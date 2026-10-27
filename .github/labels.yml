@@ -1,0 +1,21 @@
+# Proposed label set. Not applied automatically: create them once with the GitHub UI or `gh label create`.
+# Checked by tools/check_contributor_kit.py (every label named in the issue forms must be listed here).
+- {name: bug, color: d73a4a, description: Something does not work as documented}
+- {name: needs-triage, color: ededed, description: New, not yet looked at by a maintainer}
+- {name: compat, color: 0e8a16, description: How a specific game behaves}
+- {name: catalogue, color: 0e8a16, description: Title pages, compat matrix and support tables}
+- {name: graphics, color: 5319e7, description: Metal output, NVN, shaders, textures}
+- {name: audio, color: 5319e7, description: Audio output and audren}
+- {name: input, color: 5319e7, description: Controllers, touch, HID, simulators}
+- {name: services, color: 5319e7, description: Horizon HLE services and svcs}
+- {name: build-pipeline, color: 5319e7, description: napple CLI, ingest, rewrite, packaging}
+- {name: studio, color: 5319e7, description: Napple Studio (SwiftUI)}
+- {name: mod, color: fbca04, description: Mods, patches, cheats and game fixes}
+- {name: docs, color: 0075ca, description: Documentation}
+- {name: enhancement, color: a2eeef, description: New feature or request}
+- {name: good first issue, color: 7057ff, description: Small, well scoped, no Mac or game needed}
+- {name: help wanted, color: 008672, description: Maintainer would welcome a contribution}
+- {name: needs-mac, color: c5def5, description: Needs a Mac with Apple Silicon to verify}
+- {name: needs-repro, color: fef2c0, description: Cannot act until someone reproduces it}
+- {name: legal, color: b60205, description: Possible keys, game data or Nintendo code involved; handle privately}
+- {name: wontfix, color: ffffff, description: Out of scope (Windows, Linux, JIT, online services)}

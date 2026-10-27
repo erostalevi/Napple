@@ -331,6 +331,64 @@ static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t 
     return bytes;
 }
 
+/* History. The renderer produces one frame per update and keeps up to performance_frame_count of them (1 when the title asked for none) until the guest
+ * collects them: each update appends its frame, then every whole held frame, oldest first, that fits in the guest's buffer is copied out and dropped, and
+ * the byte total is reported. A buffer too small for even the oldest frame gets the newest frame with its entries capped (the single-frame behaviour), and
+ * the history restarts. Frames chain through next_offset (the frame size), so a reader walks them back to back. */
+static int perf_append_frame(AudioRenderer *r) {
+    const int v2 = revision_number(r->revision) >= 5;
+    const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
+    const size_t full = header + (size_t)(r->param.voice_count + r->param.submix_count + 1 + r->param.sink_count) * PERF_ENTRY;
+    uint8_t *frame = malloc(full);
+    if (!frame) return -1;
+    const uint32_t flen = write_performance(r, frame, full);
+    uint32_t keep = r->param.performance_frame_count > 1 ? (uint32_t)r->param.performance_frame_count : 1;
+    if (keep > 64) keep = 64;
+    while (r->perf_nframes >= keep) { /* drop the oldest */
+        memmove(r->perf_hist, r->perf_hist + r->perf_sizes[0], r->perf_hist_len - r->perf_sizes[0]);
+        r->perf_hist_len -= r->perf_sizes[0];
+        memmove(r->perf_sizes, r->perf_sizes + 1, (r->perf_nframes - 1) * sizeof r->perf_sizes[0]);
+        r->perf_nframes--;
+    }
+    uint8_t *grown = realloc(r->perf_hist, r->perf_hist_len + flen);
+    if (!grown) {
+        free(frame);
+        return -1;
+    }
+    r->perf_hist = grown;
+    memcpy(r->perf_hist + r->perf_hist_len, frame, flen);
+    r->perf_hist_len += flen;
+    r->perf_sizes[r->perf_nframes++] = flen;
+    free(frame);
+    return 0;
+}
+static uint32_t collect_performance(AudioRenderer *r, uint8_t *perf, size_t perf_size) {
+    const int v2 = revision_number(r->revision) >= 5;
+    const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
+    const int have_buffer = perf && perf_size >= header;
+    if (!have_buffer && r->param.performance_frame_count <= 0) { /* nobody asked for history and nobody collects */
+        r->perf_hist_len = 0;
+        r->perf_nframes = 0;
+        return 0;
+    }
+    if (perf_append_frame(r)) return have_buffer ? write_performance(r, perf, perf_size) : 0;
+    if (!have_buffer) return 0; /* the frame waits for the next update that brings a buffer */
+    size_t copied = 0;
+    uint32_t taken = 0;
+    while (taken < r->perf_nframes && copied + r->perf_sizes[taken] <= perf_size) copied += r->perf_sizes[taken++];
+    if (!taken) { /* the buffer cannot hold a whole frame */
+        r->perf_hist_len = 0;
+        r->perf_nframes = 0;
+        return write_performance(r, perf, perf_size);
+    }
+    memcpy(perf, r->perf_hist, copied);
+    memmove(r->perf_hist, r->perf_hist + copied, r->perf_hist_len - copied);
+    r->perf_hist_len -= copied;
+    memmove(r->perf_sizes, r->perf_sizes + taken, (r->perf_nframes - taken) * sizeof r->perf_sizes[0]);
+    r->perf_nframes -= taken;
+    return (uint32_t)copied;
+}
+
 /* Body of RequestUpdate; runs under r->lock and the caller's trap. Returns bytes written. */
 static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_size, uint8_t *output, size_t out_size, int *status, uint8_t *perf,
                             size_t perf_size) {
@@ -452,7 +510,7 @@ static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_si
         w += sizeof so;
     }
     {
-        uint32_t pb = write_performance(r, perf, perf_size);
+        uint32_t pb = collect_performance(r, perf, perf_size);
         memcpy(w, &pb, 4);
     } /* performance: bytes of history in the perf buffer */
     w += 0x10;
@@ -603,6 +661,7 @@ void napple_audren_close(napple_audren *r) {
     free(r->sinks);
     free(r->effects);
     free(r->channels);
+    free(r->perf_hist);
     free(r);
 }
 

@@ -1,1 +1,8 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and ideas (Discussions)
+    url: https://github.com/erostalevi/NappleCloudRepo/discussions
+    about: How do I..., show and tell, early ideas. Turn it into an issue once it is a concrete bug, title report or change.
+  - name: Security problem
+    url: https://github.com/erostalevi/NappleCloudRepo/security/advisories/new
+    about: Report privately. Never put a vulnerability, a key or a game file in a public issue.

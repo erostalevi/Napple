@@ -11,6 +11,15 @@ use napple_core::domain::keys::KeySet;
 use sha2::{Digest, Sha256};
 use xts_mode::Xts128;
 
+mod nca0_fixture;
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+        .collect()
+}
+
 const HEADER_KEY: [u8; 32] = [7; 32];
 const KAK: [u8; 16] = [9; 16]; // key_area_key_application_02
 const TKEK: [u8; 16] = [5; 16]; // titlekek_02
@@ -133,8 +142,17 @@ enum Sec {
 }
 
 fn build_nca(ctype: u8, secs: Vec<Sec>, rights: Option<[u8; 16]>) -> Vec<u8> {
+    build_nca_v(3, ctype, secs, rights)
+}
+
+/// `ver` 3 = NCA3, 2 = NCA2 (FS headers XTS at sector 0), 0 = NCA0 (as NCA2 plus an RSA key area).
+fn build_nca_v(ver: u8, ctype: u8, secs: Vec<Sec>, rights: Option<[u8; 16]>) -> Vec<u8> {
     let mut h = vec![0u8; 0xC00];
-    h[0x200..0x204].copy_from_slice(b"NCA3");
+    h[0x200..0x204].copy_from_slice(match ver {
+        3 => b"NCA3",
+        2 => b"NCA2",
+        _ => b"NCA0",
+    });
     h[0x205] = ctype;
     h[0x220] = 3; // key generation 3 -> index 2
     h[0x210..0x218].copy_from_slice(&0x0100_0000_0000_1000u64.to_le_bytes());
@@ -205,13 +223,18 @@ fn build_nca(ctype: u8, secs: Vec<Sec>, rights: Option<[u8; 16]>) -> Vec<u8> {
     if rights.is_some() {
         // ticket path: area is ignored by the reader
     }
-    h[0x300..0x340].copy_from_slice(&area);
+    if ver == 0 {
+        h[0x300..0x400].copy_from_slice(&unhex(nca0_fixture::AREA_CT));
+    } else {
+        h[0x300..0x340].copy_from_slice(&area);
+    }
     let xts = Xts128::<Aes128>::new(
         Aes128::new(GenericArray::from_slice(&HEADER_KEY[..16])),
         Aes128::new(GenericArray::from_slice(&HEADER_KEY[16..])),
     );
     for (i, s) in h.as_chunks_mut::<0x200>().0.iter_mut().enumerate() {
-        xts.encrypt_sector(s, (i as u128).to_be_bytes());
+        let sector = if ver != 3 && i >= 2 { 0 } else { i as u128 };
+        xts.encrypt_sector(s, sector.to_be_bytes());
     }
     h.extend(body);
     h
@@ -423,4 +446,61 @@ fn nsz_and_xcz_ingest_same_as_nsp() {
             want.exefs
         );
     }
+}
+
+fn run_versioned(ver: u8, ks: &KeySet) -> napple_core::domain::error::Result<usize> {
+    let nca = build_nca_v(
+        ver,
+        0,
+        vec![Sec::Pfs0(exefs(), false), Sec::Rom(romfs())],
+        None,
+    );
+    let nsp = pfs0(&[("prog.nca", &nca)], false);
+    let r = ingest(&write(&format!("v{ver}.nsp"), &nsp), ks)?;
+    assert_eq!(
+        r.exefs.iter().find(|(n, _)| n == "main").unwrap().1,
+        b"MAINCODE"
+    );
+    assert_eq!(r.romfs.unwrap().files.len(), 2);
+    Ok(r.exefs.len())
+}
+
+#[test]
+fn nca2_per_fs_header_sector_zero() {
+    assert_eq!(run_versioned(2, &keys()).unwrap(), 2);
+    // an NCA3 reader must not be what makes this pass: the sector numbering differs
+    let nca = build_nca_v(2, 0, vec![Sec::Pfs0(exefs(), false)], None);
+    assert_ne!(nca, build_nca(0, vec![Sec::Pfs0(exefs(), false)], None));
+}
+
+#[test]
+fn nca0_rsa_key_area() {
+    let mut kp = unhex(nca0_fixture::D);
+    kp.extend(unhex(nca0_fixture::N));
+    let text = format!("{}nca0_key_area_rsa = {}\n", keys_text(), hex(&kp));
+    assert_eq!(run_versioned(0, &KeySet::parse(&text).unwrap()).unwrap(), 2);
+    // without the user's RSA key the failure names it
+    assert!(matches!(
+        run_versioned(0, &keys()),
+        Err(Error::MissingKey(m)) if m == "nca0_key_area_rsa"
+    ));
+}
+
+#[test]
+fn nca1_stays_unsupported() {
+    let mut nca = build_nca(0, vec![Sec::Pfs0(exefs(), false)], None);
+    // re-encrypt the main header with an NCA1 magic
+    let xts = Xts128::<Aes128>::new(
+        Aes128::new(GenericArray::from_slice(&HEADER_KEY[..16])),
+        Aes128::new(GenericArray::from_slice(&HEADER_KEY[16..])),
+    );
+    let mut sec1 = [0u8; 0x200];
+    sec1.copy_from_slice(&nca[0x200..0x400]);
+    xts.decrypt_sector(&mut sec1, 1u128.to_be_bytes());
+    sec1[..4].copy_from_slice(b"NCA1");
+    xts.encrypt_sector(&mut sec1, 1u128.to_be_bytes());
+    nca[0x200..0x400].copy_from_slice(&sec1);
+    let nsp = pfs0(&[("prog.nca", &nca)], false);
+    // unsupported NCAs are skipped by ingest, which then finds no Program NCA
+    assert!(ingest(&write("v1.nsp", &nsp), &keys()).is_err());
 }

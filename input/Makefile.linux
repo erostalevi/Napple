@@ -4,7 +4,7 @@ CC      ?= cc
 CFLAGS  ?= -std=gnu11 -O1 -g -Wall -Wextra -Wno-deprecated-declarations -D_GNU_SOURCE
 INC     := -Iinclude -Isrc
 SRC     := $(wildcard src/*.c) tests/linux/ng_stub.c
-TESTS   := hid bindings motion input gesture hid_sections
+TESTS   := hid bindings motion input gesture hid_sections styles
 build/linux/test_%: tests/test_%.c $(SRC) $(wildcard src/*.h) include/napple_input.h tests/check.h
 	@mkdir -p build/linux
 	$(CC) $(CFLAGS) $(INC) $(SRC) $< -lm -lpthread -o $@

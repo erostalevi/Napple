@@ -1,0 +1,53 @@
+name: Graphics bug
+description: Wrong, missing or flickering pixels in a game (Metal output, shaders, textures)
+labels: [graphics, bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Never attach game files, keys or firmware.** A few screenshots of your own screen are fine; do not upload dumps of textures, shaders or models.
+        How to capture frames and logs: docs/guides/contributing-report-a-graphics-bug.md.
+  - type: input
+    id: game
+    attributes:
+      label: Game, title ID and version
+      placeholder: "Name (0100000000000000), 1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: build
+    attributes:
+      label: Napple build
+      placeholder: "commit or release"
+    validations:
+      required: true
+  - type: input
+    id: mac
+    attributes:
+      label: Mac and display
+      placeholder: "Apple M2 Pro, macOS 26.0, built-in display"
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where and how to see it
+      description: Scene, frame number if you have it, the scripted input that gets there (NAPPLE_INPUT_SCRIPT), whether it is every run or sometimes.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What it should look like
+      description: Describe it. If you have seen the game on a Switch, say what differs.
+  - type: textarea
+    id: warnings
+    attributes:
+      label: Graphics warnings from the log
+      description: "Lines starting with [napple-gfx] warn: or error:, and the final [napple-gfx] stats line."
+      render: text
+  - type: dropdown
+    id: scale
+    attributes:
+      label: Does it change with other settings?
+      options: [not tried, same at every setting, only at a higher render scale, only at native scale, only after a long run]

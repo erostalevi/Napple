@@ -92,6 +92,11 @@ int main(void) {
     vh = 2u << 24; svc_call(list, 0, &vh, 4, &c); CHECK(c.result != 0, "invalid handle refused");
     uint8_t mh[16] = {0}; memset(mh, 0, sizeof mh); call(211, mh, 16, &c); CHECK(c.out[0] == 1, "player 1's device is mounted");
     uint32_t p4 = 3u << 16; memcpy(mh, &p4, 4); call(211, mh, 16, &c); CHECK(c.out[0] == 0, "player 4 has no pad");
+    { /* the style set the title announces reaches the backend untouched, GameCube / Palma / NES bits included */
+        uint32_t want = NAPPLE_STYLE_GC | NAPPLE_STYLE_PALMA | NAPPLE_STYLE_LARK_NES_LEFT;
+        call(100, &want, 4, &c); call(101, NULL, 0, &c);
+        CHECK(SVC_OUT(&c, uint32_t, 0) == want, "GetSupportedNpadStyleSet returns the announced set (%#x)", SVC_OUT(&c, uint32_t, 0));
+    }
     printf("{\"test\":\"svc_hid\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     char cmd[200]; snprintf(cmd, sizeof cmd, "rm -rf %s", dir); if (system(cmd)) {}
     return g_failed != 0;

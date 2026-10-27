@@ -1,0 +1,35 @@
+name: Document a title
+description: Claim or propose a catalogue page (docs/titles/<id>.md) for a game you own
+labels: [catalogue, good first issue]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The catalogue is written by people who own the games. You run the scripted boot, record what happened and open a pull request with the title page.
+        Guide: docs/guides/contributing-document-a-title.md. **No game files, keys, firmware or dumps, ever.**
+  - type: input
+    id: game
+    attributes:
+      label: Game and title ID
+      placeholder: "Name (0100000000000000)"
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions you own
+      placeholder: "base 1.0.0, update 1.2.0, DLC yes/no"
+    validations:
+      required: true
+  - type: dropdown
+    id: state
+    attributes:
+      label: Where are you
+      options: [I want to claim this title, I have run it and have results, I need help getting it to build]
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Anything already known (stage reached, first failure).

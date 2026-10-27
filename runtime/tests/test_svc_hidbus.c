@@ -15,6 +15,15 @@ int main(void) {
     svc_call(o, 4, in, 16, &c); CHECK(c.result == 0, "Finalize is harmless");
     svc_call(o, 10, NULL, 0, &c); CHECK(c.result == 0 && c.nout_copy == 1 && handle_get(c.out_copy[0], OBJ_SHMEM), "shared memory handle");
     svc_call(o, 9, NULL, 0, &c); CHECK(c.nout_copy == 1 && !event_is_signaled(c.out_copy[0]), "command-result event never fires");
+    uint8_t hin[8] = {0}; HidbusHandle dh;
+    CHECK(hidbus_handle_decode(hin, 8, 0, &dh) == 0 && hidbus_handle_decode(hin, 7, 0, &dh) < 0, "handle decode needs 8 bytes");
+    svc_call(o, 5, hin, 8, &c); CHECK(c.result == HZ_R_HID_NOT_CONNECTED, "EnableExternalDevice: not connected");
+    svc_call(o, 6, hin, 8, &c); CHECK(c.result == HZ_R_HID_NOT_CONNECTED, "GetExternalDeviceId: not connected");
+    svc_call(o, 7, hin, 8, &c); CHECK(c.result == HZ_R_HID_NOT_CONNECTED, "SendCommandAsync: not connected");
+    svc_call(o, 11, hin, 8, &c); CHECK(c.result == HZ_R_HID_NOT_CONNECTED, "EnableJoyPollingReceiveMode: not connected");
+    svc_call(o, 13, hin, 8, &c); CHECK(c.result == HZ_R_HID_NOT_CONNECTED, "GetPollingData: not connected");
+    svc_call(o, 12, hin, 8, &c); CHECK(c.result == 0, "DisableJoyPollingReceiveMode is harmless");
+    uint32_t t = 3; svc_call(o, 14, &t, 4, &c); CHECK(c.result == 0 && ((HbState *)o->state)->status_manager_type == 3, "SetStatusManagerType is remembered");
     printf("{\"test\":\"svc_hidbus\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

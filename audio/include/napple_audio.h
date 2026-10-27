@@ -180,6 +180,11 @@ typedef uint32_t (*napple_audin_source_fn)(void *user, float *mono, uint32_t fra
 void napple_audin_set_source(napple_audin_source_fn read, void *user); /* NULL = silence */
 int napple_audin_has_source(void);
 size_t napple_audin_device_name(char *out, size_t cap); /* writes the NUL-terminated device name, returns length */
+/* Capture source from a spec string: "silence", "tone[:HZ[:AMP]]", "file:PATH" (WAV PCM16/float, or raw s16le mono 48 kHz; looped) or "mic" (default input
+   device, macOS only; needs the microphone usage description and entitlement). Returns 0, NAPPLE_AUDIO_E_INVALID (bad spec / unreadable file) or
+   NAPPLE_AUDIO_E_UNSUPPORTED (mic unavailable). The default source reads env NAPPLE_AUDIN_SOURCE once when no source is installed (unset = silence). */
+int napple_audin_install_source_spec(const char *spec);
+int napple_audin_install_default_source(void);
 typedef struct napple_audin napple_audin;
 typedef struct napple_audin_stats {
     uint64_t frames;           /* frames delivered to the guest                                              */

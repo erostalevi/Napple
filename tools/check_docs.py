@@ -117,6 +117,15 @@ def main():
     if gen.exists():  # the generated support tables must not be stale
         r = subprocess.run([sys.executable, "-I", str(gen), "--root", str(root), "--check"], capture_output=True, text=True)
         bad += [line[5:] for line in r.stdout.split("\n") if line.startswith("FAIL ")] or ([f"support tables: {r.stdout.strip() or r.stderr.strip()}"] if r.returncode else [])
+    kit = root / "tools/check_contributor_kit.py"
+    try:
+        import yaml  # noqa: F401  (the contributor kit check needs PyYAML; skip it where it is missing)
+        have_yaml = True
+    except ImportError:
+        have_yaml = False
+    if kit.exists() and have_yaml:
+        r = subprocess.run([sys.executable, str(kit), "--root", str(root)], capture_output=True, text=True)
+        bad += [line[5:] for line in r.stdout.split("\n") if line.startswith("FAIL ")] or ([f"contributor kit: {r.stdout.strip() or r.stderr.strip()}"] if r.returncode else [])
     for b in bad:
         print("FAIL", b)
     print(f"checked {len(files)} Markdown files: {'OK' if not bad else str(len(bad)) + ' problems'}")

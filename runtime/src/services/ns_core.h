@@ -32,3 +32,8 @@ int ns_select_language(uint32_t supported, uint64_t desired_code);
 /* Free / total bytes of the volume holding `path`; 0 on error. */
 uint64_t ns_free_space(const char *path);
 uint64_t ns_total_space(const char *path);
+
+/* ApplicationRecord (0x18 bytes: u64 application id, u8 record type 3 = installed, u8 unknown, 6 bytes padding, u8 unknown[8]); unverified layout. */
+#define NS_APP_RECORD_SIZE 0x18u
+uint64_t ns_parse_title_id(const char *hex); /* 16 hex digits -> id; 0 when malformed */
+void ns_app_record(uint64_t id, uint8_t out[NS_APP_RECORD_SIZE]);

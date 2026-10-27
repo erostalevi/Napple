@@ -101,7 +101,7 @@ int napple_bindings_validate(const napple_bindings *b) {
     if (!(b->trigger_threshold >= 0.05f && b->trigger_threshold <= 0.95f)) return -1;
     for (int i = 0; i < 4; i++)
         if (b->invert[i] > 1) return -1;
-    if (b->style < 0 || b->style > 3 || (b->operation_mode != 0 && b->operation_mode != 1)) return -1;
+    if (b->style < 0 || b->style >= NAPPLE_STYLE_PREF_COUNT || (b->operation_mode != 0 && b->operation_mode != 1)) return -1;
     return 0;
 }
 
@@ -117,12 +117,12 @@ static void put(char *out, size_t cap, size_t *at, const char *fmt, ...) {
 size_t napple_bindings_to_json(const napple_bindings *b, char *out, size_t cap) {
     size_t at = 0;
     static const char *const face[] = {"auto", "position", "label"};
-    static const char *const sty[] = {"auto", "pro", "joycon", "handheld"};
+    static const char *const sty[] = {"auto", "pro", "joycon", "handheld", "gc", "palma", "nes"};
     put(out, cap, &at,
         "{\n  \"version\": 1,\n  \"deadzone\": %.3f,\n  \"stick_range\": %.3f,\n  \"stick_curve\": %.3f,\n  \"trigger_threshold\": %.3f,\n"
         "  \"invert\": [%s, %s, %s, %s],\n  \"style\": \"%s\",\n  \"operation_mode\": \"%s\",\n  \"mouse_touch\": %s,\n  \"face_layout\": \"%s\",\n  \"keys\": {\n",
         b->stick_deadzone, b->stick_range, b->stick_curve, b->trigger_threshold, b->invert[0] ? "true" : "false", b->invert[1] ? "true" : "false",
-        b->invert[2] ? "true" : "false", b->invert[3] ? "true" : "false", sty[b->style >= 0 && b->style < 4 ? b->style : 0],
+        b->invert[2] ? "true" : "false", b->invert[3] ? "true" : "false", sty[b->style >= 0 && b->style < NAPPLE_STYLE_PREF_COUNT ? b->style : 0],
         b->operation_mode ? "handheld" : "docked", b->mouse_touch ? "true" : "false", face[b->face_layout >= 0 && b->face_layout < 3 ? b->face_layout : 0]);
     for (int i = 0; i < NAPPLE_BTN_COUNT_BASIC; i++)
         put(out, cap, &at, "    \"%s\": [%d, %d]%s\n", napple_button_name(i), b->key[i][0] == NAPPLE_KEY_NONE ? -1 : b->key[i][0],
@@ -200,6 +200,9 @@ int napple_bindings_from_json(const char *json, size_t len, napple_bindings *out
         else if (!strcmp(s, "pro")) b.style = 1;
         else if (!strcmp(s, "joycon")) b.style = 2;
         else if (!strcmp(s, "handheld")) b.style = 3;
+        else if (!strcmp(s, "gc")) b.style = NAPPLE_STYLE_PREF_GC;
+        else if (!strcmp(s, "palma")) b.style = NAPPLE_STYLE_PREF_PALMA;
+        else if (!strcmp(s, "nes")) b.style = NAPPLE_STYLE_PREF_NES;
         else return -1;
     }
     if ((x = tj_get(pool, r, "operation_mode"))) {

@@ -112,6 +112,16 @@ impl NczSource {
                 counter: e[0x30..0x40].try_into().unwrap(),
             });
         }
+        // The NCA's first section normally starts at 0xC00, inside the raw 0x4000 header block. A
+        // writer that records it as is leaves a first entry straddling the boundary: only its part
+        // past 0x4000 lives in the compressed body, so trim it (the CTR counter is absolute).
+        if let Some(f) = sections.first_mut()
+            && f.offset < NCZ_HEADER
+            && f.offset.checked_add(f.size).is_some_and(|e| e > NCZ_HEADER)
+        {
+            f.size -= NCZ_HEADER - f.offset;
+            f.offset = NCZ_HEADER;
+        }
         let mut end = NCZ_HEADER;
         for s in &sections {
             if s.offset < NCZ_HEADER || s.offset.checked_add(s.size).is_none() {
@@ -428,6 +438,19 @@ mod tests {
         let mut bad = z;
         bad[0x4010..0x4018].copy_from_slice(&0u64.to_le_bytes()); // section offset below header
         assert!(NczSource::open(Arc::new(BytesSource(bad))).is_err());
+    }
+
+    #[test]
+    fn first_section_straddling_the_header_boundary_is_trimmed() {
+        // Same image, but the table records section 0 from 0xC00 (inside the raw header block).
+        for blocks in [None, Some(14u8)] {
+            let (mut z, nca) = synth(40_000, blocks);
+            let split = u64le(&z, 0x4010 + 8);
+            let start = 0xC00u64;
+            z[0x4010..0x4018].copy_from_slice(&start.to_le_bytes());
+            z[0x4018..0x4020].copy_from_slice(&(split + NCZ_HEADER - start).to_le_bytes());
+            check_all(z, &nca);
+        }
     }
 
     #[test]

@@ -1,0 +1,7 @@
+#include <metal_stdlib>
+using namespace metal;
+
+// Replacement for the made-up program 00112233445566778899aabbccddeeff: passes the colour through.
+fragment float4 napple_fs_main(float4 color [[stage_in]]) {
+    return color;
+}

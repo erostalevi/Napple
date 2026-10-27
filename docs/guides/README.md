@@ -18,4 +18,13 @@ Background on how the pieces fit: [architecture](../architecture/overview.md); p
 | [testing.md](testing.md) | Every test suite, its command, and whether it runs on Linux or only on macOS. |
 | [testing-graphics.md](testing-graphics.md) | Golden-frame routes per title, the gfx warning and Metal validation gate, contact sheets, approving goldens. |
 
+### For community contributors
+| Guide | One line |
+|---|---|
+| [contributing-report-a-bug.md](contributing-report-a-bug.md) | Capture the machine details and a trimmed log for a bug report. |
+| [contributing-document-a-title.md](contributing-document-a-title.md) | Run the scripted boot, write `docs/titles/<id>.md`, update the matrix and regenerate the support tables ([field reference](../reference/catalogue-howto.md)). |
+| [contributing-report-a-graphics-bug.md](contributing-report-a-graphics-bug.md) | Capture frames and graphics logs, narrow a wrong-pixels bug down. |
+| [contributing-write-a-mod.md](contributing-write-a-mod.md) | Rules and workflow for mods and game fixes (the format itself lives in the mod docs). |
+| [contributing-community.md](contributing-community.md) | Labels, Discussions categories, conduct and security check, sign-off decision. |
+
 Related references: [environment variables](../reference/environment-variables.md), [command line](../reference/cli.md), [glossary](../reference/glossary.md).

@@ -157,6 +157,12 @@ int main(void) {
       CHECK(g.result == 0 && g.out_size == 16, "GetImageTransferProcessorState returns the 16-byte state"); CHECK(SVC_OUT(&g, uint64_t, 0) >= 1, "sampling number advances");
       int bright = 0; for (int i = 0; i < 80 * 60; i++) bright += out[i] == 255; CHECK(bright > 0 && out[0] == 0, "the output buffer holds the 80x60 trimmed image with the disc in it");
       CHECK(!memcmp(tmem, out, 80 * 60), "the transfer memory holds the same image");
+      /* the Ex form runs the same transfer */
+      id = 0; svc_call(o, 305, &id, 4, &g); CHECK(irs_core_running(&core) == 0, "StopImageProcessor before the Ex run");
+      memset(tmem, 0, sizeof tmem); memset(&c, 0, sizeof c); c.object = o; c.in = in; c.in_size = sizeof in; c.ncopy = 1; c.copy[0] = handle_new(OBJ_TMEM, &tm); svc_call_c(o, 316, &c);
+      CHECK(c.result == 0 && irs_core_running(&core) == 1, "RunImageTransferExProcessor starts a transfer");
+      svc_set_out_buf(&g, out, sizeof out); svc_call_c(o, 309, &g); CHECK(g.result == 0 && !memcmp(tmem, out, 80 * 60) && tmem[0] == 0, "Ex transfer fills the transfer memory with the same trimmed image");
+      uint8_t led[16] = {0}; svc_call(o, 317, led, sizeof led, &g); CHECK(g.result == 0, "RunIrLedProcessor accepted with a source");
       id = 0; svc_call(o, 303, NULL, 0, &g); CHECK(irs_core_running(&core) == 0 && !thread_live, "DeactivateIrsensor stops everything"); }
     irs_service_set_source(NULL);
     svc_call(o, 306, NULL, 0, &c); CHECK(c.result == HZ_R_IRSENSOR_NOT_CONNECTED, "removing the source restores the not-connected answers");

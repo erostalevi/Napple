@@ -35,6 +35,13 @@ int nae_source_peek(nae_source *s, float *lr, int frames);        /* latest fram
 uint64_t nae_source_frames_written(const nae_source *s);
 int nae_engine_has_device(void);
 
+/* ---- audin capture (audin_source.c, audin_mic.c) ---- */
+void nae_mic_ring_push(const float *mono, uint32_t frames); /* device thread: 48 kHz mono float */
+void nae_mic_ring_reset(void);
+uint32_t nae_mic_read(void *user, float *mono, uint32_t frames, uint32_t rate); /* the `mic` capture source */
+int nae_mic_start(void);                                                        /* 0 or -1 (no device / permission / not macOS) */
+void nae_mic_stop(void);
+
 /* ---- wire formats of the audren update protocol ---- */
 typedef struct {
     int32_t sample_rate, sample_count, mix_buffer_count, submix_count, voice_count, sink_count, effect_count, performance_frame_count;
@@ -211,6 +218,9 @@ struct napple_audren {
     _Atomic int running;
     uint32_t state, revision, time_limit, npools_alloc;
     uint64_t behavior_flags, elapsed_frames;
+    uint8_t *perf_hist;                            /* performance frames not yet collected by the guest, oldest first (audren.c) */
+    size_t perf_hist_len;                          /* bytes used in perf_hist */
+    uint32_t perf_sizes[64], perf_nframes;         /* byte size of each held frame, and how many */
     uint64_t stop_released, empty_played, flushed; /* wave buffers given back by Stop / without samples / flush */
     ServerVoice *voices;
     AudrenPoolIn *pools;

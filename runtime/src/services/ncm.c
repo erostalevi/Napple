@@ -4,6 +4,7 @@
  * Command ids and layouts are from the author's memory of the public documentation and are unverified; unlisted commands fail loudly. */
 #include "svc_common.h"
 #include "hz_result.h"
+#include "ncm_core.h"
 #include <string.h>
 
 #define NCM_MAX_METAS 64
@@ -99,10 +100,58 @@ static void meta_remove(IpcObject *s, IpcCall *c) {
     }
     m->used = 0;
 }
-static void meta_not_found_out(IpcObject *s, IpcCall *c) {
+/* 3 GetContentIdByType(u8 type, key) -> ContentId: parsed out of the stored meta blob (ncm_core.c). */
+static void meta_content_id_by_type(IpcObject *s, IpcCall *c) {
     (void)s;
-    c->result = HZ_R_NCM_CONTENT_NOT_FOUND;
-} /* no content infos are parsed from meta data */
+    NcmMeta *m = meta_find(in_key(c, 8));
+    NcmMetaView v;
+    uint8_t id[16];
+    if (!m) {
+        c->result = HZ_R_NCM_CONTENT_META_NOT_FOUND;
+        return;
+    }
+    if (ncm_meta_parse(m->data, m->size, &v) || ncm_meta_find_type(&v, IPC_IN(c, uint8_t, 0), id)) {
+        c->result = HZ_R_NCM_CONTENT_NOT_FOUND;
+        return;
+    }
+    ipc_out(c, id, 16);
+}
+/* Copies records [offset, offset + capacity) of `recs` into output buffer 0 and answers the number written. */
+static void list_records(IpcCall *c, const uint8_t *recs, unsigned count, uint32_t rec_size, int32_t offset) {
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint64_t cap = b ? b->size / rec_size : 0;
+    int32_t n = 0;
+    if (offset < 0) offset = 0;
+    if ((unsigned)offset < count) {
+        n = (int32_t)(count - (unsigned)offset);
+        if ((uint64_t)n > cap) n = (int32_t)cap;
+        if (n) ipc_write_buf(c, b, recs + (size_t)offset * rec_size, (uint64_t)n * rec_size);
+    }
+    IPC_OUT(c, n);
+}
+/* 4 ListContentInfo(s32 offset, key) and 17 ListContentMetaInfo(s32 offset, key) -> s32 written. */
+static void meta_list_content_info(IpcObject *s, IpcCall *c) {
+    (void)s;
+    NcmMeta *m = meta_find(in_key(c, 8));
+    NcmMetaView v;
+    if (!m) {
+        c->result = HZ_R_NCM_CONTENT_META_NOT_FOUND;
+        return;
+    }
+    if (ncm_meta_parse(m->data, m->size, &v)) memset(&v, 0, sizeof v);
+    list_records(c, v.contents, v.content_count, NCM_CONTENT_INFO_SIZE, IPC_IN(c, int32_t, 0));
+}
+static void meta_list_meta_info(IpcObject *s, IpcCall *c) {
+    (void)s;
+    NcmMeta *m = meta_find(in_key(c, 8));
+    NcmMetaView v;
+    if (!m) {
+        c->result = HZ_R_NCM_CONTENT_META_NOT_FOUND;
+        return;
+    }
+    if (ncm_meta_parse(m->data, m->size, &v)) memset(&v, 0, sizeof v);
+    list_records(c, v.metas, v.meta_count, NCM_META_INFO_SIZE, IPC_IN(c, int32_t, 0));
+}
 static void meta_has(IpcObject *s, IpcCall *c) {
     (void)s;
     uint8_t v = meta_find(in_key(c, 0)) != NULL;
@@ -153,16 +202,6 @@ static void meta_list_application(IpcObject *s, IpcCall *c) {
     int32_t off = c->in_size >= 4 ? IPC_IN(c, int32_t, 0) : 0;
     list_keys(c, off, want_type, NCM_TYPE_APPLICATION);
 }
-static void meta_list_zero(IpcObject *s, IpcCall *c) {
-    (void)s;
-    int32_t v = 0;
-    IPC_OUT(c, v);
-}
-static void meta_list_info_zero(IpcObject *s, IpcCall *c) {
-    (void)s;
-    int32_t o[2] = {0, 0};
-    ipc_out(c, o, 8);
-}
 static void meta_latest(IpcObject *s, IpcCall *c) {
     (void)s;
     uint64_t id = IPC_IN(c, uint64_t, 0);
@@ -205,10 +244,14 @@ static void meta_patch_id(IpcObject *s, IpcCall *c) {
     if (m->key[12] == NCM_TYPE_APPLICATION) id |= 0x800; /* the update title id of an application */
     IPC_OUT(c, id);
 }
+/* 16 HasContent(key, ContentId) -> bool */
 static void meta_has_content(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint8_t v = 0;
-    IPC_OUT(c, v);
+    NcmMeta *m = meta_find(in_key(c, 0));
+    NcmMetaView v;
+    uint8_t r = 0;
+    if (m && ncm_meta_parse(m->data, m->size, &v) == 0) r = (uint8_t)ncm_meta_has_content(&v, in_id(c, 16));
+    IPC_OUT(c, r);
 }
 static void meta_attributes(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -216,7 +259,9 @@ static void meta_attributes(IpcObject *s, IpcCall *c) {
         c->result = HZ_R_NCM_CONTENT_META_NOT_FOUND;
         return;
     }
-    uint8_t v = 0;
+    NcmMeta *m = meta_find(in_key(c, 0));
+    NcmMetaView mv;
+    uint8_t v = m && ncm_meta_parse(m->data, m->size, &mv) == 0 ? mv.attributes : 0;
     IPC_OUT(c, v);
 }
 
@@ -349,14 +394,13 @@ static void st_size(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, n);
 }
 
-/* Rows 3, 4, 16 and 17 stay stubs: they would read the content infos out of the stored meta blobs (a CNMT parse), which nothing needs yet (class a, left for
- * a later pass). LookupOrphanContent has no orphans to report and GetPath / GetPlaceHolderPath are complete (registered content has no host file path). */
+/* Rows 3, 4, 16, 17 and 18 read the content infos / attributes out of the stored meta blobs (ncm_core.c). LookupOrphanContent has no orphans to report and GetPath / GetPlaceHolderPath are complete (registered content has no host file path). */
 static const IpcCmd meta_db_cmds[] = {
     {0, "Set", meta_set, IPC_IMPL},
     {1, "Get", meta_get, IPC_IMPL},
     {2, "Remove", meta_remove, IPC_IMPL},
-    {3, "GetContentIdByType", meta_not_found_out, IPC_STUB},
-    {4, "ListContentInfo", meta_list_zero, IPC_STUB},
+    {3, "GetContentIdByType", meta_content_id_by_type, IPC_IMPL},
+    {4, "ListContentInfo", meta_list_content_info, IPC_IMPL},
     {5, "List", meta_list, IPC_IMPL},
     {6, "GetLatestContentMetaKey", meta_latest, IPC_IMPL},
     {7, "ListApplication", meta_list_application, IPC_IMPL},
@@ -368,8 +412,8 @@ static const IpcCmd meta_db_cmds[] = {
     {13, "DisableForcibly", svc_noop, IPC_IMPL},
     {14, "LookupOrphanContent", svc_noop, IPC_IMPL},
     {15, "Commit", svc_noop, IPC_IMPL},
-    {16, "HasContent", meta_has_content, IPC_STUB},
-    {17, "ListContentMetaInfo", meta_list_info_zero, IPC_STUB},
+    {16, "HasContent", meta_has_content, IPC_IMPL},
+    {17, "ListContentMetaInfo", meta_list_meta_info, IPC_IMPL},
     {18, "GetAttributes", meta_attributes, IPC_IMPL},
 };
 static const IpcCmd storage_cmds[] = {

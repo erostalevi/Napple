@@ -81,6 +81,38 @@ int main(void) {
     svc_call(st, 1, in, 40, &c); svc_call(st, 10, NULL, 0, &c);
     svc_call(st, 3, ph, 16, &c); CHECK(c.out[0] == 0, "CleanupAllPlaceHolder drops placeholders");
     CHECK(HZ_DESC(HZ_R_NCM_CONTENT_NOT_FOUND) == 310, "result packing");
+    /* a parsed meta blob: header + 4-byte ext header + 2 contents (program, control) + 1 meta info */
+    {
+        uint8_t blob[8 + 4 + 2 * 0x18 + 0x10] = {0}, kp[16] = {0}, id1[16], id2[16];
+        blob[0] = 4; blob[2] = 2; blob[4] = 1; blob[6] = 1; /* ext size, content count, meta count, attributes = 1 */
+        for (int i = 0; i < 16; i++) { id1[i] = (uint8_t)(0x10 + i); id2[i] = (uint8_t)(0x40 + i); }
+        memcpy(blob + 12, id1, 16); blob[12 + 23] = 1; /* type program */
+        memcpy(blob + 12 + 0x18, id2, 16); blob[12 + 0x18 + 23] = 3; /* type control */
+        blob[12 + 0x30] = 0x77; /* meta info id byte 0 */
+        uint64_t pid = 0x0100000000002000ull; memcpy(kp, &pid, 8); kp[12] = NCM_TYPE_APPLICATION;
+        s = (IpcCall){0}; s.in = kp; s.in_size = 16; svc_set_in_buf(&s, blob, sizeof blob); svc_call_c(db, 0, &s); CHECK(s.result == 0, "Set(parsed meta)");
+        uint8_t in[24] = {0}; in[0] = 1; memcpy(in + 8, kp, 16);
+        svc_call(db, 3, in, 24, &c); CHECK(c.result == 0 && !memcmp(c.out, id1, 16), "GetContentIdByType(program)");
+        in[0] = 3; svc_call(db, 3, in, 24, &c); CHECK(c.result == 0 && !memcmp(c.out, id2, 16), "GetContentIdByType(control)");
+        in[0] = 5; svc_call(db, 3, in, 24, &c); CHECK(c.result == HZ_R_NCM_CONTENT_NOT_FOUND, "GetContentIdByType: type not present");
+        memcpy(in + 8, none, 16); svc_call(db, 3, in, 24, &c); CHECK(c.result == HZ_R_NCM_CONTENT_META_NOT_FOUND, "GetContentIdByType: no such meta");
+        memset(in, 0, sizeof in); memcpy(in + 8, kp, 16);
+        uint8_t infos[0x60] = {0}; c = (IpcCall){0}; c.in = in; c.in_size = 24; svc_set_out_buf(&c, infos, sizeof infos); svc_call_c(db, 4, &c);
+        CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 2 && !memcmp(infos, id1, 16) && !memcmp(infos + 0x18, id2, 16), "ListContentInfo lists both contents");
+        in[0] = 1; memset(infos, 0, sizeof infos); c = (IpcCall){0}; c.in = in; c.in_size = 24; svc_set_out_buf(&c, infos, sizeof infos); svc_call_c(db, 4, &c);
+        CHECK(SVC_OUT(&c, int32_t, 0) == 1 && !memcmp(infos, id2, 16), "ListContentInfo honours the offset");
+        in[0] = 0; c = (IpcCall){0}; c.in = in; c.in_size = 24; svc_set_out_buf(&c, infos, 0x18); svc_call_c(db, 4, &c);
+        CHECK(SVC_OUT(&c, int32_t, 0) == 1, "ListContentInfo is cut to the buffer");
+        c = (IpcCall){0}; c.in = in; c.in_size = 24; svc_set_out_buf(&c, infos, sizeof infos); svc_call_c(db, 17, &c);
+        CHECK(SVC_OUT(&c, int32_t, 0) == 1 && infos[0] == 0x77, "ListContentMetaInfo returns the meta info record");
+        uint8_t hc[32]; memcpy(hc, kp, 16); memcpy(hc + 16, id2, 16);
+        svc_call(db, 16, hc, 32, &c); CHECK(c.out[0] == 1, "HasContent(true)");
+        id2[0] ^= 1; memcpy(hc + 16, id2, 16); svc_call(db, 16, hc, 32, &c); CHECK(c.out[0] == 0, "HasContent(false)");
+        svc_call(db, 18, kp, 16, &c); CHECK(c.out[0] == 1, "GetAttributes reads the header byte");
+        svc_call(db, 16, k1, 16, &c); CHECK(c.result == 0 && c.out[0] == 0, "HasContent on an unparseable blob = false");
+        in[0] = 0; memcpy(in + 8, k1, 16); c = (IpcCall){0}; c.in = in; c.in_size = 24; svc_set_out_buf(&c, infos, sizeof infos); svc_call_c(db, 4, &c);
+        CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 0, "ListContentInfo on an unparseable blob = 0");
+    }
     printf("{\"test\":\"svc_ncm\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

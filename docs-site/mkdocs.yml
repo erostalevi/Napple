@@ -69,6 +69,11 @@ nav:
       - Environment variables: reference/environment-variables.md
       - Glossary: reference/glossary.md
       - Tooling: reference/tooling.md
+  - Mods:
+      - mods/README.md
+      - Format: mods/format.md
+      - Authoring: mods/authoring.md
+      - Integration: mods/integration.md
   - Titles:
       - titles/README.md
       - Link's Awakening: titles/01006BB00C6F0000.md

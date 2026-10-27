@@ -491,7 +491,63 @@ static void perf_check(int rev, uint32_t header_size) {
     CHECK(napple_audren_request_update(g.r, g.in, n2, g.out, sizeof g.out, &w, tiny, 8) == 0, "buffer smaller than the header is ignored");
     napple_audren_close(g.r);
 }
+/* History: with performance_frame_count = 3 the renderer holds the last three frames until a buffer arrives, and hands them over back to back. */
+static void t_performance_history(void) {
+    AudrenParameter p = param_default();
+    p.performance_frame_count = 3;
+    Rig g;
+    rig_open(&g, p);
+    Update u;
+    scene_init(&u, 11, &p);
+    u.voices[0] = voice_pcm(0, FMT_PCM16, g_pcm, sizeof g_pcm, 240);
+    size_t w = 0;
+    for (int i = 0; i < 4; i++) {
+        size_t n = build_update(&u, g.in);
+        CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, NULL, 0) == 0, "update %d without a performance buffer", i);
+    }
+    uint8_t perf[3 * (0x20 + 16 * 16) + 64];
+    size_t n = build_update(&u, g.in);
+    memset(perf, 0, sizeof perf);
+    CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf) == 0, "update with a buffer");
+    AudrenHeader oh;
+    memcpy(&oh, g.out, sizeof oh);
+    uint32_t pb;
+    size_t off = sizeof oh + oh.memory_pools + oh.voices + oh.effects + oh.sinks;
+    memcpy(&pb, g.out + off, 4);
+    uint32_t at = 0, frames = 0, idx[8] = {0}, hdr[8];
+    while (at + 0x20 <= pb && frames < 8) {
+        memcpy(hdr, perf + at, sizeof hdr);
+        CHECK(hdr[0] == 0x46524550 && hdr[3] > 0, "frame %u has a PERF header and a next offset", frames);
+        if (hdr[3] == 0) break;
+        idx[frames++] = hdr[7];
+        at += hdr[3];
+    }
+    CHECK(at == pb && frames == 3, "three frames fill exactly the reported %u bytes (got %u frames)", pb, frames);
+    CHECK(idx[1] >= idx[0] && idx[2] >= idx[1], "frame indices never go backwards (%u %u %u)", idx[0], idx[1], idx[2]);
+    n = build_update(&u, g.in);
+    CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf) == 0, "next update");
+    memcpy(&pb, g.out + off, 4);
+    memcpy(hdr, perf, sizeof hdr);
+    CHECK(pb == hdr[3], "after collecting, only the new frame is returned (%u vs %u)", pb, hdr[3]);
+    /* a buffer that holds two frames: the oldest two are handed over, the rest waits */
+    for (int i = 0; i < 2; i++) {
+        n = build_update(&u, g.in);
+        napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, NULL, 0);
+    }
+    memcpy(hdr, perf, sizeof hdr);
+    n = build_update(&u, g.in);
+    uint32_t fsz = hdr[3];
+    napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, 2 * fsz);
+    memcpy(&pb, g.out + off, 4);
+    CHECK(pb == 2 * fsz, "a two-frame buffer takes two whole frames (%u)", pb);
+    n = build_update(&u, g.in);
+    napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf);
+    memcpy(&pb, g.out + off, 4);
+    CHECK(pb >= 2 * fsz, "the frame left behind comes out with the next update (%u)", pb);
+    napple_audren_close(g.r);
+}
 static void t_performance(void) {
+    t_performance_history();
     perf_check(11, 0x20);
     perf_check(3, 0x10);
     perf_check(5, 0x20);

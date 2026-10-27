@@ -15,6 +15,8 @@ static IrsCore core;
 static int core_ready, env_checked, thread_run, thread_live;
 static pthread_t pump_thread;
 static pthread_mutex_t irs_lock = PTHREAD_MUTEX_INITIALIZER;
+static int irs_active;              /* ActivateIrsensor / ActivateIrsensorWithFunctionLevel seen and not deactivated */
+static uint32_t irs_function_level; /* SetFunctionLevel: the sensor's function level (0 = default); processors read it from the config, so it is only kept */
 
 static uint64_t now_ns(void) { return runtime_guest_ticks() * 625ull / 12ull; } /* 19.2 MHz ticks to ns */
 static void ensure(void) {
@@ -87,10 +89,31 @@ static void irs_get_camera_handle(IpcObject *s, IpcCall *c) {
     } /* [unverified] invalid npad */
     IPC_OUT(c, h);
 }
+/* ActivateIrsensor takes the aruid (u64); the WithFunctionLevel form takes {u32 level, pad, u64 aruid}. The state is kept so that a title that activates
+ * twice or sets the level before running a processor sees the same success as on a console; processors do not require activation here. */
+static void irs_activate(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&irs_lock);
+    irs_active = 1;
+    pthread_mutex_unlock(&irs_lock);
+}
+static void irs_set_level(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t level = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0;
+    pthread_mutex_lock(&irs_lock);
+    irs_function_level = level;
+    pthread_mutex_unlock(&irs_lock);
+}
+static void irs_activate_level(IpcObject *s, IpcCall *c) {
+    irs_set_level(s, c);
+    irs_activate(s, c);
+}
 static void irs_deactivate(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
     pthread_mutex_lock(&irs_lock);
+    irs_active = 0;
     ensure();
     for (unsigned i = 0; i < IR_NCAM; i++) irs_core_stop(&core, i);
     pthread_mutex_unlock(&irs_lock);
@@ -141,7 +164,9 @@ static void irs_run_transfer(IpcObject *s, IpcCall *c) {
     (void)s;
     run_processor(c, IR_MODE_TRANSFER, sizeof(IrTransferConfig), 1);
 }
-/* Processors the simulator does not compute (tera plugin, pointing, IR LED, extended transfer): accepted while a source exists, producing nothing. */
+/* Processors the simulator does not compute (tera plugin, pointing / DPD, IR LED): accepted while a source exists, producing nothing. */
+/* RunImageTransferExProcessor: the same transfer as the plain processor (IrTransferConfig already carries the origin and trimming formats the Ex form adds). */
+static void irs_run_transfer_ex(IpcObject *s, IpcCall *c) { irs_run_transfer(s, c); }
 static void irs_run_other(IpcObject *s, IpcCall *c) {
     (void)s;
     run_processor(c, IR_MODE_OTHER, 0, 0);
@@ -188,7 +213,7 @@ static void irs_get_transfer_state(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, st);
 }
 static const IpcCmd irs_cmds[] = {
-    {302, "ActivateIrsensor", svc_noop, IPC_STUB},
+    {302, "ActivateIrsensor", irs_activate, IPC_IMPL},
     {303, "DeactivateIrsensor", irs_deactivate, IPC_IMPL},
     {304, "GetIrsensorSharedMemoryHandle", irs_get_shmem, IPC_IMPL},
     {305, "StopImageProcessor", irs_stop, IPC_IMPL},
@@ -201,11 +226,11 @@ static const IpcCmd irs_cmds[] = {
     {312, "RunDpdProcessor", irs_run_other, IPC_STUB},
     {313, "SuspendImageProcessor", irs_stop, IPC_IMPL},
     {314, "CheckFirmwareVersion", irs_check_firmware, IPC_IMPL},
-    {315, "SetFunctionLevel", svc_noop, IPC_STUB},
-    {316, "RunImageTransferExProcessor", irs_run_other, IPC_STUB},
-    {317, "RunIrLedProcessor", irs_run_other, IPC_STUB},
+    {315, "SetFunctionLevel", irs_set_level, IPC_IMPL},
+    {316, "RunImageTransferExProcessor", irs_run_transfer_ex, IPC_IMPL},
+    {317, "RunIrLedProcessor", irs_run_other, IPC_IMPL}, /* LED on: no host-visible effect, accepted while a camera source exists */
     {318, "StopImageProcessorAsync", irs_stop, IPC_IMPL},
-    {319, "ActivateIrsensorWithFunctionLevel", svc_noop, IPC_STUB},
+    {319, "ActivateIrsensorWithFunctionLevel", irs_activate_level, IPC_IMPL},
 };
 static IpcObject *irs_open(void) { return IPC_OBJECT("irs", irs_cmds, NULL, NULL); }
 void service_register_irs(void) { ipc_register_service("irs", irs_open); }

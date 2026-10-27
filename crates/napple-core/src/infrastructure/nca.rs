@@ -1,5 +1,7 @@
-//! NCA3 reader: AES-XTS header, key-area / titlekey derivation, AES-CTR section decryption.
+//! NCA3 (and NCA2/NCA0) reader: AES-XTS header, key-area / titlekey derivation, AES-CTR section decryption.
 use super::io::{Slice, Source, Src, check, read_vec};
+use super::ivfc::{self, Ivfc};
+use super::ticket::oaep_sha256_decrypt;
 use crate::domain::error::{Error, Result};
 use crate::domain::keys::KeySet;
 use aes::Aes128;
@@ -14,6 +16,8 @@ use xts_mode::Xts128;
 const HEADER_SIZE: usize = 0xC00;
 const SECTOR: usize = 0x200;
 const MEDIA: u64 = 0x200;
+/// User-supplied key for NCA0 key areas: hex of RSA private exponent (0x100) || modulus (0x100).
+pub const NCA0_KEY: &str = "nca0_key_area_rsa";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContentType {
@@ -90,14 +94,35 @@ impl Nca {
             Aes128::new(GenericArray::from_slice(&hk[..16])),
             Aes128::new(GenericArray::from_slice(&hk[16..])),
         );
-        for (i, sector) in h.as_chunks_mut::<SECTOR>().0.iter_mut().enumerate() {
-            xts.decrypt_sector(sector, (i as u128).to_be_bytes());
-        }
-        match &h[0x200..0x204] {
-            b"NCA3" => {}
-            b"NCA2" | b"NCA0" | b"NCA1" => return Err(Error::Unsupported("NCA0/1/2".into())),
+        let decrypt =
+            |h: &mut [u8], first: usize, count: usize, sector_of: &dyn Fn(usize) -> u128| {
+                for i in first..first + count {
+                    xts.decrypt_sector(
+                        &mut h[i * SECTOR..(i + 1) * SECTOR],
+                        sector_of(i).to_be_bytes(),
+                    );
+                }
+            };
+        // The first two sectors (signatures, magic, main fields) are common to all versions.
+        decrypt(&mut h, 0, 2, &|i| i as u128);
+        let version = match &h[0x200..0x204] {
+            // NCA3: one XTS run, the four FS headers continue the sector numbering.
+            b"NCA3" => {
+                decrypt(&mut h, 2, 4, &|i| i as u128);
+                3
+            }
+            // NCA2 and the pre-1.0 NCA0: every FS header is its own XTS unit at sector 0.
+            b"NCA2" => {
+                decrypt(&mut h, 2, 4, &|_| 0);
+                2
+            }
+            b"NCA0" => {
+                decrypt(&mut h, 2, 4, &|_| 0);
+                0
+            }
+            b"NCA1" => return Err(Error::Unsupported("NCA1".into())),
             _ => return Err(Error::Integrity("NCA header magic".into())),
-        }
+        };
         let content_type = match h[0x205] {
             0 => ContentType::Program,
             1 => ContentType::Meta,
@@ -129,10 +154,26 @@ impl Nca {
                 2 => "system",
                 _ => return Err(Error::Unsupported("key area index".into())),
             };
-            let kek: [u8; 16] = keys.get(&format!("key_area_key_{kind}_{key_gen:02x}"))?;
             let mut area = [0u8; 64];
-            area.copy_from_slice(&h[0x300..0x340]);
-            aes_ecb_decrypt(&kek, &mut area);
+            if version == 0 {
+                // NCA0: the key area is a 0x100-byte RSA-OAEP block (key `nca0_key_area_rsa` =
+                // private exponent || modulus). Unverified against retail files.
+                let kp = keys
+                    .get_vec(NCA0_KEY)
+                    .ok_or_else(|| Error::MissingKey(NCA0_KEY.into()))?;
+                if kp.len() != 0x200 {
+                    return Err(Error::KeyFile(format!("key {NCA0_KEY} has wrong length")));
+                }
+                let pt = oaep_sha256_decrypt(&h[0x300..0x400], &kp[..0x100], &kp[0x100..])?;
+                if pt.len() != 64 {
+                    return Err(Error::Integrity("NCA0 key area".into()));
+                }
+                area.copy_from_slice(&pt);
+            } else {
+                let kek: [u8; 16] = keys.get(&format!("key_area_key_{kind}_{key_gen:02x}"))?;
+                area.copy_from_slice(&h[0x300..0x340]);
+                aes_ecb_decrypt(&kek, &mut area);
+            }
             Some(area[0x20..0x30].try_into().unwrap())
         };
 
@@ -261,12 +302,34 @@ pub fn pfs0_data(section: &Src, sec: &Section) -> Result<Src> {
     Slice::new(section.clone(), data_off, data_size)
 }
 
-/// IVFC (RomFS): returns the data level (last level).
+/// IVFC (RomFS): checks the hash tree above the data level (master hash and every hash level;
+/// cheap, and doubles as a key-correctness check) and returns the data level. Synthetic images
+/// without a tree are passed through. Use [`romfs_data_verified`] to also hash every data block.
 pub fn romfs_data(section: &Src, sec: &Section) -> Result<Src> {
+    romfs_level(section, sec, false)
+}
+
+/// Like [`romfs_data`] but streams the whole data level through the hash tree (reads the entire
+/// RomFS: seconds for a multi-GB game).
+pub fn romfs_data_verified(section: &Src, sec: &Section) -> Result<Src> {
+    romfs_level(section, sec, true)
+}
+
+fn romfs_level(section: &Src, sec: &Section, full: bool) -> Result<Src> {
     let d = &sec.hash_data;
-    if &d[..4] != b"IVFC" {
-        return Err(Error::Integrity("IVFC magic".into()));
+    match Ivfc::parse(d)? {
+        Some(iv) => {
+            if full {
+                ivfc::verify_data(section, &iv)?;
+            } else {
+                ivfc::verify_tree(section, &iv)?;
+            }
+            let l = iv.data();
+            Slice::new(section.clone(), l.offset, l.size)
+        }
+        None => {
+            let lvl = 0x10 + 5 * 0x18;
+            Slice::new(section.clone(), u64le(d, lvl), u64le(d, lvl + 8))
+        }
     }
-    let lvl = 0x10 + 5 * 0x18;
-    Slice::new(section.clone(), u64le(d, lvl), u64le(d, lvl + 8))
 }

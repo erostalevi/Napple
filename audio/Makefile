@@ -23,7 +23,7 @@ libnapple_audio.a: $(OBJ)
 build/test_%: tests/test_%.c libnapple_audio.a
 	$(CC) $(CFLAGS) $(INC) $< libnapple_audio.a $(LIBOPUS) $(FW) -o $@
 
-TESTS := build/test_audren build/test_effects build/test_reverb3d build/test_review build/test_audin build/test_audout build/test_hwopus build/test_engine build/test_threads build/test_speed
+TESTS := build/test_audren build/test_effects build/test_reverb3d build/test_review build/test_audin build/test_audout build/test_hwopus build/test_engine build/test_threads build/test_speed build/test_audin_source
 test: $(TESTS)
 	@for t in $(TESTS); do echo "== $$t"; ./$$t || exit 1; done
 

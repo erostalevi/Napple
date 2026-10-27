@@ -63,3 +63,20 @@ uint64_t ns_total_space(const char *path) {
     if (!path || statvfs(path, &v)) return 0;
     return (uint64_t)v.f_blocks * (uint64_t)v.f_frsize;
 }
+
+uint64_t ns_parse_title_id(const char *hex) {
+    uint64_t v = 0;
+    if (!hex || strlen(hex) != 16) return 0;
+    for (int i = 0; i < 16; i++) {
+        char ch = hex[i];
+        int d = ch >= '0' && ch <= '9' ? ch - '0' : ch >= 'a' && ch <= 'f' ? ch - 'a' + 10 : ch >= 'A' && ch <= 'F' ? ch - 'A' + 10 : -1;
+        if (d < 0) return 0;
+        v = v << 4 | (uint64_t)d;
+    }
+    return v;
+}
+void ns_app_record(uint64_t id, uint8_t out[NS_APP_RECORD_SIZE]) {
+    memset(out, 0, NS_APP_RECORD_SIZE);
+    memcpy(out, &id, 8);
+    out[8] = 3;
+}

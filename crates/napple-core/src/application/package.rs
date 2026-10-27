@@ -72,7 +72,7 @@ impl Pack {
 
 /// Returns one Pack per content meta found in the file (a combined NSP/XCI can hold several titles).
 pub fn scan(path: &Path, keys: &KeySet) -> Result<Vec<Pack>> {
-    let (ncas, tks) = collect(FileSource::open(path)?)?;
+    let (ncas, tks) = collect(FileSource::open(path)?, keys)?;
     let map: HashMap<String, Src> = ncas.iter().cloned().collect();
     let mut packs = Vec::new();
     for (_, src) in &ncas {

@@ -1,0 +1,6 @@
+{
+  "renderScale": 1.5,
+  "aspect": "21:9",
+  "fpsMode": "60",
+  "fixes": { "skipIntroLogos": true }
+}

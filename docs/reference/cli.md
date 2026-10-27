@@ -367,3 +367,17 @@ Scripts meant to be run directly. Paths are relative to the `Napple/` root; most
 
 The `tools/dev/dev_*.sh` scripts are developer test drivers that take a GPU lock (`work/gpu.lock`); their usage is in [tools/dev/README.md](../../tools/dev/README.md).
 `tools/dev/synth_keys.m` and `tools/prepare_tables.py` are specific to one developer machine or are superseded and are not documented here; [tools/README.md](../../tools/README.md) describes every script.
+
+## napple mods
+
+`napple mods pack|inspect|validate|apply|convert|build-id` (`crates/napple-mods/src/cli.rs`) works on `.napmod` community mods and fixes; `<mod>` is a `.napmod` or an unpacked folder. Format and rules: [mods](../mods/README.md).
+
+```
+napple mods pack <dir> [-o <file.napmod>]
+napple mods inspect <mod> [--json]
+napple mods validate <mod> [--json]                       (exit 1 when there are errors)
+napple mods apply <mod> --image <file> --build-id <hex> [--layout <text_end>,<ro_end>] [--enable-code]
+      [--enable <patch>[#<block>]] [--disable <patch>[#<block>]] [--dry-run | -o <patched image>] [--json]
+napple mods convert <in> <out> [--build-id <hex>]          (.pchtxt, .json and .ips in either direction)
+napple mods build-id <file.nso>
+```

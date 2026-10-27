@@ -3,7 +3,8 @@
    Policy (documented in docs/architecture/audio-input-frontend.md):
      - Player 1 (npad id 0) is always present: the keyboard (and the first controller) drive it.
      - Players 2..N follow the 2nd..Nth connected controller, limited by SetSupportedNpadIdType.
-     - The reported style is the first of FullKey, JoyDual, Handheld, JoyLeft, JoyRight that the game supports. A game
+     - The reported style is the first of FullKey, JoyDual, Handheld, JoyLeft, JoyRight that the game supports (then GameCube, Palma, the retro
+       pads when it supports nothing else; the player's binding style can pick them first). A game
        that supports only Handheld gets its state on the handheld npad (id 0x20, slot 9) as well as on player 1.
      - The left mouse button is a one-finger touch screen (1280x720 space) when bindings.mouse_touch is set.
    Everything is sampled by one thread (default 120 Hz) that writes the shared memory with the pure writers in
@@ -670,6 +671,9 @@ static void map_slot(const napple_input *in, int slot, napple_npad_state *st) {
     if (st->right.y < -half) st->buttons |= NAPPLE_BTN_MASK(NAPPLE_BTN_STICK_R_DOWN);
 }
 
+#define NES_STYLES (NAPPLE_STYLE_LARK_HVC_LEFT | NAPPLE_STYLE_LARK_HVC_RIGHT | NAPPLE_STYLE_LARK_NES_LEFT | NAPPLE_STYLE_LARK_NES_RIGHT)
+#define RETRO_STYLES (NES_STYLES | NAPPLE_STYLE_LUCIA | NAPPLE_STYLE_LAGON | NAPPLE_STYLE_LAGER)
+static uint32_t first_bit(uint32_t v) { return v & (~v + 1u); }
 static uint32_t choose_style(uint32_t supported, int pref, int *handheld_only) {
     *handheld_only = 0;
     {
@@ -691,6 +695,9 @@ static uint32_t choose_style(uint32_t supported, int pref, int *handheld_only) {
         *handheld_only = 1;
         return NAPPLE_STYLE_HANDHELD;
     }
+    if (pref == NAPPLE_STYLE_PREF_GC && (supported & NAPPLE_STYLE_GC)) return NAPPLE_STYLE_GC;
+    if (pref == NAPPLE_STYLE_PREF_PALMA && (supported & NAPPLE_STYLE_PALMA)) return NAPPLE_STYLE_PALMA;
+    if (pref == NAPPLE_STYLE_PREF_NES && (supported & NES_STYLES)) return first_bit(supported & NES_STYLES);
     if (supported & NAPPLE_STYLE_FULL_KEY) return NAPPLE_STYLE_FULL_KEY;
     if (supported & NAPPLE_STYLE_JOY_DUAL) return NAPPLE_STYLE_JOY_DUAL;
     if (supported & NAPPLE_STYLE_HANDHELD) {
@@ -699,6 +706,10 @@ static uint32_t choose_style(uint32_t supported, int pref, int *handheld_only) {
     }
     if (supported & NAPPLE_STYLE_JOY_LEFT) return NAPPLE_STYLE_JOY_LEFT;
     if (supported & NAPPLE_STYLE_JOY_RIGHT) return NAPPLE_STYLE_JOY_RIGHT;
+    /* a title that supports only the retro / GameCube / Palma styles (an emulator-style launcher, a Palma-only toy) gets the first it asked for */
+    if (supported & NAPPLE_STYLE_GC) return NAPPLE_STYLE_GC;
+    if (supported & NAPPLE_STYLE_PALMA) return NAPPLE_STYLE_PALMA;
+    if (supported & RETRO_STYLES) return first_bit(supported & RETRO_STYLES);
     return NAPPLE_STYLE_FULL_KEY;
 }
 static uint32_t attrs_for(uint32_t style) {
@@ -709,6 +720,11 @@ static uint32_t attrs_for(uint32_t style) {
         case NAPPLE_STYLE_JOY_DUAL: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_LEFT_CONNECTED | NAPPLE_ATTR_RIGHT_CONNECTED;
         case NAPPLE_STYLE_JOY_LEFT: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_LEFT_CONNECTED;
         case NAPPLE_STYLE_JOY_RIGHT: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_RIGHT_CONNECTED;
+        case NAPPLE_STYLE_GC: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_WIRED; /* the GameCube adapter is a cable */
+        case NAPPLE_STYLE_LARK_HVC_LEFT:
+        case NAPPLE_STYLE_LARK_NES_LEFT: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_LEFT_CONNECTED;
+        case NAPPLE_STYLE_LARK_HVC_RIGHT:
+        case NAPPLE_STYLE_LARK_NES_RIGHT: return NAPPLE_ATTR_CONNECTED | NAPPLE_ATTR_RIGHT_CONNECTED;
         default: return NAPPLE_ATTR_CONNECTED;
     }
 }
@@ -795,11 +811,11 @@ void napple_input_update(napple_input *in, uint64_t now) {
             napple_motion_reset(&in->motion[slot]);
             napple_motion_step(&in->motion[slot], dt, rest_acc, zero, &six);
         }
-        const int six_idx = style == NAPPLE_STYLE_FULL_KEY   ? 0
-                            : style == NAPPLE_STYLE_HANDHELD ? 1
-                            : style == NAPPLE_STYLE_JOY_DUAL ? 2
-                            : style == NAPPLE_STYLE_JOY_LEFT ? 4
-                                                             : 5;
+        const int six_idx = style == NAPPLE_STYLE_HANDHELD    ? 1
+                            : style == NAPPLE_STYLE_JOY_DUAL  ? 2
+                            : style == NAPPLE_STYLE_JOY_LEFT  ? 4
+                            : style == NAPPLE_STYLE_JOY_RIGHT ? 5
+                                                              : 0; /* FullKey, and GameCube / Palma / retro pads (no motion of their own) */
         napple_hid_push_sixaxis(shm, l, slot, six_idx, &six);
         in->six_last[slot] = six;
         in->six_have[slot] = 1;

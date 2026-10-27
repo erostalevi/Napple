@@ -169,6 +169,19 @@ static int style_index(uint32_t style) {
         case NAPPLE_STYLE_JOY_LEFT: return 3;
         case NAPPLE_STYLE_JOY_RIGHT: return 4;
         case NAPPLE_STYLE_PALMA: return 5;
+        /* GameCube and the retro pads report through the FullKey lifo, their handheld forms through the Handheld one (yuzu npad.cpp; unverified) */
+        case NAPPLE_STYLE_GC:
+        case NAPPLE_STYLE_LARK_HVC_LEFT:
+        case NAPPLE_STYLE_LARK_HVC_RIGHT:
+        case NAPPLE_STYLE_LARK_NES_LEFT:
+        case NAPPLE_STYLE_LARK_NES_RIGHT:
+        case NAPPLE_STYLE_LUCIA:
+        case NAPPLE_STYLE_LAGON:
+        case NAPPLE_STYLE_LAGER: return 0;
+        case NAPPLE_STYLE_HANDHELD_LARK_HVC_LEFT:
+        case NAPPLE_STYLE_HANDHELD_LARK_HVC_RIGHT:
+        case NAPPLE_STYLE_HANDHELD_LARK_NES_LEFT:
+        case NAPPLE_STYLE_HANDHELD_LARK_NES_RIGHT: return 1;
         case NAPPLE_STYLE_SYSTEM_EXT:
         case NAPPLE_STYLE_SYSTEM: return 6;
         default: return -1;

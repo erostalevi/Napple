@@ -1,0 +1,47 @@
+name: Mod or fix submission
+description: Share a mod, a patch or a game fix (data only, no game content)
+labels: [mod, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Mods and fixes are data (patches, cheats, config, shader replacements), never game files. **Do not attach extracted assets, a patched executable, keys or firmware.**
+        Format and trust rules: docs/guides/contributing-write-a-mod.md. For a code change to Napple itself, open a pull request instead.
+  - type: input
+    id: game
+    attributes:
+      label: Game, title ID and build IDs it targets
+      placeholder: "Name (0100000000000000), build id 3ca12dfaaf9c82da"
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of change
+      options: [game fix (a bug in how the game runs on Napple), patch (pchtxt or IPS), cheat, settings preset, shader replacement, other]
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What it does and why
+      description: The symptom it fixes or the behaviour it adds, and how you know it works.
+    validations:
+      required: true
+  - type: textarea
+    id: content
+    attributes:
+      label: The patch or a link to it
+      description: Paste a pchtxt or cheat text, or link a repository. Offsets and bytes only; no game data.
+      render: text
+  - type: checkboxes
+    id: legal
+    attributes:
+      label: Rights and safety
+      options:
+        - label: I wrote this myself or have the author's permission, and I state its license in the text above.
+          required: true
+        - label: It contains no copyrighted game content, keys, firmware or Nintendo code.
+          required: true
+        - label: I tested it on a game build I own and say so above.
+          required: true
