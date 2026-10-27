@@ -54,7 +54,9 @@ void napple_settings_clamp(napple_settings *s) {
     if (!s->internal_width != !s->internal_height) s->internal_width = s->internal_height = 0;
     s->output_width = s->output_width ? clampi(s->output_width, 320, 16384) : 1280;
     s->output_height = s->output_height ? clampi(s->output_height, 240, 16384) : 720;
+    s->fps_mode = clampi(s->fps_mode, 0, 3);
     s->fps_cap = s->fps_cap == 0 ? 0 : clampi(s->fps_cap, 15, 1000);
+    if (s->fps_mode == 2 && s->fps_cap == 0) s->fps_cap = 60;
     s->vsync = s->vsync != 0;
     s->fullscreen = s->fullscreen != 0;
     s->mute_in_background = s->mute_in_background != 0;
@@ -112,12 +114,12 @@ size_t napple_settings_to_json(const napple_settings *s, char *out, size_t cap) 
     size_t at = 0;
     put(out, cap, &at,
         "{\n  \"version\": 1,\n  \"internal_width\": %d,\n  \"internal_height\": %d,\n  \"internal_scale_percent\": %d,\n  \"output_width\": %d,\n  \"output_height\": %d,\n"
-        "  \"fps_cap\": %d,\n  \"vsync\": %s,\n  \"fullscreen\": %s,\n  \"aspect\": %d,\n  \"master_volume\": %.3f,\n  \"mute_in_background\": %s,\n  \"show_touch_cursor\": %s,\n"
+        "  \"fps_mode\": %d,\n  \"fps_cap\": %d,\n  \"vsync\": %s,\n  \"fullscreen\": %s,\n  \"aspect\": %d,\n  \"master_volume\": %.3f,\n  \"mute_in_background\": %s,\n  \"show_touch_cursor\": %s,\n"
         "  \"render_mode\": %d,\n  \"supersample_percent\": %d,\n  \"filter\": %d,\n  \"sharpness\": %d,\n  \"upscaler\": %d,\n  \"anisotropy\": %d,\n"
         "  \"frame_gen\": %s,\n  \"frame_gen_mult\": %d,\n  \"frame_gen_method\": %d,\n  \"show_stats\": %s,\n"
         "  \"stats_corner\": %d,\n  \"stats_size\": %d,\n  \"stats_opacity\": %d,\n  \"metal_hud\": %s,\n  \"panel_passthrough\": %s,\n"
         "  \"speed_percent\": %d,\n  \"turbo_percent\": %d,\n  \"speed_mode\": %d,\n  \"audio_speed_mode\": %d,\n  \"update_version\": ",
-        s->internal_width, s->internal_height, s->internal_scale_percent, s->output_width, s->output_height, s->fps_cap, s->vsync ? "true" : "false",
+        s->internal_width, s->internal_height, s->internal_scale_percent, s->output_width, s->output_height, s->fps_mode, s->fps_cap, s->vsync ? "true" : "false",
         s->fullscreen ? "true" : "false", s->aspect, s->master_volume, s->mute_in_background ? "true" : "false", s->show_touch_cursor ? "true" : "false",
         s->render_mode, s->supersample_percent, s->filter, s->sharpness, s->upscaler, s->anisotropy, s->frame_gen ? "true" : "false", s->frame_gen_mult,
         s->frame_gen_method, s->show_stats ? "true" : "false", s->stats_corner, s->stats_size, s->stats_opacity, s->metal_hud ? "true" : "false",
@@ -155,6 +157,7 @@ int napple_settings_from_json(const char *json, size_t len, napple_settings *out
     NUM(output_width, "output_width");
     NUM(output_height, "output_height");
     NUM(fps_cap, "fps_cap");
+    NUM(fps_mode, "fps_mode");
     NUM(aspect, "aspect");
     NUM(render_mode, "render_mode");
     NUM(supersample_percent, "supersample_percent");
@@ -172,6 +175,15 @@ int napple_settings_from_json(const char *json, size_t len, napple_settings *out
     NUM(stats_size, "stats_size");
     NUM(stats_opacity, "stats_opacity");
 #undef NUM
+    /* files from before fps_mode: fps_cap paced the guest (its speed scaled with the rate). The rate becomes a present rate and the speed becomes explicit. */
+    if (!tj_get(pool, r, "fps_mode") && tj_get(pool, r, "fps_cap")) {
+        if (s.fps_cap == 0) s.fps_mode = 0;
+        else if (s.fps_cap >= 1000) s.fps_mode = 3;
+        else {
+            s.fps_mode = 2;
+            if (!tj_get(pool, r, "speed_percent") && s.fps_cap != 60) s.speed_percent = clampi(s.fps_cap * 100 / 60, 10, 1000);
+        }
+    }
     /* files from before render_mode existed: a custom size meant "fixed", a scale other than 100 % meant "scale factor" */
     if (!tj_get(pool, r, "render_mode")) s.render_mode = (s.internal_width && s.internal_height) ? 3 : s.internal_scale_percent != 100 ? 1 : 0;
 #define FLAG(field, key)                                                                                                                                       \
@@ -364,6 +376,20 @@ uint64_t napple_frame_limiter_wait(napple_frame_limiter *l) {
     }
     while (mono_ns() < now + w) {}
     return w;
+}
+
+static const int kFpsChoiceHz[NAPPLE_FPS_CHOICES] = {0, 0, 30, 60, 90, 120, 144, 240, 0};
+int napple_fps_choice(const napple_settings *s) {
+    if (s->fps_mode == 0 || s->fps_mode == 1) return s->fps_mode;
+    if (s->fps_mode == 3) return NAPPLE_FPS_CHOICES - 1;
+    for (int i = 2; i < NAPPLE_FPS_CHOICES - 1; i++)
+        if (kFpsChoiceHz[i] == s->fps_cap) return i;
+    return 3; /* a custom value from settings.json shows as 60 Hz; it is kept until the player picks another */
+}
+void napple_fps_choice_apply(napple_settings *s, int choice) {
+    if (choice < 0 || choice >= NAPPLE_FPS_CHOICES) return;
+    s->fps_mode = choice <= 1 ? choice : choice == NAPPLE_FPS_CHOICES - 1 ? 3 : 2;
+    if (s->fps_mode == 2) s->fps_cap = kFpsChoiceHz[choice];
 }
 
 /* Effective game speed (percent): the hold key wins over the toggles, slow motion wins over the base speed; a toggled turbo uses the turbo speed.

@@ -72,12 +72,24 @@ All guest time derives from one host clock: `GetSystemTick` and `cntpct_el0` are
 nanoseconds), `cntfrq_el0` reads 19200000, `time:u` steady clock uses the same ticks, so every guest-visible clock agrees. The only periodic source is the
 vsync event of `vi:u` (`vi.c`): a thread with absolute deadlines (`next += period`, no drift; a stall longer than 8 periods resynchronises instead of bursting),
 period from `gfx_vsync_period_ns()` read on every tick (60 Hz unless the frame-rate setting changes it).
-Settings (`frontend/include/napple_frontend.h`, applied by `app.m: push_gfx_settings` through `gfx_set_settings`, at start and on every change; headless runs read the
-same `settings.json`): `fps_cap` 0 = the game's own pacing (60/30 Hz as it asks, real time, the default), 15..999 = fixed display rate the guest is paced by
-(its speed scales with it: fast forward / slow motion), 1000 = uncapped. `vsync` only controls the Metal layer's display sync; it never changes game speed.
-The display refresh rate (120 Hz ProMotion) is irrelevant to the guest, so a high refresh display cannot speed a game up. Measured (M5, windowless): LAS presents ~46 frames/s
-(GPU ~11 ms and CPU pacing per frame: gfx replay performance, owned by graphics); the intro movie runs 2149 frames in 36.1 s (60 Hz source), i.e. real time.
-
+### Timing: three rates (2026-10-27, fps-unlock-timing)
+Three rates are kept apart, and only the first two can ever change what the game feels like:
+1. **Game clock / guest cadence**: `timescale.c`. The virtual vsync of `vi.c` fires every `TS_GAME_VSYNC_NS` (1/60 s) divided by the Speed control and nothing else
+   (`timescale_vsync_period_ns`); every guest clock follows the same scale. A title at swap interval 2 simply waits two vsyncs (30 Hz game logic). The deadline stepper
+   `timescale_deadline_step` is shared by `vi.c` and the tests.
+2. **Speed** (`speed_percent`, turbo, slow motion, `speed_mode`): the only control that makes the game faster or slower.
+3. **Present rate** (`fps_mode`): a HOST property, `timescale_set_fps`. 0 game pacing, 1 match the display refresh (ProMotion 120 Hz), 2 custom N (`fps_cap`, 15..999),
+   3 uncapped (`CAMetalLayer.displaySyncEnabled = NO`). It decides which finished game frames the presenter shows and is never read by the guest clocks. Above the game's
+   frame rate the display repeats the last image (frame generation, `mtl_interp.m`, can fill in-between images); real extra game frames need a per-title timestep patch
+   (a later per-title package). Below it (custom 30) the presenter drops frames. `vsync` off lets the layer present as soon as an image is ready (tearing possible), it
+   too never touches game speed. `gfx_vsync_period_ns()` is always the game's 16.67 ms. In `mtl_present.m` the guest-visible frame time is `swap interval / 60 / speed` in
+   every mode; the headless path (no layer) therefore always runs the game at its real speed whatever `fps_mode` says.
+Settings: `settings.json` has `fps_mode` (+ `fps_cap` as the custom rate). Files from before it stored `fps_cap` as a rate the guest was paced by (speed scaled with it):
+they migrate on load (0 -> game pacing, 1000 -> uncapped, N -> custom N and, when the file has no `speed_percent`, Speed = N/60 so the old feel is kept explicitly).
+Headless: `NAPPLE_FPS_MODE=0..3`, `NAPPLE_FPS_HZ=<N>` (mode 2); `NAPPLE_SPEED=<factor>` is the speed. `NAPPLE_FRAME_TRACE=<file.csv>` writes `kind,real_ns,game_clock_ns` for
+every guest vsync (V) and presented frame (P); `tools/fps/frame_trace.py` runs the title x mode matrix and asserts game clock 1.00 +-0.02 per wall second, guest vsync 60 Hz
++-3 % and presents never above vsync. Unit test: `runtime/tests/test_timescale.c` (10 simulated seconds at present rates 30/60/144/999/display/uncapped: identical vsync
+count and game clock, +-0.1 %). The statistics overlay (F9) shows `game` fps (guest frames) and `shown` fps (presented images) separately.
 ## Shared fonts (`pl:u`)
 The system fonts are Nintendo data and are never shipped. Extract them once from the user's own firmware:
 `napple build --dump-fonts <Firmware.zip|dir> -k <prod.keys> -o "~/Library/Application Support/Napple/system/fonts"` (system data titles

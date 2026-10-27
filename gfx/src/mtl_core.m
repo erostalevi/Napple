@@ -337,10 +337,7 @@ void gfx_mtl_tex_invalidate(const texsnap *t) { (void)t; }
  * --------------------------------------------------------------------------------------------------------------- */
 
 uint64_t napple_gfx_vsync_period_ns(void) {
-    napple_gfx_settings st;
-    gfx_settings_get(&st);
-    if (st.pacing == NAPPLE_PACING_FIXED && st.target_fps > 0) return (uint64_t)(1e9 / st.target_fps);
-    return 1000000000ull / 60;
+    return 1000000000ull / 60; /* the game's cadence; the host present rate (pacing / target_fps) never changes it, or the game would speed up */
 }
 
 /* ---------------------------------------------------------------------------------------------------------------
@@ -394,7 +391,7 @@ void gfx_mtl_settings_changed(void) {
     napple_gfx_settings st;
     gfx_settings_get(&st);
 #if TARGET_OS_OSX
-    if (g_mtl.layer) g_mtl.layer.displaySyncEnabled = st.pacing != NAPPLE_PACING_UNCAPPED; /* iOS presents on the display link only (no such property) */
+    if (g_mtl.layer) g_mtl.layer.displaySyncEnabled = st.pacing != NAPPLE_PACING_UNCAPPED && !st.host_vsync_off; /* iOS presents on the display link only (no such property) */
 #else
     (void)st;
 #endif

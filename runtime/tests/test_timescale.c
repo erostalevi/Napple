@@ -76,6 +76,47 @@ int main(void) {
     timescale_set(1.0, TS_MODE_VSYNC_ONLY); int64_t s1 = timescale_wall_skew_ns(); real_sleep_ms(100); int64_t s2 = timescale_wall_skew_ns();
     CHECK(s2 - s1 < 1000000 && s2 - s1 > -1000000, "vsync-only mode leaves the clock skew constant");
 
+    /* fps_mode: the host present rate never reaches the guest. Simulated 10 s in virtual time (jittery sleeps, absolute deadlines): the guest vsync count and
+     * the game clock are identical whatever the present rate is (30, 60, 144, 1000 Hz custom, display matching, uncapped). */
+    timescale_set(1.0, 0);
+    {
+        struct { int mode, hz; double disp; } cases[] = {{FPS_MODE_CUSTOM, 30, 120}, {FPS_MODE_CUSTOM, 60, 120}, {FPS_MODE_CUSTOM, 144, 120},
+                                                         {FPS_MODE_CUSTOM, 999, 120}, {FPS_MODE_DISPLAY, 0, 120}, {FPS_MODE_UNCAPPED, 0, 120}, {FPS_MODE_GAME, 0, 60}};
+        uint64_t base_v = 0, base_g = 0;
+        for (unsigned c = 0; c < sizeof cases / sizeof *cases; c++) {
+            timescale_set_fps(cases[c].mode, cases[c].hz);
+            CHECK(timescale_fps_mode() == cases[c].mode, "fps mode stored");
+            uint64_t period = timescale_vsync_period_ns(TS_GAME_VSYNC_NS), pp = timescale_present_period_now_ns(cases[c].disp);
+            uint64_t t0 = runtime_now_ns() + 1000000000ull, now = t0, next = t0, vs = 0, shown = 0, last_shown = 0, seed = 12345 + c;
+            while (now < t0 + 10000000000ull) {
+                uint64_t wait = timescale_deadline_step(&next, period, now);
+                seed = seed * 6364136223846793005ull + 1442695040888963407ull;
+                now += wait + (seed >> 33) % 200000; /* up to 0.2 ms scheduler latency */
+                vs++;
+                if (!last_shown || !pp || now - last_shown >= pp * 92 / 100) shown++, last_shown = now;
+            }
+            uint64_t g = timescale_guest_ns_at(t0 + 10000000000ull) - timescale_guest_ns_at(t0);
+            if (!c) base_v = vs, base_g = g;
+            CHECK(vs == base_v && g == base_g, "mode %d/%d Hz: vsync %llu, game clock %.4f s identical across present rates", cases[c].mode, cases[c].hz,
+                  (unsigned long long)vs, (double)g / 1e9);
+            CHECK(vs >= 599 && vs <= 601, "10 s of 60 Hz game vsync is 600 ticks (%llu)", (unsigned long long)vs);
+            CHECK(fabs((double)g / 1e10 - 1.0) < 0.001, "game clock rate 1.000 +-0.1%%");
+            if (cases[c].mode == FPS_MODE_CUSTOM && cases[c].hz == 30) CHECK(shown >= 295 && shown <= 305, "30 Hz present shows every second game frame (%llu)", (unsigned long long)shown);
+            if (cases[c].mode == FPS_MODE_CUSTOM && cases[c].hz >= 144) CHECK(shown >= 599, "a present rate above the game rate shows every game frame (%llu)", (unsigned long long)shown);
+        }
+        CHECK(timescale_present_period_ns(FPS_MODE_DISPLAY, 0, 120) == 8333333 && timescale_present_period_ns(FPS_MODE_UNCAPPED, 0, 120) == 0 &&
+                  timescale_present_period_ns(FPS_MODE_GAME, 0, 120) == 0 && timescale_present_period_ns(FPS_MODE_CUSTOM, 90, 0) == 11111111,
+              "present period per mode");
+        /* the Speed control still scales the game: 2x = 2x vsync rate, independent of the present mode */
+        timescale_set_fps(FPS_MODE_UNCAPPED, 0);
+        timescale_set(2.0, 0);
+        CHECK(timescale_vsync_period_ns(TS_GAME_VSYNC_NS) < 8400000, "speed 2x halves the vsync period even uncapped");
+        timescale_set(1.0, 0);
+        /* stall resync */
+        uint64_t nx = 1000; CHECK(timescale_deadline_step(&nx, 1000, 100000) == 0 && nx == 100000, "a long stall resynchronises instead of bursting");
+        timescale_set_fps(FPS_MODE_GAME, 0);
+    }
+
     printf("test_timescale: %d checks, %d failed\n", g_checked, g_failed);
     return g_failed ? 1 : 0;
 }

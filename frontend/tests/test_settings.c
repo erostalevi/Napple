@@ -40,6 +40,26 @@ int main(void) {
     CHECK(napple_settings_from_json(cl, strlen(cl), &r) == 0 && r.fps_cap == 15 && r.internal_scale_percent == 400 && r.master_volume == 1 && r.aspect == 6 &&
               r.output_width == 320,
           "clamped values");
+    /* fps_mode migration: old fps_cap paced the guest; it becomes a present rate plus an explicit Speed */
+    {
+        const char *a = "{\"fps_cap\":120}", *b = "{\"fps_cap\":0}", *c2 = "{\"fps_cap\":1000}", *e = "{\"fps_cap\":60}", *f = "{\"fps_cap\":90,\"speed_percent\":100}";
+        CHECK(napple_settings_from_json(a, strlen(a), &r) == 0 && r.fps_mode == 2 && r.fps_cap == 120 && r.speed_percent == 200, "old fps_cap 120 -> custom 120 at speed 200%%");
+        CHECK(napple_settings_from_json(b, strlen(b), &r) == 0 && r.fps_mode == 0 && r.speed_percent == 100, "old fps_cap 0 -> game pacing");
+        CHECK(napple_settings_from_json(c2, strlen(c2), &r) == 0 && r.fps_mode == 3 && r.speed_percent == 100, "old fps_cap 1000 -> uncapped, speed unchanged");
+        CHECK(napple_settings_from_json(e, strlen(e), &r) == 0 && r.fps_mode == 2 && r.speed_percent == 100, "old fps_cap 60 -> custom 60 at 100%%");
+        CHECK(napple_settings_from_json(f, strlen(f), &r) == 0 && r.fps_mode == 2 && r.speed_percent == 100, "explicit speed is kept");
+        s = d;
+        for (int i = 0; i < NAPPLE_FPS_CHOICES; i++) {
+            napple_fps_choice_apply(&s, i);
+            CHECK(napple_fps_choice(&s) == i, "fps menu choice %d round trips", i);
+        }
+        napple_fps_choice_apply(&s, 5);
+        CHECK(s.fps_mode == 2 && s.fps_cap == 120, "menu 120 Hz = custom 120");
+        s = d;
+        s.fps_mode = 1;
+        n = napple_settings_to_json(&s, json, sizeof json);
+        CHECK(napple_settings_from_json(json, n, &r) == 0 && r.fps_mode == 1, "fps_mode round trip");
+    }
     /* display / speed fields */
     s = d;
     s.render_mode = 2;

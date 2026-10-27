@@ -22,15 +22,14 @@ static void *vsync_thread(void *arg) {
     (void)arg;
     uint64_t next = runtime_now_ns();
     for (;;) {
-        uint64_t period =
-            timescale_vsync_period_ns(gfx_vsync_period_ns()); /* re-read every tick: the player can change the frame rate or game speed while the game runs */
-        next += period;
-        uint64_t now = runtime_now_ns();
-        if (next > now) {
-            uint64_t d = next - now;
-            struct timespec ts = {(time_t)(d / 1000000000ull), (long)(d % 1000000000ull)};
+        /* The guest's cadence is the title's 60 Hz scaled by the Speed control only: the host present rate (fps_mode) never reaches the guest. Re-read every
+         * tick: the player can change the game speed while the game runs. */
+        uint64_t period = timescale_vsync_period_ns(TS_GAME_VSYNC_NS);
+        uint64_t wait = timescale_deadline_step(&next, period, runtime_now_ns());
+        if (wait) {
+            struct timespec ts = {(time_t)(wait / 1000000000ull), (long)(wait % 1000000000ull)};
             nanosleep(&ts, NULL);
-        } else if (now - next > 8 * period) next = now;
+        }
         timescale_count_vsync();
         pthread_mutex_lock(&vlock);
         for (unsigned i = 0; i < nvsync; i++) event_signal_handle(vsync_events[i]);

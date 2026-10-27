@@ -195,14 +195,24 @@ static void push_gfx_settings(const napple_settings *s) {
     g.docked = !g_cfg.op_mode_handheld;
     if (s->internal_width && s->internal_height) g.internal_scale = (float)s->internal_height / (g.docked ? 1080.f : 720.f);
     else g.internal_scale = (float)s->internal_scale_percent / 100.f;
-    g.pacing = s->fps_cap == 0 ? 0 : s->fps_cap >= 1000 ? 2 : 1;
-    g.target_fps = (float)s->fps_cap;
+    /* fps_mode only chooses the host present rate; the guest's cadence stays the game's (see timescale.h). Display matching needs no cap: the layer syncs. */
+    g.pacing = s->fps_mode == 3 ? 2 : s->fps_mode == 2 ? 1 : 0;
+    g.vsync = getenv("NAPPLE_VSYNC") ? atoi(getenv("NAPPLE_VSYNC")) : s->vsync; /* NAPPLE_VSYNC=0|1: soak-test override */
+    g.target_fps = s->fps_mode == 2 ? (float)s->fps_cap : 0.f;
+    const char *fe = getenv("NAPPLE_FPS_MODE"); /* headless runs: 0 game, 1 display, 2 custom (NAPPLE_FPS_HZ), 3 uncapped */
+    if (fe) {
+        int m = atoi(fe);
+        const char *hz = getenv("NAPPLE_FPS_HZ");
+        g.pacing = m == 3 ? 2 : m == 2 ? 1 : 0;
+        g.target_fps = m == 2 ? (float)(hz && atoi(hz) > 0 ? atoi(hz) : 60) : 0.f;
+        timescale_set_fps(m, (int)g.target_fps);
+    } else timescale_set_fps(s->fps_mode, s->fps_cap);
     gfx_set_settings(&g);
     push_display_settings(s);
     LOG("main", "graphics settings: internal x%.2f, frame rate %s, vsync %s", g.internal_scale,
-        g.pacing == 0   ? "game default"
+        g.pacing == 0   ? "game pacing / display"
         : g.pacing == 2 ? "uncapped"
-                        : "fixed",
+                        : "custom present rate",
         s->vsync ? "on" : "off");
 }
 static void on_settings(void *u, const napple_settings *s) {

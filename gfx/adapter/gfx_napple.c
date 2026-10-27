@@ -32,7 +32,7 @@ int gfx_init(const GfxConfig *cfg, const GfxHooks *hooks) {
     c.hooks.core_back = a_core_back;
     c.hooks.wrap_guest_callable = a_wrap;
     c.hooks.on_present = a_present;
-    /* NAPPLE_TURBO=<fps>: debug aid that runs the guest faster than real time (virtual vsync and presents at <fps>, default 300), to reach late game states quickly. */
+    /* NAPPLE_TURBO=<fps>: debug aid, now only the host present rate (it no longer speeds the game up: use NAPPLE_SPEED=<factor> for that). */
     if (getenv("NAPPLE_TURBO")) { float f = (float)atof(getenv("NAPPLE_TURBO")); c.settings.pacing = NAPPLE_PACING_FIXED; c.settings.target_fps = f > 1 ? f : 300; }
     if (!getenv("NAPPLE_GFX_SKIPINIT") && napple_gfx_init(&c)) return -1;
     return 0;
@@ -63,6 +63,7 @@ void gfx_set_settings(const GfxSettings *in) {   /* frontend settings -> libnapp
     s.internal_res_scale = in->internal_scale > 0 ? in->internal_scale : 1.0f;
     s.pacing = in->pacing == 1 ? NAPPLE_PACING_FIXED : in->pacing == 2 ? NAPPLE_PACING_UNCAPPED : NAPPLE_PACING_GAME;
     s.target_fps = in->pacing == 1 ? in->target_fps : 0;
+    s.host_vsync_off = !in->vsync;
     s.docked = in->docked != 0;
     napple_gfx_set_settings(&s);
 }

@@ -67,7 +67,6 @@ static Row *info(NSString *t) { return mk(RowInfo, t); }
 
 static const int kScalePct[] = {50, 100, 200, 400};
 static const int kSuperPct[] = {100, 150, 200, 300, 400};
-static const int kFpsVals[] = {0, 30, 60, 90, 120, 240, 1000};
 static const int kAnisoVals[] = {0, 2, 4, 8, 16};
 static const int kFgMultVals[] = {0, 2, 3, 4, 6, 8};
 static const int kSpeedSteps[] = NAPPLE_SPEED_STEPS;
@@ -288,8 +287,8 @@ static void add_toggles(NappleFEiOS *fe, NSMutableArray *rows, NSString *sub, NS
         }
         case 1: { /* ---- FPS / Speed ---- */
             [r addObject:mk(RowHeader, @"Frame rate")];
-            [r addObject:menu(@"Display rate", @[ @"Game default", @"30 Hz", @"60 Hz", @"90 Hz", @"120 Hz", @"240 Hz", @"Uncapped" ],
-                              ^NSInteger { return index_of(kFpsVals, 7, S().fps_cap, 0); }, ^(NSInteger i) { MUT(t->fps_cap = kFpsVals[i];); })];
+            [r addObject:menu(@"Present rate", @[ @"Game pacing", @"Match display", @"30 Hz", @"60 Hz", @"90 Hz", @"120 Hz", @"144 Hz", @"240 Hz", @"Uncapped" ],
+                              ^NSInteger { napple_settings cur = S(); return napple_fps_choice(&cur); }, ^(NSInteger i) { MUT(napple_fps_choice_apply(t, (int)i););})];
             [r addObject:toggle(@"VSync", ^BOOL { return S().vsync; }, ^(BOOL on) { MUT(t->vsync = on;); })];
             [r addObject:toggle(@"Frame generation", ^BOOL { return S().frame_gen; }, ^(BOOL on) { MUT(t->frame_gen = on;); })];
             [r addObject:menu(@"Images per frame", @[ @"Automatic", @"2x", @"3x", @"4x", @"6x", @"8x" ],

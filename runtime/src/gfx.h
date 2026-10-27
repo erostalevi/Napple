@@ -55,14 +55,15 @@ void gfx_compile_status(GfxCompileStatus *out);
 int gfx_texture_info(void *nvn_texture, int *format, unsigned *width, unsigned *height);
 int gfx_texture_write_rgba(void *nvn_texture, const void *rgba, size_t pitch, unsigned width, unsigned height);
 
-/* Player-facing graphics settings (frontend settings.json -> back end), applied at any time. pacing: 0 follow the game (real time, vsync-locked),
- * 1 fixed `target_fps` (also the guest's vsync rate: the game's speed scales with it), 2 uncapped (fast forward). internal_scale: render target
+/* Player-facing graphics settings (frontend settings.json -> back end), applied at any time. pacing is the HOST present rate and never changes game speed: 0 game pacing /
+ * display refresh, 1 custom `target_fps`, 2 uncapped. internal_scale: render target
  * multiplier (1 = the game's native size); docked: the console mode the game was told about. */
 typedef struct {
     float internal_scale;
     int pacing;
     float target_fps;
     int docked;
+    int vsync; /* 1 = the Metal layer syncs to the display refresh (no tearing); 0 = present as soon as a frame is ready. Never changes game speed */
 } GfxSettings;
 void gfx_set_settings(const GfxSettings *s);
 

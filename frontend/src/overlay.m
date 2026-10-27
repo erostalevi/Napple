@@ -9,7 +9,6 @@
 
 static NSArray<NSString *> *kScales, *kFps, *kAspect, *kRenderMode, *kSuper, *kUpscaler, *kFilter, *kAniso, *kFgMult, *kFgMethod, *kSpeedMode, *kAudioSpeed;
 static const int kScaleVals[] = {25, 50, 75, 100, 150, 200, 300, 400};
-static const int kFpsVals[] = {0, 30, 60, 90, 120, 240, 1000}; /* fps_cap values behind kFps */
 
 static NSStackView *page(void) {
     NSStackView *s = [NSStackView new];
@@ -213,9 +212,8 @@ static NSView *fps_page(NappleFE *fe) {
     NSStackView *p = page();
     p.spacing = 7;
     [p addArrangedSubview:heading(@"Frame rate")];
-    NSInteger fi = index_of(kFpsVals, 7, s.fps_cap, 0);
-    [p addArrangedSubview:row(@"Display rate", fe_popup(kFps, fi, ^(NSPopUpButton *b) {
-                                  update(fe, ^(napple_settings *t) { t->fps_cap = kFpsVals[b.indexOfSelectedItem]; });
+    [p addArrangedSubview:row(@"Present rate", fe_popup(kFps, napple_fps_choice(&s), ^(NSPopUpButton *b) {
+                                  update(fe, ^(napple_settings *t) { napple_fps_choice_apply(t, (int)b.indexOfSelectedItem); });
                               }))];
     [p addArrangedSubview:fe_check(@"VSync", s.vsync, ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->vsync = b.state == NSControlStateValueOn; }); })];
     [p addArrangedSubview:fe_check(@"Frame generation (in-between frames, F8)", s.frame_gen,
@@ -227,8 +225,8 @@ static NSView *fps_page(NappleFE *fe) {
                                   update(fe, ^(napple_settings *t) { t->frame_gen_method = (int)b.indexOfSelectedItem; });
                               }))];
     [p addArrangedSubview:
-            note(@"Display rate: Game default keeps the game at its own speed (60 / 30 Hz as it asks). A fixed rate sets the rate the game is paced by, so its "
-                 @"speed scales with it; use the speed controls below for turbo and slow motion instead. Frame generation shows several images per game frame "
+            note(@"Present rate: how often your Mac shows a new image. It never changes game speed: the game always runs at its own cadence (60 / 30 Hz as it asks) "
+                 @"and the display repeats the last frame in between, so any rate is safe; use the speed controls below for turbo and slow motion. Frame generation shows several images per game frame "
                  @"without changing game speed; it adds about half a game frame of latency and can smear fast motion and text over moving scenes.")];
     [p addArrangedSubview:heading(@"Game speed")];
     [p addArrangedSubview:setting_slider(fe, @"Speed", 10, 400, MIN(s.speed_percent, 400), @"%.0f%%",
@@ -820,7 +818,7 @@ void fe_overlay_place(NappleFE *fe) {
 
 NSView *fe_build_overlay(NappleFE *fe) {
     kScales = @[ @"25%", @"50%", @"75%", @"100% (native)", @"150%", @"200%", @"300%", @"400%" ];
-    kFps = @[ @"Game default (real time)", @"30 Hz", @"60 Hz", @"90 Hz", @"120 Hz", @"240 Hz", @"Uncapped" ];
+    kFps = @[ @"Game pacing (real time)", @"Match display", @"30 Hz", @"60 Hz", @"90 Hz", @"120 Hz", @"144 Hz", @"240 Hz", @"Uncapped" ];
     kAspect = @[
         @"Locked 16:9 (native)", @"Locked 16:9", @"Locked 4:3", @"Free: stretch the image", @"Free: keep aspect (bars)", @"Free: fill (crop)",
         @"Free: match window aspect"

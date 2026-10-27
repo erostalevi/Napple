@@ -30,7 +30,8 @@ typedef struct napple_settings {
     int internal_width, internal_height; /* guest render target size the game is told about; 0,0 = game native */
     int internal_scale_percent;          /* 25..400; used when internal_width/height are 0 (100 = native) */
     int output_width, output_height;     /* window content size in points (windowed); 0 = default 1280x720 */
-    int fps_cap; /* 0 = the game's own pacing (real time), 15..999 = fixed display rate the guest is paced by (game speed scales with it), 1000 = uncapped (fast forward) */
+    int fps_mode; /* host present rate; never changes game speed: 0 = game pacing (the title's own cadence), 1 = match display refresh, 2 = custom (fps_cap), 3 = uncapped */
+    int fps_cap;  /* the custom present rate for fps_mode 2 (15..999). Files from before fps_mode stored a speed-scaling rate here; they migrate to mode + Speed */
     int vsync; /* 1 = present on display refresh */
     int fullscreen;
     int aspect; /* window / image shape: 0 = locked 16:9 (native), 1 = locked 16:9, 2 = locked 4:3, 3 = free window, stretch the image,
@@ -82,6 +83,10 @@ int napple_data_path(const char *config_dir, const char *title_id, const char *f
 #define NAPPLE_SPEED_STEPS                                                                                                                                     \
     { 10, 25, 50, 75, 100, 150, 200, 300, 400, 600, 800, 1000 }
 /* Resolved speed, for the runtime: the effective game speed in percent given the hold / toggle state; implemented in settings.c (pure, unit tested). */
+/* Present-rate menu shared by the macOS and iOS panels: 0 game pacing, 1 match display, 2..7 custom 30/60/90/120/144/240 Hz, 8 uncapped. Never changes game speed. */
+#define NAPPLE_FPS_CHOICES 9
+int napple_fps_choice(const napple_settings *s);
+void napple_fps_choice_apply(napple_settings *s, int choice);
 int napple_effective_speed_percent(const napple_settings *s, int turbo_held, int turbo_toggled, int slow_toggled);
 
 /* ---- game manifest: what the runtime tells the overlay about the installed game ---- */

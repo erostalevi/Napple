@@ -423,9 +423,9 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
     }
     uint32_t interval_eff = st.present_interval_override ? st.present_interval_override : (interval ? interval : 1);
     double speed = ds.speed > 0.05f ? ds.speed : 1.0;
-    double min_dur = 0;
-    if (st.pacing == NAPPLE_PACING_GAME) min_dur = interval_eff / 60.0 / speed;
-    else if (st.pacing == NAPPLE_PACING_FIXED && st.target_fps > 0) min_dur = 1.0 / st.target_fps / speed;
+    /* The guest-visible frame time is the game's own (swap interval / 60 at the Speed control) in every mode: the host present rate (pacing, target_fps) only
+     * decides which finished frames are shown (host_min below), so a higher rate never makes the game run faster. */
+    double min_dur = interval_eff / 60.0 / speed;
     _Atomic uint64_t *cell = &w->displayed[idx];
     uint64_t t_enter = gfx_now_ns();
 
@@ -502,9 +502,10 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
     const double disp_period = 1.0 / (hz > 1 ? hz : 60.0);
     static uint64_t last_shown_ns;
     int drop = atomic_load(&g_hidden) != 0; /* napple_gfx_set_hidden: a library applet owns the screen */
-    if (g_mtl.layer && st.pacing != NAPPLE_PACING_UNCAPPED && min_dur > 0 && min_dur < disp_period * 0.92 && last_shown_ns &&
-        (double)(t_enter - last_shown_ns) / 1e9 < disp_period * 0.92)
-        drop = 1;
+    double host_min = disp_period; /* shortest time between two shown images: the display refresh, or the custom rate when slower; uncapped: no limit */
+    if (st.pacing == NAPPLE_PACING_FIXED && st.target_fps > 0 && 1.0 / st.target_fps > host_min) host_min = 1.0 / st.target_fps;
+    if (st.pacing == NAPPLE_PACING_UNCAPPED) host_min = 0;
+    if (g_mtl.layer && host_min > 0 && min_dur < host_min * 0.92 && last_shown_ns && (double)(t_enter - last_shown_ns) / 1e9 < host_min * 0.92) drop = 1;
     if (!drop && !atomic_load(&g_shot_pending) && mtl_interp_active(&ds)) { /* frame generation consumes the frame: it shows it and the generated ones */
         if (src && mtl_interp_submit(&ds, src, crop, gw, gh, win_w, win_h, hz, interval_eff, speed, w, idx, seq, t_enter)) return;
     }
@@ -548,7 +549,7 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
     };
     if (dr) {
         last_shown_ns = gfx_now_ns();
-        if (min_dur > 0 && min_dur >= disp_period * 0.92) napple_present_after(cb, dr, min_dur);
+        if (min_dur >= disp_period * 0.92) napple_present_after(cb, dr, min_dur);
         else [cb presentDrawable:dr];
         napple_drawable_presented(cb, dr, ^(id<MTLDrawable> d) {
             (void)d;

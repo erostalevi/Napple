@@ -86,7 +86,8 @@ typedef struct napple_gfx_settings {
     uint32_t docked;                    /* 1 = report docked operation mode properties to the game (affects game-chosen resolution) */
     uint32_t unimplemented_abort;       /* 1 = abort() on the first unimplemented NVN call; 0 = log once, return 0 */
     uint32_t present_interval_override; /* 0 = honour the game; N>0 = treat every present as interval N (see docs/architecture/gfx.md, frame pacing) */
-    uint32_t reserved[7];
+    uint32_t host_vsync_off;            /* 1 = the layer does not sync to the display refresh */
+    uint32_t reserved[6];
 } napple_gfx_settings;
 
 /* ---- init ---------------------------------------------------------------------------------------------------- */
