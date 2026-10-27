@@ -37,7 +37,7 @@ int main(void) {
     CHECK(napple_settings_from_json(json, n, &r) == 0 && !memcmp(&s, &r, sizeof s), "full round trip");
     /* clamping */
     const char *cl = "{\"fps_cap\":3,\"internal_scale_percent\":9999,\"master_volume\":7,\"aspect\":9,\"output_width\":1}";
-    CHECK(napple_settings_from_json(cl, strlen(cl), &r) == 0 && r.fps_cap == 15 && r.internal_scale_percent == 400 && r.master_volume == 1 && r.aspect == 6 &&
+    CHECK(napple_settings_from_json(cl, strlen(cl), &r) == 0 && r.fps_cap == 15 && r.internal_scale_percent == 800 && r.master_volume == 1 && r.aspect == 7 &&
               r.output_width == 320,
           "clamped values");
     /* fps_mode migration: old fps_cap paced the guest; it becomes a present rate plus an explicit Speed */
@@ -66,7 +66,8 @@ int main(void) {
     s.supersample_percent = 200;
     s.filter = 4;
     s.sharpness = 55;
-    s.upscaler = 1;
+    s.upscaler = 2;
+    s.internal_scale_percent = 137;
     s.anisotropy = 8;
     s.frame_gen = 1;
     s.frame_gen_mult = 4;
@@ -90,6 +91,17 @@ int main(void) {
               r.anisotropy == 4 && r.frame_gen_mult == 2 && r.frame_gen_method == 4 && r.speed_percent == 10 && r.turbo_percent == 1000 && r.speed_mode == 2 &&
               r.audio_speed_mode == 0,
           "display / speed values clamped");
+    {   /* render scale: any value 10..800 round-trips, out of range clamps, the new upscalers and aspect survive */
+        const char *lo = "{\"internal_scale_percent\":3,\"upscaler\":3,\"aspect\":7}", *hi = "{\"internal_scale_percent\":1200,\"upscaler\":9}";
+        CHECK(napple_settings_from_json(lo, strlen(lo), &r) == 0 && r.internal_scale_percent == 10 && r.upscaler == 3 && r.aspect == 7, "scale lower clamp, CAS, integer fit");
+        CHECK(napple_settings_from_json(hi, strlen(hi), &r) == 0 && r.internal_scale_percent == 800 && r.upscaler == 3, "scale upper clamp, junk upscaler clamps to the last");
+        for (int pct = 10; pct <= 800; pct += 37) {
+            napple_settings q = d;
+            q.render_mode = 1; q.internal_scale_percent = pct; q.upscaler = pct % 4;
+            n = napple_settings_to_json(&q, json, sizeof json);
+            CHECK(napple_settings_from_json(json, n, &r) == 0 && r.internal_scale_percent == pct && r.upscaler == pct % 4 && r.render_mode == 1, "custom scale %d round trip", pct);
+        }
+    }
     const char *cl3 = "{\"stats_corner\":9,\"stats_size\":-2,\"stats_opacity\":1,\"metal_hud\":true}";
     CHECK(napple_settings_from_json(cl3, strlen(cl3), &r) == 0 && r.stats_corner == 3 && r.stats_size == 0 && r.stats_opacity == 10 && r.metal_hud && r.panel_passthrough,
           "stats / panel settings clamped, passthrough defaults on");

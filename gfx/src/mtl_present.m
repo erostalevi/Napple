@@ -171,6 +171,16 @@ static id<MTLFXSpatialScaler> get_fx(MTLPixelFormat in_pf, uint32_t iw, uint32_t
 }
 #endif
 
+int mtl_present_metalfx_available(void) {
+#ifdef NAPPLE_HAVE_METALFX
+    static int v = -1;
+    if (v < 0) v = g_mtl.dev && [MTLFXSpatialScalerDescriptor supportsDevice:g_mtl.dev];
+    return v;
+#else
+    return 0;
+#endif
+}
+
 void mtl_present_compose(id<MTLCommandBuffer> cb, id<MTLTexture> src, const float crop_in[4], float gw, float gh, id<MTLTexture> target,
                          const napple_display_settings *ds, int allow_upscaler) {
     const float sw = (float)src.width, sh = (float)src.height;
@@ -187,35 +197,11 @@ void mtl_present_compose(id<MTLCommandBuffer> cb, id<MTLTexture> src, const floa
     if (cw <= 0 || ch <= 0) return;
     /* aspect of the image in guest units (the actual allocation may be scaled per axis) */
     float img_asp = (gw * cw) / (gh * ch);
-    uint32_t dx = 0, dy = 0, dw = tw, dh = th;
-    float tgt_asp = (float)tw / (float)th;
-    if (ds->fit == NAPPLE_FIT_LETTERBOX) {
-        if (fabsf(img_asp - tgt_asp) > 0.001f) {
-            if (img_asp > tgt_asp) {
-                dw = tw;
-                dh = (uint32_t)lroundf((float)tw / img_asp);
-            } else {
-                dh = th;
-                dw = (uint32_t)lroundf((float)th * img_asp);
-            }
-            if (dw < 1) dw = 1;
-            if (dh < 1) dh = 1;
-            if (dw > tw) dw = tw;
-            if (dh > th) dh = th;
-            dx = (tw - dw) / 2;
-            dy = (th - dh) / 2;
-        }
-    } else if (ds->fit == NAPPLE_FIT_FILL && fabsf(img_asp - tgt_asp) > 0.001f) {
-        if (img_asp > tgt_asp) {
-            float keep = tgt_asp / img_asp;
-            cx += cw * (1 - keep) / 2;
-            cw *= keep;
-        } else {
-            float keep = img_asp / tgt_asp;
-            cy += ch * (1 - keep) / 2;
-            ch *= keep;
-        }
-    }
+    napple_fit_rect fr;
+    napple_display_fit_rect(ds->fit, img_asp, tw, th, (uint32_t)lroundf(gw * cw), (uint32_t)lroundf(gh * ch), &fr);
+    const uint32_t dx = fr.dx, dy = fr.dy, dw = fr.dw, dh = fr.dh;
+    if (fr.keep_x < 1) cx += cw * (1 - fr.keep_x) / 2, cw *= fr.keep_x;
+    if (fr.keep_y < 1) cy += ch * (1 - fr.keep_y) / 2, ch *= fr.keep_y;
     const float ox = cx * sw, oy = cy * sh, spx = cw * sw, spy = ch * sh; /* source pixels */
     const float rx = spx / (float)dw, ry = spy / (float)dh;
     int filter = (int)ds->filter;
@@ -223,9 +209,21 @@ void mtl_present_compose(id<MTLCommandBuffer> cb, id<MTLTexture> src, const floa
     uint32_t in_h = (uint32_t)lroundf(spy);
     if (in_h < 1) in_h = 1;
 
-    /* MetalFX spatial upscaling: only when the source is smaller than the destination on both axes and covers the whole texture */
+    /* Upscaling (source smaller than the destination on both axes): MetalFX spatial where asked for and available, else the built-in upscaler */
+    const int upscaling = allow_upscaler && ds->upscaler != NAPPLE_UP_NONE && rx < 0.999f && ry < 0.999f;
+    const uint32_t up = upscaling ? napple_display_effective_upscaler(ds->upscaler, mtl_present_metalfx_available(), 0, NULL) : NAPPLE_UP_NONE;
+    float sharp_amt = ds->sharpness;
+    if (up == NAPPLE_UP_CAS) {
+        filter = NAPPLE_FILTER_SHARP;
+        if (sharp_amt < 0.4f) sharp_amt = 0.4f;
+    }
+    if (up == NAPPLE_UP_FSR) {
+        float rect[4] = {ox, oy, spx, spy};
+        uint32_t dr[4] = {dx, dy, dw, dh};
+        if (mtl_upscale_encode(cb, src, rect, target, dr, vflip, sharp_amt)) return;
+    }
 #ifdef NAPPLE_HAVE_METALFX
-    if (allow_upscaler && ds->upscaler == 1 && rx < 0.999f && ry < 0.999f && fabsf(cw - 1) < 1e-4f && fabsf(ch - 1) < 1e-4f && !vflip) {
+    if (up == NAPPLE_UP_METALFX && fabsf(cw - 1) < 1e-4f && fabsf(ch - 1) < 1e-4f && !vflip) {
         id<MTLFXSpatialScaler> fx = get_fx(src.pixelFormat, (uint32_t)src.width, (uint32_t)src.height, dw, dh);
         if (fx) {
             MTLTextureDescriptor *d = [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:dw height:dh mipmapped:NO];
@@ -271,7 +269,7 @@ void mtl_present_compose(id<MTLCommandBuffer> cb, id<MTLTexture> src, const floa
     }
     int kernel = filter == NAPPLE_FILTER_BOX ? KERN_BOX : filter == NAPPLE_FILTER_LANCZOS ? KERN_LANCZOS : KERN_CATMULL;
     float radius = kernel == KERN_BOX ? 0.5f : kernel == KERN_LANCZOS ? 3.0f : 2.0f;
-    int sharp = filter == NAPPLE_FILTER_SHARP && ds->sharpness > 0.01f;
+    int sharp = filter == NAPPLE_FILTER_SHARP && sharp_amt > 0.01f;
     /* pass 1 (horizontal): source rows [oy, oy + spy) -> tmp(dw x in_h) ; pass 2 (vertical): tmp -> target (or tmp2 when sharpening follows) */
     id<MTLTexture> t1 = tmp_tex(0, dw, in_h, MTLPixelFormatRGBA16Float);
     {
@@ -312,7 +310,7 @@ void mtl_present_compose(id<MTLCommandBuffer> cb, id<MTLTexture> src, const floa
     if (sharp) {
         struct {
             float amount, ox, oy, pad;
-        } sp = {ds->sharpness, (float)dx, (float)dy, 0};
+        } sp = {sharp_amt, (float)dx, (float)dy, 0};
         id<MTLRenderCommandEncoder> e = begin_pass(cb, target, 1);
         float full[4] = {0, 0, 1, 1};
         [e setRenderPipelineState:g_pso_sharp];

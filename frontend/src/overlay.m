@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "fe_internal.h"
+#if __has_include(<MetalFX/MetalFX.h>)
+#import <MetalFX/MetalFX.h>
+#endif
 #import <GameController/GameController.h>
 
 static NSArray<NSString *> *kScales, *kFps, *kAspect, *kRenderMode, *kSuper, *kUpscaler, *kFilter, *kAniso, *kFgMult, *kFgMethod, *kSpeedMode, *kAudioSpeed;
@@ -82,6 +85,14 @@ static NSView *setting_slider(NappleFE *fe, NSString *label, double lo, double h
     r.spacing = 6;
     return row(label, r);
 }
+static BOOL fe_metalfx_available(void) {
+#if __has_include(<MetalFX/MetalFX.h>)
+    id<MTLDevice> d = MTLCreateSystemDefaultDevice();
+    return d && [MTLFXSpatialScalerDescriptor supportsDevice:d];
+#else
+    return NO;
+#endif
+}
 static const int kSuperVals[] = {100, 150, 200, 300, 400};
 static const int kAnisoVals[] = {0, 2, 4, 8, 16};
 static const int kFgMultVals[] = {0, 2, 3, 4, 6, 8};
@@ -124,6 +135,20 @@ static NSView *av_video_section(NappleFE *fe, NSStackView *p) {
             });
             [bs addObject:b];
         }
+        /* output targets: render at 4K / 1440p whatever the game's native size is (fixed size mode) */
+        static const int tw[2] = {3840, 2560}, th[2] = {2160, 1440};
+        for (int i = 0; i < 2; i++) {
+            int w = tw[i], h = th[i];
+            NSButton *b = small_button(i == 0 ? @"4K" : @"1440p", 52);
+            b.bezelStyle = NSBezelStyleRounded;
+            if (s.render_mode == 3 && s.internal_width == w && s.internal_height == h) b.bezelColor = NSColor.controlAccentColor;
+            fe_bind(b, ^(id x) {
+                (void)x;
+                update(fe, ^(napple_settings *t) { t->render_mode = 3; t->internal_width = w; t->internal_height = h; });
+                fe_overlay_refresh(fe);
+            });
+            [bs addObject:b];
+        }
         NSStackView *bv = [NSStackView stackViewWithViews:bs];
         bv.spacing = 5;
         [p addArrangedSubview:bv];
@@ -136,7 +161,19 @@ static NSView *av_video_section(NappleFE *fe, NSStackView *p) {
         NSInteger si = index_of(kScaleVals, 8, s.internal_scale_percent, 3);
         [p addArrangedSubview:row(@"Scale", fe_popup(kScales, si, ^(NSPopUpButton *b) {
                                       update(fe, ^(napple_settings *t) { t->internal_scale_percent = kScaleVals[b.indexOfSelectedItem]; });
+                                      fe_overlay_refresh(fe);
                                   }))];
+        /* any value from 10% to 800%, applied live (the game's screen-sized buffers are rebuilt on the fly) */
+        NSTextField *cp = [NSTextField textFieldWithString:@(s.internal_scale_percent).stringValue];
+        [cp.widthAnchor constraintEqualToConstant:62].active = YES;
+        fe_bind(cp, ^(id x) {
+            (void)x;
+            int v = cp.intValue;
+            update(fe, ^(napple_settings *t) { t->render_mode = 1; t->internal_scale_percent = v; });
+        });
+        NSStackView *cps = [NSStackView stackViewWithViews:@[ cp, fe_label(@"% (10-800)", 11, NO) ]];
+        cps.spacing = 4;
+        [p addArrangedSubview:row(@"Custom scale", cps)];
     } else if (s.render_mode == 3) {
         NSTextField *w = [NSTextField textFieldWithString:s.internal_width ? @(s.internal_width).stringValue : @""],
                     *h = [NSTextField textFieldWithString:s.internal_height ? @(s.internal_height).stringValue : @""];
@@ -162,6 +199,8 @@ static NSView *av_video_section(NappleFE *fe, NSStackView *p) {
                               }))];
     [p addArrangedSubview:row(@"Upscaler", fe_popup(kUpscaler, s.upscaler,
                                                     ^(NSPopUpButton *b) { update(fe, ^(napple_settings *t) { t->upscaler = (int)b.indexOfSelectedItem; }); }))];
+    if (s.upscaler == 1 && !fe_metalfx_available()) [p addArrangedSubview:note(@"MetalFX is not available on this Mac or build: the built-in upscaler is used instead. "
+                                                                              @"(MetalFX temporal needs depth and motion vectors from the game; none of the supported titles provide them, so only the spatial scalers are offered.)")];
     [p addArrangedSubview:row(@"Output filter", fe_popup(kFilter, s.filter, ^(NSPopUpButton *b) {
                                   update(fe, ^(napple_settings *t) { t->filter = (int)b.indexOfSelectedItem; });
                               }))];
@@ -821,11 +860,11 @@ NSView *fe_build_overlay(NappleFE *fe) {
     kFps = @[ @"Game pacing (real time)", @"Match display", @"30 Hz", @"60 Hz", @"90 Hz", @"120 Hz", @"144 Hz", @"240 Hz", @"Uncapped" ];
     kAspect = @[
         @"Locked 16:9 (native)", @"Locked 16:9", @"Locked 4:3", @"Free: stretch the image", @"Free: keep aspect (bars)", @"Free: fill (crop)",
-        @"Free: match window aspect"
+        @"Free: match window aspect", @"Free: whole-number multiple (bars)"
     ];
     kRenderMode = @[ @"Native size", @"Scale factor", @"Follow window", @"Fixed size" ];
     kSuper = @[ @"Off (1x)", @"1.5x", @"2x", @"3x", @"4x" ];
-    kUpscaler = @[ @"None (filter only)", @"MetalFX spatial (render lower, upscale)" ];
+    kUpscaler = @[ @"None (filter only)", @"MetalFX spatial (render lower, upscale)", @"Built-in edge adaptive (FSR-like)", @"CAS (resample + sharpen)" ];
     kFilter = @[ @"Bilinear", @"Nearest", @"Box (area average)", @"Bicubic", @"Lanczos", @"Sharpened bicubic" ];
     kAniso = @[ @"As the game asks", @"2x", @"4x", @"8x", @"16x" ];
     kFgMult = @[ @"Automatic (fill the display)", @"2x", @"3x", @"4x", @"6x", @"8x" ];

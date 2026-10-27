@@ -17,7 +17,8 @@ extern "C" {
 #endif
 
 enum { NAPPLE_RENDER_NATIVE = 0, NAPPLE_RENDER_SCALE = 1, NAPPLE_RENDER_WINDOW = 2, NAPPLE_RENDER_FIXED = 3 };
-enum { NAPPLE_FIT_LETTERBOX = 0, NAPPLE_FIT_STRETCH = 1, NAPPLE_FIT_FILL = 2 };
+enum { NAPPLE_FIT_LETTERBOX = 0, NAPPLE_FIT_STRETCH = 1, NAPPLE_FIT_FILL = 2, NAPPLE_FIT_INTEGER = 3 }; /* INTEGER: largest whole-number multiple that fits, bars around it */
+enum { NAPPLE_UP_NONE = 0, NAPPLE_UP_METALFX = 1, NAPPLE_UP_FSR = 2, NAPPLE_UP_CAS = 3 }; /* FSR: own edge adaptive upscaler + RCAS-style sharpening; CAS: Catmull-Rom resample + contrast adaptive sharpening (as the Sharp filter, tuned for upscaling) */
 enum { NAPPLE_FILTER_BILINEAR = 0, NAPPLE_FILTER_NEAREST = 1, NAPPLE_FILTER_BOX = 2, NAPPLE_FILTER_BICUBIC = 3, NAPPLE_FILTER_LANCZOS = 4, NAPPLE_FILTER_SHARP = 5 };
 enum { NAPPLE_FG_AUTO = 0, NAPPLE_FG_FLOW = 1, NAPPLE_FG_FLOW_LOW_LATENCY = 2, NAPPLE_FG_METAL_FLOW = 3, NAPPLE_FG_BLEND = 4 };
 
@@ -31,7 +32,7 @@ typedef struct napple_display_settings {
     uint32_t report_window_aspect; /* tell the game the window's aspect through vi / applet (engines that honour it extend their field of view) */
     uint32_t filter;             /* NAPPLE_FILTER_* */
     float    sharpness;          /* 0..1 */
-    uint32_t upscaler;           /* 0 none, 1 MetalFX spatial: render at window / upscale_factor and upscale */
+    uint32_t upscaler;           /* NAPPLE_UP_*: render at window / upscale_factor and upscale (see napple_display_effective_upscaler for the fallback) */
     float    upscale_factor;     /* > 1, default 1.5 */
     uint32_t anisotropy;         /* 0 = as the game asks, else the minimum for every sampler */
     uint32_t frame_gen;          /* generate in-between frames */
@@ -52,12 +53,28 @@ void napple_display_set_window(uint32_t width_px, uint32_t height_px, double ref
 
 /* Size the game should believe its display has: base_w x base_h (operation mode) unless report_window_aspect is on and the window is known:
  * then the height stays and the width follows the window's aspect (even, 16..16384). */
+/* HUD-safe fallback: a title whose HUD or camera breaks when it is told another aspect is marked "report_aspect": false in the per-title table; the size
+ * reported to the game is then the native one whatever report_window_aspect says (the picture is still fitted into the window by the fit mode). */
+void napple_display_set_report_aspect_allowed(int allowed);
 void napple_display_game_size(uint32_t base_w, uint32_t base_h, uint32_t *w, uint32_t *h);
 
 /* The scale factors (sx, sy) screen-sized render targets are allocated with, for a base size and window, under the given settings (pure function,
  * unit tested). Stays inside the device budget: no side above max_dim (<= 16384) and at most max_pixels in total (0 = defaults 16384 / 48 Mpixel). */
 void napple_display_compute_scale(const napple_display_settings *s, uint32_t base_w, uint32_t base_h, uint32_t win_w, uint32_t win_h,
                                   uint32_t max_dim, uint64_t max_pixels, float *sx, float *sy);
+
+/* Where the image goes inside a target of tw x th pixels. img_asp = width / height of the image as the game means it. (dx, dy, dw, dh) is the destination
+ * rectangle inside the target; keep_x / keep_y (0..1) is the part of the source that stays visible (FILL crops the long axis, centred). Pure function. */
+typedef struct napple_fit_rect { uint32_t dx, dy, dw, dh; float keep_x, keep_y; } napple_fit_rect;
+void napple_display_fit_rect(uint32_t fit, float img_asp, uint32_t tw, uint32_t th, uint32_t src_w, uint32_t src_h, napple_fit_rect *r);
+
+/* The upscaler that is really used for a request. metalfx_ok: the OS provides MetalFX spatial scaling; temporal_inputs: the title supplies depth + motion
+ * vectors (none of ours does, so a temporal request is never granted). Returns NAPPLE_UP_*; *why (static string, may be NULL) says what was substituted, for the
+ * UI ("MetalFX is not available here: using the built-in upscaler"). */
+uint32_t napple_display_effective_upscaler(uint32_t requested, int metalfx_ok, int temporal_inputs, const char **why);
+
+/* Pixel budget for the scaled render targets from the device's recommended working set (bytes): the scaled targets together stay well inside it. */
+uint64_t napple_display_budget_pixels(uint64_t working_set_bytes);
 
 typedef struct napple_display_stats {
     uint32_t size;

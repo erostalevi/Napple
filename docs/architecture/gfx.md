@@ -173,3 +173,44 @@ The translator turns the Maxwell surface instructions into Metal texture `read` 
 4. Compile with `MTLLanguageVersion3_1` when `needs_msl31`.
 5. `useResource:usage:` is not needed unless the images are reached through an argument buffer.
 6. A shader-written image makes the Metal texture the owner of the data (`GfxTex.gpu_owned`, as for render targets): CPU uploads stop, reads go to the GPU copy; there is no write-back into guest pages (the same as render targets today).
+
+### 12. Render scale, output fit and upscaling (2026-10-27)
+
+The player-facing "Video" settings (overlay tab, `settings.json`, `napple_display_settings` in `gfx/include/napple_display.h`) are applied live: a change reaches the
+next frame, and the game's screen-sized render targets are rebuilt after the window size was stable for 300 ms.
+
+**Vocabulary.** *base size* = what the game believes its screen is (1920x1080 docked, 1280x720 handheld, the window's aspect when "match window aspect" is on);
+*render size* = base x scale, the real size of the screen-sized targets; *output size* = the drawable.
+
+**Render scale.** `render_mode` 0 native, 1 scale factor, 2 follow the window, 3 fixed size. The factor is free between 10 % and 800 % (`internal_scale_percent`;
+presets 0.5x / 1x / 2x / 4x and "4K" / "1440p" targets in the overlay, a text field for any value). `supersample_percent` (100..400) multiplies it and is filtered
+down again by the output resamplers (box / bicubic / Lanczos kernels stretched by the down-scale ratio). `mtl_scale.m` allocates the screen-sized targets at
+`w * sx, h * sy`; viewports, scissors, texel fetches, size queries and the fragment position go through the `rscale` table the shader translator reads.
+Which textures count as screen sized: `mtl_scale_pick_size` (same shape as the swapchain, not smaller than base / 8, not larger than the screen, plain 2D, not mipped, not
+video decode / linear / sparse, rendered to by the GPU or depth). `NVN_TEXTURE_FLAGS_IMAGE` is **not** a veto for GPU-written targets (LAS, SMO and ACNH set it on every
+screen-sized target; the old veto left all of them unscaled). `NAPPLE_SCALE_DIAG=1` logs every distinct target and the decision once (`scale-diag:` lines).
+
+**Budget.** `napple_display_budget_pixels(working set)` (about 48 Mpixel, `recommendedMaxWorkingSetSize / 220` on small GPUs). `napple_display_compute_scale` gives up
+supersampling first (down to 1x), then reduces the render scale uniformly, and never exceeds 16384 per side: 4x with 4x supersampling degrades to about 2.7x instead of
+failing. `g_scaled_bytes` and the cache trim see the larger targets.
+
+**Output fit** (`fit`, from the overlay "Window" setting): letterbox / pillarbox (bars), stretch, fill (crop the long axis, centred) and whole-number multiple with bars.
+`napple_display_fit_rect` is a pure function (unit tested for 16:9, 21:9, 16:10, 4:3 and 9:16 targets). "Match window aspect" additionally tells the game a different
+screen size through vi/applet (`napple_display_game_size`); a title whose HUD or camera breaks with it is marked `"report_aspect": false` in the per-title table
+(HUD-safe fallback: it is told the native size, the picture is still fitted).
+
+**Upscalers** (`upscaler`): 0 none, 1 MetalFX spatial, 2 built-in edge adaptive (`mtl_upscale.m`: structure tensor driven anisotropic Lanczos-2 with an anti-ringing clamp,
+then a limited-lobe sharpening pass; original code, no third-party shader), 3 CAS (Catmull-Rom plus contrast adaptive sharpening). With an upscaler the render size is
+window / `upscale_factor` (1.5) and the upscaler brings it up. `napple_display_effective_upscaler` answers what is really used: MetalFX absent (old OS, simulator SDK)
+falls back to 2 and the overlay says so. MetalFX *temporal* needs depth and motion vectors from the game; none of the supported titles provides them, so it is never
+offered (decision, 2026-10-27). `sharpness` 0..1 scales the sharpening of 2 and 3.
+
+**Per-title table.** `mtl_scale_table.m`, format in its header: `{"titles": {"<title id>": {"disable", "max_scale", "min_div", "skip": [[w,h]], "force": [[w,h]],
+"report_aspect"}}}`; built in defaults plus an optional file named by `NAPPLE_RSCALE_TABLE`. The mod / fix system will ship the same format. See
+`docs/archive/changes/2026-10-27-claude-render-scale-2026-10-27.md` for what the audit of the four titles put in it.
+
+**Tests.** `make -C gfx test`: `t_scale_math` (factors 0.5 / 1 / 1.5 / 2 / 4 / 1.37, allocation sizes, viewport and scissor conversion, rscale entries, budget, fit rectangles,
+upscaler fallback), `t_scale_upscale` (upscaler matrix with PSNR and sharpness asserts, writes the contact sheet), `t_scale_table`, `t_display`. Real games:
+`tools/golden/render_scale.py shots|stress` (headless drawable size from `NAPPLE_OUTPUT_SIZE=WxH`).
+
+Evidence: [screenshots of the four titles at 1x / 2x / 4x, 21:9, 9:16 and with each upscaler](../screenshots/render-scale/README.md).

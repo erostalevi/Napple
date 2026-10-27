@@ -8,6 +8,7 @@
 #include <time.h>
 
 #include "obj.h"
+#include "display_priv.h"
 #include "gfx_mtl.h"
 
 gfx_global g_gfx;
@@ -315,6 +316,7 @@ int napple_gfx_init(const napple_gfx_config *cfg) {
     snprintf(g_gfx.title_id, sizeof g_gfx.title_id, "%s", cfg->title_id ? cfg->title_id : "0000000000000000");
     snprintf(g_gfx.cache_dir, sizeof g_gfx.cache_dir, "%s", cfg->cache_dir ? cfg->cache_dir : "");
     g_gfx.cfg.title_id = g_gfx.title_id;
+    gfx_scale_table_init(g_gfx.title_id);
     g_gfx.cfg.cache_dir = g_gfx.cache_dir[0] ? g_gfx.cache_dir : NULL;
     g_gfx.cfg.shader_translator = NULL;
     g_gfx.device_origin = 0;          /* NVN defaults: lower-left origin, near = -w */

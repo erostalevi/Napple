@@ -93,7 +93,7 @@ Conventions used by the code, unless a row says otherwise:
 | `NAPPLE_RENDER_MODE` | integer 0..3: native, scale, window, fixed | Overrides the render size mode. | `runtime/src/app.m` |
 | `NAPPLE_RENDER_SCALE` | number; 1 = native | Overrides the render scale multiplier (used by render mode `scale`). | `runtime/src/app.m` |
 | `NAPPLE_FILTER` | integer 0..5: bilinear, nearest, box, bicubic, Lanczos, sharp | Overrides the output filter. | `runtime/src/app.m` |
-| `NAPPLE_UPSCALER` | integer; `0` none, `1` MetalFX spatial | Overrides the upscaler. | `runtime/src/app.m` |
+| `NAPPLE_UPSCALER` | integer; `0` none, `1` MetalFX spatial (built-in upscaler when absent), `2` built-in edge adaptive, `3` CAS | Overrides the upscaler. | `runtime/src/app.m` |
 
 ## AArch32 interpreter and recompiler
 
@@ -124,6 +124,9 @@ Conventions used by the code, unless a row says otherwise:
 | `NAPPLE_TURBO` | number | Switches pacing to fixed and sets the target frame rate to this value, or 300 when the value is 1 or less. For headless benchmarks. | `gfx/adapter/gfx_napple.c` |
 | `NAPPLE_GFX_SKIPINIT` | set = on | Skips `napple_gfx_init` in the adapter. | `gfx/adapter/gfx_napple.c` |
 | `NAPPLE_NV_INIT_NOOP` | set = on | Adds a no-op override for `nv::InitializeGraphics`. | `gfx/adapter/gfx_napple.c` |
+| `NAPPLE_RSCALE_TABLE` | file path | Extra per-title render scale rules (JSON, format in `gfx/src/mtl_scale_table.m`); wins over the built-in rules per title. | `gfx/src/mtl_scale_table.m` |
+| `NAPPLE_SCALE_DIAG` | any | Logs every distinct render target once with the scaling decision (`scale-diag:` lines) and mixed-scale passes. | `gfx/src/mtl_scale.m` |
+| `NAPPLE_OUTPUT_SIZE` | `WxH` | Headless only: size of the drawable (screenshots, scale / aspect tests); default 1280x720. | `runtime/src/main.c` |
 | `NAPPLE_RSCALE` | `0` | `0` disables gfx-level render target scaling (the per-game escape hatch also in the display settings). | `gfx/src/mtl_scale.m` |
 | `NAPPLE_MINIMAL_LAYOUT` | `0` | In the texture layout code, textures with flag `0x200` and no packaged block height use the minimal-layout rule; `0` turns that rule off (a negative control for fresh sessions). Default on. | `gfx/src/tex/napple_layout.c` |
 | `NAPPLE_REC_BUDGET_MB` | integer MB greater than 0; default a quarter of the physical memory | Safety ceiling for recorded command lists. Lists live as long as their command memory (see [gfx](../architecture/gfx.md)); past the ceiling the least recently used are dropped with a warning, which is a bug to investigate. | `gfx/src/api_cmd.c` |

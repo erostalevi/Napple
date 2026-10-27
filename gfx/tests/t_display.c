@@ -48,9 +48,9 @@ int main(void) {
     napple_display_compute_scale(&s, 1920, 1080, 3840, 2160, 0, 0, &sx, &sy);
     CHECK(sx * 1920 <= 16384.01f && sy * 1080 <= 16384.01f && (double)sx * 1920 * sy * 1080 <= (48ull << 20) * 1.001, "budget cap (%g x %g)", sx * 1920, sy * 1080);
     CHECK(near(sx, sy), "cap keeps the aspect");
-    s.supersample = 1; s.render_mode = NAPPLE_RENDER_SCALE; s.scale = 0.1f; napple_display_set(&s);
-    napple_display_get(&s); CHECK(near(s.scale, 0.25f), "set clamps the scale");
-    napple_display_compute_scale(&s, 1280, 720, 0, 0, 0, 0, &sx, &sy); CHECK(near(sx, 0.25f), "min scale");
+    s.supersample = 1; s.render_mode = NAPPLE_RENDER_SCALE; s.scale = 0.05f; napple_display_set(&s);
+    napple_display_get(&s); CHECK(near(s.scale, 0.1f), "set clamps the scale to 10%%");
+    napple_display_compute_scale(&s, 1280, 720, 0, 0, 0, 0, &sx, &sy); CHECK(near(sx, 0.1f), "min scale");
     napple_display_compute_scale(&s, 0, 0, 0, 0, 0, 0, &sx, &sy); CHECK(sx == 1 && sy == 1, "no base size -> identity");
     /* 1x exactly */
     s.scale = 1.001f; napple_display_compute_scale(&s, 1920, 1080, 0, 0, 0, 0, &sx, &sy); CHECK(sx == 1 && sy == 1, "1.001 snaps to 1 (untouched targets)");

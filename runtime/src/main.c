@@ -289,5 +289,14 @@ int main(int argc, char **argv) {
     gc.headless = g_cfg.headless;
     gc.output_width = 1280;
     gc.output_height = 720;
+    if (g_cfg.headless) { /* NAPPLE_OUTPUT_SIZE=WxH: the size of the headless "window" (drawable), to exercise other screen shapes and sizes */
+        const char *e = getenv("NAPPLE_OUTPUT_SIZE");
+        int w = 0, h = 0;
+        if (e && sscanf(e, "%dx%d", &w, &h) == 2 && w >= 64 && h >= 64 && w <= 16384 && h <= 16384) {
+            gc.output_width = w;
+            gc.output_height = h;
+        }
+        napple_display_set_window((uint32_t)gc.output_width, (uint32_t)gc.output_height, 60);
+    }
     return frontend_run(boot, g_cfg.headless, g_cfg.seconds);
 }

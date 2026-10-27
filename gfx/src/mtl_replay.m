@@ -337,7 +337,7 @@ static void cb_commit(int complete_seq) {
  * Render pass
  * --------------------------------------------------------------------------------------------------------------- */
 static void pass_unify_scale(
-    void) { /* all attachments of a pass share one allocation size: lift the unscaled ones to the largest factor present (see mtl_tex_force_scale) */
+    void) { /* all attachments of a pass share one allocation size: lift the unscaled ones to the largest factor present (see mtl_tex_force_scale); factors below 1 count too */
     GfxTex *att[9];
     int n = 0;
     float mx = 1, my = 1;
@@ -347,9 +347,9 @@ static void pass_unify_scale(
     }
     GfxTex *d = S.rt.depth.s.valid ? mtl_tex_get(&S.rt.depth.s, 1) : nil;
     if (d) att[n++] = d;
-    for (int i = 0; i < n; i++) {
-        if (att[i]->rsx > mx) mx = att[i]->rsx;
-        if (att[i]->rsy > my) my = att[i]->rsy;
+    for (int i = 0; i < n; i++) { /* the factor farthest from 1 wins: below 1 (render scale under 100 %, a narrow window) as well as above it */
+        if (fabsf(att[i]->rsx - 1) > fabsf(mx - 1)) mx = att[i]->rsx;
+        if (fabsf(att[i]->rsy - 1) > fabsf(my - 1)) my = att[i]->rsy;
     }
     if (mx == 1 && my == 1) return;
     {
@@ -368,6 +368,14 @@ static void pass_unify_scale(
     for (int i = 0; i < n; i++)
         if (att[i]->rsx != mx || att[i]->rsy != my) {
             if (att[i]->w == att[0]->w && att[i]->h == att[0]->h) mtl_tex_force_scale(att[i], mx, my); /* same guest size as the rest: it is screen sized */
+        }
+    /* an attachment that cannot be lifted (a mipped texture is never re-allocated) leaves the pass with attachments of different sizes: Metal then renders only
+     * their overlap, or aborts on the scissor of a pass smaller than the guest size (ACNH and MK8D at 0.375x). The scaled siblings go back to their guest size. */
+    for (int i = 0; i < n; i++)
+        if (att[i]->w == att[0]->w && att[i]->h == att[0]->h && (att[i]->rsx != mx || att[i]->rsy != my)) {
+            for (int k = 0; k < n; k++)
+                if (att[k]->w == att[0]->w && att[k]->h == att[0]->h) mtl_tex_force_scale(att[k], 1, 1);
+            break;
         }
 }
 static void pass_info_from_rt(void) {

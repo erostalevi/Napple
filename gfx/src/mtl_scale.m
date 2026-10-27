@@ -56,11 +56,7 @@ void mtl_scale_tick(void) {
     pthread_mutex_lock(&g_mu);
     float sx = 1, sy = 1;
     if (ds.rscale && !env_off() && g_base_w) {
-        uint64_t budget = 48ull << 20;
-        if (g_mtl.dev) {
-            uint64_t ws = g_mtl.dev.recommendedMaxWorkingSetSize;
-            if (ws / 220 < budget) budget = ws / 220;
-        }
+        uint64_t budget = napple_display_budget_pixels(g_mtl.dev ? g_mtl.dev.recommendedMaxWorkingSetSize : 0);
         napple_display_compute_scale(&ds, g_base_w, g_base_h, ww, wh, 16384, budget, &sx, &sy);
     }
     uint64_t now = gfx_now_ns();
@@ -91,6 +87,27 @@ void mtl_scale_count(int scaled, uint64_t bytes) {
     g_display_stats.rt_scaled_bytes = atomic_load(&g_scaled_bytes);
 }
 
+/* NAPPLE_SCALE_DIAG=1: every distinct (size, kind, decision) once, for the per-title audit (docs/architecture/gfx.md, "Render scale") */
+static void diag_note(const napple_texdesc *d, int is_depth, int gpu, const char *why, uint32_t nw, uint32_t nh) {
+    static int on = -1;
+    if (on < 0) on = getenv("NAPPLE_SCALE_DIAG") != NULL;
+    if (!on) return;
+    static uint64_t seen[256];
+    static int n;
+    uint64_t k = (uint64_t)d->width | (uint64_t)d->height << 16 | (uint64_t)is_depth << 32 | (uint64_t)gpu << 33 | (uint64_t)(d->target & 15) << 34 |
+                 (uint64_t)(d->levels > 1) << 38 | ((uint64_t)(uintptr_t)why >> 3 & 0xFFFFF) << 40;
+    pthread_mutex_lock(&g_mu);
+    for (int i = 0; i < n; i++)
+        if (seen[i] == k) {
+            pthread_mutex_unlock(&g_mu);
+            return;
+        }
+    if (n < 256) seen[n++] = k;
+    pthread_mutex_unlock(&g_mu);
+    LOGI("scale-diag: target %ux%u%s%s target=%u levels=%u samples=%u fmt=%u flags=0x%x -> %ux%u (%s)", d->width, d->height, is_depth ? " depth" : "", gpu ? " gpu-written" : "",
+         d->target, d->levels, d->samples, d->format, d->flags, nw, nh, why);
+}
+
 void mtl_scale_pick_size(const texsnap *s, int is_depth, int for_gpu_write, mtl_scale_pick *out) {
     const napple_texdesc *d = &s->d;
     out->w = d->width ? d->width : 1;
@@ -104,15 +121,34 @@ void mtl_scale_pick_size(const texsnap *s, int is_depth, int for_gpu_write, mtl_
     napple_display_settings ds;
     napple_display_get(&ds);
     if (!ds.rscale) return;
-    if (d->target != 1 && d->target != 7 && d->target != 5) return; /* plain 2D (and multisampled 2D) */
-    if (d->levels > 1 || d->depth > 1) return;
-    if (d->flags & (0x2 | 0x4 | 0x10 | 0x20)) return; /* video decode, image bound, linear, sparse */
+    const mtl_scale_rule *rule = mtl_scale_table_active();
     uint32_t w = out->w, h = out->h, div = ds.rscale_min_div ? ds.rscale_min_div : 8;
-    if (w > bw + 16 || h > bh + 16) return; /* larger than the screen: the game's own supersampling */
-    if (w * div < bw || h * div < bh) return; /* small utility targets */
+    int forced = 0;
+    if (rule) {
+        if (rule->disable) return;
+        if (rule->min_div) div = rule->min_div;
+        if (rule->max_scale > 0) {
+            if (sx > rule->max_scale) sx = rule->max_scale;
+            if (sy > rule->max_scale) sy = rule->max_scale;
+        }
+        if (mtl_scale_rule_has(rule->force, rule->nforce, w, h)) forced = 1;
+    }
+#define KEEP(why) do { diag_note(d, is_depth, for_gpu_write, why, w, h); return; } while (0)
+    if (d->target != 1 && d->target != 7 && d->target != 5) KEEP("not a plain 2D target"); /* plain 2D (and multisampled 2D) */
+    if (d->levels > 1 || d->depth > 1) KEEP("mipped or layered");
+    if (d->flags & (0x2 | 0x10 | 0x20)) KEEP("video decode, linear or sparse");
+    /* NVN_TEXTURE_FLAGS_IMAGE: engines set it on most of their render targets (LAS, SMO and ACNH do, for every screen sized target), so it cannot veto the scaling
+     * by itself; a texture that is only filled by the CPU and image bound keeps its size (its image coordinates are not converted) */
+    if ((d->flags & 0x4) && !for_gpu_write && !is_depth) KEEP("image bound and not rendered to");
+    if (rule && mtl_scale_rule_has(rule->skip, rule->nskip, w, h)) KEEP("per-title table: skip");
     float asp = (float)w / (float)h, basp = (float)bw / (float)bh;
-    if (fabsf(asp - basp) > 0.04f * basp) return; /* shadow maps and other differently shaped targets */
-    if (!for_gpu_write && !is_depth && !(d->flags & 0x1)) return; /* a texture nothing renders to (yet) stays as it is */
+    if (!forced) {
+        if (w > bw + 16 || h > bh + 16) KEEP("larger than the screen (the game's own supersampling)"); /* larger than the screen */
+        if (w * div < bw || h * div < bh) KEEP("small utility target");
+        if (fabsf(asp - basp) > 0.04f * basp) KEEP("different shape (shadow map or similar)"); /* shadow maps and other differently shaped targets */
+        if (!for_gpu_write && !is_depth && !(d->flags & 0x1)) KEEP("not rendered to (yet)"); /* a texture nothing renders to (yet) stays as it is */
+    }
+    if (sx == 1 && sy == 1) return;
     uint32_t nw = (uint32_t)lroundf((float)w * sx), nh = (uint32_t)lroundf((float)h * sy);
     if (nw < 1) nw = 1;
     if (nh < 1) nh = 1;
@@ -122,4 +158,6 @@ void mtl_scale_pick_size(const texsnap *s, int is_depth, int for_gpu_write, mtl_
     out->h = nh;
     out->rx = (float)nw / (float)w;
     out->ry = (float)nh / (float)h;
+    diag_note(d, is_depth, for_gpu_write, forced ? "scaled (per-title table: force)" : "scaled", nw, nh);
+#undef KEEP
 }

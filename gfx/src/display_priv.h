@@ -6,6 +6,7 @@
 extern "C" {
 #endif
 extern napple_display_stats g_display_stats;
+void gfx_scale_table_init(const char *title_id);   /* mtl_scale_table.m: per title rules (also sets the aspect report policy) */
 void display_window_get(uint32_t *w, uint32_t *h, double *hz);
 #ifdef __cplusplus
 }

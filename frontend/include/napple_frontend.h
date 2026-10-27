@@ -28,7 +28,7 @@ struct napple_input; /* input/include/napple_input.h (optional) */
 typedef struct napple_settings {
     /* Video */
     int internal_width, internal_height; /* guest render target size the game is told about; 0,0 = game native */
-    int internal_scale_percent;          /* 25..400; used when internal_width/height are 0 (100 = native) */
+    int internal_scale_percent;          /* 10..800 (free value); used when internal_width/height are 0 (100 = native) */
     int output_width, output_height;     /* window content size in points (windowed); 0 = default 1280x720 */
     int fps_mode; /* host present rate; never changes game speed: 0 = game pacing (the title's own cadence), 1 = match display refresh, 2 = custom (fps_cap), 3 = uncapped */
     int fps_cap;  /* the custom present rate for fps_mode 2 (15..999). Files from before fps_mode stored a speed-scaling rate here; they migrate to mode + Speed */
@@ -36,14 +36,14 @@ typedef struct napple_settings {
     int fullscreen;
     int aspect; /* window / image shape: 0 = locked 16:9 (native), 1 = locked 16:9, 2 = locked 4:3, 3 = free window, stretch the image,
                                               4 = free window, keep the game's aspect (bars), 5 = free window, fill (crop), 6 = free window, tell the game the window's aspect (engines
-                                              that support it extend their field of view; others fall back to 4) */
+                                              that support it extend their field of view; others fall back to 4), 7 = free window, whole-number multiple of the game's size with bars */
     /* Display (render size, supersampling, output filter, frame generation) */
     int render_mode;         /* 0 = native size, 1 = scale factor (internal_scale_percent), 2 = follow window (render at the window's pixel size),
                                               3 = fixed size (internal_width x internal_height) */
     int supersample_percent; /* 100..400: render this much larger than the chosen size and filter down to the window (1.5x, 2x, 3x, 4x) */
     int filter;              /* output filter: 0 bilinear, 1 nearest, 2 box (area average), 3 bicubic (Catmull-Rom), 4 Lanczos, 5 sharpened bilinear */
     int sharpness;           /* 0..100: strength of the sharpening (filter 5, and the MetalFX upscaler's post sharpen) */
-    int upscaler;            /* 0 = none (the filter alone), 1 = MetalFX spatial upscaler (renders below the window size and upscales) */
+    int upscaler;            /* 0 = none (the filter alone), 1 = MetalFX spatial (falls back to 2 where the OS has none), 2 = built-in edge adaptive upscaler, 3 = CAS (resample + contrast adaptive sharpening); all render below the window size and upscale */
     int anisotropy;          /* 0 = as the game asks, 2 / 4 / 8 / 16 = at least this many samples */
     int frame_gen;           /* 1 = generate in-between frames */
     int frame_gen_mult;      /* 0 = automatic (as many as the display can show), 2..8 = output rate = multiplier x the game's rate */

@@ -100,7 +100,7 @@ static void push_display_settings(const napple_settings *s) {
     d.fixed_w = (uint32_t)s->internal_width;
     d.fixed_h = (uint32_t)s->internal_height;
     d.supersample = (float)s->supersample_percent / 100.f;
-    d.fit = s->aspect == 3 ? NAPPLE_FIT_STRETCH : s->aspect == 5 ? NAPPLE_FIT_FILL : NAPPLE_FIT_LETTERBOX;
+    d.fit = s->aspect == 3 ? NAPPLE_FIT_STRETCH : s->aspect == 5 ? NAPPLE_FIT_FILL : s->aspect == 7 ? NAPPLE_FIT_INTEGER : NAPPLE_FIT_LETTERBOX;
     d.report_window_aspect = s->aspect == 6;
     d.filter = (uint32_t)s->filter;
     d.sharpness = (float)s->sharpness / 100.f;

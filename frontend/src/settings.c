@@ -48,7 +48,7 @@ static int safe_version(const char *s) {
 }
 
 void napple_settings_clamp(napple_settings *s) {
-    s->internal_scale_percent = clampi(s->internal_scale_percent, 25, 400);
+    s->internal_scale_percent = clampi(s->internal_scale_percent, 10, 800);
     s->internal_width = dim(s->internal_width);
     s->internal_height = dim(s->internal_height);
     if (!s->internal_width != !s->internal_height) s->internal_width = s->internal_height = 0;
@@ -61,12 +61,12 @@ void napple_settings_clamp(napple_settings *s) {
     s->fullscreen = s->fullscreen != 0;
     s->mute_in_background = s->mute_in_background != 0;
     s->show_touch_cursor = s->show_touch_cursor != 0;
-    s->aspect = clampi(s->aspect, 0, 6);
+    s->aspect = clampi(s->aspect, 0, 7);
     s->render_mode = clampi(s->render_mode, 0, 3);
     s->supersample_percent = clampi(s->supersample_percent, 100, 400);
     s->filter = clampi(s->filter, 0, 5);
     s->sharpness = clampi(s->sharpness, 0, 100);
-    s->upscaler = clampi(s->upscaler, 0, 1);
+    s->upscaler = clampi(s->upscaler, 0, 3);
     {
         int a = s->anisotropy;
         s->anisotropy = a < 2 ? 0 : a < 4 ? 2 : a < 8 ? 4 : a < 16 ? 8 : 16;
