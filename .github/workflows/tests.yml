@@ -81,6 +81,19 @@ jobs:
         run: make -C gfx test
       - name: runtime host and service tests
         run: make -C runtime -j"$(sysctl -n hw.ncpu)" test test-services
+      - name: runtime as a library (the Mii Maker host, libnapple-applet.dylib)
+        run: |
+          make -C runtime -j"$(sysctl -n hw.ncpu)" applet-lib
+          test -f runtime/build-lib/libnapple-applet.dylib
+      - name: golden-frame harness self-test (no game needed)
+        continue-on-error: true
+        run: |
+          python3 -m pip install --quiet pillow
+          python3 tools/golden/selftest.py
+      - name: end-to-end script compiles and its option parser runs
+        run: |
+          python3 -I -m py_compile tools/e2e/e2e.py
+          bash -n tools/e2e/run.sh
 
   studio:
     name: Napple Studio swift test
@@ -110,3 +123,31 @@ jobs:
           SDK=iphonesimulator tools/build_ios.sh
           test -x runtime/build-ios-sim/napple-runtime
           file runtime/build-ios-sim/napple-runtime
+
+  studio-app:
+    name: Napple Studio.app builds (build_app.sh smoke)
+    continue-on-error: true   # new job, never run on a runner yet: non-blocking
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          brew install opus libvpx
+          rustup update stable --no-self-update
+          rustup default stable
+      - name: Build Napple Studio.app (CLI, libraries, runtime, applet library, launcher, Studio)
+        run: |
+          make -C input -j"$(sysctl -n hw.ncpu)"
+          make -C audio -j"$(sysctl -n hw.ncpu)"
+          make -C frontend -j"$(sysctl -n hw.ncpu)"
+          make -C gfx -j"$(sysctl -n hw.ncpu)" lib adapter
+          studio/build_app.sh "$RUNNER_TEMP/studio-app"
+      - name: The app carries the helpers, the applet library and the entitlements
+        run: |
+          APP="$RUNNER_TEMP/studio-app/NappleStudio.app"
+          for f in napple napple-runtime napple-launcher libnapple-applet.dylib; do test -e "$APP/Contents/Resources/$f"; done
+          codesign --verify --deep --strict "$APP"
+          codesign -d --entitlements - --xml "$APP" 2>&1 | grep -q "com.apple.security.device.camera"
+          codesign -d --entitlements - --xml "$APP" 2>&1 | grep -q "com.apple.security.device.audio-input"
+          ! codesign -d --entitlements - --xml "$APP" 2>&1 | grep -q "app-sandbox"

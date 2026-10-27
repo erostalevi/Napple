@@ -1,7 +1,7 @@
 #!/bin/bash
 # Turns <dir>/NappleStudio.app into the release assets (fixed names, so .../releases/latest/download/<name> never changes):
 #   Napple-Studio.dmg          drag-and-drop installer (Studio then sets up the engine and NAPPLE_* variables on first launch)
-#   Napple-macOS-arm64.zip     NappleStudio.app + bin/ (napple, napple-runtime, napple-launcher) + install.sh + notices
+#   Napple-macOS-arm64.zip     NappleStudio.app + bin/ (napple, napple-runtime, napple-launcher, libnapple-applet.dylib) + install.sh + notices
 #   SHA256SUMS.txt
 # Usage: studio/packaging/make_release.sh <dir containing NappleStudio.app>
 # Optional signing: NAPPLE_SIGN_IDENTITY="Developer ID Application: ..." re-signs the app with the hardened runtime, and
@@ -46,7 +46,7 @@ fi
 STAGE="$OUT/Napple-$VERSION"
 rm -rf "$STAGE"; mkdir -p "$STAGE/bin"
 ditto "$APP" "$STAGE/NappleStudio.app"
-cp "$APP/Contents/Resources/napple" "$APP/Contents/Resources/napple-runtime" "$APP/Contents/Resources/napple-launcher" "$STAGE/bin/"
+cp "$APP/Contents/Resources/napple" "$APP/Contents/Resources/napple-runtime" "$APP/Contents/Resources/napple-launcher" "$APP/Contents/Resources/libnapple-applet.dylib" "$STAGE/bin/"   # the applet library beside the runtime: napple build bundles it into every game app
 [ -f "$APP/Contents/Resources/matrix.json" ] && cp "$APP/Contents/Resources/matrix.json" "$STAGE/bin/"
 cp "$HERE/install.sh" "$STAGE/install.sh"; chmod +x "$STAGE/install.sh"
 cp "$ROOT/README.md" "$ROOT/THIRD_PARTY_NOTICES.md" "$STAGE/"

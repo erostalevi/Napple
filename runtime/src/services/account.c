@@ -36,7 +36,7 @@ static int icon_tried;
 static void icon_load(void) {
     if (icon_tried) return;
     icon_tried = 1;
-    const char *roots[3] = {g_cfg.data_dir, g_cfg.data_dir, g_cfg.save_root};
+    const char *roots[3] = {g_cfg.data_dir, g_cfg.data_dir, napple_support_dir()};
     const char *sub[3] = {"%s/system/icon/SubstituteUserIcon.jpg", "%s/../system/icon/SubstituteUserIcon.jpg", "%s/system/icon/SubstituteUserIcon.jpg"};
     for (int i = 0; i < 3 && !icon_data; i++) {
         char path[1400];

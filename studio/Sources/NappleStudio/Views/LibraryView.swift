@@ -41,6 +41,7 @@ struct LibraryView: View {
             if let id = m.selectedLibraryItem, let item = m.libraryItems.first(where: { $0.id == id }) { GameDetailBar(item: item) }
         }
         .focusedSceneValue(\.selectedGame, m.libraryItems.first { $0.id == m.selectedLibraryItem })
+        .sheet(item: $m.runItem) { RunLogView(item: $0) }
         .onDeleteCommand { if let id = m.selectedLibraryItem { m.removeFromLibrary(id) } }
     }
 }
@@ -88,6 +89,7 @@ struct GameMenu: View {
     var body: some View {
         if item.status == .present {
             Button("Play") { m.launch(item.url) }
+            Button("Play with Log…") { m.runItem = item }
             Button("Show in Finder") { m.reveal(item.url) }
             Button("Copy to Applications") { if let u = item.url { m.installToApplications(u) } }
             Divider()

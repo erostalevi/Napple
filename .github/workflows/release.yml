@@ -104,6 +104,15 @@ jobs:
           hdiutil attach Napple-Studio.dmg -nobrowse -mountpoint /tmp/napple-dmg
           test -d "/tmp/napple-dmg/NappleStudio.app" && test -L /tmp/napple-dmg/Applications
           codesign --verify --deep --strict "/tmp/napple-dmg/NappleStudio.app"
+          # the applet library and the entitlements the game apps need (camera, audio input; no App Sandbox); non-blocking until a runner has run it
+          (
+            set -e
+            test -f "/tmp/napple-dmg/NappleStudio.app/Contents/Resources/libnapple-applet.dylib"
+            test -f unz/Napple-*/bin/libnapple-applet.dylib
+            codesign -d --entitlements - --xml "/tmp/napple-dmg/NappleStudio.app" 2>&1 | grep -q "com.apple.security.device.camera"
+            codesign -d --entitlements - --xml "/tmp/napple-dmg/NappleStudio.app" 2>&1 | grep -q "com.apple.security.device.audio-input"
+            ! codesign -d --entitlements - --xml "/tmp/napple-dmg/NappleStudio.app" 2>&1 | grep -q "app-sandbox"
+          ) || echo "::warning::applet library / entitlement smoke check failed"
           hdiutil detach /tmp/napple-dmg
 
       - uses: actions/upload-artifact@v4

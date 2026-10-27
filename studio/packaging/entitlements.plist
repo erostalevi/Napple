@@ -5,4 +5,8 @@
 <key>com.apple.security.cs.allow-jit</key><true/>
 <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
 <key>com.apple.security.cs.disable-library-validation</key><true/>
+<!-- The IR camera simulator runs in the game apps (this entitlement is also set on them); there is no App Sandbox: the system data folders must be reachable. -->
+<key>com.apple.security.device.camera</key><true/>
+<key>com.apple.security.device.audio-input</key><true/>
+<!-- The microphone (audio-in) source of games, same arrangement. -->
 </dict></plist>

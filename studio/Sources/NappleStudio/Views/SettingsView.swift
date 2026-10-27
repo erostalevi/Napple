@@ -2,13 +2,18 @@ import SwiftUI
 import NappleStudioCore
 
 struct SettingsView: View {
+    @Environment(AppModel.self) private var m
     var body: some View {
-        TabView {
-            Tab("General", systemImage: "gear") { GeneralSettings() }
-            Tab("Keys & Firmware", systemImage: "key") { KeysSettings() }
-            Tab("Engine", systemImage: "cpu") { EngineSettings() }
+        @Bindable var m = m
+        TabView(selection: $m.settingsTab) {
+            Tab("General", systemImage: "gear", value: "general") { GeneralSettings() }
+            Tab("Keys & Firmware", systemImage: "key", value: "keys") { KeysSettings() }
+            Tab("Mii", systemImage: "person.crop.square", value: "mii") { MiiSettings() }
+            Tab("Amiibo", systemImage: "wave.3.right", value: "amiibo") { AmiiboSettings() }
+            Tab("Online", systemImage: "network", value: "online") { OnlineSettings() }
+            Tab("Engine", systemImage: "cpu", value: "engine") { EngineSettings() }
         }
-        .frame(width: 560, height: 420)
+        .frame(width: 620, height: 460)
     }
 }
 

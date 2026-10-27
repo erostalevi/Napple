@@ -864,7 +864,7 @@ AmiiboPicker *amiibo_service_picker(void) {
     pthread_mutex_lock(&nfp_lock);
     if (!nfp_picker_ready) {
         AmiiboConfig cfg;
-        amiibo_config_default(&cfg, g_cfg.save_root ? g_cfg.save_root : ".");
+        amiibo_config_default(&cfg, napple_support_dir() ? napple_support_dir() : ".");
         amiibo_picker_init(&nfp_picker, &cfg);
         nfp_picker_ready = 1;
     }
@@ -891,11 +891,13 @@ static void *nfp_script_thread(void *arg) {
     AmiiboScript s = nfp_script;
     struct timespec ts = {s.insert_ms / 1000, (long)(s.insert_ms % 1000) * 1000000L};
     nanosleep(&ts, NULL);
-    amiibo_script_apply(&nfp_picker, &s);
+    int rc = amiibo_script_apply(&nfp_picker, &s);
+    LOG("nfp", "NAPPLE_AMIIBO: amiibo %s on the reader%s%s", rc ? "NOT placed" : "placed", rc ? ": " : "", rc ? nfp_picker.last_error : "");
     if (s.remove_ms) {
         ts = (struct timespec){s.remove_ms / 1000, (long)(s.remove_ms % 1000) * 1000000L};
         nanosleep(&ts, NULL);
         amiibo_picker_remove(&nfp_picker);
+        LOG("nfp", "NAPPLE_AMIIBO: amiibo removed from the reader");
     }
     return NULL;
 }
@@ -907,7 +909,8 @@ static void nfp_run_script(void) { /* on the first StartDetection */
     pthread_mutex_unlock(&nfp_lock);
     if (!run) return;
     if (s.insert_ms == 0 && s.remove_ms == 0) {
-        if (amiibo_script_apply(&nfp_picker, &s)) LOG("nfp", "NAPPLE_AMIIBO: %s", nfp_picker.last_error);
+        if (amiibo_script_apply(&nfp_picker, &s)) LOG("nfp", "NAPPLE_AMIIBO: amiibo NOT placed: %s", nfp_picker.last_error);
+        else LOG("nfp", "NAPPLE_AMIIBO: amiibo placed on the reader");
         return;
     }
     pthread_t t;

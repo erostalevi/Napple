@@ -777,8 +777,8 @@ static NSView *system_page(NappleFE *fe) {
     [p addArrangedSubview:g];
 
     [p addArrangedSubview:heading(@"Mii")];
-    [p addArrangedSubview:note(@"Games read their Miis from the system Mii database that comes with the firmware you built the game with. The Mii editor and "
-                               @"Mii picker run from that firmware once the applet host is wired; until then games see the default database.")];
+    [p addArrangedSubview:note(@"Every game reads the same Mii database (Application Support/Napple/system/mii, or NAPPLE_MII_DIR). The Mii editor and picker run from "
+                               @"the firmware you built the game with. Back up, export or delete Miis in Napple Studio > Settings > Mii.")];
 
     [p addArrangedSubview:heading(@"amiibo")];
     NSView *am = fe_amiibo_page(fe);

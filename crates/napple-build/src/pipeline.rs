@@ -1325,6 +1325,16 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             std::fs::set_permissions(macos.join(name), std::fs::Permissions::from_mode(0o755))
                 .map_err(|e| BuildError::io("chmod", e))?;
         }
+        // the runtime as a library: the in-process host of the Mii Maker (NAPPLE_APPLET_INPROC=1), found by the runtime at Contents/Frameworks
+        match bundle::find_applet_lib(&runtime) {
+            Some(lib) => {
+                let fw = app.join("Contents/Frameworks");
+                std::fs::create_dir_all(&fw).map_err(|e| BuildError::io("create Frameworks", e))?;
+                std::fs::copy(&lib, fw.join("libnapple-applet.dylib"))
+                    .map_err(|e| BuildError::io("copy libnapple-applet.dylib", e))?;
+            }
+            None => notes.push("compat: libnapple-applet.dylib not found (make -C runtime applet-lib): the Mii Maker runs only as a child process of this app".into()),
+        }
     }
     progress("bundle", P_BUNDLE, "bundle assembled");
     check_cancel()?;

@@ -11,7 +11,7 @@ import Foundation
 /// Everything is idempotent and never touches files it did not create.
 public struct EngineInstaller: Sendable {
     public static let requiredFiles = ["napple", "napple-runtime", "napple-launcher"]
-    public static let optionalFiles = ["napple-runtime-ios", "matrix.json"]
+    public static let optionalFiles = ["napple-runtime-ios", "libnapple-applet.dylib", "matrix.json"]
     public static let profileMarkerBegin = "# >>> napple >>>"
     public static let profileMarkerEnd = "# <<< napple <<<"
 

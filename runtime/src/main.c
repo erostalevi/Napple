@@ -11,7 +11,10 @@ _Noreturn void a32_boot(uint32_t main_handle);
 #include "json.h"
 #include "movie.h"
 #include "ios_platform.h"
+#include "services/sysconfig_core.h"
 #include <fcntl.h>
+#include <pthread.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -182,6 +185,28 @@ static void boot(void) {
     runtime_fail("nn::init::Start returned");
 }
 
+#ifndef NAPPLE_LIB
+/* A firmware applet child (applet.c libapplet_run_firmware sets NAPPLE_APPLET_PARENT) must not outlive the game that started it: a killed or crashed parent
+ * used to leave the Mii Maker running for minutes. */
+static void *applet_parent_watch(void *arg) {
+    pid_t parent = (pid_t)(intptr_t)arg;
+    for (;;) {
+        usleep(200000);
+        if (getppid() != parent || kill(parent, 0)) {
+            fprintf(stderr, "[applet] parent %d is gone: exiting\n", (int)parent);
+            _exit(0);
+        }
+    }
+    return NULL;
+}
+static void applet_parent_watch_start(void) {
+    const char *p = getenv("NAPPLE_APPLET_PARENT");
+    if (!p || atoi(p) <= 0) return;
+    pthread_t t;
+    if (!pthread_create(&t, NULL, applet_parent_watch, (void *)(intptr_t)atoi(p))) pthread_detach(t);
+}
+#endif
+
 #ifdef NAPPLE_LIB
 int napple_applet_main(int argc, char **argv) {
 #else
@@ -215,6 +240,9 @@ int main(int argc, char **argv) {
     }
     if (trace) setenv("NAPPLE_TRACE", trace, 1);
     log_init();
+#ifndef NAPPLE_LIB
+    applet_parent_watch_start();
+#endif
     if (getenv("NAPPLE_HLE_TRACE")) runtime_hle_trace_set(atoi(getenv("NAPPLE_HLE_TRACE")));
     if (getenv("NAPPLE_SVC_TRACE")) svc_trace_all = 1;
     summary_path = summary ? summary : getenv("NAPPLE_SUMMARY");
@@ -224,6 +252,24 @@ int main(int argc, char **argv) {
         save_root = root;
     }
     g_cfg.save_root = save_root;
+    {
+        static char support[1024];
+        const char *env = getenv("NAPPLE_SUPPORT_DIR");
+#if NAPPLE_IOS
+        g_cfg.support_dir = save_root;
+        (void)env;
+#else
+        if (env && *env) snprintf(support, sizeof support, "%s", env);
+        else snprintf(support, sizeof support, "%s/Library/Application Support/Napple", getenv("HOME") ? getenv("HOME") : ".");
+        g_cfg.support_dir = support;
+#endif
+        /* <support>/system.json (Studio, overlay): amiibo source/key/store, online provider, Mii folder; the environment still wins */
+        SysConfig sc;
+        if (sysconfig_load(napple_support_dir(), &sc) == 0) {
+            int n = sysconfig_apply_env(&sc);
+            if (n) LOG("main", "system.json: %d setting(s) applied", n);
+        }
+    }
 #if NAPPLE_IOS
     ios_install_fonts(g_cfg.data_dir, save_root);
 #endif

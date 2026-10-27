@@ -252,7 +252,8 @@ int npdm_service_allowed(const char *name);
 /* Launch configuration (main.c) */
 typedef struct {
     const char *data_dir;  /* work/games/<titleid>/<buildid> */
-    const char *save_root; /* ~/Library/Application Support/Napple */
+    const char *save_root; /* per-game saves: ~/Library/Application Support/Napple (--save-root) */
+    const char *support_dir; /* system data (<support>/system: Mii, amiibo, fonts): NAPPLE_SUPPORT_DIR or ~/Library/Application Support/Napple, never --save-root; NULL = save_root */
     const char *log_dir;
     char title_id[17], build_id[17];
     int headless, seconds; /* seconds > 0: stop after that long (boot tests) */
@@ -263,3 +264,6 @@ typedef struct {
     int gfx_log;                   /* NAPPLE_GFX_LOG */
 } RuntimeConfig;
 extern RuntimeConfig g_cfg;
+int applet_game_hidden(void); /* services/applet.c: a library applet owns the screen */
+/* The ONE root of the shared system data (<root>/system/{mii,amiibo,fonts,icon}); the same for every game, Studio and the dev scripts. */
+static inline const char *napple_support_dir(void) { return g_cfg.support_dir && *g_cfg.support_dir ? g_cfg.support_dir : g_cfg.save_root; }

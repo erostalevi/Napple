@@ -39,9 +39,9 @@ Conventions:
 
 ## Loading a provider
 
-1. `NAPPLE_ONLINE_PROVIDER=/path/to/provider.dylib` (read once, at the first network call).
+1. `NAPPLE_ONLINE_PROVIDER=/path/to/provider.dylib` (read once, at the first network call), or the `online_provider` key of `<support>/system.json`, which Studio's Settings > Online edits and the runtime turns into that variable at boot (the environment wins). Empty = the NullProvider (offline).
 2. The library exports `const OnlineProvider *napple_online_provider_v1(void)` (`ONLINE_PLUGIN_SYMBOL`).
-3. The runtime checks `abi_version` and `struct_size`, calls `init` and uses the table. Any failure is logged (`online:` line) and the NullProvider stays in force.
+3. The runtime checks `abi_version` and `struct_size`, calls `init` and uses the table. Any failure (a path that does not exist, a wrong ABI, a missing symbol) is logged as one `online:` line and the NullProvider stays in force; the game keeps running offline.
 4. Embedding hosts and tests can call `online_provider_install(&table)` instead; `NULL` restores the NullProvider.
 
 iOS builds never load provider modules (no runtime code loading); the iOS app can only link a provider at build time.

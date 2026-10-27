@@ -44,6 +44,13 @@ void applet_set_focus(int in_focus) {
     pthread_mutex_unlock(&lock);
     applet_push_message(MSG_FOCUS_CHANGED);
 }
+/* 1 while a library applet owns the screen (the game is out of focus). */
+int applet_game_hidden(void) {
+    pthread_mutex_lock(&lock);
+    int h = focus_state != 1;
+    pthread_mutex_unlock(&lock);
+    return h;
+}
 static void applet_start_once(void) {
     if (started) return;
     started = 1;
@@ -769,6 +776,8 @@ static void *inproc_open_lib(void) {
         snprintf(path, sizeof path, "%s/libnapple-applet.dylib", exe);
         if (access(path, R_OK)) snprintf(path, sizeof path, "%s/Frameworks/libnapple-applet.dylib", exe);
         if (access(path, R_OK)) snprintf(path, sizeof path, "%s/../Frameworks/libnapple-applet.dylib", exe);
+        if (access(path, R_OK)) snprintf(path, sizeof path, "%s/../build-lib/libnapple-applet.dylib", exe); /* dev tree: runtime/build/napple-runtime */
+        if (access(path, R_OK)) snprintf(path, sizeof path, "%s/../../runtime/build-lib/libnapple-applet.dylib", exe);
     }
     h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
     if (!h) LOG("applet", "in-process applet host: cannot load %s: %s", path, dlerror());
@@ -783,7 +792,7 @@ static int inproc_run(const char *dir) {
     if (attach) {
         attach(g_cfg.headless ? NULL : frontend_metal_layer(), hid_input_get());
     }
-    char *argv[8];
+    char *argv[10];
     int n = 0;
     argv[n++] = (char *)"napple-applet";
     argv[n++] = (char *)dir;
@@ -811,11 +820,11 @@ static int libapplet_run_firmware(LibApplet *a, const char *program_id) {
         return 0;
     }
     char work[1400], in_dir[1450], out_dir[1450], path[1500], exe[2048];
-    snprintf(work, sizeof work, "%s/system/applet-run-%d", g_cfg.save_root, (int)getpid());
+    snprintf(work, sizeof work, "%s/system/applet-run-%d", napple_support_dir(), (int)getpid());
     snprintf(in_dir, sizeof in_dir, "%s/in", work);
     snprintf(out_dir, sizeof out_dir, "%s/out", work);
     char tmp[1400];
-    snprintf(tmp, sizeof tmp, "%s/system", g_cfg.save_root);
+    snprintf(tmp, sizeof tmp, "%s/system", napple_support_dir());
     mkdir(tmp, 0755);
     mkdir(work, 0755);
     mkdir(in_dir, 0755);
@@ -866,7 +875,7 @@ static int libapplet_run_firmware(LibApplet *a, const char *program_id) {
     }
     size_t ne = 0;
     while (environ[ne]) ne++;
-    char **envp = calloc(ne + 5, sizeof *envp);
+    char **envp = calloc(ne + 6, sizeof *envp);
     size_t k = 0;
     for (size_t i = 0; i < ne; i++)
         if (strncmp(environ[i], "NAPPLE_DEBUG_LAUNCH_APPLET=", 27)) envp[k++] = environ[i]; /* the debug launch is the host's, not the child's */
@@ -875,6 +884,9 @@ static int libapplet_run_firmware(LibApplet *a, const char *program_id) {
     envp[ne++] = modebuf;
     envp[ne++] = envin;
     envp[ne++] = envout;
+    char parentbuf[48];
+    snprintf(parentbuf, sizeof parentbuf, "NAPPLE_APPLET_PARENT=%d", (int)getpid());
+    envp[ne++] = parentbuf; /* the child exits when this process does (main.c applet_parent_watch) */
     char *argv[8];
     int n = 0;
     char seconds[16] = "0";
@@ -883,8 +895,14 @@ static int libapplet_run_firmware(LibApplet *a, const char *program_id) {
     argv[n++] = (char *)"--save-root";
     argv[n++] = (char *)g_cfg.save_root;
     if (g_cfg.headless) argv[n++] = (char *)"--headless";
+    /* Scripted exit for tests (tools/e2e): the child ends itself after N seconds, as if the player had left the editor. */
+    const char *sx = getenv("NAPPLE_APPLET_SECONDS");
+    if (sx && atoi(sx) > 0) {
+        snprintf(seconds, sizeof seconds, "%d", atoi(sx));
+        argv[n++] = (char *)"--seconds";
+        argv[n++] = seconds;
+    }
     argv[n] = NULL;
-    (void)seconds;
     pid_t pid;
     LOG("applet", "firmware applet %s: starting %s (storages in %s)", program_id, dir, in_dir);
     int rc = posix_spawn(&pid, exe, NULL, NULL, argv, envp);

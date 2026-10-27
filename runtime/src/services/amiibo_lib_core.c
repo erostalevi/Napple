@@ -88,6 +88,46 @@ long amiibo_lib_load_text(AmiiboLib *l, const char *text, size_t n) {
                 return -1;
             }
         }
+    } else if (rc == 1 && ami_jget(text, n, "amiibos", &arr) == 0 && arr.kind == 'o') {
+        /* the AmiiboAPI repository's full database: {"amiibos": {"0x<id>": {"name"}}, "characters", "amiibo_series", "game_series", "types"} */
+        AmiJVal tbl[4];
+        static const char *const tn[4] = {"characters", "amiibo_series", "game_series", "types"};
+        for (int i = 0; i < 4; i++)
+            if (ami_jget(text, n, tn[i], &tbl[i]) || tbl[i].kind != 'o') tbl[i].kind = 0;
+        const char *cur = arr.p;
+        AmiJVal k, v;
+        int r;
+        while ((r = ami_jiter(&cur, arr.p + arr.n, &k, &v)) == 1) {
+            if (k.n != 18 || k.p[0] != '0' || (k.p[1] != 'x' && k.p[1] != 'X') || v.kind != 'o') continue;
+            AmiiboInfo it;
+            memset(&it, 0, sizeof it);
+            uint8_t chk[8];
+            memcpy(it.id, k.p + 2, 16);
+            if (amiibo_id_from_hex(it.id, chk)) continue;
+            for (int i = 0; i < 16; i++) it.id[i] = (char)tolower((unsigned char)it.id[i]);
+            AmiJVal nm;
+            if (ami_jget(v.p, v.n, "name", &nm) == 0) cpy(it.name, sizeof it.name, &nm);
+            /* lookup keys: character = id[0..3], game series = id[0..2], type = id[6..7], amiibo series = id[12..13] */
+            char key[8];
+            AmiJVal x;
+            snprintf(key, sizeof key, "0x%.4s", it.id);
+            if (tbl[0].kind && ami_jget(tbl[0].p, tbl[0].n, key, &x) == 0) cpy(it.character, sizeof it.character, &x);
+            snprintf(key, sizeof key, "0x%.2s", it.id + 12);
+            if (tbl[1].kind && ami_jget(tbl[1].p, tbl[1].n, key, &x) == 0) cpy(it.series, sizeof it.series, &x);
+            snprintf(key, sizeof key, "0x%.3s", it.id);
+            if (tbl[2].kind && ami_jget(tbl[2].p, tbl[2].n, key, &x) == 0) cpy(it.game_series, sizeof it.game_series, &x);
+            snprintf(key, sizeof key, "0x%.2s", it.id + 6);
+            if (tbl[3].kind && ami_jget(tbl[3].p, tbl[3].n, key, &x) == 0) cpy(it.type, sizeof it.type, &x);
+            snprintf(it.image, sizeof it.image, AMIIBO_REPO_IMAGE_FMT, it.id, it.id + 8);
+            if (push(&t, &it)) {
+                amiibo_lib_free(&t);
+                return -1;
+            }
+        }
+        if (r < 0) {
+            amiibo_lib_free(&t);
+            return -1;
+        }
     } else if (rc == 1) {
         /* repository database: {"0x0000000000000002": {"name": "..."}, ...} */
         const char *cur = text;

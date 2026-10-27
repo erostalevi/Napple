@@ -76,6 +76,16 @@ pub fn info_plist(title_id: u64, name: &str, version: &str, has_icon: bool) -> S
             "NSCameraUsageDescription",
             "<string>Some games use the IR camera of a Joy-Con. Napple can use your webcam to simulate it, and only when a game asks for it.</string>".into(),
         ),
+        // Microphone (audin: the game's audio-in source; shown only when a game opens the audio input and no NAPPLE_AUDIN_SOURCE file is set).
+        (
+            "NSMicrophoneUsageDescription",
+            "<string>Some games listen to a microphone. Napple can use yours, and only when a game asks for it.</string>".into(),
+        ),
+        // microphone source (NAPPLE_AUDIN_SOURCE=mic, audio/src/engine.c): the prompt shows only when a game opens audio input
+        (
+            "NSMicrophoneUsageDescription",
+            "<string>Some games record from a microphone. Napple can use your Mac's microphone for that, and only when a game asks for it.</string>".into(),
+        ),
         (
             "NappleTitleId",
             format!("<string>{:016X}</string>", title_id),
@@ -151,11 +161,40 @@ pub fn verify(app: &Path) -> Result<()> {
     run_tool(&mut v).map_err(|e| BuildError::new("sign", format!("codesign --verify failed: {e}")))
 }
 
+/// Entitlements of a generated Mac game app. The camera entitlement goes with `NSCameraUsageDescription` (the IR camera simulator).
+/// There is deliberately NO `com.apple.security.app-sandbox`: the system data folders (`~/Library/Application Support/Napple/system`: Mii database,
+/// amiibo store, fonts) and the user's amiibo/key files must be reachable by every generated app; a sandboxed app would see only its own container.
+pub fn mac_entitlements() -> String {
+    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>com.apple.security.device.audio-input</key>\n\t<true/>\n\t<key>com.apple.security.device.camera</key>\n\t<true/>\n</dict>\n</plist>\n".to_string()
+}
+
 pub fn codesign(app: &Path) -> Result<()> {
+    let ent =
+        std::env::temp_dir().join(format!("napple-entitlements-{}.plist", std::process::id()));
+    std::fs::write(&ent, mac_entitlements())
+        .map_err(|e| BuildError::io("write entitlements", e))?;
     let mut c = Command::new("codesign");
-    c.args(["--force", "--deep", "-s", "-"]).arg(app);
-    run_tool(&mut c).map_err(|e| BuildError::new("sign", format!("codesign failed: {e}")))?;
+    c.args(["--force", "--deep", "-s", "-", "--entitlements"])
+        .arg(&ent)
+        .arg(app);
+    let r = run_tool(&mut c);
+    let _ = std::fs::remove_file(&ent);
+    r.map_err(|e| BuildError::new("sign", format!("codesign failed: {e}")))?;
     verify(app)
+}
+
+/// `libnapple-applet.dylib` (the runtime as a library: runs the Mii Maker inside the game app): beside the runtime, in a sibling `build-lib/`
+/// (a checkout's runtime/build/ and runtime/build-lib/), or in the checkout's runtime/build-lib. `make -C runtime applet-lib` builds it.
+pub fn find_applet_lib(runtime: &Path) -> Option<PathBuf> {
+    let name = "libnapple-applet.dylib";
+    let mut cands = vec![runtime.with_file_name(name)];
+    if let Some(dir) = runtime.parent() {
+        cands.push(dir.join("../build-lib").join(name));
+    }
+    if let Some(root) = repo_root() {
+        cands.push(root.join("runtime/build-lib").join(name));
+    }
+    cands.into_iter().find(|c| c.is_file())
 }
 
 /// Locates a prebuilt helper (runtime or launcher): explicit path, next to / relative to the installed `napple`
@@ -226,7 +265,44 @@ mod tests {
         }
         assert!(!info_plist(1, "x", "1", false).contains("CFBundleIconFile"));
         assert!(info_plist(1, "x", "1", false).contains("NSCameraUsageDescription"));
+        assert!(info_plist(1, "x", "1", false).contains("NSMicrophoneUsageDescription"));
+        assert!(info_plist(1, "x", "1", false).contains("NSMicrophoneUsageDescription"));
         assert!(p.starts_with("<?xml") && p.trim_end().ends_with("</plist>"));
+    }
+
+    #[test]
+    fn entitlements_have_camera_and_no_sandbox() {
+        let e = mac_entitlements();
+        assert!(e.contains("com.apple.security.device.camera"));
+        assert!(e.contains("com.apple.security.device.audio-input"));
+        // codesign (AMFI) rejects a repeated key
+        assert_eq!(
+            e.matches("<key>com.apple.security.device.audio-input</key>")
+                .count(),
+            1
+        );
+        assert_eq!(
+            e.matches("<key>com.apple.security.device.camera</key>")
+                .count(),
+            1
+        );
+        assert!(
+            !e.contains("app-sandbox"),
+            "system data folders need an unsandboxed app"
+        );
+        assert!(e.starts_with("<?xml") && e.trim_end().ends_with("</plist>"));
+    }
+
+    #[test]
+    fn applet_lib_is_found_beside_or_in_a_sibling_build_lib() {
+        let d = std::env::temp_dir().join(format!("napple-applet-lib-{}", std::process::id()));
+        std::fs::create_dir_all(d.join("build")).unwrap();
+        std::fs::create_dir_all(d.join("build-lib")).unwrap();
+        let rt = d.join("build/napple-runtime");
+        assert!(find_applet_lib(&rt).is_none() || repo_root().is_some());
+        std::fs::write(d.join("build-lib/libnapple-applet.dylib"), b"x").unwrap();
+        assert!(find_applet_lib(&rt).is_some());
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]

@@ -13,13 +13,15 @@ BUILD_NO="${NAPPLE_BUILD:-1}"
 
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 # Everything Studio's Build step needs: CLI, runtime, launcher (built here when missing; NAPPLE_REBUILD=1 forces).
-if [ ! -x "$ROOT/target/release/napple" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then
+CARGO_OUT="${CARGO_TARGET_DIR:-$ROOT/target}"   # honour CARGO_TARGET_DIR (CI and sandboxed builds keep it outside the tree)
+if [ ! -x "$CARGO_OUT/release/napple" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then
   (cd "$ROOT" && cargo build --release -p napple-cli)
 fi
 if [ ! -x "$ROOT/runtime/build/napple-runtime" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then make -C "$ROOT/runtime"; fi
+if [ ! -f "$ROOT/runtime/build-lib/libnapple-applet.dylib" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then make -C "$ROOT/runtime" applet-lib; fi
 if [ ! -x "$ROOT/packaging/build/napple-launcher" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then make -C "$ROOT/packaging"; fi
-for f in target/release/napple runtime/build/napple-runtime packaging/build/napple-launcher; do
-  [ -x "$ROOT/$f" ] || { echo "missing $f" >&2; exit 1; }
+for f in "$CARGO_OUT/release/napple" "$ROOT/runtime/build/napple-runtime" "$ROOT/packaging/build/napple-launcher" "$ROOT/runtime/build-lib/libnapple-applet.dylib"; do
+  [ -e "$f" ] || { echo "missing $f" >&2; exit 1; }
 done
 
 cd "$HERE"
@@ -29,7 +31,7 @@ BIN="$(swift build -c release --scratch-path "$SCRATCH" --show-bin-path)/NappleS
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/NappleStudio"
 # CLI + helpers side by side: `napple build` finds napple-runtime/napple-launcher next to itself.
-cp "$ROOT/target/release/napple" "$ROOT/runtime/build/napple-runtime" "$ROOT/packaging/build/napple-launcher" "$APP/Contents/Resources/"
+cp "$CARGO_OUT/release/napple" "$ROOT/runtime/build/napple-runtime" "$ROOT/packaging/build/napple-launcher" "$ROOT/runtime/build-lib/libnapple-applet.dylib" "$APP/Contents/Resources/"   # the applet library beside the runtime: `napple build` bundles it into every game app
 [ -x "$ROOT/runtime/build-ios/napple-runtime" ] && cp "$ROOT/runtime/build-ios/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios"   # optional: tools/build_ios.sh
 [ -x "$ROOT/runtime/build-ios-sim/napple-runtime" ] && cp "$ROOT/runtime/build-ios-sim/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios-sim"   # optional: tools/build_ios.sh --sim
 [ -f "$ROOT/compat/matrix.json" ] && cp "$ROOT/compat/matrix.json" "$APP/Contents/Resources/matrix.json"
@@ -54,6 +56,8 @@ cat > "$APP/Contents/Info.plist" <<P
 <key>CFBundleShortVersionString</key><string>$VERSION</string>
 <key>CFBundleVersion</key><string>$BUILD_NO</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
+<key>NSCameraUsageDescription</key><string>Games started from Studio can use your webcam as the Joy-Con IR camera, only when a game asks for it.</string>
+<key>NSMicrophoneUsageDescription</key><string>Games started from Studio can listen to your microphone, only when a game asks for it.</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 <key>NSHighResolutionCapable</key><true/>

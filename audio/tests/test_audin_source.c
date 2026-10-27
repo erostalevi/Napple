@@ -53,7 +53,10 @@ static void t_specs(void) {
     CHECK(!napple_audin_has_source(), "failed installs leave no source");
     CHECK(napple_audin_install_source_spec("tone") == 0 && napple_audin_has_source(), "default tone");
     CHECK(napple_audin_install_source_spec("silence") == 0 && !napple_audin_has_source(), "silence removes the source");
+#ifndef __APPLE__
     CHECK(napple_audin_install_source_spec("mic") == NAPPLE_AUDIO_E_UNSUPPORTED && !napple_audin_has_source(), "mic is unsupported off macOS");
+#endif
+    /* On macOS "mic" starts a real capture unit (and would raise the microphone permission prompt), so the test does not install it. */
 }
 
 static void t_tone(void) {

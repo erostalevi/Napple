@@ -129,7 +129,7 @@ static void pl_load(void) {
     pl.ready = 1;
     pl.shm = ipc_shared_memory_new(PL_SHM_SIZE);
     char dir[1200];
-    snprintf(dir, sizeof dir, "%s/system/fonts", g_cfg.save_root);
+    snprintf(dir, sizeof dir, "%s/system/fonts", napple_support_dir());
     DIR *d = opendir(dir);
     if (!d) {
         LOG("pl",

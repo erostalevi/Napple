@@ -99,13 +99,16 @@ int main(int argc, char **argv) {
 
     const char *save_root = NULL;
     for (int i = 1; i + 1 < argc; i++) if (!strcmp(argv[i], "--save-root")) save_root = argv[i + 1];
+    /* System data (fonts, Mii, amiibo) has one root for every game: NAPPLE_SUPPORT_DIR or the default, never --save-root. */
     char root[PATHLEN];
-    if (!save_root) {
+    const char *support = getenv("NAPPLE_SUPPORT_DIR");
+    if (!support || !*support) {
         const char *home = getenv("HOME");
         snprintf(root, sizeof root, "%s/Library/Application Support/Napple", home ? home : ".");
-        save_root = root;
+        support = root;
     }
-    install_fonts(game, save_root);
+    (void)save_root;
+    install_fonts(game, support);
 
     setenv("NAPPLE_BUNDLE_DIR", contents, 1);
     char **args = calloc((size_t)argc + 3, sizeof *args);

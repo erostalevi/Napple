@@ -96,6 +96,31 @@ Needs Xcode command line tools, rustup, `brew install opus libvpx`. `.claude/ski
 ## Titles
 Booting the reference titles needs the user's own game files and keys, so it is never automated: use [debugging.md](debugging.md), section 8, and the pages in [titles/](../titles/README.md). A passing boot is exit 0, thousands of frames and no `CRASH`.
 
+## End-to-end (`tools/e2e/run.sh`)
+
+`tools/e2e/run.sh <las|smo|acnh|mk8d|all>` ties the whole product together on a Mac that has the Testing Material, a Studio keyset (`~/Library/Application Support/Napple/keysets/22.1`)
+and this checkout's CLI, runtime, launcher and applet library built (`cargo build --release -p napple-cli`, `make -C runtime applet-lib`, `make -C packaging`). Per title it
+builds the .app **through Studio's own build path** (`napple-studio-build`: `KeysetManager` + `NappleCLI.build`, in-place data mode, updates and DLC as planned), then runs the
+steps below and prints a PASS / FAIL / KNOWN / REPORT / N/A table plus `summary.json` and `summary.md` (default folder `$TMPDIR/napple-e2e`, `--out` to change it):
+
+| Step | Passes when |
+|---|---|
+| build | Studio's pipeline produced the .app |
+| bundle | `codesign --verify` passes, `Contents/Frameworks/libnapple-applet.dylib` is there, the A32 jit dylib is embedded for the 32-bit title (MK8D) |
+| camera-mic | `NSCameraUsageDescription` and `NSMicrophoneUsageDescription` in Info.plist, the camera and audio-input entitlements, no App Sandbox |
+| mii-db | (first title) the real Mii Maker applet, driven by `NAPPLE_INPUT_SCRIPT` and `NAPPLE_SWKBD_ANSWER`, adds a Mii to the shared `MiiDatabase.dat`; every later boot reads the same file |
+| boot | the launcher starts the app headless, exit 0, no `CRASH`, at least a frame floor |
+| audio | the PCM counter line (`[napple-audio] PCM: ...`) saw samples above the noise floor |
+| input | the scripted presses reached the guest (`input: script: press`) |
+| amiibo | `NAPPLE_AMIIBO=<model id>,3000,12000`: placed and removed, a virtual amiibo in the store (N/A for a title that never opens `nfp:user`) |
+| save | a save was committed, and a second boot with the same save root mounts it again |
+| overlay | `NAPPLE_FE_OVERLAY` + `NAPPLE_FE_VIEWSHOT` render the overlay tabs to PNGs (a windowed run: the window appears briefly) |
+| golden | `tools/golden` routes against the approved goldens: **report only**, golden diffs are not deterministic run to run and never fail the table |
+
+All steps share one system data root (`<out>/support`, via `NAPPLE_SUPPORT_DIR`, see [system data folders](../reference/system-data-folders.md)). Known issues are tagged KNOWN, not
+FAIL, with the reason: ACNH's intermittent guest Break at `sdk+0xc80730` right after a headless start (retried once). A `.app` is about 6 GB: apps are deleted after each title
+unless `--keep-apps`. Nothing from the Testing Material is copied into the repository.
+
 ## Which tests to run for a change
 | You changed | Run |
 |---|---|
@@ -106,6 +131,7 @@ Booting the reference titles needs the user's own game files and keys, so it is 
 | `gfx/src/api_*.c`, `mtl_*.m` | `make -C gfx test` (Mac); `sh gfx/tests/t_getters_linux.sh` for state getters |
 | `gfx/src/shader/*` | `sh gfx/tests/t_xlate_linux.sh`, then `make -C gfx test` |
 | `audio/`, `input/`, `frontend/` | the matching `make -C <dir> test` |
-| `studio/` | `swift test --package-path studio` |
+| `studio/` | `swift test --package-path studio` (use `--scratch-path "$TMPDIR/..."` on ~/Documents: File Provider xattrs break its codesign step) |
+| anything that crosses Studio, the runtime and packaging | `tools/e2e/run.sh <title>` (end-to-end, needs the Testing Material) |
 | any `*.md` | `python3 tools/check_docs.py` |
 | `compat/matrix.json`, `docs/titles/*`, the coverage snapshot | `python3 -I tools/support/gen_support.py` (regenerates the support tables), then `python3 tools/check_docs.py` |

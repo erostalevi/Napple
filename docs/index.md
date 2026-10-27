@@ -46,6 +46,7 @@ See the [guide index](guides/README.md).
 |---|---|
 | [Subsystem map](reference/subsystems.md) | Code, tests and debug switches per subsystem |
 | [CLI](reference/cli.md) | `napple` and the runtime command line |
+| [System data folders](reference/system-data-folders.md) | The one support root: Mii database, amiibo store, fonts, `system.json` |
 | [Environment variables](reference/environment-variables.md) | Every `NAPPLE_*` variable read by the code |
 | [Support matrix](reference/support-matrix.md) | Generated per-title status per platform (macOS now, iOS deferred) |
 | [Feature support](reference/feature-support.md) | Generated coverage by domain and what is not implemented yet ([JSON for the site](reference/support-data.json)) |

@@ -38,10 +38,12 @@ void frontend_frame_presented(void) {
 }
 
 void fs_report_uncommitted(void);
+void napple_audio_pcm_report(void);
 void audio_report(void);
 void frontend_quit(int code) {
     thread_dump_all();
     fs_report_uncommitted();
+    napple_audio_pcm_report();
     audio_report();
     summary_write(code ? "fail" : "partial", code ? "stopped" : "stopped by the user or the run time limit");
     gfx_shutdown();

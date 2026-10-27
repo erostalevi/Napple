@@ -2,15 +2,17 @@
  *
  * The index is loaded client-side at runtime from a configurable source and never stored in this repository. Supported inputs: the AmiiboAPI HTTP document
  * ({"amiibo":[{"head","tail","name","character","gameSeries","amiiboSeries","type","image",...}]}, https://github.com/N3evin/AmiiboAPI, MIT, metadata only)
- * and the AmiiboAPI repository's database/amiibo.json ({"0x<16 hex>": {"name": ...}}). The upstream repository is archived (read-only since 2025-12-31), so a
+ * and the AmiiboAPI repository's database/amiibo.json ({"amiibos": {"0x<16 hex>": {"name": ...}}, "characters", "amiibo_series", "game_series", "types"}, or the bare {"0x<16 hex>": {...}} map). The upstream repository is archived (read-only since 2025-12-31), so a
  * successful fetch is cached locally and the cache is the fallback when offline; the source can be a mirror, a fork or a local folder.
  * Fetching a URL is the frontend's job (URLSession); the library takes the fetched text. */
 #pragma once
 #include "nfc_source.h"
 #include <pthread.h>
 
-#define AMIIBO_DEFAULT_SOURCE                                                                                                                                  \
-    "https://amiiboapi.com/api/amiibo/" /* a configuration default, not data; override with NAPPLE_AMIIBO_DB or the amiibo_database setting */
+/* amiiboapi.com answers 404 since the project was archived: the default is the archived repository's raw database (metadata only, MIT), a configuration default,
+ * not bundled data; override with NAPPLE_AMIIBO_DB (URL, file or folder) or the amiibo_database setting. */
+#define AMIIBO_DEFAULT_SOURCE "https://raw.githubusercontent.com/N3evin/AmiiboAPI/master/database/amiibo.json"
+#define AMIIBO_REPO_IMAGE_FMT "https://raw.githubusercontent.com/N3evin/AmiiboAPI/master/images/icon_%.8s-%.8s.png"
 
 typedef struct {
     char id[17]; /* 16 hex digits: head + tail */

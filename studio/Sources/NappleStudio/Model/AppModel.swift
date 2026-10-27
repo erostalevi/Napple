@@ -67,11 +67,14 @@ final class AppModel {
     let library: LibraryStore
     let tools: ToolRunner
     var devicesService: DeviceService { DeviceService(tools: tools) }
+    /// The game whose Run view (live runtime log) is open.
+    var runItem: LibraryItem?
 
     // navigation
     var pane: Pane = .library
     var selectedLibraryItem: UUID?
     var showInspector = false
+    var settingsTab = "general"   // selected Settings tab (the debug tour switches it)
     var toast: String?
     private var toastTask: Task<Void, Never>?
     var dropTargeted = false
@@ -334,8 +337,8 @@ final class AppModel {
     // MARK: debug tour
 
     /// Writes the window's screen rectangle (top-left origin, points) for an external `screencapture -R`, then waits for `<name>.png` to appear.
-    func snapshot(_ name: String) async {
-        guard let w = window, let dir = tour, let screen = w.screen ?? NSScreen.main else { return }
+    func snapshot(_ name: String, of target: NSWindow? = nil) async {
+        guard let w = target ?? window, let dir = tour, let screen = w.screen ?? NSScreen.main else { return }
         let f = w.frame
         let top = screen.frame.maxY - f.maxY
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -362,6 +365,17 @@ final class AppModel {
                 await snapshot(name)
             }
             showInspector = false
+            // the Settings window: the Mii, Amiibo and Online tabs over system.json
+            let sw = NSWindow(contentViewController: NSHostingController(rootView: SettingsView().environment(self)))
+            sw.title = "Settings"
+            sw.setFrameOrigin(NSPoint(x: (window?.frame.minX ?? 100) + 40, y: (window?.frame.minY ?? 100) + 40))
+            sw.makeKeyAndOrderFront(nil)
+            for tab in ["mii", "amiibo", "online"] {
+                settingsTab = tab
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                await snapshot("08-settings-\(tab)", of: sw)
+            }
+            sw.close()
             for _ in 0..<60 where phase == .planning { try? await Task.sleep(nanoseconds: 500_000_000) }
             if CommandLine.arguments.contains("--debug-fake-done") {   // replays the Simulator flow's state changes without building (crash reproduction)
                 let skip = Set((ProcessInfo.processInfo.environment["NAPPLE_FAKE_SKIP"] ?? "").split(separator: ",").map(String.init))

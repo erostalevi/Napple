@@ -66,13 +66,20 @@ Conventions used by the code, unless a row says otherwise:
 
 ### Network providers, amiibo and the IR camera (sim-online)
 
+The amiibo, key, store, online-provider and Mii-folder variables below can also be set once for every game in `<support>/system.json` (Studio Settings, the overlay's amiibo tab); a variable that is already set wins. See [system data folders](system-data-folders.md#systemjson).
+
 | Variable | Values / default | Effect | Defined in |
 |---|---|---|---|
 | `NAPPLE_ONLINE_PROVIDER` | path of a shared library; unset = NullProvider | Loaded once at the first network call; must export `napple_online_provider_v1` (see [network providers](../guides/network-providers.md)). A load or check failure is logged and the NullProvider stays. Not read on iOS. | `runtime/src/services/online_core.c` |
 | `NAPPLE_AMIIBO` | `<what>[,<insert_ms>[,<remove_ms>]]`; unset = no reader | Headless amiibo: installs the picker as the NFC reader. `<what>` is a 16-digit model id, a 14-digit stored UID or the path of a 540-byte dump. | `runtime/src/services/offline.c` |
-| `NAPPLE_AMIIBO_DB` | URL, file or folder; default `https://amiiboapi.com/api/amiibo/` | Source of the amiibo metadata index (never bundled; cached locally). | `runtime/src/services/amiibo_lib_core.c` |
+| `NAPPLE_AMIIBO_DB` | URL, file or folder; default the AmiiboAPI repository's raw `database/amiibo.json` (amiiboapi.com is offline) | Source of the amiibo metadata index (never bundled; cached locally). | `runtime/src/services/amiibo_lib_core.c` |
 | `NAPPLE_AMIIBO_KEY` | path; default `~/.switch/key_retail.bin` | The user's retail key file for the optional dump import. | `runtime/src/services/amiibo_lib_core.c` |
-| `NAPPLE_AMIIBO_STORE` | folder; default `<save-root>/system/amiibo` | Where the virtual amiibo JSON files live. | `runtime/src/services/amiibo_lib_core.c` |
+| `NAPPLE_AMIIBO_STORE` | folder; default `<support>/system/amiibo` | Where the virtual amiibo JSON files live. | `runtime/src/services/amiibo_lib_core.c` |
+| `NAPPLE_SUPPORT_DIR` | folder; default `~/Library/Application Support/Napple` | The ONE root of the shared system data (`system/mii`, `system/amiibo`, `system/fonts`, `system.json`); `--save-root` does not move it. Read by the runtime, the launcher and Studio. See [system data folders](system-data-folders.md). | `runtime/src/main.c`, `packaging/launcher.c`, `studio/Sources/NappleStudioCore/NappleCLI.swift` |
+| `NAPPLE_MII_DIR` | folder; default `<support>/system/mii` | Folder of `MiiDatabase.dat` (any folder; an iCloud Drive one included); also settable as `mii_dir` in `system.json`. | `runtime/src/services/mii.c` |
+| `NAPPLE_APPLET_SECONDS` | integer > 0 | Scripted exit for tests: a firmware applet child (Mii Maker) ends itself after N seconds. | `runtime/src/services/applet.c` |
+| `NAPPLE_APPLET_PARENT` | pid; set by the game for its applet child | The child exits when this process is gone (no orphaned Mii Maker). | `runtime/src/main.c`, `runtime/src/services/applet.c` |
+| `NAPPLE_APPLET_INPROC` | set = on | Runs the Mii Maker inside the game process from `libnapple-applet.dylib` (bundled in `Contents/Frameworks`) instead of a child process. | `runtime/src/services/applet.c` |
 | `NAPPLE_IR_SOURCE` | `blob:x,y,r[,dx,dy]`, `dark`, `flat:v`; unset = no IR camera | Scripted frame source for the IR camera simulator when the frontend installs none. | `runtime/src/services/irs.c` |
 | `NAPPLE_AUDIN_SOURCE` | `silence`, `tone[:HZ[:AMP]]`, `file:PATH` (WAV PCM16/float or raw s16le mono 48 kHz, looped), `mic`; unset = silence | Capture source for `audin:u`, installed at the first OpenAudioIn. `mic` records the default input device (macOS; needs the microphone usage description and entitlement, so it is opt-in). | `audio/src/audin_source.c`, `runtime/src/services/audio.c` |
 | `NAPPLE_BCAT_DIR` | folder laid out as `<dir>/<directory>/<file>`; unset = no delivery cache | Delivery cache provider for `bcat:u`: sub-folders are directories, regular files their files (MD5 digests computed on enumeration). Read only; never modified. | `runtime/src/services/bcat_core.c` |

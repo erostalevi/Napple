@@ -120,6 +120,12 @@ int main(void) {
     CHECK(amiibo_lib_load_text(&lib, "{\"amiibo\":[]}", 13) == -1 && lib.count == 2, "an empty document is rejected and the old contents stay");
     CHECK(amiibo_lib_load_text(&lib, "garbage", 7) == -1 && amiibo_lib_load_text(&lib, "{\"amiibo\":[{", 12) == -1 && lib.count == 2, "malformed documents are rejected");
     CHECK(amiibo_lib_load_text(&lib, DB_DOC, sizeof DB_DOC - 1) == 2 && !strcmp(lib.items[0].name, "Db One") && !strcmp(lib.items[1].id, "01010000000400aa"), "repository database format (ids lower-cased)");
+    { static const char FULL[] = "{\"amiibos\":{\"0x01010000000e0002\":{\"name\":\"Mario - Full\",\"release\":{}}},\"characters\":{\"0x0101\":\"Mario\"},"
+                                 "\"amiibo_series\":{\"0x00\":\"Super Mario Bros.\"},\"game_series\":{\"0x010\":\"Super Mario\"},\"types\":{\"0x00\":\"Figure\"}}";
+      CHECK(amiibo_lib_load_text(&lib, FULL, sizeof FULL - 1) == 1 && !strcmp(lib.items[0].name, "Mario - Full") && !strcmp(lib.items[0].character, "Mario") &&
+            !strcmp(lib.items[0].series, "Super Mario Bros.") && !strcmp(lib.items[0].game_series, "Super Mario") && !strcmp(lib.items[0].type, "Figure") &&
+            strstr(lib.items[0].image, "icon_01010000-000e0002.png"), "full repository database: names, character/series/type lookups and icon url"); }
+    CHECK(!strstr(AMIIBO_DEFAULT_SOURCE, "amiiboapi.com"), "the default source is not the dead amiiboapi.com host");
     amiibo_lib_free(&lib);
     { AmiiboConfig cfg; setenv("NAPPLE_AMIIBO_DB", "https://mirror.invalid/amiibo/", 1); amiibo_config_default(&cfg, root);
       CHECK(amiibo_config_source_is_remote(&cfg) && !strcmp(cfg.source, "https://mirror.invalid/amiibo/"), "NAPPLE_AMIIBO_DB overrides the source"); unsetenv("NAPPLE_AMIIBO_DB"); amiibo_config_default(&cfg, root);

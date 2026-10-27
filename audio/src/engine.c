@@ -75,6 +75,9 @@ static int env_int(const char *name, int fallback, int lo, int hi) {
     return (int)v;
 }
 
+static _Atomic uint64_t pcm_frames, pcm_loud;
+static _Atomic uint32_t pcm_peak_bits;
+
 /* ---- device callback ---- */
 static OSStatus pull(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTimeStamp *ts, UInt32 bus, UInt32 frames, AudioBufferList *io) {
     (void)ctx;
@@ -323,8 +326,36 @@ static void ring_put(nae_source *s, const float *lr, int frames) {
     if (!E.device_ok) atomic_store_explicit(&s->rd, wr + (uint64_t)frames, memory_order_release); /* no device: keep only the latest */
 }
 
+/* PCM counter (tests, tools/e2e): frames pushed by the renderers and how many carried a sample above the noise floor; logged at shutdown. */
+static void pcm_count(const float *lr, int frames) {
+    uint64_t loud = 0;
+    float peak = 0;
+    for (int i = 0; i < frames; i++) {
+        float a = fabsf(lr[2 * i]), b = fabsf(lr[2 * i + 1]);
+        float m = a > b ? a : b;
+        if (m > 1.0f / 4096) loud++;
+        if (m > peak) peak = m;
+    }
+    atomic_fetch_add_explicit(&pcm_frames, (uint64_t)frames, memory_order_relaxed);
+    atomic_fetch_add_explicit(&pcm_loud, loud, memory_order_relaxed);
+    float cur;
+    uint32_t bits = atomic_load_explicit(&pcm_peak_bits, memory_order_relaxed);
+    memcpy(&cur, &bits, sizeof cur);
+    if (peak > cur) { memcpy(&bits, &peak, sizeof bits); atomic_store_explicit(&pcm_peak_bits, bits, memory_order_relaxed); }
+}
+
+/* At process exit (the runtime calls it from its stop path): one line a test can grep. */
+void napple_audio_pcm_report(void) {
+    uint64_t n = atomic_load(&pcm_frames);
+    float pk;
+    uint32_t bits = atomic_load(&pcm_peak_bits);
+    memcpy(&pk, &bits, sizeof pk);
+    fprintf(stderr, "[napple-audio] PCM: %llu frames pushed, %llu above the noise floor, peak %.3f\n", (unsigned long long)n, (unsigned long long)atomic_load(&pcm_loud), pk);
+}
+
 void nae_source_push(nae_source *s, const float *lr, int frames) {
     if (!s || frames <= 0) return;
+    pcm_count(lr, frames);
     const double speed = nae_speed();
     if (nae_speed_muted()) return; /* turbo without sound: the callback drops the ring anyway */
     if (s->rate == OUT_RATE && speed == 1.0) {

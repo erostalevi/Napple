@@ -36,10 +36,10 @@ static void db_open_path(void) {
 #if NAPPLE_IOS
     else if (ios_shared_mii_dir()) snprintf(dir, sizeof dir, "%s", ios_shared_mii_dir()); /* App Group: the same database in every Napple game app */
 #endif
-    else if (g_cfg.save_root && *g_cfg.save_root) {
-        snprintf(dir, sizeof dir, "%s/system", g_cfg.save_root);
+    else if (napple_support_dir() && *napple_support_dir()) {
+        snprintf(dir, sizeof dir, "%s/system", napple_support_dir());
         mkdir(dir, 0755);
-        snprintf(dir, sizeof dir, "%s/system/mii", g_cfg.save_root);
+        snprintf(dir, sizeof dir, "%s/system/mii", napple_support_dir());
     } else return; /* tests and tools without a save root keep it in memory */
     mkdir(dir, 0755);
     snprintf(path, sizeof path, "%s/MiiDatabase.dat", dir);

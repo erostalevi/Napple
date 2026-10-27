@@ -9,7 +9,7 @@ Games talk to the nfp service, which returns already-decoded structures (TagInfo
 **virtual amiibo** (like emuiibo): its 8-byte model id, a generated UID, nickname and owner, register date and a locally persisted application area. No dump and no key are
 needed.
 
-- **Store**: `<save-root>/system/amiibo/<uid>.json`, one small JSON per virtual amiibo, shared by every game (so a game's amiibo save persists across runs and across titles).
+- **Store**: `<support>/system/amiibo/<uid>.json` (`<support>` = `~/Library/Application Support/Napple`, see [system data folders](../reference/system-data-folders.md)), one small JSON per virtual amiibo, shared by every game (so a game's amiibo save persists across runs and across titles).
   Writes go through a temporary file and a rename. Format: `id` (16 hex), `uid` (14 hex), `nickname`, `owner_mii` (base64 CharInfo), `registered`, `register_date`, `write_date`,
   `write_counter`, `version`, `font_region`, `app_area` {`access_id`, `app_id`, `write_counter`, `data` (base64, 216 bytes)}. Only `id` is required in a hand-written file.
 - **State machine** (`nfp_core.c`): Initialize, ListDevices, StartDetection, StopDetection, Mount, Unmount, Flush, Restore, GetTagInfo, GetCommonInfo, GetModelInfo,
@@ -19,9 +19,9 @@ needed.
 - **Tag source** (`nfc_source.h`): `NfcTagSource` = `poll` (tag present + generation), `store` (persist after Flush), `set_listener` (called when a tag is placed or removed, which
   signals the activate/deactivate events). Without a source the services behave exactly as before: no device, state Unavailable.
 - **Metadata library** (`amiibo_lib_core.h`): the index behind the picker (names, series, character, type, image URLs, 16-hex ids), loaded client-side from a configurable source:
-  the [AmiiboAPI](https://github.com/N3evin/AmiiboAPI) HTTP document (`https://amiiboapi.com/api/amiibo/`) or its `database/amiibo.json`, a URL, a local file or a mirror folder.
+  the [AmiiboAPI](https://github.com/N3evin/AmiiboAPI) repository's `database/amiibo.json` (the default, raw GitHub URL; the old `amiiboapi.com` endpoint answers 404), the API document shape, a URL, a local file or a mirror folder. The C loader reads both document shapes itself (the repository's `amiibos` map is joined with its `characters`, `amiibo_series`, `game_series` and `types` tables, and icon URLs are derived), so the frontend passes the fetched text through unchanged.
   AmiiboAPI is MIT licensed, metadata only, and its repository was archived read-only on 2025-12-31, so a successful fetch is cached
-  (`<save-root>/system/amiibo-cache/amiibo.json`) and the cache is the fallback when offline. The repository ships only the schema, the loader, the config key and the default
+  (`<support>/system/amiibo-cache/amiibo.json`) and the cache is the fallback when offline. The repository ships only the schema, the loader, the config key and the default
   source URL; **never any amiibo data**. Source: `NAPPLE_AMIIBO_DB` (URL, file or folder).
 - **Picker contract** (`AmiiboPicker`): `amiibo_picker_count/get/search` (list and search), `amiibo_picker_select(_hex/_uid)` (reuse the stored virtual amiibo of that model, or
   `AMIIBO_PICK_NEW` for another with a new UID), `amiibo_picker_remove`, `amiibo_picker_import_dump`, `amiibo_picker_source` (hand to `nfp_service_set_source`). `amiibo_service_picker()`
@@ -52,7 +52,7 @@ needed.
 
 ## Mac wiring (done: `frontend/src/simulators.m`, 2026-10-26 studio-redo)
 
-Both simulators live in the game's own overlay (F1 or the controller Home button), on the **Game/System** tab (amiibo and IR camera sections); nothing about them is in Napple Studio (they are per game).
+Both simulators live in the game's own overlay (F1 or the controller Home button), on the **Game/System** tab (amiibo and IR camera sections); the persistent settings (list source, key file, store) are also in Napple Studio > Settings > Amiibo.
 
 1. **amiibo tab**: search field + list over `amiibo_service_picker()` (`amiibo_picker_search/get`), *Place* (`amiibo_picker_select_hex`, reuse), *Place new copy*
    (`AMIIBO_PICK_NEW`), *Remove* (`amiibo_picker_remove`), *Reload list* (the cache / local source first via `amiibo_lib_refresh(..., NULL, 0)`, then an `NSURLSession`
@@ -64,11 +64,14 @@ Both simulators live in the game's own overlay (F1 or the controller Home button
    is installed once at window creation (`fe_simulators_install`, called before `fe_build_overlay`): `request_access` maps the AVFoundation status to `IR_ACCESS_*`
    and answers a pending prompt through `done`; `start`/`stop` run an `AVCaptureSession` (640x480 BGRA) whose frames go through `irs_adapter_rgb_to_ir`; `get_frame`
    hands the newest converted frame to the pump. The prompt appears only when a game starts an IR processor.
-3. **Packaging**: the game app's `Info.plist` carries `NSCameraUsageDescription` (`crates/napple-build/src/bundle.rs`); the Mac game app is not sandboxed and not
-   hardened, so no camera entitlement is needed (add `com.apple.security.device.camera` if that changes).
+3. **Packaging**: the game app's `Info.plist` carries `NSCameraUsageDescription` and `NSMicrophoneUsageDescription` (`NAPPLE_AUDIN_SOURCE=mic`), and the ad-hoc signature carries
+   the `com.apple.security.device.camera` and `com.apple.security.device.audio-input` entitlements (`bundle.rs`: `mac_entitlements()`). There is deliberately **no App Sandbox**
+   entitlement (a Rust test guards it): the shared system folders and the user's key file must stay reachable. Studio's own entitlements file carries the same two.
 4. **Linking**: the frontend is a static library linked into the runtime, so the runtime symbols above are weak references in `simulators.m` (`__attribute__((weak))`);
    the frontend's own test binaries link with `-undefined dynamic_lookup` and the tabs then say the feature is unavailable. The frontend's `.m` files compile with
    `-fmodules` so `AVFoundation` is auto-linked without touching the runtime's link line.
-5. **Settings** (not wired): `NAPPLE_AMIIBO_DB` (source URL/folder) and `NAPPLE_AMIIBO_KEY` are read from the environment; an overlay setting for them is still to do.
+5. **Settings**: the list source, the key file and the store folder are fields of the overlay's amiibo section and of Studio's Settings > Amiibo; both write
+   `<support>/system.json` (`amiibo_database`, `amiibo_key`, `amiibo_store`), which the runtime turns into `NAPPLE_AMIIBO_DB` / `_KEY` / `_STORE` at boot (the environment wins).
+   The reader is installed lazily (first Place / Import, or `NAPPLE_AMIIBO`), never at boot.
 
 Scripted check: `NAPPLE_FE_OVERLAY=3` (Game/System; 0 Audio/Video, 1 FPS/Speed, 2 Controls) opens the overlay on that tab at start; `NAPPLE_FE_VIEWSHOT=<png>:<seconds>` renders it to a PNG.

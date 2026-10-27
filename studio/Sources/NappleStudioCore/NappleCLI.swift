@@ -280,3 +280,154 @@ final class LockedBox<T>: @unchecked Sendable {
 extension LockedBox where T == [String] {
     func append(_ s: String) { l.lock(); v.append(s); l.unlock() }
 }
+
+// MARK: - System data, hardware simulators, online provider and the per-game run log
+// One contract with the runtime: <support>/system.json (runtime/src/services/sysconfig_core.h) and <support>/system/{mii,amiibo,fonts}.
+// Studio, the in-game overlay, the launcher and the dev scripts all resolve the same support folder, so nothing here is per game.
+
+public enum SystemData {
+    /// NAPPLE_SUPPORT_DIR or ~/Library/Application Support/Napple (what the launcher and the runtime use).
+    public static func supportDir(env: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        if let e = env["NAPPLE_SUPPORT_DIR"], !e.isEmpty { return URL(fileURLWithPath: e) }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Napple")
+    }
+}
+
+/// system.json: the settings of the hardware simulators and the online provider, read by the runtime at boot (the environment still wins there).
+public struct SystemConfig: Equatable, Sendable {
+    public var amiiboDatabase = ""   // NAPPLE_AMIIBO_DB: URL, .json file or folder
+    public var amiiboKey = ""        // NAPPLE_AMIIBO_KEY: key_retail.bin
+    public var amiiboStore = ""      // NAPPLE_AMIIBO_STORE: folder of the virtual amiibo (empty = <support>/system/amiibo)
+    public var onlineProvider = ""   // NAPPLE_ONLINE_PROVIDER: module path (empty = NullProvider, offline)
+    public var miiDir = ""           // NAPPLE_MII_DIR (empty = <support>/system/mii)
+    public init() {}
+    static var keys: [(String, WritableKeyPath<SystemConfig, String>)] {
+        [("amiibo_database", \.amiiboDatabase), ("amiibo_key", \.amiiboKey), ("amiibo_store", \.amiiboStore),
+         ("online_provider", \.onlineProvider), ("mii_dir", \.miiDir)]
+    }
+    public static func url(support: URL) -> URL { support.appendingPathComponent("system.json") }
+    public static func load(support: URL = SystemData.supportDir()) -> SystemConfig {
+        var c = SystemConfig()
+        guard let d = try? Data(contentsOf: url(support: support)), let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return c }
+        for (k, p) in keys { if let s = o[k] as? String { c[keyPath: p] = s } }
+        return c
+    }
+    public func save(support: URL = SystemData.supportDir()) throws {
+        try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        var o: [String: String] = [:]
+        for (k, p) in Self.keys where !self[keyPath: p].isEmpty { o[k] = self[keyPath: p] }
+        let d = try JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted, .sortedKeys])
+        try d.write(to: Self.url(support: support), options: .atomic)
+    }
+    /// The online provider as the user typed it: a module that exists, or nothing (the runtime also falls back to the NullProvider with one log line).
+    public var onlineProviderUsable: Bool { onlineProvider.isEmpty || FileManager.default.isReadableFile(atPath: onlineProvider) }
+    public var effectiveMiiFolder: URL { miiDir.isEmpty ? SystemData.supportDir().appendingPathComponent("system/mii") : URL(fileURLWithPath: miiDir) }
+}
+
+/// The shared Mii database (MiiDatabase.dat: 16-byte "NFDB" header, then 0x44-byte StoreData entries; see runtime/src/services/mii_core.c).
+public struct MiiStore: Sendable {
+    public struct Entry: Equatable, Sendable { public var index: Int; public var name: String }
+    public let folder: URL
+    public init(folder: URL) { self.folder = folder }
+    public var database: URL { folder.appendingPathComponent("MiiDatabase.dat") }
+    static let entrySize = 0x44, headerSize = 16
+
+    static func crc16(_ bytes: ArraySlice<UInt8>) -> UInt16 {   // CRC-16/XMODEM
+        var crc: UInt16 = 0
+        for b in bytes { crc ^= UInt16(b) << 8; for _ in 0..<8 { crc = crc & 0x8000 != 0 ? (crc << 1) ^ 0x1021 : crc << 1 } }
+        return crc
+    }
+    private func read() -> [UInt8]? {
+        guard let d = try? Data(contentsOf: database) else { return nil }
+        let b = [UInt8](d)
+        guard b.count >= Self.headerSize, b[0..<4].elementsEqual("NFDB".utf8), b[4] == 1, b.count == Self.headerSize + Int(b[5]) * Self.entrySize else { return nil }
+        return b
+    }
+    public var exists: Bool { read() != nil }
+    public func entries() -> [Entry] {
+        guard let b = read() else { return [] }
+        return (0..<Int(b[5])).map { i in
+            let o = Self.headerSize + i * Self.entrySize + 0x1c
+            var u: [UInt16] = []
+            for k in 0..<10 { let c = UInt16(b[o + 2 * k]) | UInt16(b[o + 2 * k + 1]) << 8; if c == 0 { break }; u.append(c) }
+            return Entry(index: i, name: String(decoding: u, as: UTF16.self))
+        }
+    }
+    /// Removes one Mii (keeps the previous file as .bak, like the runtime). The last Mii cannot be deleted: the runtime reseeds an empty database.
+    public func delete(index: Int) throws {
+        guard var b = read(), index >= 0, index < Int(b[5]) else { throw CLIError.failed(code: 1, message: "That Mii is not in the database.") }
+        guard b[5] > 1 else { throw CLIError.failed(code: 1, message: "The last Mii stays: a console always has one.") }
+        let off = Self.headerSize + index * Self.entrySize
+        b.removeSubrange(off..<(off + Self.entrySize))
+        b[5] -= 1
+        let crc = Self.crc16(b[Self.headerSize...])
+        b[6] = UInt8(crc & 0xff); b[7] = UInt8(crc >> 8)
+        var gen = UInt32(b[8]) | UInt32(b[9]) << 8 | UInt32(b[10]) << 16 | UInt32(b[11]) << 24
+        gen &+= 1
+        for k in 0..<4 { b[8 + k] = UInt8((gen >> (8 * UInt32(k))) & 0xff) }
+        let fm = FileManager.default
+        let bak = database.appendingPathExtension("bak")
+        try? fm.removeItem(at: bak); try? fm.copyItem(at: database, to: bak)
+        try Data(b).write(to: database, options: .atomic)
+    }
+    /// Copies the database to `dest` (a file, or a folder: MiiDatabase.dat goes inside).
+    @discardableResult public func export(to dest: URL) throws -> URL {
+        guard exists else { throw CLIError.failed(code: 1, message: "There is no Mii database yet. Start a game once.") }
+        var isDir: ObjCBool = false
+        let target = FileManager.default.fileExists(atPath: dest.path, isDirectory: &isDir) && isDir.boolValue ? dest.appendingPathComponent("MiiDatabase.dat") : dest
+        try? FileManager.default.removeItem(at: target)
+        try FileManager.default.copyItem(at: database, to: target)
+        return target
+    }
+    /// Backup next to the database with a timestamp.
+    @discardableResult public func backup(now: Date = Date()) throws -> URL {
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"; f.locale = Locale(identifier: "en_US_POSIX")
+        return try export(to: folder.appendingPathComponent("MiiDatabase-\(f.string(from: now)).dat"))
+    }
+    /// Replaces the database with a valid file (a backup).
+    public func restore(from src: URL) throws {
+        guard let d = try? Data(contentsOf: src), validate(d) != nil else { throw CLIError.badOutput("not a Napple Mii database") }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: database.appendingPathExtension("bak"))
+        if exists { try? FileManager.default.copyItem(at: database, to: database.appendingPathExtension("bak")) }
+        try d.write(to: database, options: .atomic)
+    }
+    func validate(_ d: Data) -> Int? {
+        let b = [UInt8](d)
+        guard b.count >= Self.headerSize, b[0..<4].elementsEqual("NFDB".utf8), b[4] == 1, b.count == Self.headerSize + Int(b[5]) * Self.entrySize else { return nil }
+        let crc = Self.crc16(b[Self.headerSize...])
+        return b[6] == UInt8(crc & 0xff) && b[7] == UInt8(crc >> 8) ? Int(b[5]) : nil
+    }
+}
+
+/// Runs a built game app and streams its log (the runtime prints its log on stderr) for the per-game Run view.
+public final class GameRun: @unchecked Sendable {
+    public let app: URL
+    private var process: Process?
+    private let lock = NSLock()
+    public init(app: URL) { self.app = app }
+
+    /// The executable of a built .app (CFBundleExecutable; the launcher).
+    public static func executable(of app: URL) -> URL? {
+        guard let d = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist")), let e = d["CFBundleExecutable"] as? String else { return nil }
+        let u = app.appendingPathComponent("Contents/MacOS/\(e)")
+        return FileManager.default.isExecutableFile(atPath: u.path) ? u : nil
+    }
+    public var isRunning: Bool { lock.lock(); defer { lock.unlock() }; return process?.isRunning ?? false }
+
+    /// Starts the game; `onLine` gets every stdout/stderr line; `onExit` the status. Environment additions are explicit (system.json is read by the runtime itself).
+    public func start(env: [String: String] = [:], onLine: @escaping @Sendable (String) -> Void, onExit: @escaping @Sendable (Int32) -> Void) throws {
+        guard let exe = Self.executable(of: app) else { throw CLIError.failed(code: 127, message: "\(app.lastPathComponent) has no launcher.") }
+        let p = Process()
+        p.executableURL = exe
+        p.environment = ProcessInfo.processInfo.environment.merging(env) { _, n in n }
+        let o = Pipe(), e = Pipe()
+        p.standardOutput = o; p.standardError = e; p.standardInput = FileHandle.nullDevice
+        lock.lock(); process = p; lock.unlock()
+        p.terminationHandler = { q in onExit(q.terminationStatus) }
+        try p.run()
+        Task.detached { await NappleCLI.lines(of: o.fileHandleForReading, onLine) }
+        Task.detached { await NappleCLI.lines(of: e.fileHandleForReading, onLine) }
+    }
+    public func stop() { lock.lock(); let p = process; lock.unlock(); if p?.isRunning == true { p?.terminate() } }
+}

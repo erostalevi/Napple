@@ -23,6 +23,7 @@ make -C gfx -j"$JOBS" lib adapter
 
 step "runtime + launcher"
 make -C runtime -j"$JOBS"
+make -C runtime -j"$JOBS" applet-lib   # libnapple-applet.dylib: the Mii Maker host, bundled into Studio and every game app
 make -C packaging
 
 if [ -z "${NAPPLE_SKIP_TESTS:-}" ]; then

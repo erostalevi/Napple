@@ -7,6 +7,7 @@
 #include "fe_internal.h"
 #include "amiibo_lib_core.h"
 #include "irs_core.h"
+#include "sysconfig_core.h"
 
 extern AmiiboPicker *amiibo_service_picker(void) __attribute__((weak));
 extern void nfp_service_set_source(const NfcTagSource *src) __attribute__((weak));
@@ -112,36 +113,6 @@ static NSButton *button(NSString *title, void (^blk)(id)) {
 static FEAmiiboList *g_list;
 static BOOL g_amiibo_installed, g_fetching;
 
-/* amiiboapi.com answers 404 since the project was archived; the repository database is the working default. */
-#define AMIIBO_REPO_DATABASE "https://raw.githubusercontent.com/N3evin/AmiiboAPI/master/database/amiibo.json"
-#define AMIIBO_REPO_IMAGES "https://raw.githubusercontent.com/N3evin/AmiiboAPI/master/images/icon_%@-%@.png"
-
-/* The repository database ({"amiibos":{"0x<id>":{name}}, "characters", "amiibo_series", "game_series", "types"}) converted to the API document the
-   runtime parser reads ({"amiibo":[{head,tail,name,character,amiiboSeries,gameSeries,type,image}]}). Other inputs are returned as they are. */
-static NSData *amiibo_convert_database(NSData *data) {
-    NSDictionary *root = [NSJSONSerialization JSONObjectWithData:data options:0 error:NULL];
-    if (![root isKindOfClass:NSDictionary.class] || ![root[@"amiibos"] isKindOfClass:NSDictionary.class]) return data;
-    NSDictionary *chars = root[@"characters"], *series = root[@"amiibo_series"], *games = root[@"game_series"], *types = root[@"types"];
-    NSMutableArray *out = [NSMutableArray new];
-    [root[@"amiibos"] enumerateKeysAndObjectsUsingBlock:^(NSString *k, NSDictionary *v, BOOL *stop) {
-        (void)stop;
-        NSString *id = [k.lowercaseString hasPrefix:@"0x"] ? [k.lowercaseString substringFromIndex:2] : k.lowercaseString;
-        if (id.length != 16 || ![v isKindOfClass:NSDictionary.class] || ![v[@"name"] isKindOfClass:NSString.class]) return;
-        NSString *head = [id substringToIndex:8], *tail = [id substringFromIndex:8];
-        NSString *(^look)(NSDictionary *, NSString *) = ^NSString *(NSDictionary *t, NSString *key) {
-            NSString *x = [t isKindOfClass:NSDictionary.class] ? t[[@"0x" stringByAppendingString:key]] : nil;
-            return [x isKindOfClass:NSString.class] ? x : @"";
-        };
-        [out addObject:@{
-            @"head" : head, @"tail" : tail, @"name" : v[@"name"], @"character" : look(chars, [id substringToIndex:4]),
-            @"amiiboSeries" : look(series, [tail substringWithRange:NSMakeRange(4, 2)]), @"gameSeries" : look(games, [id substringToIndex:3]),
-            @"type" : look(types, [head substringWithRange:NSMakeRange(6, 2)]), @"image" : [NSString stringWithFormat:@AMIIBO_REPO_IMAGES, head, tail]
-        }];
-    }];
-    if (!out.count) return data;
-    return [NSJSONSerialization dataWithJSONObject:@{@"amiibo" : out} options:0 error:NULL] ?: data;
-}
-
 /* The reader appears to the game only once the user places something: until then nfp/nfc keep answering "no device" (opening the tab changes nothing;
    Link's Awakening aborted at boot when the reader was installed while the tab was merely open). */
 static void amiibo_install_reader(AmiiboPicker *picker) {
@@ -173,7 +144,6 @@ static void amiibo_load(AmiiboPicker *p, NSTextField *status, BOOL fetch) {
     amiibo_status(status, p);
     if (!fetch || g_fetching || !amiibo_config_source_is_remote(&p->cfg)) return;
     const char *src = p->cfg.source;
-    if (!getenv("NAPPLE_AMIIBO_DB") && !strcmp(src, AMIIBO_DEFAULT_SOURCE)) src = AMIIBO_REPO_DATABASE;
     NSURL *u = [NSURL URLWithString:@(src)];
     if (!u) return;
     g_fetching = YES;
@@ -184,7 +154,7 @@ static void amiibo_load(AmiiboPicker *p, NSTextField *status, BOOL fetch) {
           dispatch_async(dispatch_get_main_queue(), ^{
               g_fetching = NO;
               if (!err && data.length && code < 400) {
-                  NSData *doc = amiibo_convert_database(data);
+                  NSData *doc = data; /* the runtime parser reads both document shapes */
                   pthread_mutex_lock(&p->lock);
                   amiibo_lib_refresh(&p->lib, &p->cfg, doc.bytes, doc.length);
                   pthread_mutex_unlock(&p->lock);
@@ -198,6 +168,21 @@ static void amiibo_load(AmiiboPicker *p, NSTextField *status, BOOL fetch) {
           });
       }];
     [t resume];
+}
+
+/* The amiibo list source and key file are persisted in <support>/system.json (the same file Napple Studio edits); the environment still wins at boot. */
+static NSString *amiibo_support_dir(void) {
+    const char *e = getenv("NAPPLE_SUPPORT_DIR");
+    if (e && *e) return @(e);
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Napple"];
+}
+static NSTextField *amiibo_field(NSString *value, NSString *placeholder) {
+    NSTextField *f = [NSTextField textFieldWithString:value ?: @""];
+    f.placeholderString = placeholder;
+    f.controlSize = NSControlSizeSmall;
+    f.font = [NSFont systemFontOfSize:11];
+    [f.widthAnchor constraintEqualToConstant:318].active = YES;
+    return f;
 }
 
 NSView *fe_amiibo_page(NappleFE *fe) {
@@ -266,6 +251,28 @@ NSView *fe_amiibo_page(NappleFE *fe) {
             (void)x;
             amiibo_picker_remove(picker);
             amiibo_status(status, picker);
+        }),
+    ])];
+    NSTextField *srcField = amiibo_field(@(picker->cfg.source), @"Amiibo list: URL, .json file or folder");
+    NSTextField *keyField = amiibo_field(@(picker->cfg.key), @"key_retail.bin");
+    [p addArrangedSubview:small_note(@"Amiibo list source and key file (saved for every game):")];
+    [p addArrangedSubview:srcField];
+    [p addArrangedSubview:keyField];
+    [p addArrangedSubview:hrow(@[
+        button(@"Save and reload", ^(id x) {
+            (void)x;
+            NSString *dir = amiibo_support_dir();
+            SysConfig sc;
+            sysconfig_load(dir.UTF8String, &sc);
+            snprintf(sc.amiibo_database, sizeof sc.amiibo_database, "%s", srcField.stringValue.UTF8String);
+            snprintf(sc.amiibo_key, sizeof sc.amiibo_key, "%s", keyField.stringValue.UTF8String);
+            int rc = sysconfig_save(dir.UTF8String, &sc);
+            pthread_mutex_lock(&picker->lock);
+            if (srcField.stringValue.length) snprintf(picker->cfg.source, sizeof picker->cfg.source, "%s", srcField.stringValue.UTF8String);
+            if (keyField.stringValue.length) snprintf(picker->cfg.key, sizeof picker->cfg.key, "%s", keyField.stringValue.UTF8String);
+            pthread_mutex_unlock(&picker->lock);
+            [fe toast:rc == 0 ? @"Amiibo settings saved" : @"Could not save the amiibo settings"];
+            amiibo_load(picker, status, YES);
         }),
     ])];
     [p addArrangedSubview:hrow(@[

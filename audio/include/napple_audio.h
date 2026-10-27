@@ -74,6 +74,8 @@ typedef struct napple_audio_stats {
 /* Initialise (reference counted; later calls with the first call's config are no-ops). */
 int napple_audio_init(const napple_audio_config *config);
 void napple_audio_shutdown(void);
+/* Logs "[napple-audio] PCM: N frames pushed, M above the noise floor, peak P" (tools/e2e greps it); called when the process stops. */
+void napple_audio_pcm_report(void);
 void napple_audio_set_master_volume(float volume); /* 0..1 */
 float napple_audio_get_master_volume(void);
 /* Focus handling: while paused the output is silent and queued audio is dropped when resumed. */

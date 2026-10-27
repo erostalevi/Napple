@@ -12,7 +12,10 @@ window restoration, menu bar commands). Sources: `studio/` (`NappleStudioCore` =
 | **Add Game** | Drop zone (the whole window accepts drops, so does the Dock icon and File > Open) -> plan (base, updates, DLC toggles, destination, blockers) -> build progress with the real stage names and a stage checklist -> done (Play / Install / Show in Finder / notes) or the failure with the reason. |
 | **iPhone & iPad** | Paired devices (`devicectl`) and booted Simulators (`simctl`), the guided signing flow, the memory-limit decision, "Install .ipa or .app…", and the exact command lines Studio runs. |
 | **Log** (inspector, ⌥⌘L) | The live build log with filter, copy, and "show logs in Finder" (`~/Library/Application Support/Napple/logs/build-*.log`). |
-| **Settings** (⌘,) | General (output folder, install/launch after build, legal notice), Keys & Firmware (sets, add/replace/delete), Engine (which `napple` is used). |
+| **Settings** (⌘,) | General (output folder, install/launch after build, legal notice), Keys & Firmware (sets, add/replace/delete), **Mii** (the shared database: list, delete, back up, export, restore, open the folder), **Amiibo** (list source, key file, store folder; nothing is bundled), **Online** (provider module; empty = offline NullProvider), Engine (which `napple` is used). |
+| **Play with Log…** (Library, right-click) | Runs the game through the launcher and streams the runtime log live (filter, copy, stop). The same run the dock icon starts, so what you see is what a player gets. |
+
+The Mii, Amiibo and Online tabs write `~/Library/Application Support/Napple/system.json` (one contract: the runtime reads it at boot, see [system data folders](../reference/system-data-folders.md)); they use `NappleCLI.swift`, the same code the build uses, and have no second code path. `studio/Sources/NappleStudioBuild` is the same build path without a window (`napple-studio-build`), which `tools/e2e/run.sh` uses.
 
 First launch shows the setup sheet: choose the folder that holds `prod.keys`, `title.keys` and the firmware (Studio finds them), or pick each file. Files are copied to
 `~/Library/Application Support/Napple/keysets/<name>/` (owner-only); key values are never read or logged (only key names are checked).

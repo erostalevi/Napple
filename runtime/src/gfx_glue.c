@@ -6,6 +6,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
+#include "napple.h"
 
 static void *wrap(void *user, void *fn, const char *name) {
     (void)user;
@@ -59,6 +61,9 @@ static void present(void *user, uint64_t frame, unsigned swap_interval) {
     frontend_frame_presented();
     movie_host_tick();
     maybe_screenshot(frame);
+    /* The frames of a game that an applet has hidden are dropped by the presenter, which also removes its pacing: without this the game spun at
+     * 17-20k frames per 60 s behind the Mii Maker. Keep the vsync cadence (60 Hz per swap interval). */
+    if (applet_game_hidden()) usleep(16667u * (swap_interval ? swap_interval : 1));
 }
 
 const GfxHooks *runtime_gfx_hooks(void) {
