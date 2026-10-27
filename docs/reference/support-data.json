@@ -852,7 +852,7 @@
     "`CallCommands: stale or invalid command handle` (65 k+ per minute: about 4000 lists/s never finalized, over the recording budget)",
     "iOS Simulator: the G-buffer pass needs 48 bytes of colour attachment, the Simulator allows 32 (base, AArch32)",
     "Binary archive load time (2026-10-26): a 59 MB `cache/pipelines-v8.metalar` left in the default save root by earlier runs took 65.5 s to load in `mtl_shader_init` (Metal `MTLMetalScriptBuilderImpl::initFromData`), so a ...",
-    "A32: VFP/NEON lifting is not done",
+    "A32: 4,818,607 of 4,867,102 instructions are lifted inline (VFP and NEON included), 48,495 (mostly undecodable pool/table words) run as build-time decoded out-of-line operations, zero interpreter fallbacks and zero \"no ...",
     "Both the ios-sim and mk8d-64 branches add `time:u` cmd 300 (conflict in `services/time.c` at integration)."
    ],
    "macos": {
@@ -861,7 +861,7 @@
     "graphics": null,
     "input": null,
     "saves": null,
-    "state": "v3.0.5 (update v1376256 + Booster Course Pass DLC) boots and races headless on the normal 64-bit path at 40-47 fps (title, menus, cup select, races). The base 1.0 build is AArch32 and runs through the lifted `a32jit.dylib` at the same fps, or the interpreter at 6-15 in races."
+    "state": "v3.0.5 (update v1376256 + Booster Course Pass DLC) boots and races headless on the normal 64-bit path at 40-47 fps (title, menus, cup select, races). The base 1.0 build is AArch32 and runs through the lifted `a32jit.dylib` (written by `napple build`) at 52-60 fps in headless menus and the attract race; the runtime has no interpreter (2026-10-26, a32-full)."
    },
    "matrix_name": null,
    "name": "Mario Kart 8 Deluxe",

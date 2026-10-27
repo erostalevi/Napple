@@ -126,14 +126,15 @@ public struct NappleCLI: Sendable {
         if let n = r.name, !n.isEmpty { args += ["--name", n] }
         // Bundled helper binaries sit next to the CLI; pass them explicitly when present.
         let dir = executable.deletingLastPathComponent()
-        let isIOS = BuildTarget(rawValue: r.target)?.isIOS ?? false
-        // iOS apps have no launcher (no exec on iOS) and use the runtime built by tools/build_ios.sh
-        let helpers = isIOS ? [("--runtime", "napple-runtime-ios")] : [("--runtime", "napple-runtime"), ("--launcher", "napple-launcher")]
+        let target = BuildTarget(rawValue: r.target) ?? .macos
+        let isIOS = target.isIOS
+        // iOS apps have no launcher (no exec on iOS) and use the runtime built by tools/build_ios.sh (device) / build_ios.sh --sim (Simulator)
+        let helpers = target.isSimulator ? [("--runtime", "napple-runtime-ios-sim")] : isIOS ? [("--runtime", "napple-runtime-ios")] : [("--runtime", "napple-runtime"), ("--launcher", "napple-launcher")]
         for (flag, file) in helpers {
             let u = dir.appendingPathComponent(file)
             if FileManager.default.isExecutableFile(atPath: u.path) { args += [flag, u.path] }
         }
-        if isIOS, let o = r.ios {
+        if isIOS, !target.isSimulator, let o = r.ios {
             if o.unsigned { args.append("--no-sign") } else {
                 if let i = o.identity { args += ["--signing-identity", i] }
                 if let p = o.profile { args += ["--provisioning-profile", p.path] }

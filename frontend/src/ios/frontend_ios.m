@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "internal.h"
+#import "fe_ios.h"
 #include "ios_logic.h"
 #include "napple_audio.h"
 #include "napple_input.h"
@@ -31,10 +32,10 @@
         fprintf(stderr, "\n");                                                                                                                                 \
     } while (0)
 
+static const int kSpeedStepsIOS[] = NAPPLE_SPEED_STEPS;
 struct napple_frontend {
     void *impl;
 };
-@class NappleFEiOS;
 static NappleFEiOS *g_fe;
 static dispatch_semaphore_t g_vsync;
 static void fe_hotkey(void *user, int hotkey);
@@ -51,45 +52,8 @@ static int mkdir_p(const char *path) {
     return mkdir(tmp, 0755) && errno != EEXIST ? -1 : 0;
 }
 
-/* per-device conveniences that are not part of the portable settings file */
-static BOOL pref_bool(NSString *k, BOOL d) {
-    id v = [NSUserDefaults.standardUserDefaults objectForKey:k];
-    return v ? [v boolValue] : d;
-}
-static float pref_float(NSString *k, float d) {
-    id v = [NSUserDefaults.standardUserDefaults objectForKey:k];
-    return v ? [v floatValue] : d;
-}
-
 /* ------------------------------------------------------------------------------------------------------------------ */
-@interface NappleFEiOS : NSObject
-@property (nonatomic) napple_frontend_config cfg;
-@property (nonatomic, copy) NSString *titleID, *titleName, *dir, *shotDir;
-@property (nonatomic, strong) CAMetalLayer *layer;
-@property (nonatomic) napple_settings settings;
-@property (nonatomic) napple_input *input;
-@property (nonatomic) double displayHz;
-@property (nonatomic) BOOL readyFired, quitting, overlayVisible;
-@property (nonatomic, strong) NSArray<NSDictionary *> *dlc, *updates;
-@property (nonatomic, copy) NSString *manifestTitle, *manifestBase;
-@property (nonatomic, weak) UIViewController *rootVC;
-- (napple_settings)currentSettings;
-- (void)applySettings:(napple_settings)s save:(BOOL)save notify:(BOOL)notify;
-- (void)mutate:(void (^)(napple_settings *))m;
-- (void)updateSpeed;
-- (void)toast:(NSString *)text;
-- (void)toggleSettings;
-- (void)showSettings:(BOOL)show;
-- (void)screenshot;
-- (void)restartGuest;
-- (void)quit;
-- (void)focus:(BOOL)on;
-- (BOOL)hardwareKey:(int)usage down:(BOOL)down;
-- (void)boot:(NSString *)stage fraction:(double)f;
-- (void)bootDone;
-- (void)compileNotice:(NSString *)text;
-- (void)framePresented;
-@end
+
 
 /* ------------------------------------------------------------------------------------------------------------------ */
 #pragma mark - on-screen controller
@@ -305,324 +269,6 @@ static float pref_float(NSString *k, float d) {
 @end
 
 /* ------------------------------------------------------------------------------------------------------------------ */
-#pragma mark - settings sheet
-
-typedef NS_ENUM(int, RowKind) { RowToggle, RowSlider, RowChoice, RowAction };
-@interface Row : NSObject
-@property (nonatomic) RowKind kind;
-@property (nonatomic, copy) NSString *title, *footer;
-@property (nonatomic, copy) BOOL (^getBool)(void);
-@property (nonatomic, copy) void (^setBool)(BOOL);
-@property (nonatomic, copy) float (^getFloat)(void);
-@property (nonatomic, copy) void (^setFloat)(float);
-@property (nonatomic) float min, max;
-@property (nonatomic, copy) NSArray<NSString *> *options;
-@property (nonatomic, copy) NSInteger (^getIndex)(void);
-@property (nonatomic, copy) void (^setIndex)(NSInteger);
-@property (nonatomic, copy) void (^action)(void);
-@property (nonatomic) BOOL destructive;
-@end
-@implementation Row
-@end
-
-@interface SettingsVC : UITableViewController
-@property (nonatomic, weak) NappleFEiOS *fe;
-@property (nonatomic, copy) NSArray<NSArray<Row *> *> *sections;
-@property (nonatomic, copy) NSArray<NSString *> *headers;
-@end
-
-static Row *toggle(NSString *t, BOOL (^g)(void), void (^s)(BOOL)) {
-    Row *r = [Row new];
-    r.kind = RowToggle;
-    r.title = t;
-    r.getBool = g;
-    r.setBool = s;
-    return r;
-}
-static Row *slider(NSString *t, float lo, float hi, float (^g)(void), void (^s)(float)) {
-    Row *r = [Row new];
-    r.kind = RowSlider;
-    r.title = t;
-    r.min = lo;
-    r.max = hi;
-    r.getFloat = g;
-    r.setFloat = s;
-    return r;
-}
-static Row *choice(NSString *t, NSArray<NSString *> *o, NSInteger (^g)(void), void (^s)(NSInteger)) {
-    Row *r = [Row new];
-    r.kind = RowChoice;
-    r.title = t;
-    r.options = o;
-    r.getIndex = g;
-    r.setIndex = s;
-    return r;
-}
-static Row *action(NSString *t, BOOL destructive, void (^a)(void)) {
-    Row *r = [Row new];
-    r.kind = RowAction;
-    r.title = t;
-    r.action = a;
-    r.destructive = destructive;
-    return r;
-}
-
-static const int kScaleSteps[] = {50, 75, 100, 150, 200};
-static const int kFpsSteps[] = {0, 30, 60};
-static const int kSpeedStepsIOS[] = NAPPLE_SPEED_STEPS;
-
-@implementation SettingsVC
-- (instancetype)initWithFE:(NappleFEiOS *)fe {
-    if ((self = [super initWithStyle:UITableViewStyleInsetGrouped])) {
-        self.fe = fe;
-        self.title = fe.titleName;
-        [self rebuild];
-    }
-    return self;
-}
-- (void)rebuild {
-    __weak NappleFEiOS *fe = self.fe;
-    NSMutableArray *secs = [NSMutableArray new], *heads = [NSMutableArray new];
-#define S() [fe currentSettings]
-    NSArray *scaleNames = @[ @"50%", @"75%", @"100% (native)", @"150%", @"200%" ];
-    [secs addObject:@[
-        choice(
-            @"Render resolution", scaleNames,
-            ^NSInteger {
-                napple_settings s = S();
-                for (int i = 0; i < 5; i++)
-                    if (kScaleSteps[i] == s.internal_scale_percent) return i;
-                return 2;
-            },
-            ^(NSInteger i) {
-                [fe mutate:^(napple_settings *t) {
-                    t->render_mode = 1;
-                    t->internal_width = t->internal_height = 0;
-                    t->internal_scale_percent = kScaleSteps[i];
-                }];
-            }),
-        choice(
-            @"Frame rate", @[ @"Game default", @"30 fps", @"60 fps" ],
-            ^NSInteger {
-                napple_settings s = S();
-                for (int i = 0; i < 3; i++)
-                    if (kFpsSteps[i] == s.fps_cap) return i;
-                return 0;
-            },
-            ^(NSInteger i) { [fe mutate:^(napple_settings *t) { t->fps_cap = kFpsSteps[i]; }]; }),
-        choice(
-            @"Output filter", @[ @"Bilinear", @"Nearest", @"Box", @"Bicubic", @"Lanczos", @"Sharpened" ],
-            ^NSInteger {
-                napple_settings s = S();
-                return s.filter;
-            },
-            ^(NSInteger i) { [fe mutate:^(napple_settings *t) { t->filter = (int)i; }]; }),
-        choice(
-            @"Upscaler", @[ @"None", @"MetalFX" ],
-            ^NSInteger {
-                napple_settings s = S();
-                return s.upscaler;
-            },
-            ^(NSInteger i) { [fe mutate:^(napple_settings *t) { t->upscaler = (int)i; }]; }),
-        toggle(
-            @"Frame generation",
-            ^BOOL {
-                napple_settings s = S();
-                return s.frame_gen;
-            },
-            ^(BOOL on) { [fe mutate:^(napple_settings *t) { t->frame_gen = on; }]; }),
-        toggle(
-            @"Show statistics",
-            ^BOOL {
-                napple_settings s = S();
-                return s.show_stats;
-            },
-            ^(BOOL on) { [fe mutate:^(napple_settings *t) { t->show_stats = on; }]; }),
-    ]];
-    [heads addObject:@"Video"];
-    [secs addObject:@[ slider(
-                        @"Volume", 0, 1,
-                        ^float {
-                            napple_settings s = S();
-                            return s.master_volume;
-                        },
-                        ^(float v) { [fe mutate:^(napple_settings *t) { t->master_volume = v; }]; }) ]];
-    [heads addObject:@"Audio"];
-    NSMutableArray *speedNames = [NSMutableArray new];
-    for (unsigned i = 0; i < sizeof kSpeedStepsIOS / sizeof *kSpeedStepsIOS; i++)
-        [speedNames addObject:[NSString stringWithFormat:@"%.3g×", kSpeedStepsIOS[i] / 100.0]];
-    [secs addObject:@[ choice(
-                        @"Game speed", speedNames,
-                        ^NSInteger {
-                            napple_settings s = S();
-                            for (unsigned i = 0; i < sizeof kSpeedStepsIOS / sizeof *kSpeedStepsIOS; i++)
-                                if (kSpeedStepsIOS[i] == s.speed_percent) return (NSInteger)i;
-                            return 4;
-                        },
-                        ^(NSInteger i) { [fe mutate:^(napple_settings *t) { t->speed_percent = kSpeedStepsIOS[i]; }]; }) ]];
-    [heads addObject:@"Speed"];
-    [secs addObject:@[
-        toggle(
-            @"On-screen controls", ^BOOL { return pref_bool(@"napple.padVisible", YES); },
-            ^(BOOL on) {
-                [NSUserDefaults.standardUserDefaults setBool:on forKey:@"napple.padVisible"];
-                [[NSNotificationCenter defaultCenter] postNotificationName:@"napple.padChanged" object:nil];
-            }),
-        slider(
-            @"Controls opacity", 0.15f, 1, ^float { return pref_float(@"napple.padOpacity", 0.45f); },
-            ^(float v) {
-                [NSUserDefaults.standardUserDefaults setFloat:v forKey:@"napple.padOpacity"];
-                [[NSNotificationCenter defaultCenter] postNotificationName:@"napple.padChanged" object:nil];
-            }),
-        toggle(
-            @"Haptic feedback", ^BOOL { return pref_bool(@"napple.padHaptics", YES); },
-            ^(BOOL on) { [NSUserDefaults.standardUserDefaults setBool:on forKey:@"napple.padHaptics"]; }),
-    ]];
-    [heads addObject:@"Controls"];
-    NSMutableArray *game = [NSMutableArray new];
-    if (self.fe.updates.count) {
-        NSMutableArray *names = [NSMutableArray arrayWithObject:@"Latest"];
-        for (NSDictionary *u in self.fe.updates) [names addObject:u[@"name"] ?: u[@"version"]];
-        [game addObject:choice(
-                            @"Update version", names,
-                            ^NSInteger {
-                                napple_settings s = S();
-                                if (!s.update_version[0]) return 0;
-                                for (NSUInteger i = 0; i < fe.updates.count; i++)
-                                    if ([fe.updates[i][@"version"] isEqualToString:@(s.update_version)]) return (NSInteger)i + 1;
-                                return 0;
-                            },
-                            ^(NSInteger i) {
-                                [fe mutate:^(napple_settings *t) {
-                                    if (i == 0) t->update_version[0] = 0;
-                                    else strlcpy(t->update_version, [fe.updates[i - 1][@"version"] UTF8String], sizeof t->update_version);
-                                }];
-                            })];
-    }
-    for (NSDictionary *d in self.fe.dlc) {
-        NSString *tid = d[@"id"];
-        [game addObject:toggle(
-                            d[@"name"] ?: tid,
-                            ^BOOL {
-                                napple_settings s = S();
-                                for (int i = 0; i < s.disabled_dlc_count; i++)
-                                    if (!strcmp(s.disabled_dlc[i], tid.UTF8String)) return NO;
-                                return YES;
-                            },
-                            ^(BOOL on) {
-                                [fe mutate:^(napple_settings *t) {
-                                    int at = -1;
-                                    for (int i = 0; i < t->disabled_dlc_count; i++)
-                                        if (!strcmp(t->disabled_dlc[i], tid.UTF8String)) at = i;
-                                    if (on && at >= 0) {
-                                        memmove(t->disabled_dlc[at], t->disabled_dlc[at + 1], (size_t)(t->disabled_dlc_count - at - 1) * 20);
-                                        t->disabled_dlc_count--;
-                                    } else if (!on && at < 0 && t->disabled_dlc_count < 32)
-                                        strlcpy(t->disabled_dlc[t->disabled_dlc_count++], tid.UTF8String, 20);
-                                }];
-                            })];
-    }
-    if (game.count) {
-        [game addObject:action(@"Restart game to apply", NO, ^{
-                  [fe showSettings:NO];
-                  [fe restartGuest];
-              })];
-        [secs addObject:game];
-        [heads addObject:@"Game"];
-    }
-    [secs addObject:@[
-        action(@"Take screenshot", NO,
-               ^{
-                   [fe showSettings:NO];
-                   dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 300 * NSEC_PER_MSEC), dispatch_get_main_queue(), ^{ [fe screenshot]; });
-               }),
-        action(@"Quit game", YES, ^{ [fe quit]; })
-    ]];
-    [heads addObject:@""];
-#undef S
-    self.sections = secs;
-    self.headers = heads;
-}
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(done)];
-}
-- (void)done {
-    [self.fe showSettings:NO];
-}
-- (NSInteger)numberOfSectionsInTableView:(UITableView *)t {
-    return (NSInteger)self.sections.count;
-}
-- (NSInteger)tableView:(UITableView *)t numberOfRowsInSection:(NSInteger)s {
-    return (NSInteger)self.sections[(NSUInteger)s].count;
-}
-- (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
-    NSString *h = self.headers[(NSUInteger)s];
-    return h.length ? h : nil;
-}
-- (UITableViewCell *)tableView:(UITableView *)tv cellForRowAtIndexPath:(NSIndexPath *)ip {
-    Row *r = self.sections[(NSUInteger)ip.section][(NSUInteger)ip.row];
-    UITableViewCell *c = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleValue1 reuseIdentifier:nil];
-    UIListContentConfiguration *cfg = [UIListContentConfiguration valueCellConfiguration];
-    cfg.text = r.title;
-    c.selectionStyle = UITableViewCellSelectionStyleNone;
-    switch (r.kind) {
-        case RowToggle: {
-            UISwitch *sw = [UISwitch new];
-            sw.on = r.getBool();
-            [sw addAction:[UIAction actionWithHandler:^(UIAction *a) { r.setBool(sw.on); }] forControlEvents:UIControlEventValueChanged];
-            c.accessoryView = sw;
-            break;
-        }
-        case RowSlider: {
-            UISlider *sl = [[UISlider alloc] initWithFrame:CGRectMake(0, 0, 180, 30)];
-            sl.minimumValue = r.min;
-            sl.maximumValue = r.max;
-            sl.value = r.getFloat();
-            [sl addAction:[UIAction actionWithHandler:^(UIAction *a) { r.setFloat(sl.value); }] forControlEvents:UIControlEventValueChanged];
-            c.accessoryView = sl;
-            break;
-        }
-        case RowChoice: {
-            NSInteger i = r.getIndex();
-            cfg.secondaryText = (i >= 0 && i < (NSInteger)r.options.count) ? r.options[(NSUInteger)i] : @"";
-            c.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-            c.selectionStyle = UITableViewCellSelectionStyleDefault;
-            break;
-        }
-        case RowAction:
-            cfg.textProperties.color = r.destructive ? UIColor.systemRedColor : self.view.tintColor;
-            c.selectionStyle = UITableViewCellSelectionStyleDefault;
-            break;
-    }
-    c.contentConfiguration = cfg;
-    return c;
-}
-- (void)tableView:(UITableView *)tv didSelectRowAtIndexPath:(NSIndexPath *)ip {
-    Row *r = self.sections[(NSUInteger)ip.section][(NSUInteger)ip.row];
-    [tv deselectRowAtIndexPath:ip animated:YES];
-    if (r.kind == RowAction) {
-        r.action();
-        return;
-    }
-    if (r.kind != RowChoice) return;
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:r.title message:nil preferredStyle:UIAlertControllerStyleActionSheet];
-    [r.options enumerateObjectsUsingBlock:^(NSString *o, NSUInteger i, BOOL *stop) {
-        [a addAction:[UIAlertAction actionWithTitle:o
-                                              style:UIAlertActionStyleDefault
-                                            handler:^(UIAlertAction *x) {
-                                                r.setIndex((NSInteger)i);
-                                                [tv reloadRowsAtIndexPaths:@[ ip ] withRowAnimation:UITableViewRowAnimationNone];
-                                            }]];
-    }];
-    [a addAction:[UIAlertAction actionWithTitle:@"Cancel" style:UIAlertActionStyleCancel handler:nil]];
-    a.popoverPresentationController.sourceView = [tv cellForRowAtIndexPath:ip];
-    a.popoverPresentationController.sourceRect = [tv cellForRowAtIndexPath:ip].bounds;
-    [self presentViewController:a animated:YES completion:nil];
-}
-@end
-
-/* ------------------------------------------------------------------------------------------------------------------ */
 #pragma mark - root view controller
 
 @interface NappleVC : UIViewController
@@ -687,6 +333,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, BOOL mono) {
     self.stats.backgroundColor = [UIColor colorWithWhite:0 alpha:0.6];
     self.stats.hidden = YES;
     self.stats.userInteractionEnabled = NO;
+    self.stats.translatesAutoresizingMaskIntoConstraints = YES; /* placed by refreshStats (corner setting) */
     [self.view addSubview:self.stats];
     self.toastLabel = makeLabel(15, UIFontWeightSemibold, NO);
     self.toastLabel.backgroundColor = [UIColor colorWithWhite:0 alpha:0.55];
@@ -695,8 +342,6 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, BOOL mono) {
     self.toastLabel.layer.masksToBounds = YES;
     [self.view addSubview:self.toastLabel];
     [NSLayoutConstraint activateConstraints:@[
-        [self.stats.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:8],
-        [self.stats.bottomAnchor constraintEqualToAnchor:self.view.bottomAnchor constant:-8],
         [self.toastLabel.leadingAnchor constraintEqualToAnchor:g.leadingAnchor constant:14],
         [self.toastLabel.topAnchor constraintEqualToAnchor:g.topAnchor constant:14]
     ]];
@@ -786,7 +431,16 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, BOOL mono) {
     }
     char buf[400] = "";
     fe.cfg.callbacks.stats_text(fe.cfg.callbacks.user, buf, sizeof buf);
+    static const CGFloat sizes[3] = {10, 12, 15};
+    self.stats.font = [UIFont monospacedSystemFontOfSize:sizes[s.stats_size] weight:UIFontWeightMedium];
+    self.stats.backgroundColor = [UIColor colorWithWhite:0 alpha:s.stats_opacity / 100.0];
     self.stats.text = [NSString stringWithFormat:@" %s ", buf];
+    [self.stats sizeToFit];
+    UIEdgeInsets in = self.view.safeAreaInsets;
+    CGSize vs = self.view.bounds.size, ss = self.stats.bounds.size;
+    CGFloat x = (s.stats_corner & 1) ? vs.width - in.right - ss.width - 8 : in.left + 8;
+    CGFloat y = (s.stats_corner & 2) ? vs.height - in.bottom - ss.height - 8 : in.top + 8;
+    self.stats.frame = CGRectMake(x, y, ss.width, ss.height);
     self.stats.hidden = NO;
 }
 - (void)toast:(NSString *)text {
@@ -806,7 +460,8 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, BOOL mono) {
     pthread_mutex_t _lock;
     _Atomic uint64_t _frames;
     BOOL _turboHeld, _turboToggle, _slowToggle;
-    UINavigationController *_sheet;
+    NappleIOSPanel *_panel;
+    BOOL _panelPadMode;
     CADisplayLink *_link;
 }
 - (instancetype)init {
@@ -870,6 +525,8 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, BOOL mono) {
     pthread_mutex_unlock(&_lock);
     if (save) [self saveSettings];
     napple_audio_set_master_volume(s.master_volume);
+    self.layer.developerHUDProperties = s.metal_hud ? @{@"mode" : @"default"} : nil; /* Apple's native Metal performance HUD */
+    [self refreshPanelInputMode];
     if (notify && self.cfg.callbacks.on_settings_changed) self.cfg.callbacks.on_settings_changed(self.cfg.callbacks.user, &s);
     if (notify) [self updateSpeed];
 }
@@ -905,6 +562,7 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, BOOL mono) {
     napple_audio_set_master_volume(_settings.master_volume);
     if (self.input) napple_input_set_hotkey_callback(self.input, fe_hotkey, (__bridge void *)self);
     [self attachKeyboard];
+    if (getenv("NAPPLE_FE_OVERLAY")) dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 6 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self showSettings:YES]; });
     dispatch_async(dispatch_get_main_queue(), ^{
         [vc.view layoutIfNeeded];
         if (self.cfg.callbacks.on_ready && !self.readyFired) {
@@ -1009,28 +667,62 @@ static UILabel *makeLabel(CGFloat size, UIFontWeight w, BOOL mono) {
 
 /* settings sheet ---------------------------------------------------------------------------------------------------------- */
 - (void)toggleSettings {
+    [self toggleSettingsFromPad:NO];
+}
+- (void)toggleSettingsFromPad:(BOOL)pad {
+    if (!self.overlayVisible) _panelPadMode = pad;
     [self showSettings:!self.overlayVisible];
+}
+/* The game keeps its touch / keyboard input while the panel is open, unless a controller opened it (the pad then navigates the panel). */
+- (void)refreshPanelInputMode {
+    if (self.input) napple_input_set_blocked(self.input, self.overlayVisible && (_panelPadMode || !self.settings.panel_passthrough));
 }
 - (void)showSettings:(BOOL)show {
     if (show == self.overlayVisible || !self.rootVC) return;
     self.overlayVisible = show;
+    UIView *host = self.rootVC.view;
+    UIImpactFeedbackGenerator *h = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+    [h impactOccurred];
     if (show) {
-        SettingsVC *s = [[SettingsVC alloc] initWithFE:self];
-        _sheet = [[UINavigationController alloc] initWithRootViewController:s];
-        _sheet.modalPresentationStyle = UIModalPresentationFormSheet;
-        [self.rootVC presentViewController:_sheet animated:YES completion:nil];
+        if (!_panel) _panel = [[NappleIOSPanel alloc] initWithFE:self];
+        _panel.padMode = _panelPadMode;
+        if (getenv("NAPPLE_FE_OVERLAY")) [_panel selectTab:atoi(getenv("NAPPLE_FE_OVERLAY"))]; /* test aid: open on a tab (SIMCTL_CHILD_NAPPLE_FE_OVERLAY) */
+        [_panel reload];
+        [host addSubview:_panel];
+        UILayoutGuide *g = host.safeAreaLayoutGuide;
+        NSLayoutConstraint *w = [_panel.widthAnchor constraintEqualToAnchor:host.widthAnchor multiplier:0.56];
+        w.priority = UILayoutPriorityDefaultHigh;
+        [NSLayoutConstraint activateConstraints:@[
+            [_panel.trailingAnchor constraintEqualToAnchor:g.trailingAnchor constant:-12], [_panel.topAnchor constraintEqualToAnchor:g.topAnchor constant:12],
+            [_panel.bottomAnchor constraintEqualToAnchor:g.bottomAnchor constant:-12], [_panel.widthAnchor constraintLessThanOrEqualToConstant:440],
+            [_panel.widthAnchor constraintGreaterThanOrEqualToConstant:300], w
+        ]];
+        [host layoutIfNeeded];
+        _panel.transform = CGAffineTransformMakeTranslation(_panel.bounds.size.width + 40, 0);
+        _panel.alpha = 0;
+        [UIView animateWithDuration:0.42 delay:0 usingSpringWithDamping:0.85 initialSpringVelocity:0.4 options:0 animations:^{
+            self->_panel.transform = CGAffineTransformIdentity;
+            self->_panel.alpha = 1;
+        } completion:nil];
         [self.vc.pad releaseAll];
     } else {
-        [self.rootVC dismissViewControllerAnimated:YES completion:nil];
-        _sheet = nil;
+        NappleIOSPanel *p = _panel;
+        [UIView animateWithDuration:0.25 animations:^{
+            p.transform = CGAffineTransformMakeTranslation(p.bounds.size.width + 40, 0);
+            p.alpha = 0;
+        } completion:^(BOOL f) {
+            if (!self.overlayVisible) [p removeFromSuperview];
+        }];
+        _panelPadMode = NO;
+        p.padMode = NO;
     }
-    if (self.input) napple_input_set_blocked(self.input, show);
+    [self refreshPanelInputMode];
     if (self.cfg.callbacks.on_overlay) self.cfg.callbacks.on_overlay(self.cfg.callbacks.user, show);
 }
 static void fe_hotkey(void *user, int hotkey) {
     NappleFEiOS *fe = (__bridge NappleFEiOS *)user;
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (hotkey == NAPPLE_HOTKEY_HOME) [fe toggleSettings];
+        if (hotkey == NAPPLE_HOTKEY_HOME) [fe toggleSettingsFromPad:YES];
         else if (hotkey == NAPPLE_HOTKEY_CAPTURE) [fe screenshot];
     });
 }
@@ -1267,7 +959,7 @@ void napple_frontend_text_input(napple_frontend *f, const napple_text_request *r
         void (^finish)(BOOL, NSString *) = ^(BOOL ok, NSString *text) {
             if (finished) return;
             finished = YES;
-            if (fe.input) napple_input_set_blocked(fe.input, fe.overlayVisible);
+            [fe refreshPanelInputMode];
             NSString *copy = [text copy];
             done(user, ok, ok ? copy.UTF8String : NULL);
         };

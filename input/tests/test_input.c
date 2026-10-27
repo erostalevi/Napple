@@ -192,6 +192,32 @@ int main(void) {
     CHECK(napple_input_get_vibration(in, 0, 1, &got) && got.amp_low == 1.f && got.freq_low == 1250.f && got.amp_high == 0.f && got.freq_high == 40.f,
           "vibration clamped");
     CHECK(!napple_input_get_vibration(in, 0, 0, &got), "no vibration for the other side");
+    /* per-player profile: player 1 gets A on keycode 40 (K) and nothing else; the shared set is untouched */
+    {
+        napple_bindings pb, shared, back;
+        napple_bindings_default(&pb);
+        for (int b = 0; b < NAPPLE_BTN_COUNT_BASIC; b++) pb.key[b][0] = pb.key[b][1] = NAPPLE_KEY_NONE;
+        pb.key[NAPPLE_BTN_A][0] = 40;
+        CHECK(napple_input_get_player_bindings(in, 0, &back) == 0, "player 1 follows the shared bindings");
+        CHECK(napple_input_set_player_bindings(in, 0, &pb) == 0 && napple_input_get_player_bindings(in, 0, &back) == 1, "player 1 profile stored");
+        napple_input_focus(in, 1);
+        napple_input_key(in, 40, 1);
+        napple_input_update(in, 1200000000ull);
+        e = latest(in, shm, &l, 0, l.npad_lifo[0]);
+        CHECK(e && (r64(e + 8) & NAPPLE_BTN_MASK(NAPPLE_BTN_A)), "profile key presses A");
+        napple_input_key(in, 40, 0);
+        napple_input_key(in, 0, 1); /* the shared A key (mac keycode 0) no longer does anything for player 1 */
+        napple_input_update(in, 1300000000ull);
+        e = latest(in, shm, &l, 0, l.npad_lifo[0]);
+        CHECK(e && !(r64(e + 8) & NAPPLE_BTN_MASK(NAPPLE_BTN_A)), "shared key ignored while the profile is active");
+        napple_input_key(in, 0, 0);
+        char path[300];
+        snprintf(path, sizeof path, "%s/input-p1.json", dir);
+        CHECK(access(path, R_OK) == 0, "input-p1.json written");
+        CHECK(napple_input_set_player_bindings(in, 8, &pb) != 0 && napple_input_get_player_bindings(in, -1, &back) == -1, "bad slot rejected");
+        napple_input_get_bindings(in, &shared);
+        CHECK(napple_input_clear_player_bindings(in, 0) == 0 && napple_input_get_player_bindings(in, 0, &back) == 0 && access(path, R_OK) != 0, "profile cleared");
+    }
     /* thread mode keeps samples flowing */
     napple_input_start(in);
     usleep(300000);

@@ -351,6 +351,10 @@ static void *thread_main(void *p) {
     core_take(t);
     pthread_mutex_unlock(&G);
     {
+        const char *dl = getenv("NAPPLE_DEBUG_THREAD_DELAY_MS"); /* debug aid: a started thread's first instruction runs this much later (a race probe) */
+        if (dl && *dl) usleep((useconds_t)atoi(dl) * 1000u);
+    }
+    {
         volatile char marker = 0;
         runtime_hle_stack_set((uintptr_t)&marker - 1024);
     }                                                                        /* host services of this thread run below here */
@@ -538,6 +542,7 @@ uint32_t event_create(uint32_t *readable_out) {
     e->refs = 2;
     uint32_t w = handle_new(OBJ_EVENT_W, e), r = handle_new(OBJ_EVENT_R, e);
     if (readable_out) *readable_out = r;
+    LOGV("kernel", "event created: writable %#x readable %#x", w, r);
     return w;
 }
 void event_signal_handle(uint32_t writable) {

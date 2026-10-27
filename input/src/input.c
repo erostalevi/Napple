@@ -42,6 +42,8 @@ struct napple_input {
     pthread_mutex_t lock;
     napple_hid_layout layout;
     napple_bindings bind;
+    napple_bindings pbind[8]; /* per-player profiles (players 1..8): used for slot n when bit n of pover is set */
+    unsigned pover;
     /* host events */
     uint8_t keys[256];
     float mouse_nx, mouse_ny, scroll_dx, scroll_dy;
@@ -132,6 +134,25 @@ static void load_bindings(napple_input *in) {
     in->bind = b;
     napple_input_log("bindings loaded from %s", in->path);
 }
+static void pfile(const napple_input *in, int slot, char *out, size_t cap) { snprintf(out, cap, "%s/input-p%d.json", in->dir, slot + 1); }
+static void load_player_bindings(napple_input *in) {
+    in->pover = 0;
+    for (int i = 0; i < 8; i++) {
+        napple_bindings_default(&in->pbind[i]);
+        char path[1200], buf[32769];
+        pfile(in, i, path, sizeof path);
+        FILE *f = fopen(path, "rb");
+        if (!f) continue;
+        size_t n = fread(buf, 1, sizeof buf - 1, f);
+        int whole = feof(f);
+        fclose(f);
+        napple_bindings b;
+        if (whole && !napple_bindings_from_json(buf, n, &b)) {
+            in->pbind[i] = b;
+            in->pover |= 1u << i;
+        }
+    }
+}
 static int save_bindings(napple_input *in) {
     char json[16384];
     size_t n = napple_bindings_to_json(&in->bind, json, sizeof json);
@@ -179,6 +200,7 @@ int napple_input_create(const napple_input_config *c, napple_input **out) {
     }
     napple_hid_init(in->cfg.shm, &in->layout);
     load_bindings(in);
+    load_player_bindings(in);
     in->focused = 1;
     in->player_count = 1;
     in->assign.active = 1;
@@ -486,6 +508,50 @@ int napple_input_set_bindings(napple_input *in, const napple_bindings *b) {
     if (rc) napple_input_log("could not save %s: %s", in->path, strerror(errno));
     return rc;
 }
+int napple_input_get_player_bindings(napple_input *in, int slot, napple_bindings *out) {
+    if (slot < 0 || slot > 7) return -1;
+    pthread_mutex_lock(&in->lock);
+    int own = in->pover >> slot & 1;
+    *out = own ? in->pbind[slot] : in->bind;
+    pthread_mutex_unlock(&in->lock);
+    return own;
+}
+int napple_input_set_player_bindings(napple_input *in, int slot, const napple_bindings *b) {
+    if (slot < 0 || slot > 7 || napple_bindings_validate(b)) return -1;
+    char json[16384], path[1200], tmp[1300];
+    size_t n = napple_bindings_to_json(b, json, sizeof json);
+    if (n >= sizeof json || mkdir_p(in->dir)) return -1;
+    pfile(in, slot, path, sizeof path);
+    snprintf(tmp, sizeof tmp, "%s.tmp", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return -1;
+    int ok = fwrite(json, 1, n, f) == n;
+    ok &= fclose(f) == 0;
+    if (!ok || rename(tmp, path)) return -1;
+    pthread_mutex_lock(&in->lock);
+    in->pbind[slot] = *b;
+    in->pover |= 1u << slot;
+    pthread_mutex_unlock(&in->lock);
+    return 0;
+}
+int napple_input_clear_player_bindings(napple_input *in, int slot) {
+    if (slot < 0 || slot > 7) return -1;
+    char path[1200];
+    pfile(in, slot, path, sizeof path);
+    unlink(path);
+    pthread_mutex_lock(&in->lock);
+    in->pover &= ~(1u << slot);
+    pthread_mutex_unlock(&in->lock);
+    return 0;
+}
+int napple_input_get_pad_state(napple_input *in, int slot, napple_npad_state *out) {
+    if (slot < 0 || slot > 7) return 0;
+    pthread_mutex_lock(&in->lock);
+    int on = in->slot_style[slot] != 0;
+    *out = in->pad_state[slot];
+    pthread_mutex_unlock(&in->lock);
+    return on;
+}
 int napple_input_reset_bindings(napple_input *in) {
     napple_bindings d;
     napple_bindings_default(&d);
@@ -527,14 +593,15 @@ static uint32_t swap_face(uint32_t e) { /* south<->east, west<->north */
 
 static void map_slot(const napple_input *in, int slot, napple_npad_state *st) {
     memset(st, 0, sizeof *st);
+    const napple_bindings *bd = slot >= 0 && slot < 8 && (in->pover >> slot & 1) ? &in->pbind[slot] : &in->bind; /* per-player profile, else the shared one */
     float kx = 0, ky = 0, krx = 0, kry = 0;
     if (slot == 0) { /* keyboard drives player 1 */
         for (int b = 0; b < NAPPLE_BTN_COUNT_BASIC; b++)
-            if (held(in, in->bind.key[b][0]) || held(in, in->bind.key[b][1])) st->buttons |= NAPPLE_BTN_MASK(b);
-        kx = (float)(held(in, in->bind.stick_l[2]) - held(in, in->bind.stick_l[0]));
-        ky = (float)(held(in, in->bind.stick_l[1]) - held(in, in->bind.stick_l[3]));
-        krx = (float)(held(in, in->bind.stick_r[2]) - held(in, in->bind.stick_r[0]));
-        kry = (float)(held(in, in->bind.stick_r[1]) - held(in, in->bind.stick_r[3]));
+            if (held(in, bd->key[b][0]) || held(in, bd->key[b][1])) st->buttons |= NAPPLE_BTN_MASK(b);
+        kx = (float)(held(in, bd->stick_l[2]) - held(in, bd->stick_l[0]));
+        ky = (float)(held(in, bd->stick_l[1]) - held(in, bd->stick_l[3]));
+        krx = (float)(held(in, bd->stick_r[2]) - held(in, bd->stick_r[0]));
+        kry = (float)(held(in, bd->stick_r[1]) - held(in, bd->stick_r[3]));
         /* diagonal keys read as a unit vector, not as 1.41 */
         float m = sqrtf(kx * kx + ky * ky);
         if (m > 1) {
@@ -563,19 +630,19 @@ static void map_slot(const napple_input *in, int slot, napple_npad_state *st) {
     if (src < in->npads) {
         const ng_pad *p = &in->pads[src];
         uint32_t e = p->elements;
-        if ((in->bind.face_layout == 1 && p->by_label) || (in->bind.face_layout == 2 && !p->by_label)) e = swap_face(e);
+        if ((bd->face_layout == 1 && p->by_label) || (bd->face_layout == 2 && !p->by_label)) e = swap_face(e);
         /* analog triggers: the press point is the player's setting, not GameController's */
         e &= ~((1u << NAPPLE_PAD_LT) | (1u << NAPPLE_PAD_RT));
-        if (p->lt > in->bind.trigger_threshold) e |= 1u << NAPPLE_PAD_LT;
-        if (p->rt > in->bind.trigger_threshold) e |= 1u << NAPPLE_PAD_RT;
+        if (p->lt > bd->trigger_threshold) e |= 1u << NAPPLE_PAD_LT;
+        if (p->rt > bd->trigger_threshold) e |= 1u << NAPPLE_PAD_RT;
         for (int b = 0; b < NAPPLE_BTN_COUNT_BASIC; b++)
             for (int k = 0; k < 2; k++) {
-                int el = in->bind.pad[b][k];
+                int el = bd->pad[b][k];
                 if (el >= 0 && (e >> el & 1)) st->buttons |= NAPPLE_BTN_MASK(b);
             }
         float px, py, qx, qy;
-        radial(p->lx, p->ly, in->bind.stick_deadzone, in->bind.stick_range, in->bind.stick_curve, &px, &py);
-        radial(p->rx, p->ry, in->bind.stick_deadzone, in->bind.stick_range, in->bind.stick_curve, &qx, &qy);
+        radial(p->lx, p->ly, bd->stick_deadzone, bd->stick_range, bd->stick_curve, &px, &py);
+        radial(p->rx, p->ry, bd->stick_deadzone, bd->stick_range, bd->stick_curve, &qx, &qy);
         if (px * px + py * py > lx * lx + ly * ly) {
             lx = px;
             ly = py;
@@ -585,10 +652,10 @@ static void map_slot(const napple_input *in, int slot, napple_npad_state *st) {
             ry = qy;
         }
     }
-    if (in->bind.invert[0]) lx = -lx;
-    if (in->bind.invert[1]) ly = -ly;
-    if (in->bind.invert[2]) rx = -rx;
-    if (in->bind.invert[3]) ry = -ry;
+    if (bd->invert[0]) lx = -lx;
+    if (bd->invert[1]) ly = -ly;
+    if (bd->invert[2]) rx = -rx;
+    if (bd->invert[3]) ry = -ry;
     st->left = to_stick(lx, ly);
     st->right = to_stick(rx, ry);
     /* stick direction pseudo buttons beyond half deflection */

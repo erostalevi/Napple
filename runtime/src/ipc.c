@@ -382,6 +382,10 @@ static void run_object(IpcObject *o, IpcCall *c) {
             break;
         }
     note_command(c, cmd, c->in_size);
+    if (!cmd && !o->ncmds) {   /* a tolerant stub object (firmware applets' system services): every command succeeds with no output, and is logged */
+        LOG("ipc", "%s: command %u answered by the catch-all stub (success, no output)", o->iface, c->cmd);
+        return;
+    }
     if (!cmd) {
         if (!getenv("NAPPLE_IPC_LENIENT")) unimplemented(c);
         LOG("ipc", "%s: command %u not implemented (lenient: error result)", o->iface, c->cmd);
@@ -389,6 +393,7 @@ static void run_object(IpcObject *o, IpcCall *c) {
         return;
     }
     cmd->fn(o, c);
+    if (c->result && (log_verbose || getenv("NAPPLE_TRACE_IPC"))) LOG("ipc", "%s::%s answered with error result %#x (module %u description %u)", o->iface, cmd->name, c->result, c->result & 0x1ff, (c->result >> 9) & 0x1fff);
 }
 
 /* Control requests on a session: domain conversion, cloning, pointer buffer size. */

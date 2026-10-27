@@ -540,7 +540,11 @@ static void arm_uncond(uint32_t w, A32Insn *o) {
         if (BIT(w, 24)) {
             o->op = OP_NOP;
             return;
-        } /* pld / pldw / pli: hints */
+        } /* pld / pldw (0xf5, 0xf7): hints */
+        if (BIT(w, 25) || BIT(w, 20)) { /* 0xf6 and 0xf4 with L/bit 20 set: pli (hint) or unallocated */
+            o->op = (w & 0x00700000) == 0x00500000 && !(BIT(w, 25) && BIT(w, 4)) ? OP_NOP : OP_UNDEF;
+            return;
+        }
         o->op = OP_NEON;
         o->imm = w;
         return; /* NEON element / structure load-store */

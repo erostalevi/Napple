@@ -337,6 +337,8 @@ void mtl_stats_gpu_add(double ms) { atomic_fetch_add(&g_gpu_ns_acc, (uint64_t)(m
 static char g_shot_path[1024];
 static pthread_mutex_t g_shot_mu = PTHREAD_MUTEX_INITIALIZER;
 static _Atomic int g_shot_pending;
+static _Atomic int g_hidden; /* napple_gfx_set_hidden */
+void napple_gfx_set_hidden(int hidden) { atomic_store(&g_hidden, hidden != 0); }
 static id<MTLTexture> g_last_present; /* last presented NVN texture (retained) */
 static float g_last_crop[4];
 static float g_last_gw, g_last_gh;
@@ -510,7 +512,7 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
     /* Frames beyond the display rate (game speed above 1x, uncapped fixed rates) are not shown: they would only queue up behind the display. */
     const double disp_period = 1.0 / (hz > 1 ? hz : 60.0);
     static uint64_t last_shown_ns;
-    int drop = 0;
+    int drop = atomic_load(&g_hidden) != 0; /* napple_gfx_set_hidden: a library applet owns the screen */
     if (g_mtl.layer && st.pacing != NAPPLE_PACING_UNCAPPED && min_dur > 0 && min_dur < disp_period * 0.92 && last_shown_ns &&
         (double)(t_enter - last_shown_ns) / 1e9 < disp_period * 0.92)
         drop = 1;

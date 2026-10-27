@@ -44,6 +44,7 @@ void gfx_set_nvn_version(unsigned major, unsigned minor); /* API version nvnDevi
 void gfx_shutdown(void);
 int gfx_screenshot(const char *png_path); /* PNG of the next presented frame (async); 0 = queued */
 int gfx_screenshot_pending(void);
+void gfx_set_hidden(int hidden); /* frames not shown while a library applet draws on the layer */
 /* Shader compile progress for the loading screen (app.m): the launch-time cache compile, compiles the game waits on right now, pipelines built. */
 typedef struct {
     unsigned prewarm_done, prewarm_total, blocking;

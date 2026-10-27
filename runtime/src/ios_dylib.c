@@ -14,11 +14,20 @@ int ios_dylib_path(char *out, size_t cap, const char *images_dir, const char *fi
     char *ver = strrchr(dir, '/');
     if (!ver) return -1;
     const char *vname = ver + 1;
-    char app_game[4096];
-    snprintf(app_game, sizeof app_game, "%.*s", (int)(ver - dir), dir); /* <app>/game */
+    char app_game[4096], vbuf[256];
+    snprintf(app_game, sizeof app_game, "%.*s", (int)(ver - dir), dir); /* <app>/game, or <app>/game/applets/<program id> for a firmware applet */
     char *g = strrchr(app_game, '/');
     if (!g) return -1;
-    *g = 0; /* <app> */
+    *g = 0;
+    char *g2 = strrchr(app_game, '/');
+    if (g2 && !strcmp(g2 + 1, "applets")) { /* <app>/game/applets/<id>/<build>/modules: one flat name, applets.<id>.<build>.<file> */
+        snprintf(vbuf, sizeof vbuf, "applets.%s.%s", g + 1, vname);
+        vname = vbuf;
+        *g2 = 0;
+        g = strrchr(app_game, '/');
+        if (!g) return -1;
+        *g = 0;
+    }
     int n = snprintf(out, cap, "%s/Frameworks/%s.%s%s.dylib", app_game, vname, nro ? "nro." : "", file);
     return n > 0 && (size_t)n < cap ? 0 : -1;
 }

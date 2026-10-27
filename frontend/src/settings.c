@@ -23,6 +23,9 @@ void napple_settings_default(napple_settings *s) {
     s->frame_gen_mult = 0;
     s->speed_percent = 100;
     s->turbo_percent = 300;
+    s->stats_corner = 2;
+    s->stats_opacity = 60;
+    s->panel_passthrough = 1;
 }
 
 static int clampi(double v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : (int)v; }
@@ -70,6 +73,11 @@ void napple_settings_clamp(napple_settings *s) {
     s->frame_gen_mult = s->frame_gen_mult == 0 ? 0 : clampi(s->frame_gen_mult, 2, 8);
     s->frame_gen_method = clampi(s->frame_gen_method, 0, 4);
     s->show_stats = s->show_stats != 0;
+    s->stats_corner = clampi(s->stats_corner, 0, 3);
+    s->stats_size = clampi(s->stats_size, 0, 2);
+    s->stats_opacity = clampi(s->stats_opacity, 10, 100);
+    s->metal_hud = s->metal_hud != 0;
+    s->panel_passthrough = s->panel_passthrough != 0;
     s->speed_percent = clampi(s->speed_percent, 10, 1000);
     s->turbo_percent = clampi(s->turbo_percent, 110, 1000);
     s->speed_mode = clampi(s->speed_mode, 0, 2);
@@ -107,11 +115,13 @@ size_t napple_settings_to_json(const napple_settings *s, char *out, size_t cap) 
         "  \"fps_cap\": %d,\n  \"vsync\": %s,\n  \"fullscreen\": %s,\n  \"aspect\": %d,\n  \"master_volume\": %.3f,\n  \"mute_in_background\": %s,\n  \"show_touch_cursor\": %s,\n"
         "  \"render_mode\": %d,\n  \"supersample_percent\": %d,\n  \"filter\": %d,\n  \"sharpness\": %d,\n  \"upscaler\": %d,\n  \"anisotropy\": %d,\n"
         "  \"frame_gen\": %s,\n  \"frame_gen_mult\": %d,\n  \"frame_gen_method\": %d,\n  \"show_stats\": %s,\n"
+        "  \"stats_corner\": %d,\n  \"stats_size\": %d,\n  \"stats_opacity\": %d,\n  \"metal_hud\": %s,\n  \"panel_passthrough\": %s,\n"
         "  \"speed_percent\": %d,\n  \"turbo_percent\": %d,\n  \"speed_mode\": %d,\n  \"audio_speed_mode\": %d,\n  \"update_version\": ",
         s->internal_width, s->internal_height, s->internal_scale_percent, s->output_width, s->output_height, s->fps_cap, s->vsync ? "true" : "false",
         s->fullscreen ? "true" : "false", s->aspect, s->master_volume, s->mute_in_background ? "true" : "false", s->show_touch_cursor ? "true" : "false",
         s->render_mode, s->supersample_percent, s->filter, s->sharpness, s->upscaler, s->anisotropy, s->frame_gen ? "true" : "false", s->frame_gen_mult,
-        s->frame_gen_method, s->show_stats ? "true" : "false", s->speed_percent, s->turbo_percent, s->speed_mode, s->audio_speed_mode);
+        s->frame_gen_method, s->show_stats ? "true" : "false", s->stats_corner, s->stats_size, s->stats_opacity, s->metal_hud ? "true" : "false",
+        s->panel_passthrough ? "true" : "false", s->speed_percent, s->turbo_percent, s->speed_mode, s->audio_speed_mode);
     tj_put_str(out, cap, &at, s->update_version);
     put(out, cap, &at, ",\n  \"disabled_dlc\": [");
     for (int i = 0; i < s->disabled_dlc_count; i++) {
@@ -158,6 +168,9 @@ int napple_settings_from_json(const char *json, size_t len, napple_settings *out
     NUM(turbo_percent, "turbo_percent");
     NUM(speed_mode, "speed_mode");
     NUM(audio_speed_mode, "audio_speed_mode");
+    NUM(stats_corner, "stats_corner");
+    NUM(stats_size, "stats_size");
+    NUM(stats_opacity, "stats_opacity");
 #undef NUM
     /* files from before render_mode existed: a custom size meant "fixed", a scale other than 100 % meant "scale factor" */
     if (!tj_get(pool, r, "render_mode")) s.render_mode = (s.internal_width && s.internal_height) ? 3 : s.internal_scale_percent != 100 ? 1 : 0;
@@ -175,6 +188,8 @@ int napple_settings_from_json(const char *json, size_t len, napple_settings *out
     FLAG(show_touch_cursor, "show_touch_cursor");
     FLAG(frame_gen, "frame_gen");
     FLAG(show_stats, "show_stats");
+    FLAG(metal_hud, "metal_hud");
+    FLAG(panel_passthrough, "panel_passthrough");
 #undef FLAG
     const tj_node *mv = tj_get(pool, r, "master_volume");
     if (mv) {

@@ -18,6 +18,8 @@ int main(void) {
     CHECK(ios_dylib_path(out, sizeof out, "/var/App/Game.app/game/0123456789abcdef/nro", "ab12") == 0, "line %d", __LINE__);
     CHECK(!strcmp(out, "/var/App/Game.app/Frameworks/0123456789abcdef.nro.ab12.dylib"), "dylib path %s", out);
     CHECK(ios_dylib_path(out, 20, "/var/App/Game.app/game/0123456789abcdef/modules", "main") == -1, "line %d", __LINE__);
+    CHECK(ios_dylib_path(out, sizeof out, "/var/App/Game.app/game/applets/0100000000001009/880cb7307525d961/modules", "main") == 0, "line %d", __LINE__);
+    CHECK(!strcmp(out, "/var/App/Game.app/Frameworks/applets.0100000000001009.880cb7307525d961.main.dylib"), "applet dylib path %s", out);
     CHECK(ios_dylib_path(out, sizeof out, "modules", "main") == -1, "line %d", __LINE__);
 
     /* text_end 0x3f00, data_off 0x8080 (ro_end 0x8000), key 0x10000, patch 0x14000, size 0x18000 (file 0x14040) */

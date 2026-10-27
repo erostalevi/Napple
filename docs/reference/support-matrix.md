@@ -18,7 +18,7 @@ Legend (macOS stages, from the matrix): `OK` pass, `~` partial, `X` fail, `B` bl
 ### State per title (macOS)
 
 - **Super Mario Odyssey** (`0100000000010000`): plays on macOS (intro, menus, Cascade Kingdom); start menu on the iOS Simulator (a touch A did not visibly advance).
-- **Mario Kart 8 Deluxe** (`0100152000022000`): v3.0.5 (update v1376256 + Booster Course Pass DLC) boots and races headless on the normal 64-bit path at 40-47 fps (title, menus, cup select, races). The base 1.0 build is AArch32 and runs through the lifted `a32jit.dylib` at the same fps, or the interpreter at 6-15 in races.
+- **Mario Kart 8 Deluxe** (`0100152000022000`): v3.0.5 (update v1376256 + Booster Course Pass DLC) boots and races headless on the normal 64-bit path at 40-47 fps (title, menus, cup select, races). The base 1.0 build is AArch32 and runs through the lifted `a32jit.dylib` (written by `napple build`) at 52-60 fps in headless menus and the attract race; the runtime has no interpreter (2026-10-26, a32-full).
 - **Link's Awakening** (`01006BB00C6F0000`): plays on macOS (the most mature title); reaches its title screen on the iOS Simulator.
 - **Animal Crossing: New Horizons** (`01006F8002326000`): version 3.0.3 (+3 DLC) boots through the whole opening (Timmy's dialogue, the Nook Inc. counter, the name-entry keyboard) and shows a picture; v0 (1.0.0) boots without crashes. The picture currently relies on a stopgap (`mtl_frame_present_pick`). Status after the last note, later rounds may have moved it: see the ac-render note.
 

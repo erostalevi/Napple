@@ -175,8 +175,13 @@ static int style_index(uint32_t style) {
     }
 }
 
+static void push_npad_lifo(uint8_t *shm, const napple_hid_layout *l, int slot, int idx, const napple_npad_state *st);
 void napple_hid_push_npad(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t style, const napple_npad_state *st) {
     int idx = style_index(style);
+    if (idx >= 0 && idx < 5 && l->npad_lifo[6]) push_npad_lifo(shm, l, slot, 6, st); /* the system (firmware applet) reads the controller through the SystemExt lifo too */
+    push_npad_lifo(shm, l, slot, idx, st);
+}
+static void push_npad_lifo(uint8_t *shm, const napple_hid_layout *l, int slot, int idx, const napple_npad_state *st) {
     if (slot < 0 || slot > 9 || idx < 0 || !l->npad_lifo[idx]) return;
     uint32_t ring = l->npad_base + (uint32_t)slot * l->npad_stride + l->npad_lifo[idx];
     Slot s = ring_begin(shm, ring, NPAD_STATE);

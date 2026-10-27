@@ -52,6 +52,11 @@ int main(void) {
     s.frame_gen_mult = 4;
     s.frame_gen_method = 2;
     s.show_stats = 1;
+    s.stats_corner = 3;
+    s.stats_size = 2;
+    s.stats_opacity = 35;
+    s.metal_hud = 1;
+    s.panel_passthrough = 0;
     s.speed_percent = 250;
     s.turbo_percent = 500;
     s.speed_mode = 1;
@@ -65,6 +70,9 @@ int main(void) {
               r.anisotropy == 4 && r.frame_gen_mult == 2 && r.frame_gen_method == 4 && r.speed_percent == 10 && r.turbo_percent == 1000 && r.speed_mode == 2 &&
               r.audio_speed_mode == 0,
           "display / speed values clamped");
+    const char *cl3 = "{\"stats_corner\":9,\"stats_size\":-2,\"stats_opacity\":1,\"metal_hud\":true}";
+    CHECK(napple_settings_from_json(cl3, strlen(cl3), &r) == 0 && r.stats_corner == 3 && r.stats_size == 0 && r.stats_opacity == 10 && r.metal_hud && r.panel_passthrough,
+          "stats / panel settings clamped, passthrough defaults on");
     /* settings files written before render_mode existed keep their meaning */
     const char *old1 = "{\"internal_width\":2560,\"internal_height\":1440}", *old2 = "{\"internal_scale_percent\":200}", *old3 = "{}";
     CHECK(napple_settings_from_json(old1, strlen(old1), &r) == 0 && r.render_mode == 3, "old custom size -> fixed");

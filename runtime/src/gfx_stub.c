@@ -73,6 +73,7 @@ int gfx_screenshot(const char *p) {
     return -1;
 }
 int gfx_screenshot_pending(void) { return 0; }
+void gfx_set_hidden(int hidden) { (void)hidden; }
 void gfx_compile_status(GfxCompileStatus *out) { memset(out, 0, sizeof *out); }
 int gfx_texture_info(void *t, int *f, unsigned *w, unsigned *h) {
     (void)t;

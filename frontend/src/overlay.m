@@ -1,8 +1,11 @@
-/* The in-game overlay: a compact translucent panel on the right edge with Video, Audio, Controls and Game tabs.
-   Toggled with F1 or Cmd+,.  While it is visible game input reads as neutral (napple_input_set_blocked). */
+/* The in-game overlay: a floating glass panel pinned to the top right (full height, with margins) (NSGlassEffectView on macOS 26, a vibrant material before) with four tabs:
+   Audio/Video, FPS/Speed, Controls and Game/System. Toggled with F1, Cmd+, or the controller's Home / Guide button.
+   Game input keeps flowing while the panel is open (settings.panel_passthrough); a panel opened with the controller takes the pad instead and is
+   navigated with it (see FENav below). */
 #include <stdlib.h>
 #include <string.h>
 #include "fe_internal.h"
+#import <GameController/GameController.h>
 
 static NSArray<NSString *> *kScales, *kFps, *kAspect, *kRenderMode, *kSuper, *kUpscaler, *kFilter, *kAniso, *kFgMult, *kFgMethod, *kSpeedMode, *kAudioSpeed;
 static const int kScaleVals[] = {25, 50, 75, 100, 150, 200, 300, 400};
@@ -19,6 +22,7 @@ static NSStackView *page(void) {
 static NSView *row(NSString *label, NSView *control) {
     NSTextField *l = fe_label(label, 12, NO);
     [l.widthAnchor constraintEqualToConstant:105].active = YES;
+    if ([control isKindOfClass:NSPopUpButton.class]) [control.widthAnchor constraintLessThanOrEqualToConstant:250].active = YES; /* long titles must not push the label out */
     NSStackView *r = [NSStackView stackViewWithViews:@[ l, control ]];
     r.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     r.spacing = 8;
@@ -82,10 +86,8 @@ static NSView *setting_slider(NappleFE *fe, NSString *label, double lo, double h
 static const int kSuperVals[] = {100, 150, 200, 300, 400};
 static const int kAnisoVals[] = {0, 2, 4, 8, 16};
 static const int kFgMultVals[] = {0, 2, 3, 4, 6, 8};
-static NSView *video_page(NappleFE *fe) {
+static NSView *av_video_section(NappleFE *fe, NSStackView *p) {
     napple_settings s = [fe currentSettings];
-    NSStackView *p = page();
-    p.spacing = 7;
     [p addArrangedSubview:heading(@"Window and picture shape")];
     [p addArrangedSubview:row(@"Window", fe_popup(kAspect, s.aspect,
                                                   ^(NSPopUpButton *b) { update(fe, ^(napple_settings *t) { t->aspect = (int)b.indexOfSelectedItem; }); }))];
@@ -106,7 +108,27 @@ static NSView *video_page(NappleFE *fe) {
     [p addArrangedSubview:row(@"Window size", owh)];
     [p addArrangedSubview:fe_check(@"Full screen", s.fullscreen,
                                    ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->fullscreen = b.state == NSControlStateValueOn; }); })];
-    [p addArrangedSubview:heading(@"Render size")];
+    [p addArrangedSubview:heading(@"Render target")];
+    {   /* quick presets: 0.5x, 1x, 2x, 4x of the game's native render size */
+        static const int pv[4] = {50, 100, 200, 400};
+        NSMutableArray *bs = [NSMutableArray new];
+        for (int i = 0; i < 4; i++) {
+            int v = pv[i];
+            NSButton *b = small_button(v == 50 ? @"0.5x" : [NSString stringWithFormat:@"%dx", v / 100], 52);
+            BOOL on = s.render_mode == 1 && s.internal_scale_percent == v;
+            b.bezelStyle = NSBezelStyleRounded;
+            if (on) b.bezelColor = NSColor.controlAccentColor;
+            fe_bind(b, ^(id x) {
+                (void)x;
+                update(fe, ^(napple_settings *t) { t->render_mode = 1; t->internal_scale_percent = v; });
+                fe_overlay_refresh(fe);
+            });
+            [bs addObject:b];
+        }
+        NSStackView *bv = [NSStackView stackViewWithViews:bs];
+        bv.spacing = 5;
+        [p addArrangedSubview:bv];
+    }
     [p addArrangedSubview:row(@"Render at", fe_popup(kRenderMode, s.render_mode, ^(NSPopUpButton *b) {
                                   update(fe, ^(napple_settings *t) { t->render_mode = (int)b.indexOfSelectedItem; });
                                   fe_overlay_refresh(fe);
@@ -150,6 +172,46 @@ static NSView *video_page(NappleFE *fe) {
                               }))];
     [p addArrangedSubview:note(@"Render size changes rebuild the game's screen-sized buffers on the fly; if a game shows artifacts afterwards, restart it. "
                                @"Supersampling renders larger and filters down to the window.")];
+    return nil;
+}
+static NSView *av_stats_section(NappleFE *fe, NSStackView *p) {
+    napple_settings s = [fe currentSettings];
+    [p addArrangedSubview:heading(@"Statistics")];
+    [p addArrangedSubview:fe_check(@"Show statistics (F9)", s.show_stats, ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->show_stats = b.state == NSControlStateValueOn; }); })];
+    [p addArrangedSubview:row(@"Corner", fe_popup(@[ @"Top left", @"Top right", @"Bottom left", @"Bottom right" ], s.stats_corner,
+                                                  ^(NSPopUpButton *b) { update(fe, ^(napple_settings *t) { t->stats_corner = (int)b.indexOfSelectedItem; }); }))];
+    [p addArrangedSubview:row(@"Text size", fe_popup(@[ @"Small", @"Medium", @"Large" ], s.stats_size,
+                                                     ^(NSPopUpButton *b) { update(fe, ^(napple_settings *t) { t->stats_size = (int)b.indexOfSelectedItem; }); }))];
+    [p addArrangedSubview:setting_slider(fe, @"Background", 10, 100, s.stats_opacity, @"%.0f%%", ^(napple_settings *t, double v) { t->stats_opacity = (int)v; })];
+    [p addArrangedSubview:fe_check(@"Show Metal statistics (native Metal HUD)", s.metal_hud,
+                                   ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->metal_hud = b.state == NSControlStateValueOn; }); })];
+    [p addArrangedSubview:note(@"The Metal HUD is Apple's own performance overlay: frame rate, GPU and frame time, memory and shader compilation, drawn by the system.")];
+    return nil;
+}
+static NSView *av_page(NappleFE *fe) {
+    NSStackView *p = page();
+    p.spacing = 7;
+    napple_settings s = [fe currentSettings];
+    [p addArrangedSubview:heading(@"Audio")];
+    NSSlider *sl = [NSSlider sliderWithValue:s.master_volume minValue:0 maxValue:1 target:nil action:nil];
+    [sl.widthAnchor constraintEqualToConstant:170].active = YES;
+    fe_bind(sl, ^(NSSlider *x) {
+        float v = (float)x.doubleValue;
+        update(fe, ^(napple_settings *t) { t->master_volume = v; });
+    });
+    [p addArrangedSubview:row(@"Volume", sl)];
+    [p addArrangedSubview:fe_check(@"Play audio while in the background", !s.mute_in_background,
+                                   ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->mute_in_background = b.state != NSControlStateValueOn; }); })];
+    av_video_section(fe, p);
+    [p addArrangedSubview:fe_check(@"Show mouse cursor", s.show_touch_cursor,
+                                   ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->show_touch_cursor = b.state == NSControlStateValueOn; }); })];
+    av_stats_section(fe, p);
+    return scrolled(p);
+}
+static NSView *fps_page(NappleFE *fe) {
+    napple_settings s = [fe currentSettings];
+    NSStackView *p = page();
+    p.spacing = 7;
     [p addArrangedSubview:heading(@"Frame rate")];
     NSInteger fi = index_of(kFpsVals, 7, s.fps_cap, 0);
     [p addArrangedSubview:row(@"Display rate", fe_popup(kFps, fi, ^(NSPopUpButton *b) {
@@ -164,20 +226,10 @@ static NSView *video_page(NappleFE *fe) {
     [p addArrangedSubview:row(@"Method", fe_popup(kFgMethod, s.frame_gen_method, ^(NSPopUpButton *b) {
                                   update(fe, ^(napple_settings *t) { t->frame_gen_method = (int)b.indexOfSelectedItem; });
                               }))];
-    [p addArrangedSubview:fe_check(@"Show statistics (F9)", s.show_stats,
-                                   ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->show_stats = b.state == NSControlStateValueOn; }); })];
-    [p addArrangedSubview:fe_check(@"Show mouse cursor", s.show_touch_cursor,
-                                   ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->show_touch_cursor = b.state == NSControlStateValueOn; }); })];
     [p addArrangedSubview:
             note(@"Display rate: Game default keeps the game at its own speed (60 / 30 Hz as it asks). A fixed rate sets the rate the game is paced by, so its "
-                 @"speed scales with it; use the Speed tab for turbo and slow motion instead. Frame generation shows several images per game frame without "
-                 @"changing game speed; it adds about half a game frame of latency and can smear fast motion and text over moving scenes.")];
-    return scrolled(p);
-}
-static NSView *speed_page(NappleFE *fe) {
-    napple_settings s = [fe currentSettings];
-    NSStackView *p = page();
-    p.spacing = 7;
+                 @"speed scales with it; use the speed controls below for turbo and slow motion instead. Frame generation shows several images per game frame "
+                 @"without changing game speed; it adds about half a game frame of latency and can smear fast motion and text over moving scenes.")];
     [p addArrangedSubview:heading(@"Game speed")];
     [p addArrangedSubview:setting_slider(fe, @"Speed", 10, 400, MIN(s.speed_percent, 400), @"%.0f%%",
                                          ^(napple_settings *t, double v) { t->speed_percent = (int)v; })];
@@ -219,22 +271,16 @@ static NSView *speed_page(NappleFE *fe) {
                                @"The ` [ ] \\ keys always work.")];
     return scrolled(p);
 }
-static NSView *audio_page(NappleFE *fe) {
-    napple_settings s = [fe currentSettings];
-    NSStackView *p = page();
-    NSSlider *sl = [NSSlider sliderWithValue:s.master_volume minValue:0 maxValue:1 target:nil action:nil];
-    [sl.widthAnchor constraintEqualToConstant:170].active = YES;
-    fe_bind(sl, ^(NSSlider *x) {
-        float v = (float)x.doubleValue;
-        update(fe, ^(napple_settings *t) { t->master_volume = v; });
-    });
-    [p addArrangedSubview:row(@"Volume", sl)];
-    [p addArrangedSubview:fe_check(@"Mute when in background", s.mute_in_background,
-                                   ^(NSButton *b) { update(fe, ^(napple_settings *t) { t->mute_in_background = b.state == NSControlStateValueOn; }); })];
-    return p;
-}
-
 /* ---- Controls ---- */
+/* g_slot: -1 edits the shared bindings, 0..7 edits the profile of that player (created from the shared set on first edit). */
+static int g_slot = -1;
+static void bget(NappleFE *fe, napple_bindings *b) {
+    if (g_slot >= 0) napple_input_get_player_bindings(fe.input, g_slot, b);
+    else napple_input_get_bindings(fe.input, b);
+}
+static int bset(NappleFE *fe, const napple_bindings *b) {
+    return g_slot >= 0 ? napple_input_set_player_bindings(fe.input, g_slot, b) : napple_input_set_bindings(fe.input, b);
+}
 /* Everything here edits napple_bindings (input.json of the game): keys per Switch button (two slots), the four keys of each stick, one
    controller element per button, dead zone / outer range / response curve / trigger point, axis inversion, npad style, console mode. */
 @interface CaptureBox : NSObject
@@ -250,13 +296,13 @@ static void capture_done(void *u, int is_key, int code) {
         NappleFE *fe = b.fe;
         if (!fe.input) return;
         napple_bindings bd;
-        napple_input_get_bindings(fe.input, &bd);
+        bget(fe, &bd);
         BOOL cancel = is_key && code == 53; /* Esc cancels */
         if (!cancel) {
             if (is_key && b.kind == 0) bd.key[b.sw][b.slot] = code == 51 ? NAPPLE_KEY_NONE : (uint16_t)code; /* Delete clears */
             else if (is_key && b.kind == 2) (b.sw < 4 ? bd.stick_l : bd.stick_r)[b.sw & 3] = code == 51 ? NAPPLE_KEY_NONE : (uint16_t)code;
             else if (!is_key && b.kind == 1) bd.pad[b.sw][b.slot] = (int16_t)code;
-            napple_input_set_bindings(fe.input, &bd);
+            bset(fe, &bd);
         }
         fe_overlay_refresh(fe);
     });
@@ -280,9 +326,9 @@ static NSButton *small_button(NSString *title, CGFloat w) {
 }
 static void edit_bindings(NappleFE *fe, void (^mut)(napple_bindings *)) {
     napple_bindings t;
-    napple_input_get_bindings(fe.input, &t);
+    bget(fe, &t);
     mut(&t);
-    if (napple_input_set_bindings(fe.input, &t) != 0) fe_overlay_refresh(fe); /* rejected (out of range): show the stored values again */
+    if (bset(fe, &t) != 0) fe_overlay_refresh(fe); /* rejected (out of range): show the stored values again */
 }
 static NSView *slider_row(NappleFE *fe, NSString *label, double lo, double hi, double val, NSString *fmt, void (^set)(napple_bindings *, float)) {
     NSSlider *sl = [NSSlider sliderWithValue:val minValue:lo maxValue:hi target:nil action:nil];
@@ -299,6 +345,130 @@ static NSView *slider_row(NappleFE *fe, NSString *label, double lo, double hi, d
     r.spacing = 6;
     return row(label, r);
 }
+
+/* ---- Controls: players list + live controller view (Ryujinx-style player tabs, one profile per player) ---- */
+@interface FEPadView : NSView
+@property(nonatomic) napple_input *input;
+@property(nonatomic) int slot;
+@end
+@implementation FEPadView
+- (BOOL)isFlipped { return YES; }
+static void pad_dot(CGFloat x, CGFloat y, CGFloat r, BOOL on, NSColor *c) {
+    NSBezierPath *b = [NSBezierPath bezierPathWithOvalInRect:NSMakeRect(x - r, y - r, 2 * r, 2 * r)];
+    [(on ? c : [NSColor colorWithWhite:1 alpha:0.14]) setFill];
+    [b fill];
+}
+static void pad_pill(NSRect r, BOOL on, NSColor *c) {
+    NSBezierPath *b = [NSBezierPath bezierPathWithRoundedRect:r xRadius:r.size.height / 2 yRadius:r.size.height / 2];
+    [(on ? c : [NSColor colorWithWhite:1 alpha:0.14]) setFill];
+    [b fill];
+}
+- (void)drawRect:(NSRect)dirty {
+    (void)dirty;
+    napple_npad_state st = {0};
+    int used = self.input ? napple_input_get_pad_state(self.input, self.slot, &st) : 0;
+    NSColor *hot = NSColor.controlAccentColor;
+    CGFloat w = self.bounds.size.width, h = self.bounds.size.height;
+    NSBezierPath *body = [NSBezierPath bezierPathWithRoundedRect:NSMakeRect(8, 18, w - 16, h - 26) xRadius:40 yRadius:40];
+    [[NSColor colorWithWhite:1 alpha:used ? 0.08 : 0.04] setFill];
+    [body fill];
+    [[NSColor colorWithWhite:1 alpha:0.18] setStroke];
+    body.lineWidth = 1;
+    [body stroke];
+#define BTN(b) ((st.buttons >> (b)) & 1)
+    pad_pill(NSMakeRect(34, 4, 46, 12), BTN(NAPPLE_BTN_ZL), hot);
+    pad_pill(NSMakeRect(w - 80, 4, 46, 12), BTN(NAPPLE_BTN_ZR), hot);
+    pad_pill(NSMakeRect(34, 20, 56, 9), BTN(NAPPLE_BTN_L), hot);
+    pad_pill(NSMakeRect(w - 90, 20, 56, 9), BTN(NAPPLE_BTN_R), hot);
+    CGFloat lx = 62, ly = 62, fx = w - 66, fy = 70;   /* left stick, face buttons centre */
+    pad_dot(lx, ly, 17, BTN(NAPPLE_BTN_STICK_L), hot);
+    pad_dot(lx + st.left.x / 32767.0 * 9, ly - st.left.y / 32767.0 * 9, 8, YES, NSColor.whiteColor);
+    pad_dot(fx, fy - 17, 8, BTN(NAPPLE_BTN_X), hot);
+    pad_dot(fx, fy + 17, 8, BTN(NAPPLE_BTN_B), hot);
+    pad_dot(fx - 17, fy, 8, BTN(NAPPLE_BTN_Y), hot);
+    pad_dot(fx + 17, fy, 8, BTN(NAPPLE_BTN_A), hot);
+    CGFloat dx = 96, dy = h - 36;   /* d-pad */
+    pad_pill(NSMakeRect(dx - 6, dy - 18, 12, 36), BTN(NAPPLE_BTN_UP) || BTN(NAPPLE_BTN_DOWN), hot);
+    pad_pill(NSMakeRect(dx - 18, dy - 6, 36, 12), BTN(NAPPLE_BTN_LEFT) || BTN(NAPPLE_BTN_RIGHT), hot);
+    CGFloat rx = w - 100, ry = h - 36;
+    pad_dot(rx, ry, 17, BTN(NAPPLE_BTN_STICK_R), hot);
+    pad_dot(rx + st.right.x / 32767.0 * 9, ry - st.right.y / 32767.0 * 9, 8, YES, NSColor.whiteColor);
+    pad_dot(w / 2 - 16, 50, 4, BTN(NAPPLE_BTN_MINUS), hot);
+    pad_dot(w / 2 + 16, 50, 4, BTN(NAPPLE_BTN_PLUS), hot);
+#undef BTN
+    if (!used) {
+        NSDictionary *at = @{NSFontAttributeName : [NSFont systemFontOfSize:11], NSForegroundColorAttributeName : NSColor.secondaryLabelColor};
+        [@"Not in use by the game" drawAtPoint:NSMakePoint(w / 2 - 54, h / 2 - 6) withAttributes:at];
+    }
+}
+@end
+static NSTimer *g_pad_timer;
+static FEPadView *g_pad_view;
+
+static NSString *style_name(uint32_t st) {
+    switch (st) {
+        case 0: return @"-";
+        default: return st & NAPPLE_STYLE_FULL_KEY ? @"Pro Controller" : st & NAPPLE_STYLE_HANDHELD ? @"Handheld" : st & NAPPLE_STYLE_JOY_DUAL ? @"Joy-Con pair" : @"Joy-Con";
+    }
+}
+static NSView *players_section(NappleFE *fe, const napple_input_snapshot *sn) {
+    NSMutableArray *rows = [NSMutableArray new];
+    [rows addObject:heading(@"Players")];
+    NSInteger cur = g_slot;
+    for (int i = -1; i < 8; i++) {
+        BOOL shared = i < 0;
+        if (!shared && !sn->player_style[i] && i > 0 && sn->controllers <= i) continue; /* hide unused players beyond the connected controllers */
+        napple_bindings tmp;
+        int own = shared ? 0 : napple_input_get_player_bindings(fe.input, i, &tmp);
+        NSString *who = shared ? @"All players (shared)" : [NSString stringWithFormat:@"Player %d  -  %@", i + 1,
+                            i < sn->controllers ? @(sn->controller_names[i]) : (i == 0 ? @"Keyboard" : @"No controller")];
+        NSString *sub = shared ? @"Default for players without their own profile" : [NSString stringWithFormat:@"%@  -  %@", style_name(sn->player_style[i]), own ? @"own profile" : @"shared profile"];
+        NSButton *b = [NSButton radioButtonWithTitle:who target:nil action:nil];
+        b.font = [NSFont systemFontOfSize:12 weight:NSFontWeightSemibold];
+        b.state = cur == i ? NSControlStateValueOn : NSControlStateValueOff;
+        int slot = i;
+        fe_bind(b, ^(id x) {
+            (void)x;
+            g_slot = slot;
+            fe_overlay_refresh(fe);
+        });
+        NSTextField *n = fe_label(sub, 10, NO);
+        n.textColor = NSColor.secondaryLabelColor;
+        NSStackView *c = [NSStackView stackViewWithViews:@[ b, n ]];
+        c.orientation = NSUserInterfaceLayoutOrientationVertical;
+        c.alignment = NSLayoutAttributeLeading;
+        c.spacing = 0;
+        [rows addObject:c];
+    }
+    g_pad_view = [[FEPadView alloc] initWithFrame:NSMakeRect(0, 0, 310, 120)];
+    g_pad_view.input = fe.input;
+    g_pad_view.slot = g_slot < 0 ? 0 : g_slot;
+    [g_pad_view.widthAnchor constraintEqualToConstant:310].active = YES;
+    [g_pad_view.heightAnchor constraintEqualToConstant:120].active = YES;
+    [rows addObject:g_pad_view];
+    if (g_slot >= 0) {
+        napple_bindings tmp;
+        if (!napple_input_get_player_bindings(fe.input, g_slot, &tmp)) {
+            NSButton *mk = [NSButton buttonWithTitle:[NSString stringWithFormat:@"Give player %d its own profile", g_slot + 1] target:nil action:nil];
+            mk.controlSize = NSControlSizeSmall;
+            fe_bind(mk, ^(id x) {
+                (void)x;
+                napple_bindings cp;
+                napple_input_get_player_bindings(fe.input, g_slot, &cp);   /* the shared set as the starting point */
+                napple_input_set_player_bindings(fe.input, g_slot, &cp);
+                fe_overlay_refresh(fe);
+            });
+            [rows addObject:mk];
+        }
+        [rows addObject:note(@"Each player can have different keys, controller buttons, sticks and triggers. Player 1 also reads the keyboard.")];
+    }
+    NSStackView *v = [NSStackView stackViewWithViews:rows];
+    v.orientation = NSUserInterfaceLayoutOrientationVertical;
+    v.alignment = NSLayoutAttributeLeading;
+    v.spacing = 4;
+    return v;
+}
+
 static NSView *controls_page(NappleFE *fe) {
     NSStackView *p = page();
     p.spacing = 7;
@@ -308,9 +478,10 @@ static NSView *controls_page(NappleFE *fe) {
         return p;
     }
     napple_bindings bd;
-    napple_input_get_bindings(fe.input, &bd);
+    bget(fe, &bd);
     napple_input_snapshot sn;
     napple_input_get_snapshot(fe.input, &sn);
+    [p addArrangedSubview:players_section(fe, &sn)];
     NSTextField *pads = fe_label(
         sn.controllers ? [NSString stringWithFormat:@"Controllers: %d (%s%@)", sn.controllers, sn.controller_names[0], sn.controllers > 1 ? @", ..." : @""]
                        : @"Controllers: none (keyboard drives player 1)",
@@ -424,11 +595,12 @@ static NSView *controls_page(NappleFE *fe) {
     mn.lineBreakMode = NSLineBreakByWordWrapping;
     mn.preferredMaxLayoutWidth = 300;
     [p addArrangedSubview:mn];
-    NSButton *reset = [NSButton buttonWithTitle:@"Reset to defaults" target:nil action:nil];
+    NSButton *reset = [NSButton buttonWithTitle:(g_slot >= 0 ? @"Use shared profile" : @"Reset to defaults") target:nil action:nil];
     reset.controlSize = NSControlSizeSmall;
     fe_bind(reset, ^(id x) {
         (void)x;
-        napple_input_reset_bindings(fe.input);
+        if (g_slot >= 0) napple_input_clear_player_bindings(fe.input, g_slot);
+        else napple_input_reset_bindings(fe.input);
         fe_overlay_refresh(fe);
     });
     NSStackView *m = [NSStackView stackViewWithViews:@[
@@ -523,27 +695,127 @@ static NSView *game_page(NappleFE *fe) {
     return p;
 }
 
-/* ---- assembly ---- */
-/* A segmented control and a content view instead of NSTabView: the selected NSTabView label rendered invisible in the vibrant dark appearance. */
+/* ---- Game / System: game info, DLC + update, Mii, amiibo, camera, mods and cheats ---- */
+static NSString *mods_dir(NappleFE *fe, NSString *sub) {
+    char path[1100];
+    napple_data_path(fe.cfg.config_dir, fe.titleID.UTF8String, "x", path, sizeof path);
+    NSString *base = [@(path) stringByDeletingLastPathComponent];
+    return sub.length ? [base stringByAppendingPathComponent:sub] : base;
+}
+static NSMutableSet<NSString *> *enabled_set(NappleFE *fe) {
+    NSData *d = [NSData dataWithContentsOfFile:[mods_dir(fe, nil) stringByAppendingPathComponent:@"mods-enabled.json"]];
+    NSArray *a = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:NULL] : nil;
+    return [NSMutableSet setWithArray:[a isKindOfClass:NSArray.class] ? a : @[]];
+}
+static void save_enabled(NappleFE *fe, NSSet *set) {
+    NSString *dir = mods_dir(fe, nil);
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:NULL];
+    NSData *d = [NSJSONSerialization dataWithJSONObject:[set.allObjects sortedArrayUsingSelector:@selector(compare:)] options:NSJSONWritingPrettyPrinted error:NULL];
+    [d writeToFile:[dir stringByAppendingPathComponent:@"mods-enabled.json"] atomically:YES];
+}
+static void list_toggles(NappleFE *fe, NSStackView *p, NSString *sub, NSString *kind) {
+    NSString *dir = mods_dir(fe, sub);
+    NSArray *names = [[NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:NULL] sortedArrayUsingSelector:@selector(localizedStandardCompare:)];
+    NSMutableSet *on = enabled_set(fe);
+    int n = 0;
+    for (NSString *name in names) {
+        if ([name hasPrefix:@"."]) continue;
+        NSString *key = [sub stringByAppendingPathComponent:name];
+        [p addArrangedSubview:fe_check(name.stringByDeletingPathExtension, [on containsObject:key], ^(NSButton *b) {
+               NSMutableSet *e = enabled_set(fe);
+               if (b.state == NSControlStateValueOn) [e addObject:key];
+               else [e removeObject:key];
+               save_enabled(fe, e);
+           })];
+        n++;
+    }
+    if (!n) [p addArrangedSubview:note([NSString stringWithFormat:@"No %@ found. Put them in\n%@", kind, dir])];
+}
+static NSView *system_page(NappleFE *fe) {
+    NSStackView *p = page();
+    p.spacing = 8;
+    p.translatesAutoresizingMaskIntoConstraints = NO;
+    [p addArrangedSubview:heading(@"Game")];
+    NSView *g = game_page(fe);
+    [p addArrangedSubview:g];
+
+    [p addArrangedSubview:heading(@"Mii")];
+    [p addArrangedSubview:note(@"Games read their Miis from the system Mii database that comes with the firmware you built the game with. The Mii editor and "
+                               @"Mii picker run from that firmware once the applet host is wired; until then games see the default database.")];
+
+    [p addArrangedSubview:heading(@"amiibo")];
+    NSView *am = fe_amiibo_page(fe);
+    [p addArrangedSubview:am];
+
+    [p addArrangedSubview:heading(@"IR camera")];
+    [p addArrangedSubview:fe_camera_page(fe)];
+
+    [p addArrangedSubview:heading(@"Mods")];
+    list_toggles(fe, p, @"mods", @"mods");
+    [p addArrangedSubview:heading(@"Cheats")];
+    list_toggles(fe, p, @"cheats", @"cheat files (.txt)");
+    NSButton *open = [NSButton buttonWithTitle:@"Open mods and cheats folder" target:nil action:nil];
+    open.controlSize = NSControlSizeSmall;
+    fe_bind(open, ^(id x) {
+        (void)x;
+        NSString *d = mods_dir(fe, nil);
+        for (NSString *sub in @[ @"mods", @"cheats" ]) [NSFileManager.defaultManager createDirectoryAtPath:[d stringByAppendingPathComponent:sub] withIntermediateDirectories:YES attributes:nil error:NULL];
+        [NSWorkspace.sharedWorkspace openURL:[NSURL fileURLWithPath:d]];
+    });
+    [p addArrangedSubview:open];
+    [p addArrangedSubview:note(@"Your choices are saved next to the game's settings (mods-enabled.json) and apply when the game restarts.")];
+    return scrolled(p);
+}
+
+/* ---- the floating panel ---- */
 static NSSegmentedControl *g_seg;
-static NSView *g_content;
+static NSView *g_content, *g_panel, *g_root;
 static NSInteger g_sel;
+static const CGFloat kPanelW = 400;
+
+/* header strip (not draggable: the panel is pinned top right) */
+@interface FEDragHeader : NSView
+@end
+@implementation FEDragHeader
+- (BOOL)mouseDownCanMoveWindow { return NO; }
+@end
+
 static void show_page(NappleFE *fe) {
-    NSView *(*makers[])(NappleFE *) = {video_page, speed_page, audio_page, controls_page, game_page};
+    NSView *(*makers[])(NappleFE *) = {av_page, fps_page, controls_page, system_page};
     for (NSView *v in [g_content.subviews copy]) [v removeFromSuperview];
+    [g_pad_timer invalidate];
+    g_pad_timer = nil;
+    g_pad_view = nil;
     NSView *v = makers[g_sel](fe);
     v.frame = g_content.bounds;
     v.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     [g_content addSubview:v];
+    if (g_pad_view) {
+        __weak FEPadView *wv = g_pad_view;
+        g_pad_timer = [NSTimer scheduledTimerWithTimeInterval:1.0 / 30 repeats:YES block:^(NSTimer *t) {
+            (void)t;
+            wv.needsDisplay = YES;
+        }];
+    }
+    fe_nav_page_changed();
 }
 void fe_overlay_refresh(NappleFE *fe) {
     if (g_content) show_page(fe);
 }
 void fe_overlay_select_tab(int i) {
-    if (g_seg && i >= 0 && i < 5) {
+    if (g_seg && i >= 0 && i < 4) {
         g_sel = i;
         g_seg.selectedSegment = i;
     }
+}
+/* The panel is pinned to the top right and spans the full height of the game view, with a margin so it never touches the window edges.
+   Called when it is shown and after every resize. */
+void fe_overlay_place(NappleFE *fe) {
+    if (!g_panel || !fe.gameView) return;
+    const CGFloat margin = 16;
+    NSRect b = fe.gameView.bounds;
+    CGFloat w = MIN(kPanelW, MAX(240, b.size.width - 2 * margin)), h = MAX(240, b.size.height - 2 * margin);
+    g_panel.frame = NSMakeRect(NSMaxX(b) - w - margin, NSMaxY(b) - h - margin, w, h);
 }
 
 NSView *fe_build_overlay(NappleFE *fe) {
@@ -563,34 +835,224 @@ NSView *fe_build_overlay(NappleFE *fe) {
         @[ @"Best available", @"Optical flow (VideoToolbox)", @"Optical flow, low latency (VideoToolbox)", @"Motion-compensated (Metal)", @"Plain blend" ];
     kSpeedMode = @[ @"Game clock and vsync", @"Vsync only (frame skip)", @"Game clock only" ];
     kAudioSpeed = @[ @"Automatic", @"Always pitch shift", @"Silent when not 1x" ];
-    NSVisualEffectView *v = [[NSVisualEffectView alloc] initWithFrame:NSMakeRect(0, 0, 350, 600)];
-    v.material = NSVisualEffectMaterialHUDWindow;
-    v.blendingMode = NSVisualEffectBlendingModeWithinWindow;
-    v.state = NSVisualEffectStateActive;
-    v.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
-    v.autoresizingMask = NSViewHeightSizable | NSViewMinXMargin;
-    g_seg = [NSSegmentedControl segmentedControlWithLabels:@[ @"Video", @"Speed", @"Audio", @"Controls", @"Game" ]
+
+    NSRect r0 = NSMakeRect(0, 0, kPanelW, 640);
+    NSView *root = [[NSView alloc] initWithFrame:r0];
+    root.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    NSView *panel = nil;
+    if (@available(macOS 26.0, *)) {
+        NSGlassEffectView *gv = [[NSGlassEffectView alloc] initWithFrame:r0];
+        gv.cornerRadius = 26;
+        gv.contentView = root;
+        panel = gv;
+    }
+    if (!panel) {
+        NSVisualEffectView *v = [[NSVisualEffectView alloc] initWithFrame:r0];
+        v.material = NSVisualEffectMaterialHUDWindow;
+        v.blendingMode = NSVisualEffectBlendingModeWithinWindow;
+        v.state = NSVisualEffectStateActive;
+        v.appearance = [NSAppearance appearanceNamed:NSAppearanceNameVibrantDark];
+        v.wantsLayer = YES;
+        v.layer.cornerRadius = 26;
+        v.layer.masksToBounds = YES;
+        [v addSubview:root];
+        panel = v;
+    }
+    panel.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    panel.wantsLayer = YES;
+    panel.shadow = [NSShadow new];
+    panel.layer.shadowColor = NSColor.blackColor.CGColor;
+    panel.layer.shadowOpacity = 0.35f;
+    panel.layer.shadowRadius = 24;
+    panel.layer.shadowOffset = CGSizeMake(0, -6);
+    panel.layer.masksToBounds = NO;
+    g_panel = panel;
+    g_root = root;
+    panel.autoresizingMask = NSViewNotSizable;
+
+    /* header: drag handle, title, game-input switch, close */
+    FEDragHeader *hdr = [[FEDragHeader alloc] initWithFrame:NSMakeRect(0, 640 - 44, kPanelW, 44)];
+    hdr.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
+    NSTextField *title = fe_label(@"Napple", 14, YES);
+    title.frame = NSMakeRect(18, 12, 120, 20);
+    [hdr addSubview:title];
+    NSButton *pass = fe_check(@"Game input stays on", [fe currentSettings].panel_passthrough, ^(NSButton *b) {
+        update(fe, ^(napple_settings *t) { t->panel_passthrough = b.state == NSControlStateValueOn; });
+        [fe refreshOverlayInputMode];
+    });
+    pass.controlSize = NSControlSizeSmall;
+    pass.font = [NSFont systemFontOfSize:10];
+    pass.frame = NSMakeRect(150, 12, 190, 20);
+    [hdr addSubview:pass];
+    NSButton *close = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"xmark.circle.fill" accessibilityDescription:@"Close"] target:nil action:nil];
+    close.bordered = NO;
+    close.frame = NSMakeRect(kPanelW - 38, 10, 24, 24);
+    close.autoresizingMask = NSViewMinXMargin;
+    fe_bind(close, ^(id x) {
+        (void)x;
+        [fe showOverlay:NO];
+    });
+    [hdr addSubview:close];
+    [root addSubview:hdr];
+
+    g_seg = [NSSegmentedControl segmentedControlWithLabels:@[ @"Audio/Video", @"FPS/Speed", @"Controls", @"Game/System" ]
                                               trackingMode:NSSegmentSwitchTrackingSelectOne
                                                     target:nil
                                                     action:nil];
-    g_seg.frame = NSMakeRect(12, 560, 326, 26);
-    g_seg.autoresizingMask = NSViewMinYMargin | NSViewWidthSizable;
+    g_seg.controlSize = NSControlSizeSmall;
+    g_seg.font = [NSFont systemFontOfSize:11];
+    g_seg.frame = NSMakeRect(14, 640 - 44 - 30, kPanelW - 28, 24);
+    g_seg.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     g_seg.selectedSegment = g_sel;
     fe_bind(g_seg, ^(NSSegmentedControl *x) {
         g_sel = x.selectedSegment;
         show_page(fe);
     });
-    [v addSubview:g_seg];
-    g_content = [[NSView alloc] initWithFrame:NSMakeRect(4, 40, 342, 512)];
+    [root addSubview:g_seg];
+    g_content = [[NSView alloc] initWithFrame:NSMakeRect(4, 34, kPanelW - 8, 640 - 44 - 30 - 40)];
     g_content.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
-    [v addSubview:g_content];
-    NSTextField *help = fe_label(@"F1 or Esc closes  -  F12 screenshot  -  F2 turbo  -  F9 stats", 10, NO);
+    [root addSubview:g_content];
+    NSTextField *help = fe_label(@"F1 / Esc / Home closes  -  F12 screenshot  -  F2 turbo  -  F9 stats", 10, NO);
     help.textColor = NSColor.secondaryLabelColor;
-    help.frame = NSMakeRect(12, 14, 320, 14);
+    help.frame = NSMakeRect(18, 10, kPanelW - 36, 14);
     help.autoresizingMask = NSViewMaxYMargin;
-    [v addSubview:help];
-    NSRect b = fe.gameView.bounds;
-    v.frame = NSMakeRect(NSMaxX(b) - 350, 0, 350, b.size.height);
+    [root addSubview:help];
+    panel.frame = r0;
     show_page(fe);
-    return v;
+    return panel;
+}
+
+/* ---- controller navigation of the panel (GameController; independent of the game's input) ---- */
+static NSMutableArray<NSControl *> *g_focus;
+static NSInteger g_focus_i;
+static NSView *g_ring;
+static __weak NappleFE *g_nav_fe;
+static NSTimer *g_rep;
+
+static void collect(NSView *v, NSMutableArray *out) {
+    if (v.hidden) return;
+    if ([v isKindOfClass:NSControl.class] && ![v isKindOfClass:NSTextField.class] && ![v isKindOfClass:NSSegmentedControl.class] && ((NSControl *)v).enabled && v.frame.size.width > 8 &&
+        ![v isKindOfClass:NSScroller.class] && ![v isKindOfClass:NSTableView.class])
+        [out addObject:(NSControl *)v];
+    for (NSView *s in v.subviews) collect(s, out);
+}
+static void show_ring(void) {
+    [g_ring removeFromSuperview];
+    g_ring = nil;
+    if (!g_focus.count || !g_nav_fe.overlayPadMode) return;
+    g_focus_i = MIN(MAX(g_focus_i, 0), (NSInteger)g_focus.count - 1);
+    NSControl *c = g_focus[(NSUInteger)g_focus_i];
+    [c scrollRectToVisible:c.bounds];
+    NSView *ring = [[NSView alloc] initWithFrame:NSInsetRect(c.bounds, -3, -2)];
+    ring.wantsLayer = YES;
+    ring.layer.borderColor = NSColor.controlAccentColor.CGColor;
+    ring.layer.borderWidth = 2;
+    ring.layer.cornerRadius = 8;
+    [c addSubview:ring];
+    g_ring = ring;
+}
+void fe_nav_page_changed(void) {
+    g_focus = [NSMutableArray new];
+    collect(g_content, g_focus);
+    g_focus_i = 0;
+    dispatch_async(dispatch_get_main_queue(), ^{ show_ring(); });
+}
+static void nav_move(int d) {
+    if (!g_focus.count) return;
+    g_focus_i = (g_focus_i + d + (NSInteger)g_focus.count) % (NSInteger)g_focus.count;
+    show_ring();
+}
+static void nav_adjust(int d) {
+    if (!g_focus.count) return;
+    NSControl *c = g_focus[(NSUInteger)MIN(MAX(g_focus_i, 0), (NSInteger)g_focus.count - 1)];
+    if ([c isKindOfClass:NSSlider.class]) {
+        NSSlider *s = (NSSlider *)c;
+        s.doubleValue = MIN(s.maxValue, MAX(s.minValue, s.doubleValue + d * (s.maxValue - s.minValue) / 20));
+        [s sendAction:s.action to:s.target];
+    } else if ([c isKindOfClass:NSPopUpButton.class]) {
+        NSPopUpButton *p = (NSPopUpButton *)c;
+        NSInteger n = p.numberOfItems, i = (p.indexOfSelectedItem + d + n) % n;
+        [p selectItemAtIndex:i];
+        [p sendAction:p.action to:p.target];
+    } else if ([c isKindOfClass:NSButton.class] && ((NSButton *)c).bezelStyle == NSBezelStyleRounded && d != 0 && ((NSButton *)c).title.length <= 5 && ((NSButton *)c).title.length > 0) {
+        /* quick-preset rows (0.5x 1x 2x 4x): left / right moves along the row */
+        nav_move(d);
+    }
+}
+static void nav_activate(void) {
+    if (!g_focus.count) return;
+    NSControl *c = g_focus[(NSUInteger)MIN(MAX(g_focus_i, 0), (NSInteger)g_focus.count - 1)];
+    if ([c isKindOfClass:NSPopUpButton.class]) nav_adjust(1);
+    else if ([c isKindOfClass:NSButton.class]) [(NSButton *)c performClick:nil];
+}
+static void nav_tab(int d) {
+    NSInteger n = (g_sel + d + 4) % 4;
+    g_sel = n;
+    g_seg.selectedSegment = n;
+    show_page(g_nav_fe);
+}
+/* hold-to-repeat for the d-pad */
+static void nav_repeat(void (^act)(void)) {
+    [g_rep invalidate];
+    act();
+    g_rep = [NSTimer scheduledTimerWithTimeInterval:0.22 repeats:YES block:^(NSTimer *t) {
+        (void)t;
+        act();
+    }];
+}
+static void nav_stop(void) {
+    [g_rep invalidate];
+    g_rep = nil;
+}
+static void nav_attach(GCController *c) {
+    GCExtendedGamepad *g = c.extendedGamepad;
+    if (!g) return;
+    void (^dir)(GCControllerButtonInput *, float, BOOL, void (^)(void)) = ^(GCControllerButtonInput *b, float v, BOOL p, void (^act)(void)) {
+        (void)b;
+        (void)v;
+        if (!g_nav_fe.overlayPadMode) return;
+        if (p) nav_repeat(act);
+        else nav_stop();
+    };
+    g.dpad.up.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL p) { dir(b, v, p, ^{ nav_move(-1); }); };
+    g.dpad.down.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL p) { dir(b, v, p, ^{ nav_move(1); }); };
+    g.dpad.left.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL p) { dir(b, v, p, ^{ nav_adjust(-1); }); };
+    g.dpad.right.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL p) { dir(b, v, p, ^{ nav_adjust(1); }); };
+    g.buttonA.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL p) {
+        (void)b;
+        (void)v;
+        if (p && g_nav_fe.overlayPadMode) nav_activate();
+    };
+    g.buttonB.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL p) {
+        (void)b;
+        (void)v;
+        if (p && g_nav_fe.overlayPadMode) [g_nav_fe showOverlay:NO];
+    };
+    g.leftShoulder.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL p) {
+        (void)b;
+        (void)v;
+        if (p && g_nav_fe.overlayPadMode) nav_tab(-1);
+    };
+    g.rightShoulder.pressedChangedHandler = ^(GCControllerButtonInput *b, float v, BOOL p) {
+        (void)b;
+        (void)v;
+        if (p && g_nav_fe.overlayPadMode) nav_tab(1);
+    };
+    g.leftThumbstick.yAxis.valueChangedHandler = ^(GCControllerAxisInput *a, float v) {
+        (void)a;
+        (void)v; /* the sticks scroll the page */
+    };
+}
+void fe_nav_start(NappleFE *fe) {
+    g_nav_fe = fe;
+    for (GCController *c in GCController.controllers) nav_attach(c);
+    [NSNotificationCenter.defaultCenter addObserverForName:GCControllerDidConnectNotification
+                                                    object:nil
+                                                     queue:NSOperationQueue.mainQueue
+                                                usingBlock:^(NSNotification *n) { nav_attach(n.object); }];
+}
+/* The panel was shown or hidden (or switched between pad and mouse mode): ring on / off. */
+void fe_nav_mode_changed(void) {
+    nav_stop();
+    fe_nav_page_changed();
 }

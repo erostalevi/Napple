@@ -75,6 +75,7 @@ void gfx_shutdown(void) {
     napple_gfx_diag_dump(); napple_gfx_shutdown();
 }
 int gfx_screenshot(const char *png_path) { return napple_gfx_screenshot(png_path); }
+void gfx_set_hidden(int hidden) { napple_gfx_set_hidden(hidden); }
 int gfx_screenshot_pending(void) { return napple_gfx_screenshot_pending(); }
 int gfx_texture_info(void *tex, int *format, unsigned *w, unsigned *h) { uint32_t a = 0, b = 0; int r = napple_gfx_texture_info(tex, format, &a, &b); if (w) *w = a; if (h) *h = b; return r; }
 int gfx_texture_write_rgba(void *tex, const void *rgba, size_t pitch, unsigned w, unsigned h) { return napple_gfx_texture_write_rgba(tex, rgba, pitch, w, h); }

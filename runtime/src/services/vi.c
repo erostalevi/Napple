@@ -160,8 +160,19 @@ static void ds_get_relay(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("IHOSBinderDriver", binder_cmds, NULL, NULL));
 }
+/* ISystemDisplayService / IManagerDisplayService: firmware applets (MiiEdit) open them to place their layer; catch-all stubs until a command matters. */
+static void ds_get_system(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_object(c, ipc_object_new("ISystemDisplayService", NULL, 0, NULL, NULL));
+}
+static void ds_get_manager(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_object(c, ipc_object_new("IManagerDisplayService", NULL, 0, NULL, NULL));
+}
 static const IpcCmd display_cmds[] = {
     {100, "GetRelayService", ds_get_relay, IPC_IMPL},
+    {101, "GetSystemDisplayService", ds_get_system, IPC_STUB},
+    {102, "GetManagerDisplayService", ds_get_manager, IPC_STUB},
     {1000, "ListDisplays", ds_list_displays, IPC_IMPL},
     {1010, "OpenDisplay", ds_open_display, IPC_IMPL},
     {1011, "OpenDefaultDisplay", ds_open_display, IPC_IMPL},

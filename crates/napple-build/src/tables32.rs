@@ -78,14 +78,14 @@ fn dynamic32(image: &[u8]) -> Option<BTreeMap<u32, u32>> {
 }
 
 /// Is this module AArch32 (ELF32, DT_REL, no DT_RELA)? Used to route a module away from the AArch64 rewriter.
-/// `NAPPLE_A32_RECOMPILE=1`: after the ELF32 modules of one version are written to `mdir`, lifts them to AArch64 (`napple rewrite a32`, crates/napple-rewrite/src/a32.rs)
-/// and installs `a32jit.dylib` + `a32jit.manifest` next to them. The runtime uses the image when it is there and matches the modules, and interprets everything else
-/// (mixed mode), so skipping this step only costs speed. iOS packaging (not done here): the dylib goes into the app's Frameworks folder and is signed with the app;
+/// After the ELF32 modules of one version are written to `mdir`, lifts them to AArch64 (`napple rewrite a32`, crates/napple-rewrite/src/a32.rs)
+/// and installs `a32jit.dylib` + `a32jit.manifest` next to them. The runtime has no interpreter: it only runs the lifted image, so this step is part of every
+/// AArch32 build. `NAPPLE_A32_RECOMPILE=0` skips it (tests of the packaging only; such a data directory cannot run). iOS packaging (not done here): the dylib goes into the app's Frameworks folder and is signed with the app;
 /// it contains no run-time code generation.
 pub fn recompile_if_requested(mdir: &std::path::Path) -> Result<()> {
     if std::env::var("NAPPLE_A32_RECOMPILE")
         .map(|v| v != "0")
-        .unwrap_or(false)
+        .unwrap_or(true)
     {
         let is32 = std::fs::read(mdir.join("main.tables"))
             .map(|t| t.starts_with(b"NTB2"))

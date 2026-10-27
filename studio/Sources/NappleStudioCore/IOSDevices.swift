@@ -3,6 +3,8 @@ import Foundation
 /// Build targets of `napple build --target` (docs/architecture/ios.md). iOS and iPadOS 26 or later only.
 public enum BuildTarget: String, CaseIterable, Identifiable, Sendable {
     case macos, ios, iphone, ipad
+    /// iOS Simulator build (`--target ios-sim`): ad-hoc signed, no profile, smoke tests only.
+    case iosSim = "ios-sim"
     public var id: String { rawValue }
     public var label: String {
         switch self {
@@ -10,9 +12,11 @@ public enum BuildTarget: String, CaseIterable, Identifiable, Sendable {
         case .ios: return "iPhone & iPad"
         case .iphone: return "iPhone"
         case .ipad: return "iPad"
+        case .iosSim: return "iOS Simulator"
         }
     }
     public var isIOS: Bool { self != .macos }
+    public var isSimulator: Bool { self == .iosSim }
 }
 
 /// A device `xcrun devicectl list devices` knows about.
@@ -24,6 +28,7 @@ public struct IOSDevice: Identifiable, Equatable, Sendable {
     public var connected: Bool     // tunnel is up (cable or trusted Wi-Fi)
     public var developerMode: Bool
     public var supported: Bool     // iOS / iPadOS 26 or later
+    public var simulator = false   // an iOS Simulator device (simctl), not hardware
     public init(id: String, name: String, model: String, osVersion: String, connected: Bool, developerMode: Bool) {
         self.id = id; self.name = name; self.model = model; self.osVersion = osVersion; self.connected = connected; self.developerMode = developerMode
         self.supported = (Int(osVersion.split(separator: ".").first ?? "") ?? 0) >= 26
@@ -49,6 +54,7 @@ public enum DeviceList {
             let family = (hw["deviceType"] as? String ?? "").lowercased()
             guard platform == "ios" || platform == "ipados" || family == "iphone" || family == "ipad" else { return nil }
             let tunnel = (conn["tunnelState"] as? String ?? "").lowercased()
+            if (hw["reality"] as? String ?? "").lowercased() == "virtual" || (hw["reality"] as? String ?? "").lowercased() == "simulated" { return nil }
             return IOSDevice(id: id, name: props["name"] as? String ?? "Unnamed device",
                              model: hw["marketingName"] as? String ?? hw["productType"] as? String ?? "iOS device",
                              osVersion: props["osVersionNumber"] as? String ?? "?",
@@ -102,5 +108,30 @@ public struct IOSOptions: Sendable, Equatable {
     public var unsigned: Bool
     public init(identity: String? = nil, profile: URL? = nil, bundleId: String? = nil, ipa: Bool = false, unsigned: Bool = false) {
         self.identity = identity; self.profile = profile; self.bundleId = bundleId; self.ipa = ipa; self.unsigned = unsigned
+    }
+}
+
+/// Bundle ids for built games: one per title, so several games can be installed on a device at the same time.
+public enum BundleIDs {
+    public static let defaultPrefix = "com.napple.game"
+
+    /// `<prefix>.<titleid>` (title id lower-case hex); an explicit (non-wildcard) profile id wins, because the profile only signs that one.
+    public static func make(prefix: String, titleId: String?, profileAppId: String? = nil) -> String {
+        if let appId = profileAppId, let dot = appId.firstIndex(of: ".") {
+            let pat = String(appId[appId.index(after: dot)...])
+            if !pat.contains("*") { return pat }
+        }
+        let p = clean(prefix)
+        guard let t = titleId?.lowercased(), t.count == 16, t.allSatisfy(\.isHexDigit) else { return p }
+        return "\(p).\(t)"
+    }
+
+    /// Reverse-DNS, lower case, letters digits dots and hyphens only; falls back to the default when empty.
+    public static func clean(_ prefix: String) -> String {
+        var out = ""
+        for ch in prefix.lowercased() where ch.isLetter || ch.isNumber || ch == "." || ch == "-" { out.append(ch) }
+        while out.hasSuffix(".") { out.removeLast() }
+        while out.hasPrefix(".") { out.removeFirst() }
+        return out.isEmpty ? defaultPrefix : out
     }
 }

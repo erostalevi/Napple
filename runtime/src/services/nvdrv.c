@@ -547,6 +547,31 @@ static void nv_open(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, err);
 }
 /* Ioctl family: data goes in through the pointer/map input buffer, the same struct comes back through the output buffer. */
+/* /dev/nvhost-ctrl-gpu: what the Switch's GM20B (Maxwell, Tegra X1) reports. Games' NVN is the host's, so none asks; the newer SDK that firmware applets are built with
+ * queries it itself while it sets up its graphics. GET_CHARACTERISTICS (type 'G', nr 5) is {u64 buffer size, u64 buffer address, 0xa0 bytes of characteristics}
+ * on the Switch; the field order is the nvgpu uapi's, values those of the retail console. */
+static uint32_t ctrl_gpu_ioctl(unsigned nr, uint8_t *data, unsigned size) {
+    if (nr == 5 && size >= 0xb0) {
+        uint8_t *c = data + 0x10;
+        memset(c, 0, 0xa0);
+        uint32_t w[] = {0x120, 0xb, 0xa1, 1}; /* arch GM200, impl GM20B, revision A1, one GPC */
+        memcpy(c, w, sizeof w);
+        uint64_t l2 = 0x40000, flags = 0x55;
+        memcpy(c + 0x10, &l2, 8);
+        memcpy(c + 0x38, &flags, 8);
+        uint32_t t[] = {2, 0x20, 0x20000, 0x20000, 0x1b, 0x30000}; /* TPC per GPC, AXI bus, big page 128K, compression page 128K, PDE bits, big page sizes */
+        memcpy(c + 0x20, t, sizeof t);
+        uint32_t cls[] = {0x902d, 0xb197, 0xb1c0, 0xb06f, 0xa140, 0xb0b5, 1, 0x503, 0x503, 0x20}; /* 2D, 3D, compute, gpfifo, i2m, copy; gpc mask, SM arch, warps */
+        memcpy(c + 0x40, cls, sizeof cls);
+        uint64_t chip = 0x6230326d67; /* "gm20b" */
+        memcpy(c + 0x88, &chip, 8);
+        uint64_t bs = 0xa0;
+        memcpy(data, &bs, 8);
+        return NV_OK;
+    }
+    LOG("nvdrv", "ctrl-gpu: ioctl nr %#x (size %#x) is not implemented", nr, size);
+    return NV_NOT_IMPLEMENTED;
+}
 static void do_ioctl(IpcCall *c, unsigned in_idx, unsigned out_idx) {
     uint32_t fd = IPC_IN(c, uint32_t, 0), cmd = IPC_IN(c, uint32_t, 4);
     const IpcBuf *in = ipc_in_buf(c, in_idx), *out = ipc_out_buf(c, out_idx);
@@ -571,7 +596,9 @@ static void do_ioctl(IpcCall *c, unsigned in_idx, unsigned out_idx) {
         case DEV_NVMAP: err = type == 1 ? nvmap_ioctl(nr, tmp, size) : NV_NOT_IMPLEMENTED; break;
         case DEV_CTRL: err = type == 0 ? ctrl_ioctl(nr, tmp, size) : NV_NOT_IMPLEMENTED; break;
         case DEV_CHANNEL: err = channel_ioctl(&fds[fd].ch, type, nr, tmp, size); break;
-        default: break;
+        default:
+            if (!strcmp(fds[fd].path, "/dev/nvhost-ctrl-gpu") && type == 0x47) err = ctrl_gpu_ioctl(nr, tmp, size);
+            break;
     }
     if (out) ipc_write_buf(c, out, tmp, out->size < size ? out->size : size);
 done:
@@ -673,7 +700,7 @@ static const IpcCmd nv_cmds[] = {
     {9, "InitializeDevtools", nv_set_aruid, IPC_STUB},
     {10, "Ioctl2", nv_ioctl2, IPC_IMPL},
     {11, "Ioctl3", nv_ioctl3, IPC_IMPL},
-    {12, "SetGraphicsFirmwareMemoryMarginEnabled", nv_noop, IPC_STUB},
+    {12, "Ioctl3", nv_ioctl3, IPC_IMPL},
     {13, "Unknown13", nv_cmd13, IPC_STUB},
 };
 static IpcObject *nv_new(void) { return IPC_OBJECT("nvdrv", nv_cmds, NULL, NULL); }

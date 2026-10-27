@@ -97,10 +97,11 @@ Conventions used by the code, unless a row says otherwise:
 
 | Variable | Values / default | Effect | Defined in |
 |---|---|---|---|
-| `NAPPLE_A32_JIT` | `0` | `0` ignores `a32jit.dylib` and interprets everything. Any other value or unset uses the dylib when it is present and matches the modules. | `runtime/src/a32jit/a32jit.c` |
-| `NAPPLE_A32_JITSTATS` | `1` or `2` | Any set value prints dispatcher statistics at exit; `2` also profiles the exits to the dispatcher and prints the profile. | `runtime/src/a32jit/a32jit.c` |
-| `NAPPLE_A32_JITLOG` | file path | Appends to that file the guest addresses reached through computed jumps without a lifted block. The output can be fed back as `A32LIFT_SEEDS`. | `runtime/src/a32jit/a32jit.c` |
-| `NAPPLE_A32_RECOMPILE` | `1`; unset or `0` = off | During `napple build`, lifts the AArch32 modules of each version and installs `a32jit.dylib` and `a32jit.manifest` next to them (same as `napple rewrite a32`). | `crates/napple-build/src/tables32.rs` |
+| `NAPPLE_A32_JIT` | `0` | `0` ignores `a32jit.dylib` (only useful in the `A32_INTERP=1` debug runtime, which then interprets everything; the shipped runtime stops with "AArch32 title without a lifted image"). Any other value or unset uses the dylib. | `runtime/src/a32jit/a32jit.c` |
+| `NAPPLE_A32_JITSTATS` | `1` or `2` | Any set value prints at exit how many out-of-line operations ran and how many times execution reached a pc without lifted code (`exits to the dispatcher`, must stay 0); `2` also profiles the out-of-line operations by guest pc and prints the hottest. | `runtime/src/a32jit/a32jit.c` |
+| `NAPPLE_A32_JITLOG` | file path | Appends to that file the guest addresses reached without a lifted block (only logged by the `A32_INTERP=1` debug runtime, which can step past them). The output can be fed back as `A32LIFT_SEEDS`. | `runtime/src/a32jit/a32jit.c` |
+| `NAPPLE_A32_RECOMPILE` | `0` = skip; unset = on | During `napple build`, lifts the AArch32 modules of each version and installs `a32jit.dylib` and `a32jit.manifest` next to them (same as `napple rewrite a32`). On by default since the runtime has no interpreter; `0` is for packaging tests (such a directory cannot run). | `crates/napple-build/src/tables32.rs` |
+| `A32LIFT_WHY` | hex guest address | Lifter tool: prints the discovery flags (entry, check, visited) of that address after the code walk. | `runtime/src/a32jit/a32lift.c` |
 | `A32LIFT_ONLY` | comma-separated module names | Debugging for the lifter tool: lifts only the named modules; the rest are interpreted. | `runtime/src/a32jit/a32lift_main.c` |
 | `A32LIFT_SEEDS` | file path | Lifter tool: extra entry points, one hex guest address per line (bit 0 = Thumb). Default: `a32jit.seeds` in the modules directory when it exists. | `runtime/src/a32jit/a32lift_main.c` |
 | `NAPPLE_A32_SVCTRACE` | set = on | Logs each AArch32 svc with its arguments and result. | `runtime/src/a32/a32_proc.c` |

@@ -8,6 +8,10 @@
 void service_register_lm(void);
 void service_register_apm(void);
 void service_register_applet(void);
+void service_register_applet_ae(void);
+void service_register_fatal(void);
+void service_register_mii_img(void);
+void service_register_firmware_stubs(void);
 void service_register_fs(void);
 void service_register_settings(void);
 void service_register_account(void);
@@ -58,6 +62,10 @@ void services_init(void) {
     service_register_lm();
     service_register_apm();
     service_register_applet();
+    service_register_applet_ae();
+    service_register_fatal();
+    service_register_mii_img();
+    service_register_firmware_stubs();
     service_register_fs();
     service_register_settings();
     service_register_account();

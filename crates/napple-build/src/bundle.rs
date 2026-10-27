@@ -71,6 +71,11 @@ pub fn info_plist(title_id: u64, name: &str, version: &str, has_icon: bool) -> S
         ("NSHighResolutionCapable", "<true/>".into()),
         ("NSSupportsAutomaticGraphicsSwitching", "<true/>".into()),
         ("NSPrincipalClass", "<string>NSApplication</string>".into()),
+        // IR camera simulator (frontend/src/simulators.m): the webcam stands in for the Joy-Con IR sensor; the prompt shows only when a game starts an IR processor.
+        (
+            "NSCameraUsageDescription",
+            "<string>Some games use the IR camera of a Joy-Con. Napple can use your webcam to simulate it, and only when a game asks for it.</string>".into(),
+        ),
         (
             "NappleTitleId",
             format!("<string>{:016X}</string>", title_id),
@@ -220,6 +225,7 @@ mod tests {
             assert!(p.contains(k), "missing {k}");
         }
         assert!(!info_plist(1, "x", "1", false).contains("CFBundleIconFile"));
+        assert!(info_plist(1, "x", "1", false).contains("NSCameraUsageDescription"));
         assert!(p.starts_with("<?xml") && p.trim_end().ends_with("</plist>"));
     }
 

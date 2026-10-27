@@ -244,8 +244,8 @@ static UT PFX(maxmin_num)(A32Cpu *c, UT a, UT b, int is_max) {
         PFX(nans)(c, ops, 2, &n);
         return n;
     }
-    if (an && !bn) return b;
-    if (bn && !an) return a;
+    if (an && !bn) return PFX(in)(c, b); /* the number that wins is still a flushed input when FZ is set */
+    if (bn && !an) return PFX(in)(c, a);
     if (an && bn) return (c->fpscr & FPSCR_DN) ? DEFAULT_NAN : a;
     a = PFX(in)(c, a);
     b = PFX(in)(c, b);

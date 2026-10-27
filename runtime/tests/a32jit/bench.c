@@ -1,5 +1,5 @@
 /* Micro-benchmark: a small ARM integer loop and a Thumb loop with a conditional block, run by the interpreter and by lifted code.
- *   cc -std=gnu11 -O2 -Isrc/a32 -o bench tests/a32jit/bench.c src/a32jit/a32lift.c src/a32/a32_{exec,decode_arm,decode_thumb,vfp,neon}.c && ./bench
+ *   cc -std=gnu11 -O2 -DNAPPLE_A32_INTERP -Isrc/a32 -o bench tests/a32jit/bench.c src/a32jit/a32lift.c src/a32/a32_{exec,decode_arm,decode_thumb,vfp,neon}.c && ./bench
  * Prints guest instructions per second for each. Not a game measurement: it shows the ceiling of the translated code on straight integer code. */
 #include "../../src/a32jit/a32lift.h"
 #include "../../src/a32/a32_priv.h"
@@ -16,7 +16,7 @@ static int h_svc(A32Cpu *c, uint32_t imm) { (void)c; return imm == 0x7f; }
 static int h_hle(A32Cpu *c, uint32_t pc) { (void)c; (void)pc; return 1; }
 static uint64_t h_cnt(A32Cpu *c, int w) { (void)c; (void)w; return 0; }
 static const A32Hooks hooks = { h_svc, h_hle, h_cnt };
-static uint32_t jit_step(A32Cpu *c) { return (uint32_t)a32_run(c, 1); }
+static uint32_t jit_step(A32Cpu *c, const A32Lit *l) { return (uint32_t)a32_op_exec(c, &l->insn, c->r[15], l->raw); }
 static uint32_t jit_hle(A32Cpu *c, uint32_t pc) { (void)c; (void)pc; return 1; }
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
 

@@ -112,6 +112,7 @@ static int mkdir_p(const char *path) {
 - (void)setFrameSize:(NSSize)s {
     [super setFrameSize:s];
     [self updateDrawable];
+    if (self.fe.overlayVisible) fe_overlay_place(self.fe);
 }
 - (void)viewDidChangeBackingProperties {
     [super viewDidChangeBackingProperties];
@@ -251,7 +252,7 @@ static CVReturn link_cb(CVDisplayLinkRef l, const CVTimeStamp *n, const CVTimeSt
     NSVisualEffectView *_notice;
     NSTextField *_noticeText;
     NSProgressIndicator *_noticeSpin;
-    BOOL _turboHeld, _turboToggle, _slowToggle;
+    BOOL _turboHeld, _turboToggle, _slowToggle, _hudApplied;
     NSTextField *_toast, *_stats;
     NSUInteger _toastSerial;
 }
@@ -322,6 +323,11 @@ static CVReturn link_cb(CVDisplayLinkRef l, const CVTimeStamp *n, const CVTimeSt
     if (s.aspect != old.aspect) [self applyAspect];
     if (s.show_touch_cursor != old.show_touch_cursor) [self.window invalidateCursorRectsForView:self.gameView];
     if (self.layer) self.layer.displaySyncEnabled = s.vsync != 0;
+    if (self.layer && (s.metal_hud != old.metal_hud || !_hudApplied)) {   /* Apple's native Metal performance HUD */
+        _hudApplied = YES;
+        if (@available(macOS 13.0, *)) self.layer.developerHUDProperties = s.metal_hud ? @{@"mode" : @"default"} : nil;
+    }
+    if (s.panel_passthrough != old.panel_passthrough) [self refreshOverlayInputMode];
     if (notify && self.cfg.callbacks.on_settings_changed) self.cfg.callbacks.on_settings_changed(self.cfg.callbacks.user, &s);
     if (notify) [self updateSpeed];
 }
@@ -480,17 +486,22 @@ static const int kSuperSteps[] = {100, 150, 200, 300};
     }
     if (!_stats) {
         _stats = [NSTextField labelWithString:@""];
-        _stats.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightMedium];
         _stats.textColor = NSColor.whiteColor;
         _stats.drawsBackground = YES;
-        _stats.backgroundColor = [NSColor colorWithWhite:0 alpha:0.6];
-        [self.gameView addSubview:_stats];
+        [self.gameView addSubview:_stats positioned:NSWindowBelow relativeTo:self.overlayView];
     }
+    static const CGFloat sizes[3] = {10, 12, 15};
+    _stats.font = [NSFont monospacedSystemFontOfSize:sizes[st.stats_size] weight:NSFontWeightMedium];
+    _stats.backgroundColor = [NSColor colorWithWhite:0 alpha:st.stats_opacity / 100.0];
     char buf[400] = "";
     self.cfg.callbacks.stats_text(self.cfg.callbacks.user, buf, sizeof buf);
     _stats.stringValue = [NSString stringWithFormat:@" %s ", buf];
     [_stats sizeToFit];
-    _stats.frame = NSMakeRect(8, 8, MIN(_stats.frame.size.width, self.gameView.bounds.size.width - 16), _stats.frame.size.height);
+    NSRect gb = self.gameView.bounds;
+    CGFloat w = MIN(_stats.frame.size.width, gb.size.width - 16), h = _stats.frame.size.height;
+    CGFloat x = (st.stats_corner & 1) ? gb.size.width - w - 8 : 8;                  /* 1, 3 = right */
+    CGFloat y = (st.stats_corner & 2) ? 8 : gb.size.height - h - 8;                 /* 2, 3 = bottom (the view is not flipped: y grows upwards) */
+    _stats.frame = NSMakeRect(x, y, w, h);
     _stats.hidden = NO;
 }
 
@@ -576,6 +587,8 @@ static const int kSuperSteps[] = {100, 150, 200, 300};
                                           (void)t;
                                           [self refreshStats];
                                       }];
+    fe_nav_start(self);
+    fe_simulators_install(); /* webcam -> IR camera source; the prompt appears only when a game starts an IR processor */
     self.overlayView = fe_build_overlay(self);
     self.overlayView.hidden = YES;
     [gv addSubview:self.overlayView];
@@ -622,14 +635,26 @@ static const int kSuperSteps[] = {100, 150, 200, 300};
 }
 
 - (void)toggleOverlay {
+    [self toggleOverlayFromPad:NO];
+}
+- (void)toggleOverlayFromPad:(BOOL)pad {
+    if (!self.overlayVisible) self.overlayPadMode = pad;
     [self showOverlay:!self.overlayVisible];
+}
+/* The game keeps its input while the panel is open (keyboard / mouse), unless the pad opened it or the user turned pass-through off. */
+- (void)refreshOverlayInputMode {
+    if (self.input) napple_input_set_blocked(self.input, (self.overlayVisible && (self.overlayPadMode || !self.settings.panel_passthrough)) || fe_textbar_visible(self));
+    fe_nav_mode_changed();
 }
 - (void)showOverlay:(BOOL)show {
     if (show == self.overlayVisible) return;
     self.overlayVisible = show;
     self.overlayView.hidden = !show;
-    if (show) fe_overlay_refresh(self);
-    if (self.input) napple_input_set_blocked(self.input, show || fe_textbar_visible(self));
+    if (show) {
+        fe_overlay_place(self);
+        fe_overlay_refresh(self);
+    } else self.overlayPadMode = NO;
+    [self refreshOverlayInputMode];
     if (!show) [self resignToGame];
     if (self.cfg.callbacks.on_overlay) self.cfg.callbacks.on_overlay(self.cfg.callbacks.user, show);
 }
@@ -818,7 +843,7 @@ static const int kSuperSteps[] = {100, 150, 200, 300};
 static void fe_hotkey(void *user, int hotkey) {
     NappleFE *fe = (__bridge NappleFE *)user;
     dispatch_async(dispatch_get_main_queue(), ^{
-        if (hotkey == NAPPLE_HOTKEY_HOME) [fe toggleOverlay];
+        if (hotkey == NAPPLE_HOTKEY_HOME) [fe toggleOverlayFromPad:YES];
         else if (hotkey == NAPPLE_HOTKEY_CAPTURE) [fe screenshot];
     });
 }

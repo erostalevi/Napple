@@ -107,7 +107,14 @@ int a32lift_tool(const char *dir, const char *prefix) {
     in.nseeds = (unsigned)ns;
     LiftStats st;
     char **files;
+    char covpath[1100];
+    snprintf(covpath, sizeof covpath, "%s.cov", prefix);
+    in.cov = fopen(covpath, "w");
     int n = a32lift_run(&in, prefix, &files, &st);
+    if (in.cov) {
+        fprintf(in.cov, "#stats %llu %llu\n", (unsigned long long)st.lifted, (unsigned long long)st.fallback);
+        fclose(in.cov);
+    }
     if (n < 0) return 1;
     fprintf(stderr, "a32lift: %u modules, %zu seeds, %llu entries, %llu insns visited, %llu emitted (%llu native, %llu via interpreter), %d files\n", w.nmods,
             ns, (unsigned long long)st.entries, (unsigned long long)st.insns, (unsigned long long)(st.lifted + st.fallback), (unsigned long long)st.lifted,

@@ -149,6 +149,8 @@ uint64_t napple_gfx_frame_count(void);
  * on_done fires (or poll napple_gfx_screenshot_pending() == 0). Used for headless verification. Returns 0 if queued. */
 int  napple_gfx_screenshot(const char *png_path);
 int  napple_gfx_screenshot_pending(void);
+/* Hidden: frames complete and pace the guest as usual but are not shown (another image draws on the layer: a library applet run in-process). */
+void napple_gfx_set_hidden(int hidden);
 /* Same but for the last completed frame, synchronous. Returns 0 on success. */
 int  napple_gfx_screenshot_last(const char *png_path);
 

@@ -72,14 +72,14 @@ const P_FONTS: f64 = 90.0;
 const P_BUNDLE: f64 = 94.0;
 const P_SIGN: f64 = 99.0;
 
-struct ModOut {
-    name: String,
-    file_size: usize,
-    sha256: String,
-    build_id: [u8; 32],
-    symbols: usize,
-    relocs: usize,
-    gates: usize,
+pub(crate) struct ModOut {
+    pub(crate) name: String,
+    pub(crate) file_size: usize,
+    pub(crate) sha256: String,
+    pub(crate) build_id: [u8; 32],
+    pub(crate) symbols: usize,
+    pub(crate) relocs: usize,
+    pub(crate) gates: usize,
 }
 
 enum RomfsPlan {
@@ -127,7 +127,7 @@ fn is_module(n: &str) -> bool {
 }
 
 /// main, subsdk0..N, sdk (symbols resolve in that order).
-fn load_order(names: &[String]) -> Vec<String> {
+pub(crate) fn load_order(names: &[String]) -> Vec<String> {
     let mut sub: Vec<&String> = names.iter().filter(|n| n.starts_with("subsdk")).collect();
     sub.sort_by_key(|n| n[6..].parse::<u32>().unwrap_or(u32::MAX));
     let mut v = Vec::new();
@@ -142,7 +142,7 @@ fn load_order(names: &[String]) -> Vec<String> {
 }
 
 /// Rewrites every module of one version and writes `<dir>/modules/<name>.{patched.bin,tables}`.
-fn rewrite_version(
+pub(crate) fn rewrite_version(
     exefs: &[(String, Vec<u8>)],
     dir: &Path,
     label: &str,
@@ -210,7 +210,7 @@ fn rewrite_version(
             .position(|n| *n == m.name)
             .unwrap_or(usize::MAX)
     });
-    crate::tables32::recompile_if_requested(&mdir)?; // AArch32 titles, only with NAPPLE_A32_RECOMPILE=1
+    crate::tables32::recompile_if_requested(&mdir)?; // AArch32 titles: writes modules/a32jit.dylib (NAPPLE_A32_RECOMPILE=0 skips)
     Ok(v)
 }
 
@@ -1003,6 +1003,16 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
     let mut fw_version: Option<String> = None;
     match &fw {
         Some(fwi) => {
+            // the firmware applets a title may launch (the Mii Maker) as data of their own beside the game: `applets/<title id>/`, sharing the sysdata above
+            if std::env::var_os("NAPPLE_NO_FIRMWARE_APPLETS").is_none() {
+                match crate::fwprog::build_program(fwi, &keys, 0x0100_0000_0000_1009, &game.join("applets"), None, Some(("../../sysdata", "../../system"))) {
+                    Ok(_) => {}
+                    Err(e) => notes.push(format!("compat: the Mii Maker applet could not be built from the firmware: {e}")),
+                }
+            }
+            if !sysdata::write_user_icon(fwi, &keys, &game.join("system/icon"))? {
+                notes.push("compat: the default profile picture (SubstituteUserIcon.jpg) was not found in the firmware; acc serves no profile image".into());
+            }
             let fonts = sysdata::find_fonts(fwi, &keys)?;
             fw_version = sysdata::firmware_version(fwi, &keys)?;
             let sys = sysdata::write_system_archives(fwi, &keys, &game.join("sysdata"))?;
@@ -1292,6 +1302,14 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         // iOS cannot make anonymous memory executable: every rewritten module becomes a signable Mach-O dylib (macho.rs).
         let n = crate::ios::dylibize(&game, &app.join("Frameworks"), target.platform())?;
         notes.push(format!("{n} rewritten module(s) packed as Mach-O dylibs in Frameworks/ (iOS maps executable code only from signed files)"));
+        // the runtime as a library, beside the iOS runtime (tools/build_ios.sh): what runs the Mii Maker inside the game app (no exec on iOS)
+        let lib = runtime.with_file_name("libnapple-applet.dylib");
+        if lib.is_file() {
+            std::fs::copy(&lib, app.join("Frameworks/libnapple-applet.dylib"))
+                .map_err(|e| BuildError::io("copy libnapple-applet.dylib", e))?;
+        } else {
+            notes.push("compat: libnapple-applet.dylib not found beside the iOS runtime: the Mii Maker cannot run inside this app (a game's Mii edit request is answered as cancelled); rebuild the runtime with tools/build_ios.sh".into());
+        }
     } else {
         std::fs::write(
             app.join("Contents/Info.plist"),

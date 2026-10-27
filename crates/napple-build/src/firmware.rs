@@ -57,6 +57,14 @@ impl Firmware {
         Ok(Self { ncas })
     }
 
+    /// Raw NCA by file name (`<32 hex>.nca`).
+    pub fn nca_src(&self, name: &str) -> Option<Src> {
+        self.ncas
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, s)| s.clone())
+    }
+
     pub fn nca_count(&self) -> usize {
         self.ncas.len()
     }
@@ -89,8 +97,22 @@ impl Firmware {
 
     /// RomFS of the first Data content (type 2) of `title` that has one.
     pub fn data_romfs(&self, title: &SystemTitle, keys: &KeySet) -> Result<Option<RomFs>> {
+        self.content_romfs(title, keys, 2)
+    }
+
+    /// RomFS of the Program content (type 1) of `title` (the applets' own resources).
+    pub fn program_romfs(&self, title: &SystemTitle, keys: &KeySet) -> Result<Option<RomFs>> {
+        self.content_romfs(title, keys, 1)
+    }
+
+    fn content_romfs(
+        &self,
+        title: &SystemTitle,
+        keys: &KeySet,
+        ctype: u8,
+    ) -> Result<Option<RomFs>> {
         let tks = TitleKeys::new();
-        for rec in title.meta.contents.iter().filter(|c| c.ctype == 2) {
+        for rec in title.meta.contents.iter().filter(|c| c.ctype == ctype) {
             let Some((_, src)) = self.ncas.iter().find(|(n, _)| *n == rec.nca_name()) else {
                 continue;
             };

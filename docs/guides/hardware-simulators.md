@@ -50,14 +50,25 @@ needed.
 - **Webcam adapter**: `irs_adapter_rgb_to_ir` converts an RGB(A)/BGR(A) camera frame to near-IR-like grayscale (luminance, centred 4:3 crop, box resample, optional mirror, percentile contrast
   stretch, optional threshold or binarize).
 
-## Mac wiring list (for the later Mac step; nothing here is wired yet)
+## Mac wiring (done: `frontend/src/simulators.m`, 2026-10-26 studio-redo)
 
-1. **Tag picker panel**: build the panel on `amiibo_service_picker()`: load the library (fetch `cfg.source` with URLSession and pass the text to `amiibo_lib_refresh`, which caches it),
-   list/search, call `amiibo_picker_select` / `amiibo_picker_remove`, offer `amiibo_picker_import_dump` (show `last_error`), then `nfp_service_set_source(amiibo_picker_source(p))` once at start-up
-   when amiibo support should be offered.
-2. **Webcam adapter**: an `IrFrameSource` whose `get_frame` runs `irs_adapter_rgb_to_ir` on the latest AVCaptureSession frame; install with `irs_service_set_source`. Start the capture session in
-   `start()` and stop it in `stop()`.
-3. **Permission prompts**: `request_access` triggers `AVCaptureDevice.requestAccess(for: .video)` and calls the `done` callback with the answer; return `IR_ACCESS_GRANTED` when already authorised.
-   Packaging (not edited here): add `NSCameraUsageDescription` to Info.plist (for example "Some games use the IR camera of a Joy-Con; Napple can use your webcam to simulate it") and
-   the `com.apple.security.device.camera` entitlement.
-4. **Settings**: `amiibo_database` (source URL/folder) and the key file path map to `NAPPLE_AMIIBO_DB` and `NAPPLE_AMIIBO_KEY`.
+Both simulators live in the game's own overlay (F1 or the controller Home button), on the **Game/System** tab (amiibo and IR camera sections); nothing about them is in Napple Studio (they are per game).
+
+1. **amiibo tab**: search field + list over `amiibo_service_picker()` (`amiibo_picker_search/get`), *Place* (`amiibo_picker_select_hex`, reuse), *Place new copy*
+   (`AMIIBO_PICK_NEW`), *Remove* (`amiibo_picker_remove`), *Reload list* (the cache / local source first via `amiibo_lib_refresh(..., NULL, 0)`, then an `NSURLSession`
+   fetch of `cfg.source` handed to `amiibo_lib_refresh`), *Import dump…* (`amiibo_picker_import_dump`, `last_error` shown). The picker is installed with
+   `nfp_service_set_source(amiibo_picker_source(p))` the first time the tab is opened, so a game that never opens it keeps the old "no reader" behaviour.
+   Default source: `https://raw.githubusercontent.com/N3evin/AmiiboAPI/master/database/amiibo.json` (the `amiiboapi.com` endpoint is offline since the archive); the
+   loader accepts both the API shape and the repository database shape (`amiibos` + `characters`/`amiibo_series`/`game_series`/`types` tables).
+2. **Camera tab**: status (`AVCaptureDevice.authorizationStatus`), *Allow webcam now* / *Open Privacy Settings*, *Mirror the image*. The `IrFrameSource` (`g_cam_source`)
+   is installed once at window creation (`fe_simulators_install`, called before `fe_build_overlay`): `request_access` maps the AVFoundation status to `IR_ACCESS_*`
+   and answers a pending prompt through `done`; `start`/`stop` run an `AVCaptureSession` (640x480 BGRA) whose frames go through `irs_adapter_rgb_to_ir`; `get_frame`
+   hands the newest converted frame to the pump. The prompt appears only when a game starts an IR processor.
+3. **Packaging**: the game app's `Info.plist` carries `NSCameraUsageDescription` (`crates/napple-build/src/bundle.rs`); the Mac game app is not sandboxed and not
+   hardened, so no camera entitlement is needed (add `com.apple.security.device.camera` if that changes).
+4. **Linking**: the frontend is a static library linked into the runtime, so the runtime symbols above are weak references in `simulators.m` (`__attribute__((weak))`);
+   the frontend's own test binaries link with `-undefined dynamic_lookup` and the tabs then say the feature is unavailable. The frontend's `.m` files compile with
+   `-fmodules` so `AVFoundation` is auto-linked without touching the runtime's link line.
+5. **Settings** (not wired): `NAPPLE_AMIIBO_DB` (source URL/folder) and `NAPPLE_AMIIBO_KEY` are read from the environment; an overlay setting for them is still to do.
+
+Scripted check: `NAPPLE_FE_OVERLAY=3` (Game/System; 0 Audio/Video, 1 FPS/Speed, 2 Controls) opens the overlay on that tab at start; `NAPPLE_FE_VIEWSHOT=<png>:<seconds>` renders it to a PNG.

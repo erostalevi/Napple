@@ -26,7 +26,12 @@ static FrontendBoot g_boot;
 static int g_seconds;
 static volatile int g_focus = 1;
 
-void *frontend_metal_layer(void) { return g_fe ? napple_frontend_metal_layer(g_fe) : NULL; }
+void *frontend_metal_layer(void) {
+#ifdef NAPPLE_LIB
+    if (lib_host_layer()) return lib_host_layer();
+#endif
+    return g_fe ? napple_frontend_metal_layer(g_fe) : NULL;
+}
 int frontend_has_focus(void) { return g_focus; }
 void frontend_frame_presented(void) {
     if (g_fe) napple_frontend_frame_presented(g_fe);
@@ -40,7 +45,7 @@ void frontend_quit(int code) {
     audio_report();
     summary_write(code ? "fail" : "partial", code ? "stopped" : "stopped by the user or the run time limit");
     gfx_shutdown();
-    _exit(code);
+    GUEST_EXIT(code);
 }
 
 static void *boot_thread(void *unused) {
@@ -357,6 +362,9 @@ int frontend_run(FrontendBoot boot, int headless, int seconds) {
     install_usr1_dump();
     if (headless) {
         start_boot_thread();
+#ifdef NAPPLE_LIB
+        return lib_wait_guest_end(seconds);
+#endif
         if (seconds > 0) {
             sleep((unsigned)seconds);
             LOG("main", "time limit of %d s reached", seconds);
@@ -364,6 +372,12 @@ int frontend_run(FrontendBoot boot, int headless, int seconds) {
         }
         for (;;) pause();
     }
+#ifdef NAPPLE_LIB
+    if (lib_host_layer()) { /* in-process applet with a window: the host's layer and input, no window of our own */
+        start_boot_thread();
+        return lib_wait_guest_end(seconds);
+    }
+#endif
     @autoreleasepool {
         napple_frontend_config c = {0};
         c.title_id = g_cfg.title_id;

@@ -136,6 +136,34 @@ pub fn firmware_version(fw: &Firmware, keys: &KeySet) -> Result<Option<String>> 
     Ok(None)
 }
 
+/// The default profile picture (`SubstituteUserIcon.jpg`) the firmware's own account applets show for a user without a chosen avatar, from the
+/// PlayerSelect (0100000000001007) or qlaunch (0100000000001000) program RomFS. Written as `<dir>/SubstituteUserIcon.jpg`; what acc's profile image calls serve.
+pub fn write_user_icon(fw: &Firmware, keys: &KeySet, dir: &Path) -> Result<bool> {
+    for want in [0x0100_0000_0000_1007u64, 0x0100_0000_0000_1000] {
+        for t in fw
+            .titles(keys)?
+            .into_iter()
+            .filter(|t| t.meta.title_id == want)
+        {
+            let Some(romfs) = fw.program_romfs(&t, keys)? else {
+                continue;
+            };
+            if let Some(f) = romfs
+                .files
+                .iter()
+                .find(|f| f.path == "icon/SubstituteUserIcon.jpg" && f.size <= (1 << 20))
+            {
+                let jpg = read_vec(&*romfs.open(f)?, 0, f.size as usize)?;
+                std::fs::create_dir_all(dir).map_err(|e| BuildError::io("create icon dir", e))?;
+                std::fs::write(dir.join("SubstituteUserIcon.jpg"), jpg)
+                    .map_err(|e| BuildError::io("write user icon", e))?;
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// Writes the font files and `fonts.json` into `fd` and returns the index JSON.
 pub fn write_fonts(fonts: &[Font], firmware_version: Option<&str>, fd: &Path) -> Result<String> {
     std::fs::create_dir_all(fd).map_err(|e| BuildError::io("create fonts dir", e))?;
@@ -264,6 +292,14 @@ fn run_dump_fonts_inner(args: &[String]) -> Result<()> {
         ));
     }
     write_fonts(&fonts, firmware_version(&fwi, &keys)?.as_deref(), &out)?;
+    if out.file_name().is_some_and(|n| n == "fonts") {
+        // the profile picture lives beside the fonts in the app support folder: <app-support>/system/icon
+        if let Some(sys) = out.parent()
+            && write_user_icon(&fwi, &keys, &sys.join("icon"))?
+        {
+            println!("profile picture written to {}", sys.join("icon").display());
+        }
+    }
     println!(
         "fonts: {} files ({} official shared font types of 6) written to {}",
         fonts.len(),

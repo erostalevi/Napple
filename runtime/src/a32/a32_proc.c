@@ -403,6 +403,13 @@ static A32Cpu *cpu_new(uint32_t tlr) {
     c->tpidruro = tlr;
     return c;
 }
+#ifndef NAPPLE_A32_INTERP
+static A32Exit run_slice(A32Cpu *c) {
+    if (!a32jit_active())
+        runtime_fail("AArch32 title without a lifted image: run napple build (it writes modules/a32jit.dylib); this runtime has no interpreter");
+    return a32jit_run(c, 1000000);
+}
+#else
 static A32Exit run_slice(A32Cpu *c) {
     if (!trace_on) return a32jit_active() ? a32jit_run(c, 1000000) : a32_run(c, 1000000);
     static uint32_t abort_fn;
@@ -448,6 +455,7 @@ static A32Exit run_slice(A32Cpu *c) {
     }
     return A32_EXIT_BUDGET;
 }
+#endif
 static void run_forever(A32Cpu *c, const char *what) {
     unsigned slices = 0;
     for (;;) {

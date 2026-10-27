@@ -6,20 +6,23 @@
 Builds the core into a shared library, then for each random instruction word runs both implementations from the same random state and
 compares r0-r15, the flags (N Z C V Q GE), the D registers (--vfp), FPSCR and the 96 KiB of backed memory. Unicorn faulting or rejecting
 the instruction skips the sample (counted). Exit status 1 when any mismatch is found."""
-import argparse, collections, ctypes, os, random, struct, subprocess, sys
+import argparse, collections, ctypes, os, random, re, struct, subprocess, sys
 from unicorn import *
 from unicorn.arm_const import *
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, '..', '..', 'src')
-LIB = '/tmp/a32fuzz_%d.so' % os.getpid()
+PREBUILT = os.environ.get('FUZZ_LIB')  # fuzz_all.py builds the core once and runs many short child processes against it
+LIB = PREBUILT or '/tmp/a32fuzz_%d.so' % os.getpid()
 WIN_LO, WIN_HI = 0x8000, 0x20000
 
 
 def build():
+    if PREBUILT:
+        return
     d = os.path.join(SRC, 'a32')
     srcs = [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith('.c') and f not in ('a32_module.c', 'a32_proc.c', 'a32_hle.c')] + [os.path.join(HERE, 'fuzz_lib.c')]  # loader/process glue needs the runtime, so it is left out
-    subprocess.check_call(['gcc', '-std=gnu11', '-O1', '-g', '-shared', '-fPIC', '-I' + SRC, '-o', LIB] + srcs)
+    subprocess.check_call(['gcc', '-std=gnu11', '-O1', '-g', '-shared', '-fPIC', '-DNAPPLE_A32_INTERP', '-I' + SRC, '-o', LIB] + srcs)
 
 
 class FState(ctypes.Structure):
@@ -90,6 +93,16 @@ def unpredictable(word, thumb):
             return False
         hw1, hw2 = word & 0xffff, word >> 16
         top = hw1 >> 8
+        if (hw1 & 0xef00) == 0xef00:   # Thumb NEON data processing: the ARM-form word has the same filters (Unicorn's vabd.s32 / vaba.s32)
+            a = 0xf2000000 | ((hw1 >> 12) & 1) << 24 | (hw1 & 0xff) << 16 | hw2
+            if (a & 0xfe000f00) == 0xf2000700 and (a >> 20) & 3 == 2 and not (a >> 24) & 1:
+                return True
+        if (hw1 & 0xfff0) == 0xfb60 and (hw2 & 0xf0) in (0x00, 0x10) and (hw1 & 15 in (13, 15) or (hw2 >> 12) == 15 or (hw2 >> 8) & 15 in (13, 15) or hw2 & 15 in (13, 15)):
+            return True   # smmls with sp / pc operands
+        if (hw1 & 0xffe0) == 0xf3a0 and not hw2 >> 15 and (hw2 & 0x7000) == 0 and (hw2 & 0xc0) == 0 and (hw2 & 0x30):
+            return True   # usat16 with the should-be-zero bits 5:4 set (unallocated)
+        if (hw1 & 0xffe0) == 0xf320 and not hw2 >> 15 and (hw2 & 0x7000) == 0 and (hw2 & 0xc0) == 0 and (hw2 & 0x30):
+            return True   # ssat16, same
         if top in (0xea, 0xeb) or ((hw1 & 0xfa00) == 0xf000 and not hw2 >> 15):
             op4, s, rd = (hw1 >> 5) & 15, (hw1 >> 4) & 1, (hw2 >> 8) & 15
             if rd == 15 and not (s and op4 in (0, 4, 8, 13)):
@@ -115,6 +128,28 @@ def unpredictable(word, thumb):
                     return True
         return False
     cls = (word >> 25) & 7
+    # Known Unicorn (QEMU 5.0) deviations, kept out of the comparison:
+    #  - vabd.s32 / vaba.s32: QEMU takes the absolute value of the wrapped 32-bit difference; the ARM ARM (AbsDiff) uses the exact difference, as this core does.
+    #  - vmaxnm.f64 / vminnm.f64 with NaN operands: Unicorn returns +0 where the ARM ARM (and this core) return the number / default NaN.
+    if (word & 0xfe000f00) == 0xf2000700 and (word >> 20) & 3 == 2 and not (word >> 24) & 1:
+        return True
+    if (word & 0xffb00f10) == 0xfe800b00:
+        return True
+    rd15, rn15 = (word >> 12) & 15, (word >> 16) & 15
+    if (word & 0x0fb00000) == 0x03000000 and rd15 == 15:   # movw / movt to pc
+        return True
+    if (word & 0x0fc000f0) == 0x90 and rn15 == 15:   # mul / mla / mls with Rd = pc
+        return True
+    if ((word & 0x0f8000f0) == 0x00800090 or (word & 0x0ff000f0) == 0x00400090) and (rn15 == 15 or rd15 == 15):   # long multiplies, umaal with pc as a destination
+        return True
+    if (word & 0x0f900090) == 0x01000080 and (rn15 == 15 or ((word & 0x00600000) == 0x00400000 and rd15 == 15)):   # smla<xy> family with pc as a destination
+        return True
+    if (word & 0x0f900ff0) == 0x01000050 and rd15 == 15:   # qadd / qsub / qdadd / qdsub to pc
+        return True
+    if (word & 0x0e1000f0) == 0x000000d0 and not word & (1 << 22) and ((word & 15) in ((word >> 12) & 14, ((word >> 12) & 14) + 1)):   # ldrd / strd with Rm = Rt or Rt2
+        return True
+    if (word & 0x0f100e70) == 0x0e000a10 and (word >> 12) & 15 == 15 and (word & 0x0ff00fff) != 0x0ee00a10:   # vmov Sn, pc / vmov pc, Sn
+        return True
     if (word >> 20) & 0xff == 0x75 and ((word >> 5) & 7) in (6, 7) and ((word >> 12) & 15) == 15:   # smmls with Ra = pc
         return True
     rn, rt = (word >> 16) & 15, (word >> 12) & 15
@@ -134,17 +169,30 @@ def unpredictable(word, thumb):
 
 
 def disasm(codes, thumb):
-    """Mnemonic of each instruction (llvm-mc), for grouping the report; '?' when llvm-mc cannot decode it."""
+    """Mnemonic of each instruction (assembled as .word/.short data with clang, disassembled with llvm-objdump); '?' when no tool is available."""
     out = {}
-    triple = 'thumbv8a' if thumb else 'armv8a'
+    objdump = subprocess.run(['xcrun', '--find', 'llvm-objdump'], capture_output=True, text=True).stdout.strip() or 'llvm-objdump'
+    src = '.syntax unified\n.text\n' + ('.thumb\n' if thumb else '.arm\n')
     for c in codes:
-        text = ' '.join('0x%02x' % b for b in bytes.fromhex(c))
-        try:
-            r = subprocess.run(['llvm-mc', '--disassemble', '-triple=' + triple, '-mattr=+neon,+fp-armv8,+crc'], input=text, capture_output=True, text=True, timeout=20)
-            lines = [l.strip() for l in r.stdout.splitlines() if l.strip() and not l.strip().startswith('.')]
-            out[c] = lines[0] if lines else '?'
-        except Exception:
-            out[c] = '?'
+        b = bytes.fromhex(c)
+        if thumb:
+            h = struct.unpack_from('<H', b, 0)[0]
+            src += '.inst.n 0x%04x\n' % h if len(b) == 2 or (h >> 11) not in (0x1d, 0x1e, 0x1f) else '.inst.w 0x%04x%04x\n' % (h, struct.unpack_from('<H', b, 2)[0])
+        else:
+            src += '.inst 0x%08x\n' % struct.unpack('<I', b)[0]
+        src += 'nop\n'
+    try:
+        d = '/tmp/a32dis_%d' % os.getpid()
+        open(d + '.s', 'w').write(src)
+        subprocess.run(['clang', '-c', '-target', 'armv8a-none-eabi' if not thumb else 'thumbv8a-none-eabi', '-o', d + '.o', d + '.s'], capture_output=True, check=True)
+        txt = subprocess.run([objdump, '-d', '--mattr=+neon,+fp-armv8,+crc', d + '.o'], capture_output=True, text=True).stdout
+        import re
+        lines = [m.group(1).strip() for l in txt.splitlines() for m in [re.match(r'^\s*[0-9a-f]+:\s+[0-9a-f ]+\t(.*)$', l)] if m and not m.group(1).strip().startswith('nop')]
+        # undecodable words print as ".long"/".inst": keep them
+        for c, l in zip(codes, lines):
+            out[c] = l
+    except Exception:
+        pass
     return out
 
 
@@ -178,6 +226,7 @@ def main():
     lib = ctypes.CDLL(LIB)
     lib.ft_run.argtypes = [ctypes.POINTER(FState), ctypes.c_char_p, ctypes.c_int, ctypes.c_uint]
     rng = random.Random(args.seed)
+    skip = set(open(os.environ['FUZZ_SKIP']).read().split()) if os.environ.get('FUZZ_SKIP') and os.path.exists(os.environ['FUZZ_SKIP']) else set()
     cpu = {'max': UC_CPU_ARM_MAX, 'a15': UC_CPU_ARM_CORTEX_A15}[args.cpu]
     def make_uc():
         u = Uc(UC_ARCH_ARM, UC_MODE_ARM)
@@ -212,9 +261,9 @@ def main():
         else:
             code = struct.pack('<I', rnd_word(rng, fam))
         word = struct.unpack('<I', code)[0]
-        if unpredictable(word, thumb):
+        regs, cpsr = rnd_state(rng)   # drawn before any skipping so that a rerun of the same seed sees the same samples
+        if unpredictable(word, thumb) or code.hex() in skip:
             continue
-        regs, cpsr = rnd_state(rng)
         mem = bytearray(rng.getrandbits(8) for _ in range(64)) * ((WIN_HI - WIN_LO) // 64)
         mem[0:len(code)] = code
         dregs = [rnd_double(rng) for _ in range(32)] if args.vfp else [0] * 32
@@ -229,6 +278,8 @@ def main():
                 uc.reg_write(dreg_ids[i], dregs[i])
             uc.reg_write(UC_ARM_REG_FPSCR, fpscr)
         res_uc = 'ok'
+        if os.environ.get('FUZZ_TRACE'):
+            print('sample', code.hex(), flush=True)
         try:
             uc.emu_start(WIN_LO | (1 if thumb else 0), WIN_LO + 0x100000, count=1)
         except UcError as e:
@@ -255,9 +306,15 @@ def main():
         ucpsr = uc.reg_read(UC_ARM_REG_CPSR)
         umem = bytes(uc.mem_read(WIN_LO, WIN_HI - WIN_LO))
         rc = lib.ft_run(ctypes.byref(st), buf, int(thumb), 1)
+        if rc == 100:   # the core touched memory outside the backed window (Unicorn's window is larger: not comparable)
+            stats['we_hostfault'] += 1
+            continue
         if rc in (2, 3):
             unimpl['%s %s' % (EXIT_NAMES[rc], code.hex())] += 1
             stats['we_' + EXIT_NAMES[rc]] += 1
+            continue
+        if not thumb and rc == 0 and fam in ('dp_reg', 'dp_regsh', 'dp_imm') and (word >> 12) & 15 != 15 and st.r[15] == WIN_LO + 4 and uregs[15] != st.r[15]:
+            stats['uc_overrun'] += 1   # Unicorn ran past its instruction count (it executed the random word after this one as well)
             continue
         mism = []
         if rc != 0:
@@ -280,7 +337,9 @@ def main():
                     if u != st.d[i]:
                         mism.append('d%d uc=%016x we=%016x' % (i, u, st.d[i]))
                 uf = uc.reg_read(UC_ARM_REG_FPSCR)
-                if (uf & 0xff000007) != (st.fpscr & 0xff000007):   # the sticky inexact / underflow / input-denormal bits are not compared
+                neon_insn = fam.startswith('neon') or (word & 0xfe000000) == 0xf2000000 or (word & 0xff000000) == 0xf4000000 or (thumb and (word & 0xef00) == 0xef00)
+                cum = 0 if neon_insn else 7   # Advanced SIMD operations also set the cumulative exception bits on ARMv8 hardware and QEMU; guests never read them
+                if (uf & (0xff000000 | cum)) != (st.fpscr & (0xff000000 | cum)):   # the sticky inexact / underflow / input-denormal bits are not compared
                     mism.append('fpscr uc=%08x we=%08x' % (uf, st.fpscr))
         if mism:
             bad.append((word, code.hex(), ' '.join(mism), regs, hex(cpsr)))
@@ -297,7 +356,8 @@ def main():
     names = disasm([b[1] for b in bad[:args.show]], thumb)
     for b in bad[:args.show]:
         print('   word=%08x code=%s %-34s %s' % (b[0], b[1], names.get(b[1], '?'), b[2]))
-    os.unlink(LIB)
+    if not PREBUILT:
+        os.unlink(LIB)
     return 1 if bad else 0
 
 

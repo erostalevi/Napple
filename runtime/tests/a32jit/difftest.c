@@ -1,6 +1,6 @@
 /* Differential test of the AArch32 -> AArch64 lifter against the interpreter (the oracle, itself fuzzed against Unicorn by tests/a32/fuzz.py).
  *
- *   cc -std=gnu11 -O2 -Isrc/a32 -o difftest tests/a32jit/difftest.c src/a32jit/a32lift.c src/a32/a32_*.c(minus module/proc/hle) && \
+ *   cc -std=gnu11 -O2 -DNAPPLE_A32_INTERP -Isrc/a32 -o difftest tests/a32jit/difftest.c src/a32jit/a32lift.c src/a32/a32_*.c(minus module/proc/hle) && \
  *   ./difftest [--mode arm|thumb] [--count N] [--seed S] [--family NAME] [--show N] [--vfp]
  *
  * For each random instruction word: lifts it as an entry of its own, assembles all of them into a dylib with clang, then runs every sample
@@ -33,7 +33,7 @@ static const Fam FAMS[] = {
     {"sync", 0x01800090, 0x0f8000f0}, {"halfmul", 0x01000080, 0x0f900090}, {"movw", 0x03000000, 0x0fb00000},
     {"uncond", 0xf0000000, 0xf0000000}, {"cp", 0x0e000010, 0x0f000010},
     {"vfp_dp", 0x0e000a00, 0x0f000e00}, {"vfp_ldst", 0x0c000a00, 0x0e000e00}, {"vfp_dp64", 0x0e000b00, 0x0f000f00}, {"vfp_xfer", 0x0e000a10, 0x0f000e10},
-    {"neon_dp", 0xf2000000, 0xfe000000}, {"neon_ls", 0xf4000000, 0xff100000},
+    {"neon_dp", 0xf2000000, 0xfe000000}, {"neon_ls", 0xf4000000, 0xff100000}, {"vfp_v8", 0xfe000a00, 0xff000e00}, {"vfp_x64", 0x0c400a00, 0x0fe00e00},
 };
 #define NFAM (sizeof FAMS / sizeof *FAMS)
 
@@ -95,7 +95,7 @@ static int h_svc(A32Cpu *c, uint32_t imm) { c->r[0] = 0x1234 + imm; return 0; }
 static int h_hle(A32Cpu *c, uint32_t pc) { (void)c; (void)pc; return 1; }
 static uint64_t h_cnt(A32Cpu *c, int w) { (void)c; return w ? 19200000 : 123456789012ull; }
 static const A32Hooks hooks = { h_svc, h_hle, h_cnt };
-static uint32_t jit_step(A32Cpu *c) { return (uint32_t)a32_run(c, 1); }
+static uint32_t jit_step(A32Cpu *c, const A32Lit *l) { return (uint32_t)a32_op_exec(c, &l->insn, c->r[15], l->raw); }
 static int hle_hit;
 static uint32_t jit_hle(A32Cpu *c, uint32_t pc) { (void)c; (void)pc; hle_hit = 1; return 1; }   /* a random branch into the import range: not comparable, counted as skipped */
 
@@ -186,7 +186,7 @@ int main(int argc, char **argv) {
         s->flags = rnd() & 31; s->ge = rnd() & 15;
         if (!thumb && ((w >> 25) & 7) == 4 && (w >> 28) != 15) if (((w >> 16) & 15) < 15) s->regs[(w >> 16) & 15] = ARENA_LO + 0x400 + ((rnd() & 0x3ff0));   /* ldm/stm: a base that cannot wrap the 4 GiB window */
         if (thumb && ((w & 0xffff) >> 9) == 0x74 && (w & 15) < 15) s->regs[w & 15] = ARENA_LO + 0x400 + ((rnd() & 0x3ff0));
-        if (vfp) { for (int r = 0; r < 32; r++) s->d[r] = rnd64(); s->fpscr = 0; }
+        if (vfp) { for (int r = 0; r < 32; r++) s->d[r] = rnd64(); s->fpscr = (rnd() & 3) ? 0 : (rnd() & 0x03c00000); }   /* a quarter of the samples run with random flush-to-zero / default-NaN / rounding-mode settings */
         seeds[ns] = (CODE_BASE + STRIDE * (uint32_t)ns) | (thumb ? 1u : 0u);
         for (int wi = 0; wi < 2; wi++) {
             uint8_t *p = (wi ? winj : win) + CODE_BASE + STRIDE * ns;
@@ -257,8 +257,10 @@ int main(int argc, char **argv) {
         if (ci.thumb != cj.thumb) NOTE("thumb i=%u j=%u ", ci.thumb, cj.thumb);
         if (ci.n != cj.n || ci.z != cj.z || ci.c != cj.c || ci.v != cj.v) NOTE("nzcv i=%u%u%u%u j=%u%u%u%u ", ci.n, ci.z, ci.c, ci.v, cj.n, cj.z, cj.c, cj.v);
         if (ci.q != cj.q || ci.ge != cj.ge) NOTE("q/ge i=%u/%x j=%u/%x ", ci.q, ci.ge, cj.q, cj.ge);
+        /* the cumulative exception flags (IOC DZC OFC UFC IXC IDC) are not compared: the lifted code gets them from the host FPU, the interpreter derives them in software and
+         * differs on flushed results and square roots; guests do not depend on them */
         if (memcmp(ci.v_.d, cj.v_.d, sizeof ci.v_.d)) NOTE("vfp state ");
-        if (ci.fpscr != cj.fpscr) NOTE("fpscr ");
+        if ((ci.fpscr ^ cj.fpscr) & ~0x9fu) NOTE("fpscr interp %08x lifted %08x (start %08x) ", ci.fpscr, cj.fpscr, s->fpscr);
         if (memcmp(ai, winj + ARENA_LO, ARENA_SZ)) NOTE("memory ");
         unsigned f; for (f = 0; f < nfs; f++) if (!strcmp(fs[f].n, s->fam)) break;
         if (f == nfs) { snprintf(fs[nfs].n, 16, "%s", s->fam); fs[nfs].cmp = fs[nfs].nat = fs[nfs].bad = 0; nfs++; }

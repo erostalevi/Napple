@@ -182,7 +182,11 @@ static void boot(void) {
     runtime_fail("nn::init::Start returned");
 }
 
+#ifdef NAPPLE_LIB
+int napple_applet_main(int argc, char **argv) {
+#else
 int main(int argc, char **argv) {
+#endif
     setvbuf(stderr, NULL, _IOLBF, 0);
     const char *trace = NULL, *summary = NULL, *save_root = NULL;
     for (int i = 1; i < argc; i++) {

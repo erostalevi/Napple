@@ -4,6 +4,7 @@
 #include "settings_core.h"
 #include <stdlib.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 static const char *const languages[] = {"ja", "en-US", "fr",    "de",    "it",    "es",     "zh-CN",   "ko",      "nl",
@@ -65,6 +66,16 @@ static void set_get_quest_flag(IpcObject *s, IpcCall *c) {
     uint8_t v = 0;
     IPC_OUT(c, v);
 }
+/* Key code maps (the on-screen keyboard layouts a firmware applet asks for): an all-zero map, no key mapped. */
+static void set_zero_buffer(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b && b->size) {
+        uint8_t *z = calloc(1, b->size);
+        if (z) ipc_write_buf(c, b, z, b->size);
+        free(z);
+    }
+}
 static const IpcCmd set_cmds[] = {
     {0, "GetLanguageCode", set_get_language_code, IPC_IMPL},
     {1, "GetAvailableLanguageCodes", set_get_available, IPC_IMPL},
@@ -73,6 +84,9 @@ static const IpcCmd set_cmds[] = {
     {4, "GetRegionCode", set_get_region_code, IPC_IMPL},
     {5, "GetAvailableLanguageCodes2", set_get_available2, IPC_IMPL},
     {6, "GetAvailableLanguageCodeCount2", set_count18, IPC_IMPL},
+    {7, "GetKeyCodeMap", set_zero_buffer, IPC_STUB},
+    {9, "GetKeyCodeMap2", set_zero_buffer, IPC_STUB},
+    {11, "GetKeyCodeMap3", set_zero_buffer, IPC_STUB},
     {8, "GetQuestFlag", set_get_quest_flag, IPC_IMPL}, /* a retail console is never a quest unit */
 };
 static IpcObject *set_open(void) { return IPC_OBJECT("set", set_cmds, NULL, NULL); }
@@ -108,7 +122,16 @@ static void sys_get_device_timezone(IpcObject *s, IpcCall *c) {
     settings_timezone_name(getenv("NAPPLE_TIMEZONE"), n);
     ipc_out(c, n, sizeof n);
 }
+/* GetMiiAuthorId (90): the 16-byte id the Mii library mixes into StoreData checksums (mii_core.c). */
+__attribute__((weak)) void mii_device_id(uint8_t out[16]) { memset(out, 0, 16); }
+static void sys_get_mii_author_id(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t id[16];
+    mii_device_id(id);
+    ipc_out(c, id, 16);
+}
 static const IpcCmd sys_cmds[] = {
+    {90, "GetMiiAuthorId", sys_get_mii_author_id, IPC_IMPL},
     {3, "GetFirmwareVersion", sys_get_firmware_version, IPC_IMPL},
     {4, "GetFirmwareVersion2", sys_get_firmware_version, IPC_IMPL},
     {23, "GetColorSetId", sys_get_color_set_id, IPC_IMPL},

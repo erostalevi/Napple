@@ -78,3 +78,12 @@ int a32_thumb_is32(uint16_t hw1);
 /* VFP / NEON executor (a32_vfp.c, a32_neon.c). `w` is the ARM-form encoding. Returns A32_EXIT_BUDGET for "continue" or an exit reason. */
 A32Exit a32_exec_vfp(A32Cpu *c, uint32_t w, uint32_t pc_operand);
 A32Exit a32_exec_neon(A32Cpu *c, uint32_t w);
+
+/* Semantics of one build-time decoded instruction (a32_exec.c); the shipped runtime's only way to run operations the lifter does not inline. */
+A32Exit a32_op_exec(A32Cpu *c, const A32Insn *i, uint32_t pc, uint32_t raw);
+
+/* A build-time decoded instruction as the lifter embeds it in the image (read-only data next to the code that calls a32_op_exec). */
+typedef struct {
+    A32Insn insn;
+    uint32_t raw;
+} A32Lit;

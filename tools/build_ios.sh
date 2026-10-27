@@ -52,3 +52,13 @@ $CC $RT "$ROOT/gfx/$B/obj/adapter/gfx_napple.o" "$ROOT/gfx/libnapple_gfx_$SFX.a"
     -framework UniformTypeIdentifiers -framework AudioToolbox -framework CoreAudio -framework AVFoundation -framework GameController -framework CoreHaptics -framework CoreVideo \
     -framework CoreMedia -framework VideoToolbox -lc++ -Wl,-rpath,@executable_path/Frameworks -o "$ROOT/runtime/$B/napple-runtime"
 echo "built $ROOT/runtime/$B/napple-runtime"
+# the runtime as a library (-DNAPPLE_LIB, its own globals): dlopened by the app to run a firmware applet (the Mii Maker) in-process; see runtime/src/libmode.c
+RTL=$(objs "$ROOT/runtime/src/*.c $ROOT/runtime/src/services/*.c $ROOT/runtime/src/a32/*.c $ROOT/runtime/src/a32jit/a32jit.c $ROOT/runtime/src/*.m $ROOT/runtime/src/*.S" "$ROOT/runtime/$B-lib" -DNAPPLE_LIB \
+     -I"$ROOT/input/include" -I"$ROOT/audio/include" -I"$ROOT/gfx/include" -I"$ROOT/frontend/include" -I"$DEPS/include" -I"$ROOT/runtime/src" -I"$ROOT/runtime/src/services")
+RTL=$(echo "$RTL" | grep -v 'gfx_stub')
+$CC -dynamiclib -install_name @rpath/libnapple-applet.dylib $RTL "$ROOT/gfx/$B/obj/adapter/gfx_napple.o" "$ROOT/gfx/libnapple_gfx_$SFX.a" \
+    "$ROOT/frontend/$B/libnapple_frontend.a" "$ROOT/input/$B/libnapple_input.a" "$ROOT/audio/$B/libnapple_audio.a" "$DEPS/lib/libopus.a" $VPXLIB \
+    -framework UIKit -framework QuartzCore -framework Metal $METALFX -framework Foundation -framework CoreFoundation -framework CoreGraphics -framework ImageIO \
+    -framework UniformTypeIdentifiers -framework AudioToolbox -framework CoreAudio -framework AVFoundation -framework GameController -framework CoreHaptics -framework CoreVideo \
+    -framework CoreMedia -framework VideoToolbox -lc++ -o "$ROOT/runtime/$B/libnapple-applet.dylib"
+echo "built $ROOT/runtime/$B/libnapple-applet.dylib"

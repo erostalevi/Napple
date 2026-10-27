@@ -48,6 +48,11 @@ typedef struct napple_settings {
     int frame_gen_mult;      /* 0 = automatic (as many as the display can show), 2..8 = output rate = multiplier x the game's rate */
     int frame_gen_method; /* 0 = best available, 1 = optical flow (VideoToolbox), 2 = optical flow low latency (VideoToolbox), 3 = motion-compensated blend (Metal), 4 = plain blend */
     int show_stats; /* 1 = frame rate / GPU time / latency overlay in the corner of the game view */
+    int stats_corner;  /* 0 top left, 1 top right, 2 bottom left (default), 3 bottom right */
+    int stats_size;    /* 0 small, 1 medium, 2 large */
+    int stats_opacity; /* 10..100: opacity of the statistics background (percent) */
+    int metal_hud;     /* 1 = Apple's native Metal performance HUD (CAMetalLayer.developerHUDProperties: frame rate, GPU time, memory, shader compiles) */
+    int panel_passthrough; /* 1 (default) = the game keeps receiving keyboard / mouse input while the floating panel is open (controller-opened panels always take the pad) */
     /* Game speed (independent of the frame rate) */
     int speed_percent;    /* 10..1000: how fast game time passes (100 = normal) */
     int turbo_percent;    /* speed while the turbo key is held / toggled (default 300) */

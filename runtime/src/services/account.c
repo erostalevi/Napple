@@ -2,6 +2,7 @@
 #include "../ipc.h"
 #include "host_info.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 const uint8_t g_user_id[16] = {0x4e, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x55, 0x73, 0x65, 0x72, 0, 0, 0, 0, 0, 1};
@@ -27,16 +28,56 @@ static void profile_get(IpcObject *s, IpcCall *c) {
         ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
     }
 }
+/* The profile picture: the firmware's own default avatar (SubstituteUserIcon.jpg, extracted by `napple build` into <data dir>/../system/icon or
+ * <app support>/system/icon). Without a firmware the profile has no image (size 0), which titles treat as "use your own placeholder". */
+static uint8_t *icon_data;
+static uint32_t icon_size;
+static int icon_tried;
+static void icon_load(void) {
+    if (icon_tried) return;
+    icon_tried = 1;
+    const char *roots[3] = {g_cfg.data_dir, g_cfg.data_dir, g_cfg.save_root};
+    const char *sub[3] = {"%s/system/icon/SubstituteUserIcon.jpg", "%s/../system/icon/SubstituteUserIcon.jpg", "%s/system/icon/SubstituteUserIcon.jpg"};
+    for (int i = 0; i < 3 && !icon_data; i++) {
+        char path[1400];
+        if (!roots[i] || !*roots[i]) continue;
+        snprintf(path, sizeof path, sub[i], roots[i]);
+        FILE *f = fopen(path, "rb");
+        if (!f) continue;
+        fseek(f, 0, SEEK_END);
+        long n = ftell(f);
+        fseek(f, 0, SEEK_SET);
+        if (n > 0 && n <= (1 << 20) && (icon_data = malloc((size_t)n)) && fread(icon_data, 1, (size_t)n, f) == (size_t)n) icon_size = (uint32_t)n;
+        else {
+            free(icon_data);
+            icon_data = NULL;
+        }
+        fclose(f);
+        if (icon_data) LOG("acc", "profile picture: %u bytes from %s", icon_size, path);
+    }
+}
 static void profile_get_image_size(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint32_t v = 0;
+    icon_load();
+    uint32_t v = icon_size;
     IPC_OUT(c, v);
+}
+static void profile_load_image(IpcObject *s, IpcCall *c) {
+    (void)s;
+    icon_load();
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint32_t n = 0;
+    if (b && icon_data) {
+        n = b->size < icon_size ? (uint32_t)b->size : icon_size;
+        ipc_write_buf(c, b, icon_data, n);
+    }
+    IPC_OUT(c, n);
 }
 static const IpcCmd profile_cmds[] = {
     {0, "Get", profile_get, IPC_IMPL},
     {1, "GetBase", profile_get_base, IPC_IMPL},
-    {10, "GetImageSize", profile_get_image_size, IPC_STUB},
-    {11, "LoadImage", profile_get_image_size, IPC_STUB},
+    {10, "GetImageSize", profile_get_image_size, IPC_IMPL},
+    {11, "LoadImage", profile_load_image, IPC_IMPL},
 };
 static void manager_check(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -123,5 +164,6 @@ static const IpcCmd acc_cmds[] = {
 static IpcObject *acc_open(void) { return IPC_OBJECT("acc:u0", acc_cmds, NULL, NULL); }
 void service_register_account(void) {
     ipc_register_service("acc:u0", acc_open);
+    ipc_register_service("acc:u1", acc_open);
     (void)acc_bool_true;
 }

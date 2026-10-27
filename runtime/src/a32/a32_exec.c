@@ -67,11 +67,12 @@ const char *a32_exit_name(A32Exit e) {
         case A32_EXIT_UNIMPL: return "unimplemented";
         case A32_EXIT_BKPT: return "bkpt";
         case A32_EXIT_ALIGN: return "alignment";
+        case A32_EXIT_NOBLOCK: return "no lifted code at this pc";
     }
     return "?";
 }
 
-static int cond_pass(const A32Cpu *c, unsigned cond) {
+__attribute__((unused)) static int cond_pass(const A32Cpu *c, unsigned cond) {
     int r;
     switch (cond >> 1) {
         case 0: r = c->z; break;
@@ -897,6 +898,23 @@ void a32_free(A32Cpu *c) {
     c->cache = NULL;
 }
 
+/* Executes one instruction that was decoded at build time (the lifter embeds the A32Insn in the image): the semantics of an operation the lifter does not
+ * inline. The condition has already been checked by the caller. Leaves the next pc in c->r[15] (and CPSR.T). No guest code is fetched or decoded here. */
+A32Exit a32_op_exec(A32Cpu *c, const A32Insn *i, uint32_t pc, uint32_t raw) {
+    Ctx x = {.c = c, .pc = pc, .pcv = pc + (c->thumb ? 4 : 8), .npc = pc + i->len, .exit = A32_EXIT_BUDGET};
+    exec_one(&x, i);
+    if (x.exit != A32_EXIT_BUDGET) {
+        c->fault_pc = pc;
+        c->fault_word = raw;
+        if (x.exit == A32_EXIT_STOP) c->r[15] = x.npc;
+        return x.exit;
+    }
+    c->r[15] = x.npc;
+    return A32_EXIT_BUDGET;
+}
+
+#ifdef NAPPLE_A32_INTERP /* the fetch-decode-execute loop: a test oracle and a diagnostics flag, never part of the shipped runtime */
+
 /* Decode (through the per-cpu cache) the instruction at pc. Returns the instruction or NULL when the fetch itself is not possible. */
 static const A32Insn *fetch_decode(A32Cpu *c, uint32_t pc, uint32_t *raw_out) {
     CacheEntry *cache = c->cache;
@@ -1002,3 +1020,4 @@ A32Exit a32_run(A32Cpu *c, uint64_t budget) {
     }
     return A32_EXIT_BUDGET;
 }
+#endif /* NAPPLE_A32_INTERP */

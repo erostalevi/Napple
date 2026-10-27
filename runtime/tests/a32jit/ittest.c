@@ -1,7 +1,7 @@
 /* Differential test of lifted Thumb code with IT blocks and short instruction sequences (the lifter tracks the IT state statically; the interpreter
  * tracks it at run time). Each sample is `it<x><cond>` followed by random Thumb instructions, lifted as one run starting at the IT; both the
  * interpreter and the lifted code then run until the pc leaves the sample, and registers, flags and the data arena are compared.
- *   cc -std=gnu11 -O2 -Isrc/a32 -o ittest tests/a32jit/ittest.c src/a32jit/a32lift.c src/a32/a32_{exec,decode_arm,decode_thumb,vfp,neon}.c && ./ittest [--count N] [--seed S] [--show N] */
+ *   cc -std=gnu11 -O2 -DNAPPLE_A32_INTERP -Isrc/a32 -o ittest tests/a32jit/ittest.c src/a32jit/a32lift.c src/a32/a32_{exec,decode_arm,decode_thumb,vfp,neon}.c && ./ittest [--count N] [--seed S] [--show N] */
 #include "../../src/a32jit/a32lift.h"
 #include "../../src/a32/a32_priv.h"
 #include <dlfcn.h>
@@ -37,7 +37,7 @@ static void dump(const char *tag, const A32Cpu *c) {
     for (int i = 0; i < 15; i++) printf(" %x", c->r[i]);
     printf("\n");
 }
-static uint32_t jit_step(A32Cpu *c) { if (tracing) dump("jit-fallback", c); return (uint32_t)a32_run(c, 1); }
+static uint32_t jit_step(A32Cpu *c, const A32Lit *l) { if (tracing) dump("jit-fallback", c); return (uint32_t)a32_op_exec(c, &l->insn, c->r[15], l->raw); }
 static int hle_hit;
 static uint32_t jit_hle(A32Cpu *c, uint32_t pc) { (void)c; (void)pc; hle_hit = 1; return 1; }   /* a random branch into the import range: not comparable, counted as skipped */
 static sigjmp_buf jb;

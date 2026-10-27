@@ -262,7 +262,7 @@ static void svc_exit_process(uint64_t *r) {
     LOG("kernel", "guest called ExitProcess");
     summary_note("guest called ExitProcess");
     summary_write("fail", "guest exited the process (ExitProcess)");
-    _exit(0);
+    GUEST_EXIT(0);
 }
 static void svc_output_debug_string(uint64_t *r) {
     uint64_t n = r[1];

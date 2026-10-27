@@ -6,6 +6,7 @@
 #include "applet_core.h"
 #include "applet_lib_core.h"
 #include "../frontend.h"
+#include "../gfx.h"
 #include "napple_frontend.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -33,6 +34,15 @@ void applet_push_message(uint32_t message) {
         signal_events();
     }
     pthread_mutex_unlock(&lock);
+}
+/* While a library applet is on screen the application is out of focus (FocusState 2, message FocusStateChanged): on the console that is what
+ * makes it stop drawing (it would otherwise alternate frames with the applet on the one screen); back to InFocus when the applet returns. */
+void applet_set_focus(int in_focus) {
+    gfx_set_hidden(!in_focus);
+    pthread_mutex_lock(&lock);
+    focus_state = in_focus ? 1 : 2;
+    pthread_mutex_unlock(&lock);
+    applet_push_message(MSG_FOCUS_CHANGED);
 }
 static void applet_start_once(void) {
     if (started) return;
@@ -89,13 +99,15 @@ static void csg_receive_message(IpcObject *s, IpcCall *c) {
     else
         for (unsigned i = 0; i < nmsg_events; i++) event_clear_handle(msg_events[i]); /* the real queue de-asserts its event when it empties */
     pthread_mutex_unlock(&lock);
+    LOGV("applet", "ReceiveMessage -> %u", m);
     IPC_OUT(c, m);
 }
+uint32_t g_applet_kind = 1; /* AppletType: 1 Application; a firmware applet process (applet_ae.c) is 3 LibraryApplet */
 static void csg_get_this_applet_kind(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint32_t v = 1;
+    uint32_t v = g_applet_kind;
     IPC_OUT(c, v);
-} /* Application */
+}
 static void csg_noop(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
@@ -176,7 +188,14 @@ static void csg_get_builtin_display_type(IpcObject *s, IpcCall *c) {
     uint32_t v = 0;
     IPC_OUT(c, v);
 }
+/* GetSettingsPlatformRegion (300): 1 Global, 2 China. */
+static void csg_get_platform_region(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = 1;
+    IPC_OUT(c, v);
+}
 static const IpcCmd csg_cmds[] = {
+    {300, "GetSettingsPlatformRegion", csg_get_platform_region, IPC_STUB},
     {0, "GetEventHandle", csg_get_event_handle, IPC_IMPL},
     {1, "ReceiveMessage", csg_receive_message, IPC_IMPL},
     {2, "GetThisAppletKind", csg_get_this_applet_kind, IPC_IMPL},
@@ -310,6 +329,17 @@ static void sc_exit(IpcObject *s, IpcCall *c) {
     LOG("applet", "ISelfController::Exit: the guest asked to exit");
     summary_note("guest called appletExit");
 }
+/* GetSystemSharedLayerHandle: {shared buffer handle, shared layer handle}; a firmware applet that shares the system buffer gets layer 1 (the window's). */
+/* No system compositor shares buffers with this process: report sharing as unavailable (a failing result) so the applet draws into its own layer. */
+static void sc_no_shared_buffers(IpcObject *s, IpcCall *c) {
+    (void)s;
+    c->result = 0x1480;
+}
+static void sc_shared_layer(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t v[2] = {1, 1};
+    IPC_OUT(c, v);
+}
 static const IpcCmd sc_cmds[] = {
     {0, "Exit", sc_exit, IPC_IMPL},
     {1, "LockExit", csg_noop, IPC_IMPL},
@@ -328,6 +358,8 @@ static const IpcCmd sc_cmds[] = {
     {18, "SetRequiresCaptureButtonShortPressedMessage", sc_set_capture_short_press, IPC_IMPL},
     {19, "SetScreenShotImageOrientation", sc_set_orientation, IPC_IMPL},
     {20, "SetDesirableKeyboardLayout", sc_set_keyboard_layout, IPC_IMPL},
+    {41, "IsSystemBufferSharingEnabled", sc_no_shared_buffers, IPC_STUB},
+    {42, "GetSystemSharedLayerHandle", sc_shared_layer, IPC_STUB},
     {40, "CreateManagedDisplayLayer", sc_create_managed_layer, IPC_IMPL},
     {44, "CreateManagedDisplaySeparableLayer", sc_create_separable_layer, IPC_IMPL},
     {50, "SetHandlesRequestToDisplay", csg_noop, IPC_STUB},
@@ -405,6 +437,14 @@ static const IpcCmd dc_cmds[] = {
     {1, "UpdateLastForegroundCaptureImage", csg_noop, IPC_STUB},
     {2, "GetLastApplicationCaptureImage", dc_noop_result, IPC_STUB},
     {5, "GetLastForegroundCaptureImageEx", dc_noop_result, IPC_STUB},
+    {3, "GetCallerAppletCaptureImage", dc_noop_result, IPC_STUB},
+    {4, "UpdateCallerAppletCaptureImage", csg_noop, IPC_STUB},
+    {6, "GetLastApplicationCaptureImageEx", dc_noop_result, IPC_STUB},
+    {7, "GetCallerAppletCaptureImageEx", dc_noop_result, IPC_STUB},
+    {8, "TakeScreenShotOfOwnLayer", csg_noop, IPC_STUB},
+    {9, "CopyBetweenCaptureBuffers", csg_noop, IPC_STUB},
+    {10, "AcquireLastApplicationCaptureBuffer", csg_noop, IPC_STUB},
+    {11, "ReleaseLastApplicationCaptureBuffer", csg_noop, IPC_STUB},
 };
 
 /* ---- IStorage / IStorageAccessor: launch parameters and library-applet storage ------------------------------------------------- */
@@ -442,6 +482,8 @@ static void accessor_read(IpcObject *s, IpcCall *c) {
     int64_t off = IPC_IN(c, int64_t, 0);
     const IpcBuf *b = ipc_out_buf(c, 0);
     if (!b || off < 0 || (uint64_t)off + b->size > st->size) {
+        LOG("applet", "IStorageAccessor::Read: offset %lld size %llu outside the %llu-byte storage", (long long)off, b ? (unsigned long long)b->size : 0ull,
+            (unsigned long long)st->size);
         c->result = 0x1d80;
         return;
     }
@@ -555,7 +597,7 @@ static void libapplet_run_swkbd(LibApplet *a) {
     /* Encoding of the returned text: Link's Awakening (and so the SDK path it uses: use-UTF-8 byte of the config is 0) reads it as UTF-8 (verified: the
      * name shows correctly; UTF-16 units come out as a single "L"). NAPPLE_SWKBD_UTF16=1 switches to UTF-16 for titles that need it. */
     if (ok) {
-        if (!getenv("NAPPLE_SWKBD_UTF16")) strlcpy((char *)o->data + 4, text, SWKBD_OUT_SIZE - 4);
+        if (!getenv("NAPPLE_SWKBD_UTF16") && g_applet_kind != 3) strlcpy((char *)o->data + 4, text, SWKBD_OUT_SIZE - 4);
         else {
             uint16_t u16[600];
             size_t n = napple_utf8_to_utf16(text, u16, 599);
@@ -641,6 +683,259 @@ static void libapplet_run_player_select(LibApplet *a) {
     a->result = 0;
     LOG("applet", uid ? "player select: confirmed with the only profile" : "player select: cancelled");
 }
+/* ---- the firmware applet host (parent side) --------------------------------------------------------------------------------------------------
+ * A library applet that has a program in the user's firmware (the Mii Maker, applet id 0x12) can run for real: `napple build` wrote it beside the game as
+ * <title dir>/applets/<program id>/<build id>/ (a data directory like any title's). The game's guest stays blocked in Start; this process starts
+ * `napple-runtime <that directory>` as a child, the pushed storages go to it as files (NAPPLE_APPLET_IN/in<N>.bin), the child's PushOutData storages come back
+ * (NAPPLE_APPLET_OUT/out<N>.bin) when it exits, and the game then pops them like any applet's output. On by default (NAPPLE_FIRMWARE_APPLETS=0 turns it off); a missing applet, a failing child or the timeout (NAPPLE_APPLET_TIMEOUT seconds, default 600) answer as cancelled. See docs/archive/changes/2026-10-26-mii-firmware.md. */
+#include <dirent.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
+#include <signal.h>
+#include <spawn.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <time.h>
+#include <unistd.h>
+extern char **environ;
+static int write_file(const char *path, const void *p, uint64_t n) {
+    FILE *f = fopen(path, "wb");
+    if (!f) return -1;
+    int ok = n == 0 || fwrite(p, 1, (size_t)n, f) == (size_t)n;
+    return fclose(f) == 0 && ok ? 0 : -1;
+}
+static int find_applet_dir(const char *program_id, char *out, size_t cap) {
+    char base[1300];
+    snprintf(base, sizeof base, "%s/../applets/%s", g_cfg.data_dir, program_id);
+    DIR *d = opendir(base);
+    if (!d) return 0;
+    struct dirent *e;
+    int found = 0;
+    while (!found && (e = readdir(d))) {
+        if (e->d_name[0] == '.') continue;
+        char m[1500];
+        snprintf(m, sizeof m, "%s/%s/manifest.json", base, e->d_name);
+        if (!access(m, R_OK)) {
+            snprintf(out, cap, "%s/%s", base, e->d_name);
+            found = 1;
+        }
+    }
+    closedir(d);
+    return found;
+}
+static void remove_run_dir(const char *work, const char *in_dir, const char *out_dir) {
+    char p[1500];
+    for (unsigned i = 0; i < 16; i++) {
+        snprintf(p, sizeof p, "%s/in%u.bin", in_dir, i);
+        remove(p);
+        snprintf(p, sizeof p, "%s/out%u.bin", out_dir, i);
+        remove(p);
+    }
+    snprintf(p, sizeof p, "%s/result.txt", out_dir);
+    remove(p);
+    rmdir(in_dir);
+    rmdir(out_dir);
+    rmdir(work);
+}
+/* Returns 1 when the child ran to completion with output storages (a->out set), 0 otherwise. */
+/* In-process mode (iOS always, macOS with NAPPLE_APPLET_INPROC=1): iOS cannot spawn a process, so the applet runs as a second copy of this runtime, loaded from
+ * libnapple-applet.dylib (make applet-lib; NAPPLE_APPLET_LIB overrides the path, default: beside the executable, then ../Frameworks) with its own globals,
+ * on a thread of this process. Same storage-file protocol as the child process. The applet's guest ending returns napple_applet_main (src/libmode.c). */
+#include <dlfcn.h>
+typedef struct {
+    int (*entry)(int, char **);
+    int argc;
+    char **argv;
+    int code;
+} InprocRun;
+static void *inproc_thread(void *p) {
+    InprocRun *r = p;
+    r->code = r->entry(r->argc, r->argv);
+    return NULL;
+}
+static void *inproc_open_lib(void) {
+    static void *h;
+    if (h) return h;
+    char path[2048];
+    const char *env = getenv("NAPPLE_APPLET_LIB");
+    if (env && *env) snprintf(path, sizeof path, "%s", env);
+    else {
+        char exe[2048];
+        uint32_t sz = sizeof exe;
+        if (_NSGetExecutablePath(exe, &sz)) return NULL;
+        char *slash = strrchr(exe, '/');
+        if (slash) *slash = 0;
+        snprintf(path, sizeof path, "%s/libnapple-applet.dylib", exe);
+        if (access(path, R_OK)) snprintf(path, sizeof path, "%s/Frameworks/libnapple-applet.dylib", exe);
+        if (access(path, R_OK)) snprintf(path, sizeof path, "%s/../Frameworks/libnapple-applet.dylib", exe);
+    }
+    h = dlopen(path, RTLD_NOW | RTLD_LOCAL);
+    if (!h) LOG("applet", "in-process applet host: cannot load %s: %s", path, dlerror());
+    return h;
+}
+static int inproc_run(const char *dir) {
+    void *h = inproc_open_lib();
+    if (!h) return 0;
+    InprocRun r = {.entry = dlsym(h, "napple_applet_main")};
+    if (!r.entry) return 0;
+    void (*attach)(void *, void *) = dlsym(h, "napple_applet_attach");
+    if (attach) {
+        attach(g_cfg.headless ? NULL : frontend_metal_layer(), hid_input_get());
+    }
+    char *argv[8];
+    int n = 0;
+    argv[n++] = (char *)"napple-applet";
+    argv[n++] = (char *)dir;
+    argv[n++] = (char *)"--save-root";
+    argv[n++] = (char *)g_cfg.save_root;
+    if (g_cfg.headless) argv[n++] = (char *)"--headless";
+    argv[n] = NULL;
+    r.argc = n;
+    r.argv = argv;
+    pthread_attr_t at;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 64u << 20);
+    pthread_t t;
+    if (pthread_create(&t, &at, inproc_thread, &r)) return 0;
+    pthread_join(t, NULL);
+    LOG("applet", "in-process applet returned %d", r.code);
+    return 1;
+}
+static int libapplet_run_firmware(LibApplet *a, const char *program_id) {
+    const char *on = getenv("NAPPLE_FIRMWARE_APPLETS");
+    char dir[1500];
+    if (on && !strcmp(on, "0")) return 0; /* on by default; NAPPLE_FIRMWARE_APPLETS=0 turns it off */
+    if (!find_applet_dir(program_id, dir, sizeof dir)) {
+        LOG("applet", "firmware applet %s: not built beside this game (napple build --firmware writes it)", program_id);
+        return 0;
+    }
+    char work[1400], in_dir[1450], out_dir[1450], path[1500], exe[2048];
+    snprintf(work, sizeof work, "%s/system/applet-run-%d", g_cfg.save_root, (int)getpid());
+    snprintf(in_dir, sizeof in_dir, "%s/in", work);
+    snprintf(out_dir, sizeof out_dir, "%s/out", work);
+    char tmp[1400];
+    snprintf(tmp, sizeof tmp, "%s/system", g_cfg.save_root);
+    mkdir(tmp, 0755);
+    mkdir(work, 0755);
+    mkdir(in_dir, 0755);
+    mkdir(out_dir, 0755);
+    for (unsigned i = 0; i < a->nin; i++) {
+        snprintf(path, sizeof path, "%s/in%u.bin", in_dir, i);
+        if (write_file(path, storage_bytes(&a->in[i]), a->in[i].size)) {
+            LOG("applet", "firmware applet: cannot write %s", path);
+            return 0;
+        }
+    }
+    int inproc = NAPPLE_IOS || (getenv("NAPPLE_APPLET_INPROC") && !getenv("NAPPLE_APPLET_EXE"));
+    const char *exe_override = getenv("NAPPLE_APPLET_EXE"); /* tests run a stand-in program */
+    if (exe_override) snprintf(exe, sizeof exe, "%s", exe_override);
+    else {
+#ifdef __APPLE__
+        uint32_t sz = sizeof exe;
+        if (_NSGetExecutablePath(exe, &sz)) return 0;
+#else
+        ssize_t len = readlink("/proc/self/exe", exe, sizeof exe - 1);
+        if (len <= 0) return 0;
+        exe[len] = 0;
+#endif
+    }
+    char idbuf[32], modebuf[32], envin[1600], envout[1600];
+    snprintf(idbuf, sizeof idbuf, "NAPPLE_APPLET_ID=%#x", a->applet_id);
+    snprintf(modebuf, sizeof modebuf, "NAPPLE_APPLET_MODE=%u", a->mode);
+    snprintf(envin, sizeof envin, "NAPPLE_APPLET_IN=%s", in_dir);
+    snprintf(envout, sizeof envout, "NAPPLE_APPLET_OUT=%s", out_dir);
+    applet_set_focus(0);
+    if (inproc) {
+        setenv("NAPPLE_APPLET_ID", idbuf + 17, 1);
+        setenv("NAPPLE_APPLET_MODE", modebuf + 19, 1);
+        setenv("NAPPLE_APPLET_IN", in_dir, 1);
+        setenv("NAPPLE_APPLET_OUT", out_dir, 1);
+        LOG("applet", "firmware applet %s: running in-process (storages in %s)", program_id, in_dir);
+        int ran = inproc_run(dir);
+        unsetenv("NAPPLE_APPLET_ID");
+        unsetenv("NAPPLE_APPLET_MODE");
+        unsetenv("NAPPLE_APPLET_IN");
+        unsetenv("NAPPLE_APPLET_OUT");
+        if (!ran) {
+            remove_run_dir(work, in_dir, out_dir);
+            applet_set_focus(1);
+            return 0;
+        }
+        goto collect;
+    }
+    size_t ne = 0;
+    while (environ[ne]) ne++;
+    char **envp = calloc(ne + 5, sizeof *envp);
+    size_t k = 0;
+    for (size_t i = 0; i < ne; i++)
+        if (strncmp(environ[i], "NAPPLE_DEBUG_LAUNCH_APPLET=", 27)) envp[k++] = environ[i]; /* the debug launch is the host's, not the child's */
+    ne = k;
+    envp[ne++] = idbuf;
+    envp[ne++] = modebuf;
+    envp[ne++] = envin;
+    envp[ne++] = envout;
+    char *argv[8];
+    int n = 0;
+    char seconds[16] = "0";
+    argv[n++] = exe;
+    argv[n++] = dir;
+    argv[n++] = (char *)"--save-root";
+    argv[n++] = (char *)g_cfg.save_root;
+    if (g_cfg.headless) argv[n++] = (char *)"--headless";
+    argv[n] = NULL;
+    (void)seconds;
+    pid_t pid;
+    LOG("applet", "firmware applet %s: starting %s (storages in %s)", program_id, dir, in_dir);
+    int rc = posix_spawn(&pid, exe, NULL, NULL, argv, envp);
+    free(envp);
+    if (rc) {
+        LOG("applet", "firmware applet: cannot start the child (%d)", rc);
+        applet_set_focus(1);
+        return 0;
+    }
+    const char *to = getenv("NAPPLE_APPLET_TIMEOUT");
+    long limit = to ? atol(to) : 600;
+    time_t t0 = time(NULL);
+    int status = 0, done = 0;
+    while (!done) {
+        pid_t r = waitpid(pid, &status, WNOHANG);
+        if (r == pid) done = 1;
+        else if (time(NULL) - t0 > limit) {
+            LOG("applet", "firmware applet: no answer after %ld s, terminating it", limit);
+            kill(pid, SIGKILL);
+            waitpid(pid, &status, 0);
+            applet_set_focus(1);
+            return 0;
+        } else usleep(50000);
+    }
+    LOG("applet", "firmware applet exited (status %d)", WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+collect:
+    applet_set_focus(1);
+    snprintf(path, sizeof path, "%s/out0.bin", out_dir);
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        remove_run_dir(work, in_dir, out_dir);
+        return 0;
+    }
+    fseek(f, 0, SEEK_END);
+    long len = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    Storage *o = calloc(1, sizeof *o);
+    o->size = len > 0 ? (uint64_t)len : 0;
+    o->data = calloc(1, o->size ? o->size : 1);
+    int ok = o->size == 0 || fread(o->data, 1, o->size, f) == o->size;
+    fclose(f);
+    remove_run_dir(work, in_dir, out_dir);
+    if (!ok) {
+        free(o->data);
+        free(o);
+        return 0;
+    }
+    a->out = o;
+    a->result = 0;
+    return 1;
+}
 static void la_state_event(IpcObject *s, IpcCall *c) {
     LibApplet *a = s->state;
     uint32_t r = 0;
@@ -666,7 +961,8 @@ static void la_start(IpcObject *s, IpcCall *c) {
     else if (a->applet_id == APPLET_ID_CONTROLLER) libapplet_run_controller(a);
     else if (a->applet_id == LIBAPPLET_ID_ERROR) libapplet_run_error(a);
     else if (a->applet_id == LIBAPPLET_ID_PLAYER_SELECT) libapplet_run_player_select(a);
-    else { /* unknown library applet: the guest sees it terminate without output (as if the user cancelled), instead of the process dying */
+    else if (a->applet_id == 0x12 && libapplet_run_firmware(a, "0100000000001009")) { /* the Mii Maker, run for real */
+    } else { /* unknown library applet: the guest sees it terminate without output (as if the user cancelled), instead of the process dying */
         LOG("applet", "library applet %#x is not implemented: reporting it as cancelled", a->applet_id);
         a->unsupported = 1;
         a->result = 0x1480;
@@ -963,4 +1259,59 @@ static void oe_open_application_proxy(IpcObject *s, IpcCall *c) {
 }
 static const IpcCmd oe_cmds[] = {{0, "OpenApplicationProxy", oe_open_application_proxy, IPC_IMPL}};
 static IpcObject *oe_open(void) { return IPC_OBJECT("appletOE", oe_cmds, NULL, NULL); }
-void service_register_applet(void) { ipc_register_service("appletOE", oe_open); }
+/* Debug/test aid: NAPPLE_DEBUG_LAUNCH_APPLET=<seconds> makes this process launch the Mii Maker as if the game had asked (ShowMiiEdit, no arguments but the
+ * 0x100-byte one), so the in-process and child-process hosts can be exercised with any title. */
+static void *debug_launch_thread(void *arg) {
+    sleep((unsigned)(uintptr_t)arg);
+    LibApplet a;
+    memset(&a, 0, sizeof a);
+    a.applet_id = 0x12;
+    uint8_t *arg0 = calloc(1, 0x100);
+    arg0[0] = 3;
+    a.in[0] = (Storage){.data = arg0, .size = 0x100};
+    a.nin = 1;
+    int ok = libapplet_run_firmware(&a, "0100000000001009");
+    LOG("applet", "debug launch: firmware applet %s, output %llu bytes", ok ? "ran" : "did not run", (unsigned long long)(a.out ? a.out->size : 0));
+    return NULL;
+}
+void service_register_applet(void) {
+    ipc_register_service("appletOE", oe_open);
+    const char *d = getenv("NAPPLE_DEBUG_LAUNCH_APPLET");
+#ifdef NAPPLE_LIB
+    d = NULL; /* only the host image launches */
+#endif
+    if (d) {
+        pthread_t t;
+        pthread_create(&t, NULL, debug_launch_thread, (void *)(uintptr_t)atoi(d));
+        pthread_detach(t);
+    }
+}
+
+/* ---- shared with applet_ae.c: the objects of the proxy a firmware applet process gets from appletAE ---------------------------------------- */
+IpcObject *applet_shared_object(const char *which) {
+    if (!strcmp(which, "common")) return IPC_OBJECT("ICommonStateGetter", csg_cmds, NULL, NULL);
+    if (!strcmp(which, "self")) {
+        pthread_mutex_lock(&lock);
+        applet_start_once();
+        pthread_mutex_unlock(&lock);
+        return IPC_OBJECT("ISelfController", sc_cmds, NULL, NULL);
+    }
+    if (!strcmp(which, "window")) return IPC_OBJECT("IWindowController", wc_cmds, NULL, NULL);
+    if (!strcmp(which, "audio")) return IPC_OBJECT("IAudioController", ac_cmds, NULL, NULL);
+    if (!strcmp(which, "display")) return IPC_OBJECT("IDisplayController", dc_cmds, NULL, NULL);
+    if (!strcmp(which, "creator")) return IPC_OBJECT("ILibraryAppletCreator", lac_cmds, NULL, NULL);
+    return NULL;
+}
+IpcObject *applet_storage_make(const void *data, uint64_t size) {
+    IpcObject *o = storage_new(size);
+    Storage *st = o->state;
+    if (size) memcpy(st->data, data, size);
+    return o;
+}
+int applet_storage_peek(const IpcObject *o, const uint8_t **data, uint64_t *size) {
+    const Storage *st = o ? o->state : NULL;
+    if (!st) return 0;
+    *data = storage_bytes(st);
+    *size = st->size;
+    return 1;
+}

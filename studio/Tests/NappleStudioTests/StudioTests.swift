@@ -213,7 +213,7 @@ func fakeFirmwareDir(in dir: URL) -> URL {
     }
 
     @Test func buildArgumentsCarrySigningOptions() {
-        #expect(BuildTarget.allCases.map(\.rawValue) == ["macos", "ios", "iphone", "ipad"])
+        #expect(BuildTarget.allCases.map(\.rawValue) == ["macos", "ios", "iphone", "ipad", "ios-sim"])
         #expect(BuildTarget.ios.isIOS && !BuildTarget.macos.isIOS)
         #expect(ErrorText.humanize("error: [install] devicectl failed").contains("Developer Mode"))
     }

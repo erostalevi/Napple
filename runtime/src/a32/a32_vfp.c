@@ -104,10 +104,7 @@ static uint32_t half_to_single(A32Cpu *c, uint16_t h, int ahp) {
     }
     if (exp == 0) {
         if (frac == 0) return sign;
-        if (c->fpscr & FPSCR_FZ) {
-            c->fpscr |= FPSCR_IDC;
-            return sign;
-        }
+        /* a half precision denormal is exact as a single: FPSCR.FZ does not flush it (FZ16 only exists with half precision arithmetic) */
         unsigned k = 0; /* normalise the denormal: value = 2^(-14-k) * 1.frac */
         while (!(frac & 0x400)) {
             frac <<= 1;
@@ -756,6 +753,8 @@ uint32_t a32_neon_f32(A32Cpu *c, int op, uint32_t a, uint32_t b, uint32_t acc, i
         case NF_MINNM: {
             int mx = op == NF_MAX || op == NF_MAXNM;
             if (op >= NF_MAXNM) {
+                int sa = an && !(ra & 0x400000u), sb = bn && !(rb & 0x400000u); /* a signalling NaN is an invalid operation: default NaN */
+                if (sa || sb) return 0x7fc00000u;
                 if (an && !bn) return rb;
                 if (bn && !an) return ra;
             }
@@ -776,12 +775,14 @@ uint32_t a32_neon_f32(A32Cpu *c, int op, uint32_t a, uint32_t b, uint32_t acc, i
         case NF_RECPS: {
             if (an || bn) return 0x7fc00000u;
             if ((isinf(fa) && fb == 0) || (fa == 0 && isinf(fb))) return nf_u(2.0f);
-            return nf_out(fmaf(-fa, fb, 2.0f));
+            volatile float p = fa * fb; /* AArch32 VRECPS is not fused: the product is rounded first (FPRecipStep) */
+            return nf_out(2.0f - p);
         }
         case NF_RSQRTS: {
             if (an || bn) return 0x7fc00000u;
             if ((isinf(fa) && fb == 0) || (fa == 0 && isinf(fb))) return nf_u(1.5f);
-            return nf_out(fmaf(-fa, fb, 3.0f) / 2.0f);
+            volatile float p = fa * fb; /* not fused (FPRSqrtStep) */
+            return nf_out((3.0f - p) / 2.0f);
         }
         case NF_RECPE: {
             if (arg == 1) { /* unsigned fixed point estimate (vrecpe.u32) */
@@ -831,10 +832,15 @@ uint32_t a32_neon_f32(A32Cpu *c, int op, uint32_t a, uint32_t b, uint32_t acc, i
         case NF_RINT:
             if (an) return 0x7fc00000u;
             return nf_out(nf_round((double)fa, arg & 0xff));
-        case NF_CVT_RM:
-            if ((arg & 0xff00) == 0x200) return to_half(c, a, 0);
-            if ((arg & 0xff00) == 0x300) return half_to_single(c, (uint16_t)a, 0);
-            return 0;
+        case NF_CVT_RM: {
+            /* Advanced SIMD runs with the standard FPSCR value (flush to zero, default NaN, round to nearest) whatever the guest's FPSCR holds, and leaves it unchanged */
+            uint32_t saved = c->fpscr, r = 0;
+            c->fpscr = FPSCR_FZ | FPSCR_DN;
+            if ((arg & 0xff00) == 0x200) r = to_half(c, a, 0);
+            else if ((arg & 0xff00) == 0x300) r = half_to_single(c, (uint16_t)a, 0);
+            c->fpscr = saved;
+            return r;
+        }
     }
     return 0;
 }

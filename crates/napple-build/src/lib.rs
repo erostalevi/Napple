@@ -10,6 +10,8 @@ pub mod container;
 pub mod control;
 pub mod error;
 pub mod firmware;
+pub mod fwlist;
+pub mod fwprog;
 pub mod ios;
 pub mod json;
 pub mod legacy;
@@ -32,6 +34,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let has = |f: &str| args.iter().any(|a| a == f);
     if has("--dump-fonts") {
         return sysdata::run_dump_fonts(args);
+    }
+    if has("--firmware-program") {
+        return fwprog::run(args);
+    }
+    if has("--list-firmware") {
+        return fwlist::run(args);
     }
     if has("--dump-exefs") || has("--dump-romfs") {
         return legacy::run(args);

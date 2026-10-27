@@ -24,6 +24,7 @@ typedef struct {
     unsigned nseeds; /* entry points: guest address, bit 0 = Thumb */
     int each_entry;  /* test mode: every instruction is an entry of its own (differential tests) */
     uint8_t *seed_fb;
+    FILE *cov;                   /* coverage list: one line per instruction that is not lifted natively: module addr A|T raw op class */
     uint32_t fb_base, fb_stride; /* test mode output: seed_fb[(addr - fb_base) / fb_stride] = 1 when that instruction fell back to the interpreter */
 } LiftInput;
 
@@ -35,3 +36,6 @@ typedef struct {
 /* Writes `<prefix>.NN.S` (code chunks), `<prefix>.tab.S` (hash table + common stubs). Returns the number of files written (names in
  * out_files, malloc'd), or -1. */
 int a32lift_run(const LiftInput *in, const char *prefix, char ***out_files, LiftStats *st);
+
+/* Name of a decoded operation (A32Op), for coverage reports. */
+const char *a32lift_opname(unsigned op);

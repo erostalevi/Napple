@@ -34,6 +34,20 @@ const char *ios_default_save_root(void) {
     return path;
 }
 
+const char *ios_shared_mii_dir(void) {
+    static char path[4096];
+    @autoreleasepool {
+        NSString *group = [NSBundle.mainBundle objectForInfoDictionaryKey:@"NappleAppGroup"];
+        if (![group isKindOfClass:NSString.class] || !group.length) return NULL;
+        NSURL *u = [NSFileManager.defaultManager containerURLForSecurityApplicationGroupIdentifier:group];
+        if (!u) return NULL;
+        NSString *dir = [u.path stringByAppendingPathComponent:@"Napple/mii"];
+        if (![NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil]) return NULL;
+        snprintf(path, sizeof path, "%s", dir.fileSystemRepresentation);
+    }
+    return path;
+}
+
 void ios_install_fonts(const char *data_dir, const char *save_root) {
     @autoreleasepool {
         NSFileManager *fm = NSFileManager.defaultManager;

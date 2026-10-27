@@ -31,6 +31,7 @@ cp "$BIN" "$APP/Contents/MacOS/NappleStudio"
 # CLI + helpers side by side: `napple build` finds napple-runtime/napple-launcher next to itself.
 cp "$ROOT/target/release/napple" "$ROOT/runtime/build/napple-runtime" "$ROOT/packaging/build/napple-launcher" "$APP/Contents/Resources/"
 [ -x "$ROOT/runtime/build-ios/napple-runtime" ] && cp "$ROOT/runtime/build-ios/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios"   # optional: tools/build_ios.sh
+[ -x "$ROOT/runtime/build-ios-sim/napple-runtime" ] && cp "$ROOT/runtime/build-ios-sim/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios-sim"   # optional: tools/build_ios.sh --sim
 [ -f "$ROOT/compat/matrix.json" ] && cp "$ROOT/compat/matrix.json" "$APP/Contents/Resources/matrix.json"
 # App icon (studio/packaging/icon.png -> AppIcon.icns)
 if [ -f "$HERE/packaging/icon.png" ] && command -v iconutil >/dev/null 2>&1; then
@@ -56,10 +57,12 @@ cat > "$APP/Contents/Info.plist" <<P
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
 <key>NSHighResolutionCapable</key><true/>
+<key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeName</key><string>Switch package</string><key>CFBundleTypeRole</key><string>Viewer</string><key>LSHandlerRank</key><string>Alternate</string><key>CFBundleTypeExtensions</key><array><string>nsp</string><string>xci</string><string>nsz</string><string>xcz</string></array></dict></array>
+<key>NSSupportsAutomaticTermination</key><false/>
 </dict></plist>
 P
 xattr -cr "$APP" 2>/dev/null || true
 # Release bundle: drop local symbols (the debug builds in target/ and runtime/build keep them; no dSYM is shipped).
 for f in "$APP/Contents/MacOS/NappleStudio" "$APP/Contents/Resources/napple" "$APP/Contents/Resources/napple-runtime" "$APP/Contents/Resources/napple-launcher"; do strip -x "$f"; done
-codesign --force --sign - --timestamp=none "$APP"
+codesign --force --sign - --timestamp=none --entitlements "$HERE/packaging/entitlements.plist" "$APP"
 echo "Built $APP"

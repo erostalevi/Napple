@@ -17,7 +17,7 @@ unsafe extern "C" {
     fn a32lift_tool(dir: *const c_char, prefix: *const c_char) -> c_int;
 }
 
-const USAGE: &str = "usage: napple rewrite a32 <modules dir> [-o <work dir>]   (the dir holding main.patched.bin / main.tables ...)";
+const USAGE: &str = "usage: napple rewrite a32 [--coverage] <modules dir> [-o <work dir>]   (the dir holding main.patched.bin / main.tables ...)";
 /// Deployment target of the produced dylib. `rmif` (FEAT_FlagM, Armv8.4-A) is used for the flag-preserving logical operations: Apple A13 and later.
 const TARGET: &str = "arm64-apple-macos13";
 
@@ -119,8 +119,45 @@ pub fn recompile(modules: &Path, work: &Path) -> Result<PathBuf, RewriteError> {
     Ok(out)
 }
 
+/// Prints the fallback coverage table of a lift: per module and operation the number of instructions the lifter did not turn into native code, with the
+/// first address and encoding of each group. The full list (module, address, A|T, encoding, operation) is kept in `<work>/j.cov`.
+pub fn coverage_table(cov: &Path) -> Result<String, RewriteError> {
+    use std::collections::BTreeMap;
+    let text = std::fs::read_to_string(cov).map_err(io)?;
+    let mut groups: BTreeMap<(String, String), (u64, String)> = BTreeMap::new();
+    let (mut native, mut fb) = (0u64, 0u64);
+    for l in text.lines() {
+        if let Some(s) = l.strip_prefix("#stats ") {
+            let mut it = s.split_whitespace().map(|v| v.parse::<u64>().unwrap_or(0));
+            native = it.next().unwrap_or(0);
+            fb = it.next().unwrap_or(0);
+            continue;
+        }
+        let f: Vec<&str> = l.split_whitespace().collect();
+        if f.len() != 5 {
+            continue;
+        }
+        let e = groups
+            .entry((f[0].to_string(), f[4].to_string()))
+            .or_insert((0, format!("{} {} {}", f[1], f[2], f[3])));
+        e.0 += 1;
+    }
+    let mut o = String::new();
+    o.push_str("module     operation   count   first (address A|T encoding)\n");
+    o.push_str("# operations the lifter does not inline: each is a build-time decoded instruction executed by an out-of-line semantics routine (a32_op_exec);\n");
+    o.push_str("# nothing is fetched or decoded at run time and there is no interpreter loop in the runtime\n");
+    for ((m, op), (n, first)) in &groups {
+        o.push_str(&format!("{m:<10} {op:<10} {n:>7}   {first}\n"));
+    }
+    o.push_str(&format!(
+        "total: {native} instructions lifted inline, {fb} out-of-line, 0 interpreter fallbacks\n"
+    ));
+    Ok(o)
+}
+
 pub fn run(args: &[String]) -> Result<(), RewriteError> {
     let (mut modules, mut work) = (None, None);
+    let mut coverage = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -129,12 +166,18 @@ pub fn run(args: &[String]) -> Result<(), RewriteError> {
                     it.next().ok_or_else(|| RewriteError::Usage(USAGE.into()))?,
                 ))
             }
+            "--coverage" => coverage = true,
             "-h" | "--help" => return Err(RewriteError::Usage(USAGE.into())),
             d => modules = Some(PathBuf::from(d)),
         }
     }
     let modules = modules.ok_or_else(|| RewriteError::Usage(USAGE.into()))?;
     let work = work.unwrap_or_else(|| std::env::temp_dir().join("napple-a32jit"));
+    if coverage {
+        lift(&modules, &work)?;
+        print!("{}", coverage_table(&work.join("j.cov"))?);
+        return Ok(());
+    }
     let out = recompile(&modules, &work)?;
     println!(
         "a32: wrote {} ({} bytes)",

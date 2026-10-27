@@ -25,6 +25,17 @@ void log_line(const char *tag, const char *fmt, ...) __attribute__((format(print
     do {                                                                                                                                                       \
         if (log_verbose) log_line(tag, __VA_ARGS__);                                                                                                           \
     } while (0)
+/* Library mode (-DNAPPLE_LIB, build/libnapple-applet.dylib): the runtime is a second image inside a host process (the iOS game app runs the Mii Maker this
+ * way). The guest ending must not end the process: GUEST_EXIT records the code, wakes napple_applet_main and ends only the calling thread. */
+#ifdef NAPPLE_LIB
+_Noreturn void lib_guest_end(int code);
+int lib_wait_guest_end(int seconds); /* returns the guest's exit code (0 after the time limit) */
+void *lib_host_layer(void);          /* the host's CAMetalLayer (napple_applet_attach), NULL = headless */
+void lib_mirror_host_input(void *mine); /* feed the host's pad state into this image's napple_input */
+#define GUEST_EXIT(code) lib_guest_end(code)
+#else
+#define GUEST_EXIT(code) _exit(code)
+#endif
 extern int log_verbose;
 /* Fatal runtime error: logs, writes the summary, exits with status 70. */
 _Noreturn void runtime_fail(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
@@ -69,6 +80,7 @@ typedef struct Module {
     const Gate *gates;
     const char *strtab;
     uint8_t *base;
+    size_t skew;                     /* macOS: base sits skew bytes into its mapping so a 4 KiB-aligned data segment lands on a host page of its own */
     size_t size;
     unsigned *hash, hash_mask;
     unsigned relative, symbolic, cross, weak;

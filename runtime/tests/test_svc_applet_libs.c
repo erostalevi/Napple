@@ -38,7 +38,7 @@ int main(void) {
     IpcObject *oe = oe_open(); IpcCall c;
     svc_call(oe, 0, NULL, 0, &c); IpcObject *proxy = c.out_objects[0];
     svc_call(proxy, 11, NULL, 0, &c); IpcObject *lac = c.out_objects[0];
-    uint8_t out[0x100]; uint64_t n;
+    uint8_t out[0x200]; uint64_t n;
 
     /* ---- pure cores ---- */
     AppletControllerAnswer ca;
@@ -105,6 +105,29 @@ int main(void) {
     la = create_applet(lac, 0x13);  /* web: still not implemented */
     CHECK(run(la, out, &n) == 0x1480 && n == 0, "unimplemented library applets still report cancelled");
 
+
+    /* the firmware applet host (parent side): a stand-in program plays the Mii Maker: it reads in0.bin and writes out0.bin = "OK" + the input */
+    {
+        char root[96], cmd[600];
+        snprintf(root, sizeof root, "/tmp/napple-applet-host-%d", (int)getpid());
+        snprintf(cmd, sizeof cmd, "mkdir -p %s/game/b1 %s/game/applets/0100000000001009/b2 && echo '{}' > %s/game/applets/0100000000001009/b2/manifest.json && "
+                 "printf '#!/bin/sh\\nprintf OK > \"$NAPPLE_APPLET_OUT/out0.bin\"; cat \"$NAPPLE_APPLET_IN/in0.bin\" >> \"$NAPPLE_APPLET_OUT/out0.bin\"\\n' > %s/fake.sh && chmod +x %s/fake.sh", root, root, root, root, root);
+        CHECK(system(cmd) == 0, "host test scaffolding");
+        static char dd[160], fk[160]; snprintf(dd, sizeof dd, "%s/game/b1", root); snprintf(fk, sizeof fk, "%s/fake.sh", root);
+        g_cfg.data_dir = dd; g_cfg.save_root = root;
+        IpcObject *la = create_applet(lac, 0x12); uint8_t in[0x100] = {3, 0, 0, 0, 7}; push(la, in, sizeof in);
+        setenv("NAPPLE_FIRMWARE_APPLETS", "0", 1);
+        CHECK(run(la, out, &n) == 0x1480, "Mii Maker with NAPPLE_FIRMWARE_APPLETS=0: cancelled as before");
+        setenv("NAPPLE_FIRMWARE_APPLETS", "1", 1); setenv("NAPPLE_APPLET_EXE", fk, 1);
+        la = create_applet(lac, 0x12); push(la, in, sizeof in);
+        uint32_t r = run(la, out, &n);
+        CHECK(r == 0 && n == 2 + sizeof in && out[0] == 'O' && out[1] == 'K' && out[2] == 3 && out[6] == 7, "firmware applet host: storages go to the child as files and its output comes back (result %#x, %llu bytes)", r, (unsigned long long)n);
+        setenv("NAPPLE_APPLET_EXE", "/bin/false", 1);
+        la = create_applet(lac, 0x12); push(la, in, sizeof in);
+        CHECK(run(la, out, &n) == 0x1480 && n == 0, "a child that produces nothing: cancelled");
+        unsetenv("NAPPLE_FIRMWARE_APPLETS"); unsetenv("NAPPLE_APPLET_EXE");
+        snprintf(cmd, sizeof cmd, "rm -rf %s", root); (void)!system(cmd);
+    }
     printf("{\"test\":\"svc_applet_libs\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

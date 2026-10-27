@@ -147,6 +147,8 @@ pub fn info_plist(
         // Saves and settings live in Documents; the Files app can show and back them up.
         ("UIFileSharingEnabled", "<true/>".into()),
         ("LSSupportsOpeningDocumentsInPlace", "<true/>".into()),
+        // IR camera simulator (frontend/src/sim_shared.m): the camera stands in for the Joy-Con IR sensor; the prompt shows only when a game starts an IR processor.
+        ("NSCameraUsageDescription", s("Some games use the IR camera of a Joy-Con. Napple can use your camera to simulate it, and only when a game asks for it.")),
         ("GCSupportsControllerUserInteraction", "<true/>".into()),
         ("GCSupportsGameMode", "<true/>".into()),
         // 120 Hz on ProMotion iPhones (iPads get it by default)
@@ -222,6 +224,27 @@ pub fn make_icons(jpeg: &[u8], work: &Path, app: &Path) -> Result<Vec<String>> {
 /// (`<ver>.<m>.dylib`, `<ver>.nro.<id>.dylib`; the runtime derives the same names, see runtime/src/module.c). Returns the dylib count.
 pub fn dylibize(game: &Path, frameworks: &Path, platform: macho::Platform) -> Result<usize> {
     std::fs::create_dir_all(frameworks).map_err(|e| BuildError::io("create Frameworks", e))?;
+    let mut n = dylibize_dir(game, "", frameworks, platform)?;
+    // the firmware applets built beside the game (game/applets/<program id>/<build>/): the runtime names them applets.<id>.<build>.<module>
+    if let Ok(rd) = std::fs::read_dir(game.join("applets")) {
+        for prog in rd.flatten() {
+            let id = prog.file_name().to_string_lossy().to_string();
+            n += dylibize_dir(
+                &prog.path(),
+                &format!("applets.{id}."),
+                frameworks,
+                platform,
+            )?;
+        }
+    }
+    Ok(n)
+}
+fn dylibize_dir(
+    game: &Path,
+    prefix: &str,
+    frameworks: &Path,
+    platform: macho::Platform,
+) -> Result<usize> {
     let mut n = 0;
     for ver in std::fs::read_dir(game)
         .map_err(|e| BuildError::io("read game dir", e))?
@@ -230,7 +253,7 @@ pub fn dylibize(game: &Path, frameworks: &Path, platform: macho::Platform) -> Re
         if !ver.path().join("manifest.json").is_file() {
             continue;
         }
-        let vname = ver.file_name().to_string_lossy().to_string();
+        let vname = format!("{prefix}{}", ver.file_name().to_string_lossy());
         for (sub, tag) in [("modules", ""), ("nro", "nro.")] {
             let dir = ver.path().join(sub);
             let Ok(rd) = std::fs::read_dir(&dir) else {
@@ -637,6 +660,7 @@ mod tests {
             "UIApplicationSceneManifest",
             "NappleSceneDelegate",
             "UIFileSharingEnabled",
+            "NSCameraUsageDescription",
             "CFBundleIconFiles",
             "AppIcon60x60",
             "Tom &amp; Jerry",

@@ -19,6 +19,7 @@ typedef enum {
     A32_EXIT_UNIMPL,     /* valid instruction this core does not implement yet (same fields): the list of these is the to-do list */
     A32_EXIT_BKPT,       /* bkpt / udf #imm */
     A32_EXIT_ALIGN,      /* alignment fault (ldrd/ldm/ldrex on an unaligned address) */
+    A32_EXIT_NOBLOCK,    /* the pc has no lifted code (cpu->fault_pc): the lifted image is incomplete; there is no interpreter to fall back to */
 } A32Exit;
 
 struct A32Cpu;
@@ -66,6 +67,7 @@ typedef struct A32Cpu {
 void a32_reset(A32Cpu *c);
 void a32_free(A32Cpu *c); /* releases the decode cache */
 /* Runs up to `budget` instructions. */
+/* Only with NAPPLE_A32_INTERP (the test oracle / debug build): the shipped runtime has no interpreter loop. */
 A32Exit a32_run(A32Cpu *c, uint64_t budget);
 /* CPSR as the guest reads it (mrs / the flags part of ldm^ etc.) and the inverse for msr. */
 uint32_t a32_get_cpsr(const A32Cpu *c);

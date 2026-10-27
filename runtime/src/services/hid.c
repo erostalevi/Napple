@@ -52,6 +52,15 @@ static void ensure_input(void) {
     cfg.screen_h = 720;
     if (napple_input_create(&cfg, &g_input)) runtime_fail("input backend failed to start");
     napple_input_start(g_input);
+#ifdef NAPPLE_LIB
+    lib_mirror_host_input(g_input);
+#endif
+    if (getenv("NAPPLE_HID_DUMP")) { /* debug aid: once a second, slot 0's style set and the newest sample of the FullKey and SystemExt lifos */
+        extern void *hid_dump_thread(void *);
+        pthread_t t;
+        pthread_create(&t, NULL, hid_dump_thread, NULL);
+        pthread_detach(t);
+    }
 #ifdef __APPLE__
     if (getenv("NAPPLE_HID_TRACE")) {
         trace_on = 1;
@@ -316,6 +325,35 @@ static void hid_set_styles(IpcObject *s, IpcCall *c) {
     HC()->styles_set = 1;
     LOG("hid", "SetSupportedNpadStyleSet %#x", IPC_IN(c, uint32_t, 0));
     napple_input_set_supported_styles(g_input, IPC_IN(c, uint32_t, 0));
+}
+/* hid:sys ApplyNpadSystemCommonPolicy (firmware applets): the system's common npad policy supports every controller style. */
+void hid_apply_system_common_policy(void) {
+    ensure_input();
+    HC()->styles = 0x1f;
+    HC()->styles_set = 1;
+    LOG("hid", "ApplyNpadSystemCommonPolicy: supported styles %#x", 0x1fu);
+    napple_input_set_supported_styles(g_input, 0x1f);
+}
+void *hid_dump_thread(void *arg) {
+    (void)arg;
+    for (;;) {
+        sleep(1);
+        const uint8_t *b = (const uint8_t *)g_shmem->host + 0x9A00;
+        for (int k = 0; k < 2; k++) {
+            uint32_t off = k ? 0x1408 : 0x28;
+            uint64_t tail, count;
+            memcpy(&tail, b + off + 0x10, 8);
+            memcpy(&count, b + off + 0x18, 8);
+            uint64_t btn = 0, sn = 0;
+            if (tail < 17) {
+                memcpy(&sn, b + off + 0x20 + tail * 0x30, 8);
+                memcpy(&btn, b + off + 0x20 + tail * 0x30 + 0x10, 8);
+            }
+            LOG("hid", "dump slot0 %s lifo: style_set %#x tail %llu count %llu newest sample %llu buttons %#llx", k ? "SystemExt" : "FullKey", *(const uint32_t *)b, (unsigned long long)tail,
+                (unsigned long long)count, (unsigned long long)sn, (unsigned long long)btn);
+        }
+    }
+    return NULL;
 }
 static void hid_get_styles(IpcObject *s, IpcCall *c) {
     (void)s;

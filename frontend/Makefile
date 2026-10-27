@@ -3,11 +3,11 @@ CC      ?= clang
 MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 DEPFLAGS = -MMD -MP
 CFLAGS  ?= -std=gnu11 -O2 -g -Wall -Wextra -Werror -Wno-deprecated-declarations
-INC     := -Iinclude -Isrc -I../input/include -I../audio/include
+INC     := -Iinclude -Isrc -I../input/include -I../audio/include -I../runtime/src/services
 CSRC    := $(wildcard src/*.c)
 MSRC    := $(wildcard src/*.m)
 OBJ     := $(patsubst src/%.c,build/%.o,$(CSRC)) $(patsubst src/%.m,build/%.o,$(MSRC))
-FW      := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Metal -framework Foundation
+FW      := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Metal -framework Foundation -framework AVFoundation -framework CoreMedia -framework UniformTypeIdentifiers
 SIBLINGS:= ../input/libnapple_input.a ../audio/libnapple_audio.a /opt/homebrew/opt/opus/lib/libopus.a
 SFW     := -framework GameController -framework CoreHaptics -framework AudioToolbox -framework CoreAudio
 
@@ -16,9 +16,10 @@ all: libnapple_frontend.a
 build/%.o: src/%.c
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(DEPFLAGS) $(INC) -c $< -o $@
+# -fmodules: the objects carry their framework link options (AVFoundation for simulators.m) so the runtime link line needs no change.
 build/%.o: src/%.m
 	@mkdir -p build
-	$(CC) $(CFLAGS) $(DEPFLAGS) -fobjc-arc $(INC) -c $< -o $@
+	$(CC) $(CFLAGS) $(DEPFLAGS) -fobjc-arc -fmodules $(INC) -c $< -o $@
 
 libnapple_frontend.a: $(OBJ)
 	@rm -f $@
@@ -29,11 +30,13 @@ $(SIBLINGS):
 	$(MAKE) -C ../audio
 
 build/test_settings: tests/test_settings.c libnapple_frontend.a
-	$(CC) $(CFLAGS) $(INC) $< libnapple_frontend.a $(FW) -o $@
+	$(CC) $(CFLAGS) $(INC) $< libnapple_frontend.a $(FW) $(NORT) -o $@
+# The frontend's own binaries have no runtime: the simulator pages' weak references to it resolve to NULL.
+NORT    := -Wl,-undefined,dynamic_lookup
 build/test_window: tests/test_window.m libnapple_frontend.a $(SIBLINGS)
-	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) -o $@
+	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
 build/demo_window: tests/demo_window.m libnapple_frontend.a $(SIBLINGS)
-	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) -o $@
+	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
 
 test: build/test_settings build/test_window
 	@cmp src/tinyjson.h ../input/src/tinyjson.h && echo "tinyjson.h copies identical"

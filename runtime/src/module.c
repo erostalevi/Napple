@@ -9,6 +9,8 @@
 #include "ios_dylib.h"
 #include <dlfcn.h>
 #include <fcntl.h>
+#include <mach/mach.h>
+#include "mach_vm_compat.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -120,6 +122,58 @@ void *host_symbol_lookup(const char *name) {
     return NULL;
 }
 
+/* Code hooks (manifest "hooks": [{"module","offset","symbol"}]): a stripped module that carries its own copy of a function the host replaces by name (a firmware
+ * applet's statically linked NVN driver has no exported nvnBootstrapLoader) gets its first instructions replaced by a jump to the host symbol. `napple build` finds
+ * the offsets by signature (fwprog.rs). */
+static struct {
+    char module[16], symbol[64];
+    uint64_t offset;
+} hooks[8];
+static unsigned nhooks;
+/* Known-build patches (manifest "patches": [{"module","offset","word"}]): single instruction words the build writes for a firmware program whose behaviour is known to need it
+ * (fwprog.rs keeps the list, keyed by the main module's build id). */
+static struct {
+    char module[16];
+    uint64_t offset;
+    uint32_t word;
+} patches[16];
+static unsigned npatches;
+static struct {
+    uintptr_t addr;
+    Module *module;
+    unsigned long off;
+    uint32_t orig;
+} dbglog[64];
+static unsigned ndbglog;
+/* SIGTRAP from a NAPPLE_DEBUG_LOG point: log, restore the instruction, resume. Returns 1 when pc was one of them. */
+int module_debug_log_hit(uint64_t pc, const uint64_t *x, uint64_t lr, uint64_t tid) {
+    for (unsigned i = 0; i < ndbglog; i++) {
+        if (dbglog[i].addr != pc) continue;
+        char where[96];
+        module_describe(lr, where, sizeof where);
+        LOG("trace", "%s+%#lx first hit: thread %#llx x0=%#llx x1=%#llx x2=%#llx x3=%#llx lr=%s", dbglog[i].module->name, dbglog[i].off, (unsigned long long)tid, (unsigned long long)x[0],
+            (unsigned long long)x[1], (unsigned long long)x[2], (unsigned long long)x[3], where);
+        if (getenv("NAPPLE_DEBUG_LOG_MEM")) { /* NAPPLE_DEBUG_LOG_MEM=1: also the 0x60 bytes behind x0..x3 when readable */
+            for (int r = 0; r < 4; r++) {
+                uint8_t buf[0x60];
+                mach_vm_size_t got = 0;
+                if (x[r] < 0x100000000ull || mach_vm_read_overwrite(mach_task_self(), x[r], sizeof buf, (mach_vm_address_t)(uintptr_t)buf, &got) != KERN_SUCCESS || got != sizeof buf) continue;
+                char hex[0xc0 + 1];
+                for (unsigned k = 0; k < sizeof buf; k++) snprintf(hex + 2 * k, 3, "%02x", buf[k]);
+                LOG("trace", "  *x%d = %s", r, hex);
+            }
+        }
+        uintptr_t page = pc & ~(uintptr_t)(PAGE_16K - 1);
+        mprotect((void *)page, PAGE_16K, PROT_READ | PROT_WRITE);
+        memcpy((void *)pc, &dbglog[i].orig, 4);
+        mprotect((void *)page, PAGE_16K, PROT_READ | PROT_EXEC);
+        __builtin___clear_cache((char *)pc, (char *)pc + 4);
+        dbglog[i].addr = 0;
+        return 1;
+    }
+    return 0;
+}
+
 /* ---- loading ------------------------------------------------------------------------------------------------- */
 static void *read_whole(const char *path, size_t *size) {
     int fd = open(path, O_RDONLY);
@@ -192,7 +246,7 @@ static void load_tables(Module *m, const char *dir, const char *file) {
 
 /* Layout check and the key page: shared by the anonymous-memory path (macOS) and the dylib path (iOS). */
 static void finish_image(Module *m) {
-    if (m->key_off % PAGE_16K || m->key_off + PAGE_16K > m->patch_off || m->patch_off >= m->size) runtime_fail("%s: key page / patch layout", m->name);
+    if (m->key_off % PAGE_16K || m->key_off + PAGE_16K > m->patch_off || m->patch_off > m->size) runtime_fail("%s: key page / patch layout", m->name);
     uint64_t *key = (uint64_t *)(m->base + m->key_off);
     for (unsigned i = 0; i < 8; i++) key[i] = (uint64_t)runtime_keys[i] * 8;
     make_hash(m);
@@ -243,8 +297,14 @@ static void map_image(Module *m, const char *dir, const char *file, const char *
     struct stat st;
     if (fstat(fd, &st) || (uint64_t)st.st_size != m->file_size) runtime_fail("%s: size differs from its tables", path);
     m->size = page_up(m->file_size);
-    m->base = mmap(NULL, m->size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
-    if (m->base == MAP_FAILED) runtime_fail("cannot map %s", m->name);
+    /* Horizon maps modules at 4 KiB granularity, the host protects 16 KiB pages. A module small enough that text and data_off share one host page (MiiEdit's
+     * 8 KiB `sdk` stub) is loaded 4/8/12 KiB past a host page boundary, so its data segment starts a page of its own: adrp and every offset stay valid, only the
+     * absolute alignment of the module changes. */
+    m->skew = 0;
+    if (page_up(m->text_end) > (m->data_off & ~(uint64_t)(PAGE_16K - 1)) && m->data_off % PAGE_16K) m->skew = PAGE_16K - m->data_off % PAGE_16K;
+    uint8_t *map = mmap(NULL, page_up(m->file_size + m->skew), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (map == MAP_FAILED) runtime_fail("cannot map %s", m->name);
+    m->base = map + m->skew;
     for (size_t got = 0; got < m->file_size;) {
         ssize_t n = pread(fd, m->base + got, m->file_size - got, (off_t)got);
         if (n <= 0) runtime_fail("short read of %s", path);
@@ -305,12 +365,72 @@ static void seal(Module *m) {
     if (mprotect(m->base + m->key_off, PAGE_16K, PROT_READ)) runtime_fail("%s: key page R: %s", m->name, strerror(errno));
     return;
 #else
-    size_t rx = page_up(m->text_end), ro_end = m->data_off & ~(size_t)(PAGE_16K - 1);
+    /* Debug aid: NAPPLE_DEBUG_TRAP="main+0x2259f8,sdk+0x40" replaces those instructions by brk #0, so the crash report shows the registers where the guest reaches them. */
+    for (const char *t = getenv("NAPPLE_DEBUG_TRAP"); t && *t;) {
+        char nm[16]; unsigned long off; int used = 0;
+        if (sscanf(t, "%15[^+]+%lx%n", nm, &off, &used) < 2 || !used) break;
+        if (!strcmp(nm, m->name) && off + 4 <= m->text_end) { uint32_t brk = 0xD4200000u; memcpy(m->base + off, &brk, 4); LOG("loader", "debug trap at %s+%#lx", nm, off); }
+        t += used; if (*t == ',') t++; else break;
+    }
+    /* Debug aid: NAPPLE_DEBUG_LOG="main+0x60d20,main+0x7c80" logs the first hit of each (thread, x0..x3, lr) and then lets the guest go on (the instruction is put back). */
+    for (const char *t = getenv("NAPPLE_DEBUG_LOG"); t && *t;) {
+        char nm[16];
+        unsigned long off;
+        int used = 0;
+        if (sscanf(t, "%15[^+]+%lx%n", nm, &off, &used) < 2 || !used) break;
+        if (!strcmp(nm, m->name) && off + 4 <= m->text_end && ndbglog < 64) {
+            dbglog[ndbglog].addr = (uintptr_t)m->base + off;
+            dbglog[ndbglog].module = m;
+            dbglog[ndbglog].off = off;
+            memcpy(&dbglog[ndbglog++].orig, m->base + off, 4);
+            uint32_t brk = 0xD4200200u; /* brk #0x10 */
+            memcpy(m->base + off, &brk, 4);
+        }
+        t += used;
+        if (*t == ',') t++;
+        else break;
+    }
+    for (unsigned h = 0; h < nhooks; h++) {
+        if (strcmp(hooks[h].module, m->name)) continue;
+        void *fn = host_symbol_lookup(hooks[h].symbol);
+        if (!fn || hooks[h].offset + 16 > m->text_end) {
+            LOG("loader", "hook %s+%#llx -> %s skipped (%s)", m->name, (unsigned long long)hooks[h].offset, hooks[h].symbol, fn ? "outside the text" : "no host symbol");
+            continue;
+        }
+        uint32_t code[2] = {0x58000050u, 0xD61F0200u}; /* ldr x16, #8 ; br x16 ; .quad target */
+        memcpy(m->base + hooks[h].offset, code, 8);
+        memcpy(m->base + hooks[h].offset + 8, &fn, 8);
+        LOG("loader", "hook: %s+%#llx now jumps to the host's %s", m->name, (unsigned long long)hooks[h].offset, hooks[h].symbol);
+    }
+    /* Debug aid: NAPPLE_DEBUG_PATCH="main+0x7fe0=52800020,main+0x7fe4=d65f03c0" overwrites instruction words (hex) before the text is sealed. */
+    for (const char *t = getenv("NAPPLE_DEBUG_PATCH"); t && *t;) {
+        char nm[16];
+        unsigned long off, word;
+        int used = 0;
+        if (sscanf(t, "%15[^+]+%lx=%lx%n", nm, &off, &word, &used) < 3 || !used) break;
+        if (!strcmp(nm, m->name) && off + 4 <= m->text_end) {
+            uint32_t w = (uint32_t)word;
+            memcpy(m->base + off, &w, 4);
+            LOG("loader", "debug patch at %s+%#lx = %08x", nm, off, w);
+        }
+        t += used;
+        if (*t == ',') t++;
+        else break;
+    }
+    for (unsigned k = 0; k < npatches && !getenv("NAPPLE_NO_MANIFEST_PATCHES"); k++) {
+        if (strcmp(patches[k].module, m->name) || patches[k].offset + 4 > m->text_end) continue;
+        memcpy(m->base + patches[k].offset, &patches[k].word, 4);
+        LOG("loader", "patch: %s+%#llx = %08x", m->name, (unsigned long long)patches[k].offset, patches[k].word);
+    }
+    uint8_t *map = m->base - m->skew;
+    size_t rx = page_up(m->skew + m->text_end), ro_end = (m->skew + m->data_off) & ~(size_t)(PAGE_16K - 1);   /* offsets from the start of the mapping */
     if (rx > ro_end) runtime_fail("%s: text overlaps data", m->name);
-    if (mprotect(m->base, rx, PROT_READ | PROT_EXEC)) runtime_fail("%s: text RX: %s", m->name, strerror(errno));
-    if (ro_end > rx && mprotect(m->base + rx, ro_end - rx, PROT_READ)) runtime_fail("%s: rodata R", m->name);
-    if (mprotect(m->base + m->key_off, PAGE_16K, PROT_READ)) runtime_fail("%s: key page R", m->name);
-    if (mprotect(m->base + m->patch_off, m->size - m->patch_off, PROT_READ | PROT_EXEC)) runtime_fail("%s: patch RX", m->name);
+    if (m->skew) LOG("loader", "%s: 4 KiB-aligned segments share a host page: mapped %#zx bytes into its mapping (data starts a page of its own)", m->name, m->skew);
+    if (mprotect(map, rx, PROT_READ | PROT_EXEC)) runtime_fail("%s: text RX: %s", m->name, strerror(errno));
+    if (ro_end > rx && mprotect(map + rx, ro_end - rx, PROT_READ)) runtime_fail("%s: rodata R", m->name);
+    if (m->skew && m->patch_off < m->size) runtime_fail("%s: a skewed module cannot carry a patch area", m->name);
+    if (!m->skew && mprotect(m->base + m->key_off, PAGE_16K, PROT_READ)) runtime_fail("%s: key page R", m->name);   /* skewed: the key page is not host-page aligned, left writable */
+    if (m->patch_off < m->size && mprotect(m->base + m->patch_off, m->size - m->patch_off, PROT_READ | PROT_EXEC)) runtime_fail("%s: patch RX", m->name);
     __builtin___clear_cache((char *)m->base, (char *)m->base + rx);
     __builtin___clear_cache((char *)m->base + m->patch_off, (char *)m->base + m->size);
 #endif
@@ -346,6 +466,18 @@ void modules_load(const char *dir) {
         char id[65];
         hex(m->build_id, 20, id);
         LOG("loader", "mapped %-8s %p size=%#zx symbols=%u relocs=%u gates=%u build=%.16s", m->name, m->base, m->size, m->nsym, m->nrel, m->ngate, id);
+    }
+    const JsonNode *hk = json_get(root, "hooks");
+    for (const JsonNode *e = hk && hk->type == J_ARR ? hk->child : NULL; e && nhooks < 8; e = e->next) {
+        snprintf(hooks[nhooks].module, sizeof hooks[0].module, "%s", json_str(e, "module", ""));
+        snprintf(hooks[nhooks].symbol, sizeof hooks[0].symbol, "%s", json_str(e, "symbol", ""));
+        hooks[nhooks++].offset = (uint64_t)json_num(e, "offset", 0);
+    }
+    const JsonNode *pt = json_get(root, "patches");
+    for (const JsonNode *e = pt && pt->type == J_ARR ? pt->child : NULL; e && npatches < 16; e = e->next) {
+        snprintf(patches[npatches].module, sizeof patches[0].module, "%s", json_str(e, "module", ""));
+        patches[npatches].offset = (uint64_t)json_num(e, "offset", 0);
+        patches[npatches++].word = (uint32_t)json_num(e, "word", 0);
     }
     json_free(root);
     free(text);
@@ -422,7 +554,7 @@ void module_unload(Module *m) {
         m->dl = NULL;
     }
 #else
-    munmap(m->base, m->size);
+    munmap(m->base - m->skew, page_up(m->size + m->skew));
 #endif
     free(m->hash);
     m->hash = NULL; /* tables_blob stays: replaced gate indexes may still point into it */

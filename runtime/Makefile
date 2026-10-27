@@ -3,7 +3,15 @@ CC ?= clang
 BUILD := build
 MAKEFLAGS += -j$(shell sysctl -n hw.ncpu 2>/dev/null || echo 4)
 DEPFLAGS = -MMD -MP
-SRC := $(wildcard src/*.c src/services/*.c src/a32/*.c) src/a32jit/a32jit.c
+# A32_INTERP=1 builds the AArch32 interpreter loop and the decoders into the runtime: a debug build (NAPPLE_A32_INTERP) for diagnostics and the test oracle.
+# The shipped runtime has no interpreter: lifted code (a32jit.dylib) plus out-of-line operation semantics (a32_op_exec) only.
+A32_INTERP ?= 0
+A32SRC := $(filter-out src/a32/a32_decode_arm.c src/a32/a32_decode_thumb.c,$(wildcard src/a32/*.c))
+ifeq ($(A32_INTERP),1)
+A32SRC := $(wildcard src/a32/*.c)
+A32DEF := -DNAPPLE_A32_INTERP
+endif
+SRC := $(wildcard src/*.c src/services/*.c) $(A32SRC) src/a32jit/a32jit.c
 MSRC := $(wildcard src/*.m)
 ASM := $(wildcard src/*.S)
 OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC)) $(patsubst src/%.m,$(BUILD)/%.o,$(MSRC)) $(patsubst src/%.S,$(BUILD)/%.o,$(ASM))
@@ -17,7 +25,7 @@ endif
 OPT ?= $(if $(debug),-O0,-O2)
 ROOT := ..
 INCS := -I$(ROOT)/input/include -I$(ROOT)/audio/include -I$(ROOT)/gfx/include -I$(ROOT)/frontend/include
-CFLAGS := -std=gnu11 $(INCS) $(OPT) -g -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -I/opt/homebrew/opt/libvpx/include -I/opt/homebrew/opt/opus/include -DNAPPLE_HAVE_OPUS=1 -Isrc -Isrc/services
+CFLAGS := $(EXTRA_CFLAGS) -std=gnu11 $(A32DEF) $(INCS) $(OPT) -g -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -I/opt/homebrew/opt/libvpx/include -I/opt/homebrew/opt/opus/include -DNAPPLE_HAVE_OPUS=1 -Isrc -Isrc/services
 FRAMEWORKS := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Metal -framework Foundation -framework CoreFoundation -framework AudioToolbox -framework CoreAudio -framework GameController
 # Release link: drop unreferenced code and local symbols (the build is always -g for the object files, but no dSYM is produced).
 LDFLAGS ?= -Wl,-dead_strip -Wl,-x
@@ -27,6 +35,15 @@ FRAMEWORKS += -framework VideoToolbox -framework CoreMedia -framework ImageIO
 EXTRA_LIBS ?= -L$(ROOT)/frontend -lnapple_frontend -L$(ROOT)/input -lnapple_input -L$(ROOT)/audio -lnapple_audio $(OPUS) $(VPX) -framework CoreHaptics -framework IOKit
 
 all: $(BUILD)/napple-runtime
+
+# Library mode: the runtime as a dylib (own copy of every global) that a host process dlopens to run a firmware applet in-process (iOS: the Mii Maker).
+# `make applet-lib` -> build-lib/libnapple-applet.dylib, entry napple_applet_main(argc, argv); see src/libmode.c and tests/inproc_host.c.
+applet-lib:
+	$(MAKE) BUILD=build-lib EXTRA_CFLAGS=-DNAPPLE_LIB build-lib/libnapple-applet.dylib
+build-lib/libnapple-applet.dylib: $(OBJ) $(ROOT)/frontend/libnapple_frontend.a $(ROOT)/input/libnapple_input.a $(ROOT)/audio/libnapple_audio.a ../gfx/libnapple_gfx.a ../gfx/build/obj/adapter/gfx_napple.o
+	$(CC) -dynamiclib -install_name @rpath/libnapple-applet.dylib $(OBJ) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) $(LDFLAGS) -o $@
+$(BUILD)/inproc_host: tests/inproc_host.c
+	$(CC) -std=gnu11 -O1 -g $< -o $@
 
 $(BUILD)/napple-runtime: $(OBJ) $(ROOT)/frontend/libnapple_frontend.a $(ROOT)/input/libnapple_input.a $(ROOT)/audio/libnapple_audio.a
 	$(CC) $(OBJ) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) $(LDFLAGS) -o $@
@@ -118,3 +135,17 @@ clean:
 
 # Service unit tests (services-2026-10-24): `make test-services`
 -include tests/services.mk
+
+# AArch32 lifter tests (a32-full, 2026-10-26): lifted code vs the interpreter oracle (difftest, progtest) and the no-interpreter proof for the shipped binary.
+# The core fuzz against Unicorn is python3 tests/a32/fuzz_all.py (needs `pip install unicorn`). `make test-a32`
+A32_TEST_SRC := $(filter-out src/a32/a32_module.c src/a32/a32_proc.c src/a32/a32_hle.c,$(wildcard src/a32/a32_*.c))
+$(BUILD)/tests/a32/difftest: tests/a32jit/difftest.c src/a32jit/a32lift.c $(A32_TEST_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O2 -DNAPPLE_A32_INTERP -Isrc/a32 -o $@ tests/a32jit/difftest.c src/a32jit/a32lift.c $(A32_TEST_SRC)
+test-a32: $(BUILD)/tests/a32/difftest $(BUILD)/napple-runtime
+	$(BUILD)/tests/a32/difftest --mode arm --count 20000
+	$(BUILD)/tests/a32/difftest --mode thumb --count 20000
+	python3 tests/a32jit/inline_words.py --count 2000 --difftest $(BUILD)/tests/a32/difftest
+	python3 tests/a32jit/progtest.py
+	../tools/check_a32_no_interp.sh $(BUILD)/napple-runtime
+.PHONY: test-a32

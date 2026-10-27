@@ -265,5 +265,5 @@ _Noreturn void runtime_fail(const char *fmt, ...) {
     trace_event("fail", "\"message\":\"%s\"", "see log");
     summary_write("fail", buf);
     filelog_drain();
-    _exit(70);
+    GUEST_EXIT(70);
 }

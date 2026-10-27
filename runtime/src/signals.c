@@ -163,6 +163,23 @@ static int watch_emulate(ucontext_t *u, uint64_t fault) {
     return 1;
 }
 
+#ifdef NAPPLE_LIB
+/* Library mode: the host process (a runtime of its own, the game) installed these handlers first. A fault that this image's handlers did not claim and that is not in its
+ * guest code belongs to the host: pass it on instead of reporting it as ours. */
+static struct sigaction g_prev[32];
+static int chain_to_host(int num, siginfo_t *info, void *context) {
+    if (module_for_address(((ucontext_t *)context)->uc_mcontext->__ss.__pc)) return 0; /* guest code of this image faulted: ours */
+    struct sigaction *p = &g_prev[num];
+    if (p->sa_flags & SA_SIGINFO) {
+        if (!p->sa_sigaction) return 0;
+        p->sa_sigaction(num, info, context);
+        return 1;
+    }
+    if (p->sa_handler == SIG_DFL || p->sa_handler == SIG_IGN) return 0;
+    p->sa_handler(num);
+    return 1;
+}
+#endif
 static void crash(int num, siginfo_t *info, void *context) {
     ucontext_t *u = context;
     uint64_t pc = u->uc_mcontext->__ss.__pc;
@@ -182,6 +199,10 @@ static void crash(int num, siginfo_t *info, void *context) {
             return;
         }
     }
+    if (num == SIGTRAP) {
+        extern int module_debug_log_hit(uint64_t pc, const uint64_t *x, uint64_t lr, uint64_t tid);
+        if (module_debug_log_hit(pc, (const uint64_t *)u->uc_mcontext->__ss.__x, u->uc_mcontext->__ss.__lr, (uint64_t)(uintptr_t)pthread_self())) return;
+    }
     if ((num == SIGBUS || num == SIGSEGV) && watch_page && watch_emulate(u, (uint64_t)(uintptr_t)info->si_addr)) return;
     if ((num == SIGBUS || num == SIGSEGV) && runtime_fault_guard) {
         sigjmp_buf *g = runtime_fault_guard;
@@ -194,6 +215,9 @@ static void crash(int num, siginfo_t *info, void *context) {
     }
     if ((num == SIGBUS || num == SIGSEGV) && guest_fault(info->si_addr, (int)((u->uc_mcontext->__es.__esr >> 6) & 1), context)) return;
 
+#ifdef NAPPLE_LIB
+    if (chain_to_host(num, info, context)) return;
+#endif
     runtime_peek("at crash");
     {
         extern void a32_crash_report(void) __attribute__((weak));
@@ -229,6 +253,20 @@ static void crash(int num, siginfo_t *info, void *context) {
         snprintf(l, sizeof l, "x%u=", i);
         out_hex(l, u->uc_mcontext->__ss.__x[i]);
     }
+    if (getenv("NAPPLE_CRASH_DUMP")) { /* debug aid: the 16 words each register points at, for the registers that hold readable memory */
+        for (unsigned i = 0; i < 29; i++) {
+            uint64_t v = u->uc_mcontext->__ss.__x[i], w[16];
+            mach_vm_size_t got = 0;
+            if (v < 0x10000 || (v & 7) || mach_vm_read_overwrite(mach_task_self(), v, sizeof w, (mach_vm_address_t)(uintptr_t)w, &got) != KERN_SUCCESS || got != sizeof w) continue;
+            snprintf(text, sizeof text, "[napple] *x%u:", i);
+            out(text);
+            for (unsigned k = 0; k < 16; k++) {
+                snprintf(text, sizeof text, " %llx", (unsigned long long)w[k]);
+                out(text);
+            }
+            out("\n");
+        }
+    }
     for (unsigned depth = 0; depth < 24 && fp && !(fp & 15); depth++) {
         uint64_t frame[2];
         mach_vm_size_t got = 0;
@@ -245,7 +283,7 @@ static void crash(int num, siginfo_t *info, void *context) {
     summary_crash(num, pc, note);
     summary_write("fail", "guest crashed (see crashes)");
     filelog_drain();
-    _exit(128 + num);
+    GUEST_EXIT(128 + num);
 }
 
 static void abort_report(int num) {
@@ -266,10 +304,26 @@ void signals_install(void) {
     a.sa_sigaction = crash;
     a.sa_flags = SA_SIGINFO | SA_ONSTACK;
     sigemptyset(&a.sa_mask);
+#ifdef NAPPLE_LIB
+    sigaction(SIGSEGV, &a, &g_prev[SIGSEGV]);
+#else
     sigaction(SIGSEGV, &a, NULL);
+#endif
+#ifdef NAPPLE_LIB
+    sigaction(SIGBUS, &a, &g_prev[SIGBUS]);
+#else
     sigaction(SIGBUS, &a, NULL);
+#endif
+#ifdef NAPPLE_LIB
+    sigaction(SIGILL, &a, &g_prev[SIGILL]);
+#else
     sigaction(SIGILL, &a, NULL);
+#endif
+#ifdef NAPPLE_LIB
+    sigaction(SIGTRAP, &a, &g_prev[SIGTRAP]);
+#else
     sigaction(SIGTRAP, &a, NULL);
+#endif
     struct sigaction ab = {0};
     ab.sa_handler = abort_report;
     ab.sa_flags = SA_ONSTACK;

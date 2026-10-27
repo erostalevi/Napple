@@ -128,6 +128,10 @@ FullKey, JoyDual, Handheld) and the console mode (`operation_mode`: docked 1080p
 Diagonal keyboard stick input is normalised to the unit circle. `napple_input_keys()` presses several keys atomically (chords such as L+R for the title of Link's Awakening).
 Controller Home / Guide and Share / Capture fire `napple_input_set_hotkey_callback` (the frontend opens the overlay / takes a screenshot); keyboard F1 and F12 do the same.
 The overlay's Controls tab edits all of the above and lists the connected controllers; Esc cancels a pending capture instead of closing the menu.
+**Per-player profiles** (`napple_input_get/set/clear_player_bindings`, files `input-p<N>.json` next to `input.json`): a player with a profile maps its keyboard (player 1) and controller input with its own bindings, the others follow the shared set. The Controls tab lists the players, shows a live controller diagram (`napple_input_get_pad_state`) and edits the selected player's profile.
+
+### The overlay panel (frontend/src/overlay.m, simulators.m)
+A floating glass panel pinned to the top right, full height with a 16 pt margin, (`NSGlassEffectView` on macOS 26, a vibrant material before), toggled by F1, Cmd+, or the controller Home / Guide button. Game input keeps flowing while it is open (`panel_passthrough`, default on); a panel opened with the controller sets `overlayPadMode`: the game sees neutral input and the pad navigates the panel through GameController (D-pad moves and adjusts, A activates, B closes, LB/RB switch tabs, hold repeats). Tabs: **Audio/Video** (volume, play audio in the background, window, render target 0.5x/1x/2x/4x, supersampling, upscaler, output filter, sharpness, anisotropy, cursor, statistics: corner, size, background, native Metal HUD via `CAMetalLayer.developerHUDProperties`), **FPS/Speed** (display rate, vsync, frame generation, game speed, turbo, hot keys), **Controls** (players, profiles, bindings, sticks, console mode), **Game/System** (update and DLC, Mii note, amiibo picker, IR camera, mods and cheats toggles saved in `mods-enabled.json`; the runtime does not load mods or cheats yet).
 
 ### 2.3 Settings files
 
@@ -174,3 +178,6 @@ return napple_frontend_run(fe);                  // main thread; from on_ready s
 2. The HID shared memory block (page aligned) and its handle.
 3. The restart action behind `on_restart_guest` and the DLC/update mounts.
 4. `NSApplication` is created by `napple_frontend_run`; do not create another event loop on the main thread.
+
+### iOS settings panel (frontend/src/ios/panel_ios.m)
+Same four tabs as the Mac overlay, built for touch: a glass panel (UIGlassEffect on iOS 26) pinned to the trailing edge inside the safe area, 52 pt rows, native menus for choices, sliders with live values, haptic ticks, swipe right to close. The game and the on-screen controller stay usable beside it; a panel opened with a physical controller's Home button takes the pad (D-pad moves and adjusts, A activates, B closes, LB/RB switch tabs). Per-player profiles, button capture, stats options (corner, size, background), the Metal HUD, amiibo search and the IR camera (`sim_shared.m`), mods and cheats toggles are all there. Test aid: `SIMCTL_CHILD_NAPPLE_FE_OVERLAY=<tab> xcrun simctl launch ...` opens it on a tab after 6 s.

@@ -62,6 +62,9 @@ Behaviour cases (jump-table shapes incl. halfword tables padded to the largest e
 ## nx-kernel (2026-10-26)
 Behaviour (not code) of nxnative (MIT, copyright seedds) docs/reference/threads.md and services.md was used as the specification for the same-core handoff, sleep_precise, ideal-core -3, history-ring prefill, shake and offline push-service stand-ins in runtime/src/threads.c, input/src and runtime/src/services/push.c. No nxnative source was copied.
 
+## mii-firmware (2026-10-26)
+No code copied. The Mii layouts and the default Mii parameters were read from the user's own firmware (sdb) at development time; the default-Mii values are facts of the console data. nxnative (MIT, copyright seedds) docs were consulted for the Miis section of its MK8D notes.
+
 ## gfx/src/shader (envytools, 2026-10-26)
 The bit layouts of the video ALU ops (VADD, VMAD, VABSDIFF, VSHL, VSHR, VSET, VSETP), FCHK, PIXLD, IMAD/IMAD32I, DSET and the call/jump family in maxwell_translate.c were checked against the Maxwell
 disassembler tables of envytools (envydis gm107.c, MIT, Copyright 2014 Red Hat Inc., https://github.com/envytools/envytools). Only the encoding facts (bit positions and operand roles) were read; no source text was copied.

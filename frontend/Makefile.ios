@@ -4,8 +4,8 @@ IOS_SDK ?= $(shell xcrun --sdk iphoneos --show-sdk-path)
 CC      := xcrun --sdk iphoneos clang -target arm64-apple-ios26.0 -isysroot $(IOS_SDK)
 OUT     ?= build-ios
 CFLAGS  := -std=gnu11 -O2 -g -Wall -Wextra -Wno-unused-parameter -Wno-deprecated-declarations -fobjc-arc
-INC     := -Iinclude -Isrc -Isrc/ios -I../input/include -I../audio/include
-OBJ     := $(OUT)/settings.o $(OUT)/ios_logic.o $(OUT)/frontend_ios.o
+INC     := -Iinclude -Isrc -Isrc/ios -I../input/include -I../audio/include -I../runtime/src/services
+OBJ     := $(OUT)/settings.o $(OUT)/ios_logic.o $(OUT)/frontend_ios.o $(OUT)/panel_ios.o $(OUT)/sim_shared.o
 
 all: $(OUT)/libnapple_frontend.a
 
@@ -15,7 +15,13 @@ $(OUT)/settings.o: src/settings.c include/napple_frontend.h
 $(OUT)/ios_logic.o: src/ios/ios_logic.c src/ios/ios_logic.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(INC) -c $< -o $@
-$(OUT)/frontend_ios.o: src/ios/frontend_ios.m src/ios/ios_logic.h include/napple_frontend.h
+$(OUT)/sim_shared.o: src/sim_shared.m src/sim_shared.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(INC) -fmodules -c $< -o $@
+$(OUT)/panel_ios.o: src/ios/panel_ios.m src/ios/fe_ios.h include/napple_frontend.h
+	@mkdir -p $(OUT)
+	$(CC) $(CFLAGS) $(INC) -c $< -o $@
+$(OUT)/frontend_ios.o: src/ios/frontend_ios.m src/ios/fe_ios.h src/ios/ios_logic.h include/napple_frontend.h
 	@mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(INC) -c $< -o $@
 $(OUT)/libnapple_frontend.a: $(OBJ)

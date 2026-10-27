@@ -13,7 +13,7 @@ the repository front page is the [README](../README.md) and the title status is 
 
 **Contributor** (you want to change the code)
 1. [Architecture overview](architecture/overview.md), then the page of the subsystem you touch.
-2. [Contributor guides](guides/README.md): add a service, an svc, an NVN function, a Maxwell op, a game, a signature; [debugging](guides/debugging.md); [testing](guides/testing.md); [network providers](guides/network-providers.md); [hardware simulators](guides/hardware-simulators.md).
+2. [Contributor guides](guides/README.md): add a service, an svc, an NVN function, a Maxwell op, a game, a signature; [debugging](guides/debugging.md); [testing](guides/testing.md); [network providers](guides/network-providers.md); [hardware simulators](guides/hardware-simulators.md); [Napple Studio](guides/studio.md).
 3. [Subsystem map](reference/subsystems.md) (code, tests, debug switches per subsystem), [environment variables](reference/environment-variables.md), [glossary](reference/glossary.md).
 
 **Maintainer** (you integrate and release)

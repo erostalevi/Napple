@@ -6,19 +6,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
-    /// Quitting while a build runs would leave a half-written app behind: ask first, then stop the build cleanly.
     @MainActor
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let model, model.phase == .building else { return .terminateNow }
         let a = NSAlert()
-        a.messageText = "A build is still running"
-        a.informativeText = "If you quit now the build is cancelled and nothing is saved. Keep Studio open until it finishes."
-        a.addButton(withTitle: "Keep Building"); a.addButton(withTitle: "Cancel Build and Quit")
+        a.messageText = String(localized: "A build is still running")
+        a.informativeText = String(localized: "If you quit now the build is cancelled and nothing is saved.")
+        a.addButton(withTitle: String(localized: "Keep Building")); a.addButton(withTitle: String(localized: "Cancel Build and Quit"))
         if a.runModal() == .alertFirstButtonReturn { return .terminateCancel }
         model.cancelBuild()
-        // give the CLI a moment to remove its staging folder (SIGTERM stops it between 8 MB chunks)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { NSApp.reply(toApplicationShouldTerminate: true) }
         return .terminateLater
+    }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        Task { @MainActor in await model?.handleDrop(urls) }
     }
 }
 
@@ -28,30 +30,40 @@ struct StudioApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        Window("Napple Studio", id: "main") {
+        WindowGroup("Napple Studio", id: "main") {
             RootView()
                 .environment(model)
-                .onAppear {
-                    delegate.model = model
-                    model.offerMoveToApplications()
-                    model.refreshLibrary(adoptOutput: true)
-                }
+                .onAppear { delegate.model = model; model.refreshLibrary(adoptOutput: true) }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     model.refreshLibrary()
                 }
+                .frame(minWidth: 860, minHeight: 560)
         }
-        .windowStyle(.plain)
-        .windowResizability(.contentSize)
-        .defaultSize(width: Metrics.width, height: Metrics.height)
+        .defaultSize(width: 1080, height: 700)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Add Game…") { model.pickFilesAndAdd() }.keyboardShortcut("o")
-                Button("Show Library") { if model.phase != .building { model.resetPlanState(); model.screen = .library } }
-                    .keyboardShortcut("l")
+                Divider()
+                Button("Build") { model.startBuild() }.keyboardShortcut("b").disabled(!model.canBuild)
+                Button("Cancel Build") { model.cancelBuild() }.keyboardShortcut(".").disabled(!model.isBuilding)
             }
-            CommandGroup(replacing: .appSettings) {
-                Button("Settings…") { model.openSettings() }.keyboardShortcut(",")
+            CommandMenu("Go") {
+                ForEach(Array(Pane.allCases.enumerated()), id: \.element) { i, p in
+                    Button(p.title) { model.pane = p }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
+                }
+            }
+            CommandMenu("Device") {
+                Button("Refresh Devices") { Task { await model.refreshIOS() } }.keyboardShortcut("r")
+                Button("Install on Device…") { model.installFile() }.disabled(model.selectedDevice == nil)
+            }
+            CommandGroup(after: .toolbar) {
+                Button(model.showInspector ? "Hide Log" : "Show Log") { model.showInspector.toggle() }.keyboardShortcut("l", modifiers: [.command, .option])
+            }
+            CommandGroup(replacing: .help) {
+                Button("Show Build Logs in Finder") { model.showLogsInFinder() }
+                Link("Napple Studio Guide", destination: URL(string: "https://napple.app/guides/studio")!)
             }
         }
+        Settings { SettingsView().environment(model) }
     }
 }

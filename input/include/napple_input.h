@@ -314,6 +314,14 @@ void napple_bindings_default(napple_bindings *b);
 int napple_input_get_bindings(napple_input *in, napple_bindings *out);
 int napple_input_set_bindings(napple_input *in, const napple_bindings *b); /* validates, applies and saves */
 int napple_input_reset_bindings(napple_input *in);
+/* Per-player profiles (players 1..8 = slot 0..7): a player with a profile maps keyboard / controller input with it instead of the shared bindings
+   (input-p<N>.json next to input.json). get returns 1 when the slot has its own profile, 0 when it follows the shared bindings (out is then the shared set),
+   -1 for a bad slot. set validates, applies and saves; clear removes the profile. */
+int napple_input_get_player_bindings(napple_input *in, int slot, napple_bindings *out);
+int napple_input_set_player_bindings(napple_input *in, int slot, const napple_bindings *b);
+int napple_input_clear_player_bindings(napple_input *in, int slot);
+/* Latest state sent to player slot 0..7 (for the live controller display). Returns 1 when the slot is in use, 0 when not (out is then the last known state). */
+int napple_input_get_pad_state(napple_input *in, int slot, napple_npad_state *out);
 /* JSON (pure; used by the above and unit tests). write returns bytes needed (snprintf style). */
 size_t napple_bindings_to_json(const napple_bindings *b, char *out, size_t cap);
 int napple_bindings_from_json(const char *json, size_t len, napple_bindings *out); /* 0 ok, <0 error; out untouched on error */

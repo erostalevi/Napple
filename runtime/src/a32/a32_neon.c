@@ -125,9 +125,9 @@ static uint64_t shift_by_reg(A32Cpu *c, int64_t a_s, uint64_t a_u, unsigned sz, 
     __int128 a = sgn ? (__int128)a_s : (__int128)a_u;
     __int128 r;
     if (sh >= 0) {
-        if (sh >= 127) r = a ? (a < 0 ? -((__int128)1 << 100) : ((__int128)1 << 100)) : 0;
-        else r = a << (sh > 100 ? 100 : sh);
-        if (sh >= (int)bits + 1 && a) r = a < 0 ? -((__int128)1 << 100) : ((__int128)1 << 100);
+        /* a shift by the element size or more moves every non-zero value out of range (the 128-bit intermediate itself would overflow for 64-bit elements) */
+        if (sh >= (int)bits) r = a ? (a < 0 ? -((__int128)1 << 100) : ((__int128)1 << 100)) : 0;
+        else r = a << sh;
         if (sat) return sgn ? (uint64_t)sat_s(r, bits, c) : sat_u(r, bits, c);
         return (uint64_t)r;
     }
@@ -1123,7 +1123,7 @@ static A32Exit neon_ldst(A32Cpu *c, uint32_t w) {
             if (n == 1 && esz == 3) return A32_EXIT_UNDEF;
             if (n > 1 && esz == 3 && n != 4) return A32_EXIT_UNDEF;
             if (d + (n - 1) * inc + regs - 1 > 31) return A32_EXIT_UNDEF;
-            if (esz == 3) ebytes = 8;
+            if (esz == 3) ebytes = 4; /* vld4 with size 0b11: 32-bit elements, 128-bit alignment hint */
             for (unsigned i = 0; i < n; i++) {
                 uint64_t v = 0;
                 memcpy(&v, c->mem + addr, ebytes);
