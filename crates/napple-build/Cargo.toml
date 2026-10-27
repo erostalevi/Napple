@@ -8,7 +8,7 @@ license.workspace = true
 napple-core = { path = "../napple-core" }
 napple-rewrite = { path = "../napple-rewrite" }
 napple-mods = { path = "../napple-mods" }
-aes = "0.8"
+aes = "0.9"
 ctr = "0.9"
 cipher = "0.4"
 xts-mode = "0.5"
