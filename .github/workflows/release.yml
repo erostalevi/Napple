@@ -115,7 +115,7 @@ jobs:
           ) || echo "::warning::applet library / entitlement smoke check failed"
           hdiutil detach /tmp/napple-dmg
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: napple-${{ steps.ver.outputs.version }}
           path: |
