@@ -190,6 +190,18 @@ void napple_frontend_frame_presented(napple_frontend *fe);
 /* swkbd: asynchronous (any thread) and blocking (guest thread: returns when the user finishes). */
 void napple_frontend_text_input(napple_frontend *fe, const napple_text_request *req, napple_text_done_fn done, void *user);
 int napple_frontend_text_input_blocking(napple_frontend *fe, const napple_text_request *req, char *out, size_t cap);
+/* ---- library applet sheets (macOS, frontend/src/applet_sheets.m): each blocks the calling guest thread until the user answers ---- */
+/* Controller support: confirm (1) with *players (in/out, within min..max) or cancel (0). */
+int napple_frontend_sheet_controller(napple_frontend *fe, unsigned min, unsigned max, int connected, int single_mode, int *players);
+/* Player select: the chosen index, or -1 on cancel. */
+int napple_frontend_sheet_player_select(napple_frontend *fe, const uint8_t (*uids)[16], unsigned count);
+/* Error applet: a critical alert, returns when dismissed. */
+void napple_frontend_sheet_error(napple_frontend *fe, const char *title, const char *message);
+/* Web / offline web: a WKWebView window for an http(s) or file:// URL (read_root: the folder file:// pages may read, may be NULL). Returns 0 when the user
+ * pressed Done, 1 when they closed the window, -1 when the page could not be shown. last_url gets the page the user left on. */
+int napple_frontend_sheet_web(napple_frontend *fe, const char *url, const char *read_root, char *last_url, size_t cap);
+/* Album image (RGBA8 w x h, copied): 1 = selected, 0 = next image, -1 = close the album. can_select hides the Select button (view mode). */
+int napple_frontend_sheet_image(napple_frontend *fe, const uint8_t *rgba, unsigned w, unsigned h, unsigned index, unsigned count, int can_select);
 /* Pure validation used by the bar (unit tested): returns 1 if `utf8` satisfies the request. */
 int napple_text_validate(const napple_text_request *req, const char *utf8);
 /* UTF-16 <-> UTF-8 helpers for the swkbd applet result buffers. Return units/bytes written (no NUL counted). */

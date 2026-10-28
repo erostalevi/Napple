@@ -1241,11 +1241,12 @@ static int vorbis_validate(uint8 *data)
 static int lookup1_values(int entries, int dim)
 {
    int r = (int) floor(exp((float) log((float) entries) / dim));
-   if ((int) floor(pow((float) r+1, dim)) <= entries)   // (int) cast for MinGW warning;
+   // napple: no (int) casts here: pow() overflows to inf for a large dim, and the cast of inf is undefined (INT_MIN on x86, INT_MAX on arm64)
+   if (floor(pow((float) r+1, dim)) <= entries)
       ++r;                                              // floor() to avoid _ftol() when non-CRT
    if (pow((float) r+1, dim) <= entries)
       return -1;
-   if ((int) floor(pow((float) r, dim)) > entries)
+   if (floor(pow((float) r, dim)) > entries)
       return -1;
    return r;
 }
@@ -3848,6 +3849,9 @@ static int start_decoder(vorb *f)
       if (c->lookup_type > 2) return error(f, VORBIS_invalid_setup);
       if (c->lookup_type > 0) {
          uint16 *mults;
+         // napple: entries (24 bits) * dimensions (16 bits) sizes the multiplicand table (and wraps the 32-bit lookup_values of type 2): a few header bytes
+         // asked for terabytes. Real codebooks are a few thousand values; 4M is far above them.
+         if ((unsigned long long) c->entries * (unsigned long long) c->dimensions > (1u << 22)) return error(f, VORBIS_invalid_setup);
          c->minimum_value = float32_unpack(get_bits(f, 32));
          c->delta_value = float32_unpack(get_bits(f, 32));
          c->value_bits = get_bits(f, 4)+1;

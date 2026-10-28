@@ -13,7 +13,7 @@
 #import "mtl_priv.h"
 #include "cache_trim.h"
 
-#define TRANSLATOR_VERSION 11u /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 12u /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader
 @end
@@ -852,6 +852,84 @@ static int writes_colour(const pipe_key *k) {
     return 0;
 }
 
+/* Attachments, blending, sample count and (vertex_layout) the vertex descriptor of a draw's pipeline; `used` = the vertex program's input attributes. */
+static void pipe_desc_fill(MTLRenderPipelineDescriptor *d, const pipe_key *k, uint32_t used, int vertex_layout) {
+    d.rasterSampleCount = k->samples ? k->samples : 1;
+    d.alphaToCoverageEnabled = k->a2c;
+    d.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)k->topo;
+    for (int i = 0; i < 8; i++) {
+        if (!k->color_fmt[i]) continue;
+        MTLRenderPipelineColorAttachmentDescriptor *c = d.colorAttachments[i];
+        c.pixelFormat = (MTLPixelFormat)k->color_fmt[i];
+        uint32_t m = k->wmask[i];
+        c.writeMask = (m & 1 ? MTLColorWriteMaskRed : 0) | (m & 2 ? MTLColorWriteMaskGreen : 0) | (m & 4 ? MTLColorWriteMaskBlue : 0) |
+                      (m & 8 ? MTLColorWriteMaskAlpha : 0);
+        if (k->blend_en[i]) {
+            const blend_st *b = &k->blend[i];
+            c.blendingEnabled = YES;
+            c.sourceRGBBlendFactor = mtl_blend_factor((unsigned)b->src_rgb);
+            c.destinationRGBBlendFactor = mtl_blend_factor((unsigned)b->dst_rgb);
+            c.sourceAlphaBlendFactor = mtl_blend_factor((unsigned)b->src_a);
+            c.destinationAlphaBlendFactor = mtl_blend_factor((unsigned)b->dst_a);
+            c.rgbBlendOperation = mtl_blend_op((unsigned)b->eq_rgb);
+            c.alphaBlendOperation = mtl_blend_op((unsigned)b->eq_a);
+        }
+    }
+    d.depthAttachmentPixelFormat = (MTLPixelFormat)k->depth_fmt;
+    d.stencilAttachmentPixelFormat = (MTLPixelFormat)k->stencil_fmt;
+    if (!vertex_layout) return;
+    /* vertex layout */
+    MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
+    uint32_t have = 0;
+    for (int i = 0; i < k->nattr && i < 32; i++) {
+        int kind;
+        uint32_t vf = mtl_vertex_format((int)k->attr[i].fmt, &kind);
+        if (!vf && (used & (1u << i)) && k->attr[i].fmt)
+            LOG_ONCE(NAPPLE_LOG_WARN, "vertex attribute %d: NVN format %#x has no Metal vertex format (vs %016llx): the input reads zeros", i,
+                     (unsigned)k->attr[i].fmt, (unsigned long long)k->vs);
+        if (!vf || !(used & (1u << i))) continue;
+        vd.attributes[i].format = (MTLVertexFormat)vf;
+        vd.attributes[i].offset = k->attr[i].offset;
+        vd.attributes[i].bufferIndex = VB_BASE + (k->attr[i].stream % MAX_STREAMS);
+        have |= 1u << i;
+    }
+    int need_dummy = 0;
+    for (int i = 0; i < 32; i++) { /* inputs without a bound attribute read zeros from a constant stream */
+        if ((used & (1u << i)) && !(have & (1u << i))) {
+            vd.attributes[i].format = MTLVertexFormatFloat4;
+            vd.attributes[i].offset = 0;
+            vd.attributes[i].bufferIndex = VB_BASE + MAX_STREAMS;
+            need_dummy = 1;
+        }
+    }
+    uint32_t used_streams = 0;
+    for (int i = 0; i < 32; i++)
+        if (have & (1u << i)) used_streams |= 1u << (k->attr[i].stream % MAX_STREAMS);
+    for (int s = 0; s < k->nstream && s < MAX_STREAMS; s++) {
+        if (!(used_streams & (1u << s))) continue;
+        MTLVertexBufferLayoutDescriptor *l = vd.layouts[VB_BASE + s];
+        if (k->stream[s].stride == 0) {
+            l.stepFunction = MTLVertexStepFunctionConstant;
+            l.stepRate = 0;
+            l.stride = 16;
+        } else if (k->stream[s].divisor) {
+            l.stepFunction = MTLVertexStepFunctionPerInstance;
+            l.stepRate = k->stream[s].divisor;
+            l.stride = k->stream[s].stride;
+        } else {
+            l.stepFunction = MTLVertexStepFunctionPerVertex;
+            l.stride = k->stream[s].stride;
+        }
+    }
+    if (need_dummy) {
+        MTLVertexBufferLayoutDescriptor *z = vd.layouts[VB_BASE + MAX_STREAMS];
+        z.stepFunction = MTLVertexStepFunctionConstant;
+        z.stepRate = 0;
+        z.stride = 16;
+    }
+    d.vertexDescriptor = vd;
+}
+
 /* Builds once: whoever claims the pipe first (prewarm, the async path or a waiting draw) builds it, everyone else returns. */
 static void build_pipe(GfxPipe *p, pipe_key k) {
     int unclaimed = 0;
@@ -859,6 +937,7 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     ShaderKey vk = {0};
     memcpy(vk.attr_kind, k.attr_kind, sizeof vk.attr_kind);
     vk.depth_slots = k.depth_slots[0];
+    vk.stencil_slots = k.stencil_slots[0];
     vk.image_int_mask = k.img_int[0];
     vk.image_uint_mask = k.img_uint[0];
     vk.point_prim = k.topo == MTLPrimitiveTopologyClassPoint;
@@ -880,6 +959,7 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
      * without it (NAPPLE_ORIGIN_FLIP=0, debug) the key does not carry the origin and the register keeps the lower-left answer */
     fk.upper_left = g_gfx.origin_flip && !k.flip_y;
     fk.depth_slots = k.depth_slots[1];
+    fk.stencil_slots = k.stencil_slots[1];
     fk.image_int_mask = k.img_int[1];
     fk.image_uint_mask = k.img_uint[1];
     { /* NAPPLE_SHADER_PROBE=<fragment program hash hex>:<pc hex>:<rA>:<rB>:<rC>[:<scale>][;<next probe>...]: the fragment program draws those registers as its colour
@@ -929,79 +1009,7 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
                 k.blend_en[0] = 0;
             }
         }
-        d.rasterSampleCount = k.samples ? k.samples : 1;
-        d.alphaToCoverageEnabled = k.a2c;
-        d.inputPrimitiveTopology = (MTLPrimitiveTopologyClass)k.topo;
-        for (int i = 0; i < 8; i++) {
-            if (!k.color_fmt[i]) continue;
-            MTLRenderPipelineColorAttachmentDescriptor *c = d.colorAttachments[i];
-            c.pixelFormat = (MTLPixelFormat)k.color_fmt[i];
-            uint32_t m = k.wmask[i];
-            c.writeMask = (m & 1 ? MTLColorWriteMaskRed : 0) | (m & 2 ? MTLColorWriteMaskGreen : 0) | (m & 4 ? MTLColorWriteMaskBlue : 0) |
-                          (m & 8 ? MTLColorWriteMaskAlpha : 0);
-            if (k.blend_en[i]) {
-                const blend_st *b = &k.blend[i];
-                c.blendingEnabled = YES;
-                c.sourceRGBBlendFactor = mtl_blend_factor((unsigned)b->src_rgb);
-                c.destinationRGBBlendFactor = mtl_blend_factor((unsigned)b->dst_rgb);
-                c.sourceAlphaBlendFactor = mtl_blend_factor((unsigned)b->src_a);
-                c.destinationAlphaBlendFactor = mtl_blend_factor((unsigned)b->dst_a);
-                c.rgbBlendOperation = mtl_blend_op((unsigned)b->eq_rgb);
-                c.alphaBlendOperation = mtl_blend_op((unsigned)b->eq_a);
-            }
-        }
-        d.depthAttachmentPixelFormat = (MTLPixelFormat)k.depth_fmt;
-        d.stencilAttachmentPixelFormat = (MTLPixelFormat)k.stencil_fmt;
-        /* vertex layout */
-        MTLVertexDescriptor *vd = [MTLVertexDescriptor vertexDescriptor];
-        uint32_t used = vs->info.attr_mask, have = 0;
-        for (int i = 0; i < k.nattr && i < 32; i++) {
-            int kind;
-            uint32_t vf = mtl_vertex_format((int)k.attr[i].fmt, &kind);
-            if (!vf && (used & (1u << i)) && k.attr[i].fmt)
-                LOG_ONCE(NAPPLE_LOG_WARN, "vertex attribute %d: NVN format %#x has no Metal vertex format (vs %016llx): the input reads zeros", i,
-                         (unsigned)k.attr[i].fmt, (unsigned long long)k.vs);
-            if (!vf || !(used & (1u << i))) continue;
-            vd.attributes[i].format = (MTLVertexFormat)vf;
-            vd.attributes[i].offset = k.attr[i].offset;
-            vd.attributes[i].bufferIndex = VB_BASE + (k.attr[i].stream % MAX_STREAMS);
-            have |= 1u << i;
-        }
-        int need_dummy = 0;
-        for (int i = 0; i < 32; i++) { /* inputs without a bound attribute read zeros from a constant stream */
-            if ((used & (1u << i)) && !(have & (1u << i))) {
-                vd.attributes[i].format = MTLVertexFormatFloat4;
-                vd.attributes[i].offset = 0;
-                vd.attributes[i].bufferIndex = VB_BASE + MAX_STREAMS;
-                need_dummy = 1;
-            }
-        }
-        uint32_t used_streams = 0;
-        for (int i = 0; i < 32; i++)
-            if (have & (1u << i)) used_streams |= 1u << (k.attr[i].stream % MAX_STREAMS);
-        for (int s = 0; s < k.nstream && s < MAX_STREAMS; s++) {
-            if (!(used_streams & (1u << s))) continue;
-            MTLVertexBufferLayoutDescriptor *l = vd.layouts[VB_BASE + s];
-            if (k.stream[s].stride == 0) {
-                l.stepFunction = MTLVertexStepFunctionConstant;
-                l.stepRate = 0;
-                l.stride = 16;
-            } else if (k.stream[s].divisor) {
-                l.stepFunction = MTLVertexStepFunctionPerInstance;
-                l.stepRate = k.stream[s].divisor;
-                l.stride = k.stream[s].stride;
-            } else {
-                l.stepFunction = MTLVertexStepFunctionPerVertex;
-                l.stride = k.stream[s].stride;
-            }
-        }
-        if (need_dummy) {
-            MTLVertexBufferLayoutDescriptor *z = vd.layouts[VB_BASE + MAX_STREAMS];
-            z.stepFunction = MTLVertexStepFunctionConstant;
-            z.stepRate = 0;
-            z.stride = 16;
-        }
-        d.vertexDescriptor = vd;
+        pipe_desc_fill(d, &k, vs->info.attr_mask, 1);
         NSError *err = nil;
         uint64_t pt0 = gfx_now_ns();
         id<MTLBinaryArchive> ar = archive_get();
@@ -1219,3 +1227,208 @@ void mtl_shader_spec_stats(uint64_t *compiled, uint64_t *used) {
     *compiled = atomic_load(&g_spec_n);
     *used = atomic_load(&g_spec_used);
 } /* tests (t_pipekey) */
+
+/* ---------------------------------------------------------------------------------------------------------------
+ * Pipelines of the stages beyond vertex / fragment (mtl_stages.inc drives them; contract in docs/architecture/gfx.md section 13)
+ *  - SPK_CAPTURE: the vertex program with ShaderKey.stage_out and / or the xfb entries, no fragment function, no attachments (drawn as points so every vertex runs once).
+ *  - SPK_GS_DRAW: a pass-through vertex function over the geometry program's output records (gs_vtx; points pull their record through gs_idx) + the fragment program.
+ *  - SPK_TESS:    the tess eval program as a post-tessellation vertex function + the fragment program, factors from the tessellation factor buffer.
+ * --------------------------------------------------------------------------------------------------------------- */
+static ShaderKey stage_vs_key(const pipe_key *k) {
+    ShaderKey vk = {0};
+    memcpy(vk.attr_kind, k->attr_kind, sizeof vk.attr_kind);
+    vk.depth_slots = k->depth_slots[0];
+    vk.stencil_slots = k->stencil_slots[0];
+    vk.image_int_mask = k->img_int[0];
+    vk.image_uint_mask = k->img_uint[0];
+    vk.flip_y = k->flip_y;
+    vk.depth_minus_one = k->depth_mode == 0;
+    return vk;
+}
+static GfxShader *stage_fs(const pipe_key *k, uint32_t vs_out_mask) {
+    if (!k->fs) return nil;
+    ShaderKey fk = {0};
+    memcpy(fk.rt_kind, k->rt_kind, sizeof fk.rt_kind);
+    fk.vs_out_mask = vs_out_mask;
+    prog_io fio = program_io(k->fs);
+    if (fio.ok && !fio.fs_indexed) fk.vs_out_mask = vs_out_mask | ~fio.fs_read;
+    fk.upper_left = g_gfx.origin_flip && !k->flip_y;
+    fk.depth_slots = k->depth_slots[1];
+    fk.stencil_slots = k->stencil_slots[1];
+    fk.image_int_mask = k->img_int[1];
+    fk.image_uint_mask = k->img_uint[1];
+    return shader_variant(k->fs, &fk, 1);
+}
+/* Pass-through vertex function of the geometry output: record r of gs_vtx -> position + the generic slots the program stores (+ point size for points). */
+static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points) {
+    static NSMutableDictionary<NSNumber *, id<MTLFunction>> *cache;
+    NSNumber *ck = @(slots * 2 + (uint64_t)(points != 0));
+    @synchronized([GfxPipe class]) {
+        if (!cache) cache = [NSMutableDictionary dictionary];
+        if (cache[ck]) return cache[ck];
+    }
+    NSMutableString *m = [NSMutableString stringWithString:@"#include <metal_stdlib>\nusing namespace metal;\nstruct VOut {\n  float4 pos [[position]];\n"];
+    for (int i = 0; i < 32; i++)
+        if (slots & (1ull << (STAGE_SLOT_GENERIC + i))) [m appendFormat:@"  float4 v%d [[user(locn%d)]];\n", i, i];
+    if (points) [m appendString:@"  float psize [[point_size]];\n"];
+    [m appendFormat:@"};\nvertex VOut gs_out(uint vid [[vertex_id]], device const float4 *gs_vtx [[buffer(%d)]], device const uint *gs_idx [[buffer(%d)]]) {\n  VOut o;\n",
+                    GS_VERTEX_BUFFER_INDEX, GS_INDEX_BUFFER_INDEX];
+    if (points) /* point lists have no restart: an unused index slot becomes a point outside the clip volume */
+        [m appendString:@"  uint r = gs_idx[vid];\n  if (r == 0xFFFFFFFFu) { o = {}; o.pos = float4(0.0f, 0.0f, 2.0f, 1.0f); o.psize = 1.0f; return o; }\n"];
+    else [m appendString:@"  uint r = vid;\n"];
+    [m appendFormat:@"  device const float4 *s = gs_vtx + r * %uu;\n  o.pos = s[%d];\n", STAGE_SLOTS, STAGE_SLOT_POS];
+    for (int i = 0; i < 32; i++)
+        if (slots & (1ull << (STAGE_SLOT_GENERIC + i))) [m appendFormat:@"  o.v%d = s[%d];\n", i, STAGE_SLOT_GENERIC + i];
+    if (points) [m appendFormat:@"  o.psize = %@;\n", (slots & (1ull << STAGE_SLOT_SYS)) ? @"max(s[0].w, 1.0f)" : @"1.0f"];
+    [m appendString:@"  return o;\n}\n"];
+    NSError *err = nil;
+    id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:m options:nil error:&err];
+    id<MTLFunction> fn = lib ? [lib newFunctionWithName:@"gs_out"] : nil;
+    if (!fn) LOGW("geometry pass-through vertex function: %s", err.localizedDescription.UTF8String);
+    @synchronized([GfxPipe class]) {
+        if (fn) cache[ck] = fn;
+    }
+    return fn;
+}
+static uint32_t generic_mask(uint64_t slots) { return (uint32_t)(slots >> STAGE_SLOT_GENERIC); }
+
+static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb_layout *xfb) {
+    const pipe_key *k = &sk->k;
+    GfxShader *vs = nil, *fs = nil;
+    id<MTLFunction> vfn = nil;
+    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+    if (sk->mode == SPK_CAPTURE) {
+        ShaderKey vk = stage_vs_key(k);
+        vk.point_prim = 1;
+        vk.stage_out = sk->stage_out;
+        if (xfb && sk->xfb_id) {
+            vk.xfb_count = xfb->count;
+            memcpy(vk.xfb_stride, xfb->stride, sizeof vk.xfb_stride);
+            memcpy(vk.xfb, xfb->e, sizeof vk.xfb);
+        }
+        vs = shader_variant(k->vs, &vk, 1);
+        if (vs->state != 1) return;
+        vfn = vs->fn;
+        pipe_key nk = *k; /* no attachments: the capture pass has none */
+        memset(nk.color_fmt, 0, sizeof nk.color_fmt);
+        nk.depth_fmt = nk.stencil_fmt = 0;
+        nk.samples = 1;
+        nk.a2c = 0;
+        nk.topo = MTLPrimitiveTopologyClassPoint;
+        pipe_desc_fill(d, &nk, vs->info.attr_mask, 1);
+        /* rasterization stays on: Metal wants a void vertex function without it, and the translated one returns its outputs. With no fragment function
+         * and the pass's 1x1 attachment-less target nothing is written. */
+    } else if (sk->mode == SPK_GS_DRAW) {
+        int points = sk->gs_topo == GS_OUT_POINTS;
+        vfn = gs_passthrough_fn(sk->gs_slots, points);
+        if (!vfn) return;
+        fs = stage_fs(k, generic_mask(sk->gs_slots));
+        if (k->fs && fs->state != 1) return;
+        pipe_key nk = *k;
+        nk.topo = points ? MTLPrimitiveTopologyClassPoint : sk->gs_topo == GS_OUT_LINE_STRIP ? MTLPrimitiveTopologyClassLine : MTLPrimitiveTopologyClassTriangle;
+        pipe_desc_fill(d, &nk, 0, 0);
+    } else if (sk->mode == SPK_TESS) {
+        ShaderKey tk = {0};
+        tk.flip_y = k->flip_y;
+        tk.depth_minus_one = k->depth_mode == 0;
+        tk.tess_domain = sk->tess_domain;
+        tk.tess_out_vertices = sk->tess_cp;
+        tk.depth_slots = sk->te_depth;
+        tk.stencil_slots = sk->te_stencil;
+        tk.image_int_mask = sk->te_img_int;
+        tk.image_uint_mask = sk->te_img_uint;
+        vs = shader_variant(sk->prog, &tk, 1);
+        if (vs->state != 1) return;
+        vfn = vs->fn;
+        fs = stage_fs(k, vs->info.out_mask);
+        if (k->fs && fs->state != 1) return;
+        pipe_key nk = *k;
+        nk.topo = MTLPrimitiveTopologyClassTriangle;
+        pipe_desc_fill(d, &nk, 0, 0);
+        d.maxTessellationFactor = 64;
+        d.tessellationFactorScaleEnabled = NO;
+        d.tessellationFactorFormat = MTLTessellationFactorFormatHalf;
+        d.tessellationControlPointIndexType = MTLTessellationControlPointIndexTypeNone;
+        d.tessellationFactorStepFunction = MTLTessellationFactorStepFunctionPerPatch;
+        d.tessellationOutputWindingOrder = sk->tess_winding == TESS_WINDING_CW ? MTLWindingClockwise : MTLWindingCounterClockwise;
+        d.tessellationPartitionMode = sk->tess_spacing == TESS_SPACING_FRACTIONAL_ODD    ? MTLTessellationPartitionModeFractionalOdd
+                                      : sk->tess_spacing == TESS_SPACING_FRACTIONAL_EVEN ? MTLTessellationPartitionModeFractionalEven
+                                                                                         : MTLTessellationPartitionModeInteger;
+    } else return;
+    d.vertexFunction = vfn;
+    d.fragmentFunction = fs ? fs->fn : nil;
+    NSError *err = nil;
+    p->ps = [g_mtl.dev newRenderPipelineStateWithDescriptor:d error:&err];
+    if (!p->ps) {
+        LOGW("stage pipeline (mode %u, vs %016llx, stage program %016llx, fs %016llx) creation failed: %s", sk->mode, (unsigned long long)k->vs,
+             (unsigned long long)sk->prog, (unsigned long long)k->fs, err.localizedDescription.UTF8String);
+        return;
+    }
+    p->vs = vs;
+    p->fs = fs;
+    atomic_fetch_add(&g_gfx.pipelines_compiled, 1);
+    p->state = 1;
+}
+
+GfxPipe *mtl_stage_pipe_get(const stage_pipe_key *k0, const gfx_xfb_layout *xfb) {
+    stage_pipe_key kn = *k0;
+    if (kn.mode != SPK_CAPTURE) { /* the vertex layout belongs to the capture pass only */
+        memset(kn.k.attr, 0, sizeof kn.k.attr);
+        memset(kn.k.stream, 0, sizeof kn.k.stream);
+        memset(kn.k.attr_kind, 0, sizeof kn.k.attr_kind);
+        kn.k.nattr = kn.k.nstream = 0;
+    }
+    pipe_key_normalize(&kn.k);
+    if (kn.mode == SPK_CAPTURE) { /* the capture pass has no fragment stage and no attachments */
+        kn.k.fs = 0;
+        memset(kn.k.blend, 0, sizeof kn.k.blend);
+        memset(kn.k.blend_en, 0, sizeof kn.k.blend_en);
+        memset(kn.k.wmask, 0, sizeof kn.k.wmask);
+        memset(kn.k.rt_kind, 0, sizeof kn.k.rt_kind);
+        memset(kn.k.color_fmt, 0, sizeof kn.k.color_fmt);
+        kn.k.depth_fmt = kn.k.stencil_fmt = 0;
+        kn.k.samples = 1;
+        kn.k.a2c = 0;
+        kn.k.depth_slots[1] = kn.k.stencil_slots[1] = kn.k.img_int[1] = kn.k.img_uint[1] = 0;
+    }
+    kn.k.probe = 0;
+    NSNumber *key = @(fnv1a(&kn, sizeof kn, FNV_INIT) ^ 0x5354474550495045ull);
+    pthread_mutex_lock(&g_sh_mu);
+    static NSMutableDictionary<NSNumber *, GfxPipe *> *spipes;
+    if (!spipes) spipes = [NSMutableDictionary dictionary];
+    GfxPipe *p = spipes[key];
+    int create = !p;
+    if (create) {
+        p = [GfxPipe new];
+        spipes[key] = p;
+    }
+    pthread_mutex_unlock(&g_sh_mu);
+    if (create) {
+        atomic_fetch_add(&g_gfx.compiles_blocking, 1);
+        @autoreleasepool {
+            build_stage_pipe(p, &kn, xfb);
+        }
+        if (p->state != 1) p->state = 2;
+        atomic_fetch_sub(&g_gfx.compiles_blocking, 1);
+    }
+    return p->state == 1 ? p : nil;
+}
+
+id<MTLComputePipelineState> mtl_compute_pipe_key(uint64_t hash, const ShaderKey *key, GfxShader *__autoreleasing *sh) {
+    GfxShader *s = shader_variant(hash, key, 1);
+    *sh = s;
+    if (s->state != 1) return nil;
+    NSNumber *k = @(hash ^ (key_hash(key) * 0x9E3779B97F4A7C15ull) ^ 0x4b45594544435350ull);
+    pthread_mutex_lock(&g_sh_mu);
+    if (!g_cpipes) g_cpipes = [NSMutableDictionary dictionary];
+    id cp = g_cpipes[k];
+    pthread_mutex_unlock(&g_sh_mu);
+    if (cp) return cp == (id)NSNull.null ? nil : cp;
+    NSError *err = nil;
+    id<MTLComputePipelineState> ps = [g_mtl.dev newComputePipelineStateWithFunction:s->fn error:&err];
+    if (!ps) LOGW("stage kernel %016llx (stage %d): compute pipeline creation failed: %s", (unsigned long long)hash, s->info.stage, err.localizedDescription.UTF8String);
+    pthread_mutex_lock(&g_sh_mu);
+    g_cpipes[k] = ps ?: (id)NSNull.null;
+    pthread_mutex_unlock(&g_sh_mu);
+    return ps;
+}

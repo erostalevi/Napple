@@ -339,4 +339,39 @@ mod tests {
         d[0] = b'X';
         assert!(parse_npdm(&d).is_err());
     }
+    /// Seeded mutations of the synthetic NPDM (bit flips, truncation, huge length fields): never panic.
+    #[test]
+    fn mutated_npdm_never_panics() {
+        let seed = synthetic();
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let mut next = move || {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            x
+        };
+        for _ in 0..4000 {
+            let mut v = seed.clone();
+            for _ in 0..1 + next() % 4 {
+                let at = (next() % v.len() as u64) as usize;
+                match next() % 4 {
+                    0 => v[at] ^= 1 << (next() % 8),
+                    1 => v.truncate(at),
+                    2 => {
+                        let at = at & !3;
+                        if at + 4 <= v.len() {
+                            v[at..at + 4].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+                        }
+                    }
+                    _ => v[at] = next() as u8,
+                }
+                if v.is_empty() {
+                    break;
+                }
+            }
+            let _ = parse_npdm(&v);
+            let _ = parse_sac(&v);
+            let _ = parse_kac(&v);
+        }
+    }
 }

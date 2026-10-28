@@ -15,6 +15,7 @@ void gfx_mtl_set_gmem(uint64_t base, uint64_t size);   /* guest heap window that
 
 /* Memory pools: the pool memory is wrapped (no copy) so GPU addresses equal CPU addresses. */
 void *gfx_mtl_pool_add(uint8_t *mem, uint64_t size, uint32_t flags);
+uint64_t gfx_mtl_allocated_bytes(void);   /* MTLDevice.currentAllocatedSize (0 before the device exists): textures + buffers + pipelines; counts as process memory on iOS */
 void  gfx_mtl_pool_remove(void *rec);
 
 /* Textures are created lazily by the replay thread from their snapshot; this drops Metal textures whose storage lies inside a range

@@ -15,6 +15,11 @@
 #include "napple_display.h"
 #include "napple_gfx.h"
 #include "timescale.h"
+#if !NAPPLE_IOS
+#include "services/applet_lib_core.h"
+#include "services/applet_ui.h"
+#include "services/applet_web_core.h"
+#endif
 #include <dirent.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -368,6 +373,44 @@ static void install_usr1_dump(void) {
     dispatch_resume(g_usr2);
 }
 
+#if !NAPPLE_IOS
+/* The library applets' sheets (frontend/src/applet_sheets.m), registered once the window exists. Scripted answers (NAPPLE_CONTROLLER_SUPPORT,
+ * NAPPLE_PLAYER_SELECT, NAPPLE_WEB_ANSWER, NAPPLE_ALBUM_PICK) are checked by the applets before these hooks run. */
+static void ui_error(const AppletErrorInfo *e, const char *code, const char *desc) {
+    (void)e;
+    char msg[400];
+    snprintf(msg, sizeof msg, "%s%s%s", code && *code ? "Error code " : "", code ? code : "", code && *code ? "\n" : "");
+    size_t n = strlen(msg);
+    snprintf(msg + n, sizeof msg - n, "%s", desc ? desc : "");
+    napple_frontend_sheet_error(g_fe, "The game reported an error", msg);
+}
+static int ui_controller(AppletControllerAnswer *a) {
+    int players = a->players;
+    if (!napple_frontend_sheet_controller(g_fe, a->min, a->max, a->connected, a->single_mode, &players)) return 0;
+    a->players = players;
+    return 1;
+}
+static int ui_player_select(const uint8_t (*uids)[16], unsigned count) { return napple_frontend_sheet_player_select(g_fe, uids, count); }
+static int ui_open_web(const char *url, int offline, char *last_url, size_t cap) {
+    (void)offline;
+    int r = napple_frontend_sheet_web(g_fe, url, applet_web_html_root(), last_url, cap);
+    if (r < 0) return -1;
+    return r == 0 ? WEB_EXIT_BACK_BUTTON : WEB_EXIT_WINDOW_CLOSED;
+}
+static int ui_show_image(const uint8_t *rgba, unsigned w, unsigned h, unsigned index, unsigned count) {
+    return napple_frontend_sheet_image(g_fe, rgba, w, h, index, count, applet_ui_album_selecting());
+}
+static void register_applet_sheets(void) {
+    applet_set_error_hook(ui_error);
+    applet_set_controller_ui(ui_controller);
+    applet_set_player_select_ui(ui_player_select);
+    applet_ui_set_open_web(ui_open_web);
+    applet_ui_set_show_image(ui_show_image);
+}
+#else
+static void register_applet_sheets(void) {}
+#endif
+
 int frontend_run(FrontendBoot boot, int headless, int seconds) {
     g_boot = boot;
     g_seconds = seconds;
@@ -410,6 +453,7 @@ int frontend_run(FrontendBoot boot, int headless, int seconds) {
         c.callbacks.on_screenshot = on_screenshot;
         g_fe = napple_frontend_create(&c);
         if (!g_fe) runtime_fail("frontend: cannot create the window");
+        register_applet_sheets();
         napple_frontend_run(g_fe);
     }
     return 0;

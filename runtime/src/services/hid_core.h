@@ -45,6 +45,21 @@ typedef struct {
     unsigned nvib_active;
 } HidCore;
 
+/* HidNpadStyleTag bits (libnx / switchbrew; the same bits as input/napple_input.h NAPPLE_STYLE_*, repeated here to keep this core free of the input library). Lark is the
+ * Famicom / NES pad of Switch Online (one bit for HVC / NES, left / right); Lucia SNES, Lagon N64, Lager Mega Drive. */
+enum {
+    HIDC_STYLE_FULL_KEY = 1u << 0, HIDC_STYLE_HANDHELD = 1u << 1, HIDC_STYLE_JOY_DUAL = 1u << 2, HIDC_STYLE_JOY_LEFT = 1u << 3, HIDC_STYLE_JOY_RIGHT = 1u << 4,
+    HIDC_STYLE_GC = 1u << 5, HIDC_STYLE_PALMA = 1u << 6, HIDC_STYLE_LARK = 1u << 7, HIDC_STYLE_HANDHELD_LARK = 1u << 8, HIDC_STYLE_LUCIA = 1u << 9,
+    HIDC_STYLE_LAGON = 1u << 10, HIDC_STYLE_LAGER = 1u << 11, HIDC_STYLE_SYSTEM_EXT = 1u << 29, HIDC_STYLE_SYSTEM = 1u << 30
+};
+#define HIDC_STYLES_STANDARD 0x1fu  /* FullKey .. JoyRight: what GetSupportedNpadStyleSet answers before the title sets any */
+#define HIDC_STYLES_ALL_PAD 0xfffu  /* every controller style 0..11 (the system common policy) */
+#define HIDC_STYLES_KNOWN (HIDC_STYLES_ALL_PAD | HIDC_STYLE_SYSTEM_EXT | HIDC_STYLE_SYSTEM)
+uint32_t hidc_styles_sanitize(uint32_t styles);                  /* the set without bits no style owns (what the input backend is given) */
+const char *hidc_style_name(uint32_t style);                     /* name of exactly one style bit, NULL otherwise */
+int hidc_style_supported(const HidCore *h, uint32_t style);      /* 1 when the title's supported set (the standard one before any Set) holds the style bit(s) */
+int hidc_style_is_retro(uint32_t style);                         /* 1 for Lark / HandheldLark / Lucia / Lagon / Lager (the Switch Online pads), 0 otherwise */
+
 enum { HIDC_ZERO_DRIFT_LOOSE = 0, HIDC_ZERO_DRIFT_STANDARD = 1, HIDC_ZERO_DRIFT_TIGHT = 2 };
 #define HIDC_DEFAULT_GAIN 0.03f
 #define HIDC_DEFAULT_REDUCTION 0.4f

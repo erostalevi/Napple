@@ -12,6 +12,7 @@ pub mod error;
 pub mod firmware;
 pub mod fwlist;
 pub mod fwprog;
+pub mod html;
 pub mod ios;
 pub mod json;
 pub mod legacy;

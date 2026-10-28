@@ -120,7 +120,7 @@ void ipc_service_names(char names[][12], unsigned max, unsigned *count) {
 
 /* ---- request helpers --------------------------------------------------------------------------------------------- */
 const void *ipc_in(const IpcCall *c, uint32_t off, uint32_t n) {
-    if (off + n > c->in_size) {
+    if (off > c->in_size || n > c->in_size - off) { /* off + n could wrap for an offset computed from a guest value */
         LOG("ipc", "%s cmd %u: argument %u+%u beyond the %u request bytes", c->object->iface, c->cmd, off, n, c->in_size);
         runtime_fail("IPC argument out of range");
     }
@@ -276,6 +276,10 @@ typedef struct {
     unsigned ndata;
 } ParseTail;
 
+/* The descriptors, handles and data words of a request are read from the guest's message buffer (MSG_BYTES): every count in the header is the guest's. */
+static void parse_need(const uint32_t *m, const uint32_t *p, size_t words) {
+    if ((size_t)(p - m) + words > MSG_BYTES / 4) runtime_fail("IPC request exceeds the message buffer");
+}
 static void parse(const uint32_t *m, IpcCall *c, ParseTail *tail) {
     memset(c, 0, sizeof *c);
     c->type = m[0] & 0xffff;
@@ -288,11 +292,13 @@ static void parse(const uint32_t *m, IpcCall *c, ParseTail *tail) {
     if (c->nx > IPC_MAX_BUF || c->na > IPC_MAX_BUF || c->nb > IPC_MAX_BUF || c->nw > IPC_MAX_BUF) runtime_fail("IPC message with too many buffers");
     const uint32_t *p = m + 2;
     if (special) {
+        parse_need(m, p, 1);
         uint32_t h = *p++;
         c->has_pid = h & 1;
         c->ncopy = (h >> 1) & 0xf;
         c->nmove = (h >> 5) & 0xf;
         if (c->ncopy > IPC_MAX_HANDLES || c->nmove > IPC_MAX_HANDLES) runtime_fail("IPC message with too many handles");
+        parse_need(m, p, (c->has_pid ? 2u : 0u) + c->ncopy + c->nmove);
         if (c->has_pid) {
             memcpy(&c->pid, p, 8);
             p += 2;
@@ -300,17 +306,18 @@ static void parse(const uint32_t *m, IpcCall *c, ParseTail *tail) {
         for (unsigned i = 0; i < c->ncopy; i++) c->copy[i] = *p++;
         for (unsigned i = 0; i < c->nmove; i++) c->move[i] = *p++;
     }
+    parse_need(m, p, 2u * c->nx + 3u * (c->na + c->nb + c->nw));
     for (unsigned i = 0; i < c->nx; i++, p += 2) c->x[i] = (IpcBuf){guest_addr_to_host(static_addr(p)), p[0] >> 16, p[0] & 0x3f};
     IpcBuf *lists[3] = {c->a, c->b, c->w};
     unsigned counts[3] = {c->na, c->nb, c->nw};
     for (unsigned k = 0; k < 3; k++)
         for (unsigned i = 0; i < counts[k]; i++, p += 3) lists[k][i] = (IpcBuf){guest_addr_to_host(buffer_addr(p)), buffer_size(p), i};
     tail->data_words = p;
-    const uint32_t *recv = p + tail->ndata;
     c->nc = recv_mode == 2 ? 1 : recv_mode > 2 ? recv_mode - 2 : 0;
     if (c->nc > IPC_MAX_BUF) runtime_fail("IPC message with too many receive buffers");
+    parse_need(m, p, tail->ndata + 2u * c->nc); /* the data words, then the receive list */
+    const uint32_t *recv = p + tail->ndata;
     for (unsigned i = 0; i < c->nc; i++, recv += 2) c->c[i] = (IpcBuf){guest_addr_to_host(recv[0] | ((uint64_t)(recv[1] & 0xffff) << 32)), recv[1] >> 16, i};
-    if ((const uint8_t *)recv - (const uint8_t *)m > MSG_BYTES) runtime_fail("IPC request exceeds the message buffer");
 }
 
 static void respond(uint32_t *m, int domain, const IpcCall *c, const uint32_t *object_ids) {
@@ -494,6 +501,8 @@ static void dispatch(IpcSession *s, uint32_t *m) {
     }
     const uint8_t *bytes = (const uint8_t *)tail.data_words, *end = bytes + tail.ndata * 4;
     const uint8_t *payload = (const uint8_t *)m + (((bytes - (const uint8_t *)m) + 15) & ~15);
+    if ((size_t)(payload - (const uint8_t *)m) + (s->is_domain && !control_msg ? 32 : 16) > MSG_BYTES) /* the domain header (16) and the CMIF header (16) follow */
+        runtime_fail("IPC request exceeds the message buffer");
     IpcObject *target = NULL;
     uint32_t object_ids[IPC_MAX_HANDLES];
     int domain_message = 0;
@@ -522,7 +531,8 @@ static void dispatch(IpcSession *s, uint32_t *m) {
             unsigned nin = payload[1];
             const uint8_t *ids = payload + 16 + dsize; /* input objects follow the data */
             pthread_mutex_lock(&s->dom->lock);
-            for (unsigned i = 0; i < nin && i < IPC_MAX_HANDLES && ids + 4 * (i + 1) <= end; i++) {
+            size_t avail = (uintptr_t)ids <= (uintptr_t)end ? (size_t)(end - ids) : 0; /* dsize is the guest's: ids may be past the message */
+            for (unsigned i = 0; i < nin && i < IPC_MAX_HANDLES && 4 * (i + 1) <= avail; i++) {
                 uint32_t id;
                 memcpy(&id, ids + 4 * i, 4);
                 c.in_objects[c.nin_objects++] = id && id <= DOMAIN_MAX ? s->dom->objects[id] : NULL;

@@ -12,6 +12,10 @@ public enum SigningMode: String, CaseIterable, Identifiable, Sendable {
     public var label: String {
         switch self { case .automatic: return "Automatic (Xcode)"; case .profile: return "Provisioning profile"; case .unsigned: return "Unsigned (external signer)" }
     }
+    /// Short names for the segmented picker: the long labels made the signing card 540 points wide at minimum, wider than a compact window.
+    public var shortLabel: String {
+        switch self { case .automatic: return "Xcode"; case .profile: return "Profile"; case .unsigned: return "Unsigned" }
+    }
 }
 
 /// Automatic signing without an Xcode project of our own: a throwaway stub project with the game's bundle id, team and entitlements is built once with

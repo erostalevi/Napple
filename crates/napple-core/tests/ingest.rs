@@ -640,3 +640,41 @@ fn nca1_stays_unsupported() {
     // unsupported NCAs are skipped by ingest, which then finds no Program NCA
     assert!(ingest(&write("v1.nsp", &nsp), &keys()).is_err());
 }
+
+#[test]
+fn truncated_and_corrupt_nsz_do_not_panic() {
+    let nca = build_nca(0, vec![Sec::Pfs0(big_exefs(), false)], None);
+    for exp in [None, Some(14u8)] {
+        let ncz = to_ncz(&nca, exp);
+        // every cut of the zstd/block payload: an error or a (shorter) result, never a panic
+        for cut in [
+            0x4000,
+            0x4008,
+            0x4010,
+            0x4050,
+            0x4060,
+            0x4080,
+            ncz.len() / 2,
+            ncz.len() - 1,
+        ] {
+            let nsz = pfs0(&[("p.ncz", &ncz[..cut.min(ncz.len())])], false);
+            let _ = ingest(&write("tz.nsz", &nsz), &keys());
+        }
+        // flipped bytes in the section table and the compressed payload
+        for at in [
+            0x4008usize,
+            0x4010,
+            0x4018,
+            0x4040,
+            0x4060,
+            0x4070,
+            ncz.len() - 3,
+        ] {
+            let mut bad = ncz.clone();
+            let at = at.min(bad.len() - 1);
+            bad[at] ^= 0xFF;
+            let nsz = pfs0(&[("p.ncz", &bad)], false);
+            let _ = ingest(&write("cz.nsz", &nsz), &keys());
+        }
+    }
+}

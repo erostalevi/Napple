@@ -22,7 +22,15 @@ public struct DeviceService: Sendable {
 
     /// Hardware first, then booted simulators. A failure of one source does not hide the other.
     public func allDevices() async -> (devices: [IOSDevice], note: String?) {
+        // The first devicectl run on a Mac makes Xcode install its device-support components, which puts up the system "xcodebuild is trying to install
+        // Apple software" password prompt (seen in the Studio tour 2026-10-27). That is Xcode's one-time setup, not Studio's: say so up front while
+        // `xcodebuild -checkFirstLaunchStatus` (never prompts; exit 69 = setup pending) reports it, and keep listing. Other failures (no Xcode, ...) fall
+        // through to the device listing, which explains itself.
         var all: [IOSDevice] = [], note: String?
+        do { _ = try await tools.run(URL(fileURLWithPath: "/usr/bin/xcodebuild"), ["-checkFirstLaunchStatus"]) }
+        catch CLIError.failed(let code, _) where code == 69 {
+            note = "Xcode's first-launch setup is not complete: if macOS asks for your password to install Apple software, that is Xcode installing its device support (once). `xcodebuild -runFirstLaunch` does it ahead of time."
+        } catch {}
         do { all += try await physicalDevices() } catch { note = "Could not list devices: \(error.localizedDescription)" }
         if let sims = try? await bootedSimulators() { all += sims }
         return (all, note)

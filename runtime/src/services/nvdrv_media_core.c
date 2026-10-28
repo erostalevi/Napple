@@ -1,11 +1,13 @@
 #include "nvdrv_media_core.h"
 #include "jpeg_core.h"
 #include "nvdrv_media_regs.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define NREGS 0x1000
 #define MAX_GATHER_DEPTH 4
+void (*media_write_prepare)(void *addr, size_t n);
 struct MediaEngine {
     uint32_t class_id, cur_class;
     NvMediaMem mem;
@@ -14,6 +16,7 @@ struct MediaEngine {
     int dec_codec;
     uint64_t cfg_key; /* hash of the parameter sets last handed to configure(); 0 = none yet */
     uint32_t reg[NREGS];
+    uint32_t thi_method; /* latched by the THI_METHOD0 write, consumed by the THI_METHOD1 write */
     MediaStats st;
 };
 
@@ -67,14 +70,78 @@ static uint64_t fnv64(uint64_t h, const void *p, size_t n) {
 }
 /* Hands the backend the parameter sets of this frame's stream when they are new: H.264 SPS+PPS NAL units found in the bitstream, a VP9 key frame with a
  * size. Returns 0 when the backend refused them, 1 otherwise (including "nothing new"). */
-static int nvdec_configure(MediaEngine *e, int codec, const uint8_t *bs, size_t n) {
+static int sext(uint32_t v, int bits) { return (int)(v << (32 - bits)) >> (32 - bits); }
+/* H.264 as the SDK sends it for the hardware: slice NAL units only, the sequence and picture parameters live in the picture-info structure. Writes the SPS and
+ * PPS those fields describe (what the slice headers need: frame number and POC widths, field/frame, CABAC, reference defaults, weighting, deblocking, 8x8). The
+ * reference-frame count is not in the structure: the maximum for the picture size is claimed, which only delays nothing here (the backend outputs per request). */
+static int nvdec_synth_h264(const uint8_t *pic, size_t pic_avail, DecoderConfig *cfg, uint64_t *key) {
+    if (!pic || pic_avail < NVDEC_H264_PIC_WORDS * 4) return 0;
+    uint32_t w[NVDEC_H264_PIC_WORDS];
+    memcpy(w, pic, sizeof w);
+    int wm = (int)w[NVDEC_H264_W_WIDTH_MBS], hm = (int)w[NVDEC_H264_W_HEIGHT_MAP_UNITS];
+    if (wm < 1 || hm < 1 || wm > 512 || hm > 512) return 0;
+    uint32_t fl = w[NVDEC_H264_W_FLAGS];
+    H264SpsFields f;
+    h264_sps_fields_default(&f, wm * 16, hm * 16, 4);
+    f.frame_mbs_only = w[NVDEC_H264_W_FRAME_MBS_ONLY] != 0;
+    if (!f.frame_mbs_only) f.height_map_units = hm, f.crop_bottom = 0;
+    f.log2_max_frame_num = (int)((fl >> 8) & 15) + 4;
+    f.poc_type = (int)((fl >> 14) & 3);
+    f.log2_max_poc_lsb = (int)w[NVDEC_H264_W_LOG2_MAX_POC_LSB_M4] + 4;
+    f.direct_8x8_inference = (fl >> 1) & 1;
+    f.chroma_format_idc = 1;
+    f.num_ref_frames = 16;
+    f.crop_left = f.crop_right = f.crop_top = f.crop_bottom = 0;
+    uint8_t sps[64], pps[32];
+    size_t sn = h264_build_sps(&f, sps, sizeof sps);
+    H264Pps p;
+    memset(&p, 0, sizeof p);
+    p.cabac = w[NVDEC_H264_W_CABAC] != 0;
+    p.bottom_field_pic_order = w[NVDEC_H264_W_POC_PRESENT] != 0;
+    p.num_ref_idx_l0 = (int)(w[NVDEC_H264_W_NUM_REF_L0] & 31) + 1;
+    p.num_ref_idx_l1 = (int)(w[NVDEC_H264_W_NUM_REF_L1] & 31) + 1;
+    p.weighted_pred = (fl >> 2) & 1;
+    p.weighted_bipred_idc = (int)(w[NVDEC_H264_W_FLAGS2] & 3);
+    p.pic_init_qp = 26 + sext((fl >> 16) & 63, 6);
+    p.pic_init_qs = 26;
+    p.chroma_qp_index_offset = sext((fl >> 22) & 31, 5);
+    p.second_chroma_qp_index_offset = sext((fl >> 27) & 31, 5);
+    p.deblocking_filter_control = w[NVDEC_H264_W_DEBLOCK_CTRL] != 0;
+    p.constrained_intra_pred = (fl >> 3) & 1;
+    p.redundant_pic_cnt = w[NVDEC_H264_W_REDUNDANT_PIC_CNT] != 0;
+    p.transform_8x8 = w[NVDEC_H264_W_TRANSFORM_8X8] != 0;
+    size_t pn = h264_build_pps(&p, pps, sizeof pps);
+    if (!sn || !pn) return 0;
+    uint8_t *o = cfg->h264_annexb;
+    static const uint8_t sc[4] = {0, 0, 0, 1};
+    if (sn + pn + 8 > sizeof cfg->h264_annexb) return 0;
+    memcpy(o, sc, 4);
+    memcpy(o + 4, sps, sn);
+    memcpy(o + 4 + sn, sc, 4);
+    memcpy(o + 8 + sn, pps, pn);
+    cfg->h264_annexb_size = sn + pn + 8;
+    cfg->width = wm * 16;
+    cfg->height = hm * 16 * (f.frame_mbs_only ? 1 : 2);
+    cfg->h264.nsps = cfg->h264.npps = 1;
+    cfg->h264.sps[0] = o + 4;
+    cfg->h264.sps_size[0] = sn;
+    cfg->h264.pps[0] = o + 8 + sn;
+    cfg->h264.pps_size[0] = pn;
+    *key = fnv64(*key, o, cfg->h264_annexb_size);
+    return 1;
+}
+static int nvdec_configure(MediaEngine *e, int codec, const uint8_t *bs, size_t n, const uint8_t *pic, size_t pic_avail) {
     DecoderConfig cfg;
     memset(&cfg, 0, sizeof cfg);
     cfg.codec = codec;
     uint64_t key = 1469598103934665603ull;
     if (codec == DEC_CODEC_H264) {
         H264Sps sps;
-        if (h264_find_param_sets(bs, n, &cfg.h264) != 0) return 1; /* nothing (or only half) in this access unit: keep what the backend has */
+        if (h264_find_param_sets(bs, n, &cfg.h264) != 0) {
+            /* nothing (or only half) in this access unit: the picture-info structure describes the sequence (the SDK's way); else keep what the backend has */
+            if (!nvdec_synth_h264(pic, pic_avail, &cfg, &key)) return 1;
+            goto have_key;
+        }
         for (int i = 0; i < cfg.h264.nsps; i++) key = fnv64(key, cfg.h264.sps[i], cfg.h264.sps_size[i]);
         for (int i = 0; i < cfg.h264.npps; i++) key = fnv64(key, cfg.h264.pps[i], cfg.h264.pps_size[i]);
         cfg.h264_annexb_size = h264_param_sets_annexb(&cfg.h264, cfg.h264_annexb, sizeof cfg.h264_annexb);
@@ -95,6 +162,7 @@ static int nvdec_configure(MediaEngine *e, int codec, const uint8_t *bs, size_t 
     } else {
         return 1;
     }
+have_key:
     if (key == e->cfg_key) return 1;
     if (e->backend->reset) e->backend->reset(e->dec);
     if (e->backend->configure(e->dec, &cfg) < 0) return 0;
@@ -142,7 +210,7 @@ static void nvdec_execute(MediaEngine *e) {
         status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
         return;
     }
-    if (e->backend->configure && !nvdec_configure(e, codec, bs, bs_len)) {
+    if (e->backend->configure && !nvdec_configure(e, codec, bs, bs_len, pic, pic_avail)) {
         fail(e, 4); /* the backend refused the parameter sets */
         status[3] = 4;
         status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
@@ -150,7 +218,17 @@ static void nvdec_execute(MediaEngine *e) {
     }
     DecodeRequest rq = {codec, pic, pic_avail, bs, bs_len, idx, luma, chroma, luma_avail, chroma_avail};
     DecodeResult rs = {0};
+    if (media_write_prepare) {
+        media_write_prepare(luma, luma_avail);
+        media_write_prepare(chroma, chroma_avail);
+    }
     int rc = e->backend->decode(e->dec, &rq, &rs);
+    if (getenv("NAPPLE_MEDIA_TRACE")) {
+        static int said;
+        if (said++ < 20 || rc != 0)
+            fprintf(stderr, "[nvdec] backend %s codec %d bitstream %zu luma_cap %zu chroma_cap %zu -> rc %d %dx%d\n", e->backend->name, codec, bs_len, luma_avail,
+                    chroma_avail, rc, rs.width, rs.height);
+    }
     if (rc < 0) {
         fail(e, 3);
         status[3] = 3;
@@ -170,8 +248,24 @@ static void vic_execute(MediaEngine *e) {
     uint8_t *cfg = surf(e, e->reg[VIC_SET_CONFIG_STRUCT_OFFSET], &cfg_avail);
     uint8_t *luma = surf(e, e->reg[VIC_SET_INPUT0_LUMA_OFFSET], &l_avail), *chroma = surf(e, e->reg[VIC_SET_INPUT0_CHROMA_OFFSET], &c_avail);
     uint8_t *out = surf(e, e->reg[VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET], &o_avail);
-    if (!cfg || cfg_avail < VIC_CFG_WORDS * 4 || !luma || !chroma || !out) {
+    if (!luma || !chroma || !out) {
         fail(e, 2);
+        return;
+    }
+    if (!cfg || cfg_avail < VIC_CFG_WORDS * 4) { /* no readable config structure (the SDK's): plain NV12 -> NV12 copy of what fits */
+        size_t oc_avail = 0;
+        uint8_t *ochroma = surf(e, e->reg[VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET], &oc_avail);
+        if (!ochroma) {
+            fail(e, 2);
+            return;
+        }
+        if (media_write_prepare) {
+            media_write_prepare(out, o_avail);
+            media_write_prepare(ochroma, oc_avail);
+        }
+        memcpy(out, luma, l_avail < o_avail ? l_avail : o_avail);
+        memcpy(ochroma, chroma, c_avail < oc_avail ? c_avail : oc_avail);
+        e->st.vic_copies++;
         return;
     }
     uint32_t sw = rd32(cfg), sh = rd32(cfg + 4), dw = rd32(cfg + 8), dh = rd32(cfg + 12), fmt = rd32(cfg + 16), matrix = rd32(cfg + 20), full = rd32(cfg + 24),
@@ -187,6 +281,7 @@ static void vic_execute(MediaEngine *e) {
     /* 16.16 fixed point coefficients (as movie.c) */
     const int rv = matrix ? 103206 : 91881, gu = matrix ? 12276 : 22554, gv = matrix ? 30679 : 46802, bu = matrix ? 121609 : 116130;
     const int ys = full ? 65536 : 76309, yo = full ? 0 : 16, cscale = full ? 65536 : 74898;
+    if (media_write_prepare) media_write_prepare(out, o_avail);
     for (uint32_t y = 0; y < dh; y++) {
         uint32_t sy = (uint32_t)((uint64_t)y * sh / dh);
         const uint8_t *yr = luma + (size_t)sy * sw, *uv = chroma + (size_t)(sy >> 1) * sw;
@@ -317,7 +412,9 @@ static int known_reg(const MediaEngine *e, uint32_t off) {
             return off <= NVDEC_SET_DISPLAY_BUF_CHROMA_OFFSET ||
                    (off >= NVDEC_SET_PICTURE_LUMA_OFFSET0 && off < NVDEC_SET_PICTURE_LUMA_OFFSET0 + NVDEC_PIC_SLOTS) ||
                    (off >= NVDEC_SET_PICTURE_CHROMA_OFFSET0 && off < NVDEC_SET_PICTURE_CHROMA_OFFSET0 + NVDEC_PIC_SLOTS);
-        case MEDIA_CLASS_VIC: return off <= VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET || off == VIC_SET_INPUT0_LUMA_OFFSET || off == VIC_SET_INPUT0_CHROMA_OFFSET;
+        case MEDIA_CLASS_VIC:
+            return off == VIC_SET_INPUT0_LUMA_OFFSET || off == VIC_SET_INPUT0_CHROMA_OFFSET || off == VIC_SET_CONFIG_STRUCT_OFFSET ||
+                   off == VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET || off == VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET || (off >= 0x1c2 && off <= 0x1cf);
         case MEDIA_CLASS_NVJPG: return off <= NVJPG_SET_OUT_CHROMA_OFFSET || off == NVJPG_SET_STATUS_OFFSET;
         default: return off == MSENC_SET_STATUS_OFFSET;
     }
@@ -331,6 +428,15 @@ static void write_reg(MediaEngine *e, uint32_t off, uint32_t v) {
     }
     if (e->cur_class != e->class_id || off >= NREGS) {
         e->st.foreign_writes++;
+        return;
+    }
+    if (off == NVM_THI_METHOD0) { /* the SDK drives the engines through the THI: a (method, data) pair of writes to words 0x10 / 0x11 */
+        e->thi_method = v & 0xfff;
+        e->st.thi_pairs++;
+        return;
+    }
+    if (off == NVM_THI_METHOD1) {
+        write_reg(e, e->thi_method, v);
         return;
     }
     e->reg[off] = v;

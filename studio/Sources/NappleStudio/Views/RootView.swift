@@ -13,9 +13,13 @@ struct RootView: View {
         } detail: {
             detail
                 .navigationTitle(m.pane.title)
-                .inspector(isPresented: $m.showInspector) { LogInspector().inspectorColumnWidth(min: 260, ideal: 340, max: 520) }
+                .inspector(isPresented: $m.showInspector) { LogInspector().inspectorColumnWidth(min: 220, ideal: 300, max: 520) }
         }
         .toolbar { MainToolbar() }
+        // A narrow window cannot hold sidebar + content + log: the sidebar folds away while the log is open (SwiftUI otherwise loops on the layout and aborts).
+        .onChange(of: m.showInspector) { _, open in
+            if open, (m.window?.frame.width ?? 1000) < 940 { columns = .detailOnly } else if !open { columns = .all }
+        }
         .overlay(alignment: .bottom) { ToastHost() }
         .overlay { if m.dropTargeted { DropOverlay() } }
         .onDrop(of: [.fileURL], isTargeted: $m.dropTargeted) { providers in
@@ -52,7 +56,7 @@ struct Sidebar: View {
             Section("Devices") { row(.devices, badge: nil) }
         }
         .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 180, ideal: 210, max: 280)
+        .navigationSplitViewColumnWidth(min: 140, ideal: 160, max: 210)
         .safeAreaInset(edge: .bottom) { EngineFooter() }
     }
     private func row(_ p: Pane, badge: String?) -> some View {

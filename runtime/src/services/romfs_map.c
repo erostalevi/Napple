@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #ifdef __APPLE__
 #include <CommonCrypto/CommonCryptor.h>
@@ -27,7 +28,7 @@ struct RomfsMap {
 
 void romfs_map_close(RomfsMap *m) {
     if (!m) return;
-    for (uint32_t i = 0; i < m->nfiles; i++)
+    for (uint32_t i = 0; m->fds && i < m->nfiles; i++) /* fds is still NULL when the header was refused */
         if (m->fds[i] >= 0) close(m->fds[i]);
     free(m->fds);
     free(m->e);
@@ -40,11 +41,17 @@ RomfsMap *romfs_map_open(const char *path, uint64_t *size) {
     uint8_t h[24];
     RomfsMap *m = calloc(1, sizeof *m);
     int ok = 0;
+    if (!m) {
+        fclose(f);
+        return NULL;
+    }
     if (fread(h, 1, 24, f) != 24 || memcmp(h, "RMP1", 4)) goto out;
     memcpy(&m->nfiles, h + 4, 4);
     memcpy(&m->n, h + 8, 8);
     memcpy(&m->size, h + 16, 8);
     if (!m->nfiles || m->nfiles > 64 || !m->n || m->n > (1u << 26)) goto out;
+    struct stat st; /* every extent record is 64 bytes of the file: a count the file cannot hold would only size a huge allocation */
+    if (fstat(fileno(f), &st) || (uint64_t)st.st_size < 24 || m->n > ((uint64_t)st.st_size - 24) / 64) goto out;
     m->fds = malloc(m->nfiles * sizeof *m->fds);
     for (uint32_t i = 0; i < m->nfiles; i++) m->fds[i] = -1;
     for (uint32_t i = 0; i < m->nfiles; i++) {

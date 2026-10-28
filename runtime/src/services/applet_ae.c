@@ -130,6 +130,7 @@ static void pw_launch_reason(IpcObject *s, IpcCall *c) { (void)s; uint8_t v[4] =
 static const IpcCmd pw_cmds[] = {{0, "GetLaunchReason", pw_launch_reason, IPC_IMPL}};
 
 /* ---- IAppletCommonFunctions ---------------------------------------------------------------------------------------------------------------- */
+/* Accepted silently: with no Home menu process the debug message has no receiver (see csg_noop in applet.c). */
 static void acf_noop(IpcObject *s, IpcCall *c) { (void)s; (void)c; }
 static void acf_no_data(IpcObject *s, IpcCall *c) { (void)s; c->result = 0x680; }
 static void acf_set_terminate_result(IpcObject *s, IpcCall *c) {
@@ -157,7 +158,7 @@ static void lp_winding(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IP
 static void lp_self_accessor(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("ILibraryAppletSelfAccessor", sa_cmds, NULL, NULL)); }
 static void lp_common_functions(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("IAppletCommonFunctions", acf_cmds, NULL, NULL)); }
 /* Kept stub: there is no home menu to notify. */
-static const IpcCmd lp_debug_cmds[] = {{0, "NotifyMessageToHomeMenuForDebug", acf_noop, IPC_STUB}};
+static const IpcCmd lp_debug_cmds[] = {{0, "NotifyMessageToHomeMenuForDebug", acf_noop, IPC_IMPL}};
 static void lp_debug(IpcObject *s, IpcCall *c) { (void)s; ipc_out_object(c, IPC_OBJECT("IDebugFunctions", lp_debug_cmds, NULL, NULL)); }
 static const IpcCmd lp_cmds[] = {
     {0, "GetCommonStateGetter", lp_common, IPC_IMPL}, {1, "GetSelfController", lp_self, IPC_IMPL}, {2, "GetWindowController", lp_window, IPC_IMPL},
@@ -214,27 +215,14 @@ static void hid_sys_policy(IpcObject *s, IpcCall *c) {
 }
 static const IpcCmd hid_sys_cmds[] = {{303, "ApplyNpadSystemCommonPolicy", hid_sys_policy, IPC_IMPL}, {306, "ApplyNpadSystemCommonPolicyFull", hid_sys_policy, IPC_IMPL}};
 static IpcObject *hid_sys_open(void) { return IPC_OBJECT("hid:sys", hid_sys_cmds, NULL, NULL); }
-/* Kept stubs below (miiimg root, nfc:sys/nfp:sys root): catch-all objects until a firmware applet calls into them; the Mii image database and the system NFC interface belong to the Mii and NFC areas. */
-/* miiimg: the Mii image service; GetDatabaseService-like root (cmd 0) returns a catch-all object until its commands are known. */
-__attribute__((unused)) static void miiimg_root_get(IpcObject *s, IpcCall *c) {
-    (void)s;
-    ipc_out_object(c, stub_object("IImageDatabaseService"));
-}
-static const IpcCmd miiimg_cmds[] = {{0, "GetImageDatabaseService", miiimg_root_get, IPC_STUB}};
+/* Kept as catch-all objects until a firmware applet calls into them: ldn:m, ldn:s, lp2p:m, ngct:u. (nfc:sys / nfp:sys are real: offline.c answers CreateSystemInterface with the
+ * same simulated NFC objects as the user services; miiimg is registered by mii_img.c.) */
 #define STUB_FACTORY(n, name) static IpcObject *n(void) { return stub_object(name); }
-/* nfc:sys / nfp:sys: command 0 creates the system interface object; a catch-all object stands in for it. */
-static void nfc_make_interface(IpcObject *s, IpcCall *c) {
-    (void)s;
-    ipc_out_object(c, stub_object("INfcSystemInterface"));
-}
-static const IpcCmd nfc_root_cmds[] = {{0, "CreateSystemInterface", nfc_make_interface, IPC_STUB}};
-static IpcObject *sf0(void) { return IPC_OBJECT("nfc:sys", nfc_root_cmds, NULL, NULL); }
-static IpcObject *sf1(void) { return IPC_OBJECT("nfp:sys", nfc_root_cmds, NULL, NULL); } STUB_FACTORY(sf2, "ldn:m") STUB_FACTORY(sf3, "ldn:s") STUB_FACTORY(sf4, "lp2p:m") STUB_FACTORY(sf5, "ngct:u")
-static IpcObject *(*const stub_factory[])(void) = {sf0, sf1, sf2, sf3, sf4, sf5};
-static IpcObject *miiimg_open(void) { (void)miiimg_cmds; return stub_object("miiimg"); }
+STUB_FACTORY(sf2, "ldn:m") STUB_FACTORY(sf3, "ldn:s") STUB_FACTORY(sf4, "lp2p:m") STUB_FACTORY(sf5, "ngct:u")
+static IpcObject *(*const stub_factory[])(void) = {sf2, sf3, sf4, sf5};
 void service_register_firmware_stubs(void) {
     ipc_register_service("hid:sys", hid_sys_open);
-    static const char *const names[] = {"nfc:sys", "nfp:sys", "ldn:m", "ldn:s", "lp2p:m", "ngct:u"};
+    static const char *const names[] = {"ldn:m", "ldn:s", "lp2p:m", "ngct:u"};
     for (unsigned i = 0; i < sizeof names / sizeof *names; i++) ipc_register_service(names[i], stub_factory[i]);
 }
 

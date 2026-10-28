@@ -5,6 +5,7 @@
  * NAPPLE_IPC_LENIENT=1 to get an error result instead and keep enumerating). */
 #pragma once
 #include "napple.h"
+#include <string.h>
 
 #define IPC_MAX_BUF 8
 #define IPC_MAX_HANDLES 8
@@ -67,7 +68,13 @@ IpcObject *ipc_object_new(const char *iface, const IpcCmd *cmds, size_t ncmds, v
 
 /* Request helpers */
 const void *ipc_in(const IpcCall *c, uint32_t off, uint32_t n); /* argument bytes; fails the runtime when out of range */
-#define IPC_IN(c, T, off) (*(const T *)ipc_in((c), (off), sizeof(T)))
+/* The argument bytes are not aligned to T (TIPC puts them at a 4 byte boundary): read through memcpy, never a typed pointer. */
+#define IPC_IN(c, T, off) \
+    ({ \
+        T ipc_in_v_; \
+        memcpy(&ipc_in_v_, ipc_in((c), (off), sizeof(T)), sizeof(T)); \
+        ipc_in_v_; \
+    })
 /* nth input buffer: map-alias "A" buffers first, then pointer "X" buffers. Returns NULL when absent. */
 const IpcBuf *ipc_in_buf(const IpcCall *c, unsigned n);
 /* nth output buffer: map-alias "B" buffers first, then receive-list "C" buffers. */

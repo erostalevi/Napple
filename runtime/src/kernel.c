@@ -2,6 +2,7 @@
  * threads.c, memory in memory.c, sessions and IPC in ipc.c. Every svc the guest issues that no handler claims is
  * recorded (summary + trace) and stops the runtime with its number and name. */
 #include "napple.h"
+#include "kthread.h"
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -193,6 +194,57 @@ static const char *known_names[256] = {
 };
 const char *svc_name(unsigned num) { return num < 256 ? (names[num] ? names[num] : known_names[num]) : NULL; }
 
+/* Post-mortem ring of the last svcs of every thread (NAPPLE_SVC_RING=1; costs one atomic add and a 72-byte store per svc). Dumped by guest Break and by the crash handler (svc_ring_dump), so an intermittent abort shows the calls that led to it
+ * without the timing change of a full svc trace. */
+typedef struct {
+    uint64_t t_ns, in[3], out[2];
+    uint32_t num, tid, cmd, ires; /* IPC (0x21/0x22): command id of the request and result word of the reply (~0 when none) */
+    uint64_t lr;
+} SvcRec;
+#define SVC_RING_N 8192
+static SvcRec g_ring[SVC_RING_N];
+static _Atomic uint64_t g_ring_next;
+static int g_ring_on = -1;
+static int svc_ring_enabled(void) {
+    if (g_ring_on < 0) g_ring_on = getenv("NAPPLE_SVC_RING") ? 1 : 0;
+    return g_ring_on;
+}
+/* The word after `magic` ("SFCI" request: command id at +8, "SFCO" reply: result at +8 of the magic) in the first 0x40 bytes of the message buffer. */
+static uint32_t ring_ipc_word(Thread *t, uint32_t magic, unsigned at) {
+    const uint32_t *w = t ? t->tlr : NULL;
+    if (!w) return ~0u;
+    for (unsigned i = 2; i < 12; i++)
+        if (w[i] == magic) return w[i + at];
+    return ~0u;
+}
+void svc_ring_dump(unsigned per_thread, unsigned total) {
+    if (!svc_ring_enabled()) return;
+    uint64_t end = atomic_load(&g_ring_next), self = threads_current_id();
+    uint64_t begin = end > SVC_RING_N ? end - SVC_RING_N : 0;
+    unsigned shown = 0;
+    LOG("svcring", "last svcs of thread %#llx (oldest first), then the last %u of all threads", (unsigned long long)self, total);
+    uint64_t from = end;
+    for (uint64_t i = end; i > begin && shown < per_thread; i--)
+        if (g_ring[(i - 1) % SVC_RING_N].tid == self) {
+            from = i - 1;
+            shown++;
+        }
+    for (uint64_t i = from; i < end; i++) {
+        const SvcRec *r = &g_ring[i % SVC_RING_N];
+        if (r->tid != self) continue;
+        char w[96];
+        module_describe(r->lr, w, sizeof w);
+        LOG("svcring", "  t=%.6f %#04x %s from %s in %#llx %#llx %#llx -> %#llx %#llx ipc cmd %d result %#x", r->t_ns / 1e9, r->num, svc_name(r->num) ? svc_name(r->num) : "?", w,
+            (unsigned long long)r->in[0], (unsigned long long)r->in[1], (unsigned long long)r->in[2], (unsigned long long)r->out[0], (unsigned long long)r->out[1],
+            r->cmd == ~0u ? -1 : (int)r->cmd, r->ires);
+    }
+    uint64_t start = end > total && end - total > begin ? end - total : begin;
+    for (uint64_t i = start; i < end; i++) {
+        const SvcRec *r = &g_ring[i % SVC_RING_N];
+        LOG("svcring", "  all t=%.6f tid %#llx %#04x %s in %#llx %#llx -> %#llx ipc %d/%#x", r->t_ns / 1e9, (unsigned long long)r->tid, r->num, svc_name(r->num) ? svc_name(r->num) : "?",
+            (unsigned long long)r->in[0], (unsigned long long)r->in[1], (unsigned long long)r->out[0], r->cmd == ~0u ? -1 : (int)r->cmd, r->ires);
+    }
+}
 void svc_dispatch(unsigned num, uint64_t *regs, const char *module, uint64_t offset) {
     threads_svc_enter(num, regs, module, offset);
     threads_checkpoint();
@@ -200,7 +252,25 @@ void svc_dispatch(unsigned num, uint64_t *regs, const char *module, uint64_t off
         LOG("svc", "0x%02x %s from %s+0x%llx x0=%#llx x1=%#llx x2=%#llx x3=%#llx", num, svc_name(num) ? svc_name(num) : "?", module, (unsigned long long)offset,
             (unsigned long long)regs[0], (unsigned long long)regs[1], (unsigned long long)regs[2], (unsigned long long)regs[3]);
     if (num < 256 && handlers[num]) {
+        SvcRec rec;
+        int ring = svc_ring_enabled();
+        if (ring) {
+            rec.in[0] = regs[0];
+            rec.in[1] = regs[1];
+            rec.in[2] = regs[2];
+            rec.lr = regs[30];
+            rec.cmd = num == 0x21 || num == 0x22 ? ring_ipc_word(kthread_self_or_null(), 0x49434653, 2) : ~0u;
+        }
         handlers[num](regs);
+        if (ring) {
+            rec.num = num;
+            rec.tid = (uint32_t)threads_current_id();
+            rec.out[0] = regs[0];
+            rec.out[1] = regs[1];
+            rec.ires = num == 0x21 || num == 0x22 ? ring_ipc_word(kthread_self_or_null(), 0x4f434653, 2) : ~0u;
+            rec.t_ns = runtime_now_ns();
+            g_ring[atomic_fetch_add(&g_ring_next, 1) % SVC_RING_N] = rec;
+        }
         threads_svc_exit();
         if (svc_trace_all) LOG("svc", "   -> 0x%02x result=%#llx x1=%#llx", num, (unsigned long long)regs[0], (unsigned long long)regs[1]);
         return;
@@ -286,6 +356,7 @@ static void svc_break(uint64_t *r) {
     LOG("kernel", "guest Break reason=%#llx result=%#x (module %u desc %u) from %s", (unsigned long long)r[0], result, result & 0x1ff, (result >> 9) & 0x1fff,
         where);
     runtime_trace_guest(r[29], r[30]);
+    svc_ring_dump(40, 120);
     thread_dump_all();
     if (r[0] & 0x80000000ULL) {
         r[0] = 0;

@@ -49,6 +49,9 @@ typedef struct {
     int depth_clamp, raster_discard, render_enable;
     float alpha_ref;
     int64_t copy_row_stride, copy_img_stride;
+    uint32_t patch_size;              /* tessellation (mtl_stages.inc): control points per input patch, NVN default levels */
+    float tess_outer[4], tess_inner[2];
+    bufrange xfb[MAX_XFB_BUFFERS];    /* transform feedback buffer bindings */
 } nstate;
 
 static nstate S;
@@ -207,6 +210,9 @@ static void state_reset(void) {
     S.stencil_wmask[0] = S.stencil_wmask[1] = S.stencil_rmask[0] = S.stencil_rmask[1] = 0xff;
     for (int i = 0; i < 16; i++) { S.dr[i][1] = 1.0f; }
     S.render_enable = 1;
+    S.patch_size = 3;
+    for (int i = 0; i < 4; i++) S.tess_outer[i] = 1.0f;
+    S.tess_inner[0] = S.tess_inner[1] = 1.0f;
 }
 
 /* ---------------------------------------------------------------------------------------------------------------
@@ -537,8 +543,9 @@ static int pass_begin(void) {
         for (uint32_t j = 0; j < i; j++) {
             MTLRenderPassColorAttachmentDescriptor *b = rp.colorAttachments[j];
             if (b.texture == a.texture && b.level == a.level && b.slice == a.slice && b.depthPlane == a.depthPlane) {
-                LOG_ONCE(NAPPLE_LOG_WARN, "colour attachments %u and %u are the same image: the later one is not attached", j, i);
+                LOG_ONCE(NAPPLE_LOG_INFO, "colour attachments %u and %u are the same image: the later one is not attached", j, i);
                 a.texture = nil;
+                P.color_fmt[i] = 0;   /* the pipeline then has no attachment there (its writes are dropped), as the attachment check below expects */
                 break;
             }
         }
@@ -1088,26 +1095,30 @@ static void image_masks(int stage, uint32_t *imask, uint32_t *umask) {
         else if (pf_is_int((uint32_t)pf)) *umask |= 1u << slot;
     }
 }
-static uint32_t depth_slot_mask(int stage) {
+/* Binding slots of a stage whose texture samples as depth (depth bit) or as a stencil view (stencil bit; the view's depth-stencil mode overrides the
+ * texture's, as in mtl_tex_view). A depth-stencil texture bound in stencil mode is a stencil slot, not a depth one: the shader reads a uint. */
+static void ds_slot_masks(int stage, uint32_t *depth, uint32_t *stencil) {
+    *depth = *stencil = 0;
     gdpool *tp = (gdpool *)htab_get(S.texpool);
-    if (!tp) return 0;
-    uint32_t m = 0;
+    if (!tp) return;
     for (int slot = 0; slot < 32; slot++) {
         uint64_t h = S.tex[stage][slot];
         uint32_t tic = (uint32_t)(h & 0xfffff);
         if (!h || tic >= (uint32_t)tp->n || !tp->tex[tic].s.valid) continue;
+        const dtex *e = &tp->tex[tic];
         MTLPixelFormat pf;
         int dep, st;
-        mtl_tex_format_info(&tp->tex[tic].s, &pf, &dep, &st);
-        if (dep && pf != MTLPixelFormatStencil8) m |= 1u << slot;
+        mtl_tex_format_info(&e->s, &pf, &dep, &st);
+        int stencil_view = st && (e->view.set_ds ? e->view.ds_mode : e->s.ds_mode) == 1;
+        if (pf == MTLPixelFormatStencil8 || stencil_view) *stencil |= 1u << slot;
+        else if (dep) *depth |= 1u << slot;
     }
-    return m;
 }
 
 static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     memset(k, 0, sizeof *k);
-    k->depth_slots[0] = depth_slot_mask(ST_VS);
-    k->depth_slots[1] = depth_slot_mask(ST_FS);
+    ds_slot_masks(ST_VS, &k->depth_slots[0], &k->stencil_slots[0]);
+    ds_slot_masks(ST_FS, &k->depth_slots[1], &k->stencil_slots[1]);
     image_masks(ST_VS, &k->img_int[0], &k->img_uint[0]);
     image_masks(ST_FS, &k->img_int[1], &k->img_uint[1]);
     k->vs = S.prog[ST_VS];
@@ -1268,7 +1279,9 @@ static uint64_t gpu_va(uint64_t addr, uint64_t size) {
     id<MTLBuffer> b;
     uint64_t o;
     if (!mtl_addr(addr, size ? size : 1, &b, &o)) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "shader storage buffer %#llx+%#llx is not inside a memory pool", (unsigned long long)addr, (unsigned long long)size);
+        /* The driver-constant table carries all 16 slots of a stage, used or not, and NVN lets a binding dangle once its pool is finalized (SMO leaves one behind
+         * between scenes): an unbacked slot reads as zero, which is what the hardware gives a shader that never touches it. Not a warning. */
+        LOG_ONCE(NAPPLE_LOG_INFO, "shader storage buffer %#llx+%#llx is not inside a memory pool (stale binding, reads as zero)", (unsigned long long)addr, (unsigned long long)size);
         return 0;
     }
     return b.gpuAddress + o;
@@ -1292,6 +1305,8 @@ static void make_pools_resident(id enc, int compute) {
 /* Bind constant buffers, textures and samplers of one stage. `enc` is the render or compute encoder. */
 static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint32_t cs_groups[3]) {
     const ShaderInfo *si = &sh->info;
+    /* geometry and tess control kernels run on a compute encoder (compute = 1) but keep the graphics driver-constant layout of their stage */
+    int cs_layout = compute && stage == ST_CS;
     uint32_t cbsz[18];
     for (int i = 0; i < 18; i++) cbsz[i] = 0x10000; /* bound size per constant buffer (the shader reads 0 past it: CBSZ_BUFFER_INDEX) */
     for (int k = 0; k < 18; k++) {
@@ -1303,8 +1318,11 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
             if (sz < 0x800) sz = 0x800;
             uint8_t *p = ring_alloc(&g_ring, sz, 256, &buf, &off);
             memset(p, 0, sz);
-            uint32_t base = stage == ST_FS ? 0x510 : 0x110;
-            for (int i = 0; i < 16 && !compute; i++) {
+            /* storage buffer table of the stage: 0x110 + 0x100 * hardware stage (VS 0, TCS 1, TES 2, GS 3, FS 4); the VS and FS offsets are the measured ones,
+             * the three between are inferred from that spacing */
+            static const uint32_t hw_stage[6] = {0, 4, 3, 1, 2, 0};
+            uint32_t base = 0x110 + 0x100 * hw_stage[stage < 6 ? stage : 0];
+            for (int i = 0; i < 16 && !cs_layout; i++) {
                 uint32_t *e = (uint32_t *)(p + base + 16 * i);
                 uint64_t va = gpu_va(S.ssbo[stage][i].addr, S.ssbo[stage][i].size);
                 e[0] = (uint32_t)va;
@@ -1312,11 +1330,11 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
                 e[2] = (uint32_t)S.ssbo[stage][i].size;
             }
             /* c0 + 0x610: the largest point size (Maxwell's limit, 2047); GLSLC clamps a shader-written gl_PointSize to it (SMO's point sprites, nxnative G6) */
-            if (!compute) {
+            if (!cs_layout) {
                 const float max_point = 2047.0f;
                 memcpy(p + 0x610, &max_point, 4);
             }
-            if (compute) {
+            if (cs_layout) {
                 uint32_t *g = (uint32_t *)(p + 0x200);
                 g[0] = cs_groups[0];
                 g[1] = cs_groups[1];
@@ -1358,12 +1376,12 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
             cbsz[k] = r.addr ? (r.size && r.size < sz ? (uint32_t)r.size : sz) : 0;
         }
         if (compute) [(id<MTLComputeCommandEncoder>)enc setBuffer:buf offset:off atIndex:k];
-        else if (stage == ST_VS) [(id<MTLRenderCommandEncoder>)enc setVertexBuffer:buf offset:off atIndex:k];
+        else if (stage != ST_FS) [(id<MTLRenderCommandEncoder>)enc setVertexBuffer:buf offset:off atIndex:k];
         else [(id<MTLRenderCommandEncoder>)enc setFragmentBuffer:buf offset:off atIndex:k];
     }
     if (si->cbuf_dynamic) {
         if (compute) [(id<MTLComputeCommandEncoder>)enc setBytes:cbsz length:sizeof cbsz atIndex:CBSZ_BUFFER_INDEX];
-        else if (stage == ST_VS) [(id<MTLRenderCommandEncoder>)enc setVertexBytes:cbsz length:sizeof cbsz atIndex:CBSZ_BUFFER_INDEX];
+        else if (stage != ST_FS) [(id<MTLRenderCommandEncoder>)enc setVertexBytes:cbsz length:sizeof cbsz atIndex:CBSZ_BUFFER_INDEX];
         else [(id<MTLRenderCommandEncoder>)enc setFragmentBytes:cbsz length:sizeof cbsz atIndex:CBSZ_BUFFER_INDEX];
     }
     float *rscale_ptr = NULL; /* the rscale table of this stage (filled per texture below) */
@@ -1388,7 +1406,7 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
             p[3] = (float)P.h * (compute ? 1.0f : P.sy);
         } /* fragment coordinate y of the lower-left origin: H - y_top */
         if (compute) [(id<MTLComputeCommandEncoder>)enc setBuffer:buf offset:off atIndex:18];
-        else if (stage == ST_VS) [(id<MTLRenderCommandEncoder>)enc setVertexBuffer:buf offset:off atIndex:18];
+        else if (stage != ST_FS) [(id<MTLRenderCommandEncoder>)enc setVertexBuffer:buf offset:off atIndex:18];
         else [(id<MTLRenderCommandEncoder>)enc setFragmentBuffer:buf offset:off atIndex:18];
     }
     /* textures and samplers */
@@ -1434,7 +1452,7 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
             }
             if (gt) {
                 mtl_tex_prepare_sample(gt);
-                tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, st->type, st->shadow);
+                tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, st->type, st->shadow, e->s.ds_mode);
                 if (rscale_ptr && i < 64) {
                     rscale_ptr[(i + 1) * 4] = gt->rsx > 0 ? gt->rsx : 1;
                     rscale_ptr[(i + 1) * 4 + 1] = gt->rsy > 0 ? gt->rsy : 1;
@@ -1489,7 +1507,7 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
         if (compute) {
             [(id<MTLComputeCommandEncoder>)enc setTexture:tex atIndex:i];
             if (i < 16) [(id<MTLComputeCommandEncoder>)enc setSamplerState:smp atIndex:i];
-        } else if (stage == ST_VS) {
+        } else if (stage != ST_FS) {
             [(id<MTLRenderCommandEncoder>)enc setVertexTexture:tex atIndex:i];
             if (i < 16) [(id<MTLRenderCommandEncoder>)enc setVertexSamplerState:smp atIndex:i];
         } else {
@@ -1525,7 +1543,7 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
             tex = dummy_image(im->type, im->kind);
         }
         if (compute) [(id<MTLComputeCommandEncoder>)enc setTexture:tex atIndex:IMAGE_TEXTURE_BASE + i];
-        else if (stage == ST_VS) [(id<MTLRenderCommandEncoder>)enc setVertexTexture:tex atIndex:IMAGE_TEXTURE_BASE + i];
+        else if (stage != ST_FS) [(id<MTLRenderCommandEncoder>)enc setVertexTexture:tex atIndex:IMAGE_TEXTURE_BASE + i];
         else [(id<MTLRenderCommandEncoder>)enc setFragmentTexture:tex atIndex:IMAGE_TEXTURE_BASE + i];
     }
 }
@@ -1660,7 +1678,7 @@ static void do_draw_texture(const p_draw_tex *dt) {
     GfxTex *gt = mtl_tex_get(&e->s, 0);
     if (!gt) return;
     mtl_tex_prepare_sample(gt);
-    id<MTLTexture> tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, TEXTYPE_2D, 0);
+    id<MTLTexture> tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, TEXTYPE_2D, 0, e->s.ds_mode);
     id<MTLSamplerState> smp = (sp && tsc < (uint32_t)sp->n && sp->samp_used[tsc]) ? mtl_sampler_get(&sp->samp[tsc]) : nil;
     if (!smp) {
         static samp_par def;
@@ -1724,6 +1742,62 @@ static int stream_referenced(uint32_t st) {
         if (S.vattr[i].fmt && (uint32_t)(S.vattr[i].stream % MAX_STREAMS) == st) return 1;
     return 0;
 }
+/* Vertex streams of the current state on g_re (VB_BASE + stream; the constant zero stream at VB_BASE + MAX_STREAMS). */
+static void bind_vertex_streams(void) {
+    for (uint32_t s = 0; s < S.nstream && s < MAX_STREAMS; s++) {
+        bufrange r = S.vbuf[s];
+        id<MTLBuffer> b;
+        uint64_t o;
+        uint32_t stride = S.vstream[s].stride;
+        if (stride && (stride & 3) && r.addr) {
+            /* Streams with a stride that is not a multiple of 4 (2-bone skin weights/indices, 16-bit normals...) are copied into rows padded to 4. Only the rows this draw
+             * reads are copied (index range recorded by the draw); the rest of the staging buffer is left untouched. */
+            uint32_t ns = (stride + 3) & ~3u;
+            uint64_t avail = r.size ? r.size / stride : 0;
+            int64_t lo = g_vr_valid ? g_vr_lo : 0, hi = g_vr_valid ? g_vr_hi : (int64_t)avail - 1;
+            if (S.vstream[s].divisor) {
+                lo = 0;
+                hi = (int64_t)avail - 1;
+            } /* per-instance data: copy it all */
+            if (lo < 0) lo = 0;
+            if (hi >= (int64_t)avail && avail) hi = (int64_t)avail - 1;
+            if (!avail || hi < lo) continue;
+            if (hi > (1 << 20)) hi = 1 << 20;
+            uint32_t ro;
+            uint8_t *dst = ring_alloc(&g_ring, (size_t)(hi + 1) * ns, 4, &b, &ro);
+            const uint8_t *src = (const uint8_t *)(uintptr_t)r.addr;
+            for (int64_t v = lo; v <= hi; v++) {
+                memcpy(dst + (size_t)v * ns, src + (size_t)v * stride, stride);
+                memset(dst + (size_t)v * ns + stride, 0, ns - stride);
+            }
+            [g_re setVertexBuffer:b offset:ro atIndex:VB_BASE + s];
+            continue;
+        }
+        if (r.addr && mtl_addr(r.addr, r.size ? r.size : 1, &b, &o)) [g_re setVertexBuffer:b offset:o atIndex:VB_BASE + s];
+        else if (r.addr && mtl_addr(r.addr, 1, &b, &o)) {
+            /* The stream starts inside a pool but its size runs past the pool's end (a stream spanning two mapped ranges, or a size larger than what the draw reads):
+             * bind from its start; reads past the end return zero on this GPU. */
+            LOG_ONCE(NAPPLE_LOG_WARN, "vertex stream %u at %#llx+%#llx runs past the end of its memory pool: bound from its start", s,
+                     (unsigned long long)r.addr, (unsigned long long)r.size);
+            [g_re setVertexBuffer:b offset:o atIndex:VB_BASE + s];
+        } else if (r.addr && !stream_referenced(s)) {
+            /* a stream no vertex attribute reads (stale binding of a freed pool): nothing to bind */
+        } else if (r.addr) {
+            /* Not inside any pool (memory the GPU could not reach on the console either): a zero-filled stream, never the previous draw's binding. */
+            LOG_ONCE(NAPPLE_LOG_WARN, "vertex stream %u at %#llx+%#llx is not inside a memory pool: bound as zeros", s, (unsigned long long)r.addr,
+                     (unsigned long long)r.size);
+            uint32_t zo;
+            uint32_t zn = (uint32_t)MIN(MAX(r.size, 256), 1u << 20);
+            void *z = ring_alloc(&g_ring, zn, 256, &b, &zo);
+            memset(z, 0, zn);
+            [g_re setVertexBuffer:b offset:zo atIndex:VB_BASE + s];
+        }
+    }
+    static const float zeros[4] = {0, 0, 0, 0};
+    [g_re setVertexBytes:zeros length:16 atIndex:VB_BASE + MAX_STREAMS];
+}
+static int stage_draw_needed(uint32_t mode); /* mtl_stages.inc */
+static int xfb_capturing(void);
 /* Prepare pipeline + state for a draw. Returns 0 when the draw must be skipped. */
 static int prepare_draw(uint32_t prim) {
     if (!S.render_enable && getenv("NAPPLE_RCLOG")) {
@@ -1733,7 +1807,8 @@ static int prepare_draw(uint32_t prim) {
                     S.rt.color[0].s.d.width, S.rt.color[0].s.d.height, S.rt.color[0].s.d.format, (unsigned long long)S.prog[ST_VS],
                     (unsigned long long)S.prog[ST_FS]);
     }
-    if (S.raster_discard && S.render_enable) {
+    if (g_predict && stage_draw_needed(prim)) return 0; /* stage pipelines are built at the draw */
+    if (S.raster_discard && S.render_enable && !g_predict && !xfb_capturing()) {
         static _Atomic uint64_t nrd;
         uint64_t k = atomic_fetch_add(&nrd, 1);
         if (k < 3 || (k & (k - 1)) == 0)
@@ -1844,58 +1919,7 @@ static int prepare_draw(uint32_t prim) {
     [g_re setRenderPipelineState:p->ps];
     [g_re setDepthStencilState:depth_stencil_state()];
     apply_raster_state();
-    /* vertex streams */
-    for (uint32_t s = 0; s < S.nstream && s < MAX_STREAMS; s++) {
-        bufrange r = S.vbuf[s];
-        id<MTLBuffer> b;
-        uint64_t o;
-        uint32_t stride = S.vstream[s].stride;
-        if (stride && (stride & 3) && r.addr) {
-            /* Streams with a stride that is not a multiple of 4 (2-bone skin weights/indices, 16-bit normals...) are copied into rows padded to 4. Only the rows this draw
-             * reads are copied (index range recorded by the draw); the rest of the staging buffer is left untouched. */
-            uint32_t ns = (stride + 3) & ~3u;
-            uint64_t avail = r.size ? r.size / stride : 0;
-            int64_t lo = g_vr_valid ? g_vr_lo : 0, hi = g_vr_valid ? g_vr_hi : (int64_t)avail - 1;
-            if (S.vstream[s].divisor) {
-                lo = 0;
-                hi = (int64_t)avail - 1;
-            } /* per-instance data: copy it all */
-            if (lo < 0) lo = 0;
-            if (hi >= (int64_t)avail && avail) hi = (int64_t)avail - 1;
-            if (!avail || hi < lo) continue;
-            if (hi > (1 << 20)) hi = 1 << 20;
-            uint32_t ro;
-            uint8_t *dst = ring_alloc(&g_ring, (size_t)(hi + 1) * ns, 4, &b, &ro);
-            const uint8_t *src = (const uint8_t *)(uintptr_t)r.addr;
-            for (int64_t v = lo; v <= hi; v++) {
-                memcpy(dst + (size_t)v * ns, src + (size_t)v * stride, stride);
-                memset(dst + (size_t)v * ns + stride, 0, ns - stride);
-            }
-            [g_re setVertexBuffer:b offset:ro atIndex:VB_BASE + s];
-            continue;
-        }
-        if (r.addr && mtl_addr(r.addr, r.size ? r.size : 1, &b, &o)) [g_re setVertexBuffer:b offset:o atIndex:VB_BASE + s];
-        else if (r.addr && mtl_addr(r.addr, 1, &b, &o)) {
-            /* The stream starts inside a pool but its size runs past the pool's end (a stream spanning two mapped ranges, or a size larger than what the draw reads):
-             * bind from its start; reads past the end return zero on this GPU. */
-            LOG_ONCE(NAPPLE_LOG_WARN, "vertex stream %u at %#llx+%#llx runs past the end of its memory pool: bound from its start", s,
-                     (unsigned long long)r.addr, (unsigned long long)r.size);
-            [g_re setVertexBuffer:b offset:o atIndex:VB_BASE + s];
-        } else if (r.addr && !stream_referenced(s)) {
-            /* a stream no vertex attribute reads (stale binding of a freed pool): nothing to bind */
-        } else if (r.addr) {
-            /* Not inside any pool (memory the GPU could not reach on the console either): a zero-filled stream, never the previous draw's binding. */
-            LOG_ONCE(NAPPLE_LOG_WARN, "vertex stream %u at %#llx+%#llx is not inside a memory pool: bound as zeros", s, (unsigned long long)r.addr,
-                     (unsigned long long)r.size);
-            uint32_t zo;
-            uint32_t zn = (uint32_t)MIN(MAX(r.size, 256), 1u << 20);
-            void *z = ring_alloc(&g_ring, zn, 256, &b, &zo);
-            memset(z, 0, zn);
-            [g_re setVertexBuffer:b offset:zo atIndex:VB_BASE + s];
-        }
-    }
-    static const float zeros[4] = {0, 0, 0, 0};
-    [g_re setVertexBytes:zeros length:16 atIndex:VB_BASE + MAX_STREAMS];
+    bind_vertex_streams();
     if (g_drawlog_verbose) {
         for (int st = 0; st < 2; st++)
             for (int i = 0; i < 4; i++)
@@ -2005,16 +2029,23 @@ static uint32_t expanded_max(uint32_t mode, uint32_t count) {
 }
 static MTLPrimitiveType expanded_type(uint32_t mode) { return mode == 2 ? MTLPrimitiveTypeLineStrip : MTLPrimitiveTypeTriangle; }
 
+static id<MTLComputeCommandEncoder> compute_encoder(void);
+#include "mtl_stages.inc"
+
 static void do_draw_arrays(const p_draw_arrays *d) {
     int native;
     MTLPrimitiveType pt = prim_native(d->mode, &native);
+    g_vr_valid = 1;
+    g_vr_lo = d->first;
+    g_vr_hi = (int64_t)d->first + d->count - 1;
+    {
+        sdraw sd = {d->mode, d->first, d->count, d->base_instance, d->instances, 0, 0, 0, 0};
+        if (stage_draw(&sd)) return;
+    }
     if (d->mode > 9) {
         LOG_ONCE(NAPPLE_LOG_WARN, "draw with unsupported primitive %u skipped", d->mode);
         return;
     }
-    g_vr_valid = 1;
-    g_vr_lo = d->first;
-    g_vr_hi = (int64_t)d->first + d->count - 1;
     if (!prepare_draw(d->mode)) return;
     if (g_drawlog_verbose)
         fprintf(stderr, "    drawArrays mode %u first %u count %u instances %u base %u\n", d->mode, d->first, d->count, d->instances, d->base_instance);
@@ -2042,10 +2073,6 @@ static void do_draw_arrays(const p_draw_arrays *d) {
 static void do_draw_elements(const p_draw_elems *d) {
     int native;
     MTLPrimitiveType pt = prim_native(d->mode, &native);
-    if (d->mode > 9) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "draw with unsupported primitive %u skipped", d->mode);
-        return;
-    }
     g_vr_valid = 0;
     if (streams_misaligned() && d->count) { /* need the vertex range the indices reach */
         uint32_t isz0 = d->idx_type == 0 ? 1 : d->idx_type == 1 ? 2 : 4;
@@ -2059,6 +2086,14 @@ static void do_draw_elements(const p_draw_elems *d) {
         g_vr_valid = 1;
         g_vr_lo = (int64_t)mn + d->base_vertex;
         g_vr_hi = (int64_t)mx + d->base_vertex;
+    }
+    {
+        sdraw sd = {d->mode, 0, d->count, d->base_instance, d->instances, d->idx_type, 1, (int32_t)d->base_vertex, d->idx_addr};
+        if (stage_draw(&sd)) return;
+    }
+    if (d->mode > 9) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "draw with unsupported primitive %u skipped", d->mode);
+        return;
     }
     if (!prepare_draw(d->mode)) return;
     if (g_drawlog_verbose) {
@@ -2098,6 +2133,7 @@ static void do_draw_elements(const p_draw_elems *d) {
         for (uint32_t i = 0; i < n; i++) out[i] = seq[tmp[i]];
         free(tmp);
         free(seq);
+        if (!n) return;   /* a zero index count draws nothing; Metal validation rejects it */
         [g_re drawIndexedPrimitives:expanded_type(d->mode)
                          indexCount:n
                           indexType:MTLIndexTypeUInt32
@@ -2119,6 +2155,7 @@ static void do_draw_elements(const p_draw_elems *d) {
         b = rb;
         o = ro;
     }
+    if (!d->count) return;   /* a zero index count draws nothing; Metal validation rejects it */
     [g_re drawIndexedPrimitives:pt
                      indexCount:d->count
                       indexType:it
@@ -2132,6 +2169,11 @@ static void do_draw_elements(const p_draw_elems *d) {
 static void do_draw_indirect(const p_draw_ind *d, int indexed) {
     int native;
     MTLPrimitiveType pt = prim_native(d->mode, &native);
+    if (xfb_capturing()) LOG_ONCE(NAPPLE_LOG_WARN, "indirect draw during transform feedback: not captured");
+    if (stage_draw_needed(d->mode)) {
+        stage_skip("indirect draw with geometry / tessellation programs");
+        return;
+    }
     if (!native) {
         LOG_ONCE(NAPPLE_LOG_WARN, "indirect draw with primitive %u skipped", d->mode);
         return;
@@ -2826,7 +2868,9 @@ static int predict_skips(uint16_t op) {
         case OP_RESET_COUNTER:
         case OP_DRAW_TEXTURE:
         case OP_BARRIER:
-        case OP_SCREEN_MARK: return 1;
+        case OP_SCREEN_MARK:
+        case OP_XFB:
+        case OP_DRAW_XFB: return 1;
         default: return 0;
     }
 }
@@ -3154,7 +3198,36 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
             break;
         }
         case OP_DRAW_TEXTURE: do_draw_texture((const p_draw_tex *)pl); break;
-        case OP_BARRIER: break;
+        case OP_PATCH_SIZE: S.patch_size = *(const uint32_t *)pl; break;
+        case OP_TESS_LEVELS: {
+            const p_tess_levels *t = (const p_tess_levels *)pl;
+            if (t->outer) memcpy(S.tess_outer, t->v, sizeof S.tess_outer);
+            else memcpy(S.tess_inner, t->v, sizeof S.tess_inner);
+            break;
+        }
+        case OP_BIND_XFB: {
+            const p_range *r = (const p_range *)pl;
+            const bufrange *b = (const bufrange *)(r + 1);
+            for (uint32_t i = 0; i < r->n && r->first + i < MAX_XFB_BUFFERS; i++) S.xfb[r->first + i] = b[i];
+            break;
+        }
+        case OP_XFB: do_xfb((const p_xfb *)pl); break;
+        case OP_DRAW_XFB: { /* vertex count = bytes written to buffer 0 / its stride, from the control memory End / Pause stored */
+            const p_draw_xfb *x = (const p_draw_xfb *)pl;
+            const uint32_t *c = xfb_ctl_mem(x->control);
+            uint32_t n = c && c[4] ? c[0] / c[4] : 0;
+            if (n) {
+                p_draw_arrays da = {x->mode, 0, n, 0, 1, 0};
+                do_draw_arrays(&da);
+            }
+            break;
+        }
+        case OP_BARRIER:
+            if (*(const uint32_t *)pl & BARRIER_RESOLVE_DEPTH) {
+                flush_clears();
+                end_encoders();
+            }
+            break;
         default: LOG_ONCE(NAPPLE_LOG_WARN, "unknown recorded op %u", h->op); break;
     }
 }
@@ -3173,6 +3246,7 @@ void replay_run_submission(cmdrec *const *recs, uint32_t n, uint64_t seq) {
     static int init;
     if (!init) {
         state_reset();
+        g_no_stages = getenv("NAPPLE_GFX_NO_STAGES") != NULL;
         init = 1;
     }
     {

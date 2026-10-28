@@ -400,7 +400,12 @@ impl Source for IndirectSource {
                 .map(|r| r.virtual_off)
                 .unwrap_or(self.total);
             let n = ((end - pos) as usize).min(buf.len() - done);
-            let phys = e.physical_off + (pos - e.virtual_off);
+            let phys = e
+                .physical_off
+                .checked_add(pos - e.virtual_off)
+                .ok_or_else(|| {
+                    CoreError::Container("relocation points outside its source".into())
+                })?;
             let src = if e.source == 0 {
                 &self.base
             } else {
@@ -436,7 +441,10 @@ impl Source for IndirectSource {
             } else {
                 &self.patch
             };
-            if !src.map(e.physical_off + (pos - e.virtual_off), n, out) {
+            let Some(phys) = e.physical_off.checked_add(pos - e.virtual_off) else {
+                return false;
+            };
+            if !src.map(phys, n, out) {
                 return false;
             }
             pos += n;
@@ -538,7 +546,10 @@ impl PatchedRomfs {
             if s >= e {
                 continue;
             }
-            let phys = r.physical_off + (s - r.virtual_off);
+            let phys = r
+                .physical_off
+                .checked_add(s - r.virtual_off)
+                .ok_or_else(|| bad("relocation physical offset overflows"))?;
             let source_offset = if r.source == 0 {
                 phys.checked_sub(base_data_shift).ok_or_else(|| bad("a relocation reads the base IVFC hash levels; the delta layer cannot express it"))?
             } else {
@@ -740,5 +751,32 @@ mod tests {
             patch: Arc::new(BytesSource(patch)),
         };
         assert!(bad.read_at(0, &mut [0u8; 20]).is_err());
+    }
+
+    #[test]
+    fn hostile_physical_offsets_do_not_overflow() {
+        let huge = RelocEntry {
+            virtual_off: 0,
+            physical_off: u64::MAX - 4,
+            source: 0,
+        };
+        let data: Src = Arc::new(BytesSource(vec![0u8; 64]));
+        let s = IndirectSource {
+            relocs: vec![huge],
+            total: 64,
+            base: data.clone(),
+            patch: data.clone(),
+        };
+        assert!(s.read_at(8, &mut [0u8; 8]).is_err());
+        assert!(!s.map(8, 8, &mut Vec::new()));
+        let p = PatchedRomfs {
+            data: data.clone(),
+            data_off: 8,
+            data_size: 8,
+            relocs: vec![huge],
+            patch: data,
+            patch_size: 64,
+        };
+        assert!(p.delta_entries(0).is_err());
     }
 }

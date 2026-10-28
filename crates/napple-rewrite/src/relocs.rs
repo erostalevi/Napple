@@ -23,12 +23,12 @@ const R_AARCH64_JUMP_SLOT: u32 = 1026;
 const R_AARCH64_RELATIVE: u32 = 1027;
 
 fn rd64(img: &[u8], o: usize) -> Result<u64, RewriteError> {
-    img.get(o..o + 8)
+    img.get(o..o.saturating_add(8))
         .map(|b| u64::from_le_bytes(b.try_into().unwrap()))
         .ok_or_else(|| RewriteError::Relocation(format!("read outside image at {o:#x}")))
 }
 fn rd32(img: &[u8], o: usize) -> Result<u32, RewriteError> {
-    img.get(o..o + 4)
+    img.get(o..o.saturating_add(4))
         .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
         .ok_or_else(|| RewriteError::Relocation(format!("read outside image at {o:#x}")))
 }
@@ -56,7 +56,11 @@ pub fn decode_relr(
     let mut out = Vec::new();
     let mut seen = std::collections::HashSet::new();
     let mut push = |a: u64| -> Result<(), RewriteError> {
-        if !a.is_multiple_of(8) || a < lower || a + 8 > upper || a as usize + 8 > img.len() {
+        if !a.is_multiple_of(8)
+            || a < lower
+            || a.checked_add(8)
+                .is_none_or(|e| e > upper || e > img.len() as u64)
+        {
             return Err(RewriteError::Relocation(format!(
                 "RELR relocation outside writable image: {a:#x}"
             )));
@@ -80,17 +84,17 @@ pub fn decode_relr(
         let e = rd64(img, o)?;
         if e & 1 == 0 {
             push(e)?;
-            cursor = Some(e + 8);
+            cursor = Some(e.saturating_add(8));
         } else {
             let c = cursor.ok_or_else(|| {
                 RewriteError::Relocation("RELR bitmap before initial address".into())
             })?;
             for bit in 1..64 {
                 if e >> bit & 1 == 1 {
-                    push(c + (bit as u64 - 1) * 8)?;
+                    push(c.saturating_add((bit as u64 - 1) * 8))?;
                 }
             }
-            cursor = Some(c + 63 * 8);
+            cursor = Some(c.saturating_add(63 * 8));
         }
     }
     Ok(out)
@@ -123,7 +127,7 @@ pub fn collect(
         })
         .collect();
     let nsyms = match tags.get(&DT_HASH) {
-        Some(h) => rd32(img, *h as usize + 4).unwrap_or(0) as usize,
+        Some(h) => rd32(img, (*h as usize).saturating_add(4)).unwrap_or(0) as usize,
         None => 0,
     };
     for (tab, sz) in [
@@ -134,11 +138,11 @@ pub fn collect(
             continue;
         };
         for i in 0..(sz / 24) as usize {
-            let at = tab as usize + 24 * i;
+            let at = (tab as usize).saturating_add(24 * i);
             let (offset, info, addend) = (
                 rd64(img, at)?,
-                rd64(img, at + 8)?,
-                rd64(img, at + 16)? as i64,
+                rd64(img, at.saturating_add(8))?,
+                rd64(img, at.saturating_add(16))? as i64,
             );
             let (kind, sym) = (info as u32, (info >> 32) as usize);
             let target = match kind {
@@ -147,12 +151,12 @@ pub fn collect(
                     if sym != 0 && sym < nsyms.max(1) =>
                 {
                     let symtab = *tags.get(&DT_SYMTAB).unwrap_or(&0) as usize;
-                    let ent = symtab + 24 * sym;
+                    let ent = symtab.saturating_add(24 * sym);
                     let (shndx, value) = (
-                        img.get(ent + 6..ent + 8)
+                        img.get(ent.saturating_add(6)..ent.saturating_add(8))
                             .map(|b| u16::from_le_bytes(b.try_into().unwrap()))
                             .unwrap_or(0),
-                        rd64(img, ent + 8).unwrap_or(0),
+                        rd64(img, ent.saturating_add(8)).unwrap_or(0),
                     );
                     (shndx != 0).then(|| value.wrapping_add(addend as u64))
                 }

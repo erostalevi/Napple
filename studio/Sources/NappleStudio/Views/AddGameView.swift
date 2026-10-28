@@ -35,7 +35,7 @@ struct PlanView: View {
     var body: some View {
         @Bindable var m = m
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 10) {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(m.planTitle).font(.largeTitle.weight(.bold))
@@ -62,6 +62,7 @@ struct PlanView: View {
                         Text("\(p.includedSummary) · \(PlanResult.formatBytes(p.totalSelectedBytes)) in total").font(.caption).foregroundStyle(.secondary)
                     }
                 }
+                EnginePickerCard()
                 DestinationCard()
                 if let d = m.diskWarning { Banner(text: d, tone: .bad) }
                 if let o = m.outputWarning, !m.destination.isIOS { Banner(text: o, tone: .warn) }
@@ -74,7 +75,7 @@ struct PlanView: View {
                         .buttonStyle(.glassProminent).disabled(!m.canBuild).keyboardShortcut(.defaultAction).accessibilityIdentifier("plan.build")
                 }
             }
-            .padding(24)
+            .padding(14)
         }
     }
 
@@ -139,7 +140,7 @@ struct BuildingView: View {
     @Environment(AppModel.self) private var m
     private static let order = ["preflight", "provision", "ingest", "plan", "rewrite", "romfs", "fonts", "bundle", "sign", "done"]
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Building \(m.planTitle)").font(.largeTitle.weight(.bold))
             Text(m.builtSummary + " · " + m.destinationLabel).foregroundStyle(.secondary)
             GlassCard {
@@ -163,7 +164,7 @@ struct BuildingView: View {
                     .buttonStyle(.glass).disabled(m.cancelling)
             }
         }
-        .padding(24)
+        .padding(14)
         .frame(maxWidth: 720, maxHeight: .infinity, alignment: .top)
     }
 
@@ -224,7 +225,7 @@ struct DoneView: View {
                     }
                 }
             }
-            .padding(24)
+            .padding(14)
             .frame(maxWidth: 820, alignment: .leading)
         }
     }
@@ -278,5 +279,25 @@ struct LogInspector: View {
         if l.hasPrefix("warning") { return .orange }
         if l.hasPrefix("$ ") { return .accentColor }
         return .primary
+    }
+}
+
+/// Which engine builds the game: Studio's own or any installed version (listed with its build date), chosen before Build.
+struct EnginePickerCard: View {
+    @Environment(AppModel.self) private var m
+    var body: some View {
+        GlassCard(title: "Engine", symbol: "gearshape.2") {
+            HStack {
+                Picker("Engine", selection: Binding(get: { m.selectedEngine?.id ?? m.engines.first?.id ?? "" }, set: { m.engineChoice = $0 })) {
+                    ForEach(m.engines) { Text($0.label).tag($0.id) }
+                }
+                .labelsHidden().frame(maxWidth: 420).accessibilityIdentifier("plan.engine")
+                Button { m.refreshEngines() } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.glass).help("Refresh the list")
+                Spacer()
+            }
+            Text(m.engines.isEmpty ? "No engine found. Rebuild Studio with build_app.sh or set NAPPLE_CLI." : "The engine's own runtime and launcher are packed into the game: pick an older engine to build with that exact version.")
+                .font(.caption).foregroundStyle(.secondary)
+            if let e = m.selectedEngine ?? m.engines.first { Text(e.cliURL.path).font(.caption2.monospaced()).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle) }
+        }
     }
 }

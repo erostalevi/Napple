@@ -278,8 +278,20 @@ fn dylibize_dir(
                 }
                 let layout = macho::layout_from_ntb1(&tables)?;
                 let name = format!("{vname}.{tag}{stem}.dylib");
-                let dylib =
-                    macho::build_dylib(&image, &layout, &format!("@rpath/{name}"), platform)?;
+                let dylib = match macho::build_dylib(
+                    &image,
+                    &layout,
+                    &format!("@rpath/{name}"),
+                    platform,
+                ) {
+                    Ok(d) => d,
+                    // a firmware applet module too small for the page layout (the Mii Maker's sdk): leave it out, the game itself is unaffected
+                    Err(e) if prefix.starts_with("applets.") => {
+                        eprintln!("note: {name} skipped: {e}");
+                        continue;
+                    }
+                    Err(e) => return Err(e),
+                };
                 std::fs::write(frameworks.join(&name), dylib)
                     .map_err(|e| BuildError::io("write module dylib", e))?;
                 std::fs::remove_file(&p).map_err(|e| BuildError::io("remove module image", e))?;

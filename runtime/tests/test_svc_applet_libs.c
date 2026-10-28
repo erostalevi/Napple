@@ -15,6 +15,15 @@ void frontend_alert(const char *t, const char *m) { (void)t; (void)m; }
 int frontend_connected_pads(void) { return 1; }
 #endif
 
+static int g_ps_ret = -2, g_ps_calls, g_ctl_ret, g_ctl_calls, g_err_calls;
+static uint8_t g_ps_uids[8][16];
+static unsigned g_ps_count;
+static int ps_ui(const uint8_t (*u)[16], unsigned count) { g_ps_calls++; g_ps_count = count; memcpy(g_ps_uids, u, count * 16); return g_ps_ret; }
+static int ctl_ui(AppletControllerAnswer *a) { g_ctl_calls++; if (g_ctl_ret) a->players = 3; return g_ctl_ret; }
+static char g_err_code[32], g_err_desc[200];
+static void err_ui(const AppletErrorInfo *e, const char *code, const char *desc) { (void)e; g_err_calls++; snprintf(g_err_code, sizeof g_err_code, "%s", code); snprintf(g_err_desc, sizeof g_err_desc, "%s", desc); }
+static unsigned lister2(uint8_t (*u)[16], unsigned max) { (void)max; memset(u, 0xA1, 32); u[1][0] = 0xB2; return 2; }
+
 /* CreateLibraryApplet(id, mode) on ILibraryAppletCreator */
 static IpcObject *create_applet(IpcObject *lac, uint32_t id) {
     uint32_t in[2] = {id, 0}; IpcCall c; svc_call(lac, 0, in, 8, &c); return c.nout_objects ? c.out_objects[0] : NULL;
@@ -111,6 +120,35 @@ int main(void) {
     setenv("NAPPLE_PLAYER_SELECT", "cancel", 1);
     CHECK(run(la, out, &n) == 0 && n == APPLET_PLAYER_SELECT_OUT_SIZE && *(uint64_t *)out == APPLET_PLAYER_SELECT_CANCELLED && !*(uint64_t *)(out + 8), "player select applet: NAPPLE_PLAYER_SELECT=cancel");
     unsetenv("NAPPLE_PLAYER_SELECT");
+
+    /* ---- the frontend sheets: player select (with a profile list, pick and cancel), controller (confirm adjusts players, cancel), error hook ---- */
+    applet_set_profile_lister(lister2); applet_set_player_select_ui(ps_ui);
+    la = create_applet(lac, LIBAPPLET_ID_PLAYER_SELECT); push(la, common, 0x20); push(la, selarg, 0xa0); g_ps_ret = 1;
+    CHECK(run(la, out, &n) == 0 && g_ps_calls == 1 && g_ps_count == 2 && *(uint64_t *)out == 0 && out[8] == 0xB2, "player select sheet: the second profile of two is returned");
+    la = create_applet(lac, LIBAPPLET_ID_PLAYER_SELECT); push(la, common, 0x20); push(la, selarg, 0xa0); g_ps_ret = -1;
+    CHECK(run(la, out, &n) == 0 && *(uint64_t *)out == APPLET_PLAYER_SELECT_CANCELLED && !*(uint64_t *)(out + 8), "player select sheet: cancel returns the cancelled result");
+    la = create_applet(lac, LIBAPPLET_ID_PLAYER_SELECT); push(la, common, 0x20); push(la, selarg, 0xa0); g_ps_ret = 9;
+    CHECK(run(la, out, &n) == 0 && out[8] == 0xA1, "player select sheet: a bad index is the first profile");
+    setenv("NAPPLE_PLAYER_SELECT", "1", 1); g_ps_calls = 0; g_ps_ret = -1;
+    la = create_applet(lac, LIBAPPLET_ID_PLAYER_SELECT); push(la, common, 0x20); push(la, selarg, 0xa0);
+    CHECK(run(la, out, &n) == 0 && !g_ps_calls && out[8] == 0xB2, "player select: the scripted answer wins over the sheet");
+    unsetenv("NAPPLE_PLAYER_SELECT"); applet_set_player_select_ui(NULL); applet_set_profile_lister(NULL);
+
+    applet_set_controller_ui(ctl_ui); g_ctl_ret = 1; carg[0] = 1; carg[1] = 4; carg[5] = 0;
+    la = create_applet(lac, LIBAPPLET_ID_CONTROLLER); push(la, common, 0x20); push(la, carg, sizeof carg);
+    CHECK(run(la, out, &n) == 0 && g_ctl_calls == 1 && *(int32_t *)out == 3 && *(uint32_t *)(out + 8) == 0, "controller sheet: confirmed with the players the sheet chose");
+    g_ctl_ret = 0;
+    la = create_applet(lac, LIBAPPLET_ID_CONTROLLER); push(la, common, 0x20); push(la, carg, sizeof carg);
+    CHECK(run(la, out, &n) == 0 && *(int32_t *)out == 0 && *(uint32_t *)(out + 4) == 0xffffffffu && *(uint32_t *)(out + 8) == APPLET_CONTROLLER_CANCELLED, "controller sheet: cancel reports 0 players and the cancelled result");
+    setenv("NAPPLE_CONTROLLER_SUPPORT", "strict", 1); g_ctl_calls = 0;
+    la = create_applet(lac, LIBAPPLET_ID_CONTROLLER); push(la, common, 0x20); push(la, carg, sizeof carg);
+    CHECK(run(la, out, &n) == 0 && !g_ctl_calls && *(uint32_t *)(out + 8) == 0, "controller: a scripted policy skips the sheet");
+    unsetenv("NAPPLE_CONTROLLER_SUPPORT"); applet_set_controller_ui(NULL);
+
+    applet_set_error_hook(err_ui);
+    la = create_applet(lac, LIBAPPLET_ID_ERROR); push(la, common, 0x20); push(la, ehdr, sizeof ehdr); push(la, earg, sizeof earg);
+    CHECK(run(la, out, &n) == 0 && g_err_calls == 1 && !strcmp(g_err_code, "2379-0000") && g_err_desc[0], "error hook: code %s, text '%s'", g_err_code, g_err_desc);
+    applet_set_error_hook(NULL);
 
     /* registered handlers answer before the built-in applets */
     CHECK(libapplet_find_handler(0x13) == NULL, "no handler registered at start");

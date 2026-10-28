@@ -539,3 +539,47 @@ fn corrupt_bktr_tables_fail_with_a_clear_code() {
     ])
     .unwrap();
 }
+
+#[test]
+fn html_document_written_next_to_romfs_map() {
+    let _t = tmp("html");
+    let g = make_game_html(&_t);
+    let out = tmp("html-out");
+    run(&[
+        p(&g.base_nsp),
+        "-k",
+        p(&g.keys),
+        "--data-only",
+        "-o",
+        p(&out),
+    ])
+    .unwrap();
+    let base = out.join(format!("{APP_ID:016X}")).join("0102030405060708");
+    assert_eq!(
+        std::fs::read(base.join("html/index.html")).unwrap(),
+        b"<html>manual</html>"
+    );
+    assert_eq!(
+        std::fs::read(base.join("html/a.png")).unwrap(),
+        [0x89, b'P', b'N', b'G']
+    );
+    // a title without an HtmlDocument gets no html/ directory
+    let _t2 = tmp("nohtml");
+    let g2 = make_game(&_t2, false);
+    let out2 = tmp("nohtml-out");
+    run(&[
+        p(&g2.base_nsp),
+        "-k",
+        p(&g2.keys),
+        "--data-only",
+        "-o",
+        p(&out2),
+    ])
+    .unwrap();
+    assert!(
+        !out2
+            .join(format!("{APP_ID:016X}"))
+            .join("0102030405060708/html")
+            .exists()
+    );
+}

@@ -76,3 +76,5 @@ hex, 64 chars>.{patched.bin,tables}`. The tables are NTB1 with the module id as 
 relocs}]`. `ldr:ro` (`runtime/src/ro.c`) maps the image whose module id matches the NRO the game passes. A RomFS `.nro` that is not a
 valid NRO (or cannot be rewritten) is listed in the app's notes instead. The rewriter treats an NRO header (0x10..0x80 of text, "NRO0" at
 0x10) as data.
+
+**Offline HTML (`html/`).** When the title (newest update first, else base) carries an HtmlDocument NCA (CNMT content type 4: manual / offline HTML), `napple build` writes its RomFS files under `<version dir>/html/` next to `romfs.map` / `romfs.bin` (paths confined to the directory; `..`, absolute and backslash names are dropped; files over 256 MiB or beyond 1 GiB in total are skipped). `service_register_applet` uses this directory as the offline web root. Titles without an HtmlDocument get no `html/`. Code: `crates/napple-build/src/html.rs`.

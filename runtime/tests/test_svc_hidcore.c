@@ -1,6 +1,7 @@
 /* Unit tests: hid settings core (portable). The hid IPC glue needs Mach and the input library, so it is tested on macOS only (test_hid_depth.c). */
 #include "../src/services/hid_core.h"
 #include "check.h"
+#include <string.h>
 
 int main(void) {
     HidCore h; hidc_init(&h);
@@ -44,6 +45,20 @@ int main(void) {
     CHECK(hidc_vib_activate(&n, 2u << 24) == -1, "invalid handle refused");
     for (uint32_t i = 0; i < 40; i++) hidc_vib_activate(&n, i << 16 & 0x00070000u | 0x00000000u | ((i & 1) << 24));
     CHECK(n.nvib_active <= HIDC_MAX_VIB_ACTIVE, "active list is bounded");
+    { /* npad styles */
+        HidCore s; hidc_init(&s);
+        CHECK(HIDC_STYLE_GC == 0x20 && HIDC_STYLE_PALMA == 0x40 && HIDC_STYLE_LARK == 0x80 && HIDC_STYLE_LUCIA == 0x200 && HIDC_STYLE_LAGER == 0x800 && HIDC_STYLE_SYSTEM == 0x40000000u, "style bits are libnx's");
+        CHECK(hidc_style_supported(&s, HIDC_STYLE_FULL_KEY | HIDC_STYLE_JOY_DUAL) && !hidc_style_supported(&s, HIDC_STYLE_GC) && !hidc_style_supported(&s, HIDC_STYLE_PALMA) && !hidc_style_supported(&s, 0), "before any Set: the five standard styles");
+        s.styles = HIDC_STYLE_GC | HIDC_STYLE_PALMA | HIDC_STYLE_LARK | 0x00ff0000u; s.styles_set = 1;
+        CHECK(hidc_style_supported(&s, HIDC_STYLE_GC) && hidc_style_supported(&s, HIDC_STYLE_PALMA | HIDC_STYLE_LARK) && !hidc_style_supported(&s, HIDC_STYLE_FULL_KEY), "GameCube / Palma / NES supported only when set");
+        CHECK(hidc_styles_sanitize(s.styles) == (HIDC_STYLE_GC | HIDC_STYLE_PALMA | HIDC_STYLE_LARK) && hidc_styles_sanitize(0xffffffffu) == HIDC_STYLES_KNOWN, "unowned bits dropped");
+        CHECK(!strcmp(hidc_style_name(HIDC_STYLE_GC), "GameCube") && !strcmp(hidc_style_name(HIDC_STYLE_PALMA), "Palma") && !strcmp(hidc_style_name(HIDC_STYLE_LARK), "Lark") && !hidc_style_name(3) && !hidc_style_name(1u << 15) && !hidc_style_name(0), "style names; none for sets or unowned bits");
+        unsigned named = 0; for (unsigned b = 0; b < 32; b++) if (hidc_style_name(1u << b)) named++;
+        CHECK(named == 14, "fourteen named styles");
+        CHECK(hidc_style_is_retro(HIDC_STYLE_LARK) && hidc_style_is_retro(HIDC_STYLE_LAGON | HIDC_STYLE_LUCIA) && !hidc_style_is_retro(HIDC_STYLE_GC) && !hidc_style_is_retro(HIDC_STYLE_LARK | HIDC_STYLE_PALMA) && !hidc_style_is_retro(0), "Switch Online pads");
+        CHECK((HIDC_STYLES_ALL_PAD & HIDC_STYLE_GC) && (HIDC_STYLES_ALL_PAD & HIDC_STYLE_PALMA) && (HIDC_STYLES_ALL_PAD & HIDC_STYLE_LARK) && (HIDC_STYLES_ALL_PAD & HIDC_STYLES_STANDARD) == HIDC_STYLES_STANDARD, "system policy covers GameCube, Palma, NES");
+        CHECK(hidc_capture_assign(&s, HIDC_STYLE_GC, 3) == 0 && hidc_capture_get(&s, HIDC_STYLE_GC) == 3, "capture assignment accepts the GameCube style");
+    }
     printf("{\"test\":\"svc_hidcore\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

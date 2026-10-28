@@ -323,16 +323,17 @@ static void hid_set_styles(IpcObject *s, IpcCall *c) {
     ensure_input();
     HC()->styles = IPC_IN(c, uint32_t, 0);
     HC()->styles_set = 1;
-    LOG("hid", "SetSupportedNpadStyleSet %#x", IPC_IN(c, uint32_t, 0));
-    napple_input_set_supported_styles(g_input, IPC_IN(c, uint32_t, 0));
+    LOG("hid", "SetSupportedNpadStyleSet %#x (GameCube %d, Palma %d, NES/Lark %d)", IPC_IN(c, uint32_t, 0), hidc_style_supported(HC(), HIDC_STYLE_GC), hidc_style_supported(HC(), HIDC_STYLE_PALMA),
+        hidc_style_supported(HC(), HIDC_STYLE_LARK));
+    napple_input_set_supported_styles(g_input, hidc_styles_sanitize(IPC_IN(c, uint32_t, 0))); /* bits no style owns never reach the backend */
 }
 /* hid:sys ApplyNpadSystemCommonPolicy (firmware applets): the system's common npad policy supports every controller style. */
 void hid_apply_system_common_policy(void) {
     ensure_input();
-    HC()->styles = 0x1f;
+    HC()->styles = HIDC_STYLES_ALL_PAD;
     HC()->styles_set = 1;
-    LOG("hid", "ApplyNpadSystemCommonPolicy: supported styles %#x", 0x1fu);
-    napple_input_set_supported_styles(g_input, 0x1f);
+    LOG("hid", "ApplyNpadSystemCommonPolicy: supported styles %#x", HIDC_STYLES_ALL_PAD);
+    napple_input_set_supported_styles(g_input, HIDC_STYLES_ALL_PAD);
 }
 void *hid_dump_thread(void *arg) {
     (void)arg;
@@ -357,7 +358,7 @@ void *hid_dump_thread(void *arg) {
 }
 static void hid_get_styles(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint32_t v = HC()->styles_set ? HC()->styles : 0x1f;
+    uint32_t v = HC()->styles_set ? HC()->styles : HIDC_STYLES_STANDARD;
     IPC_OUT(c, v);
 }
 static void push_assignment(void);

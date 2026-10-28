@@ -344,5 +344,7 @@ int main(int argc, char **argv) {
         }
         napple_display_set_window((uint32_t)gc.output_width, (uint32_t)gc.output_height, 60);
     }
+    extern void memlog_start(void);
+    memlog_start();
     return frontend_run(boot, g_cfg.headless, g_cfg.seconds);
 }

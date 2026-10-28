@@ -68,13 +68,14 @@ typedef struct {
 } Bits;
 
 static int rd16(const uint8_t *p) { return (p[0] << 8) | p[1]; }
-static void huff_build(Huff *h) {
+static int huff_build(Huff *h) { /* -1 when the code lengths over-subscribe the code space (such a table cannot be prefix-free; look[] would be overrun) */
     int code = 0, k = 0;
     memset(h->look, 0, sizeof h->look);
     for (int l = 1; l <= 16; l++) {
         h->valptr[l] = k;
         h->mincode[l] = code;
         for (int i = 0; i < h->bits[l]; i++, k++, code++) {
+            if (code >= (1 << l)) return -1;
             if (l <= 9) {
                 int base = code << (9 - l);
                 for (int j = 0; j < (1 << (9 - l)); j++) h->look[base + j] = (int16_t)((l << 8) | h->vals[k]);
@@ -84,6 +85,7 @@ static void huff_build(Huff *h) {
         code <<= 1;
     }
     h->maxcode[17] = 0x7fffffff;
+    return 0;
 }
 static void bits_fill(Bits *b) {
     while (b->nbits <= 24) {
@@ -202,7 +204,7 @@ static int parse_headers(const uint8_t *d, size_t n, Frame *f, uint16_t q[4][64]
                 if (total > 256 || sl < 17 + total) return JPEGCORE_BAD;
                 memcpy(h->vals, s + 17, (size_t)total);
                 h->present = 1;
-                huff_build(h);
+                if (huff_build(h)) return JPEGCORE_BAD;
                 s += 17 + total;
                 sl -= 17 + total;
             }
@@ -238,7 +240,7 @@ int napjpeg_info(const uint8_t *data, size_t size, JpegInfo *info) {
         info->height = f.height;
         info->ncomp = f.ncomp;
         info->progressive = f.progressive;
-        for (int i = 0; i < f.ncomp; i++) {
+        for (int i = 0; i < f.ncomp && i < 3; i++) { /* a 4-component frame header is refused after ncomp is read: h/v hold 3 */
             info->h[i] = f.h[i];
             info->v[i] = f.v[i];
         }

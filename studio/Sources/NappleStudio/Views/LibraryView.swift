@@ -31,7 +31,7 @@ struct LibraryView: View {
                                 .accessibilityIdentifier("library.card.\(item.entry.titleId)")
                         }
                     }
-                    .padding(24)
+                    .padding(14)
                 }
                 .scrollEdgeEffectStyle(.soft, for: .top)
             }

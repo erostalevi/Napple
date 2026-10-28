@@ -151,34 +151,48 @@ static void ds_vsync_event(IpcObject *s, IpcCall *c) {
     ipc_out_copy_handle(c, r);
 }
 /* IHOSBinderDriver (relay service): the NVN driver that would use it is not executed. */
-/* The SDK's android::Surface talks to an IGraphicBufferProducer while a layer is created, even though the graphics back end
- * (which overrides nvnBootstrapLoader) never uses that producer. Every transaction is answered with a well-formed success reply:
- * a zero-filled payload of the size the call returns, ending with a zero android status. Codes are logged. */
-static unsigned reply_words(uint32_t code) {
-    switch (code) {
-        case 9: return 1;  /* query: value */
-        case 10: return 4; /* connect: QueueBufferOutput {width, height, transform hint, pending buffers} */
-        case 7: return 4;  /* queueBuffer: QueueBufferOutput */
-        case 3: return 2;  /* dequeueBuffer: slot, fence flag (+ fence/graphic buffer objects are not produced) */
-        default: return 0;
-    }
+/* The SDK's android::Surface talks to an IGraphicBufferProducer while a layer is created, even though the graphics back end (which overrides nvnBootstrapLoader) never
+ * uses that producer to move pixels. vi_producer_transact (vi_core.c) keeps a consistent per-binder answer instead of a dummy: connect / disconnect, dequeue / request /
+ * queue / cancel with slot bookkeeping, query of the window size and format. The parcel is {data size, data offset, objects size, objects offset} + data; the data starts
+ * with the strict-mode word and the interface token (UTF-16 string), the arguments follow. Codes are logged. */
+static unsigned parcel_args(const uint8_t *p, uint64_t n, const uint8_t **args) {
+    *args = NULL;
+    uint32_t dsize, doff;
+    if (!p || n < 16) return 0;
+    memcpy(&dsize, p, 4);
+    memcpy(&doff, p + 4, 4);
+    if (doff > n || dsize > n - doff || dsize < 8) return 0;
+    const uint8_t *d = p + doff;
+    int32_t tlen;
+    memcpy(&tlen, d + 4, 4); /* d[0] = strict mode policy */
+    if (tlen < 0 || tlen > 256) return 0;
+    uint32_t tok = 8 + (((uint32_t)tlen + 1) * 2 + 3) / 4 * 4;
+    if (tok > dsize) return 0;
+    *args = d + tok;
+    return dsize - tok;
 }
 static void binder_transact(IpcObject *s, IpcCall *c) {
     (void)s;
     uint32_t id = IPC_IN(c, uint32_t, 0), code = IPC_IN(c, uint32_t, 4), flags = IPC_IN(c, uint32_t, 8);
-    LOG("vi", "IGraphicBufferProducer transaction binder %u code %u flags %#x (answered with a dummy success)", id, code, flags);
-    const IpcBuf *out = ipc_out_buf(c, 0);
+    const IpcBuf *in = ipc_in_buf(c, 0), *out = ipc_out_buf(c, 0);
+    const uint8_t *args;
+    unsigned alen = parcel_args(in ? ipc_buf_ptr(in) : NULL, in ? in->size : 0, &args);
+    uint8_t reply[0x40] = {0};
+    pthread_mutex_lock(&vi_lock);
+    unsigned rn = vi_producer_transact(vi_state(), id, code, args, alen, reply, sizeof reply);
+    pthread_mutex_unlock(&vi_lock);
+    LOG("vi", "IGraphicBufferProducer transaction binder %u code %u flags %#x: %u reply bytes", id, code, flags, rn);
     if (!out) return;
-    uint32_t words = reply_words(code), size = (words + 1) * 4;
-    uint8_t parcel[0x80] = {0};
-    uint32_t hdr[4] = {size, 0x10, 0, 0x10 + size};
-    memcpy(parcel, hdr, 16);
-    if (code == 10) {
-        uint32_t w = 1280, h = 720;
-        memcpy(parcel + 0x10, &w, 4);
-        memcpy(parcel + 0x14, &h, 4);
+    if (!rn) { /* an unknown code: a bad-value status */
+        int32_t st = VI_ST_BAD_VALUE;
+        memcpy(reply, &st, 4);
+        rn = 4;
     }
-    ipc_write_buf(c, out, parcel, 0x10 + size);
+    uint8_t parcel[0x80] = {0};
+    uint32_t hdr[4] = {rn, 0x10, 0, 0x10 + rn};
+    memcpy(parcel, hdr, 16);
+    memcpy(parcel + 16, reply, rn);
+    ipc_write_buf(c, out, parcel, 0x10 + rn);
 }
 /* 1 AdjustRefcount(s32 binder id, s32 addend, s32 type: 0 weak, 1 strong): counted per binder (vi_core.c), never below zero. */
 static void binder_adjust(IpcObject *s, IpcCall *c) {
@@ -195,12 +209,11 @@ static void binder_native_handle(IpcObject *s, IpcCall *c) {
     event_create(&r);
     ipc_out_copy_handle(c, r);
 }
-/* TransactParcel / TransactParcelAuto stay stubs on purpose: the graphics back end overrides nvnBootstrapLoader and never produces buffers through this producer, so
- * the replies are well-formed dummies (class d, no title-visible behaviour to model). */
-static const IpcCmd binder_cmds[] = {{0, "TransactParcel", binder_transact, IPC_STUB},
+/* TransactParcel / TransactParcelAuto answer from the producer bookkeeping above; no title-visible behaviour depends on more (the back end never produces buffers). */
+static const IpcCmd binder_cmds[] = {{0, "TransactParcel", binder_transact, IPC_IMPL},
                                      {1, "AdjustRefcount", binder_adjust, IPC_IMPL},
                                      {2, "GetNativeHandle", binder_native_handle, IPC_IMPL},
-                                     {3, "TransactParcelAuto", binder_transact, IPC_STUB}};
+                                     {3, "TransactParcelAuto", binder_transact, IPC_IMPL}};
 static void ds_get_relay(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("IHOSBinderDriver", binder_cmds, NULL, NULL));

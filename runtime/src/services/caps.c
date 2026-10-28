@@ -5,6 +5,7 @@
  * the author's memory of the public documentation and are unverified. Unlisted commands fail loudly (generic unknown-command policy). */
 #include "svc_common.h"
 #include "caps_core.h"
+#include "applet_album_core.h"
 #include "hz_result.h"
 #include "host_info.h"
 #include <stdlib.h>
@@ -154,4 +155,5 @@ static IpcObject *u_open(void) { return IPC_OBJECT("caps:u", u_cmds, NULL, NULL)
 void service_register_caps(void) {
     ipc_register_service("caps:su", su_open);
     ipc_register_service("caps:u", u_open);
+    applet_album_set_source(&caps); /* the album applet (0x15) browses the screenshots saved here */
 }

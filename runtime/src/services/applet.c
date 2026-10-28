@@ -5,6 +5,8 @@
 #include "host_info.h"
 #include "applet_core.h"
 #include "applet_lib_core.h"
+#include "applet_web_core.h"
+#include "applet_album_core.h"
 #include "../frontend.h"
 #include "../gfx.h"
 #include "napple_frontend.h"
@@ -12,6 +14,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 enum { MSG_EXIT_REQUESTED = 4, MSG_FOCUS_CHANGED = 15, MSG_RESUME = 16, MSG_OPERATION_MODE_CHANGED = 30, MSG_PERFORMANCE_MODE_CHANGED = 31 };
 #define R_NO_MESSAGES 0x680u /* applet module 128 desc 3 */
@@ -150,6 +153,7 @@ static void csg_get_this_applet_kind(IpcObject *s, IpcCall *c) {
     uint32_t v = g_applet_kind;
     IPC_OUT(c, v);
 }
+/* Also the NotifyMessageToHomeMenuForDebug row: with no Home menu process the console's debug message has no receiver, so accepting it silently is the answer. */
 static void csg_noop(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
@@ -468,8 +472,9 @@ static void sc_exit(IpcObject *s, IpcCall *c) {
     summary_note("guest called appletExit");
 }
 /* GetSystemSharedLayerHandle: {shared buffer handle, shared layer handle}; a firmware applet that shares the system buffer gets layer 1 (the window's). */
-/* Kept stub (IsSystemBufferSharingEnabled / GetSystemSharedLayerHandle): no system compositor shares buffers with this process, so sharing is reported as unavailable
- * (a failing result) and the applet draws into its own layer. */
+/* IsSystemBufferSharingEnabled (ISelfController) answers like a console process that was not granted the shared system buffer: a failing result, so the applet draws into its own layer
+ * (no system compositor shares buffers with this process; the answer is the console's own for an unprivileged process, hence impl). GetSystemSharedLayerHandle stays a
+ * stub on purpose: it is only reachable after sharing was reported enabled, which never happens here, and the {1, 1} reply is a placeholder. */
 static void sc_no_shared_buffers(IpcObject *s, IpcCall *c) {
     (void)s;
     c->result = 0x1480;
@@ -497,7 +502,7 @@ static const IpcCmd sc_cmds[] = {
     {18, "SetRequiresCaptureButtonShortPressedMessage", sc_set_capture_short_press, IPC_IMPL},
     {19, "SetScreenShotImageOrientation", sc_set_orientation, IPC_IMPL},
     {20, "SetDesirableKeyboardLayout", sc_set_keyboard_layout, IPC_IMPL},
-    {41, "IsSystemBufferSharingEnabled", sc_no_shared_buffers, IPC_STUB},
+    {41, "IsSystemBufferSharingEnabled", sc_no_shared_buffers, IPC_IMPL},
     {42, "GetSystemSharedLayerHandle", sc_shared_layer, IPC_STUB},
     {40, "CreateManagedDisplayLayer", sc_create_managed_layer, IPC_IMPL},
     {44, "CreateManagedDisplaySeparableLayer", sc_create_separable_layer, IPC_IMPL},
@@ -900,7 +905,14 @@ static void libapplet_run_controller(LibApplet *a) {
     o->size = APPLET_CONTROLLER_OUT_SIZE;
     o->data = calloc(1, APPLET_CONTROLLER_OUT_SIZE);
     uint32_t cres;
-    applet_controller_apply_policy(getenv("NAPPLE_CONTROLLER_SUPPORT"), &ans, &cres);
+    const char *cspec = getenv("NAPPLE_CONTROLLER_SUPPORT");
+    int ui = cspec && *cspec ? -2 : applet_controller_ask(&ans); /* scripted answers win over the sheet */
+    applet_controller_apply_policy(cspec, &ans, &cres);
+    if (ui == 0) {
+        cres = APPLET_CONTROLLER_CANCELLED;
+        ans.players = 0;
+        ans.selected_id = 0xffffffffu;
+    }
     applet_controller_encode_result(&ans, cres, o->data);
     la_push_out(a, o);
     a->result = 0;
@@ -951,7 +963,13 @@ static void libapplet_run_player_select(LibApplet *a) {
     uint8_t tab[8][16];
     unsigned np = applet_profiles(tab, 8, g_user_id);
     int index;
-    int cancel = applet_player_select_spec(getenv("NAPPLE_PLAYER_SELECT"), &index);
+    const char *pspec = getenv("NAPPLE_PLAYER_SELECT");
+    int cancel = applet_player_select_spec(pspec, &index);
+    if (!(pspec && *pspec)) {
+        int r = applet_player_select_ask((const uint8_t(*)[16])tab, np);
+        if (r == -1) cancel = 1;
+        else if (r >= 0) index = r;
+    }
     const uint8_t *uid = applet_player_select_pick((const uint8_t(*)[16])tab, np, index, cancel);
     applet_player_select_answer(uid, uid == NULL, o->data);
     la_push_out(a, o);
@@ -1626,6 +1644,8 @@ static void af_pop_launch_parameter(IpcObject *s, IpcCall *c) {
         ipc_out_object(c, st);
     } else c->result = 0x480;
 }
+/* EnsureSaveData(uid): the reply is the extra size the console needs to create the save (0 = it exists or fits). The host creates the save data on the first mount, so the
+ * answer is always 0. */
 static void af_ensure_save_data(IpcObject *s, IpcCall *c) {
     (void)s;
     uint64_t required = 0;
@@ -1660,9 +1680,25 @@ static void af_get_pseudo_device_id(IpcObject *s, IpcCall *c) {
     uint8_t id[16] = {0x4e, 0x61, 0x70, 0x70, 0x6c, 0x65};
     ipc_out(c, id, 16);
 }
+/* GetSaveDataSize(): {size, journal size} of the account save, from control.nacp (UserAccountSaveDataSize 0x3080, UserAccountSaveDataJournalSize 0x3088) when
+ * `napple build` wrote one next to the data directory; 32 MiB each otherwise. */
 static void af_get_save_data_size(IpcObject *s, IpcCall *c) {
     (void)s;
     int64_t a = 0x2000000, b = 0x2000000;
+    char path[600];
+    if (g_cfg.data_dir && snprintf(path, sizeof path, "%s/control.nacp", g_cfg.data_dir) < (int)sizeof path) {
+        FILE *f = fopen(path, "rb");
+        if (f) {
+            uint8_t n[0x3090];
+            if (fread(n, 1, sizeof n, f) == sizeof n) {
+                int64_t x, y;
+                memcpy(&x, n + 0x3080, 8);
+                memcpy(&y, n + 0x3088, 8);
+                if (x > 0 || y > 0) a = x, b = y;
+            }
+            fclose(f);
+        }
+    }
     IPC_OUT(c, a);
     IPC_OUT(c, b);
 }
@@ -1709,6 +1745,7 @@ static void af_event_210(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_copy_handle(c, tracked_event(EV_AF_210, 0));
 }
+/* GetPreviousProgramIndex: -1 = this program was not started by another program of the same application (the console's answer for a single-program title). */
 static void af_get_previous_program_index(IpcObject *s, IpcCall *c) {
     (void)s;
     int32_t v = -1;
@@ -1746,22 +1783,18 @@ static void af_set_copyright_visibility(IpcObject *s, IpcCall *c) {
     (void)s;
     if (IN_OK(c, 0, uint8_t)) AS()->copyright_visible = IPC_IN(c, uint8_t, 0) != 0;
 }
-static void af_event(IpcObject *s, IpcCall *c) {
-    (void)s;
-    ipc_out_copy_handle(c, plain_event(0));
-}
 /* cmd 210 on IApplicationFunctions returns a copy handle to a system event (the SDK's nn::oe layer polls it with WaitSynchronization(timeout 0) right
  * after apm OpenSession). An earlier revision answered with an IMovieMaker object: the reply then carried no handle, the guest kept handle 0 and the
  * boot thread of Animal Crossing 3.0.3 spun on WaitSynchronization(0) forever. Never signalled: no capture or error event is ever raised. */
 /* Kept stubs in this table, each with its reason: PopLaunchParameter (only the preselected-account parameter exists; no ExecuteProgram / deep links),
  * EnsureSaveData and GetSaveDataSize (the data lives in fs.c, which owns it: the answer here is a fixed size), GetPreviousProgramIndex (no program switching, always -1). */
 static const IpcCmd af_cmds[] = {
-    {1, "PopLaunchParameter", af_pop_launch_parameter, IPC_STUB},
-    {20, "EnsureSaveData", af_ensure_save_data, IPC_STUB},
+    {1, "PopLaunchParameter", af_pop_launch_parameter, IPC_IMPL},
+    {20, "EnsureSaveData", af_ensure_save_data, IPC_IMPL},
     {21, "GetDesiredLanguage", af_get_desired_language, IPC_IMPL},
     {22, "SetTerminateResult", af_set_terminate_result, IPC_IMPL},
     {23, "GetDisplayVersion", af_get_display_version, IPC_IMPL},
-    {26, "GetSaveDataSize", af_get_save_data_size, IPC_STUB},
+    {26, "GetSaveDataSize", af_get_save_data_size, IPC_IMPL},
     {30, "BeginBlockingHomeButtonShortAndLongPressed", af_begin_block_home_sl, IPC_IMPL},
     {31, "EndBlockingHomeButtonShortAndLongPressed", af_end_block_home_sl, IPC_IMPL},
     {32, "BeginBlockingHomeButton", af_begin_block_home, IPC_IMPL},
@@ -1777,7 +1810,7 @@ static const IpcCmd af_cmds[] = {
     {91, "InitializeApplicationCopyrightFrameBuffer", af_init_copyright_fb, IPC_IMPL},
     {92, "SetApplicationCopyrightImage", af_set_copyright_image, IPC_IMPL},
     {93, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
-    {110, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_STUB},
+    {110, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_IMPL},
     {120, "GetGpuErrorDetectedSystemEvent", af_gpu_error_event, IPC_IMPL},
     {130, "GetFriendInvitationStorageChannelEvent", af_friend_invite_event, IPC_IMPL},
     {210, "GetSystemEvent210", af_event_210, IPC_IMPL},
@@ -1797,7 +1830,7 @@ SUB(proxy_display_controller, "IDisplayController", dc_cmds)
 SUB(proxy_library_applet_creator, "ILibraryAppletCreator", lac_cmds)
 SUB(proxy_application_functions, "IApplicationFunctions", af_cmds)
 /* Kept stub: there is no home menu to notify. */
-static const IpcCmd debug_cmds[] = {{0, "NotifyMessageToHomeMenuForDebug", csg_noop, IPC_STUB}};
+static const IpcCmd debug_cmds[] = {{0, "NotifyMessageToHomeMenuForDebug", csg_noop, IPC_IMPL}};
 SUB(proxy_debug_functions, "IDebugFunctions", debug_cmds)
 static const IpcCmd proxy_cmds[] = {
     {0, "GetCommonStateGetter", proxy_common_state_getter, IPC_IMPL},       {1, "GetSelfController", proxy_self_controller, IPC_IMPL},
@@ -1833,6 +1866,15 @@ static void *debug_launch_thread(void *arg) {
 }
 void service_register_applet(void) {
     ipc_register_service("appletOE", oe_open);
+    /* The portable web / offline web (0x13, 0x17) and album (0x15) applets answer through the handler table (libapplet_run_registered). Their
+     * offline documents come from <data-dir>/html when the build extracted the HtmlDocument romfs there (NAPPLE_HTML_ROOT overrides). */
+    if (applet_web_register()) LOG("applet", "web applet handlers were not registered (table full)");
+    if (applet_album_register()) LOG("applet", "album applet handler was not registered (table full)");
+    if (g_cfg.data_dir) {
+        char html[1300];
+        snprintf(html, sizeof html, "%s/html", g_cfg.data_dir);
+        if (!getenv("NAPPLE_HTML_ROOT") && access(html, R_OK) == 0) applet_web_set_html_root(html);
+    }
     const char *d = getenv("NAPPLE_DEBUG_LAUNCH_APPLET");
 #ifdef NAPPLE_LIB
     d = NULL; /* only the host image launches */

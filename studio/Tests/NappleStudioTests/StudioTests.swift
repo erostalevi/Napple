@@ -229,6 +229,41 @@ func fakeFirmwareDir(in dir: URL) -> URL {
         return r
     }
 
+    /// Every local build is stamped with the same version, so a stale engine of an older build must be replaced when the bundled binaries differ.
+    @Test func replacesAStaleEngineOfTheSameVersion() throws {
+        let root = tmp(), home = tmp()
+        let res = bundle(in: root)
+        var inst = EngineInstaller(resources: res, support: home.appendingPathComponent("Support"), home: home)
+        inst.setLaunchctl = false
+        try inst.install(version: "1-1")
+        #expect(inst.isUpToDate(version: "1-1"))
+        // a newer Studio build with the same version string but a different engine
+        let napple = res.appendingPathComponent("napple")
+        let old = try Data(contentsOf: napple)
+        try (old + Data("-rebuilt".utf8)).write(to: napple)
+        #expect(!inst.isUpToDate(version: "1-1"))
+        let r = try inst.install(version: "1-1")
+        #expect(r.installed && inst.isUpToDate(version: "1-1"))
+        #expect(try Data(contentsOf: inst.cli) == (old + Data("-rebuilt".utf8)))
+    }
+
+    /// The build screen's engine picker lists Studio's own engine and every installed version, newest first; several versions stay installed.
+    @Test func listsEveryEngineBuild() throws {
+        let root = tmp(), home = tmp()
+        let res = bundle(in: root)
+        var inst = EngineInstaller(resources: res, support: home.appendingPathComponent("Support"), home: home)
+        inst.setLaunchctl = false
+        #expect(inst.listEngines().map(\.id) == [EngineBuild.bundledID])
+        try inst.install(version: "1-1")
+        try inst.install(version: "1-2")
+        try inst.install(version: "1-3")
+        let l = inst.listEngines(bundleVersion: "1-3")
+        #expect(l.first?.isBundled == true && l.first?.version == "1-3")
+        #expect(Set(l.dropFirst().map(\.id)) == ["1-1", "1-2", "1-3"])
+        #expect(l.filter(\.isActive).map(\.id) == ["1-3"])
+        #expect(FileManager.default.isExecutableFile(atPath: l[1].cliURL.path))
+    }
+
     @Test func installsLinksAndIsIdempotent() throws {
         let root = tmp(), home = tmp()
         var inst = EngineInstaller(resources: bundle(in: root), support: home.appendingPathComponent("Support"), home: home)

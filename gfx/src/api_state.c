@@ -155,3 +155,62 @@ NVN(nvnVertexStreamStateSetStride, void, NVNvertexStreamState *s, ptrdiff_t st) 
 NVN(nvnVertexStreamStateSetDivisor, void, NVNvertexStreamState *s, int d) { ST(vs_st, s)->divisor = (uint32_t)d; }
 NVN(nvnVertexStreamStateGetStride, ptrdiff_t, const NVNvertexStreamState *s) { return (ptrdiff_t)CST(vs_st, s)->stride; }
 NVN(nvnVertexStreamStateGetDivisor, int, const NVNvertexStreamState *s) { return (int)CST(vs_st, s)->divisor; }
+
+/* ---- stage parameters the program's control section would carry (stages.h) ---- */
+#include <pthread.h>
+#include <stdlib.h>
+#include "stages.h"
+#define STAGE_PARAMS_MAX 256
+static pthread_mutex_t g_sp_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct { uint64_t hash; gfx_xfb_layout l; } g_xfb_tab[STAGE_PARAMS_MAX];
+static struct { uint64_t hash; gfx_tess_params p; } g_tess_tab[STAGE_PARAMS_MAX];
+static int g_nxfb, g_ntess;
+void gfx_xfb_set_layout(uint64_t h, const gfx_xfb_layout *l) {
+    if (!h) return;
+    pthread_mutex_lock(&g_sp_mu);
+    int i = 0;
+    while (i < g_nxfb && g_xfb_tab[i].hash != h) i++;
+    if (!l) { if (i < g_nxfb) g_xfb_tab[i] = g_xfb_tab[--g_nxfb]; }
+    else if (i < g_nxfb || g_nxfb < STAGE_PARAMS_MAX) { if (i == g_nxfb) g_nxfb++; g_xfb_tab[i].hash = h; g_xfb_tab[i].l = *l; if (g_xfb_tab[i].l.count > MAX_XFB_ENTRIES) g_xfb_tab[i].l.count = MAX_XFB_ENTRIES; }
+    else LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback layout table full (%d programs)", STAGE_PARAMS_MAX);
+    pthread_mutex_unlock(&g_sp_mu);
+}
+int gfx_xfb_get_layout(uint64_t h, gfx_xfb_layout *out) {
+    int r = 0;
+    pthread_mutex_lock(&g_sp_mu);
+    for (int i = 0; i < g_nxfb; i++) if (g_xfb_tab[i].hash == h) { *out = g_xfb_tab[i].l; r = 1; break; }
+    pthread_mutex_unlock(&g_sp_mu);
+    return r;
+}
+void gfx_tess_set_params(uint64_t h, const gfx_tess_params *p) {
+    if (!h) return;
+    pthread_mutex_lock(&g_sp_mu);
+    int i = 0;
+    while (i < g_ntess && g_tess_tab[i].hash != h) i++;
+    if (!p) { if (i < g_ntess) g_tess_tab[i] = g_tess_tab[--g_ntess]; }
+    else if (i < g_ntess || g_ntess < STAGE_PARAMS_MAX) { if (i == g_ntess) g_ntess++; g_tess_tab[i].hash = h; g_tess_tab[i].p = *p; }
+    else LOG_ONCE(NAPPLE_LOG_WARN, "tessellation parameter table full (%d programs)", STAGE_PARAMS_MAX);
+    pthread_mutex_unlock(&g_sp_mu);
+}
+int gfx_tess_get_params(uint64_t h, gfx_tess_params *out) {
+    static int def_domain = -1;
+    if (def_domain < 0) { const char *e = getenv("NAPPLE_GFX_TESS_DOMAIN"); def_domain = e && !strcmp(e, "quad") ? TESS_DOMAIN_QUAD : TESS_DOMAIN_TRIANGLE; }
+    *out = (gfx_tess_params){ (uint8_t)def_domain, TESS_SPACING_EQUAL, TESS_WINDING_CCW };
+    int r = 0;
+    pthread_mutex_lock(&g_sp_mu);
+    for (int i = 0; i < g_ntess; i++) if (g_tess_tab[i].hash == h) { *out = g_tess_tab[i].p; r = 1; break; }
+    pthread_mutex_unlock(&g_sp_mu);
+    return r;
+}
+int gfx_program_set_xfb_layout(const void *prog, const gfx_xfb_layout *l) {
+    uint64_t h = prog ? ((const prog_t *)prog)->hash[0] : 0;
+    if (!h) return 0;
+    gfx_xfb_set_layout(h, l);
+    return 1;
+}
+int gfx_program_set_tess_params(const void *prog, const gfx_tess_params *p) {
+    uint64_t h = prog ? ((const prog_t *)prog)->hash[4] : 0;
+    if (!h) return 0;
+    gfx_tess_set_params(h, p);
+    return 1;
+}

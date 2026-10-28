@@ -46,6 +46,10 @@ impl Nso {
             }
             let raw = &f[file_off..file_off + csz];
             let data = if flags & (1 << i) != 0 {
+                // LZ4 expands at most ~255x: a larger claim is hostile and would pre-allocate `dsz` bytes.
+                if dsz > csz.saturating_mul(255).saturating_add(64) {
+                    return container("NSO segment size implausible for its compressed size");
+                }
                 lz4_flex::block::decompress(raw, dsz)
                     .map_err(|_| Error::Container("NSO LZ4 decompression failed".into()))?
             } else {

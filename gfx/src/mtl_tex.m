@@ -507,7 +507,7 @@ static int view_valid(id<MTLTexture> tex, MTLPixelFormat *pf, MTLTextureType wan
     }
 }
 
-id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, int has_view, int stype, int shadow) {
+id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, int has_view, int stype, int shadow, int ds_mode) {
     (void)shadow;
     MTLTextureType want = shader_type(stype, 0, t->tex.textureType);
     MTLPixelFormat pf = t->pf;
@@ -548,6 +548,10 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
         out[2] = 4;
         out[3] = 5;
     } /* depth views are sampled as one channel */
+    /* Stencil mode of a depth-stencil texture (the view's mode overrides the texture's): the stencil plane is read through a stencil-only format view (X32_Stencil8 of a
+     * Depth32Float_Stencil8 texture; a Stencil8 texture is its own stencil view). The depth plane is what the combined format already samples as. */
+    int stencil_view = t->has_stencil && (has_view && v->set_ds ? v->ds_mode : ds_mode) == 1;
+    if (stencil_view) pf = t->pf == MTLPixelFormatStencil8 ? MTLPixelFormatStencil8 : MTLPixelFormatX32_Stencil8;
     int identity = out[0] == 2 && out[1] == 3 && out[2] == 4 && out[3] == 5;
     int full = l0 == 0 && nl == t->tex.mipmapLevelCount && s0 == 0;
     if (identity && pf == t->pf && want == t->tex.textureType && full && (ns == (t->tex.arrayLength ? t->tex.arrayLength : 1) || want == MTLTextureTypeCube))
@@ -559,6 +563,21 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
     if (cached) return cached;
     MTLTextureSwizzleChannels sw =
         MTLTextureSwizzleChannelsMake((MTLTextureSwizzle)out[0], (MTLTextureSwizzle)out[1], (MTLTextureSwizzle)out[2], (MTLTextureSwizzle)out[3]);
+    if (!view_valid(t->tex, &pf, want, l0, nl ? nl : 1, s0, ns ? ns : 1)) {
+        /* The asked type cannot be viewed (a cube of a non-square or short array, an array of a 3D texture, ...): keep the level and layer RANGE the game chose and view
+         * it as the texture's own kind (a 2D array for cube / array sources, 2D for a single layer) instead of throwing the selection away with the whole texture. */
+        MTLTextureType have = t->tex.textureType;
+        MTLTextureType alt = (have == MTLTextureTypeCube || have == MTLTextureTypeCubeArray) ? (ns == 1 ? MTLTextureType2D : MTLTextureType2DArray) : have;
+        if (alt != want && have != MTLTextureType3D && view_valid(t->tex, &pf, alt, l0, nl ? nl : 1, s0, ns ? ns : 1)) {
+            LOG_ONCE(NAPPLE_LOG_INFO, "texture view type %lu of a type %lu texture is not expressible: viewed as type %lu over levels %u+%u slices %u+%u",
+                     (unsigned long)want, (unsigned long)have, (unsigned long)alt, l0, nl, s0, ns);
+            want = alt;
+            key = (key & ~(0xfull << 12)) | ((uint64_t)want << 12);
+            k = @(key);
+            cached = t->views[k];
+            if (cached) return cached;
+        }
+    }
     if (!view_valid(t->tex, &pf, want, l0, nl ? nl : 1, s0, ns ? ns : 1)) {
         LOG_ONCE(NAPPLE_LOG_INFO,
                  "texture view not expressible in Metal (fmt %lu->%lu type %lu->%lu levels %u+%u/%lu slices %u+%u/%lu): using the whole texture",

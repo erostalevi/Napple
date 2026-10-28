@@ -286,3 +286,22 @@ void applet_controller_apply_policy(const char *spec, AppletControllerAnswer *a,
         a->selected_id = 0xffffffffu;
     }
 }
+
+static AppletPlayerSelectUi g_ps_ui;
+void applet_set_player_select_ui(AppletPlayerSelectUi fn) { g_ps_ui = fn; }
+int applet_player_select_ask(const uint8_t (*uids)[16], unsigned count) {
+    if (!g_ps_ui) return -2;
+    int i = g_ps_ui(uids, count);
+    return i >= (int)count ? 0 : i; /* a bad index is the first profile, -1 stays cancel */
+}
+static AppletControllerUi g_ctl_ui;
+void applet_set_controller_ui(AppletControllerUi fn) { g_ctl_ui = fn; }
+int applet_controller_ask(AppletControllerAnswer *a) {
+    if (!g_ctl_ui) return -2;
+    int ok = g_ctl_ui(a);
+    if (ok) {
+        if ((uint32_t)a->players < a->min) a->players = (int32_t)a->min;
+        if ((uint32_t)a->players > a->max) a->players = (int32_t)a->max;
+    }
+    return ok != 0;
+}

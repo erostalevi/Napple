@@ -9,7 +9,13 @@ OUT="${1:-$HERE/dist}"
 SCRATCH="${NAPPLE_STUDIO_SCRATCH:-${TMPDIR:-/tmp}/napple-studio-build}"
 APP="$OUT/NappleStudio.app"
 VERSION="${NAPPLE_VERSION:-0.1.0}"   # CFBundleShortVersionString; the release pipeline passes the build number as NAPPLE_BUILD
-BUILD_NO="${NAPPLE_BUILD:-1}"
+# Local builds get a build number from the commit count (+ the commit and a timestamp when the tree is dirty) so two different local builds never share a version;
+# the engine installer also compares file contents, this keeps the version string honest too. The release pipeline passes NAPPLE_BUILD.
+if [ -z "${NAPPLE_BUILD:-}" ]; then
+  NAPPLE_BUILD="$(git -C "$HERE/../.." rev-list --count HEAD 2>/dev/null || echo 1)"
+  git -C "$HERE/../.." diff --quiet HEAD 2>/dev/null || NAPPLE_BUILD="$NAPPLE_BUILD.$(date +%s)"
+fi
+BUILD_NO="$NAPPLE_BUILD"
 
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:$PATH"
 # Everything Studio's Build step needs: CLI, runtime, launcher (built here when missing; NAPPLE_REBUILD=1 forces).

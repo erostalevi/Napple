@@ -404,6 +404,12 @@ static uint32_t journal_commit(SaveJournal *j) {
     pthread_mutex_lock(&j->mu);
     uint32_t r = 0;
     int was_dirty = j->dirty;
+    if (!was_dirty && path_exists(j->committed)) { /* nothing was written since the last snapshot: a commit changes nothing (and a clone plus sync() is tens of ms: games commit after
+                                                      every probe, and a slow commit lets their other threads run ahead of the committing one) */
+        j->commits++;
+        pthread_mutex_unlock(&j->mu);
+        return 0;
+    }
     j->dirty = 0; /* before the snapshot: a write racing with the commit marks the root dirty again */
     rm_rf(j->tmp, 0);
     if (clone_tree(j->live, j->tmp)) {
@@ -678,7 +684,9 @@ static void fs_get_entry_type(IpcObject *s, IpcCall *c) {
     HostFs *fs = s->state;
     FS_PATH(p, 0);
     struct stat sb;
-    if (stat(p, &sb)) {
+    int sr = stat(p, &sb);
+    if (fs_trace()) LOG("fs", "GetEntryType %s -> %s (thread %#llx)", p, sr ? strerror(errno) : S_ISDIR(sb.st_mode) ? "dir" : "file", (unsigned long long)threads_current_id());
+    if (sr) {
         c->result = R_FS_PATH_NOT_FOUND;
         return;
     }
@@ -695,6 +703,7 @@ static void fs_open_file(IpcObject *s, IpcCall *c) {
         return;
     }
     int fd = open(p, writable ? O_RDWR : O_RDONLY);
+    if (fs_trace()) LOG("fs", "OpenFile %s mode %u -> %s (thread %#llx)", p, mode, fd < 0 ? strerror(errno) : "ok", (unsigned long long)threads_current_id());
     if (fd < 0) {
         c->result = errno_result();
         return;
@@ -722,7 +731,8 @@ static void fs_open_directory(IpcObject *s, IpcCall *c) {
 }
 static void fs_commit(IpcObject *s, IpcCall *c) {
     HostFs *fs = s->state;
-    if (fs_trace()) LOG("fs", "Commit %s%s", fs->root, fs->journal ? (fs->journal->dirty ? " (changes pending)" : " (clean)") : " (not transactional)");
+    if (fs_trace()) LOG("fs", "Commit %s%s (thread %#llx)", fs->root, fs->journal ? (fs->journal->dirty ? " (changes pending)" : " (clean)") : " (not transactional)",
+                            (unsigned long long)threads_current_id());
     if (fs->journal) {
         uint32_t r = journal_commit(fs->journal);
         if (r) c->result = r;
@@ -1453,9 +1463,11 @@ static const IpcCmd srv_cmds[] = {
     {200, "OpenDataStorageByCurrentProcess", srv_open_data_storage, IPC_IMPL},
     {203, "OpenPatchDataStorageByCurrentProcess", srv_open_patch_storage, IPC_IMPL},
     {202, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},
-    {1003, "DisableAutoSaveDataCreation", srv_noop, IPC_STUB},
-    {1005, "GetGlobalAccessLogMode", srv_get_log_mode, IPC_STUB},
-    {1006, "OutputAccessLogToSdCard", srv_noop, IPC_STUB},
+    /* The console's own behaviour for an offline application: auto save creation is a system setting that nothing here enables, the global
+     * access log mode is 0 (off) and nothing is written to the SD card, so the no-op / 0 answers are the real ones, not placeholders. */
+    {1003, "DisableAutoSaveDataCreation", srv_noop, IPC_IMPL},
+    {1005, "GetGlobalAccessLogMode", srv_get_log_mode, IPC_IMPL},
+    {1006, "OutputAccessLogToSdCard", srv_noop, IPC_IMPL},
 };
 static IpcObject *fsp_open(void) { return IPC_OBJECT("fsp-srv", srv_cmds, NULL, NULL); }
 void service_register_fs(void) { ipc_register_service("fsp-srv", fsp_open); }

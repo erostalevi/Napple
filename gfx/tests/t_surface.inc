@@ -263,3 +263,4 @@
 #undef SU_OK
 }
 #include "t_xlate_stages.inc"
+#include "t_xlate_rare.inc"

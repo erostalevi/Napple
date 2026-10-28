@@ -67,6 +67,20 @@ int main(void) {
     svc_call(af, 90, &on, 1, &c); CHECK(AS()->crash_report_enabled == 1, "EnableApplicationCrashReport");
     /* cmd 210 hands the guest a copy handle (an unsignalled event): a reply without one left Animal Crossing spinning on WaitSynchronization(handle 0) */
     svc_call(af, 210, NULL, 0, &c); CHECK(c.nout_copy == 1 && c.out_copy[0] != 0 && c.nout_objects == 0 && !event_is_signaled(c.out_copy[0]), "cmd 210 returns an event copy handle");
+    /* rows made impl by ipc-polish: the answers a single-program, offline title sees */
+    svc_call(sc, 41, NULL, 0, &c); CHECK(c.result == 0x1480, "IsSystemBufferSharingEnabled: not granted to an application");
+    svc_call(af, 110, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == -1, "GetPreviousProgramIndex: -1 (not started by another program)");
+    svc_call(af, 20, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == 0, "EnsureSaveData: no extra size needed");
+    { uint32_t kind = 2; svc_call(af, 1, &kind, 4, &c); CHECK(c.result == 0 && c.nout_objects == 1 && ((Storage *)c.out_objects[0]->state)->size == 0x88, "PopLaunchParameter(account preselect) hands a 0x88 storage once");
+      uint32_t magic; memcpy(&magic, ((Storage *)c.out_objects[0]->state)->data, 4); CHECK(magic == 0xC79497CA, "the preselected-user parameter carries its magic");
+      svc_call(af, 1, &kind, 4, &c); CHECK(c.result == 0x480, "PopLaunchParameter: second pop has no data");
+      kind = 1; svc_call(af, 1, &kind, 4, &c); CHECK(c.result == 0x480, "PopLaunchParameter(other kind): no data"); }
+    svc_call(af, 26, NULL, 0, &c); CHECK(SVC_OUT(&c, int64_t, 0) == 0x2000000 && SVC_OUT(&c, int64_t, 8) == 0x2000000, "GetSaveDataSize: 32 MiB defaults without a control.nacp");
+    { char dd[] = "/tmp/napple-applet-nacp-XXXXXX"; const char *saved = g_cfg.data_dir; g_cfg.data_dir = mkdtemp(dd);
+      static uint8_t nacp[0x4000]; int64_t sz = 0x500000, jr = 0x100000; memcpy(nacp + 0x3080, &sz, 8); memcpy(nacp + 0x3088, &jr, 8);
+      char path[300]; snprintf(path, sizeof path, "%s/control.nacp", dd); FILE *f = fopen(path, "wb"); fwrite(nacp, 1, sizeof nacp, f); fclose(f);
+      svc_call(af, 26, NULL, 0, &c); CHECK(SVC_OUT(&c, int64_t, 0) == sz && SVC_OUT(&c, int64_t, 8) == jr, "GetSaveDataSize reads UserAccountSaveDataSize / JournalSize from control.nacp");
+      remove(path); rmdir(dd); g_cfg.data_dir = saved; }
     printf("{\"test\":\"svc_applet\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

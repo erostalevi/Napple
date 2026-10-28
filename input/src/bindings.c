@@ -3,6 +3,9 @@
 #include "tinyjson.h"
 #include <stdio.h>
 #include <string.h>
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#endif
 
 /* macOS virtual keycodes of the default layout */
 enum {
@@ -82,7 +85,11 @@ void napple_bindings_default(napple_bindings *b) {
     b->trigger_threshold = 0.5f;
     memset(b->invert, 0, sizeof b->invert);
     b->style = NAPPLE_STYLE_PREF_AUTO;
+#if defined(TARGET_OS_IPHONE) && TARGET_OS_IPHONE
+    b->operation_mode = 1; /* iPhone / iPad: handheld (720p) by default, a 1080p docked render target costs memory and heat a phone can spare (input.json or NAPPLE_OP_MODE=docked overrides) */
+#else
     b->operation_mode = 0;
+#endif
 }
 
 /* 0 if the table is acceptable */

@@ -38,15 +38,11 @@ if [ "${VPX:-0}" = 1 ] && [ ! -f "$PREFIX/lib/libvpx.a" ]; then   # optional: VP
   SRC=${VPX_SRC:-$OUT/src/libvpx}
   [ -d "$SRC" ] || fetch https://github.com/webmproject/libvpx/archive/refs/tags/v1.14.1.tar.gz "$SRC"
   mkdir -p "$OUT/vpx-build$SFX"
-  if [ "$SDKNAME" = iphonesimulator ]; then   # libvpx's darwin targets force the macOS SDK; build as a generic arm64 target with the Simulator toolchain instead (NEON intrinsics still on)
-    TC="xcrun --sdk iphonesimulator clang -target arm64-apple-ios$MIN-simulator -isysroot $SDK"
-    TCXX="xcrun --sdk iphonesimulator clang++ -target arm64-apple-ios$MIN-simulator -isysroot $SDK"
-    (cd "$OUT/vpx-build$SFX" && CC="$TC" CXX="$TCXX" AS="$TC" LD="$TC" AR="xcrun ar" "$SRC/configure" --target=arm64-linux-gcc --prefix="$PREFIX" --disable-examples --disable-tools --disable-docs \
-        --disable-unit-tests --enable-vp9-decoder --disable-vp8 --disable-vp9-encoder --enable-pic --disable-install-bins && make -j 8 && make install)
-  else
-  (cd "$OUT/vpx-build$SFX" && "$SRC/configure" --target=arm64-darwin20-gcc --prefix="$PREFIX" --disable-examples --disable-tools --disable-docs \
-      --disable-unit-tests --enable-vp9-decoder --disable-vp8 --disable-vp9-encoder --enable-pic --extra-cflags="-isysroot $SDK $VMINFLAG" \
-      --extra-cxxflags="-isysroot $SDK $VMINFLAG" && make -j 8 && make install)
-  fi
+  # libvpx's darwin targets force the macOS SDK: build as a generic arm64 target with the iOS / Simulator toolchain instead (NEON intrinsics still on)
+  TRIPLE=arm64-apple-ios$MIN; [ "$SDKNAME" = iphonesimulator ] && TRIPLE=$TRIPLE-simulator
+  TC="xcrun --sdk $SDKNAME clang -target $TRIPLE -isysroot $SDK"
+  TCXX="xcrun --sdk $SDKNAME clang++ -target $TRIPLE -isysroot $SDK"
+  (cd "$OUT/vpx-build$SFX" && CC="$TC" CXX="$TCXX" AS="$TC" LD="$TC" AR="xcrun ar" "$SRC/configure" --target=arm64-linux-gcc --prefix="$PREFIX" --disable-examples --disable-tools --disable-docs \
+      --disable-unit-tests --enable-vp9-decoder --disable-vp8 --disable-vp9-encoder --enable-pic --disable-install-bins && make -j 8 && make install)
 fi
 echo "ok: $PREFIX"

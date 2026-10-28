@@ -1,0 +1,194 @@
+[package]
+name = "napple-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Not part of the default workspace (own [workspace] table): `cargo test --workspace` never builds it.
+# Run with `cargo +nightly fuzz run <target>` from this folder; see docs/guides/fuzzing.md.
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = ["."]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+aes = "0.8"
+xts-mode = "0.5"
+serde_json = "1"
+napple-core = { path = "../crates/napple-core" }
+napple-build = { path = "../crates/napple-build" }
+napple-mods = { path = "../crates/napple-mods" }
+napple-rewrite = { path = "../crates/napple-rewrite" }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "bktr_nca"
+path = "fuzz_targets/bktr_nca.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "bktr_tables"
+path = "fuzz_targets/bktr_tables.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cheats"
+path = "fuzz_targets/cheats.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cnmt"
+path = "fuzz_targets/cnmt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hfs0"
+path = "fuzz_targets/hfs0.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ingest"
+path = "fuzz_targets/ingest.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ips"
+path = "fuzz_targets/ips.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ivfc"
+path = "fuzz_targets/ivfc.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "keyfile"
+path = "fuzz_targets/keyfile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "manifest_config"
+path = "fuzz_targets/manifest_config.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nacp"
+path = "fuzz_targets/nacp.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "napmod"
+path = "fuzz_targets/napmod.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nca"
+path = "fuzz_targets/nca.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ncz"
+path = "fuzz_targets/ncz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "npdm"
+path = "fuzz_targets/npdm.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nro"
+path = "fuzz_targets/nro.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nso"
+path = "fuzz_targets/nso.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nso_rewrite"
+path = "fuzz_targets/nso_rewrite.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pchtxt"
+path = "fuzz_targets/pchtxt.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "pfs0"
+path = "fuzz_targets/pfs0.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "romfs"
+path = "fuzz_targets/romfs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ticket"
+path = "fuzz_targets/ticket.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xci"
+path = "fuzz_targets/xci.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "zip_firmware"
+path = "fuzz_targets/zip_firmware.rs"
+test = false
+doc = false
+bench = false

@@ -7,7 +7,7 @@ INC     := -Iinclude -Isrc -I../input/include -I../audio/include -I../runtime/sr
 CSRC    := $(wildcard src/*.c)
 MSRC    := $(wildcard src/*.m)
 OBJ     := $(patsubst src/%.c,build/%.o,$(CSRC)) $(patsubst src/%.m,build/%.o,$(MSRC))
-FW      := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Metal -framework Foundation -framework AVFoundation -framework CoreMedia -framework UniformTypeIdentifiers
+FW      := -framework Cocoa -framework QuartzCore -framework CoreVideo -framework Metal -framework Foundation -framework AVFoundation -framework CoreMedia -framework UniformTypeIdentifiers -framework WebKit
 SIBLINGS:= ../input/libnapple_input.a ../audio/libnapple_audio.a /opt/homebrew/opt/opus/lib/libopus.a
 SFW     := -framework GameController -framework CoreHaptics -framework AudioToolbox -framework CoreAudio
 
@@ -42,10 +42,15 @@ test: build/test_settings build/test_window
 	@cmp src/tinyjson.h ../input/src/tinyjson.h && echo "tinyjson.h copies identical"
 	./build/test_settings
 	./build/test_window
+# Interactive-free check of the applet sheets (they open real windows for about a second each; NAPPLE_SHEET_SHOT=<dir> keeps their screenshots).
+build/test_sheets: tests/test_sheets.m libnapple_frontend.a $(SIBLINGS)
+	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
+test-sheets: build/test_sheets
+	./build/test_sheets
 demo: build/demo_window
 	./build/demo_window
 -include $(OBJ:.o=.d)
 
 clean:
 	rm -rf build libnapple_frontend.a
-.PHONY: all test demo clean
+.PHONY: all test test-sheets demo clean

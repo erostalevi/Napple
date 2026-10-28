@@ -26,15 +26,18 @@ int main(void) {
     restart(); j = journal_get(live);
     CHECK(has(live, "slot0.bin", "A1") && !has(live, "slot1.bin", NULL), "restart rolls back the uncommitted writes");
 
+    /* a commit of an unchanged root does nothing (no snapshot churn) and still counts */
+    { unsigned c0 = j->commits; CHECK(journal_commit(j) == 0 && j->commits == c0 + 1 && has(j->committed, "slot0.bin", "A1"), "clean commit is a no-op"); }
+
     /* a commit that completes survives a restart */
-    put(live, "slot1.bin", "B1"); put(live, "slot0.bin", "A3"); CHECK(journal_commit(j) == 0, "second commit");
+    put(live, "slot1.bin", "B1"); put(live, "slot0.bin", "A3"); journal_mark_dirty(j); CHECK(journal_commit(j) == 0, "second commit");
     restart(); j = journal_get(live);
     CHECK(has(live, "slot0.bin", "A3") && has(live, "slot1.bin", "B1"), "committed state survives a restart");
 
     /* a file deleted before the commit is gone afterwards; deleted after the last commit comes back */
     { char p[1400]; snprintf(p, sizeof p, "%s/slot1.bin", live); unlink(p); }
     restart(); j = journal_get(live); CHECK(has(live, "slot1.bin", "B1"), "uncommitted delete rolled back");
-    { char p[1400]; snprintf(p, sizeof p, "%s/slot1.bin", live); unlink(p); } CHECK(journal_commit(j) == 0, "commit the delete");
+    { char p[1400]; snprintf(p, sizeof p, "%s/slot1.bin", live); unlink(p); } journal_mark_dirty(j); CHECK(journal_commit(j) == 0, "commit the delete");
     restart(); j = journal_get(live); CHECK(!has(live, "slot1.bin", NULL), "committed delete persists");
 
     /* crash between "committed -> previous" and "committing -> committed": previous is restored */
@@ -43,7 +46,7 @@ int main(void) {
     CHECK(has(live, "slot0.bin", "A3") && !path_exists(j->old) && !path_exists(j->tmp) && path_exists(j->committed), "interrupted commit recovers the last complete snapshot");
 
     /* nested directories are part of the snapshot */
-    { char d[1400]; snprintf(d, sizeof d, "%s/sub/deeper", live); mkdirs(d); put(d, "f.bin", "deep"); } CHECK(journal_commit(j) == 0, "commit with nested dirs");
+    { char d[1400]; snprintf(d, sizeof d, "%s/sub/deeper", live); mkdirs(d); put(d, "f.bin", "deep"); } journal_mark_dirty(j); CHECK(journal_commit(j) == 0, "commit with nested dirs");
     restart(); j = journal_get(live); { char d[1400]; snprintf(d, sizeof d, "%s/sub/deeper", live); CHECK(has(d, "f.bin", "deep"), "nested files restored"); }
 
     /* a save from before the journal existed (directory without marker) is adopted as the first committed state */
@@ -54,7 +57,7 @@ int main(void) {
     char fresh[1100]; snprintf(fresh, sizeof fresh, "%s/account/bbbbbbbb", base); SaveJournal *fj = journal_get(fresh); put(fresh, "x.bin", "X"); journal_mark_dirty(fj);
     restart(); fj = journal_get(fresh); CHECK(!has(fresh, "x.bin", NULL), "first-ever save never committed: discarded"); j = journal_get(live);
     /* open file descriptors keep working across a commit (the live directory is never swapped) */
-    char fp[1400]; snprintf(fp, sizeof fp, "%s/open.bin", live); int fd = open(fp, O_CREAT | O_RDWR, 0644); (void)write(fd, "123", 3);
+    char fp[1400]; snprintf(fp, sizeof fp, "%s/open.bin", live); int fd = open(fp, O_CREAT | O_RDWR, 0644); (void)write(fd, "123", 3); journal_mark_dirty(j); /* IFile::Write marks the root dirty */
     CHECK(journal_commit(j) == 0, "commit with an open file"); (void)pwrite(fd, "456", 3, 3); close(fd);
     CHECK(has(live, "open.bin", "123456") && has(j->committed, "open.bin", "123"), "writes after the commit through an open fd stay uncommitted");
     char cmd[1200]; snprintf(cmd, sizeof cmd, "rm -rf %s", base); (void)system(cmd);

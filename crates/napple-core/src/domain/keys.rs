@@ -44,6 +44,11 @@ impl KeySet {
     /// Never overwrites a key already present.
     fn derive_missing(&mut self) {
         let dec = |key: &[u8], data: &[u8]| -> Vec<u8> {
+            // A user key file may carry any hex length: only a 16-byte key is an AES-128 key (an empty
+            // result is dropped by the length filter below, so a malformed source key derives nothing).
+            if key.len() != 16 {
+                return Vec::new();
+            }
             let c = Aes128::new(GenericArray::from_slice(key));
             let mut out = data.to_vec();
             for b in out.as_chunks_mut::<16>().0 {
@@ -159,5 +164,22 @@ mod tests {
     #[test]
     fn empty_rejected() {
         assert!(KeySet::parse("garbage\n").is_err());
+    }
+
+    #[test]
+    fn odd_length_master_keys_derive_nothing_instead_of_panicking() {
+        // 32-byte master_key_00 / aes_kek_generation_source were fed to AES-128 as keys (found by cargo-fuzz).
+        let k = format!(
+            "master_key_00 = {}\naes_kek_generation_source = {}\naes_key_generation_source = {}\n\
+             titlekek_source = {}\nkey_area_key_application_source = {}\n",
+            "11".repeat(32),
+            "22".repeat(16),
+            "33".repeat(16),
+            "44".repeat(16),
+            "55".repeat(16)
+        );
+        let ks = KeySet::parse(&k).unwrap();
+        assert!(!ks.has("titlekek_00"));
+        assert!(!ks.has("key_area_key_application_00"));
     }
 }

@@ -10,6 +10,10 @@ typedef struct {
 static void ws(Cur *c) {
     while (c->p < c->end && (*c->p == ' ' || *c->p == '\n' || *c->p == '\t' || *c->p == '\r')) c->p++;
 }
+static int lit(const Cur *c, const char *w) { /* the literal w at the cursor, inside the text */
+    size_t n = strlen(w);
+    return (size_t)(c->end - c->p) >= n && !memcmp(c->p, w, n);
+}
 static JsonNode *node(int type) {
     JsonNode *n = calloc(1, sizeof *n);
     if (n) n->type = type;
@@ -45,7 +49,8 @@ static char *parse_string(Cur *c) {
     }
     c->p++;
     *o = 0;
-    return out;
+    char *fit = realloc(out, (size_t)(o - out) + 1); /* the buffer was sized for the rest of the text: keep only what the string needs */
+    return fit ? fit : out;
 }
 
 static JsonNode *parse_value(Cur *c) {
@@ -99,21 +104,25 @@ static JsonNode *parse_value(Cur *c) {
             ws(c);
             if (c->p < c->end && *c->p == ',') c->p++;
         }
-    } else if (!strncmp(c->p, "true", 4) || !strncmp(c->p, "false", 5)) {
+    } else if (lit(c, "true") || lit(c, "false")) {
         n = node(J_BOOL);
-        n->num = *c->p == 't';
-        c->p += n->num ? 4 : 5;
-    } else if (!strncmp(c->p, "null", 4)) {
+        if (n) n->num = *c->p == 't';
+        c->p += *c->p == 't' ? 4 : 5;
+    } else if (lit(c, "null")) {
         n = node(J_NULL);
         c->p += 4;
     } else {
-        char *e;
+        /* the number token is copied out: strtod would read on past `end` (the text is not necessarily NUL-terminated) */
+        char tok[64], *e;
+        size_t k = 0;
+        while (c->p + k < c->end && k < sizeof tok - 1 && strchr("0123456789+-.eE", c->p[k]) && c->p[k]) tok[k] = c->p[k], k++;
+        tok[k] = 0;
         n = node(J_NUM);
-        n->num = strtod(c->p, &e);
-        if (e == c->p) {
+        if (n) n->num = strtod(tok, &e);
+        if (!n || e == tok) {
             free(n);
             n = NULL;
-        } else c->p = e;
+        } else c->p += e - tok;
     }
     c->depth--;
     return n;

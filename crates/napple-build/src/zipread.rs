@@ -105,7 +105,9 @@ impl ZipArchive {
                     return Err(bad("entry too large"));
                 }
                 let comp = read_vec(&*raw, 0, e.csize as usize)?;
-                let mut out = Vec::with_capacity(e.usize as usize);
+                // Deflate expands at most ~1032x: never trust `usize` for the up-front reservation.
+                let mut out =
+                    Vec::with_capacity(e.usize.min(e.csize.saturating_mul(1032)) as usize);
                 flate2::read::DeflateDecoder::new(&comp[..])
                     .take(MAX_INFLATED)
                     .read_to_end(&mut out)

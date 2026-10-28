@@ -9,6 +9,7 @@
 #include "bsd_core.h"
 #include "nfp_core.h"
 #include "amiibo_lib_core.h"
+#include <limits.h>
 #include <time.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -770,7 +771,11 @@ static void bsd_select(IpcObject *s, IpcCall *c) {
         if (p) memcpy(set[k], p, bytes < (size_t)b->size ? bytes : (size_t)b->size), have[k] = 1;
     }
     int64_t sec = c->in_size >= 24 ? IPC_IN(c, int64_t, 8) : 0, usec = c->in_size >= 24 ? IPC_IN(c, int64_t, 16) : 0;
-    int timeout = (sec < 0 || usec < 0) ? -1 : (int)(sec * 1000 + usec / 1000);
+    int timeout = -1;
+    if (sec >= 0 && usec >= 0) { /* guest values: no overflow, saturate at INT_MAX */
+        int64_t ms = sec > 0x1fffff ? INT_MAX : sec * 1000 + usec / 1000;
+        timeout = ms > INT_MAX ? INT_MAX : (int)ms;
+    }
     int r = bsdg_select(bsd_g(), nfds, have[0] ? set[0] : NULL, have[1] ? set[1] : NULL, have[2] ? set[2] : NULL, timeout, &err);
     for (unsigned k = 0; k < 3; k++) {
         const IpcBuf *b = ipc_out_buf(c, k);
@@ -923,6 +928,7 @@ typedef struct {
     uint32_t w[3][8]; /* writable ends of the activate, deactivate and availability events handed out so far */
     unsigned nw[3];
     uint8_t keep_session; /* nfc:user KeepPassThroughSession */
+    uint8_t system;       /* handed out by nfc:sys CreateSystemInterface (the firmware applets' view of the reader) */
 } NfpSvc;
 static NfpSvc *nfp_svcs[8];
 
@@ -1276,12 +1282,20 @@ static void nfc_is_enabled(IpcObject *s, IpcCall *c) {
 }
 static void nfc_pass_through(IpcObject *s, IpcCall *c) {
     NFP_SVC(s);
-    NFP_CHECK_HANDLE(c);
     const IpcBuf *in = ipc_in_buf(c, 0), *out = ipc_out_buf(c, 0);
     const uint8_t *cmd = in && in->size ? ipc_buf_ptr(in) : NULL;
     uint8_t resp[0x100];
     long n = -1;
-    if (cmd) NFP_LOCKED(svc, n = nfc_passthrough(&svc->dev, cmd, (size_t)in->size, resp, sizeof resp));
+    if (!nfp_handle_ok(c) || !cmd) {
+        if (!svc->system) {
+            c->result = NFP_R_DEVICE_NOT_FOUND;
+            return;
+        }
+        /* The Mii Maker probes the console's reader with a pass-through on the system interface right after CreateSystemInterface, before any ListDevices
+         * or tag: the console answers it, so an empty success keeps the applet going (an error here is fatal to it: ThrowFatal 2115-0064, seen 2026-10-27). */
+        LOG("nfp", "nfc:sys pass-through before a device is selected: answered empty");
+        n = 0;
+    } else NFP_LOCKED(svc, n = nfc_passthrough(&svc->dev, cmd, (size_t)in->size, resp, sizeof resp));
     if (n < 0) {
         c->result = NFP_R_WRONG_DEVICE_STATE;
         return;
@@ -1327,6 +1341,18 @@ static void nfc_create_user(IpcObject *s, IpcCall *c) {
 static const IpcCmd nfc_cmds[] = {{0, "CreateUserInterface", nfc_create_user, IPC_IMPL}};
 static IpcObject *nfc_open(void) { return IPC_OBJECT("nfc:user", nfc_cmds, NULL, NULL); }
 static IpcObject *nfp_open(void) { return IPC_OBJECT("nfp:user", nfp_cmds, NULL, NULL); }
+/* nfc:sys / nfp:sys (the firmware's NFC applets): command 0 CreateSystemInterface hands out the same simulated interfaces as the user services (the system interfaces
+ * add only commands a title never calls). */
+static void nfc_create_sys(IpcObject *s, IpcCall *c) {
+    (void)s;
+    NfpSvc *svc = nfp_svc_new();
+    svc->system = 1;
+    ipc_out_object(c, IPC_OBJECT("INfcSystem", nfc_user_cmds, svc, nfp_svc_destroy));
+}
+static const IpcCmd nfp_sys_cmds[] = {{0, "CreateSystemInterface", nfp_create_user, IPC_IMPL}};
+static const IpcCmd nfc_sys_cmds[] = {{0, "CreateSystemInterface", nfc_create_sys, IPC_IMPL}};
+static IpcObject *nfp_sys_open(void) { return IPC_OBJECT("nfp:sys", nfp_sys_cmds, NULL, NULL); }
+static IpcObject *nfc_sys_open(void) { return IPC_OBJECT("nfc:sys", nfc_sys_cmds, NULL, NULL); }
 
 /* nfc:mf:u IMifare: the reader calls work like nfc:user's (ListDevices, StartDetection, StopDetection, GetTagInfo, events, states). Read / Write of Mifare
  * Classic blocks cannot be served by an NTAG215 amiibo tag: they report the tag as not a Mifare card. */
@@ -1692,6 +1718,8 @@ void service_register_offline(void) {
     ipc_register_service("ssl", ssl_open);
     ipc_register_service("nfp:user", nfp_open);
     ipc_register_service("nfc:user", nfc_open);
+    ipc_register_service("nfp:sys", nfp_sys_open);
+    ipc_register_service("nfc:sys", nfc_sys_open);
     ipc_register_service("nfc:mf:u", mifare_open);
     ipc_register_service("bsd:u", bsd_open);
     ipc_register_service("bsd:s", bsd_open);

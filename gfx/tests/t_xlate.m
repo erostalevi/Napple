@@ -616,36 +616,8 @@ int main(void) {
                 if (r->msl) MSL_COMPILES(r->msl, "JMP/JCAL/JMX");
                 maxwell_free(r);
             }
-            /* the instructions no application shader reaches are refused by name */
-            struct {
-                const char *name, *why;
-                uint64_t w;
-            } rcases[] = {
-                /* VABSDIFF4, TXA and IMADSP are translated since the shader-stages package (tests/t_xlate_stages.inc); OUT outside a geometry shader is still refused */
-                {"IDP", "IDP", EV(0x53f8000000000000ull, 1, 2, 3, 0)},
-                {"B2R", "control/system", EV(0xf0b8000000000000ull, 1, 2, 0, 0)},
-                {"R2B", "control/system", EV(0xf0c0000000000000ull, 1, 2, 0, 0)},
-                {"BPT", "control/system", EV(0xe3a0000000000000ull, 0, 0, 0, 0)},
-                {"IDE", "control/system", EV(0xe390000000000000ull, 0, 0, 0, 0)},
-                {"RAM", "control/system", EV(0xe380000000000000ull, 0, 0, 0, 0)},
-                {"SAM", "control/system", EV(0xe370000000000000ull, 0, 0, 0, 0)},
-                {"RTT", "control/system", EV(0xe360000000000000ull, 0, 0, 0, 0)},
-                {"GETCRSPTR", "control/system", EV(0xe2c0000000000000ull, 1, 0, 0, 0)},
-                {"GETLMEMBASE", "control/system", EV(0xe2d0000000000000ull, 1, 0, 0, 0)},
-                {"SETCRSPTR", "control/system", EV(0xe2e0000000000000ull, 0, 2, 0, 0)},
-                {"SETLMEMBASE", "control/system", EV(0xe2f0000000000000ull, 0, 2, 0, 0)},
-                {"PEXIT", "control/system", EV(0xe230000000000000ull, 0, 0, 0, 0)},
-                {"LONGJMP", "control/system", EV(0xe310000000000000ull, 0, 0, 0, 0)},
-                {"PLONGJMP", "control/system", EV(0xe280000000000000ull, 0, 0, 0, 0)},
-                {"ISBERD", "control/system", EV(0xefd0000000000000ull, 1, 2, 0, 0)},
-                {"STP", "control/system", EV(0xeea0000000000000ull, 0, 0, 0, 0)},
-            };
-            for (size_t i = 0; i < sizeof rcases / sizeof *rcases; i++) {
-                uint64_t ins[] = {rcases[i].w, ins_exit()};
-                ShaderInfo *r = xl_ins(STAGE_FRAGMENT, ins, 2, z, 0xf);
-                CHECK(REFUSED(r, rcases[i].why), "%s is refused by name (msl %s, error \"%s\")", rcases[i].name, r->msl ? "present" : "null", r->error);
-                maxwell_free(r);
-            }
+            /* the control/system ops (BPT IDE RAM SAM RTT PEXIT LONGJMP PLONGJMP GET/SETCRSPTR GET/SETLMEMBASE B2R R2B ISBERD STP) and IDP are translated since
+             * the shader-rare-ops round: tests/t_xlate_rare.inc */
 #undef EV
 #undef VREG
 #undef VBSEL

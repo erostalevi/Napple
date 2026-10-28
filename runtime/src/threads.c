@@ -18,6 +18,7 @@
 #include "kthread.h"
 #include "timescale.h"
 #include <errno.h>
+#include <signal.h>
 #include <sched.h>
 #include <stdatomic.h>
 #include <stdio.h>
@@ -27,6 +28,7 @@
 #include <unistd.h>
 #ifdef __APPLE__
 #include <pthread/qos.h>
+#include <sys/ucontext.h>
 #include <mach/mach.h>
 #define thread_set_interactive() pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0)
 #define cond_wait_relative(cv, m, rel) pthread_cond_timedwait_relative_np((cv), (m), (rel))
@@ -234,6 +236,113 @@ static void core_checkpoint(void) {
     core_take(t);
     pthread_mutex_unlock(&G);
 }
+
+/* ---- timer preemption -------------------------------------------------------------------------------------------------
+ * Horizon switches threads on a timer as well as at svc: a thread of better priority that waits for a core takes it from a running one, and
+ * equal-priority threads share a core in 10 ms slices. A guest thread that spins in user code (a flag poll, a try-lock loop) never reaches
+ * an svc, so on its own the cooperative scheduler would keep the core for good and starve the waiter (SMO: a prio-47 thread spinning on core
+ * 0 while the prio-44 main thread waited). The slice thread looks at every core a few ms apart; when a thread waits for a core that its owner
+ * should give up, it sends the owner SIGPROF. The handler (on the thread's signal stack) switches only when the interrupted pc is guest code
+ * (never inside the runtime, so no host lock is held) and the thread is not inside a preemption-disabled section (TLR disable_count: then
+ * interrupt_flag is raised and SynchronizePreemptionState does the switch, as on the kernel). Threads inside an svc get the existing
+ * svc-exit checkpoint instead of a signal. NAPPLE_SLICE_MS=<n> sets the slice (default 10), 0 turns timer preemption off. */
+#define SLICE_DEFAULT_MS 10
+#define SLICE_TICK_NS 2000000
+static int64_t g_slice_ns = SLICE_DEFAULT_MS * 1000000ll;
+static int g_slice_started, g_preempt_any_pc;
+/* Host unit tests run "guest" code in plain C: every pc counts as preemptible there. */
+void threads_preempt_test_any_pc(int on) { g_preempt_any_pc = on; }
+static uint64_t sig_pc(void *uc) {
+#if defined(__APPLE__) && defined(__aarch64__)
+    return ((ucontext_t *)uc)->uc_mcontext->__ss.__pc;
+#else
+    (void)uc;
+    return 0;
+#endif
+}
+static void preempt_handler(int sig, siginfo_t *si, void *uc) {
+    (void)sig;
+    (void)si;
+    int saved = errno;
+    Thread *t = self_or_null();
+    if (t && t->slice_req && (g_preempt_any_pc || module_pc_is_guest_code(sig_pc(uc)))) {
+        t->slice_req = 0;
+        volatile uint16_t *disable = tlr_word(t, TLR_DISABLE_COUNT);
+        if (disable && *disable) {
+            *tlr_word(t, TLR_INTERRUPT_FLAG) = 1;
+            t->preempt = 1; /* switched by SynchronizePreemptionState */
+        } else {
+            pthread_mutex_lock(&G);
+            if (t->cur_core >= 0) {
+                t->nslice++;
+                core_put(t);
+                core_take(t);
+            }
+            pthread_mutex_unlock(&G);
+        }
+    }
+    errno = saved;
+}
+/* One look at every core (G held): whom should the timer ask to give its core up. Returns how many threads were asked; `signals` gets them. */
+static int slice_scan(int64_t now, Thread **signals) {
+    int n = 0;
+    for (int c = 0; c < NCORE; c++) {
+        Thread *o = g_core_owner[c];
+        if (!o || o->exited || o->wkind || !o->pt || o == self_or_null()) continue;
+        int need = 0;
+        for (Thread *w = g_core_wait; w && !need; w = w->cnext) {
+            if (!core_allowed(w, c)) continue;
+            if (g_core_resv[c] && g_core_resv[c] != w) continue;
+            need = w->prio < o->prio || (w->prio == o->prio && now - (int64_t)o->core_since >= g_slice_ns);
+        }
+        if (!need) continue;
+        if (__atomic_load_n(&o->svc_regs, __ATOMIC_ACQUIRE)) o->preempt = 1; /* inside an svc: its exit checkpoint does the switch */
+        else {
+            o->slice_req = 1;
+            signals[n++] = o;
+        }
+    }
+    return n;
+}
+int threads_preempt_scan_for_test(Thread **signals) {
+    int n;
+    pthread_mutex_lock(&G);
+    n = slice_scan((int64_t)runtime_now_ns(), signals);
+    pthread_mutex_unlock(&G);
+    return n;
+}
+static void *slice_main(void *arg) {
+    (void)arg;
+    sigset_t all;
+    sigfillset(&all);
+    pthread_sigmask(SIG_BLOCK, &all, NULL);
+    for (;;) {
+        usleep(SLICE_TICK_NS / 1000);
+        Thread *sig[NCORE];
+        pthread_mutex_lock(&G);
+        int n = slice_scan((int64_t)runtime_now_ns(), sig);
+        for (int i = 0; i < n; i++) pthread_kill(sig[i]->pt, SIGPROF);
+        pthread_mutex_unlock(&G);
+    }
+    return NULL;
+}
+/* Starts the slice thread (once; the main thread registers first). */
+void threads_preempt_start(void) {
+    if (g_slice_started || !cores_enabled()) return;
+    const char *e = getenv("NAPPLE_SLICE_MS");
+    if (e && *e) g_slice_ns = (int64_t)atoi(e) * 1000000ll;
+    if (g_slice_ns <= 0) return;
+    g_slice_started = 1;
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = preempt_handler;
+    sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPROF, &sa, NULL);
+    pthread_t pt;
+    pthread_create(&pt, NULL, slice_main, NULL);
+    pthread_detach(pt);
+}
 int threads_current_core(void) {
     Thread *t = self_or_null();
     return t ? (t->cur_core >= 0 ? t->cur_core : t->core) : -1;
@@ -424,6 +533,7 @@ uint32_t threads_register_main(void) {
     pthread_mutex_unlock(&G);
     pthread_setspecific(g_key, t);
     t->tlr = pthread_getspecific(runtime_keys[2]);
+    threads_preempt_start();
     if (getenv("NAPPLE_PCPROF")) {
         pthread_t pt;
         pthread_create(&pt, NULL, pcprof_main, NULL);
@@ -658,6 +768,12 @@ static void svc_create_thread(uint64_t *r) {
     pthread_attr_destroy(&a);
     LOGV("kernel", "CreateThread %#x entry=%#llx sp=%#llx prio=%d core=%d", t->handle, (unsigned long long)t->entry, (unsigned long long)t->stack_top, prio,
          core);
+    if (getenv("NAPPLE_THREAD_LOG")) {
+        char w[96];
+        module_describe(t->entry, w, sizeof w);
+        LOG("threads", "CreateThread id %#llx handle %#x by thread %#llx: entry %s arg %#llx prio %d core %d", (unsigned long long)t->id, t->handle,
+            (unsigned long long)threads_current_id(), w, (unsigned long long)t->arg, prio, core);
+    }
     r[0] = 0;
     r[1] = t->handle;
 }
@@ -666,6 +782,7 @@ static void svc_start_thread(uint64_t *r) {
     Thread *t = thread_of((uint32_t)r[0]);
     if (t) {
         int first = !t->started;
+        if (first && getenv("NAPPLE_THREAD_LOG")) LOG("threads", "StartThread id %#llx by thread %#llx", (unsigned long long)t->id, (unsigned long long)threads_current_id());
         t->started = 1;
         pthread_cond_signal(&t->cv);
         if (first) core_handoff_note(t);

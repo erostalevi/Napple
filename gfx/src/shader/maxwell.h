@@ -69,6 +69,10 @@ typedef struct {
     bool flip_y;           /* lower-left window origin: flip clip y */
     bool upper_left;       /* fragment: the guest's window origin is upper-left (SR_Y_DIRECTION reads +1; lower-left, the default, reads -1) */
     uint32_t depth_slots;  /* NVN combined-texture binding slots (c2 + 0x20 + 8 * slot) that hold depth textures: sampled as depth2d, result (d, 0, 0, 1) */
+    uint32_t stencil_slots; /* ... that hold a stencil view (NVN depth-stencil mode STENCIL: the replay binds the X32_Stencil8 / Stencil8 view, pixel format uint). Same slot numbering
+                               as depth_slots; a slot in both masks is a stencil binding. The binding is declared `texture2d<uint> tN_u [[texture(N)]]` (2D, or `texture2d_array<uint>` for 2D
+                               arrays; other targets and depth comparison are refused) and sampled through the StencilTex wrapper: the result is (stencil, 0, 0, 1), the stencil value as an integer
+                               in .r (register bits = the integer, not a float). Level 0 only, nearest. Bindless handles are not covered by the mask. Part of the pipeline key. */
     bool point_prim;       /* vertex: the pipeline draws points (the point size output exists only then) */
     uint32_t vs_out_mask;  /* fragment: varyings the vertex shader provides (0 = unknown, all inputs are read) */
     uint32_t
@@ -100,6 +104,7 @@ typedef struct {
     uint32_t handle_offset; /* byte offset of the texture handle in the texture constant buffer (c2) */
     uint8_t type;           /* TEXTYPE_* */
     bool shadow, is_array, is_image, bindless, depth;
+    bool stencil; /* bound as a stencil view (ShaderKey.stencil_slots): the Metal texture must be a uint stencil view, not a float or depth texture */
     uint32_t bindless_cbuf, bindless_offset;
 } ShaderTexture;
 

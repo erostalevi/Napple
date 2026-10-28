@@ -77,9 +77,15 @@ int main(void) {
     CHECK(secs > 0.19 && secs < 0.23, "100 ms real at 2x = %.3f guest seconds of ticks", secs);
 
     /* wall clock skew is the accumulated difference (0 when the clock is never scaled) */
-    timescale_set(3.0, 0); real_sleep_ms(200);
-    int64_t skew = timescale_wall_skew_ns();
-    CHECK(skew > 300000000 && skew < 700000000, "wall skew after 0.2 s at 3x about +0.4 s (got %.3f s)", (double)skew / 1e9);
+    /* measured as a delta from the skew the earlier sections left (their retry loops run a variable time at 2x / 0.5x), over the real elapsed time (a
+     * loaded host can stretch 200 ms to 400 ms): the skew grows by 2x the real time at 3x either way */
+    timescale_set(3.0, 0);
+    uint64_t w0 = runtime_now_ns();
+    int64_t skew0 = timescale_wall_skew_ns();
+    real_sleep_ms(200);
+    int64_t skew = timescale_wall_skew_ns() - skew0;
+    double elapsed = (double)(runtime_now_ns() - w0) / 1e9, expect = 2.0 * elapsed;
+    CHECK(fabs((double)skew / 1e9 - expect) < 0.05 + 0.05 * expect, "wall skew grows by +%.3f s over %.3f s at 3x (got %.3f s)", expect, elapsed, (double)skew / 1e9);
     timescale_set(1.0, TS_MODE_VSYNC_ONLY); int64_t s1 = timescale_wall_skew_ns(); real_sleep_ms(100); int64_t s2 = timescale_wall_skew_ns();
     CHECK(s2 - s1 < 1000000 && s2 - s1 > -1000000, "vsync-only mode leaves the clock skew constant");
 

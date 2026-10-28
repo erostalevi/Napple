@@ -81,3 +81,4 @@ const DecoderBackend *decoder_backend_current(void);
 /* Installs a backend for engines created afterwards (existing ones keep theirs). NULL restores the null backend. Returns 0, or -1 and installs nothing when
  * the abi differs or open/close/decode is missing. */
 int decoder_backend_install(const DecoderBackend *b);
+extern const DecoderBackend decoder_backend_videotoolbox;

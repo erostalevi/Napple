@@ -25,6 +25,7 @@ static inline void napple_drawable_presented(id<MTLCommandBuffer> cb, id<MTLDraw
 #include "timeline.h"
 #include "shader/blob.h"
 #include "shader/maxwell.h"
+#include "stages.h"
 
 /* Buffer table layout shared with the translated shaders: cbuf k -> buffer(k) (0..17), gmem -> 17, rscale -> 18; vertex streams start at VB_BASE. */
 #define VB_BASE 19
@@ -75,7 +76,7 @@ GfxTex *mtl_tex_get(const texsnap *s, int for_gpu_write);                 /* fin
 void    mtl_tex_force_scale(GfxTex *t, float rx, float ry);                 /* re-allocate at guest size x (rx, ry): a pass mixed scaled and unscaled attachments; replay thread */
 void mtl_tex_debug_dump(GfxTex *t, const char *dir, unsigned layer);       /* NAPPLE_DRAWLOG_TEX debugging aid */
 void mtl_tex_prepare_sample(GfxTex *t);                                    /* upload if the CPU wrote the storage */
-id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, int has_view, int shader_type, int shadow);   /* sampled view */
+id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, int has_view, int shader_type, int shadow, int ds_mode);   /* sampled view; ds_mode: the texture's own NVNtextureDepthStencilMode (a view's overrides it) */
 uint32_t mtl_bcrt_pending(void);                    /* shadows of block-compressed render targets waiting to be copied back */
 void mtl_bcrt_flush(id<MTLCommandBuffer> cb);        /* copy them back (no encoder may be open on cb) */
 id<MTLTexture> mtl_tex_image_view(GfxTex *t, int kind, int type, int atomic);   /* surface image view (IMGKIND_*, TEXTYPE_*); nil when the texture type does not fit */
@@ -98,6 +99,7 @@ typedef struct pipe_key {
     vs_st stream[MAX_STREAMS];
     uint8_t attr_kind[32], rt_kind[8];
     uint32_t depth_slots[2];          /* per stage (vs, fs): binding slots holding depth textures */
+    uint32_t stencil_slots[2];        /* per stage (vs, fs): binding slots holding a stencil view (ds mode STENCIL: sampled as uint) */
     uint32_t img_int[2], img_uint[2]; /* per stage (vs, fs): image bindings whose texture is signed / unsigned integer (ShaderKey.image_*_mask) */
 } pipe_key;
 @interface GfxPipe : NSObject { @public id<MTLRenderPipelineState> ps; GfxShader *vs, *fs; int state; int claimed; /* build started (atomic 0 -> 1) */ } @end
@@ -108,6 +110,24 @@ void mtl_pipe_prefetch(const pipe_key *k);                /* start building a dr
 GfxPipe *mtl_pipe_get(const pipe_key *k);                  /* nil while compiling asynchronously */
 GfxShader *mtl_shader_for(uint64_t hash, const ShaderKey *key);   /* translated + compiled (async); never nil for a known blob */
 id<MTLComputePipelineState> mtl_compute_pipe(uint64_t hash, uint32_t img_int, uint32_t img_uint, GfxShader *__autoreleasing *sh);
+/* Stages beyond vertex / fragment (mtl_stages.inc, gfx.md section 13). A stage pipeline is the draw's normal key plus what the extra stage needs; built
+ * synchronously on first use, not persisted or prewarmed. */
+enum { SPK_CAPTURE = 1, SPK_GS_DRAW = 2, SPK_TESS = 3 };
+typedef struct stage_pipe_key {
+    pipe_key k;                     /* the draw's own key (vs, fs, attachments, blend, vertex layout) */
+    uint8_t mode;                   /* SPK_* */
+    uint8_t stage_out;              /* SPK_CAPTURE: the vertex program writes its stage-out records */
+    uint8_t gs_topo;                /* SPK_GS_DRAW: GS_OUT_* of the geometry program */
+    uint8_t tess_domain, tess_spacing, tess_winding, tess_cp; /* SPK_TESS: stages.h parameters, control points per patch */
+    uint8_t pad;
+    uint64_t prog;                  /* SPK_GS_DRAW: the geometry program; SPK_TESS: the tess eval program */
+    uint64_t gs_slots;              /* SPK_GS_DRAW: ShaderInfo.stage_slot_mask of the geometry program */
+    uint32_t xfb_id;                /* SPK_CAPTURE: content hash of the xfb layout below (0 = no transform feedback) */
+    uint32_t te_depth, te_stencil, te_img_int, te_img_uint; /* SPK_TESS: depth / stencil slots and integer images of the tess eval stage */
+    uint32_t pad2;
+} stage_pipe_key;
+GfxPipe *mtl_stage_pipe_get(const stage_pipe_key *k, const gfx_xfb_layout *xfb /* SPK_CAPTURE with xfb_id */);
+id<MTLComputePipelineState> mtl_compute_pipe_key(uint64_t hash, const ShaderKey *key, GfxShader *__autoreleasing *sh);   /* geometry / tess control kernels */
 void mtl_shader_init(void);
 void mtl_shader_shutdown(void);                             /* writes the binary archive */
 

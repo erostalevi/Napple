@@ -33,6 +33,15 @@ static int32_t br_se(Br *b) {
     uint32_t k = br_ue(b);
     return (k & 1) ? (int32_t)((k + 1) / 2) : -(int32_t)(k / 2);
 }
+/* The same values as ints that cannot overflow when a caller adds a small constant to them: clamped to +-2^30 (every use compares against far smaller bounds). */
+static int br_uei(Br *b) {
+    uint32_t v = br_ue(b);
+    return v > 0x3fffffffu ? 0x3fffffff : (int)v;
+}
+static int br_sei(Br *b) {
+    int32_t v = br_se(b);
+    return v > 0x3fffffff ? 0x3fffffff : v < -0x3fffffff ? -0x3fffffff : v;
+}
 /* Removes emulation prevention bytes (00 00 03 -> 00 00) into out; returns the new length. */
 static size_t unescape(const uint8_t *in, size_t n, uint8_t *out, size_t cap) {
     size_t o = 0;
@@ -65,7 +74,7 @@ static int next_nal(const uint8_t *d, size_t n, size_t *pos, size_t *start, size
 static void h264_skip_scaling(Br *b, int count) {
     int last = 8, next = 8;
     for (int j = 0; j < count; j++) {
-        if (next) { next = (last + br_se(b) + 256) % 256; }
+        if (next) { next = (last + br_sei(b) + 256) % 256; }
         last = next ? next : last;
     }
 }
@@ -84,9 +93,9 @@ int h264_parse_sps(const uint8_t *in, size_t n, H264Sps *o) {
     static const int high[] = {100, 110, 122, 244, 44, 83, 86, 118, 128, 138, 139, 134, 135};
     for (unsigned i = 0; i < sizeof high / sizeof *high; i++)
         if (o->profile_idc == high[i]) {
-            o->chroma_format_idc = (int)br_ue(&b);
+            o->chroma_format_idc = br_uei(&b);
             if (o->chroma_format_idc == 3) separate = (int)br_bit(&b);
-            o->bit_depth = 8 + (int)br_ue(&b);
+            o->bit_depth = 8 + br_uei(&b);
             br_ue(&b);
             br_bit(&b);       /* qpprime_y_zero_transform_bypass */
             if (br_bit(&b)) { /* seq_scaling_matrix_present */
@@ -96,7 +105,7 @@ int h264_parse_sps(const uint8_t *in, size_t n, H264Sps *o) {
             break;
         }
     br_ue(&b); /* log2_max_frame_num_minus4 */
-    o->poc_type = (int)br_ue(&b);
+    o->poc_type = br_uei(&b);
     if (o->poc_type == 0) br_ue(&b);
     else if (o->poc_type == 1) {
         br_bit(&b);
@@ -105,7 +114,7 @@ int h264_parse_sps(const uint8_t *in, size_t n, H264Sps *o) {
         uint32_t k = br_ue(&b);
         for (uint32_t i = 0; i < k && i < 256 && !b.err; i++) br_se(&b);
     }
-    o->num_ref_frames = (int)br_ue(&b);
+    o->num_ref_frames = br_uei(&b);
     br_bit(&b); /* gaps_in_frame_num_allowed */
     uint32_t wmb = br_ue(&b) + 1, hmap = br_ue(&b) + 1;
     o->frame_mbs_only = (int)br_bit(&b);
@@ -252,7 +261,7 @@ int h265_find_sps(const uint8_t *d, size_t n, H265Sps *o) {
         h265_skip_ptl(&b, msl);
         o->level_idc = 0;
         br_ue(&b); /* sps_seq_parameter_set_id */
-        o->chroma_format_idc = (int)br_ue(&b);
+        o->chroma_format_idc = br_uei(&b);
         if (o->chroma_format_idc == 3) br_bit(&b);
         uint32_t w = br_ue(&b), h = br_ue(&b);
         uint32_t cl = 0, cr = 0, ct = 0, cb = 0;
@@ -373,19 +382,19 @@ int h264_parse_pps(const uint8_t *in, size_t n, H264Pps *o) {
     size_t len = unescape(in, n < sizeof rb ? n : sizeof rb, rb, sizeof rb);
     Br b = {rb, len, 0, 0};
     memset(o, 0, sizeof *o);
-    o->pps_id = (int)br_ue(&b);
-    o->sps_id = (int)br_ue(&b);
+    o->pps_id = br_uei(&b);
+    o->sps_id = br_uei(&b);
     o->cabac = (int)br_bit(&b);
     o->bottom_field_pic_order = (int)br_bit(&b);
-    o->num_slice_groups = (int)br_ue(&b) + 1;
+    o->num_slice_groups = br_uei(&b) + 1;
     if (o->num_slice_groups > 1) return -1; /* FMO: Baseline/Extended only, no hardware decoder takes it */
-    o->num_ref_idx_l0 = (int)br_ue(&b) + 1;
-    o->num_ref_idx_l1 = (int)br_ue(&b) + 1;
+    o->num_ref_idx_l0 = br_uei(&b) + 1;
+    o->num_ref_idx_l1 = br_uei(&b) + 1;
     o->weighted_pred = (int)br_bit(&b);
     o->weighted_bipred_idc = (int)br_bits(&b, 2);
-    o->pic_init_qp = 26 + br_se(&b);
-    o->pic_init_qs = 26 + br_se(&b);
-    o->chroma_qp_index_offset = br_se(&b);
+    o->pic_init_qp = 26 + br_sei(&b);
+    o->pic_init_qs = 26 + br_sei(&b);
+    o->chroma_qp_index_offset = br_sei(&b);
     o->deblocking_filter_control = (int)br_bit(&b);
     o->constrained_intra_pred = (int)br_bit(&b);
     o->redundant_pic_cnt = (int)br_bit(&b);
@@ -394,7 +403,7 @@ int h264_parse_pps(const uint8_t *in, size_t n, H264Pps *o) {
     if (more_rbsp_data(&b)) {
         o->transform_8x8 = (int)br_bit(&b);
         if (br_bit(&b)) return b.err ? -1 : 0; /* pic_scaling_matrix_present: lists not read */
-        o->second_chroma_qp_index_offset = br_se(&b);
+        o->second_chroma_qp_index_offset = br_sei(&b);
         if (b.err) return -1;
     }
     return 0;
@@ -423,7 +432,7 @@ static void bw_ue(Bw *w, uint32_t v) {
     bw_bits(w, 0, z);
     for (int i = z; i >= 0; i--) bw_bit(w, (unsigned)((x >> i) & 1));
 }
-static void bw_se(Bw *w, int32_t v) { bw_ue(w, v > 0 ? (uint32_t)(2 * v - 1) : (uint32_t)(-2 * (int64_t)v)); }
+static void bw_se(Bw *w, int32_t v) { bw_ue(w, v > 0 ? (uint32_t)(2 * (int64_t)v - 1) : (uint32_t)(-2 * (int64_t)v)); }
 /* Appends the stop bit, pads to a byte, then writes header + escaped payload into out. Returns the NAL length or 0. */
 static size_t finish_nal(Bw *w, uint8_t header, uint8_t *out, size_t cap) {
     bw_bit(w, 1);
@@ -522,6 +531,10 @@ size_t h264_build_sps(const H264SpsFields *f, uint8_t *out, size_t cap) {
 size_t h264_build_pps(const H264Pps *p, uint8_t *out, size_t cap) {
     if (p->pps_id < 0 || p->pps_id > 255 || p->sps_id < 0 || p->sps_id > 31 || p->num_ref_idx_l0 < 1 || p->num_ref_idx_l0 > 32 || p->num_ref_idx_l1 < 1 ||
         p->num_ref_idx_l1 > 32 || (p->num_slice_groups > 1))
+        return 0;
+    /* QP values and offsets are small (the spec's ranges are within +-64); the picture info of a guest can hold anything, and p->pic_init_qp - 26 would overflow */
+    if (p->pic_init_qp < -128 || p->pic_init_qp > 128 || p->pic_init_qs < -128 || p->pic_init_qs > 128 || p->chroma_qp_index_offset < -128 ||
+        p->chroma_qp_index_offset > 128 || p->second_chroma_qp_index_offset < -128 || p->second_chroma_qp_index_offset > 128)
         return 0;
     uint8_t buf[32] = {0};
     Bw w = {buf, sizeof buf, 0, 0};

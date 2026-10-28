@@ -350,7 +350,8 @@ static void st_user_clock_difference(IpcObject *s, IpcCall *c) {
         c->result = HZ_RESULT(HZ_MOD_TIME, 200);
         return;
     }
-    int64_t ns = span * 1000000000ll;
+    int64_t ns;
+    __builtin_mul_overflow(span, 1000000000ll, &ns); /* guest-supplied snapshots: wraps, never signed overflow */
     IPC_OUT(c, ns);
 }
 /* CalculateMonotonicSystemClockBaseTimePoint(SystemClockContext) -> s64: context.offset + now - context.steady_time_point, or a clock mismatch error. */

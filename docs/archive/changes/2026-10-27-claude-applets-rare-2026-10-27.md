@@ -1,0 +1,10 @@
+# applets-rare: HLE web / offline web and photo viewer / album library applets (2026-10-27)
+
+Branch `claude/applets-rare-2026-10-27`, built on the `libapplet_register_handler` hook of applets-host. Linux cloud: **tested, not verified** (no macOS build).
+
+* `runtime/src/services/applet_web_core.[ch]`: WebArgs parse (header `{u16 entries; u16 pad; u32 shim}` + TLVs `{u16 type; u16 size; u32 pad}`; url, callback url, document path/kind, application id, screenshot flag), `web_offline_resolve` (strips `offline:`, query/fragment, rejects `..` and backslashes, directory -> `index.html`, checks the file exists under the HtmlDocument root), `web_file_url`, `WebCommonReturnValue` encoding (0x1010), and one handler for ids 0x13 (web) and 0x17 (offline web). `applet_web_register()` registers both; the HTML root comes from `applet_web_set_html_root()` or `NAPPLE_HTML_ROOT`.
+* `runtime/src/services/applet_album_core.[ch]`: photo viewer (0x15) over `caps_core` public calls: args `{u8 mode; u8 content}`, list, decoded image shown through a hook, select mode returns the picked 0x20-byte entry (`AlbumResult` 0x28), view always succeeds, select with no pick / empty album is cancelled. The caps state is static in `caps.c`, so it is handed over with `applet_album_set_source()`.
+* `runtime/src/services/applet_ui.h`: frontend hooks `applet_ui_open_web(url, offline, last_url, cap)` and `applet_ui_show_image(...)`, null defaults (web: user leaves at once on the requested page with exit reason "requested"; album: nothing is picked). A WKWebView / image viewer registers later on the Mac.
+* Tests: `runtime/tests/test_svc_applet_web.c` (128 checks) and `test_svc_applet_album.c` (57 checks), run with `sh runtime/tests/linux/run_applet.sh applet_web applet_album`.
+
+Verified vs not: all tested on Linux only. Tag numbers, exit-reason numbering, shim kinds and the album argument/result layouts are from memory of libnx's public headers and are [unverified] against a title. Nothing calls `applet_web_register()` / `applet_album_register()` / `applet_album_set_source()` yet (applet.c and caps.c are not this branch's files): see the integrator file.

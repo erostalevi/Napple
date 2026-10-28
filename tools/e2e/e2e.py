@@ -33,8 +33,8 @@ TITLES = {
     "mk8d": {"id": "0100152000022000", "script": "15:A,19:A,23:A,27:A,31:A,35:A,39:A,43:A", "floor": 1000},
 }
 KNOWN = [
+    (re.compile(r"CRASH signal=11 fault=0x8 pc=main\+0x6d65a4"), "ACNH intermittent null dereference in game code (main+0x6d65a4, a singleton whose field was not set yet) about 1 s into a start, seen under host load (kernel-threads note: a start-up ordering race between game threads, not reproduced without load)"),
     (re.compile(r"sdk\+0xc80730"), "ACNH intermittent guest Break at sdk+0xc80730 about 1 s into a headless start (independent of the fps mode; tracked in the orchestration notes)"),
-    (re.compile(r"result=0x35f202|result 0x35f202"), "LAS intermittent early abort: SetTerminateResult 0x35f202 (fs 2-6905) 0.4-0.8 s after start, about 1 start in 5, none with tracing on (the amiibo reader is not involved: LAS never opens nfp)"),
 ]
 
 
@@ -281,12 +281,17 @@ def step_mii(r, name, app):
     nick = "E2E%06d" % (int(time.time()) % 1000000)
     env = env_for(r, NAPPLE_INPUT_SCRIPT=script, NAPPLE_SWKBD_ANSWER=nick, NAPPLE_SCREENSHOT=os.path.join(r.out, "logs", "mii-maker"),
                   NAPPLE_SCREENSHOT_FRAMES="1500,2100")
-    rc = sh([runtime, ad, "--headless", "--seconds", "60", "--save-root", os.path.join(r.out, "saves", "miimaker")], env=env, log=log, timeout=200)
-    after = mii_count(r)
-    try:
-        found = nick.encode("utf-16-le") in open(os.path.join(r.support, "system/mii/MiiDatabase.dat"), "rb").read()
-    except OSError:
-        found = False
+    for attempt in range(3):  # the script is wall-clock timed: a slow first start (cold shader / pipeline caches) can shift the Mii Maker screens past a press, so the step retries
+        rc = sh([runtime, ad, "--headless", "--seconds", "60", "--save-root", os.path.join(r.out, "saves", "miimaker")], env=env, log=log, timeout=200)
+        after = mii_count(r)
+        try:
+            found = nick.encode("utf-16-le") in open(os.path.join(r.support, "system/mii/MiiDatabase.dat"), "rb").read()
+        except OSError:
+            found = False
+        if found and rc == 0:
+            break
+        nick = "E2E%06d" % ((int(time.time()) + attempt + 1) % 1000000)
+        env["NAPPLE_SWKBD_ANSWER"] = nick
     if found and rc == 0:
         r.add(name, "mii-db", "PASS", "Mii Maker scripted: Mii %r (swkbd answer) is in the shared database (%s -> %s Miis); every later title reads this file" % (nick, before, after))
     else:

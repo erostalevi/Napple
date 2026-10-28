@@ -6,7 +6,23 @@
 void napple_display_game_size(uint32_t bw, uint32_t bh, uint32_t *w, uint32_t *h) { *w = bw; *h = bh; }
 #endif
 
+static int vi_cmd_is_impl(IpcObject *o, unsigned cmd) { const IpcCmd *e = svc_find(o, cmd); return e && e->status == IPC_IMPL; }
 static IpcObject *sub(IpcObject *o, unsigned cmd) { IpcCall k; svc_call(o, cmd, NULL, 0, &k); return k.out_objects[0]; }
+
+
+/* One TransactParcel: in = {binder, code, flags}; the parcel is header + strict-mode word + interface token + args. Returns the reply words (after the 16-byte header) in rw, their count as the result. */
+static int transact(IpcObject *bd, unsigned cmd, uint32_t binder, uint32_t code, const uint32_t *args, unsigned nargs, uint32_t *rw) {
+    uint8_t p[0x100] = {0}, outp[0x80] = {0}; IpcCall c; uint32_t in[3] = {binder, code, 0};
+    const char *tok = "android.gui.IGraphicBufferProducer"; int32_t tl = (int32_t)strlen(tok);
+    uint32_t doff = 16, strict = 0x100; unsigned d = 0, tbytes = (((unsigned)tl + 1) * 2 + 3) / 4 * 4;
+    memcpy(p + doff + d, &strict, 4); d += 4; memcpy(p + doff + d, &tl, 4); d += 4;
+    for (int i = 0; i < tl; i++) { p[doff + d + i * 2] = (uint8_t)tok[i]; }
+    d += tbytes; memcpy(p + doff + d, args, nargs * 4); d += nargs * 4;
+    uint32_t hdr[4] = {d, doff, 0, doff + d}; memcpy(p, hdr, 16);
+    memset(&c, 0, sizeof c); c.in = (const uint8_t *)in; c.in_size = 12; svc_set_in_buf(&c, p, doff + d); svc_set_out_buf(&c, outp, sizeof outp); svc_call_c(bd, cmd, &c);
+    uint32_t rsize; memcpy(&rsize, outp, 4); memcpy(rw, outp + 16, rsize);
+    return (int)(rsize / 4);
+}
 
 int main(void) {
     ViState v; vi_init(&v);
@@ -53,6 +69,31 @@ int main(void) {
     svc_call(bd, 1, adj, 12, &c); CHECK(c.result == 0 && vi.binder_strong[1] == before + 2, "AdjustRefcount adds strong references");
     adj[1] = -100; svc_call(bd, 1, adj, 12, &c); CHECK(vi.binder_strong[1] == 0, "AdjustRefcount never goes below zero");
     svc_call(bd, 2, NULL, 0, &c); CHECK(c.result == 0 && c.nout_copy == 1, "GetNativeHandle returns an event");
+    { /* IGraphicBufferProducer: a consistent answer per binder */
+        uint32_t rw[8]; const uint32_t conn[3] = {0, 2, 0}; const uint32_t none[1] = {0};
+        CHECK(vi_cmd_is_impl(bd, 0) && vi_cmd_is_impl(bd, 3), "TransactParcel rows are implemented");
+        uint32_t dq[6] = {0, 0, 0, 0, 0, 0};
+        CHECK(transact(bd, 0, 5, VI_PT_DEQUEUE_BUFFER, dq, 6, rw) == 3 && (int32_t)rw[2] == VI_ST_NO_INIT, "dequeue before connect: no init");
+        CHECK(transact(bd, 0, 5, VI_PT_CONNECT, conn, 3, rw) == 5 && rw[0] == 1280 && rw[1] == 720 && rw[4] == 0, "connect: QueueBufferOutput with the window size, status 0");
+        uint32_t what = 0;
+        CHECK(transact(bd, 0, 5, VI_PT_QUERY, &what, 1, rw) == 2 && rw[0] == 1280 && rw[1] == 0, "query width");
+        what = 1; transact(bd, 0, 5, VI_PT_QUERY, &what, 1, rw); CHECK(rw[0] == 720, "query height");
+        what = 99; transact(bd, 0, 5, VI_PT_QUERY, &what, 1, rw); CHECK((int32_t)rw[1] == VI_ST_BAD_VALUE, "query of an unknown attribute: bad value");
+        int slots[3];
+        for (int i = 0; i < 3; i++) { transact(bd, 0, 5, VI_PT_DEQUEUE_BUFFER, dq, 6, rw); slots[i] = (int)rw[0]; CHECK(rw[2] == 0 && slots[i] == i, "dequeue hands out slot %d", i); }
+        transact(bd, 0, 5, VI_PT_DEQUEUE_BUFFER, dq, 6, rw); CHECK((int32_t)rw[2] == VI_ST_BUSY && (int32_t)rw[0] == -1, "every slot out: busy");
+        uint32_t sl = 1; transact(bd, 0, 5, VI_PT_REQUEST_BUFFER, &sl, 1, rw); CHECK(rw[0] == 0 && vi.producer[5].slot_requested[1], "requestBuffer on a dequeued slot");
+        uint32_t q[4] = {1, 0, 0, 0}; CHECK(transact(bd, 3, 5, VI_PT_QUEUE_BUFFER, q, 4, rw) == 5 && rw[4] == 0 && vi.producer[5].frame_counter == 1, "queueBuffer (Auto row) counts a frame");
+        transact(bd, 0, 5, VI_PT_QUEUE_BUFFER, q, 4, rw); CHECK((int32_t)rw[4] == VI_ST_BAD_VALUE && vi.producer[5].frame_counter == 1, "queueing a slot that is not dequeued is refused");
+        sl = 2; transact(bd, 0, 5, VI_PT_CANCEL_BUFFER, &sl, 1, rw); CHECK(rw[0] == 0, "cancelBuffer returns a dequeued slot");
+        transact(bd, 0, 5, VI_PT_CANCEL_BUFFER, &sl, 1, rw); CHECK((int32_t)rw[0] == VI_ST_BAD_VALUE, "cancel twice: bad value");
+        uint32_t bc = 9; transact(bd, 0, 5, VI_PT_SET_BUFFER_COUNT, &bc, 1, rw); CHECK((int32_t)rw[0] == VI_ST_BAD_VALUE, "setBufferCount beyond the slots");
+        bc = 2; transact(bd, 0, 5, VI_PT_SET_BUFFER_COUNT, &bc, 1, rw); CHECK(rw[0] == 0 && vi.producer[5].buffer_count == 2, "setBufferCount 2");
+        transact(bd, 0, 5, VI_PT_DISCONNECT, none, 0, rw); CHECK(rw[0] == 0 && !vi.producer[5].connected && vi.producer[5].slot_state[0] == 0, "disconnect clears the slots");
+        transact(bd, 0, 5, 77, none, 0, rw); CHECK((int32_t)rw[0] == VI_ST_BAD_VALUE, "unknown code: bad value");
+        transact(bd, 0, 6, VI_PT_CONNECT, conn, 3, rw); CHECK(vi.producer[6].connected && !vi.producer[5].connected, "binders are independent");
+        uint32_t bound[1]; CHECK(transact(bd, 0, 99, VI_PT_QUERY, &what, 1, bound) == 2, "a binder id out of range is answered, not crashed on");
+    }
     printf("{\"test\":\"svc_vi\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

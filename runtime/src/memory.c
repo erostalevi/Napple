@@ -91,6 +91,7 @@ void memory_init(void) {
     }
     /* The preferred fixed layout (alias at 0x70_0000_0000) works on older macOS; otherwise one reservation in a free
      * hole, with the alias region shrinking in 4 GiB steps from the requested size down to 4 GiB. */
+    if (getenv("NAPPLE_HEAP_CAP_MB")) heap_cap_v = (strtoull(getenv("NAPPLE_HEAP_CAP_MB"), NULL, 0) << 20) & ~0x1fffffULL; /* diagnosis: try another guest heap cap (a device's 3.25 GiB on the Simulator) */
     uint64_t want = alias_requested(), least = getenv("NAPPLE_ALIAS_GIB") ? want : ALIAS_LEAST;
     uint8_t *space = NULL;
     for (uint64_t g = want; !space; g -= ALIAS_STEP) {

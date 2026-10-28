@@ -47,7 +47,7 @@ void applet_player_select_answer(const uint8_t user_id[16], int cancel, uint8_t 
  * (0xC; the older 8-byte layout reads the first two fields). One virtual pad: players = min..max clamped to 1.. (the game asked for at
  * least 1 and at most its maximum). `connected` is the number of pads the input backend reports (keyboard-only counts as 1): players = connected
  * clamped to min..max (short_of_min is set when fewer are connected than asked: the real applet would keep waiting); single mode reports npad 0 (Player 1) as the selected controller, otherwise 0xffffffff. */
-typedef struct {
+typedef struct AppletControllerAnswer {
     int32_t players;
     uint32_t min, max;
     int single_mode;
@@ -160,8 +160,20 @@ unsigned applet_profiles(uint8_t (*uids)[16], unsigned max, const uint8_t fallba
 /* NAPPLE_PLAYER_SELECT: "cancel", "<index>", or "<hex uid prefix>" (not parsed here: index only). Returns 1 for cancel; *index = wanted profile. */
 int applet_player_select_spec(const char *spec, int *index);
 
+/* ---- interactive sheets (the frontend registers them; NULL = headless answers) --------------------------------------------------------------- */
+/* Player select: show the profiles, return the chosen index or -1 when the user cancels. Not consulted when NAPPLE_PLAYER_SELECT is set (scripted). */
+typedef int (*AppletPlayerSelectUi)(const uint8_t (*uids)[16], unsigned count);
+void applet_set_player_select_ui(AppletPlayerSelectUi fn);
+/* Returns -2 when no UI is registered (keep the headless answer), else the UI's answer. */
+int applet_player_select_ask(const uint8_t (*uids)[16], unsigned count);
+/* Controller support: show the pad-assignment sheet for what the game asked (a->min..max, a->connected pads) and return 1 to confirm (the UI may adjust
+ * a->players) or 0 to cancel. Not consulted when NAPPLE_CONTROLLER_SUPPORT is set. */
+
 /* ---- controller support: cancel ------------------------------------------------------------------------------------------------------------ */
 enum { APPLET_CONTROLLER_OK = 0, APPLET_CONTROLLER_CANCELLED = 2 };
 /* NAPPLE_CONTROLLER_SUPPORT: "cancel" cancels; "strict" cancels when fewer pads are connected than the game's minimum (the real applet would keep waiting). */
 void applet_controller_encode_result(const AppletControllerAnswer *a, uint32_t result, uint8_t out[APPLET_CONTROLLER_OUT_SIZE]);
+typedef int (*AppletControllerUi)(AppletControllerAnswer *a);
+void applet_set_controller_ui(AppletControllerUi fn);
+int applet_controller_ask(AppletControllerAnswer *a); /* -2 when no UI is registered, else 1 confirmed / 0 cancelled */
 void applet_controller_apply_policy(const char *spec, AppletControllerAnswer *a, uint32_t *result);

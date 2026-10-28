@@ -236,6 +236,7 @@ const char *ami_jskip(const char *p, const char *e, AmiJVal *v) {
         return NULL;
     }
     while (p < e && *p != ',' && *p != '}' && *p != ']' && *p != ' ' && *p != '\n' && *p != '\r' && *p != '\t') p++;
+    if (p == s) return NULL; /* a value cannot be empty ("[1 } 2]", "{\"a\":}"): without this a stray closer made the callers' loops spin on the same byte */
     if (v) *v = (AmiJVal){s, (size_t)(p - s), 'n'};
     return p;
 }
@@ -455,7 +456,7 @@ int amiibo_keys_load(const char *path, AmiiboKeys *k) {
     uint8_t b[161];
     size_t n = fread(b, 1, sizeof b, f);
     fclose(f);
-    if (n != 160) return -2;
+    if (n != 160 || b[31] > 16 || b[111] > 16) return -2; /* the magic size byte of each key set (offset 31) is at most the 16 magic bytes */
     memcpy(k->data, b, 80);
     memcpy(k->tag, b + 80, 80);
     return 0;

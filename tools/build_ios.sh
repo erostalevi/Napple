@@ -60,5 +60,5 @@ $CC -dynamiclib -install_name @rpath/libnapple-applet.dylib $RTL "$ROOT/gfx/$B/o
     "$ROOT/frontend/$B/libnapple_frontend.a" "$ROOT/input/$B/libnapple_input.a" "$ROOT/audio/$B/libnapple_audio.a" "$DEPS/lib/libopus.a" $VPXLIB \
     -framework UIKit -framework QuartzCore -framework Metal $METALFX -framework Foundation -framework CoreFoundation -framework CoreGraphics -framework ImageIO \
     -framework UniformTypeIdentifiers -framework AudioToolbox -framework CoreAudio -framework AVFoundation -framework GameController -framework CoreHaptics -framework CoreVideo \
-    -framework CoreMedia -framework VideoToolbox -lc++ -o "$ROOT/runtime/$B/libnapple-applet.dylib"
+    -framework CoreMedia -framework VideoToolbox -lcompression -lc++ -o "$ROOT/runtime/$B/libnapple-applet.dylib"
 echo "built $ROOT/runtime/$B/libnapple-applet.dylib"

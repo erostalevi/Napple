@@ -643,6 +643,15 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             break;
         }
     }
+    // offline HTML (manual): newest version that carries an HtmlDocument NCA
+    let mut html_files: Option<Vec<(String, Vec<u8>)>> = None;
+    for &i in upd.iter().rev().chain(std::iter::once(&base_i)) {
+        let c = conts.get(&plan.packs[i].path)?;
+        if let Some(h) = crate::html::read_html(&c, &plan.packs[i], &keys)? {
+            html_files = Some(h);
+            break;
+        }
+    }
     let modset =
         ModSet::load(&o.mods, Some(app_id)).map_err(|e| BuildError::new("mods", e.to_string()))?;
     for w in &modset.warnings {
@@ -804,9 +813,9 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
 
     // sizes -> free-space check
     let in_place = matches!(o.update_romfs, UpdateRomfs::InPlace);
-    if in_place && !o.data_only {
+    if in_place && !o.data_only && !target.is_sim() {
         return Err(BuildError::usage(
-            "--update-romfs in-place is for --data-only development builds (the map holds decryption keys)",
+            "--update-romfs in-place is for --data-only or --target ios-sim development builds (the map holds decryption keys)",
         ));
     }
     let cache_dir = root.join(".napple-cache.nosync").join(cache_dir_name_mods(
@@ -1214,6 +1223,9 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         if let Some(raw) = control.as_ref().and_then(|c| c.nacp_raw.as_ref()) {
             std::fs::write(game.join(&v.dir).join("control.nacp"), raw)
                 .map_err(|e| BuildError::io("write control.nacp", e))?;
+        }
+        if let Some(h) = &html_files {
+            crate::html::write_html(&game.join(&v.dir), h)?;
         }
         let mut fields: Vec<(&str, String)> = vec![
             ("format", "1".into()),

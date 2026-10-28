@@ -82,10 +82,20 @@ pub fn build_image(files: &[PathBuf], dylib: &Path) -> Result<(), RewriteError> 
                 &o.to_string_lossy(),
             ])
         })?;
-    let mut args: Vec<String> = ["-dynamiclib", "-target", TARGET, "-Wl,-x", "-o"]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
+    // A fixed install name: the default is the temp work path (unique per build process), which went into LC_ID_DYLIB and the content-derived UUID, so two
+    // builds of the same title never produced the same bytes. The runtime dlopens it by absolute path, so the name is never resolved.
+    let mut args: Vec<String> = [
+        "-dynamiclib",
+        "-target",
+        TARGET,
+        "-Wl,-x",
+        "-install_name",
+        "@rpath/a32jit.dylib",
+        "-o",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
     args.push(dylib.to_string_lossy().into());
     // the object list goes through a response file: there are hundreds of them
     let rsp = dylib.with_extension("objs");

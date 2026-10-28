@@ -12,6 +12,8 @@ import Foundation
 public struct EngineInstaller: Sendable {
     public static let requiredFiles = ["napple", "napple-runtime", "napple-launcher"]
     public static let optionalFiles = ["napple-runtime-ios", "libnapple-applet.dylib", "matrix.json"]
+    /// How many engine versions stay installed (the newest ones); the picker in Studio's build screen lists them.
+    public static let keptVersions = 5
     public static let profileMarkerBegin = "# >>> napple >>>"
     public static let profileMarkerEnd = "# <<< napple <<<"
 
@@ -43,7 +45,14 @@ public struct EngineInstaller: Sendable {
         let fm = FileManager.default
         let marker = current.appendingPathComponent(".version")
         guard let v = try? String(contentsOf: marker, encoding: .utf8), v.trimmingCharacters(in: .whitespacesAndNewlines) == version else { return false }
-        return Self.requiredFiles.allSatisfy { fm.isExecutableFile(atPath: current.appendingPathComponent($0).path) }
+        guard Self.requiredFiles.allSatisfy({ fm.isExecutableFile(atPath: current.appendingPathComponent($0).path) }) else { return false }
+        // The version string alone is not enough: every local build is stamped 0.1.0-1, so a stale engine of an older Studio build looked current and was
+        // never replaced (the new Studio then built and ran games with the old CLI and runtime). When the bundle carries an engine, the installed binaries
+        // must be byte-identical to it.
+        if bundleHasEngine {
+            for f in Self.requiredFiles where !fm.contentsEqual(atPath: resources.appendingPathComponent(f).path, andPath: current.appendingPathComponent(f).path) { return false }
+        }
+        return true
     }
 
     /// True when the bundle actually carries an engine (false for a bare `swift run` during development).
@@ -143,7 +152,7 @@ public struct EngineInstaller: Sendable {
         let old = items.filter { $0.lastPathComponent != keep && $0.lastPathComponent != "current" && !$0.lastPathComponent.hasPrefix(".") }
             .sorted { ((try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) >
                       ((try? $1.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
-        for u in old.dropFirst(1) { try? fm.removeItem(at: u) }   // keep the previous version for rollback
+        for u in old.dropFirst(Self.keptVersions - 1) { try? fm.removeItem(at: u) }   // keep the newest few for rollback and for the Studio engine picker
     }
 
     private func applyLaunchctl() {
@@ -154,5 +163,47 @@ public struct EngineInstaller: Sendable {
             p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
             try? p.run(); p.waitUntilExit()
         }
+    }
+}
+
+/// One engine Studio can build with: the copy bundled in this Studio app, or an installed version under `<support>/engine/`.
+public struct EngineBuild: Identifiable, Equatable, Sendable {
+    public static let bundledID = "bundled"
+    public var id: String                 // "bundled" or the version folder name
+    public var version: String
+    public var folder: URL
+    public var isBundled: Bool
+    public var isActive: Bool             // `engine/current`: what the terminal's `napple` and NAPPLE_CLI point at
+    public var builtAt: Date?             // modification date of the napple binary
+    public var cliURL: URL { folder.appendingPathComponent("napple") }
+    public var label: String {
+        var t = isBundled ? "This Studio's engine" : "Installed \(version)"
+        if let d = builtAt { t += " · built " + Self.stamp.string(from: d) }
+        if isActive && !isBundled { t += " · active in Terminal" }
+        return t
+    }
+    private static let stamp: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm"; return f }()
+}
+
+extension EngineInstaller {
+    /// Every engine that can build a game: the bundled one first (when this Studio carries an engine), then the installed versions, newest first.
+    public func listEngines(bundleVersion: String? = nil) -> [EngineBuild] {
+        let fm = FileManager.default
+        func built(_ f: URL) -> Date? { (try? f.appendingPathComponent("napple").resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate }
+        var out: [EngineBuild] = []
+        if bundleHasEngine {
+            out.append(EngineBuild(id: EngineBuild.bundledID, version: bundleVersion ?? "bundled", folder: resources, isBundled: true, isActive: false, builtAt: built(resources)))
+        }
+        let active = current.resolvingSymlinksInPath().standardizedFileURL
+        let items = (try? fm.contentsOfDirectory(at: engineRoot, includingPropertiesForKeys: nil)) ?? []
+        var installed: [EngineBuild] = []
+        for f in items {
+            let name = f.lastPathComponent
+            guard name != "current", !name.hasPrefix("."), fm.isExecutableFile(atPath: f.appendingPathComponent("napple").path) else { continue }
+            let v = ((try? String(contentsOf: f.appendingPathComponent(".version"), encoding: .utf8)) ?? name).trimmingCharacters(in: .whitespacesAndNewlines)
+            installed.append(EngineBuild(id: name, version: v, folder: f, isBundled: false, isActive: f.resolvingSymlinksInPath().standardizedFileURL == active, builtAt: built(f)))
+        }
+        installed.sort { ($0.builtAt ?? .distantPast) > ($1.builtAt ?? .distantPast) }
+        return out + installed
     }
 }

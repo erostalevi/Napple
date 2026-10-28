@@ -188,6 +188,9 @@ impl Nca {
                 continue;
             }
             check(s, en - s, src.size())?;
+            if xts_key.is_some() && s < NCA0_SECTOR_BASE {
+                return Err(Error::Container("NCA0 section overlaps the header".into()));
+            }
             let fh_buf;
             let fh = if let Some(k) = &xts_key {
                 // NCA0: the FS header is the first sector of the section itself.

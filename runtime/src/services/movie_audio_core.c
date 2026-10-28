@@ -89,15 +89,17 @@ static int store_header(VorbisPcm *v, const uint8_t *pkt, size_t n) {
 }
 static int add_header_(VorbisPcm *v, const uint8_t *pkt, size_t n) {
     static const uint8_t want[3] = {1, 3, 5};
+    static const uint8_t empty_comment[16] = {3, 'v', 'o', 'r', 'b', 'i', 's', 0, 0, 0, 0, 0, 0, 0, 0, 1};
     /* Android's MediaCodec Vorbis convention (csd-0 = identification, csd-1 = setup) leaves the comment header out: it carries nothing the decoder
      * needs, so a setup header that follows the identification header gets an empty comment header (no vendor, no comments, framing bit) in front. */
     if (v->nhdr == 1 && n >= 7 && pkt[0] == 5 && !memcmp(pkt + 1, "vorbis", 6)) {
-        static const uint8_t empty_comment[16] = {3, 'v', 'o', 'r', 'b', 'i', 's', 0, 0, 0, 0, 0, 0, 0, 0, 1};
         int r = store_header(v, empty_comment, sizeof empty_comment);
         if (r < 0) return r;
     }
     if (v->nhdr > 2 || n < 7 || pkt[0] != want[v->nhdr] || memcmp(pkt + 1, "vorbis", 6) || n > MAX_PACKET) return AUDIO_BAD;
-    int r = store_header(v, pkt, n);
+    /* The comment header is never handed to stb_vorbis: its vendor/comment lengths are 32-bit values from the stream that it allocates and loops over (a few
+     * hundred bytes could ask for 4 GiB), and nothing in them is used. The decoder gets the empty one for every comment header. */
+    int r = v->nhdr == 1 ? store_header(v, empty_comment, sizeof empty_comment) : store_header(v, pkt, n);
     if (r < 0) return r;
     return v->nhdr == 3 ? open_decoder(v) : AUDIO_NEED_MORE;
 }
@@ -182,7 +184,7 @@ int vorbispcm_packet(VorbisPcm *v, const uint8_t *pkt, size_t n, int16_t *out, i
         for (int i = 0; i < samples; i++)
             for (int c = 0; c < ch; c++) {
                 float x = pcm[c][i] * 32767.0f;
-                out[i * ch + c] = (int16_t)(x >= 32767.0f ? 32767 : x <= -32768.0f ? -32768 : (x < 0 ? x - 0.5f : x + 0.5f));
+                out[i * ch + c] = (int16_t)(x >= 32767.0f ? 32767 : x <= -32768.0f ? -32768 : x != x ? 0 : (x < 0 ? x - 0.5f : x + 0.5f)); /* NaN (a corrupt stream) -> 0 */
             }
         *frames = samples;
     }

@@ -24,6 +24,8 @@ typedef struct Thread {
     int last_svc;
     uint64_t last_lr, last_fp, last_sp, last_pc, nsvc;
     int cur_core, preempt;
+    int slice_req;   /* timer preemption (threads.c): the slice thread asked this thread to give its core up at its next guest instruction */
+    uint64_t nslice; /* times the thread was switched out by the timer */
     uint64_t cseq, core_since;
     struct Thread *cnext;
     uint32_t wh[4];

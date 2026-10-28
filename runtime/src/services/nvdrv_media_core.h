@@ -16,7 +16,7 @@ typedef struct {
     void *ctx;
 } NvMediaMem;
 typedef struct {
-    uint64_t words, ops, regwrites, executes, frames, errors, unknown_regs, foreign_writes, syncpt_incrs, configures;
+    uint64_t words, ops, regwrites, executes, frames, errors, unknown_regs, foreign_writes, syncpt_incrs, configures, thi_pairs, vic_copies;
     uint32_t last_unknown_reg, last_error;
 } MediaStats;
 typedef struct MediaEngine MediaEngine;
@@ -54,3 +54,6 @@ void nvdisp_init(NvDisp *d, uint64_t now_ns, int docked);
 uint64_t nvdisp_vblank_count(const NvDisp *d, uint64_t now_ns);
 /* data is the in/out buffer (size bytes, at least the struct size of the ioctl). Returns an NVDISP_* code. */
 int nvdisp_ioctl(NvDisp *d, unsigned nr, uint8_t *data, unsigned size, uint64_t now_ns);
+
+/* Optional: called before the engines write decoded pixels into a guest surface (gfx dirty tracking). Set by media_gfx_glue.c in the runtime, NULL in host tests. */
+extern void (*media_write_prepare)(void *addr, size_t n);

@@ -8,15 +8,15 @@ struct GlassCard<Content: View>: View {
     var symbol: String?
     @ViewBuilder var content: Content
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             if let title {
                 Label { Text(title).font(.headline) } icon: { if let symbol { Image(systemName: symbol).foregroundStyle(.tint) } }
             }
             content
         }
-        .padding(16)
+        .padding(12)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 18, style: .continuous))
+        .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
     }
 }
 
@@ -27,10 +27,10 @@ struct Banner: View {
     var tone: Tone = .info
     var body: some View {
         Label { Text(text).fixedSize(horizontal: false, vertical: true).textSelection(.enabled) } icon: { Image(systemName: symbol).foregroundStyle(color) }
-            .font(.callout)
-            .padding(12)
+            .font(.footnote)
+            .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(color.opacity(0.12), in: .rect(cornerRadius: 12, style: .continuous))
+            .background(color.opacity(0.12), in: .rect(cornerRadius: 10, style: .continuous))
             .accessibilityElement(children: .combine)
     }
     private var symbol: String {

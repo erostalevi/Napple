@@ -107,6 +107,7 @@ FITS(dpool_t, NVNsamplerPool);
 /* ---------------------------------------------------------------------------------------------------------------
  * Programs
  * --------------------------------------------------------------------------------------------------------------- */
+#define BARRIER_RESOLVE_DEPTH 0x80000000u   /* OP_BARRIER payload bit: nvnCommandBufferResolveDepthBuffer */
 typedef struct { uint32_t magic, nstage; NVNshaderData sd[6]; uint64_t hash[6]; } prog_t;      FITS(prog_t, NVNprogram);   /* hash[stage]: shader blob identity, 0 = none; a value with the high word 0x504c4348 names a stage whose code is a bare pool offset (see gfx_prog_resolve_hash) */
 
 /* ---------------------------------------------------------------------------------------------------------------
@@ -167,7 +168,8 @@ enum {
     OP_DRAW_ARRAYS, OP_DRAW_ELEMENTS, OP_DRAW_ARRAYS_IND, OP_DRAW_ELEMENTS_IND, OP_DISPATCH, OP_DISPATCH_IND,
     OP_COPY_B2B, OP_COPY_B2T, OP_COPY_T2B, OP_COPY_T2T, OP_DOWNSAMPLE, OP_UPDATE_UBO, OP_COPY_STRIDES,
     OP_FENCE_SYNC, OP_WAIT_SYNC, OP_SIGNAL_EVENT, OP_WAIT_EVENT, OP_REPORT_COUNTER, OP_RESET_COUNTER, OP_BARRIER,
-    OP_DISCARD_COLOR, OP_DISCARD_DS, OP_DRAW_TEXTURE, OP_SCREEN_MARK, OP_DRAW_IND_COUNT, OP_COUNT
+    OP_DISCARD_COLOR, OP_DISCARD_DS, OP_DRAW_TEXTURE, OP_SCREEN_MARK, OP_DRAW_IND_COUNT,
+    OP_PATCH_SIZE, OP_TESS_LEVELS, OP_BIND_XFB, OP_XFB, OP_DRAW_XFB, OP_COUNT
 };
 
 /* Payloads (follow op_hdr). All pointer-sized fields are raw guest/GPU addresses or handles; nothing points into guest-owned objects. */
@@ -193,6 +195,11 @@ typedef struct { uint64_t addr; uint32_t mode, value, pad; } p_event;           
 typedef struct { uint32_t type, pad; uint64_t addr; } p_counter;
 typedef struct { uint32_t count, pad; } p_call;
 typedef struct { uint64_t handle; float dst[4], src[4]; } p_draw_tex;                            /* NVNtextureHandle, NVNdrawTextureRegion x2 */                                                  /* followed by count recording pointers */
+/* tessellation and transform feedback (gfx.md section 13) */
+typedef struct { uint32_t outer, pad; float v[4]; } p_tess_levels;                                /* outer = 1: 4 outer levels, 0: 2 inner levels */
+enum { XFB_BEGIN = 0, XFB_END, XFB_PAUSE, XFB_RESUME };
+typedef struct { uint32_t op, pad; uint64_t control; } p_xfb;                                     /* control: NVN transform feedback control memory (see mtl_stages.inc) */
+typedef struct { uint32_t mode, pad; uint64_t control; } p_draw_xfb;                              /* DrawTransformFeedback: vertex count from the control memory */
 
 /* A finished command list. Immutable once published; reference counted (owner command buffer, submissions, callers). */
 typedef struct cmdrec {

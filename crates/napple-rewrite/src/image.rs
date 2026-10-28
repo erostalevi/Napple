@@ -156,8 +156,8 @@ impl ModuleImage {
             };
             let v = match enc & 0x70 {
                 0x00 => v,
-                0x10 => v + o as i64,
-                0x30 => v + hdr as i64,
+                0x10 => v.checked_add(o as i64)?,
+                0x30 => v.checked_add(hdr as i64)?,
                 _ => return None,
             };
             Some((v, sz))

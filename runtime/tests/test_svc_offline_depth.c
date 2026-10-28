@@ -100,6 +100,13 @@ int main(void) {
     IpcObject *nfc = nfc_open(); svc_call(nfc, 0, NULL, 0, &c); IpcObject *nu = c.out_objects[0];
     svc_call(nu, 401, NULL, 0, &c); CHECK(((NfpSvc *)nu->state)->keep_session == 1, "KeepPassThroughSession");
     svc_call(nu, 402, NULL, 0, &c); CHECK(((NfpSvc *)nu->state)->keep_session == 0, "ReleasePassThroughSession");
+    /* nfc:sys / nfp:sys (firmware NFC applets) answer CreateSystemInterface with the simulated interfaces */
+    { IpcObject *sys = nfc_sys_open(); svc_call(sys, 0, NULL, 0, &c); CHECK(c.result == 0 && c.nout_objects == 1 && c.out_objects[0]->state != NULL, "nfc:sys CreateSystemInterface returns an INfc object");
+      /* the Mii Maker's first call on it: a pass-through with an unselected handle, answered empty instead of DeviceNotFound (fatal to the applet) */
+      IpcObject *ns = c.out_objects[0]; uint8_t probe[32] = {0}; svc_call(ns, 400, probe, sizeof probe, &c);
+      CHECK(c.result == 0, "nfc:sys pass-through before ListDevices succeeds (got %#x)", c.result);
+      svc_call(nu, 400, probe, sizeof probe, &c); CHECK(c.result == NFP_R_DEVICE_NOT_FOUND, "nfc:user pass-through with an unknown handle is DeviceNotFound");
+      IpcObject *psys = nfp_sys_open(); svc_call(psys, 0, NULL, 0, &c); CHECK(c.result == 0 && c.nout_objects == 1, "nfp:sys CreateSystemInterface returns an INfpUser object"); }
     printf("{\"test\":\"svc_offline_depth\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

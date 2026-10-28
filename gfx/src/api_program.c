@@ -113,4 +113,30 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
 /* NVNshaderDataExt = { data, control, reserved }, 0x18 bytes. */
 NVN(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const void *d) { return set_shaders(p, n, (const uint8_t *)d, 24); }
 NVN(nvnProgramSetSubroutineLinkage, NVNboolean, NVNprogram *p, int n, const NVNsubroutineLinkageMapPtr *m) { (void)p; (void)n; (void)m; return 1; }
-NVN(nvnProgramSetSampleShading, void, NVNprogram *p, uint32_t enable, float rate) { (void)p; (void)enable; (void)rate; }
+/* Sample shading: kept in a side table keyed by the program address, NOT in the program object. The guest's NVNprogram may be smaller than the 0xC0 bytes of this
+ * header (the SDK it was built with decides; writing past prog_t's 152 bytes crashed Animal Crossing at boot by corrupting a neighbour). Metal has no pipeline switch
+ * for it: a fragment function runs once per sample exactly when it reads [[sample_id]] or a per-sample interpolant, a property of the translated shader, so
+ * nothing enters the pipeline key. The debug label is accepted and dropped. */
+#define SS_N 4096
+static struct { const void *p; uint32_t en; float rate; } g_ss[SS_N];
+static pthread_mutex_t g_ss_mu = PTHREAD_MUTEX_INITIALIZER;
+NVN(nvnProgramSetSampleShading, void, NVNprogram *p, uint32_t enable, float rate) {
+    uint32_t i = (uint32_t)(((uintptr_t)p >> 4) * 2654435761u) % SS_N;
+    pthread_mutex_lock(&g_ss_mu);
+    g_ss[i].p = p;
+    g_ss[i].en = enable ? 1 : 0;
+    g_ss[i].rate = rate < 0 ? 0 : (rate > 1 ? 1 : rate);
+    pthread_mutex_unlock(&g_ss_mu);
+}
+NVN(nvnProgramSetDebugLabel, void, NVNprogram *p, const char *l) { (void)p; (void)l; }
+/* test hook: the stored sample shading (enable, rate) */
+int gfx_program_sample_shading(const NVNprogram *p, float *rate) {
+    uint32_t i = (uint32_t)(((uintptr_t)p >> 4) * 2654435761u) % SS_N;
+    int en = 0;
+    float r = 0;
+    pthread_mutex_lock(&g_ss_mu);
+    if (g_ss[i].p == p) { en = (int)g_ss[i].en; r = g_ss[i].rate; }
+    pthread_mutex_unlock(&g_ss_mu);
+    if (rate) *rate = r;
+    return en;
+}

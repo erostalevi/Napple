@@ -77,7 +77,9 @@ typedef struct {
     uint64_t patch_slots;
     bool uses_vsys;         // vertex: system value outputs (attribute 0x60..0x6F) are kept in a local for stage_out / xfb
     bool uses_gs_emit;      // geometry: OUT present
-    bool uses_vabsdiff4, uses_isel;   // helper functions to emit
+    bool uses_vabsdiff4, uses_isel, uses_idp;   // helper functions to emit
+    bool uses_stencil;                          // a texture binding is a stencil view: uint texture + the StencilTex wrapper
+    bool has_pexit, uses_ljs, uses_lmb;         // PEXIT in the program / PLONGJMP stack and local memory base to declare
     int ald_vertex;         // register holding the vertex index of the ALD/AST being translated (RZ = none), set by the handler
     bool ald_patch, ald_out, ald_vlatched;   // ald_vlatched: the vertex index was copied to `vx` (the destination registers may overlap it)
 } Ctx;
@@ -833,6 +835,7 @@ static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
     ShaderTexture *t = &c->info->tex[s];
     t->handle_offset = index * 4;
     if (c->key && index * 4 >= 0x20 && index * 4 < 0x120 && ((c->key->depth_slots >> ((index * 4 - 0x20) / 8)) & 1)) t->depth = true;
+    if (c->key && index * 4 >= 0x20 && index * 4 < 0x120 && ((c->key->stencil_slots >> ((index * 4 - 0x20) / 8)) & 1)) t->stencil = true, t->depth = false;
     t->type = (uint8_t)type;
     t->shadow = shadow;
     t->is_array = array;
@@ -853,6 +856,10 @@ static const char *tex_type_name(int t) {
 
 // Write texture results: component mask selects which of r,g,b,a go to consecutive registers.
 static void write_tex_result(Ctx *c, int slot, const char *call, uint32_t mask, int d0, int d1, bool texs, bool f16) {
+    if (f16 && c->info->tex[slot].stencil) {
+        fail(c, "half-precision (.F16) result from a stencil texture binding (the value is an integer)");
+        return;
+    }
     if (c->info->tex[slot].depth && !c->info->tex[slot].shadow && !strstr(call, ".gather("))
         sp(&c->body, "    { float4 t = float4(%s, 0.0f, 0.0f, 1.0f);\n", call);   // a depth texture sampled as colour: (d, 0, 0, 1)
     else sp(&c->body, "    { float4 t = %s;\n", call);
@@ -1424,6 +1431,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
 
 #define OPM(val, mask) ((w & (uint64_t)(mask)) == (uint64_t)(val))
     if (OPM(0xe300000000000000ull, 0xfff0000000000000ull)) {   // EXIT
+        if (c->has_pexit) sp(&c->body, "    if (pex != 0xFFFFFFFFu) { pc = pex; pex = 0xFFFFFFFFu; continue; }\n");
         sp(&c->body, c->branchy ? "    exit_now = true; break;\n" : "    break;\n");
     } else if (OPM(0xe330000000000000ull, 0xfff0000000000000ull)) {   // KIL
         c->info->uses_discard = true;
@@ -2698,7 +2706,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sprintf(t, hi ? "(uint((%s%s%s) >> 32) + %s)" : "(uint(%s%s%s) + %s)", bits(w, 56, 1) ? "-" : "", pr, "", acc);
         set_reg(c, d, t);
     } else if (OPM(0x5c88000000000000ull, 0xfff8000000000000ull) || OPM(0x4c88000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0x3888000000000000ull, 0xfef8000000000000ull)) {   // FCHK.DIVIDE: Pd = this division needs the slow path
+               OPM(0x3888000000000000ull, 0xfef8000000000000ull)) {   // FCHK (the .DIVIDE form): Pd = this division needs the slow path
         /* Conservative: true unless both operands are normal and the quotient's exponent keeps clear of the range ends, so the shader's fast reciprocal path
          * only runs when it is exact enough; whatever it rejects is computed by the slow path the compiler emitted. Pd at bits 3-5 (envydis). */
         int pd = (int)bits(w, 3, 3);
@@ -2757,8 +2765,16 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         sprintf(t, "vabsdiff4(%s, %s, %s, %s, %s, %uu, %s)", R(a), eb, R((int)bits(w, 39, 8)), bits(w, 48, 1) ? "true" : "false", bits(w, 49, 1) ? "true" : "false",
                 (unsigned)op, bits(w, 54, 1) ? "true" : "false");
         set_reg(c, d, t);
-    } else if (OPM(0x53f8000000000000ull, 0xfff8000000000000ull) || OPM(0x53d8000000000000ull, 0xfff8000000000000ull)) {
-        fail(c, "IDP is not translated (integer dot product exists from SM 6.0 only; Maxwell SM 5.x has none)");
+    } else if (OPM(0x53f8000000000000ull, 0xfff8000000000000ull) || OPM(0x53d8000000000000ull, 0xfff8000000000000ull)) {   // IDP
+        /* Integer dot product with accumulate (the DP4A / DP2A family; Maxwell SM 5.x has no hardware form, so no compiler targeting it emits one and the field
+         * layout below is this translator's own, pinned by tests/t_xlate.m): d = sum_i sel_i(Ra) * sel_i(Rb) + Rc, 32-bit wrap. Ra [8,16), Rb [20,28), Rc [39,47),
+         * A signed bit 48, B signed bit 49. Class 0x53f8 = IDP.4A (the four bytes of Ra against the four bytes of Rb); class 0x53d8 = IDP.2A (the two halves of Ra
+         * against two bytes of Rb: the low pair, or the high pair with bit 47 set). */
+        bool two = OPM(0x53d8000000000000ull, 0xfff8000000000000ull);
+        c->uses_idp = true;
+        sprintf(t, "idp(%s, %s, %s, %s, %s, %s, %s)", R(a), R((int)bits(w, 20, 8)), R((int)bits(w, 39, 8)), bits(w, 48, 1) ? "true" : "false",
+                bits(w, 49, 1) ? "true" : "false", two ? "true" : "false", bits(w, 47, 1) ? "true" : "false");
+        set_reg(c, d, t);
     } else if (OPM(0x5a80000000000000ull, 0xff80000000000000ull) || OPM(0x5280000000000000ull, 0xff80000000000000ull) ||
                OPM(0x4a80000000000000ull, 0xff80000000000000ull) || OPM(0x3480000000000000ull, 0xfe80000000000000ull)) {   // IMADSP
         /* Multiply-add with sub-word operand selectors: d = sel_a(Ra) * sel_b(B) + C, low 32 bits. Layout (pinned by tests/t_xlate_stages.inc): B by the opcode
@@ -2786,18 +2802,54 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         c->uses_isel = true;
         sprintf(t, "(isel(%s, %uu) * isel(%s, %uu) + %s)", R(a), (unsigned)as, bv, (unsigned)bs, cv);
         set_reg(c, d, t);
-    } else if (OPM(0xf0b8000000000000ull, 0xfff8000000000000ull) || OPM(0xf0c0000000000000ull, 0xfff8000000000000ull) ||
-               OPM(0xe3a0000000000000ull, 0xfff0000000000000ull) || OPM(0xe390000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0xe380000000000000ull, 0xfff0000000000000ull) || OPM(0xe370000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0xe360000000000000ull, 0xfff0000000000000ull) || OPM(0xe2c0000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0xe2d0000000000000ull, 0xfff0000000000000ull) || OPM(0xe2e0000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0xe2f0000000000000ull, 0xfff0000000000000ull) || OPM(0xe230000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0xe310000000000000ull, 0xfff0000000000000ull) || OPM(0xe280000000000000ull, 0xfff0000000000000ull) ||
-               OPM(0xefd0000000000000ull, 0xfff8000000000000ull) || OPM(0xeea0000000000000ull, 0xfff8000000000000ull)) {
-        fail(
-            c,
-            "control/system instruction %03x (B2R R2B BPT IDE RAM SAM RTT GET/SETCRSPTR GET/SETLMEMBASE PEXIT LONGJMP PLONGJMP ISBERD STP) is not translated: debugger, trap, call-return-stack, tessellation and geometry plumbing no application shader reaches",
-            (unsigned)(w >> 52));
+    } else if (OPM(0xe3a0000000000000ull, 0xfff0000000000000ull)) {   // BPT: debugger breakpoint / trap
+        /* BPT.{INT,TRAP,PAUSE,DRAIN,CAL,...} raise a breakpoint for an attached debugger or the driver's trap handler. No debugger exists under the replay and the
+         * emitted program has to keep running, so it is a documented no-op (a compiler emits it only for explicit device-side asserts in debug builds). */
+    } else if (OPM(0xe390000000000000ull, 0xfff0000000000000ull)) {   // IDE: interrupt disable / enable
+        // IDE.EN / IDE.DI mask the trap-handler interrupts of the warp; there is no interrupt to mask here: no-op
+    } else if (OPM(0xe380000000000000ull, 0xfff0000000000000ull) || OPM(0xe370000000000000ull, 0xfff0000000000000ull)) {   // RAM / SAM
+        // RAM / SAM save and restore the warp's address-mask registers around the trap handler: the handler never runs, so there is nothing to restore: no-op
+    } else if (OPM(0xe360000000000000ull, 0xfff0000000000000ull)) {   // RTT: return from the trap handler
+        // Control returns to the trapped program on hardware; the trap handler is never entered here, so a stray RTT can only end the thread, like EXIT
+        sp(&c->body, c->branchy ? "    exit_now = true; break;\n" : "    break;\n");
+    } else if (OPM(0xe230000000000000ull, 0xfff0000000000020ull)) {   // PEXIT: set the target the next EXIT of this thread jumps to
+        c->uses_branches = true;
+        sp(&c->body, "    pex = %uu;\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));
+    } else if (OPM(0xe280000000000000ull, 0xfff0000000000020ull)) {   // PLONGJMP: push a long-jump target
+        c->uses_branches = true;
+        sp(&c->body, "    ljs[ljs_n++] = %uu;\n", norm_target((int64_t)pc + 8 + sbits(w, 20, 24)));
+    } else if (OPM(0xe310000000000000ull, 0xfff0000000000000ull)) {   // LONGJMP: pop the PLONGJMP stack and jump (as BRK does for PBK)
+        c->uses_branches = true;
+        sp(&c->body, "    pc = ljs[--ljs_n]; continue;\n");
+    } else if (OPM(0xe2c0000000000000ull, 0xfff0000000000000ull)) {   // GETCRSPTR: Rd = call-return stack pointer (the CAL depth)
+        set_reg(c, d, "cal_n");
+    } else if (OPM(0xe2e0000000000000ull, 0xfff0000000000000ull)) {   // SETCRSPTR: call-return stack pointer = Ra (clamped to the stack)
+        sp(&c->body, "    cal_n = min(%s, 16u);\n", R(a));
+    } else if (OPM(0xe2d0000000000000ull, 0xfff0000000000000ull)) {   // GETLMEMBASE: Rd = local memory window base
+        /* Local memory (LDL/STL) is a private array here, addressed from 0: the base is only a number the program reads back after SETLMEMBASE */
+        c->uses_lmb = true;
+        set_reg(c, d, "lmb");
+    } else if (OPM(0xe2f0000000000000ull, 0xfff0000000000000ull)) {   // SETLMEMBASE: local memory window base = Ra
+        c->uses_lmb = true;
+        sp(&c->body, "    lmb = %s;\n", R(a));
+    } else if (OPM(0xf0b8000000000000ull, 0xfff8000000000000ull)) {   // B2R: barrier state to register
+        /* B2R.{RESULT,WARP} reads the convergence-barrier state (a Volta-era warp-sync save). The barriers here are Metal threadgroup barriers with no readable
+         * state, so the register receives 0 (no thread blocked on a barrier). */
+        set_reg(c, d, "0u");
+    } else if (OPM(0xf0c0000000000000ull, 0xfff8000000000000ull)) {   // R2B: register to barrier state
+        // The inverse of B2R: the barrier state is not materialised, so the write is dropped: no-op
+    } else if (OPM(0xefd0000000000000ull, 0xfff8000000000000ull)) {   // ISBERD: read the attribute (ISBE) memory at the address in Ra
+        /* Rd = a[Ra + imm10 at 20]: the indexed attribute read (AL2P + ALD.PHYS family) in the stage's own input space, so it shares the ALD register-addressed path */
+        c->ald_vertex = RZ;
+        c->ald_patch = false;
+        c->ald_out = false;
+        sp(&c->body, "    { uint ix = %s;\n", R(a));
+        char ib[48];
+        sprintf(ib, "(ix + %uu)", (uint32_t)bits(w, 20, 10));
+        attr_load(c, d, 0, ib);
+        sp(&c->body, "    }\n");
+    } else if (OPM(0xeea0000000000000ull, 0xfff8000000000000ull)) {   // STP: store to the trap-handler parameter area
+        // STP writes the state area the trap handler reads back (with RTT/RAM/SAM); with no handler the store has no observer: no-op
     } else if (OPM(0xfbe0000000000000ull, 0xfff8000000000000ull) || OPM(0xf6e0000000000000ull, 0xfff8000000000000ull) ||
                OPM(0xebe0000000000000ull, 0xfff8000000000000ull)) {   // OUT (reg, imm, cbuf forms)
         /* Geometry shader output: mode [39,41) 1 EMIT (append the current output vertex to the strip), 2 CUT (end the strip), 3 EMIT then CUT. The stream
@@ -2981,6 +3033,18 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             if (t >= 0 && (size_t)(t / 8) < end) label[t / 8] = 1;
             any_branch = true;
         }
+        if ((w & 0xfff0000000000020ull) == 0xe230000000000000ull || (w & 0xfff0000000000020ull) == 0xe280000000000000ull) {   // PEXIT / PLONGJMP: relative like PBK
+            int64_t t = norm_target((int64_t)pc + 8 + sbits(w, 20, 24));
+            if (t >= 0 && (size_t)(t / 8) < end) label[t / 8] = 1;
+            any_branch = true;
+            if ((w >> 52) == 0xe23) c->has_pexit = true;
+            else c->uses_ljs = true;
+        }
+        if ((w & 0xfff0000000000000ull) == 0xe310000000000000ull || (w & 0xfff0000000000000ull) == 0xe2c0000000000000ull ||
+            (w & 0xfff0000000000000ull) == 0xe2e0000000000000ull) {   // LONGJMP / GETCRSPTR / SETCRSPTR: need the state machine's stacks
+            any_branch = true;
+            if ((w >> 52) == 0xe31) c->uses_ljs = true;
+        }
         if ((w & 0xfff0000000000000ull) == 0xe320000000000000ull) any_branch = true;   // RET
         if ((w & 0xfff0000000000000ull) == 0xe250000000000000ull ||
             (w & 0xfff0000000000020ull) == 0xe200000000000000ull) {   // BRX / JMX: any instruction may be a target
@@ -3016,6 +3080,13 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (sz == 0) sz = 16;
         if (sz > 32768u) fail(c, "shared memory of %u bytes exceeds Metal's 32 KB threadgroup limit", sz);
         info->shared_mem = sz;
+    }
+    for (int i = 0; i < info->ntex && !c->fail; i++) {
+        const ShaderTexture *t = &info->tex[i];
+        if (!t->stencil) continue;
+        if (t->type != TEXTYPE_2D && t->type != TEXTYPE_2D_ARRAY) fail(c, "stencil sampling of a texture of type %d (only 2D and 2D array stencil views exist)", t->type);
+        else if (t->shadow) fail(c, "depth comparison on a stencil texture binding");
+        else c->uses_stencil = true;
     }
     stage_check(c);
     if (c->fail) {
@@ -3093,6 +3164,41 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "    int y = sb ? int(char(b >> (i * 8u))) : int((b >> (i * 8u)) & 0xFFu);\n    uint dl = uint(abs(x - y)), cl = (c >> (i * 8u)) & 0xFFu;\n"
            "    sum += dl;\n    r |= ((op == 2u ? min(dl, cl) : (op == 3u ? max(dl, cl) : dl)) & 0xFFu) << (i * 8u);\n  }\n"
            "  if (op == 1u) { uint t = sum + c; return (sat && t < sum) ? 0xFFFFFFFFu : t; }\n  return r;\n}\n");
+    if (c->uses_stencil) {
+        /* Stencil views are uint textures (X32_Stencil8 / Stencil8): Metal cannot `sample` an integer texture, so the shader's texture name is a wrapper with the
+         * float-texture member functions the translator emits. Sampling is a nearest read of level 0 (stencil values are never filtered; bias / lod / offset
+         * / gradient arguments are ignored). The result is the integer in x with (0, 0, 1) behind it, carried as raw bits in a float4 like every register. */
+        sp(&s, "static inline float4 stx(uint v) { return as_type<float4>(uint4(v, 0u, 0u, 1u)); }\n");
+        sp(&s,
+           "struct StencilTex2D { texture2d<uint> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float4 read(uint2 c, uint l = 0u) const { return stx(t.read(c, l).x); }\n"
+           "  uint at(int2 p) const { return t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1)))).x; }\n"
+           "  template <typename... A> float4 sample(sampler, float2 uv, A...) const { return stx(at(int2(floor(uv * float2(t.get_width(), t.get_height()))))); }\n"
+           "  template <typename... A> float4 gather(sampler, float2 uv, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
+           "    return as_type<float4>(uint4(at(b + int2(0, 1)), at(b + int2(1, 1)), at(b + int2(1, 0)), at(b))); } };\n");
+        sp(&s,
+           "struct StencilTex2DArray { texture2d_array<uint> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float4 read(uint2 c, uint layer, uint l = 0u) const { return stx(t.read(c, layer, l).x); }\n"
+           "  uint at(int2 p, uint layer) const { return t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))), layer).x; }\n"
+           "  template <typename... A> float4 sample(sampler, float2 uv, uint layer, A...) const { return stx(at(int2(floor(uv * float2(t.get_width(), t.get_height()))), layer)); }\n"
+           "  template <typename... A> float4 gather(sampler, float2 uv, uint layer, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
+           "    return as_type<float4>(uint4(at(b + int2(0, 1), layer), at(b + int2(1, 1), layer), at(b + int2(1, 0), layer), at(b, layer))); } };\n");
+    }
+    if (c->uses_idp)
+        sp(&s,
+           "static inline uint idp(uint a, uint b, uint c, bool asg, bool bsg, bool two, bool hi) {\n"
+           "  int acc = 0; uint n = two ? 2u : 4u;\n"
+           "  for (uint i = 0u; i < n; i++) {\n"
+           "    int x = two ? (asg ? int(short(a >> (16u * i))) : int((a >> (16u * i)) & 0xFFFFu)) : (asg ? int(char(a >> (8u * i))) : int((a >> (8u * i)) & 0xFFu));\n"
+           "    uint bs = two ? (hi ? 16u : 0u) + 8u * i : 8u * i;\n"
+           "    int y = bsg ? int(char(b >> bs)) : int((b >> bs) & 0xFFu);\n"
+           "    acc += x * y;\n  }\n  return uint(acc) + c;\n}\n");
     if (c->uses_isel)
         sp(&s,
            "static inline uint isel(uint v, uint s) { switch (s) { case 2u: return v & 0xFFu; case 3u: return uint(int(char(v))); case 4u: return v & 0xFFFFu; "
@@ -3181,7 +3287,8 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         ShaderTexture *t = &info->tex[i];
         const char *tn = tex_type_name(t->type);
         /* Metal allows 16 samplers per function: textures from the 17th on share the first texture's sampler */
-        if (t->shadow || t->depth) sp(&args, ", depth%s<float> t%d [[texture(%d)]]", tn, i, i);
+        if (t->stencil) sp(&args, ", texture%s<uint> t%d_u [[texture(%d)]]", tn, i, i);
+        else if (t->shadow || t->depth) sp(&args, ", depth%s<float> t%d [[texture(%d)]]", tn, i, i);
         else sp(&args, ", texture%s<float> t%d [[texture(%d)]]", tn, i, i);
         if (i < 16) sp(&args, ", sampler s%d [[sampler(%d)]]", i, i);
     }
@@ -3257,8 +3364,13 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (c->uses_vsys) sp(&s, "  float4 vsys = float4(0.0f);\n");
     if (c->uses_cc) sp(&s, "  uint cc = 0; bool ccz = false, ccs = false;\n");
     if (c->uses_local) sp(&s, "  uint lmem[%d] = {};\n", LMEM_WORDS);
+    if (c->uses_lmb) sp(&s, "  uint lmb = 0u;\n");
+    for (int i = 0; i < info->ntex; i++)
+        if (info->tex[i].stencil) sp(&s, "  const StencilTex%s t%d = {t%d_u};\n", info->tex[i].type == TEXTYPE_2D_ARRAY ? "2DArray" : "2D", i, i);
     if (any_branch) {
         sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0; uint cal[16]; uint cal_n = 0;\n");
+        if (c->uses_ljs) sp(&s, "  uint ljs[16]; uint ljs_n = 0;\n");
+        if (c->has_pexit) sp(&s, "  uint pex = 0xFFFFFFFFu;\n");
         sp(&s, "  bool exit_now = false;\n");
         sp(&s, "  for (uint guard = 0; guard < 100000u; guard++) {\n  switch (pc) {\n");
         sp(&s, "%s", c->body.buf ? c->body.buf : "");

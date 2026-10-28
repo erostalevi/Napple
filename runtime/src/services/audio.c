@@ -39,8 +39,10 @@ void audio_init_once(void) {
     }
     audio_ready = 1;
     napple_audio_config c = {0};
-    /* Headless runs use the null sink unless NAPPLE_AUDIO_DEVICE=1 (no sound in boot tests). */
-    c.use_device = !g_cfg.headless || (getenv("NAPPLE_AUDIO_DEVICE") && atoi(getenv("NAPPLE_AUDIO_DEVICE")));
+    /* Headless runs use the null sink and window runs the device, unless NAPPLE_AUDIO_DEVICE says otherwise (1 forces the device in boot tests, 0 keeps a
+     * windowed test run silent). */
+    const char *dev = getenv("NAPPLE_AUDIO_DEVICE");
+    c.use_device = dev && *dev ? atoi(dev) != 0 : !g_cfg.headless;
     if (getenv("NAPPLE_AUDIO_VOLUME")) c.master_volume = (float)atof(getenv("NAPPLE_AUDIO_VOLUME"));
     napple_audio_init(&c);
     LOG("audio", "engine started (%s)", c.use_device ? "Core Audio output" : "null sink");

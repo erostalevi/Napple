@@ -150,6 +150,6 @@ void time_snapshot_read(const uint8_t i[TIME_SNAPSHOT_SIZE], TimeSnapshot *s) {
 }
 int time_snapshot_span(const TimeSnapshot *a, const TimeSnapshot *b, int64_t *out) {
     if (memcmp(a->steady_source, b->steady_source, 16)) return -1;
-    *out = b->user_time - a->user_time;
+    *out = (int64_t)((uint64_t)b->user_time - (uint64_t)a->user_time); /* the snapshots hold guest values: wrap instead of signed overflow */
     return 0;
 }

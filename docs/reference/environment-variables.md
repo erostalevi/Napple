@@ -42,6 +42,9 @@ Conventions used by the code, unless a row says otherwise:
 |---|---|---|---|
 | `NAPPLE_ALIAS_GIB` | integer 1..64; default 64 | Size in GiB of the guest alias region to reserve. When set, the reservation does not shrink below this value; when unset it shrinks in 4 GiB steps down to the minimum. Values outside 1..64 abort. | `runtime/src/memory.c` |
 | `NAPPLE_FREE_CORES` | set = on | Disables the emulated per-core scheduling (core affinity masks): threads run on any core. | `runtime/src/threads.c` |
+| `NAPPLE_SLICE_MS` | integer ms, default 10 | Time slice of the timer preemption of spinning guest threads (0 turns the timer preemption off). | `runtime/src/threads.c` |
+| `NAPPLE_SVC_RING` | set = on | Post-mortem ring of the last svcs (with the IPC command id and reply result) per thread, dumped on a guest Break and on a crash. | `runtime/src/kernel.c` |
+| `NAPPLE_THREAD_LOG` | set = on | Logs every CreateThread / StartThread (creator, entry, priority, core). | `runtime/src/threads.c` |
 | `NAPPLE_SKIP_VERIFY` | set = on | Skips the SHA-256 check of module images against `manifest.json`. | `runtime/src/module.c` |
 | `HOME` | path | Base of the default save root `~/Library/Application Support/Napple` (`--save-root` overrides) and of the log directory `~/Library/Logs/Napple`. Falls back to `.` (or `/tmp` in the input library). | `runtime/src/main.c`, `runtime/src/filelog.c`, `input/src/input.c`, `frontend/src/settings.c`, `packaging/launcher.c` |
 | `NAPPLE_VERSION` | version directory name | Selects which embedded version directory under `Contents/Resources/game/` the launcher (and on iOS the runtime) uses; otherwise the first line of `game/default`. A name containing `/` or starting with `.` is rejected. Also read by the build scripts below. | `packaging/launcher.c`, `runtime/src/ios_platform.m` |

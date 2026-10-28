@@ -579,9 +579,34 @@ NVN(nvnCommandBufferSetViewportSwizzles, void, NVNcommandBuffer *c, int f, int n
 NVN(nvnCommandBufferSetShaderScratchMemory, void, NVNcommandBuffer *c, const NVNmemoryPool *p, ptrdiff_t o, size_t s) { (void)c; (void)p; (void)o; (void)s; }
 NVN(nvnCommandBufferSaveZCullData, void, NVNcommandBuffer *c, NVNbufferAddress a, size_t s) { (void)c; (void)a; (void)s; }
 NVN(nvnCommandBufferRestoreZCullData, void, NVNcommandBuffer *c, NVNbufferAddress a, size_t s) { (void)c; (void)a; (void)s; }
-NVN(nvnCommandBufferSetPatchSize, void, NVNcommandBuffer *c, int s) { (void)c; (void)s; }
-NVN(nvnCommandBufferSetInnerTessellationLevels, void, NVNcommandBuffer *c, const float *v) { (void)c; (void)v; }
-NVN(nvnCommandBufferSetOuterTessellationLevels, void, NVNcommandBuffer *c, const float *v) { (void)c; (void)v; }
+/* Tessellation state: patch size (control points per input patch) and the default levels used when no tess control program writes them. */
+NVN(nvnCommandBufferSetPatchSize, void, NVNcommandBuffer *c, int s) { *(uint32_t *)rec_op(c, OP_PATCH_SIZE, 4) = (uint32_t)(s < 1 ? 1 : s > 32 ? 32 : s); }
+NVN(nvnCommandBufferSetInnerTessellationLevels, void, NVNcommandBuffer *c, const float *v) {
+    p_tess_levels *p = REC(c, p_tess_levels, OP_TESS_LEVELS); p->outer = 0; p->pad = 0; p->v[0] = v[0]; p->v[1] = v[1]; p->v[2] = p->v[3] = 0;
+}
+NVN(nvnCommandBufferSetOuterTessellationLevels, void, NVNcommandBuffer *c, const float *v) {
+    p_tess_levels *p = REC(c, p_tess_levels, OP_TESS_LEVELS); p->outer = 1; p->pad = 0; memcpy(p->v, v, 16);
+}
+/* Transform feedback: buffer bindings, begin / end / pause / resume with the game's control memory, and the draw that takes its vertex count from it. */
+NVN(nvnCommandBufferBindTransformFeedbackBuffer, void, NVNcommandBuffer *c, int idx, NVNbufferAddress a, size_t size) {
+    if (idx < 0 || idx > 3) return;
+    p_range *p = REC_N(c, p_range, OP_BIND_XFB, sizeof(bufrange));
+    p->first = (uint32_t)idx; p->n = 1;
+    *(bufrange *)(p + 1) = (bufrange){ a, size };
+}
+NVN(nvnCommandBufferBindTransformFeedbackBuffers, void, NVNcommandBuffer *c, int first, int n, const NVNbufferRange *r) {
+    if (first < 0 || first > 3) return;
+    if (n < 0) n = 0; if (first + n > 4) n = 4 - first;
+    p_range *p = REC_N(c, p_range, OP_BIND_XFB, (size_t)n * sizeof(bufrange));
+    p->first = (uint32_t)first; p->n = (uint32_t)n;
+    memcpy(p + 1, r, (size_t)n * sizeof(bufrange));
+}
+static void xfb_op(NVNcommandBuffer *c, uint32_t op, NVNbufferAddress ctl) { *REC(c, p_xfb, OP_XFB) = (p_xfb){ op, 0, ctl }; }
+NVN(nvnCommandBufferBeginTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress a) { xfb_op(c, XFB_BEGIN, a); }
+NVN(nvnCommandBufferEndTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress a) { xfb_op(c, XFB_END, a); }
+NVN(nvnCommandBufferPauseTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress a) { xfb_op(c, XFB_PAUSE, a); }
+NVN(nvnCommandBufferResumeTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress a) { xfb_op(c, XFB_RESUME, a); }
+NVN(nvnCommandBufferDrawTransformFeedback, void, NVNcommandBuffer *c, NVNdrawPrimitive m, NVNbufferAddress a) { *REC(c, p_draw_xfb, OP_DRAW_XFB) = (p_draw_xfb){ (uint32_t)m, 0, a }; }
 NVN(nvnCommandBufferBindCoverageModulationTable, void, NVNcommandBuffer *c, const float *v) { (void)c; (void)v; }
 NVN(nvnCommandBufferSetColorReductionEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
 NVN(nvnCommandBufferSetColorReductionThresholds, void, NVNcommandBuffer *c, int a, int b) { (void)c; (void)a; (void)b; }
@@ -702,9 +727,10 @@ NVN(nvnCommandBufferDownsample, void, NVNcommandBuffer *c, const NVNtexture *s, 
 NVN(nvnCommandBufferTiledDownsample, void, NVNcommandBuffer *c, const NVNtexture *s, const NVNtexture *d) { downsample(c, s, NULL, d, NULL); }
 NVN(nvnCommandBufferDownsampleTextureView, void, NVNcommandBuffer *c, const NVNtexture *s, const NVNtextureView *sv, const NVNtexture *d, const NVNtextureView *dv) { downsample(c, s, sv, d, dv); }
 NVN(nvnCommandBufferTiledDownsampleTextureView, void, NVNcommandBuffer *c, const NVNtexture *s, const NVNtextureView *sv, const NVNtexture *d, const NVNtextureView *dv) { downsample(c, s, sv, d, dv); }
-/* Decompresses the bound depth target on the console (needed before sampling it after programmable sample locations); Metal depth targets are
- * always readable, so there is nothing to do. */
-NVN(nvnCommandBufferResolveDepthBuffer, void, NVNcommandBuffer *c) { (void)c; }
+/* Decompresses the bound depth target on the console (needed before sampling it after programmable sample locations). Metal depth targets are never compressed,
+ * but the depth of the open render pass only reaches the texture when the pass ends: the replay closes the pass (and flushes pending clears) at this point, so a
+ * following sample or copy of the depth buffer sees it. Recorded as a barrier with a private bit. */
+NVN(nvnCommandBufferResolveDepthBuffer, void, NVNcommandBuffer *c) { *(uint32_t *)rec_op(c, OP_BARRIER, 4) = BARRIER_RESOLVE_DEPTH; }
 NVN(nvnCommandBufferDrawTexture, void, NVNcommandBuffer *c, NVNtextureHandle h, const NVNdrawTextureRegion *dst, const NVNdrawTextureRegion *src) {
     if (!dst) return;
     p_draw_tex *p = REC(c, p_draw_tex, OP_DRAW_TEXTURE);
@@ -745,13 +771,3 @@ NVN(nvnCommandBufferInsertDebugMarker, void, NVNcommandBuffer *c, const char *s)
 NVN(nvnCommandBufferInsertCheckpointStatic, void, NVNcommandBuffer *c, uint32_t id, const char *s) { (void)c; (void)id; (void)s; }
 NVN(nvnCommandBufferInsertCheckpointDynamic, void, NVNcommandBuffer *c, uint32_t id, const char *s) { (void)c; (void)id; (void)s; }
 
-/* ---- transform feedback ----
- * Metal has no transform-feedback stage; the Metal replay would need a vertex-shader capture path. Until then the commands are accepted and
- * dropped (nothing is recorded, nothing is written to the capture buffers) and one warning is logged per call site. */
-NVN(nvnCommandBufferBindTransformFeedbackBuffer, void, NVNcommandBuffer *c, int i, NVNbufferAddress a, size_t sz) { (void)c; (void)i; (void)a; (void)sz; LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback is not supported: BindTransformFeedbackBuffer ignored"); }
-NVN(nvnCommandBufferBindTransformFeedbackBuffers, void, NVNcommandBuffer *c, int first, int n, const NVNbufferRange *r) { (void)c; (void)first; (void)n; (void)r; LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback is not supported: BindTransformFeedbackBuffers ignored"); }
-NVN(nvnCommandBufferBeginTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress ctl) { (void)c; (void)ctl; LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback is not supported: BeginTransformFeedback ignored"); }
-NVN(nvnCommandBufferEndTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress ctl) { (void)c; (void)ctl; }
-NVN(nvnCommandBufferPauseTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress ctl) { (void)c; (void)ctl; }
-NVN(nvnCommandBufferResumeTransformFeedback, void, NVNcommandBuffer *c, NVNbufferAddress ctl) { (void)c; (void)ctl; }
-NVN(nvnCommandBufferDrawTransformFeedback, void, NVNcommandBuffer *c, NVNdrawPrimitive m, NVNbufferAddress ctl) { (void)c; (void)m; (void)ctl; LOG_ONCE(NAPPLE_LOG_WARN, "transform feedback is not supported: DrawTransformFeedback ignored"); }

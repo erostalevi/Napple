@@ -494,6 +494,21 @@ pub fn make_game_with(dir: &Path, mode_bktr: bool, base_data_space: bool) -> Gam
 }
 
 pub fn make_game_full(dir: &Path, mode_bktr: bool, base_data_space: bool, corrupt: bool) -> Game {
+    make_game_inner(dir, mode_bktr, base_data_space, corrupt, false)
+}
+
+/// Like `make_game`, with an HtmlDocument NCA (`index.html`, `a.png`) in the base.
+pub fn make_game_html(dir: &Path) -> Game {
+    make_game_inner(dir, false, false, false, true)
+}
+
+fn make_game_inner(
+    dir: &Path,
+    mode_bktr: bool,
+    base_data_space: bool,
+    corrupt: bool,
+    html: bool,
+) -> Game {
     std::fs::create_dir_all(dir).unwrap();
     let keys = dir.join("prod.keys");
     std::fs::write(&keys, keys_text()).unwrap();
@@ -517,30 +532,48 @@ pub fn make_game_full(dir: &Path, mode_bktr: bool, base_data_space: bool, corrup
             ),
         ]))],
     );
-    let cn = cnmt(
-        0x80,
+    let htmlnca = build_nca(
         APP_ID,
-        APP_ID,
-        0,
-        &[
-            Rec {
-                id: id(1),
-                size: prog.len() as u64,
-                ctype: 1,
-            },
-            Rec {
-                id: id(2),
-                size: control.len() as u64,
-                ctype: 3,
-            },
-        ],
+        4,
+        vec![Sec::Rom(romfs_flat(&[
+            ("index.html", b"<html>manual</html>"),
+            ("a.png", &[0x89, b'P', b'N', b'G']),
+        ]))],
     );
+    let mut recs = vec![
+        Rec {
+            id: id(1),
+            size: prog.len() as u64,
+            ctype: 1,
+        },
+        Rec {
+            id: id(2),
+            size: control.len() as u64,
+            ctype: 3,
+        },
+    ];
+    if html {
+        recs.push(Rec {
+            id: id(3),
+            size: htmlnca.len() as u64,
+            ctype: 4,
+        });
+    }
+    let cn = cnmt(0x80, APP_ID, APP_ID, 0, &recs);
     let meta = meta_nca(APP_ID, &cn);
-    let base = pfs0(&[
-        (&nca_name(&id(1)), &prog),
-        (&nca_name(&id(2)), &control),
-        ("m.cnmt.nca", &meta),
-    ]);
+    let mut base_files_v = vec![
+        (nca_name(&id(1)), prog.clone()),
+        (nca_name(&id(2)), control.clone()),
+        ("m.cnmt.nca".to_string(), meta.clone()),
+    ];
+    if html {
+        base_files_v.push((nca_name(&id(3)), htmlnca));
+    }
+    let base_refs: Vec<(&str, &[u8])> = base_files_v
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    let base = pfs0(&base_refs);
     let base_nsp = dir.join("base.nsp");
     std::fs::write(&base_nsp, base).unwrap();
     // ---- update: a.bin becomes "WORLD" (same size), everything else is shared with the base

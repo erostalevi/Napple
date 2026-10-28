@@ -63,7 +63,7 @@ struct LibraryItem: Identifiable, Equatable {
 @Observable
 final class AppModel {
     let keysets: KeysetManager
-    let cli: NappleCLI?
+    private(set) var cli: NappleCLI?
     let library: LibraryStore
     let tools: ToolRunner
     var devicesService: DeviceService { DeviceService(tools: tools) }
@@ -80,9 +80,18 @@ final class AppModel {
     var dropTargeted = false
     var pendingDrops: [URL] = []
     var showLegal = false
+    /// `--debug-tour-size WxH` (default: the app's default window size) sizes the window the tour photographs.
+    static func tourSize() -> NSSize {
+        let a = CommandLine.arguments
+        if let i = a.firstIndex(of: "--debug-tour-size"), i + 1 < a.count {
+            let p = a[i + 1].split(separator: "x").compactMap { Double($0) }
+            if p.count == 2 { return NSSize(width: p[0], height: p[1]) }
+        }
+        return NSSize(width: 880, height: 580)
+    }
     /// `--debug-tour <dir>`: visit every pane, write a PNG of the window for each, then quit (scripted UI check).
     var tour: URL?
-    var window: NSWindow? { didSet { guard let w = window, oldValue == nil else { return }; w.setFrameAutosaveName("NappleStudioMain"); if tour != nil { w.setContentSize(NSSize(width: 1080, height: 700)); startTour() } } }
+    var window: NSWindow? { didSet { guard let w = window, oldValue == nil else { return }; w.setFrameAutosaveName("NappleStudioMain"); if tour != nil { w.setContentSize(Self.tourSize()); startTour() } } }
 
     // keys
     var sets: [Keyset] = []
@@ -110,6 +119,24 @@ final class AppModel {
     var installMessage: String?
     var installing = false
     var engineMessage: String?
+    /// Engine builds Studio can build with (its own bundled one + the installed versions) and the one the user picked ("" = the default order of NappleCLI.locate).
+    private(set) var engines: [EngineBuild] = []
+    var engineChoice: String = UserDefaults.standard.string(forKey: "engineChoice") ?? "" {
+        didSet { UserDefaults.standard.set(engineChoice, forKey: "engineChoice"); applyEngineChoice() }
+    }
+    var selectedEngine: EngineBuild? { engines.first { $0.id == engineChoice } }
+    func refreshEngines() {
+        guard let res = Bundle.main.resourceURL else { return }
+        let info = Bundle.main.infoDictionary
+        let version = [info?["CFBundleShortVersionString"] as? String, info?["CFBundleVersion"] as? String].compactMap { $0 }.joined(separator: "-")
+        engines = EngineInstaller(resources: res).listEngines(bundleVersion: version.isEmpty ? nil : version)
+        applyEngineChoice()
+    }
+    /// The picked engine's CLI does the build (it packs its own runtime and launcher into the game); with no (or a vanished) choice the default lookup applies.
+    private func applyEngineChoice() {
+        if let e = selectedEngine { cli = NappleCLI(executable: e.cliURL) }
+        else { cli = NappleCLI.locate() }
+    }
     private(set) var matrix: CompatMatrix?
     var buildTask: Task<Void, Never>?
     var activity: NSObjectProtocol?
@@ -188,6 +215,7 @@ final class AppModel {
         refreshLibrary(adoptOutput: true)
         libraryLoaded = true
         if destination.isIOS || self.pane == .devices { Task { await refreshIOS() } }
+        refreshEngines()
         if !args.contains("--no-engine-setup") { setUpEngine() }
         watcher = DirectoryWatcher { [weak self] in Task { @MainActor in self?.refreshLibrary() } }
         syncWatcher()
@@ -228,6 +256,7 @@ final class AppModel {
                 switch result {
                 case .success(let r):
                     self.engineMessage = r.installed ? String(localized: "Napple engine \(r.version) is ready.") : nil
+                    self.refreshEngines()
                     r.notes.forEach { self.log.append("engine: \($0)") }
                 case .failure(let e): self.engineMessage = String(localized: "Engine setup failed: \(e.localizedDescription)")
                 }

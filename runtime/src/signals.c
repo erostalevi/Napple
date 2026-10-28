@@ -218,6 +218,11 @@ static void crash(int num, siginfo_t *info, void *context) {
 #ifdef NAPPLE_LIB
     if (chain_to_host(num, info, context)) return;
 #endif
+    if (getenv("NAPPLE_SVC_RING")) { /* post-mortem: the last svcs of the thread and of all threads, then every thread's state */
+        extern void svc_ring_dump(unsigned per_thread, unsigned total);
+        svc_ring_dump(40, 200);
+        thread_dump_all();
+    }
     runtime_peek("at crash");
     {
         extern void a32_crash_report(void) __attribute__((weak));

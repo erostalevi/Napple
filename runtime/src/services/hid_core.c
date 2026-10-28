@@ -144,3 +144,30 @@ int hidc_vib_is_active(const HidCore *h, uint32_t handle) {
         if (h->vib_active[i] == handle) return 1;
     return 0;
 }
+
+/* ---- npad styles ---- */
+uint32_t hidc_styles_sanitize(uint32_t styles) { return styles & HIDC_STYLES_KNOWN; }
+const char *hidc_style_name(uint32_t style) {
+    switch (style) {
+        case HIDC_STYLE_FULL_KEY: return "FullKey";
+        case HIDC_STYLE_HANDHELD: return "Handheld";
+        case HIDC_STYLE_JOY_DUAL: return "JoyDual";
+        case HIDC_STYLE_JOY_LEFT: return "JoyLeft";
+        case HIDC_STYLE_JOY_RIGHT: return "JoyRight";
+        case HIDC_STYLE_GC: return "GameCube";
+        case HIDC_STYLE_PALMA: return "Palma";
+        case HIDC_STYLE_LARK: return "Lark";
+        case HIDC_STYLE_HANDHELD_LARK: return "HandheldLark";
+        case HIDC_STYLE_LUCIA: return "Lucia";
+        case HIDC_STYLE_LAGON: return "Lagon";
+        case HIDC_STYLE_LAGER: return "Lager";
+        case HIDC_STYLE_SYSTEM_EXT: return "SystemExt";
+        case HIDC_STYLE_SYSTEM: return "System";
+        default: return NULL;
+    }
+}
+int hidc_style_supported(const HidCore *h, uint32_t style) {
+    uint32_t set = h->styles_set ? h->styles : HIDC_STYLES_STANDARD;
+    return style != 0 && (set & style) == style;
+}
+int hidc_style_is_retro(uint32_t style) { return style && !(style & ~(HIDC_STYLE_LARK | HIDC_STYLE_HANDHELD_LARK | HIDC_STYLE_LUCIA | HIDC_STYLE_LAGON | HIDC_STYLE_LAGER)); }

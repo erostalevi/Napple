@@ -215,8 +215,12 @@ impl NczSource {
                         let data = if raw.len() == dlen {
                             raw
                         } else {
-                            zstd::bulk::decompress(&raw, dlen)
-                                .map_err(|e| Error::Container(format!("NCZ block: {e}")))?
+                            // Streamed so a hostile `dlen` (up to 4 GiB) is never pre-allocated.
+                            let mut out = Vec::with_capacity(dlen.min(raw.len().saturating_mul(8)));
+                            zstd::stream::Decoder::new(&raw[..])
+                                .and_then(|d| d.take(dlen as u64 + 1).read_to_end(&mut out))
+                                .map_err(|e| Error::Container(format!("NCZ block: {e}")))?;
+                            out
                         };
                         if data.len() != dlen {
                             return container("NCZ block has wrong size");

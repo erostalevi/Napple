@@ -206,11 +206,12 @@ static size_t prepare_seed(const MasterKeys *m, const uint8_t base[64], uint8_t 
     size_t copy = tl < 14 ? tl + 1 : 14; /* the string including its NUL, or all 14 bytes */
     memcpy(p, m->type_string, copy);
     p += copy;
-    size_t lead = 16 - m->magic_size;
+    size_t msize = m->magic_size > 16 ? 16 : m->magic_size; /* a key file byte: never more than the 16 magic bytes (amiibo_keys_load refuses larger ones) */
+    size_t lead = 16 - msize;
     memcpy(p, base, lead);
     p += lead;
-    memcpy(p, m->magic, m->magic_size);
-    p += m->magic_size;
+    memcpy(p, m->magic, msize);
+    p += msize;
     memcpy(p, base + 0x10, 16);
     p += 16;
     for (int i = 0; i < 32; i++) p[i] = base[0x20 + i] ^ m->xor_pad[i];

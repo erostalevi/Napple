@@ -102,6 +102,7 @@ int main(void) {
             return 0;
         }
     }
+    decoder_backend_install(NULL); /* the runtime build installs the VideoToolbox backend at startup (decoder_vt.c); these checks are about the null backend */
     nv = nv_new();
     nvmap_fd = open_("/dev/nvmap");
     uint32_t dec = open_("/dev/nvhost-nvdec"), vic = open_("/dev/nvhost-vic"), jpg = open_("/dev/nvhost-nvjpg"), enc = open_("/dev/nvhost-msenc");
@@ -259,6 +260,34 @@ int main(void) {
         memset(bs.mem, 0, 0x2000); memcpy(bs.mem, vp9_inter, sizeof vp9_inter); len = sizeof vp9_inter; memcpy(pic.mem + 12 * 4, &len, 4);
         submit(d3, &cb3, p5, sizeof p5 / 4, NULL, 0);
         CHECK(rec.configures == c0 + 1, "VP9 inter frame: no configure");
+        /* the SDK's way (MK8D, 2026-10-27): every register goes through the THI method FIFO (INCR 0x10 count 2: method, data) and the H.264 sequence lives in the
+         * picture-info structure; the stream carries only slice NAL units, so the sets are synthesised from the structure */
+        {
+            memset(&rec, 0, sizeof rec);
+            uint32_t pw[NVDEC_H264_PIC_WORDS] = {0};
+            pw[18] = 6; pw[19] = 1; pw[22] = 1; pw[24] = 1; pw[25] = 32; pw[26] = 38; pw[28] = 1; pw[30] = 4; pw[32] = 1; pw[35] = pw[36] = 0x200;
+            pw[44] = 0x16u | (1u << 12) | (0x3fu << 16) | (28u << 22) | (28u << 27); /* direct_8x8, weighted_pred, 4:2:0, qp -1, chroma offsets -4 */
+            pw[45] = 2;
+            memcpy(pic.mem, pw, sizeof pw);
+            static const uint8_t slice[6] = {0, 0, 1, 0x65, 0x88, 0x84};
+            memset(bs.mem, 0, 0x2000); memcpy(bs.mem, slice, sizeof slice);
+#define THI(reg, val) INCR(NVM_THI_METHOD0, 2), (reg), (val)
+            uint32_t p6[] = {SETCL(MEDIA_CLASS_NVDEC), THI(NVM_SET_APPLICATION_ID, DEC_CODEC_H264), THI(NVDEC_SET_DRV_PIC_SETUP_OFFSET, pic.iova >> 8), THI(NVDEC_SET_IN_BUF_BASE_OFFSET, bs.iova >> 8),
+                             THI(NVDEC_SET_PICTURE_INDEX, 1), THI(NVDEC_SET_PICTURE_LUMA_OFFSET0 + 1, luma.iova >> 8), THI(NVDEC_SET_PICTURE_CHROMA_OFFSET0 + 1, chroma.iova >> 8),
+                             THI(NVDEC_SET_STATUS_OFFSET, st.iova >> 8), THI(NVM_EXECUTE, 0)};
+#undef THI
+            submit(d3, &cb3, p6, sizeof p6 / 4, NULL, 0);
+            H264Sps sps; H264Pps pps;
+            CHECK(stats(d3)->thi_pairs == 8 && rec.configures == 1 && rec.decoded == 1 && rec.last.picture_index == 1, "THI pairs reach the registers: %llu pairs, configured %d, decoded %d", (unsigned long long)stats(d3)->thi_pairs, rec.configures, rec.decoded);
+            CHECK(rec.cfg.width == 512 && rec.cfg.height == 608 && rec.cfg.h264.nsps == 1 && rec.cfg.h264.npps == 1 && !h264_parse_sps(rec.cfg.h264.sps[0] + 1, rec.cfg.h264.sps_size[0] - 1, &sps) && sps.width == 512 && sps.height == 608,
+                  "H.264 without in-band sets: SPS synthesised from the picture-info structure (%dx%d)", rec.cfg.width, rec.cfg.height);
+            CHECK(!h264_parse_pps(rec.cfg.h264.pps[0] + 1, rec.cfg.h264.pps_size[0] - 1, &pps) && pps.cabac == 1 && pps.num_ref_idx_l0 == 5 && pps.weighted_pred == 1 && pps.weighted_bipred_idc == 2 && pps.pic_init_qp == 25 && pps.chroma_qp_index_offset == -4 && pps.deblocking_filter_control == 1,
+                  "synthesised PPS: CABAC, 5 refs, weighted pred/bipred 2, QP 25, chroma offset %d", pps.chroma_qp_index_offset);
+            submit(d3, &cb3, p6, sizeof p6 / 4, NULL, 0);
+            CHECK(rec.configures == 1 && rec.decoded == 2, "the same structure again: no new configure");
+            pw[25] = 20; memcpy(pic.mem, pw, sizeof pw); submit(d3, &cb3, p6, sizeof p6 / 4, NULL, 0);
+            CHECK(rec.configures == 2 && rec.cfg.width == 320, "a changed picture size reconfigures (%d)", rec.cfg.width);
+        }
         close_(d3);
         CHECK(stats(dec)->configures >= 1 && stats(dec)->frames > 0, "the null backend takes the configure hand-off too (%llu configures on the first channel)", (unsigned long long)stats(dec)->configures);
         /* contract checks of install */
@@ -272,7 +301,7 @@ int main(void) {
     Buf vcb = mkbuf(vic, 0x1000), cfg = mkbuf(vic, 0x1000), yin = mkbuf(vic, 0x1000), cin = mkbuf(vic, 0x1000), out = mkbuf(vic, 0x10000);
     memset(yin.mem, 81, 16 * 8); memset(cin.mem, 90, 16 * 4); for (int i = 0; i < 16 * 4; i += 2) cin.mem[i + 1] = 240; /* BT.601 limited red: Y 81, U 90, V 240 */
     uint32_t c1[VIC_CFG_WORDS] = {16, 8, 0, 0, VIC_FMT_ABGR, 0, 0, 200, 0}; memcpy(cfg.mem, c1, sizeof c1);
-    uint32_t vprog[] = {SETCL(MEDIA_CLASS_VIC), INCR(VIC_SET_CONFIG_STRUCT_OFFSET, 2), cfg.iova >> 8, out.iova >> 8, INCR(VIC_SET_INPUT0_LUMA_OFFSET, 2), yin.iova >> 8, cin.iova >> 8, IMM(NVM_EXECUTE, 0)};
+    uint32_t vprog[] = {SETCL(MEDIA_CLASS_VIC), INCR(VIC_SET_CONFIG_STRUCT_OFFSET, 1), cfg.iova >> 8, INCR(VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET, 1), out.iova >> 8, INCR(VIC_SET_INPUT0_LUMA_OFFSET, 2), yin.iova >> 8, cin.iova >> 8, IMM(NVM_EXECUTE, 0)};
     CHECK(submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0) == NV_OK && stats(vic)->frames == 1 && stats(vic)->errors == 0, "VIC submit");
     CHECK(out.mem[0] >= 250 && out.mem[1] <= 6 && out.mem[2] <= 6 && out.mem[3] == 200, "NV12 red -> RGBA bytes R,G,B,A = %u %u %u %u", out.mem[0], out.mem[1], out.mem[2], out.mem[3]);
     uint32_t c2[VIC_CFG_WORDS] = {16, 8, 32, 16, VIC_FMT_ARGB, 0, 0, 255, 160}; memcpy(cfg.mem, c2, sizeof c2); memset(out.mem, 0, 0x10000);
@@ -284,6 +313,17 @@ int main(void) {
     memset(yin.mem, 16, 16 * 8); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0); CHECK(out.mem[0] == 16, "full range does not remove the black offset (Y 16 -> 16)");
     uint32_t c4[VIC_CFG_WORDS] = {0}; memcpy(cfg.mem, c4, sizeof c4); errs = stats(vic)->errors;
     CHECK(submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0) == NV_OK && stats(vic)->errors == errs + 1, "empty VIC configuration: counted error");
+    /* the SDK's streams carry a config address that no pinned handle covers (MK8D): the execute copies NV12 to the NV12 output surfaces */
+    {
+        Buf ochroma = mkbuf(vic, 0x1000);
+        for (int i = 0; i < 16 * 8; i++) yin.mem[i] = (uint8_t)(i + 1);
+        memset(cin.mem, 77, 16 * 4); memset(out.mem, 0, 0x100); memset(ochroma.mem, 0, 64);
+        uint32_t nprog[] = {SETCL(MEDIA_CLASS_VIC), INCR(VIC_SET_CONFIG_STRUCT_OFFSET, 1), 0x610110, INCR(VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET, 2), out.iova >> 8, ochroma.iova >> 8,
+                            INCR(VIC_SET_INPUT0_LUMA_OFFSET, 2), yin.iova >> 8, cin.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        errs = stats(vic)->errors;
+        CHECK(submit(vic, &vcb, nprog, sizeof nprog / 4, NULL, 0) == NV_OK && stats(vic)->errors == errs && stats(vic)->vic_copies == 1 && out.mem[0] == 1 && out.mem[100] == 101 && ochroma.mem[10] == 77,
+              "VIC with an unreadable config structure: NV12 copy (%llu copies)", (unsigned long long)stats(vic)->vic_copies);
+    }
 
     /* ---- NVJPG ---- */
     Buf jcb = mkbuf(jpg, 0x1000), jsetup = mkbuf(jpg, 0x1000), jin = mkbuf(jpg, 0x8000), jout = mkbuf(jpg, 0x8000), jchroma = mkbuf(jpg, 0x4000), jst = mkbuf(jpg, 0x100);

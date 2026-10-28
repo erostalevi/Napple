@@ -76,7 +76,7 @@ $(BUILD)/tests/test_timescale: tests/test_timescale.c src/timescale.c src/timesc
 $(BUILD)/tests/test_media: tests/test_media.c src/vt_h264.c src/vt_h264.h tests/check.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) tests/test_media.c src/vt_h264.c -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework ImageIO -framework CoreGraphics -o $@
-test: $(BUILD)/tests/test_media $(BUILD)/tests/test_ipc $(BUILD)/tests/test_fs_journal $(BUILD)/tests/test_hid_service $(BUILD)/tests/test_timescale
+test: $(BUILD)/tests/test_media $(BUILD)/tests/test_decoder_vt $(BUILD)/tests/test_ipc $(BUILD)/tests/test_fs_journal $(BUILD)/tests/test_hid_service $(BUILD)/tests/test_timescale
 	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
 
 # Host unit tests (any POSIX host, e.g. Linux): the portable kernel, loader and service code with tests/host stand-ins for the macOS-only
@@ -127,6 +127,11 @@ $(HOST_BUILD)/test_romfs_overlay: tests/host/test_romfs_overlay.c src/services/r
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_romfs_overlay.c src/services/romfs_map.c -o $@
 HOST_TESTS += $(HOST_BUILD)/test_romfs_overlay
+# kernel-threads (2026-10-27): timer preemption of spinning guest threads
+$(HOST_BUILD)/test_threads_preempt: tests/host/test_threads_preempt.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_threads_preempt.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_threads_preempt
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 
@@ -154,3 +159,10 @@ test-a32: $(BUILD)/tests/a32/difftest $(BUILD)/napple-runtime
 	python3 tests/a32jit/progtest.py
 	../tools/check_a32_no_interp.sh $(BUILD)/napple-runtime
 .PHONY: test-a32
+
+# Fuzz drivers for the untrusted-input C parsers (tests/fuzz/HOWTO.md): `make fuzz-build`, `make fuzz-smoke`, `make fuzz-run FUZZ_SECONDS=300`
+-include tests/fuzz/fuzz.mk
+# media-mac (2026-10-27 b6): the VideoToolbox DecoderBackend behind decoder_backend.h
+$(BUILD)/tests/test_decoder_vt: tests/test_decoder_vt.c src/services/decoder_vt.c src/vt_h264.c src/services/decoder_null_core.c src/services/codec_headers_core.c tests/check.h
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -Isrc/services tests/test_decoder_vt.c src/services/decoder_vt.c src/vt_h264.c src/services/decoder_null_core.c src/services/codec_headers_core.c -lm -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework ImageIO -framework CoreGraphics -o $@
