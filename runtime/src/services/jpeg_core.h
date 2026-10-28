@@ -7,7 +7,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-enum { JPEGCORE_OK = 0, JPEGCORE_BAD = 1, JPEGCORE_UNSUPPORTED = 2, JPEGCORE_NOMEM = 3, JPEGCORE_TRUNCATED = 4 };
+enum { JPEGCORE_OK = 0, JPEGCORE_BAD = 1, JPEGCORE_UNSUPPORTED = 2, JPEGCORE_NOMEM = 3, JPEGCORE_TRUNCATED = 4, JPEGCORE_TOO_SMALL = 5 };
 #define JPEGCORE_MAX_DIM 16384
 
 typedef struct {
@@ -23,3 +23,6 @@ uint8_t *napjpeg_decode_rgba(const uint8_t *data, size_t size, int *width, int *
 uint8_t *napjpeg_encode_rgba(const uint8_t *rgba, int width, int height, int stride, int quality, int subsample420, size_t *out_size);
 /* Box-filter downscale of RGBA8 into a malloc'd dw x dh image (nearest area average). */
 uint8_t *napjpeg_scale_rgba(const uint8_t *rgba, int w, int h, int dw, int dh);
+/* What caps:dc DecodeJpeg does: decodes `data` and writes width x height RGBA8 (tight rows) to `out`, box-scaled when the file has another size
+ * (width/height 0 = the file's own size, which then is reported back). JPEGCORE_TOO_SMALL when cap < width*height*4; nothing is written on an error. */
+int napjpeg_decode_into(const uint8_t *data, size_t size, int *width, int *height, uint8_t *out, size_t cap);

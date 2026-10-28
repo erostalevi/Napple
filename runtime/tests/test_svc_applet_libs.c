@@ -92,6 +92,11 @@ int main(void) {
       CHECK(applet_swkbd_fit(&sc, "abcdefgh", fit, sizeof fit) && !strcmp(fit, "abcde"), "swkbd: cut to the max length");
       CHECK(!applet_swkbd_fit(&sc, "a", fit, sizeof fit), "swkbd: below the minimum cannot be confirmed");
       CHECK(applet_swkbd_fit(&sc, "h\xc3\xa9llo!!", fit, sizeof fit) && !strcmp(fit, "h\xc3\xa9llo"), "swkbd: limit counts code points, not bytes");
+      { static const uint8_t hdr[] = {'N',0,'a',0,'m',0,'e',0,0x3d,0xd8,0x00,0xde,0,0}; /* "Name" + U+1F600 as a surrogate pair */
+        memcpy(k + 0x24, hdr, sizeof hdr); memcpy(k + 0xA6, "O\0k\0", 4); memcpy(k + 0x1A8, "\xe9\0", 2);
+        applet_swkbd_parse(k, sizeof k, &sc);
+        CHECK(!strcmp(sc.header, "Name\xf0\x9f\x98\x80") && !strcmp(sc.sub, "Ok") && !strcmp(sc.guide, "\xc3\xa9"), "swkbd: header/sub/guide text parsed (UTF-16 to UTF-8, surrogates)");
+        applet_swkbd_parse(k, 0x100, &sc); CHECK(!sc.header[0] && !sc.guide[0], "swkbd: short config has no text"); }
       v = 600; memcpy(k + 0x3AC, &v, 4); applet_swkbd_parse(k, sizeof k, &sc); CHECK(sc.max_len == APPLET_SWKBD_MAX_LEN, "swkbd: max length clamped"); }
     AppletErrorInfo e; char d[200]; uint8_t hdr[8] = {1, 1}, ea[8] = {0x78, 0x56, 0x34, 0x12};
     applet_error_parse(hdr, 8, ea, 8, &e); applet_error_describe(&e, d, sizeof d);

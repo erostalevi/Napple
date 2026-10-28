@@ -35,16 +35,24 @@ int main(void) {
 
     /* continuity: the guest clock never jumps or runs backwards when the speed changes */
     timescale_set(1.0, 0);
-    uint64_t prev = timescale_guest_ns(); int backwards = 0; uint64_t maxjump = 0;
+    /* a step is judged against the real time that passed between the two reads (a loaded host can preempt the loop for milliseconds): the guest
+     * clock may advance by at most 7.5x the real time of the step (the fastest factor used) plus a small slack, whatever the load */
+    uint64_t prev = timescale_guest_ns(); int backwards = 0; uint64_t maxexcess = 0, maxstep = 0;
+    struct timespec ts0; clock_gettime(CLOCK_MONOTONIC, &ts0);
+    uint64_t real0 = (uint64_t)ts0.tv_sec * 1000000000ull + (uint64_t)ts0.tv_nsec;
     for (int i = 0; i < 2000; i++) {
         timescale_set(i % 2 ? 7.5 : 0.25, 0);
         uint64_t cur = timescale_guest_ns();
+        struct timespec t1; clock_gettime(CLOCK_MONOTONIC, &t1);
+        uint64_t real1 = (uint64_t)t1.tv_sec * 1000000000ull + (uint64_t)t1.tv_nsec;
         if (cur < prev) backwards++;
-        if (cur - prev > maxjump) maxjump = cur - prev;
-        prev = cur;
+        uint64_t step = cur - prev, allowed = (uint64_t)((double)(real1 - real0) * 7.5) + 100000;
+        if (step > maxstep) maxstep = step;
+        if (step > allowed && step - allowed > maxexcess) maxexcess = step - allowed;
+        prev = cur; real0 = real1;
     }
     CHECK(backwards == 0, "guest clock is monotonic across %d speed changes", 2000);
-    CHECK(maxjump < 2000000, "no jump at a speed change (max step %llu ns)", (unsigned long long)maxjump);
+    CHECK(maxexcess == 0, "no jump at a speed change (largest step %llu ns, over the real-time bound by %llu ns)", (unsigned long long)maxstep, (unsigned long long)maxexcess);
 
     /* explicit-time maths: rebase at a known instant */
     timescale_set(1.0, 0);

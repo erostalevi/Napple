@@ -16,9 +16,11 @@ void napple_display_game_size(uint32_t w, uint32_t h, uint32_t *gw, uint32_t *gh
 size_t napple_utf16_to_utf8(const uint16_t *u, size_t n, char *out, size_t cap) { size_t k = 0; for (size_t i = 0; i < n && k + 1 < cap; i++) out[k++] = (char)u[i]; if (cap) out[k] = 0; return k; }
 size_t napple_utf8_to_utf16(const char *s, uint16_t *out, size_t cap) { size_t k = 0; for (; s[k] && k < cap; k++) out[k] = (uint8_t)s[k]; return k; }
 #endif
+static char g_seen_header[100], g_seen_sub[100], g_seen_guide[100]; static int g_text_calls; /* the texts the keyboard passed to the text bar */
 static const char *g_typed; /* what the user types into the text bar (NULL = cancel) */
 int t_frontend_text_input(const char *a, const char *b, const char *c, const char *d, unsigned e, unsigned f, int g, int h, char *out, unsigned cap) {
-    (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h;
+    (void)d; (void)e; (void)f; (void)g; (void)h;
+    snprintf(g_seen_header, sizeof g_seen_header, "%s", a); snprintf(g_seen_sub, sizeof g_seen_sub, "%s", b); snprintf(g_seen_guide, sizeof g_seen_guide, "%s", c); g_text_calls++;
     if (!g_typed) { if (cap) out[0] = 0; return 0; }
     snprintf(out, cap, "%s", g_typed); return 1;
 }
@@ -82,6 +84,14 @@ int main(void) {
         g_typed = NULL; la = create_applet(lac, LIBAPPLET_ID_SWKBD, 0); push(la, common, 0x20); push(la, cfg, sizeof cfg);
         start_result(la); n = pop_out(la, out); CHECK(n == 0x800 && *(uint32_t *)out == 1, "swkbd cancel: CloseResult 1");
     }
+    { /* swkbd (foreground) below the minimum length cannot be confirmed: a cancel; header text reaches the text bar */
+        uint8_t cfg[0x4C8] = {0}; uint32_t mx = 8, mn = 3; memcpy(cfg + 0x3AC, &mx, 4); memcpy(cfg + 0x3B0, &mn, 4); memcpy(cfg + 0x24, "H\0d\0r\0", 6);
+        g_typed = "ab";
+        IpcObject *la = create_applet(lac, LIBAPPLET_ID_SWKBD, 0); push(la, common, 0x20); push(la, cfg, sizeof cfg);
+        start_result(la); n = pop_out(la, out); CHECK(n == 0x800 && *(uint32_t *)out == 1, "swkbd: text below the minimum -> cancel");
+        CHECK(!strcmp(g_seen_header, "Hdr"), "swkbd foreground: header text reaches the text bar");
+        g_typed = NULL;
+    }
     { /* controller support */
         uint8_t arg[0x21c] = {0}; arg[0] = 2; arg[1] = 4; g_pads = 3;
         IpcObject *la = create_applet(lac, LIBAPPLET_ID_CONTROLLER, 0); push(la, common, 0x20); push(la, arg, sizeof arg);
@@ -137,6 +147,12 @@ int main(void) {
         g_typed = "abcdefghij"; push_inter(la, calc, sizeof calc);
         n = pop_inter(la, out); CHECK(*(uint32_t *)out == APPLET_SWKBD_REPLY_CHANGED_STRING_UTF8 && !strcmp((char *)out + 8, "abcdef"), "swkbd inline: ChangedStringUtf8 with the cut text (%s)", (char *)out + 8);
         n = pop_inter(la, out); CHECK(*(uint32_t *)out == APPLET_SWKBD_REPLY_DECIDED_ENTER_UTF8 && !strcmp((char *)out + 8, "abcdef"), "swkbd inline: DecidedEnterUtf8");
+        { /* the config's header/sub/guide text reaches the text bar on the inline path too */
+          uint8_t cfg2[0x4C8] = {0}; memcpy(cfg2 + 0x3AC, &v, 4); memcpy(cfg2 + 0x24, "N\0a\0m\0e\0", 8); memcpy(cfg2 + 0xA6, "s\0u\0b\0", 6); memcpy(cfg2 + 0x1A8, "g\0", 2);
+          IpcObject *lb = create_applet(lac, LIBAPPLET_ID_SWKBD, 1); push(lb, common, 0x20); push(lb, cfg2, sizeof cfg2); svc_call(lb, 10, NULL, 0, &c2);
+          g_typed = "ok"; int calls = g_text_calls; push_inter(lb, calc, sizeof calc);
+          CHECK(g_text_calls == calls + 1 && !strcmp(g_seen_header, "Name") && !strcmp(g_seen_sub, "sub") && !strcmp(g_seen_guide, "g"), "swkbd inline: header/sub/guide text passed to the text bar (%s/%s/%s)", g_seen_header, g_seen_sub, g_seen_guide);
+          svc_call(lb, 20, NULL, 0, &c2); }
         g_typed = NULL; push_inter(la, calc, sizeof calc);
         n = pop_inter(la, out); CHECK(*(uint32_t *)out == APPLET_SWKBD_REPLY_DECIDED_CANCEL, "swkbd inline cancel: DecidedCancel");
         push_inter(la, fin, sizeof fin); CHECK(completed(la), "swkbd inline: Finalize completes the applet");

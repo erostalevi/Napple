@@ -471,18 +471,18 @@ static void sc_exit(IpcObject *s, IpcCall *c) {
     LOG("applet", "ISelfController::Exit: the guest asked to exit");
     summary_note("guest called appletExit");
 }
-/* GetSystemSharedLayerHandle: {shared buffer handle, shared layer handle}; a firmware applet that shares the system buffer gets layer 1 (the window's). */
-/* IsSystemBufferSharingEnabled (ISelfController) answers like a console process that was not granted the shared system buffer: a failing result, so the applet draws into its own layer
- * (no system compositor shares buffers with this process; the answer is the console's own for an unprivileged process, hence impl). GetSystemSharedLayerHandle stays a
- * stub on purpose: it is only reachable after sharing was reported enabled, which never happens here, and the {1, 1} reply is a placeholder. */
+/* IsSystemBufferSharingEnabled / GetSystemSharedLayerHandle (ISelfController 41/42): both answer like a console process that was not granted the shared system
+ * buffer (a firmware-only privilege): a failing result, so the applet draws into its own layer. No system compositor shares buffers with this process, so the
+ * handles {buffer, layer} never exist; the failing result is the console's own answer for an unprivileged caller. Calls to 42 are counted and logged once. */
+static unsigned shared_layer_queries;
 static void sc_no_shared_buffers(IpcObject *s, IpcCall *c) {
     (void)s;
     c->result = 0x1480;
 }
 static void sc_shared_layer(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint64_t v[2] = {1, 1};
-    IPC_OUT(c, v);
+    if (shared_layer_queries++ == 0) LOG("applet", "GetSystemSharedLayerHandle: refused (no shared system buffer for an application)");
+    c->result = 0x1480;
 }
 static const IpcCmd sc_cmds[] = {
     {0, "Exit", sc_exit, IPC_IMPL},
@@ -503,7 +503,7 @@ static const IpcCmd sc_cmds[] = {
     {19, "SetScreenShotImageOrientation", sc_set_orientation, IPC_IMPL},
     {20, "SetDesirableKeyboardLayout", sc_set_keyboard_layout, IPC_IMPL},
     {41, "IsSystemBufferSharingEnabled", sc_no_shared_buffers, IPC_IMPL},
-    {42, "GetSystemSharedLayerHandle", sc_shared_layer, IPC_STUB},
+    {42, "GetSystemSharedLayerHandle", sc_shared_layer, IPC_IMPL},
     {40, "CreateManagedDisplayLayer", sc_create_managed_layer, IPC_IMPL},
     {44, "CreateManagedDisplaySeparableLayer", sc_create_separable_layer, IPC_IMPL},
     {50, "SetHandlesRequestToDisplay", sc_set_handles_request_to_display, IPC_IMPL},
@@ -1472,7 +1472,7 @@ static void la_push_interactive(IpcObject *s, IpcCall *c) {
         uint32_t cmd = d->size >= 4 && d->data ? *(uint32_t *)d->data : 0;
         int typed = 0;
         if (cmd == APPLET_SWKBD_CMD_CALC) /* the keyboard appears: the user types through the host text bar (or the headless script) */
-            typed = frontend_text_input("", "", "", "", a->kbd.cfg.max_len, a->kbd.cfg.min_len, a->kbd.cfg.password, a->kbd.cfg.numeric, text, sizeof text);
+            typed = frontend_text_input(a->kbd.cfg.header, a->kbd.cfg.sub, a->kbd.cfg.guide, "", a->kbd.cfg.max_len, a->kbd.cfg.min_len, a->kbd.cfg.password, a->kbd.cfg.numeric, text, sizeof text);
         applet_swkbd_inline_request(&a->kbd, d->data, d->size, typed ? text : NULL, &call);
         for (unsigned i = 0; i < call.ninteractive_out; i++) la_push_iout(a, la_storage_from(call.interactive_out[i], call.interactive_out_size[i]));
         libapplet_call_free(&call);

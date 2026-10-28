@@ -71,7 +71,34 @@ NVN(nvnTextureBuilderGetPackagedTextureData, const void *, const NVNtextureBuild
 NVN(nvnTextureBuilderGetStride, ptrdiff_t, const NVNtextureBuilder *b) { return (ptrdiff_t)CTB(b)->d.stride; }
 NVN(nvnTextureBuilderGetGLTextureName, uint32_t, const NVNtextureBuilder *b) { (void)b; return 0; }
 NVN(nvnTextureBuilderGetZCullStorageSize, size_t, const NVNtextureBuilder *b) { (void)b; return 0; }
-NVN(nvnTextureBuilderGetSparseTileLayout, void, const NVNtextureBuilder *b, NVNtextureSparseTileLayout *l) { (void)b; (void)l; }
+/* Sparse textures (NVN_TEXTURE_FLAGS_SPARSE on a virtual pool): the console backs tiles of 64 KiB on demand (nvnMemoryPoolMapVirtual); here every texture
+ * is fully resident (the virtual pool is plain host memory, unmapped pages read as zero), so the residency calls only have to give the game a tile layout
+ * it can do its arithmetic with: the hardware's 64 KiB page shape per texel size (256x256 for 1 byte, 256x128, 128x128, 128x64, 64x64 for 16 bytes; block
+ * formats count in blocks; 3D tiles 32x32x16 scaled the same way) and the number of levels at least one tile large. Layout of NVNtextureSparseTileLayout
+ * as the C++ API reads it (GetNumTiledLevels / GetTileWidth / Height / Depth, 0x20 bytes). */
+typedef struct { int32_t num_tiled_levels, tile_w, tile_h, tile_d; int32_t reserved[4]; } sparse_layout_t;
+static void sparse_layout(const napple_texdesc *d, void *out) {
+    sparse_layout_t *l = (sparse_layout_t *)out;
+    memset(l, 0, sizeof *l);
+    int bw = 1, bh = 1, bpb = napple_fmt_bpb(d->format, &bw, &bh);
+    uint32_t tw, th, td = 1;
+    switch (bpb) {
+        case 1: tw = 256; th = 256; break;
+        case 2: tw = 256; th = 128; break;
+        case 4: tw = 128; th = 128; break;
+        case 8: tw = 128; th = 64; break;
+        default: tw = 64; th = 64; break;
+    }
+    if (d->target == NVN_TEXTURE_TARGET_3D) { tw /= 4; th /= 4; td = 16; }
+    l->tile_w = (int32_t)(tw * (uint32_t)bw);
+    l->tile_h = (int32_t)(th * (uint32_t)bh);
+    l->tile_d = (int32_t)td;
+    int n = 0;
+    for (uint32_t lv = 0; lv < d->levels; lv++)
+        if ((d->width >> lv) >= (uint32_t)l->tile_w && (d->height >> lv) >= (uint32_t)l->tile_h) n++;
+    l->num_tiled_levels = n ? n : 1;
+}
+NVN(nvnTextureBuilderGetSparseTileLayout, void, const NVNtextureBuilder *b, NVNtextureSparseTileLayout *l) { if (l) sparse_layout(&CTB(b)->d, l); }
 NVN(nvnTextureBuilderGetDevice, const NVNdevice *, const NVNtextureBuilder *b) { return CTB(b)->dev; }
 NVN(nvnTextureBuilderGetMemoryPool, const NVNmemoryPool *, const NVNtextureBuilder *b) { return (const NVNmemoryPool *)CTB(b)->pool; }
 NVN(nvnTextureBuilderGetMemoryOffset, ptrdiff_t, const NVNtextureBuilder *b) { return (ptrdiff_t)CTB(b)->off; }
@@ -115,6 +142,9 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
         return 0;
     }
     { static int n; if (getenv("NAPPLE_TEXLOG") && (s->d.flags & 1) && n++ < 20) fprintf(stderr, "[texlog] display-flag texture %ux%u fmt %#x flags %#x mem %p pool %p off %lld\n", (unsigned)s->d.width, (unsigned)s->d.height, (unsigned)s->d.format, (unsigned)s->d.flags, (void *)(s->pool ? s->pool->mem + s->off : NULL), (const void *)s->pool, (long long)s->off); }
+    if (s->d.flags & NVN_TEXTURE_FLAGS_SPARSE)
+        LOG_ONCE(NAPPLE_LOG_INFO, "sparse texture (%ux%u fmt %#x, %u levels): fully resident, residency requests are not tracked", (unsigned)s->d.width, (unsigned)s->d.height,
+                 (unsigned)s->d.format, (unsigned)s->d.levels);
     o->magic = TEX_MAGIC;
     o->s.d = s->d;
     o->s.mem = s->pool->mem + s->off;
@@ -149,7 +179,7 @@ NVN(nvnTextureGetSwizzle, void, const NVNtexture *t, NVNtextureSwizzle *r, NVNte
 NVN(nvnTextureGetDepthStencilMode, NVNtextureDepthStencilMode, const NVNtexture *t) { return (NVNtextureDepthStencilMode)CTX(t)->s.ds_mode; }
 NVN(nvnTextureGetStride, ptrdiff_t, const NVNtexture *t) { return (ptrdiff_t)napple_tex_linear_stride(&CTX(t)->s.d); }
 NVN(nvnTextureGetTextureAddress, NVNtextureAddress, const NVNtexture *t) { return (NVNtextureAddress)(uintptr_t)CTX(t)->s.mem; }
-NVN(nvnTextureGetSparseTileLayout, void, const NVNtexture *t, NVNtextureSparseTileLayout *l) { (void)t; (void)l; }
+NVN(nvnTextureGetSparseTileLayout, void, const NVNtexture *t, NVNtextureSparseTileLayout *l) { if (l) sparse_layout(&CTX(t)->s.d, l); }
 NVN(nvnTextureGetStorageSize, int, const NVNtexture *t) { return (int)CTX(t)->s.size; }
 NVN(nvnTextureGetDebugID, uint64_t, const NVNtexture *t) { return (uint64_t)(uintptr_t)CTX(t)->s.mem; }
 NVN(nvnTextureCompare, NVNboolean, const NVNtexture *a, const NVNtexture *b) {

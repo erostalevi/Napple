@@ -195,6 +195,13 @@ static void uninstall(void) {
     }
 }
 
+static napple_audin_permission_fn g_perm;
+static void *g_perm_user;
+void napple_audin_set_permission_hook(napple_audin_permission_fn fn, void *user) {
+    g_perm = fn;
+    g_perm_user = user;
+}
+
 int napple_audin_install_source_spec(const char *spec) {
     if (!spec || !*spec || !strcmp(spec, "silence")) {
         uninstall();
@@ -220,6 +227,7 @@ int napple_audin_install_source_spec(const char *spec) {
     }
     if (!strcmp(spec, "mic")) {
         uninstall();
+        if (g_perm && !g_perm(g_perm_user)) return NAPPLE_AUDIO_E_DENIED;
         nae_mic_ring_reset();
         if (nae_mic_start()) return NAPPLE_AUDIO_E_UNSUPPORTED;
         I.mic = 1;

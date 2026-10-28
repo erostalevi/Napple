@@ -42,7 +42,7 @@ Keep patches small. Only write the bytes you change; a mod must never contain th
 
 ## 3. Cheats, files, settings (all optional)
 
-* Cheats: `cheats/<first 16 hex digits of the main build id>.txt` in the Atmosphere text format; only the [opcode subset](format.md#cheat-opcode-subset) runs.
+* Cheats: `cheats/<first 16 hex digits of the main build id>.txt` in the Atmosphere text format; only the [opcode table](format.md#cheat-opcode-table) runs (a cheat using any other code type is skipped as a whole).
 * Replacement files: put them under `files/` at the romfs path (`files/ui/title.bin` replaces `/ui/title.bin`). Add `files/path.delete` to hide a file. Use only files you made yourself.
 * Settings: `config.json` with `renderScale`, `aspect`, `fpsMode`, `fixes`.
 

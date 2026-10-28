@@ -95,6 +95,7 @@ typedef struct pipe_key {
     uint32_t samples, topo;
     blend_st blend[8]; uint8_t blend_en[8]; uint8_t wmask[8];
     uint8_t a2c, flip_y, depth_mode, nattr, nstream, probe;
+    uint8_t sample_shading; /* the bound program asks for sample shading and the pass is multisampled (ShaderKey.sample_shading of the fragment stage) */
     va_st attr[32];
     vs_st stream[MAX_STREAMS];
     uint8_t attr_kind[32], rt_kind[8];

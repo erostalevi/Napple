@@ -186,6 +186,8 @@ static uint32_t nvmap_ioctl(unsigned nr, uint8_t *buf, uint32_t size) {
             h->align = align;
             h->addr = addr;
             h->allocated = 1;
+            if (media_trace()) fprintf(stderr, "[nvmap] alloc id %u size %#x addr %#llx heap %#x flags %#x align %#x kind %u\n", id, h->size, (unsigned long long)addr, heap,
+                                       flags, align, buf[16]);
             r = NV_OK;
             break;
         }
@@ -318,8 +320,9 @@ static uint32_t ctrl_ioctl(unsigned nr, uint8_t *buf, uint32_t size) {
  * (relocations applied to a copy), run as host1x streams on the channel's engine (nvdrv_media_core: NVDEC to the DecoderBackend, VIC colour
  * conversion, NVJPG decode through jpeg_core, MSENC accepted) and the submit completes at once: its syncpoint increments land immediately and
  * the fence thresholds are what the guest then waits for. A malformed stream or an unmapped gather fails the submit like the kernel's
- * firewall; a failed decode is reported in the engine's status structure only. Movie playback in movie.c still decodes at the media
- * library level and does not go through here. Everything runs under the nvdrv lock. */
+ * firewall; a failed decode is reported in the engine's status structure only. movie.c decodes only the movie formats it replaces at the
+ * media-library level (the ones it hooks); any other decoder the title's own library drives (MK8D's 512x608 AVC preview video, for one) comes here
+ * as nvhost-nvdec + nvhost-vic submits. Everything runs under the nvdrv lock. */
 enum { NV_BAD_VALUE = 0xB, NV_INVALID_STATE = 8 };
 #define SYNCPT_FIRST_DYNAMIC 32 /* ids below are the fixed ones (display, GPU) the SDK may poll through nvhost-ctrl */
 static uint8_t syncpt_owned[NSYNC];
@@ -340,6 +343,7 @@ static uint32_t nvmap_pin(NvMapHandle *h) {
     if (end > 0xfff00000u) return 0;
     next_iova = (uint32_t)end;
     h->iova = (uint32_t)at;
+    if (media_trace()) fprintf(stderr, "[nvmap] pin id %u addr %#llx size %#x -> iova %#x\n", h->id, (unsigned long long)h->addr, h->size, h->iova);
     return h->iova;
 }
 /* Device address -> host pointer for the media engines: the nvmap handle whose pinned range covers it (guest addresses are host addresses here). */
@@ -349,7 +353,16 @@ static uint8_t *nv_resolve(void *ctx, uint64_t iova, size_t *avail) {
         NvMapHandle *h = &nvmap[i];
         if (!h->used || !h->iova || !h->addr || iova < h->iova || iova >= (uint64_t)h->iova + h->size) continue;
         *avail = (size_t)((uint64_t)h->iova + h->size - iova);
-        return guest_ptr(h->addr + (iova - h->iova), *avail); /* NULL when the guest gave an address that is not mapped */
+        uint8_t *p = guest_ptr(h->addr + (iova - h->iova), *avail); /* NULL when the guest gave an address that is not mapped */
+        if (!p && media_trace()) {
+            static int said;
+            if (said++ < 20) fprintf(stderr, "[nvmap] iova %#llx -> handle %u addr %#llx: not guest memory\n", (unsigned long long)iova, h->id, (unsigned long long)h->addr);
+        }
+        return p;
+    }
+    if (media_trace()) {
+        static int said;
+        if (said++ < 40) fprintf(stderr, "[nvmap] resolve miss iova %#llx\n", (unsigned long long)iova);
     }
     return NULL;
 }
@@ -396,6 +409,12 @@ static uint32_t channel_submit(Channel *ch, uint8_t *buf, uint32_t size) {
                 return t && !iova ? NV_INSUFFICIENT_MEMORY : NV_BAD_PARAMETER;
             }
             w[(at - offset) / 4] = (uint32_t)(((uint64_t)iova + toff) >> shift);
+            if (media_trace()) {
+                static int said;
+                if (said++ < 64)
+                    fprintf(stderr, "[nvdrv] class %#x reloc word %#x -> handle %u (+%#x) >> %u = %#x\n", ch->class_id, (at - offset) / 4, t->id, toff, shift,
+                            w[(at - offset) / 4]);
+            }
         }
         int rc = media_engine_run(ch->eng, w, words);
         free(w);
@@ -503,6 +522,9 @@ static void channel_release(Channel *ch) { /* close of the fd: its syncpoints go
         if (st->unknown_regs)
             summary_note("nvdrv: media engine %#x: %llu writes to registers outside the known map (last %#x)", media_engine_class(ch->eng),
                          (unsigned long long)st->unknown_regs, st->last_unknown_reg);
+        if (st->errors) /* 1 codec refused by the backend (VP9 on VideoToolbox), 2 unmapped surface, 3 decode failed, 4 bad parameters / surface too small */
+            summary_note("nvdrv: media engine %#x: %llu of %llu executes failed (last error %u)", media_engine_class(ch->eng), (unsigned long long)st->errors,
+                         (unsigned long long)st->executes, st->last_error);
         media_engine_free(ch->eng);
         ch->eng = NULL;
     }

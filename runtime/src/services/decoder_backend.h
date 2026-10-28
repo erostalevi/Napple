@@ -18,8 +18,10 @@
  *   - Synchronous and in decode order: the frame produced by THIS request is written to req->luma / req->chroma before it returns (NVDEC hands the guest
  *     one output slot per request and the guest does the display reordering itself). A VideoToolbox backend therefore decodes with temporal processing
  *     off, or waits for the frame of this very access unit. Never write after returning, never keep the pointers (they point into guest memory).
- *   - Output is pitch-linear NV12 (luma rows of out->pitch bytes, chroma = interleaved CbCr, height/2 rows of out->pitch bytes); the writer checks
- *     luma_cap >= pitch*height and chroma_cap >= pitch*((height+1)/2) itself and returns -1 when the guest surface is too small. pitch >= width.
+ *   - Output is pitch-linear NV12 (luma rows of out->pitch bytes, chroma = interleaved CbCr, (height+1)/2 rows of out->pitch bytes). The row pitch is the
+ *     guest's: req->luma_pitch / req->chroma_pitch when non-zero and >= width, else the width (packed). The writer checks that the last row fits
+ *     (cap >= pitch*(rows-1)+width) itself and returns -1 when the guest surface is too small; bytes between width and pitch are left as they were.
+ *     decoder_write_nv12() does all of that for a backend that holds a packed frame.
  *   - Return 0: a frame was produced and out is valid. >0: no frame yet (stream starts mid-GOP, parameter sets still missing): the engine reports
  *     "no picture" in the status structure and counts nothing. <0: error; the engine counts it and reports it in the status structure.
  *   - H.264 bitstream: Annex B slice NAL units (and possibly SPS/PPS/SEI in-band). VP9/VP8: one frame (superframe index, if any, left in).
@@ -47,6 +49,7 @@ typedef struct {
     uint32_t picture_index; /* output slot the guest selected */
     uint8_t *luma, *chroma; /* output planes (host pointers into the guest surfaces) */
     size_t luma_cap, chroma_cap;
+    uint32_t luma_pitch, chroma_pitch; /* bytes per row of the guest surfaces (NVDEC picture-info structure), 0 = packed (width) */
 } DecodeRequest;
 typedef struct {
     int width, height, pitch; /* what was written: luma rows of `pitch` bytes, chroma (interleaved CbCr) half as many rows */
@@ -77,6 +80,9 @@ typedef struct DecoderBackend {
 } DecoderBackend;
 
 extern const DecoderBackend decoder_backend_null;
+/* Copies a packed NV12 frame (w x h luma, then w x h/2 interleaved CbCr) to the request's surfaces at the request's pitches and fills out's size fields.
+ * 0, or -1 when a surface is missing or too small (nothing written then). */
+int decoder_write_nv12(const DecodeRequest *req, const uint8_t *nv12, int w, int h, DecodeResult *out);
 const DecoderBackend *decoder_backend_current(void);
 /* Installs a backend for engines created afterwards (existing ones keep theirs). NULL restores the null backend. Returns 0, or -1 and installs nothing when
  * the abi differs or open/close/decode is missing. */

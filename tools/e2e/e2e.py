@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """e2e.py - end-to-end run of the whole Napple product per title. Use tools/e2e/run.sh (it picks the python that has Pillow).
 
-  run.sh <las|smo|acnh|mk8d|all> [--out DIR] [--keyset NAME] [--seconds N] [--keep-apps] [--skip-build] [--no-golden] [--no-overlay] [--no-mii]
+  run.sh <las|smo|acnh|mk8d|all> [--out DIR] [--keyset NAME] [--seconds N] [--keep-apps] [--skip-build] [--no-golden] [--no-overlay] [--no-mii] [--no-applets] [--build-only] [--only STEPS]
 
 Per title, in order (every step ends PASS, FAIL, KNOWN (a documented known issue), REPORT (informational), N/A or SKIP):
   build       the .app through Studio's build path (studio `napple-studio-build`: KeysetManager + NappleCLI.build; in-place data mode, updates and DLC as planned)
@@ -13,6 +13,8 @@ Per title, in order (every step ends PASS, FAIL, KNOWN (a documented known issue
   amiibo      NAPPLE_AMIIBO with a generated virtual amiibo: placed and removed when the title opens the nfp service
   save        a save was written (commit) in the boot, and re-read by a second boot with the same save root
   mii-db      (first title) the Mii Maker applet creates a Mii (scripted input + swkbd answer) in the shared database; every title then boots against the same file
+  applets     (first title) the library applet sheets (error, controller, player select, software keyboard, web, album) raised over the running title's window
+              with NAPPLE_DEBUG_SHEETS, answered by NAPPLE_SHEET_AUTO (confirm run, then cancel run + NAPPLE_SWKBD_ANSWER / NAPPLE_CONTROLLER_PADS), PNG of each sheet
   overlay     the in-game overlay tabs render (NAPPLE_FE_OVERLAY + NAPPLE_FE_VIEWSHOT, a windowed run)
   golden      the golden-frame harness (tools/golden, report only: diffs do not fail the table; the user approves goldens)
 Results: <out>/summary.json, <out>/summary.md and the table on stdout. Exit 0 when no step is FAIL.
@@ -320,6 +322,51 @@ def step_overlay(r, name, app, tabs):
     r.add(name, "overlay", "FAIL" if bad else "PASS", "tabs rendered %s%s (PNGs in %s)" % (ok, ", missing %s" % bad if bad else "", outdir))
 
 
+SHEETS = ["error", "controller", "player_select", "swkbd", "web", "album"]
+
+
+def step_applets(r, name, app):
+    """The AppKit sheets of the library applets over a real title (docs/archive/changes/2026-10-27-applets-on-title.md). No title raises most of these
+    applets by itself, so NAPPLE_DEBUG_SHEETS (runtime/src/app.m) raises them from a thread of its own, the way a guest thread would, through the same
+    hooks the applets use. Results come from the "debug-sheets:" log lines; each sheet must also leave a PNG (NAPPLE_SHEET_SHOT)."""
+    outdir = os.path.join(r.out, "applets", name)
+    shutil.rmtree(outdir, ignore_errors=True)
+    os.makedirs(outdir, exist_ok=True)
+    save = os.path.join(r.out, "saves", name + "-applets")
+    base = {"NAPPLE_DEBUG_SHEETS": "12", "NAPPLE_AUDIO_DEVICE": "0", "NAPPLE_CONTROLLER_PADS": "3",
+            "NAPPLE_SHEET_ORIGIN": "930,540", "NAPPLE_SHEET_SIZE": "560,380"}  # sheets are moved to the screen corner for the shot (the middle may be covered)
+    runs = [
+        ("confirm", {"NAPPLE_SHEET_AUTO": "confirm:3000", "NAPPLE_SHEET_SHOT": os.path.join(outdir, "confirm")},
+         [r"debug-sheets: error -> dismissed", r"debug-sheets: controller -> 1 players=2 connected=3", r"debug-sheets: player select -> 0",
+          r'debug-sheets: swkbd -> 1 "Link"', r"debug-sheets: web -> 0", r"debug-sheets: album -> 1", r"debug-sheets: done"], SHEETS),
+        ("cancel", {"NAPPLE_SHEET_AUTO": "cancel:500", "NAPPLE_SWKBD_ANSWER": "Epona"},
+         [r"debug-sheets: controller -> 0", r"debug-sheets: player select -> -1", r'debug-sheets: swkbd -> 1 "Epona"', r"debug-sheets: done"], []),
+    ]
+    bad, ok, missing = [], [], []
+    for tag, extra, wants, shots in runs:
+        env = dict(base)
+        env.update(extra)
+        text = ""
+        for attempt in range(2):  # an intermittent early abort of the title (KNOWN) is retried once
+            rc, text, log = boot(r, name, app, 45, save, "applets-" + tag, extra_env=env, headless=False)
+            if not known_issue(text):
+                break
+        for w in wants:
+            if not re.search(w, text):
+                bad.append("%s run: no '%s'" % (tag, w))
+        for sh_ in shots:
+            png = os.path.join(outdir, tag, sh_ + ".png")
+            if not (os.path.exists(png) and os.path.getsize(png) > 3000):
+                missing.append("%s/%s.png" % (tag, sh_))  # screencapture needs the Screen Recording grant: a missing PNG is reported, not a failure
+        if "CRASH" in text:
+            bad.append("%s run: CRASH" % tag)
+        if rc != 0:
+            bad.append("%s run: exit %s" % (tag, rc))
+        ok.append(tag)
+    shutil.rmtree(save, ignore_errors=True)
+    r.add(name, "applets", "FAIL" if bad else "PASS", ("; ".join(bad) if bad else "sheets %s answered (confirm run, cancel run); PNGs in %s%s" % (", ".join(SHEETS), outdir, ("; PNG missing (Screen Recording grant?): %s" % ", ".join(missing)) if missing else "")))
+
+
 def step_golden(r, name, app):
     spec = importlib.util.spec_from_file_location("golden", os.path.join(ROOT, "tools/golden/golden.py"))
     g = importlib.util.module_from_spec(spec)
@@ -376,6 +423,9 @@ def main():
     ap.add_argument("--skip-build", action="store_true", help="reuse the .app of an earlier run in --out")
     ap.add_argument("--no-golden", action="store_true")
     ap.add_argument("--no-overlay", action="store_true")
+    ap.add_argument("--build-only", action="store_true", help="build the .app(s) and stop (keeps them: run the other steps later with --skip-build --only ...)")
+    ap.add_argument("--only", default="", help="comma list of steps to run: bundle,camera-mic,mii-db,boot,applets,overlay,golden (default all); lets a run be split into short game-lock turns")
+    ap.add_argument("--no-applets", action="store_true")
     ap.add_argument("--no-mii", action="store_true")
     a = ap.parse_args()
     r = Run(a)
@@ -392,20 +442,29 @@ def main():
         app = step_build(r, name, TITLES[name], tool)
         if not app:
             continue
-        step_bundle(r, name, app)
-        step_camera_mic(r, name, app)
-        if first and not a.no_mii:
+        if a.build_only:
+            continue
+        only = [x for x in a.only.split(",") if x]
+        want = lambda step: not only or step in only
+        if want("bundle"):
+            step_bundle(r, name, app)
+        if want("camera-mic"):
+            step_camera_mic(r, name, app)
+        if first and not a.no_mii and want("mii-db"):
             step_mii(r, name, app)
-        step_boot_group(r, name, app)
-        if not a.no_overlay:
+        if want("boot"):
+            step_boot_group(r, name, app)
+        if first and not a.no_applets and want("applets"):
+            step_applets(r, name, app)
+        if not a.no_overlay and want("overlay"):
             step_overlay(r, name, app, [0, 1, 2, 3] if first else [3])
-        if not a.no_golden:
+        if not a.no_golden and want("golden"):
             try:
                 step_golden(r, name, app)
             except Exception as e:  # the golden harness is report only: its own errors never end the run
                 r.add(name, "golden", "REPORT", "harness error: %s" % e)
         first = False
-        if not a.keep_apps:
+        if not a.keep_apps and not only:
             shutil.rmtree(os.path.dirname(app), ignore_errors=True)  # an app is 6 GB
     return finish(r)
 

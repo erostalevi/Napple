@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "last_run": 1792549082,
-  "last_run_iso": "2026-10-21T02:18:02Z",
+  "last_run": 1793184284,
+  "last_run_iso": "2026-10-28T10:44:44Z",
   "games": [
     {
       "title_id": "0100000000010000",
@@ -370,6 +370,617 @@
       "notes": []
     },
     {
+      "title_id": "0100152000022000",
+      "name": "Mario Kart 8 Deluxe",
+      "publisher": "Nintendo",
+      "versions": [
+        {
+          "kind": "base",
+          "title_id": "0100152000022000",
+          "version": 0,
+          "display_version": "1.0.0",
+          "build_id": "b5c39b5b7c62a88e",
+          "stages": {
+            "audio": {
+              "status": "untested",
+              "reason": "all test runs had audio off",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "build-plan": {
+              "status": "pass",
+              "reason": "base + 1 update(s) + 1 DLC",
+              "evidence": "",
+              "time": 1793184284,
+              "tool": "napple-compat"
+            },
+            "ingame": {
+              "status": "partial",
+              "reason": "menus, preview and course select load; full races not verified",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "ingest": {
+              "status": "pass",
+              "reason": "9 ExeFS files, romfs 4669 files",
+              "evidence": "",
+              "time": 1793184284,
+              "tool": "napple-compat"
+            },
+            "input": {
+              "status": "partial",
+              "reason": "scripted menu input reaches the game; real controller untested",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "nso-load": {
+              "status": "pass",
+              "reason": "8 modules, segment hashes verified, main build b5c39b5b7c62a88e",
+              "evidence": "",
+              "time": 1793184284,
+              "tool": "napple-compat"
+            },
+            "rewrite": {
+              "status": "pass",
+              "reason": "napple build completes (A32 base via the a32 interpreter/JIT, 64-bit update AOT)",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "runtime-boot": {
+              "status": "pass",
+              "reason": "boots into the main loop headed and headless (A32 base 2216 frames, 64-bit update 2499 frames in 50 s)",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "saves": {
+              "status": "untested",
+              "reason": "not exercised",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "site-scan": {
+              "status": "pass",
+              "reason": "OtherSysReg=5 X18=62594",
+              "evidence": "",
+              "time": 1793184284,
+              "tool": "napple-compat"
+            },
+            "title-screen": {
+              "status": "pass",
+              "reason": "title and main menu reached",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "video": {
+              "status": "partial",
+              "reason": "menus and the preview video render (nvdec/VIC path on the update); race rendering not judged",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            }
+          },
+          "modules": [
+            {
+              "name": "rtld",
+              "build_id": "74dac2371a39ac4c9149b42cce6590e1edcb6970000000000000000000000000",
+              "text_bytes": 13484,
+              "sites": {
+                "X18": 29
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "main",
+              "build_id": "b5c39b5b7c62a88ec25fa897858c874e00000000000000000000000000000000",
+              "text_bytes": 10860860,
+              "sites": {
+                "X18": 39101
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "subsdk0",
+              "build_id": "5b109840874bb2c4aaf79d658314a918eeafcb4a000000000000000000000000",
+              "text_bytes": 1060668,
+              "sites": {
+                "X18": 3545
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "subsdk1",
+              "build_id": "65fb977974677204abf177847587ab2ee44e2cb1000000000000000000000000",
+              "text_bytes": 71500,
+              "sites": {
+                "X18": 175
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "subsdk2",
+              "build_id": "fc36857da0c342fab0755da8d911584ef603bf80000000000000000000000000",
+              "text_bytes": 47076,
+              "sites": {
+                "X18": 52
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "subsdk3",
+              "build_id": "df815b134bed7daafd826286d2e003cd60367b3d000000000000000000000000",
+              "text_bytes": 185616,
+              "sites": {
+                "OtherSysReg": 1,
+                "X18": 536
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "subsdk4",
+              "build_id": "db90ec869d595dd3bb6a55753a0b59cc0aaf8e2f000000000000000000000000",
+              "text_bytes": 3293892,
+              "sites": {
+                "OtherSysReg": 4,
+                "X18": 9536
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "sdk",
+              "build_id": "66c55bf0d8b166f81ac71bfc179191fd5b8a9a33000000000000000000000000",
+              "text_bytes": 3726076,
+              "sites": {
+                "X18": 9620
+              },
+              "svc_numbers": []
+            }
+          ],
+          "npdm": {
+            "name": "Application",
+            "is_64bit": false,
+            "address_space": 2,
+            "main_thread_priority": 44,
+            "main_thread_core": 0,
+            "main_thread_stack_size": 1048576,
+            "system_resource_size": 0,
+            "memory_region": 0,
+            "production": true,
+            "fs_permissions": "0x4000000000040000",
+            "handle_table_size": 512,
+            "kernel_version": "3.0",
+            "thread_info": "prio 28..59, cores 0..2",
+            "allowed_svcs": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              47,
+              50,
+              51,
+              95
+            ],
+            "memory_maps": [],
+            "io_maps": [],
+            "debug_flags": "allow_debug=true force_debug=false program_type=1",
+            "services_used": [
+              "acc:u0",
+              "aoc:u",
+              "apm",
+              "apm:p",
+              "appletOE",
+              "audin:u",
+              "audout:u",
+              "audren:u",
+              "bsd:u",
+              "bsdcfg",
+              "csrng",
+              "friend:u",
+              "fsp-srv",
+              "hid",
+              "htc",
+              "htc:tenv",
+              "htcs",
+              "hwopus",
+              "irs",
+              "ldn:u",
+              "ldr:ro",
+              "lm",
+              "mii:u",
+              "mm:u",
+              "nfc:mf:u",
+              "nfc:user",
+              "nfp:user",
+              "nifm:u",
+              "nsd:u",
+              "ntc",
+              "nvdrv",
+              "pctl",
+              "pl:u",
+              "prepo:u",
+              "set",
+              "sfdnsres",
+              "ssl",
+              "time:u",
+              "tspm",
+              "vi:u"
+            ],
+            "services_hosted": []
+          },
+          "notes": [
+            "[auto] RISK: NPDM declares a 32-bit process; the A64 pipeline does not apply"
+          ]
+        },
+        {
+          "kind": "update",
+          "title_id": "0100152000022800",
+          "version": 1376256,
+          "display_version": "3.0.5",
+          "build_id": "fe941ed5ba14be5d",
+          "stages": {
+            "audio": {
+              "status": "untested",
+              "reason": "all test runs had audio off",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "build-plan": {
+              "status": "pass",
+              "reason": "base + 1 update(s) + 1 DLC",
+              "evidence": "",
+              "time": 1793184284,
+              "tool": "napple-compat"
+            },
+            "ingame": {
+              "status": "partial",
+              "reason": "menus, preview and course select load; full races not verified",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "ingest": {
+              "status": "partial",
+              "reason": "5 ExeFS files, romfs pending (BKTR (update patch) sections: not yet)",
+              "evidence": "",
+              "time": 1793184284,
+              "tool": "napple-compat"
+            },
+            "input": {
+              "status": "partial",
+              "reason": "scripted menu input reaches the game; real controller untested",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "nso-load": {
+              "status": "pass",
+              "reason": "4 modules, segment hashes verified, main build fe941ed5ba14be5d",
+              "evidence": "",
+              "time": 1793184284,
+              "tool": "napple-compat"
+            },
+            "rewrite": {
+              "status": "pass",
+              "reason": "napple build completes (A32 base via the a32 interpreter/JIT, 64-bit update AOT)",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "runtime-boot": {
+              "status": "pass",
+              "reason": "boots into the main loop headed and headless (A32 base 2216 frames, 64-bit update 2499 frames in 50 s)",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "saves": {
+              "status": "untested",
+              "reason": "not exercised",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "site-scan": {
+              "status": "pass",
+              "reason": "MrsCntpct=34 MrsTpidrEl0=2 MrsTpidrroEl0=54 MsrTpidrEl0=4 Svc=61 X18=18899",
+              "evidence": "",
+              "time": 1793184284,
+              "tool": "napple-compat"
+            },
+            "title-screen": {
+              "status": "pass",
+              "reason": "title and main menu reached",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "video": {
+              "status": "partial",
+              "reason": "menus and the preview video render (nvdec/VIC path on the update); race rendering not judged",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            }
+          },
+          "modules": [
+            {
+              "name": "rtld",
+              "build_id": "d33817c0c763d8faf97d9a6534c19db231ff7271000000000000000000000000",
+              "text_bytes": 6112,
+              "sites": {
+                "Svc": 4,
+                "X18": 4
+              },
+              "svc_numbers": [
+                6,
+                38,
+                39,
+                40
+              ]
+            },
+            {
+              "name": "main",
+              "build_id": "fe941ed5ba14be5d505698da1bbf4fe700000000000000000000000000000000",
+              "text_bytes": 11866312,
+              "sites": {
+                "X18": 3626
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "subsdk0",
+              "build_id": "d9de423efc1512328c3c05378c7cb03173facde3000000000000000000000000",
+              "text_bytes": 3186728,
+              "sites": {
+                "X18": 8362
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "sdk",
+              "build_id": "ba520906609c503227871a314a94fb5f6ccbe444000000000000000000000000",
+              "text_bytes": 4252832,
+              "sites": {
+                "MrsCntpct": 34,
+                "MrsTpidrEl0": 2,
+                "MrsTpidrroEl0": 54,
+                "MsrTpidrEl0": 4,
+                "Svc": 57,
+                "X18": 6907
+              },
+              "svc_numbers": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                31,
+                33,
+                34,
+                35,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                44,
+                45,
+                47,
+                50,
+                51,
+                52,
+                53,
+                64,
+                65,
+                67,
+                68,
+                69,
+                80,
+                81,
+                82,
+                83,
+                112,
+                114
+              ]
+            }
+          ],
+          "npdm": {
+            "name": "Application",
+            "is_64bit": true,
+            "address_space": 3,
+            "main_thread_priority": 44,
+            "main_thread_core": 0,
+            "main_thread_stack_size": 1048576,
+            "system_resource_size": 0,
+            "memory_region": 0,
+            "production": true,
+            "fs_permissions": "0x4000000000040000",
+            "handle_table_size": 512,
+            "kernel_version": "6.0",
+            "thread_info": "prio 28..59, cores 0..2",
+            "allowed_svcs": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              47,
+              50,
+              51,
+              52,
+              53,
+              95
+            ],
+            "memory_maps": [],
+            "io_maps": [],
+            "debug_flags": "allow_debug=true force_debug=false program_type=1",
+            "services_used": [
+              "acc:u0",
+              "aoc:u",
+              "apm",
+              "appletOE",
+              "audin:u",
+              "audout:u",
+              "audren:u",
+              "banana",
+              "bcat:u",
+              "bsd:u",
+              "bsdcfg",
+              "caps:su",
+              "csrng",
+              "friend:u",
+              "fsp-srv",
+              "hid",
+              "htc",
+              "htc:tenv",
+              "htcs",
+              "hwopus",
+              "irs",
+              "ldn:u",
+              "ldr:ro",
+              "lm",
+              "mii:u",
+              "mm:u",
+              "nfc:mf:u",
+              "nfc:user",
+              "nfp:user",
+              "nifm:u",
+              "nsd:u",
+              "ntc",
+              "nvdrv",
+              "pcm",
+              "pctl",
+              "pl:u",
+              "prepo:u",
+              "set",
+              "sfdnsres",
+              "ssl",
+              "time:u",
+              "vi:u"
+            ],
+            "services_hosted": []
+          },
+          "notes": [
+            "[auto] module sdk contains svc numbers not in the NPDM allow-list: 0x2a 0x2c 0x2d 0x40 0x41 0x43 0x44 0x45 0x50 0x51 0x52 0x53 0x70 0x72"
+          ]
+        }
+      ],
+      "dlc": [
+        {
+          "title_id": "0100152000023001",
+          "version": 65536
+        }
+      ],
+      "notes": [
+        "[auto] NSO set differs: base v0 = [rtld main subsdk0 subsdk1 subsdk2 subsdk3 subsdk4 sdk], update v1376256 = [rtld main subsdk0 sdk]"
+      ]
+    },
+    {
       "title_id": "01006BB00C6F0000",
       "name": "The Legend of Zelda: Link's Awakening",
       "publisher": "Nintendo",
@@ -703,6 +1314,963 @@
         }
       ],
       "dlc": [],
+      "notes": []
+    },
+    {
+      "title_id": "01006F8002326000",
+      "name": "Animal Crossing: New Horizons",
+      "publisher": "Nintendo",
+      "versions": [
+        {
+          "kind": "base",
+          "title_id": "01006F8002326000",
+          "version": 0,
+          "display_version": "1.0.0",
+          "build_id": "7fc1baff976aeca4",
+          "stages": {
+            "audio": {
+              "status": "untested",
+              "reason": "all test runs had audio off",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "build-plan": {
+              "status": "pass",
+              "reason": "base + 2 update(s) + 3 DLC",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "ingame": {
+              "status": "partial",
+              "reason": "island and airport counter scene load and run; no long play session; start flake open",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "ingest": {
+              "status": "pass",
+              "reason": "5 ExeFS files, romfs 66790 files",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "input": {
+              "status": "partial",
+              "reason": "scripted A presses at the airport counter reach the game; real controller untested",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "nso-load": {
+              "status": "pass",
+              "reason": "4 modules, segment hashes verified, main build 7fc1baff976aeca4",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "rewrite": {
+              "status": "pass",
+              "reason": "napple build completes, runtime runs the rewritten modules",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "runtime-boot": {
+              "status": "partial",
+              "reason": "boots into the main loop and renders (1400+ frames in 50 s headless); about 10-30% of headless starts crash in the gfx command recorder (docs/todo.md ACNH start flake)",
+              "evidence": "docs/todo.md",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "saves": {
+              "status": "untested",
+              "reason": "not exercised in the headless runs",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "site-scan": {
+              "status": "pass",
+              "reason": "MrsCntpct=32 MrsTpidrEl0=2 MrsTpidrroEl0=60 MsrTpidrEl0=3 Svc=101 X18=51737",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "title-screen": {
+              "status": "pass",
+              "reason": "title screen reached (headed run, DLC with and without)",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "video": {
+              "status": "partial",
+              "reason": "title screen and island scene render; shader prewarm on the first launch takes a while; geometry/tessellation/XFB stages untested on this title",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            }
+          },
+          "modules": [
+            {
+              "name": "rtld",
+              "build_id": "31a2773ea6928ffe3d32b17b3ad08f54826da39f000000000000000000000000",
+              "text_bytes": 5728,
+              "sites": {
+                "Svc": 4
+              },
+              "svc_numbers": [
+                6,
+                38,
+                39,
+                40
+              ]
+            },
+            {
+              "name": "main",
+              "build_id": "7fc1baff976aeca414520cb89f4616cb00000000000000000000000000000000",
+              "text_bytes": 35723872,
+              "sites": {
+                "Svc": 36,
+                "X18": 30353
+              },
+              "svc_numbers": [
+                38
+              ]
+            },
+            {
+              "name": "subsdk0",
+              "build_id": "5a7ada8dd7447c10aa244944f64d0aff17c50539000000000000000000000000",
+              "text_bytes": 3582656,
+              "sites": {
+                "X18": 10201
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "sdk",
+              "build_id": "ad3fdfbd62a5f4b082d385ffe420d4400abb831d000000000000000000000000",
+              "text_bytes": 5503424,
+              "sites": {
+                "MrsCntpct": 32,
+                "MrsTpidrEl0": 2,
+                "MrsTpidrroEl0": 60,
+                "MsrTpidrEl0": 3,
+                "Svc": 61,
+                "X18": 11183
+              },
+              "svc_numbers": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                31,
+                33,
+                34,
+                35,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                44,
+                45,
+                47,
+                50,
+                51,
+                52,
+                53,
+                54,
+                64,
+                65,
+                67,
+                68,
+                69,
+                72,
+                73,
+                75,
+                80,
+                81,
+                82,
+                83,
+                112,
+                114
+              ]
+            }
+          ],
+          "npdm": {
+            "name": "Application",
+            "is_64bit": true,
+            "address_space": 3,
+            "main_thread_priority": 44,
+            "main_thread_core": 0,
+            "main_thread_stack_size": 1048576,
+            "system_resource_size": 0,
+            "memory_region": 0,
+            "production": true,
+            "fs_permissions": "0x4000000000040000",
+            "handle_table_size": 512,
+            "kernel_version": "9.1",
+            "thread_info": "prio 28..59, cores 0..2",
+            "allowed_svcs": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              47,
+              50,
+              51,
+              52,
+              53,
+              54,
+              95
+            ],
+            "memory_maps": [],
+            "io_maps": [],
+            "debug_flags": "allow_debug=true force_debug=false program_type=1",
+            "services_used": [
+              "acc:u0",
+              "aoc:u",
+              "apm",
+              "appletOE",
+              "audin:u",
+              "audout:u",
+              "audren:u",
+              "banana",
+              "bcat:u",
+              "bsd:u",
+              "bsdcfg",
+              "caps:su",
+              "caps:u",
+              "csrng",
+              "friend:u",
+              "fsp-srv",
+              "hid",
+              "htc",
+              "htc:tenv",
+              "htcs",
+              "hwopus",
+              "irs",
+              "ldn:u",
+              "ldr:ro",
+              "lm",
+              "mii:u",
+              "mm:u",
+              "nfc:mf:u",
+              "nfc:user",
+              "nfp:user",
+              "nifm:u",
+              "nim:eca",
+              "npns:u",
+              "nsd:u",
+              "ntc",
+              "nvdrv",
+              "pcm",
+              "pctl",
+              "pl:u",
+              "prepo:u",
+              "set",
+              "sfdnsres",
+              "ssl",
+              "time:u",
+              "vi:u"
+            ],
+            "services_hosted": []
+          },
+          "notes": [
+            "[auto] module sdk contains svc numbers not in the NPDM allow-list: 0x2a 0x2c 0x2d 0x40 0x41 0x43 0x44 0x45 0x48 0x49 0x4b 0x50 0x51 0x52 0x53 0x70 0x72"
+          ]
+        },
+        {
+          "kind": "update",
+          "title_id": "01006F8002326800",
+          "version": 2097152,
+          "display_version": "3.0.1",
+          "build_id": "8f2cb7a9774959c8",
+          "stages": {
+            "build-plan": {
+              "status": "pass",
+              "reason": "base + 2 update(s) + 3 DLC",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "ingest": {
+              "status": "partial",
+              "reason": "5 ExeFS files, romfs pending (BKTR (update patch) sections: not yet)",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "nso-load": {
+              "status": "pass",
+              "reason": "4 modules, segment hashes verified, main build 8f2cb7a9774959c8",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "site-scan": {
+              "status": "pass",
+              "reason": "MrsCntpct=43 MrsTpidrEl0=2 MrsTpidrroEl0=124 MsrTpidrEl0=3 Svc=100 X18=77490",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            }
+          },
+          "modules": [
+            {
+              "name": "rtld",
+              "build_id": "283033deea3fc0b60104a4790098b9ccdb62d006000000000000000000000000",
+              "text_bytes": 9536,
+              "sites": {
+                "Svc": 6,
+                "X18": 9
+              },
+              "svc_numbers": [
+                2,
+                3,
+                6,
+                38,
+                39,
+                40
+              ]
+            },
+            {
+              "name": "main",
+              "build_id": "8f2cb7a9774959c89189c994fe4cc98800000000000000000000000000000000",
+              "text_bytes": 66083760,
+              "sites": {
+                "Svc": 36,
+                "X18": 52126
+              },
+              "svc_numbers": [
+                38
+              ]
+            },
+            {
+              "name": "subsdk0",
+              "build_id": "6c6ceace7be94107a8bd440bc2d6070469bc90ce000000000000000000000000",
+              "text_bytes": 3501008,
+              "sites": {
+                "X18": 9784
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "sdk",
+              "build_id": "a226048605d3597f90cb1067d141cd36647b90cd000000000000000000000000",
+              "text_bytes": 6692912,
+              "sites": {
+                "MrsCntpct": 43,
+                "MrsTpidrEl0": 2,
+                "MrsTpidrroEl0": 124,
+                "MsrTpidrEl0": 3,
+                "Svc": 58,
+                "X18": 15571
+              },
+              "svc_numbers": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                31,
+                33,
+                34,
+                35,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                44,
+                45,
+                47,
+                50,
+                51,
+                52,
+                53,
+                54,
+                64,
+                65,
+                67,
+                68,
+                69,
+                75,
+                80,
+                81,
+                82,
+                112,
+                114
+              ]
+            }
+          ],
+          "npdm": {
+            "name": "Application",
+            "is_64bit": true,
+            "address_space": 3,
+            "main_thread_priority": 44,
+            "main_thread_core": 0,
+            "main_thread_stack_size": 1048576,
+            "system_resource_size": 0,
+            "memory_region": 0,
+            "production": true,
+            "fs_permissions": "0x4000000000040000",
+            "handle_table_size": 512,
+            "kernel_version": "9.1",
+            "thread_info": "prio 28..59, cores 0..2",
+            "allowed_svcs": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              44,
+              45,
+              47,
+              50,
+              51,
+              52,
+              53,
+              54,
+              95
+            ],
+            "memory_maps": [],
+            "io_maps": [],
+            "debug_flags": "allow_debug=true force_debug=false program_type=1",
+            "services_used": [
+              "acc:u0",
+              "aoc:u",
+              "apm",
+              "appletOE",
+              "audin:u",
+              "audout:u",
+              "audren:u",
+              "banana",
+              "bcat:u",
+              "bsd:u",
+              "bsdcfg",
+              "caps:su",
+              "caps:u",
+              "csrng",
+              "ectx:aw",
+              "friend:u",
+              "fsp-srv",
+              "hid",
+              "htc",
+              "htc:tenv",
+              "htcs",
+              "hwopus",
+              "irs",
+              "ldn:u",
+              "ldr:ro",
+              "lm",
+              "mii:u",
+              "mm:u",
+              "mnpp:app",
+              "nfc:mf:u",
+              "nfc:user",
+              "nfp:user",
+              "ngc:u",
+              "ngct:u",
+              "nifm:u",
+              "nim:eca",
+              "notif:a",
+              "npns:u",
+              "nsd:u",
+              "ntc",
+              "nvdrv",
+              "olsc:u",
+              "pcm",
+              "pctl",
+              "pl:u",
+              "prepo:u",
+              "set",
+              "sfdnsres",
+              "ssl",
+              "time:u",
+              "vi:u"
+            ],
+            "services_hosted": []
+          },
+          "notes": [
+            "[auto] module sdk contains svc numbers not in the NPDM allow-list: 0x2a 0x40 0x41 0x43 0x44 0x45 0x4b 0x50 0x51 0x52 0x70 0x72"
+          ]
+        },
+        {
+          "kind": "update",
+          "title_id": "01006F8002326800",
+          "version": 2228224,
+          "display_version": "3.0.3",
+          "build_id": "ff1d1c05670db602",
+          "stages": {
+            "audio": {
+              "status": "untested",
+              "reason": "all test runs had audio off",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "build-plan": {
+              "status": "pass",
+              "reason": "base + 2 update(s) + 3 DLC",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "ingame": {
+              "status": "partial",
+              "reason": "island and airport counter scene load and run; no long play session; start flake open",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "ingest": {
+              "status": "partial",
+              "reason": "5 ExeFS files, romfs pending (BKTR (update patch) sections: not yet)",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "input": {
+              "status": "partial",
+              "reason": "scripted A presses at the airport counter reach the game; real controller untested",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "nso-load": {
+              "status": "pass",
+              "reason": "4 modules, segment hashes verified, main build ff1d1c05670db602",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "rewrite": {
+              "status": "pass",
+              "reason": "napple build completes, runtime runs the rewritten modules",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "runtime-boot": {
+              "status": "partial",
+              "reason": "boots into the main loop and renders (1400+ frames in 50 s headless); about 10-30% of headless starts crash in the gfx command recorder (docs/todo.md ACNH start flake)",
+              "evidence": "docs/todo.md",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "saves": {
+              "status": "untested",
+              "reason": "not exercised in the headless runs",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "site-scan": {
+              "status": "pass",
+              "reason": "MrsCntpct=43 MrsTpidrEl0=2 MrsTpidrroEl0=124 MsrTpidrEl0=3 Svc=100 X18=77490",
+              "evidence": "",
+              "time": 1793184283,
+              "tool": "napple-compat"
+            },
+            "title-screen": {
+              "status": "pass",
+              "reason": "title screen reached (headed run, DLC with and without)",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            },
+            "video": {
+              "status": "partial",
+              "reason": "title screen and island scene render; shader prewarm on the first launch takes a while; geometry/tessellation/XFB stages untested on this title",
+              "evidence": "",
+              "time": 1793184303,
+              "tool": "manual"
+            }
+          },
+          "modules": [
+            {
+              "name": "rtld",
+              "build_id": "283033deea3fc0b60104a4790098b9ccdb62d006000000000000000000000000",
+              "text_bytes": 9536,
+              "sites": {
+                "Svc": 6,
+                "X18": 9
+              },
+              "svc_numbers": [
+                2,
+                3,
+                6,
+                38,
+                39,
+                40
+              ]
+            },
+            {
+              "name": "main",
+              "build_id": "ff1d1c05670db6021c85b624a710b96300000000000000000000000000000000",
+              "text_bytes": 66088432,
+              "sites": {
+                "Svc": 36,
+                "X18": 52126
+              },
+              "svc_numbers": [
+                38
+              ]
+            },
+            {
+              "name": "subsdk0",
+              "build_id": "6c6ceace7be94107a8bd440bc2d6070469bc90ce000000000000000000000000",
+              "text_bytes": 3501008,
+              "sites": {
+                "X18": 9784
+              },
+              "svc_numbers": []
+            },
+            {
+              "name": "sdk",
+              "build_id": "a226048605d3597f90cb1067d141cd36647b90cd000000000000000000000000",
+              "text_bytes": 6692912,
+              "sites": {
+                "MrsCntpct": 43,
+                "MrsTpidrEl0": 2,
+                "MrsTpidrroEl0": 124,
+                "MsrTpidrEl0": 3,
+                "Svc": 58,
+                "X18": 15571
+              },
+              "svc_numbers": [
+                1,
+                2,
+                3,
+                4,
+                5,
+                6,
+                7,
+                8,
+                9,
+                10,
+                11,
+                12,
+                13,
+                14,
+                15,
+                16,
+                17,
+                18,
+                19,
+                20,
+                21,
+                22,
+                23,
+                24,
+                25,
+                26,
+                27,
+                28,
+                29,
+                31,
+                33,
+                34,
+                35,
+                37,
+                38,
+                39,
+                40,
+                41,
+                42,
+                44,
+                45,
+                47,
+                50,
+                51,
+                52,
+                53,
+                54,
+                64,
+                65,
+                67,
+                68,
+                69,
+                75,
+                80,
+                81,
+                82,
+                112,
+                114
+              ]
+            }
+          ],
+          "npdm": {
+            "name": "Application",
+            "is_64bit": true,
+            "address_space": 3,
+            "main_thread_priority": 44,
+            "main_thread_core": 0,
+            "main_thread_stack_size": 1048576,
+            "system_resource_size": 0,
+            "memory_region": 0,
+            "production": true,
+            "fs_permissions": "0x4000000000040000",
+            "handle_table_size": 512,
+            "kernel_version": "9.1",
+            "thread_info": "prio 28..59, cores 0..2",
+            "allowed_svcs": [
+              1,
+              2,
+              3,
+              4,
+              5,
+              6,
+              7,
+              8,
+              9,
+              10,
+              11,
+              12,
+              13,
+              14,
+              15,
+              16,
+              17,
+              18,
+              19,
+              20,
+              21,
+              22,
+              23,
+              24,
+              25,
+              26,
+              27,
+              28,
+              29,
+              30,
+              31,
+              32,
+              33,
+              34,
+              35,
+              36,
+              37,
+              38,
+              39,
+              40,
+              41,
+              44,
+              45,
+              47,
+              50,
+              51,
+              52,
+              53,
+              54,
+              95
+            ],
+            "memory_maps": [],
+            "io_maps": [],
+            "debug_flags": "allow_debug=true force_debug=false program_type=1",
+            "services_used": [
+              "acc:u0",
+              "aoc:u",
+              "apm",
+              "appletOE",
+              "audin:u",
+              "audout:u",
+              "audren:u",
+              "banana",
+              "bcat:u",
+              "bsd:u",
+              "bsdcfg",
+              "caps:su",
+              "caps:u",
+              "csrng",
+              "ectx:aw",
+              "friend:u",
+              "fsp-srv",
+              "hid",
+              "htc",
+              "htc:tenv",
+              "htcs",
+              "hwopus",
+              "irs",
+              "ldn:u",
+              "ldr:ro",
+              "lm",
+              "mii:u",
+              "mm:u",
+              "mnpp:app",
+              "nfc:mf:u",
+              "nfc:user",
+              "nfp:user",
+              "ngc:u",
+              "ngct:u",
+              "nifm:u",
+              "nim:eca",
+              "notif:a",
+              "npns:u",
+              "nsd:u",
+              "ntc",
+              "nvdrv",
+              "olsc:u",
+              "pcm",
+              "pctl",
+              "pl:u",
+              "prepo:u",
+              "set",
+              "sfdnsres",
+              "ssl",
+              "time:u",
+              "vi:u"
+            ],
+            "services_hosted": []
+          },
+          "notes": [
+            "[auto] module sdk contains svc numbers not in the NPDM allow-list: 0x2a 0x40 0x41 0x43 0x44 0x45 0x4b 0x50 0x51 0x52 0x70 0x72"
+          ]
+        }
+      ],
+      "dlc": [
+        {
+          "title_id": "01006F800232712C",
+          "version": 0
+        },
+        {
+          "title_id": "01006F800232712D",
+          "version": 0
+        },
+        {
+          "title_id": "01006F80023273E8",
+          "version": 0
+        }
+      ],
       "notes": []
     }
   ]

@@ -71,6 +71,18 @@ int main(void) {
     }
     { uint8_t px[4 * 4 * 4]; for (int i = 0; i < 16; i++) { px[4*i] = (uint8_t)(i < 8 ? 0 : 200); px[4*i+1] = 0; px[4*i+2] = 0; px[4*i+3] = 255; }
       uint8_t *s = napjpeg_scale_rgba(px, 4, 4, 2, 2); CHECK(s && s[0] == 0 && s[8] == 200 && s[3] == 255, "box downscale averages areas"); free(s); }
+    { /* napjpeg_decode_into (caps:dc DecodeJpeg): own size, scaled size, short buffer, garbage */
+        uint8_t px[32 * 16 * 4]; for (int i = 0; i < 32 * 16; i++) { px[4*i] = (uint8_t)(i % 32 * 8); px[4*i+1] = 60; px[4*i+2] = 30; px[4*i+3] = 255; }
+        size_t n; uint8_t *j = napjpeg_encode_rgba(px, 32, 16, 128, 92, 0, &n); static uint8_t out[32 * 16 * 4];
+        int w = 32, h = 16; CHECK(napjpeg_decode_into(j, n, &w, &h, out, sizeof out) == JPEGCORE_OK && w == 32 && h == 16 && psnr(px, out, sizeof px) > 30, "decode_into at the file size");
+        w = 0; h = 0; CHECK(napjpeg_decode_into(j, n, &w, &h, out, sizeof out) == JPEGCORE_OK && w == 32 && h == 16, "decode_into reports the file size for 0x0");
+        w = 16; h = 8; memset(out, 0, sizeof out);
+        CHECK(napjpeg_decode_into(j, n, &w, &h, out, 16 * 8 * 4) == JPEGCORE_OK && out[15 * 4] > out[0] && out[3] == 255 && out[16 * 8 * 4] == 0, "decode_into box-scales to 16x8, writes no more");
+        w = 32; h = 16; memset(out, 0xab, sizeof out);
+        CHECK(napjpeg_decode_into(j, n, &w, &h, out, sizeof out - 1) == JPEGCORE_TOO_SMALL && out[0] == 0xab, "decode_into: buffer one byte short, nothing written");
+        uint8_t junk[8] = {0xff, 0xd8, 1}; w = 4; h = 4; CHECK(napjpeg_decode_into(junk, sizeof junk, &w, &h, out, sizeof out) != JPEGCORE_OK, "decode_into: garbage refused");
+        free(j);
+    }
     printf("{\"test\":\"svc_jpeg\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

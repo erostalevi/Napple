@@ -25,6 +25,17 @@ static int demux(const uint8_t *d, size_t n, Pkt *out, int max) {
     }
     return np;
 }
+/* Granule position of the stream's last page: the sample count (Vorbis: after the end trim; Opus: plus the pre-skip, at 48 kHz). */
+static int64_t last_granule(const uint8_t *d, size_t n) {
+    int64_t g = -1;
+    for (size_t pos = 0; pos + 27 <= n && !memcmp(d + pos, "OggS", 4);) {
+        int nseg = d[pos + 26]; size_t body = 0;
+        for (int i = 0; i < nseg; i++) body += d[pos + 27 + i];
+        memcpy(&g, d + pos + 6, 8);
+        pos += 27 + nseg + body;
+    }
+    return g;
+}
 static double tone_hz(const int16_t *x, int n, int ch, int rate, double *amp) { /* zero-crossing frequency of channel 0 over the steady part */
     int a = n / 4, b = n - n / 4, cross = 0; double peak = 0;
     for (int i = a + 1; i < b; i++) { int16_t p = x[(i - 1) * ch], q = x[i * ch]; if ((p < 0) != (q < 0)) cross++; if (fabs((double)q) > peak) peak = fabs((double)q); }
@@ -86,6 +97,10 @@ int main(void) {
     int np = decode_all(mono_ogg, sizeof mono_ogg, 0, &pcm, &frames, &ch, &rate);
     CHECK(np > 6 && ch == 1 && rate == 22050, "mono vector: %d packets, %d ch, %d Hz", np, ch, rate);
     CHECK(frames > 22050 * 0.5 && frames <= 22050 * 0.7, "mono: %d sample frames for 0.6 s", frames);
+    { /* exact count: what the stream's last granule says, plus at most the end trim of the last block (raw packets carry no granule, so it is not applied) */
+        int64_t g = last_granule(mono_ogg, sizeof mono_ogg);
+        CHECK(g > 0 && frames >= g && frames - g < 2048, "mono: %d sample frames decoded, stream granule %lld (end trim %lld)", frames, (long long)g, (long long)(frames - g));
+    }
     double hz = tone_hz(pcm, frames, 1, rate, &amp); CHECK(fabs(hz - 440.0) < 6.0 && amp > 0.05, "mono: tone %.1f Hz (want 440), peak %.2f", hz, amp);
     free(pcm);
 
@@ -95,6 +110,7 @@ int main(void) {
 
     decode_all(st_ogg, sizeof st_ogg, 0, &pcm, &frames, &ch, &rate);
     CHECK(ch == 2 && rate == 44100 && frames > 44100 * 0.4, "stereo vector: %d ch, %d Hz, %d frames", ch, rate, frames);
+    { int64_t g = last_granule(st_ogg, sizeof st_ogg); CHECK(g > 0 && frames >= g && frames - g < 2048, "stereo: %d sample frames decoded, stream granule %lld", frames, (long long)g); }
     hz = tone_hz(pcm, frames, 2, rate, &amp); double hr = 0, amp_r = 0; /* right channel: same tone at half level */
     { int16_t *r = pcm + 1; int a = frames / 4, b = frames - frames / 4; for (int i = a; i < b; i++) if (fabs((double)r[i * 2]) > amp_r) amp_r = fabs((double)r[i * 2]); amp_r /= 32768.0; (void)hr; }
     CHECK(fabs(hz - 1000.0) < 12.0 && amp > 0.05 && amp_r > amp * 0.35 && amp_r < amp * 0.65, "stereo: left %.0f Hz peak %.2f, right peak %.2f (about half)", hz, amp, amp_r);
@@ -145,6 +161,7 @@ int main(void) {
         for (int i = 2; i < n3; i++) { int fr; if (opuspcm_packet(o, pk[i].p, pk[i].n, buf, OPUSPCM_MAX_FRAMES, &fr) != AUDIO_OK) { CHECK(0, "opus packet %d", i); break; } if (total + fr < 48000) memcpy(all + total, buf, sizeof(int16_t) * fr); total += fr; }
         double a2; double h2 = tone_hz(all, total < 48000 ? total : 48000, 1, 48000, &a2);
         CHECK(total > 48000 * 0.45 && fabs(h2 - 440.0) < 6.0 && a2 > 0.05, "opus: %d frames, tone %.1f Hz, peak %.2f", total, h2, a2);
+        { int64_t g = last_granule(opus_ogg, sizeof opus_ogg); CHECK(g > 0 && total + skip >= g && total + skip - g < 960 * 6, "opus: %d frames + pre-skip %d against granule %lld", total, skip, (long long)g); }
         opuspcm_flush(o); opuspcm_destroy(o);
         CHECK(opuspcm_create(3, 0) == NULL, "three channels not supported by this decoder object");
     } else printf("note: Opus not built here (no NAPPLE_HAVE_OPUS); the Opus checks run on the Mac build\n");

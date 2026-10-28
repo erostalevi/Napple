@@ -1,4 +1,7 @@
 #include "applet_web_core.h"
+#include <ctype.h>
+#include <limits.h>
+#include <unistd.h>
 #include "applet_ui.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -83,15 +86,31 @@ int web_offline_resolve(const char *html_root, const char *doc_path, char *out, 
     size_t n = strlen(p);
     if (n >= sizeof rel - 12) return -1;
     memcpy(rel, p, n + 1);
-    for (size_t i = 0; i < n; i++)
-        if (rel[i] == '\\') return -1;
-    /* drop a query or fragment */
+    /* drop a query or fragment (before decoding: an encoded %3F is part of a file name) */
     for (size_t i = 0; i < n; i++)
         if (rel[i] == '?' || rel[i] == '#') {
             rel[i] = 0;
             n = i;
             break;
         }
+    /* percent-decode (a page link written "my%20page.html"); a decoded NUL is rejected, backslash and ".." are checked after decoding */
+    {
+        size_t w = 0;
+        for (size_t i = 0; i < n; i++) {
+            unsigned char ch = (unsigned char)rel[i];
+            if (ch == '%' && i + 2 < n && isxdigit((unsigned char)rel[i + 1]) && isxdigit((unsigned char)rel[i + 2])) {
+                char hx[3] = {rel[i + 1], rel[i + 2], 0};
+                ch = (unsigned char)strtol(hx, NULL, 16);
+                if (!ch) return -1;
+                i += 2;
+            }
+            rel[w++] = (char)ch;
+        }
+        rel[w] = 0;
+        n = w;
+    }
+    for (size_t i = 0; i < n; i++)
+        if (rel[i] == '\\') return -1;
     /* reject ".." components */
     for (const char *s = rel; *s;) {
         const char *e = strchr(s, '/');
@@ -110,6 +129,13 @@ int web_offline_resolve(const char *html_root, const char *doc_path, char *out, 
         strcat(path, "/index.html");
     }
     if (stat(path, &st) != 0 || !S_ISREG(st.st_mode)) return -2;
+    { /* a symlink inside the document tree must not lead out of it */
+        char rp[PATH_MAX], rr[PATH_MAX];
+        if (realpath(path, rp) && realpath(html_root, rr)) {
+            size_t l = strlen(rr);
+            if (strncmp(rp, rr, l) || (rp[l] && rp[l] != '/')) return -1;
+        }
+    }
     if (strlen(path) >= cap) return -3;
     strcpy(out, path);
     return 0;

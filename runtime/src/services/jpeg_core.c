@@ -625,3 +625,25 @@ uint8_t *napjpeg_encode_rgba(const uint8_t *rgba, int w, int h, int stride, int 
     *out_size = o.n;
     return o.buf;
 }
+int napjpeg_decode_into(const uint8_t *data, size_t size, int *width, int *height, uint8_t *out, size_t cap) {
+    int w = 0, h = 0, err = JPEGCORE_OK;
+    if (*width < 0 || *height < 0 || *width > JPEGCORE_MAX_DIM || *height > JPEGCORE_MAX_DIM) return JPEGCORE_BAD;
+    uint8_t *px = napjpeg_decode_rgba(data, size, &w, &h, &err);
+    if (!px) return err ? err : JPEGCORE_BAD;
+    int dw = *width ? *width : w, dh = *height ? *height : h;
+    if ((size_t)dw * dh * 4 > cap) {
+        free(px);
+        return JPEGCORE_TOO_SMALL;
+    }
+    if (dw != w || dh != h) {
+        uint8_t *s = napjpeg_scale_rgba(px, w, h, dw, dh);
+        free(px);
+        if (!s) return JPEGCORE_NOMEM;
+        px = s;
+    }
+    memcpy(out, px, (size_t)dw * dh * 4);
+    free(px);
+    *width = dw;
+    *height = dh;
+    return JPEGCORE_OK;
+}

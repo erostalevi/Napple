@@ -116,4 +116,13 @@ void fe_textbar_show(NappleFE *fe, const napple_text_request *req, napple_text_d
     if (fe.input) napple_input_set_blocked(fe.input, YES);
     [bar refresh];
     [fe.window makeFirstResponder:f];
+    NSString *act;
+    double ms;
+    if (auto_action(&act, &ms) && !getenv("NAPPLE_SWKBD_ANSWER")) { /* test aid: the bar is shot, then answered like a sheet (cancel -> Cancel, anything else -> OK) */
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(ms * NSEC_PER_MSEC)), dispatch_get_main_queue(), ^{
+            shot_rect([fe.window convertRectToScreen:[bar convertRect:bar.bounds toView:nil]], @"swkbd"); /* the bar only */
+            if ([act isEqualToString:@"cancel"]) [cancel performClick:nil];
+            else [ok performClick:nil];
+        });
+    }
 }

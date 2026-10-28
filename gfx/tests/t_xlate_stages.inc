@@ -20,8 +20,8 @@
                       "device float4 *gs_vtx [[buffer(21)]], device uint *gs_idx [[buffer(22)]]"),
               "GS entry point and buffer contract");
         CHECK(HAS(g1, "constant uint GS_MAXV = 6u;"), "GS_MAXV from the key");
-        CHECK(HAS(g1, "stage_in[(sp[1] + gid * 3u + vx) * 34u + 1u][0u]"), "GS ALD of the position reads vertex vx (latched Rb) of the primitive (slot 1)");
-        CHECK(HAS(g1, "stage_in[(sp[1] + gid * 3u + vx) * 34u + 2u][0u]"), "GS ALD of generic 0 reads slot 2");
+        CHECK(HAS(g1, "stage_in[(sp[1] + gs_pid * 3u + vx) * 34u + 1u][0u]"), "GS ALD of the position reads vertex vx (latched Rb) of the primitive (slot 1)");
+        CHECK(HAS(g1, "stage_in[(sp[1] + gs_pid * 3u + vx) * 34u + 2u][0u]"), "GS ALD of generic 0 reads slot 2");
         CHECK(HAS(g1, "gso[1][0] = as_type<float>(r4);") && HAS(g1, "gso[2][3] = as_type<float>(r"), "GS AST fills the staging vertex");
         CHECK(HAS(g1, "gs_put(gs_vtx + (gid * GS_MAXV + gs_n) * 34u, gso); gs_idx[gid * 2u * GS_MAXV + gs_ic++] = gid * GS_MAXV + gs_n; gs_n++; gs_open = true;"),
               "OUT.EMIT appends a vertex and its index");
@@ -40,16 +40,16 @@
         XL_OK(g2, STAGE_GEOMETRY, gf, 0, "GS clip", ST_ALD(4, 255, 0x70, 4, 255, 0, 0), ST_AST(4, 0x70, 4, 0), ST_OUT(255, 3), ins_exit());
         CHECK(HAS(g2, "p.y = -p.y;") && HAS(g2, "p.z = (p.z + p.w) * 0.5f;"), "GS emit applies the clip-space conversions to the position");
         CHECK(HAS(g2, "if (gs_n < GS_MAXV)") && HAS(g2, "if (gs_open)"), "OUT.EMIT_THEN_CUT does both");
-        CHECK(HAS(g2, "stage_in[(sp[1] + gid * 3u + 0u) * 34u + 1u][0u]"), "no vertex register reads vertex 0");
+        CHECK(HAS(g2, "stage_in[(sp[1] + gs_pid * 3u + 0u) * 34u + 1u][0u]"), "no vertex register reads vertex 0");
         maxwell_free(g2);
         ShaderKey gl = gk;
         gl.gs_in_vertices = 6;
         XL_OK(g3, STAGE_GEOMETRY, gl, 0, "GS adjacency", ST_S2R(2, 0x11), ST_ALD(4, 255, 0x60, 1, 255, 0, 0), ins_exit());
-        CHECK(HAS(g3, "gid * 6u") || HAS(g3, "(sp[2] + gid)"), "adjacency primitive: six vertices; attribute 0x60 is the primitive id");
-        CHECK(HAS(g3, "r2 = 0u;"), "SR_INVOCATION_ID is 0 (single invocation)");
+        CHECK(HAS(g3, "gs_pid * 6u") || HAS(g3, "(sp[2] + gs_pid)"), "adjacency primitive: six vertices; attribute 0x60 is the primitive id");
+        CHECK(HAS(g3, "r2 = inv;") && HAS(g3, "gs_pid = gid / gs_ninv"), "SR_INVOCATION_ID is the geometry instance (gid % sp[3])");
         maxwell_free(g3);
         XL_OK(g4, STAGE_GEOMETRY, gk, 0, "GS indexed read", ST_ALD(4, 20, 0x80, 1, 8, 0, 0), ins_exit());
-        CHECK(HAS(g4, "stage_in[(sp[1] + gid * 3u + vx) * 34u + min("), "an indexed ALD computes the slot at run time");
+        CHECK(HAS(g4, "stage_in[(sp[1] + gs_pid * 3u + vx) * 34u + min("), "an indexed ALD computes the slot at run time");
         maxwell_free(g4);
         XL_REFUSE(g5, STAGE_GEOMETRY, z, 0, "gs_max_vertices", "GS without a vertex limit", ST_OUT(255, 1), ins_exit());
         ShaderKey gb = gk;
@@ -246,6 +246,32 @@
                   0xdf40000000000000ull | (uint64_t)4 | (2ull << 8) | (3ull << 22) | (3ull << 31) | PT_BITS, ins_exit());
         XL_REFUSE(a3, STAGE_FRAGMENT, z, 0xf, "txa type 2", "TXQ and TXA share the query", ins_tex2d_lz(0, 8, 9, 0),
                   0xdf48000000000000ull | (uint64_t)4 | (2ull << 8) | (2ull << 22) | (3ull << 31) | PT_BITS, ins_exit());
+    }
+    /* ---- TLD.MS (multisampled texel fetch) and sample shading */
+    {
+        uint64_t tldms = 0xdc38000000000000ull | (uint64_t)0 | (4ull << 8) | (6ull << 20) | (1ull << 29) | (0xfull << 31) | (8ull << 36) | (1ull << 50) | PT_BITS;
+        XL_OK(ms1, STAGE_FRAGMENT, z, 0xf, "TLD.MS", ins_mov32i(4, 3), ins_mov32i(5, 3), ins_mov32i(6, 2), tldms, ins_exit());
+        CHECK(HAS(ms1, "texture2d_ms<float> t0 [[texture(0)]]") && HAS(ms1, "get_num_samples() - 1u)"), "TLD.MS declares texture2d_ms and reads by sample index");
+        CHECK(!HAS(ms1, "[[sample_id]]"), "no sample shading unless the key asks");
+        maxwell_free(ms1);
+        ShaderKey ssk = z;
+        ssk.sample_shading = true;
+        XL_OK(ms2, STAGE_FRAGMENT, ssk, 0xf, "sample shading", ins_mov32i(0, 0x3f800000), ins_exit());
+        CHECK(HAS(ms2, "uint sample_id [[sample_id]]"), "ShaderKey.sample_shading declares [[sample_id]] (per-sample execution)");
+        maxwell_free(ms2);
+        XL_REFUSE(ms3, STAGE_FRAGMENT, z, 0xf, "tld.ms of a texture that is not 2D", "TLD.MS 3D", (tldms & ~(3ull << 29)) | (2ull << 29), ins_exit());
+    }
+    /* ---- capture-only vertex function: void, no return, pairs with rasterizationEnabled = NO */
+    {
+        ShaderKey cv = z;
+        cv.stage_out = true;
+        cv.capture_void = true;
+        XL_OK(cv1, STAGE_VERTEX, cv, 0, "capture void", ins_ald(0, 0x80, 4), ins_ast(0, 0x70, 4), ins_exit());
+        CHECK(HAS(cv1, "vertex void main0(") && !HAS(cv1, "return out;") && HAS(cv1, "stage_out[xo * 34u + 1] = out.pos;"), "capture_void: void vertex function that still writes its record");
+        maxwell_free(cv1);
+        ShaderKey cv2 = z;
+        cv2.capture_void = true;
+        XL_REFUSE(cv3, STAGE_VERTEX, cv2, 0, "capture_void is for", "capture_void without capture", ins_exit());
     }
 #undef ST_ALD
 #undef ST_AST

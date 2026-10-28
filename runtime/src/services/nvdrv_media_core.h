@@ -57,3 +57,5 @@ int nvdisp_ioctl(NvDisp *d, unsigned nr, uint8_t *data, unsigned size, uint64_t 
 
 /* Optional: called before the engines write decoded pixels into a guest surface (gfx dirty tracking). Set by media_gfx_glue.c in the runtime, NULL in host tests. */
 extern void (*media_write_prepare)(void *addr, size_t n);
+/* NAPPLE_MEDIA_TRACE=1: debug prints of the media path (decodes, VIC jobs, nvmap allocations and pins, unresolved device addresses) to stderr. */
+int media_trace(void);

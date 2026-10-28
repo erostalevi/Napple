@@ -1,4 +1,7 @@
-/* VideoToolbox DecoderBackend for the nvdrv NVDEC engine (H.264 only; other codecs are refused so the engine reports "not supported").
+/* VideoToolbox DecoderBackend for the nvdrv NVDEC engine (H.264 only). VP9 policy: open() refuses it (and VP8/H.265) cleanly, the engine then reports
+ * "codec not supported" in the guest's status structure and the channel's summary line; VP9 movies keep going through movie.c's libvpx path at the media
+ * library level, and this backend does not grow a VideoToolbox VP9 decoder (VTDecompressionSession VP9 needs a supplemental-decoder opt-in and a
+ * vpcC record per stream; not worth it while no title sends VP9 to nvhost-nvdec).
  * Wraps vt_h264.c: decode() is synchronous, so each request is decoded and flushed, and the single frame produced is copied to the guest surface.
  * Installed at startup by a constructor; NAPPLE_DECODER=null keeps the null backend. Host (Linux) builds do not compile this file. */
 #include "decoder_backend.h"
@@ -17,7 +20,7 @@ static void on_frame(void *user, const uint8_t *nv12, int w, int h, int64_t pts,
     VtCtx *c = user;
     (void)pts;
     free(c->nv12);
-    c->nv12 = malloc((size_t)w * h * 3 / 2);
+    c->nv12 = calloc(1, (size_t)w * (h + (h + 1) / 2)); /* room for the last chroma row of an odd height */
     if (!c->nv12) return;
     memcpy(c->nv12, nv12, (size_t)w * h * 3 / 2);
     c->w = w, c->h = h, c->full = full, c->bt601 = bt601, c->got = 1;
@@ -63,13 +66,7 @@ static int vt_decode(void *ctx, const DecodeRequest *r, DecodeResult *out) {
     if (n < 0) return -1;
     vth264_flush(c->d, on_frame, c); /* the guest reorders itself: this request's frame must come out now */
     if (!c->got || !c->nv12) return 1;
-    size_t ysz = (size_t)c->w * c->h, csz = (size_t)c->w * (((size_t)c->h + 1) / 2);
-    if (!r->luma || !r->chroma || r->luma_cap < ysz || r->chroma_cap < csz) return -1;
-    memcpy(r->luma, c->nv12, ysz);
-    memcpy(r->chroma, c->nv12 + ysz, (size_t)c->w * (c->h / 2));
-    out->width = c->w;
-    out->height = c->h;
-    out->pitch = c->w;
+    if (decoder_write_nv12(r, c->nv12, c->w, c->h, out)) return -1;
     out->bt709 = !c->bt601;
     out->full_range = c->full;
     return 0;

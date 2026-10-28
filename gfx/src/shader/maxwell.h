@@ -29,7 +29,7 @@
 #include <stdint.h>
 
 enum { STAGE_VERTEX = 0, STAGE_FRAGMENT = 1, STAGE_GEOMETRY = 2, STAGE_TESS_CTRL = 3, STAGE_TESS_EVAL = 4, STAGE_COMPUTE = 5 };
-enum { TEXTYPE_1D, TEXTYPE_2D, TEXTYPE_3D, TEXTYPE_CUBE, TEXTYPE_2D_ARRAY, TEXTYPE_CUBE_ARRAY, TEXTYPE_1D_ARRAY, TEXTYPE_BUFFER, TEXTYPE_2D_MS };
+enum { TEXTYPE_1D, TEXTYPE_2D, TEXTYPE_3D, TEXTYPE_CUBE, TEXTYPE_2D_ARRAY, TEXTYPE_CUBE_ARRAY, TEXTYPE_1D_ARRAY, TEXTYPE_BUFFER, TEXTYPE_2D_MS, TEXTYPE_2D_MS_ARRAY };
 
 /* Stage-to-stage records: one record = STAGE_SLOTS float4. Slot 0 = system values (attribute 0x60..0x6F: x primitive id, y layer, z viewport index, w point size),
  * slot 1 = position (0x70), slot 2 + n = generic attribute n (0x80 + 16 * n). Patch records (tessellation): slot 0 = outer levels (0x00), slot 1 = inner levels
@@ -98,6 +98,8 @@ typedef struct {
     uint8_t xfb_count;      /* vertex: number of valid xfb[] entries */
     uint16_t xfb_stride[MAX_XFB_BUFFERS]; /* bytes per captured vertex of each buffer (a multiple of 4) */
     ShaderXfbEntry xfb[MAX_XFB_ENTRIES];
+    bool sample_shading; /* fragment: nvnProgramSetSampleShading on into a multisampled target: the function declares `[[sample_id]]`, which makes Metal run it once per sample */
+    bool capture_void;   /* vertex with stage_out / xfb: emit `vertex void` (nothing returned to the rasterizer) so the capture pipeline can set rasterizationEnabled = NO */
 } ShaderKey;
 
 typedef struct {

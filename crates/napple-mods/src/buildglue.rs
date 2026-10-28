@@ -12,6 +12,10 @@ use std::path::{Path, PathBuf};
 
 /// `<data dir>/mods/overlay.json`, relative to the data directory (version directory of the build).
 pub const OVERLAY_JSON: &str = "mods/overlay.json";
+/// `<data dir>/mods/cheats.txt`: the enabled mods' cheats for the main module's build id, Atmosphere text (runtime/src/mods_cheats.c runs it each frame).
+pub const CHEATS_TXT: &str = "mods/cheats.txt";
+/// `<data dir>/mods/config.json`: the merged `config.json` of the enabled mods (runtime/src/mods_runtime.c applies it to the run's settings).
+pub const CONFIG_JSON: &str = "mods/config.json";
 /// Overlay files are copied to `<data dir>/mods/files/<mod index>/<romfs path>`.
 pub const OVERLAY_FILES: &str = "mods/files";
 
@@ -162,6 +166,49 @@ impl ModSet {
         apply_mods_to_module(build_id, module, &self.resolved)
     }
 
+    /// Replaces everything in `<dir>/mods` with this set's runtime files: the romfs overlay, `cheats.txt` (for `main_build_id`, the main module's
+    /// full build id; none = no cheats) and the merged `config.json`. With an empty set it only clears the stale files of an earlier build.
+    pub fn write_runtime_files(
+        &self,
+        dir: &Path,
+        main_build_id: Option<&[u8; 32]>,
+    ) -> Result<RuntimeFiles> {
+        clear_runtime_files(dir)?;
+        let mut out = RuntimeFiles::default();
+        if self.is_empty() {
+            return Ok(out);
+        }
+        out.overlay_files = self.write_overlay(dir)?;
+        out.overlay = dir.join(OVERLAY_JSON).exists();
+        if let Some(bid) = main_build_id {
+            let (text, n) = cheat_text(self, bid);
+            if n > 0 {
+                std::fs::create_dir_all(dir.join("mods"))?;
+                std::fs::write(dir.join(CHEATS_TXT), text)?;
+                out.cheats = n;
+            }
+        }
+        let cfgs: Vec<crate::config::ModConfig> = self
+            .loaded
+            .iter()
+            .zip(&self.resolved)
+            .filter(|(_, r)| r.selection.enabled)
+            .filter_map(|(m, _)| m.load_config().ok().flatten().map(|(c, _)| c))
+            .collect();
+        if !cfgs.is_empty() {
+            let merged = crate::config::merge(&cfgs.iter().collect::<Vec<_>>());
+            if merged != crate::config::ModConfig::default() {
+                std::fs::create_dir_all(dir.join("mods"))?;
+                std::fs::write(
+                    dir.join(CONFIG_JSON),
+                    serde_json::to_string(&merged).map_err(|e| ModError(e.to_string()))?,
+                )?;
+                out.config = true;
+            }
+        }
+        Ok(out)
+    }
+
     /// Writes `<dir>/mods/overlay.json` and copies the overlay files below `<dir>/mods/files/`. Returns the file count;
     /// writes nothing when no mod carries romfs content.
     pub fn write_overlay(&self, dir: &Path) -> Result<usize> {
@@ -178,6 +225,58 @@ impl ModSet {
         }
         write_overlay_map(dir, &map, &refs)
     }
+}
+
+/// What [`ModSet::write_runtime_files`] wrote.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct RuntimeFiles {
+    pub overlay_files: usize,
+    pub overlay: bool,
+    pub cheats: usize,
+    pub config: bool,
+}
+
+/// Removes everything a previous `--mods` build left in `<dir>/mods` so a rebuild with another (or no) mod set never leaves a stale overlay,
+/// cheat file or config for the runtime to pick up. Only the files this module writes are touched.
+pub fn clear_runtime_files(dir: &Path) -> Result<()> {
+    let m = dir.join("mods");
+    for f in ["overlay.json", "cheats.txt", "config.json"] {
+        match std::fs::remove_file(m.join(f)) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(e.into()),
+        }
+    }
+    match std::fs::remove_dir_all(m.join("files")) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
+    let _ = std::fs::remove_dir(&m); // only when empty
+    Ok(())
+}
+
+fn cheat_text(set: &ModSet, build_id: &[u8; 32]) -> (String, usize) {
+    let mut out = String::new();
+    let mut n = 0;
+    for r in &set.resolved {
+        let cs = r.cheats_for(build_id);
+        if cs.is_empty() {
+            continue;
+        }
+        out.push_str(&format!("// mod {}@{}\n", r.id, r.version));
+        for c in cs {
+            let (open, close) = if c.master { ('{', '}') } else { ('[', ']') };
+            out.push_str(&format!("{open}{}{close}\n", c.name));
+            for line in c.words.chunks(4) {
+                let l: Vec<String> = line.iter().map(|w| format!("{w:08X}")).collect();
+                out.push_str(&l.join(" "));
+                out.push('\n');
+            }
+            n += 1;
+        }
+    }
+    (out, n)
 }
 
 /// Runtime-readable form: one entry per line so the C reader needs no JSON library.

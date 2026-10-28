@@ -26,7 +26,12 @@ typedef struct cmdbuf_host {
     PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb; void *cb_data;
     ptrdiff_t row_stride, img_stride;
     uint8_t dummy[256];                       /* sink for commands recorded outside Begin/End */
+    uint64_t rec_tid;                         /* thread that called BeginRecording (diagnostics: a recording used from two threads) */
+    const void *owner;                        /* the guest cmd_t this host part was made for: a copied or moved guest object must not share it */
 } cmdbuf_host;
+/* The host part of a guest command buffer object, or NULL when the object was never initialised, was finalized, or is a byte copy of another one
+ * (the guest may relocate or copy the object; two objects sharing one host part would double free it). */
+static inline cmdbuf_host *cb_host_of(const cmd_t *o) { cmdbuf_host *h = o ? o->h : NULL; return h && h->owner == o ? h : NULL; }
 
 static _Atomic uint64_t g_rec_live;
 static _Atomic uint64_t g_rec_bytes;      /* bytes held by live recordings (headers + raw or packed command data) */
@@ -40,18 +45,33 @@ static int g_cmdtrace = -1;                 /* NAPPLE_GFX_CMDTRACE=1: log record
  * Recordings
  * --------------------------------------------------------------------------------------------------------------- */
 void cmdrec_retain(cmdrec *r) { atomic_fetch_add(&r->refs, 1); }
+/* Handle lookups retain under g_acq_mu; the last release invalidates the handle and then passes through the same lock before freeing, so a lookup can never
+ * hold a recording that is being freed (a thread re-recording a list at the same command memory used to free it between another thread's lookup and retain). */
+static pthread_mutex_t g_acq_mu = PTHREAD_MUTEX_INITIALIZER;
 void cmdrec_release(cmdrec *r) {
     if (atomic_fetch_sub(&r->refs, 1) != 1) return;
     CMDTRACE("free %#llx\n", (unsigned long long)r->handle);
     for (uint32_t i = 0; i < r->nchildren; i++) cmdrec_release(r->children[i]);
     free(r->children);
     htab_free(r->handle);
+    pthread_mutex_lock(&g_acq_mu); pthread_mutex_unlock(&g_acq_mu);   /* lookups that already found r have retained it or failed on refs == 0 */
     r->magic = 0;
     atomic_fetch_sub(&g_rec_live, 1);
     if (r->z) atomic_fetch_sub(&g_rec_packed, 1);
     atomic_fetch_sub(&g_rec_bytes, sizeof *r + (r->z ? r->zlen : r->len));
     free(r->data); free(r->z);
     free(r);
+}
+cmdrec *cmdrec_acquire(uint64_t h) {          /* lookup + retain; NULL when stale */
+    pthread_mutex_lock(&g_acq_mu);
+    cmdrec *r = (cmdrec *)htab_get(h);
+    if (r && r->magic == CMDREC_MAGIC) {
+        int n = atomic_load(&r->refs);
+        while (n > 0 && !atomic_compare_exchange_weak(&r->refs, &n, n + 1)) {}
+        if (n <= 0) r = NULL;
+    } else r = NULL;
+    pthread_mutex_unlock(&g_acq_mu);
+    return r;
 }
 cmdrec *cmdrec_from_handle(uint64_t h) {
     cmdrec *r = (cmdrec *)htab_get(h);
@@ -256,7 +276,7 @@ uint64_t gfx_cmdrec_packed(void) { return atomic_load(&g_rec_packed); }
  * GetCommandMemoryUsed on a null buffer). They then act on a scratch host object, so the call is a harmless no-op instead of a fault. */
 static cmdbuf_host g_null_host;
 static cmdbuf_host *cbh_get(const void *c) {
-    cmdbuf_host *h = c ? ((const cmd_t *)c)->h : NULL;
+    cmdbuf_host *h = cb_host_of((const cmd_t *)c);
     if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "command buffer call on a null or finalized command buffer ignored"); return &g_null_host; }
     return h;
 }
@@ -272,6 +292,7 @@ NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
     h->buf = malloc(h->cap);
     if (!h->buf) { free(h); return 0; }
     o->magic = CB_MAGIC;
+    h->owner = o;
     o->h = h;
     o->inline_cur = ~0ull;      /* NVN 55 inline fast paths never find room: every call takes the API path */
     o->inline_end = 0;
@@ -279,8 +300,8 @@ NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
 }
 NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = o->h;
-    if (o->magic != CB_MAGIC || !h) return;
+    cmdbuf_host *h = cb_host_of(o);
+    if (o->magic != CB_MAGIC || !h) { memset(o, 0, sizeof *o); return; }
     CMDTRACE("finalize cb %p\n", (void *)h);
     /* recorded lists stay valid: they belong to the game's command memory, not to this object */
     for (uint32_t i = 0; i < h->nchild; i++) cmdrec_release(h->children[i]);
@@ -317,7 +338,7 @@ NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return
  * --------------------------------------------------------------------------------------------------------------- */
 static void *rec_op(NVNcommandBuffer *c, uint16_t op, uint32_t payload) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = o ? o->h : NULL;
+    cmdbuf_host *h = cb_host_of(o);
     if (!h) { static uint8_t scratch[64]; LOG_ONCE(NAPPLE_LOG_WARN, "command recorded on a null or finalized command buffer ignored"); memset(scratch, 0, sizeof scratch); return scratch; }
     if (!o->recording) {
         LOG_ONCE(NAPPLE_LOG_WARN, "command recorded outside BeginRecording/EndRecording (op %u) ignored", op);
@@ -346,9 +367,11 @@ static void *rec_op(NVNcommandBuffer *c, uint16_t op, uint32_t payload) {
 
 NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = o ? o->h : NULL;
+    cmdbuf_host *h = cb_host_of(o);
     if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "BeginRecording on a null or finalized command buffer ignored"); return; }
-    if (o->recording) LOG_ONCE(NAPPLE_LOG_WARN, "BeginRecording while already recording");
+    uint64_t me = (uint64_t)(uintptr_t)pthread_self();
+    if (o->recording) LOG_ONCE(NAPPLE_LOG_WARN, "BeginRecording while already recording (first begun by thread %#llx, now %#llx, cb %p)", (unsigned long long)h->rec_tid, (unsigned long long)me, (void *)c);
+    h->rec_tid = me;
     h->len = 0;
     h->rec_lo = h->cmd_base + h->used_est;
     for (uint32_t i = 0; i < h->nchild; i++) cmdrec_release(h->children[i]);
@@ -358,9 +381,10 @@ NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
 
 NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = o ? o->h : NULL;
+    cmdbuf_host *h = cb_host_of(o);
     if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording on a null or finalized command buffer ignored"); return 0; }
-    if (!o->recording) { LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording without BeginRecording"); return 0; }
+    if (!o->recording) { LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording without BeginRecording (last begun by thread %#llx, now %#llx, cb %p)", (unsigned long long)h->rec_tid, (unsigned long long)(uintptr_t)pthread_self(), (void *)c); return 0; }
+    if (h->rec_tid != (uint64_t)(uintptr_t)pthread_self()) LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording from another thread than BeginRecording (%#llx vs %#llx, cb %p)", (unsigned long long)h->rec_tid, (unsigned long long)(uintptr_t)pthread_self(), (void *)c);
     rec_op(c, OP_END, 0);
     o->recording = 0;
     cmdrec *r = calloc(1, sizeof *r);
@@ -398,9 +422,10 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
 
 /* Called by NVNdevice::FinalizeCommandHandle: the game is done with the handle. */
 void gfx_cmdrec_finalize_handle(uint64_t handle) {
-    cmdrec *r = cmdrec_from_handle(handle);
+    cmdrec *r = cmdrec_acquire(handle);
     if (!r) return;
-    gfx_cmdrec_unregister(r);     /* submissions and calling lists in flight hold their own references */
+    gfx_cmdrec_unregister(r);
+    cmdrec_release(r);     /* submissions and calling lists in flight hold their own references */
 }
 
 static void add_children(NVNcommandBuffer *c, int n, const NVNcommandHandle *hs, int copy) {
@@ -410,7 +435,7 @@ static void add_children(NVNcommandBuffer *c, int n, const NVNcommandHandle *hs,
     uint64_t *list = (uint64_t *)(p + 1);
     uint32_t cnt = 0;
     for (int i = 0; i < n; i++) {
-        cmdrec *r = cmdrec_from_handle(hs[i]);
+        cmdrec *r = cmdrec_acquire(hs[i]);
         if (!r) {
             static _Atomic uint64_t n_stale;
             uint64_t k = atomic_fetch_add(&n_stale, 1);
@@ -419,7 +444,6 @@ static void add_children(NVNcommandBuffer *c, int n, const NVNcommandHandle *hs,
                                                    (unsigned long long)g_rel_why[0], (unsigned long long)g_rel_why[1], (unsigned long long)g_rel_why[2], (unsigned long long)g_rel_why[3]);
             continue;
         }
-        cmdrec_retain(r);
         atomic_store_explicit(&r->last_use, cmdrec_now(), memory_order_relaxed);
         if (h->nchild == h->capchild) { h->capchild = h->capchild ? h->capchild * 2 : 16; h->children = realloc(h->children, h->capchild * sizeof *h->children); }
         h->children[h->nchild++] = r;
@@ -433,12 +457,17 @@ NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcom
 /* ---------------------------------------------------------------------------------------------------------------
  * State binding
  * --------------------------------------------------------------------------------------------------------------- */
+int gfx_program_sample_shading(const NVNprogram *p, float *rate); /* api_program.c */
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *prog, int stages) {
     p_bind_program *p = REC(c, p_bind_program, OP_BIND_PROGRAM);
     const prog_t *pr = (const prog_t *)prog;
     memset(p, 0, sizeof *p);
     if (pr && pr->magic == PROG_MAGIC) memcpy(p->hash, pr->hash, sizeof p->hash);
     p->stage_mask = (uint32_t)stages;
+    if (pr && pr->magic == PROG_MAGIC && (stages & NVN_SHADER_STAGE_FRAGMENT_BIT)) {
+        float rate = 0;
+        p->sample_shading = gfx_program_sample_shading(prog, &rate) && rate > 0 ? 1u : 0u;
+    }
 }
 NVN(nvnCommandBufferBindBlendState, void, NVNcommandBuffer *c, const NVNblendState *s) { memcpy(REC(c, blend_st, OP_BIND_BLEND), s, sizeof(blend_st)); }
 NVN(nvnCommandBufferBindChannelMaskState, void, NVNcommandBuffer *c, const NVNchannelMaskState *s) { memcpy(REC(c, chmask_st, OP_BIND_CHMASK), s, sizeof(chmask_st)); }

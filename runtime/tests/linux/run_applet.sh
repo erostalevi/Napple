@@ -9,7 +9,7 @@ fail=0
 for n in $names; do
   t=tests/test_svc_$n.c; [ -f "$t" ] || continue
   inc=$(grep -o 'services/[A-Za-z0-9_]*\.c' "$t" | sort -u)
-  cores=""; for f in src/services/applet_core.c src/services/applet_lib_core.c; do skip=0; for i in $inc; do [ "src/$i" = "$f" ] && skip=1; done; [ $skip = 0 ] && cores="$cores $f"; done
+  cores=""; for f in src/services/applet_core.c src/services/applet_lib_core.c src/services/applet_web_core.c src/services/applet_album_core.c src/services/caps_core.c src/services/jpeg_core.c; do skip=0; for i in $inc; do [ "src/$i" = "$f" ] && skip=1; done; [ $skip = 0 ] && cores="$cores $f"; done
   if cc $CF "$t" $cores $COMMON -lm -ldl -Wl,--allow-multiple-definition -o build/linux/t_$n 2>build/linux/$n.log; then
     if ! ./build/linux/t_$n >build/linux/$n.out 2>&1; then echo "FAIL $n"; tail -8 build/linux/$n.out; fail=1; else tail -1 build/linux/$n.out; fi
   else echo "BUILD FAIL $n"; grep -E "error|undefined" build/linux/$n.log | head; fail=1; fi

@@ -35,7 +35,8 @@ enum {
     NAPPLE_AUDIO_E_SIZE = -4,        /* output buffer too small (needed size is returned in *out_written) */
     NAPPLE_AUDIO_E_UNSUPPORTED = -5, /* revision / format outside what is implemented    */
     NAPPLE_AUDIO_E_STATE = -6,       /* wrong state (not started, unknown decoder, ...)  */
-    NAPPLE_AUDIO_E_DECODE = -7       /* codec failure (hwopus)                           */
+    NAPPLE_AUDIO_E_DECODE = -7,      /* codec failure (hwopus)                           */
+    NAPPLE_AUDIO_E_DENIED = -8       /* the host refused a permission (microphone)       */
 };
 
 /* ---- host callbacks ---- */
@@ -183,10 +184,15 @@ void napple_audin_set_source(napple_audin_source_fn read, void *user); /* NULL =
 int napple_audin_has_source(void);
 size_t napple_audin_device_name(char *out, size_t cap); /* writes the NUL-terminated device name, returns length */
 /* Capture source from a spec string: "silence", "tone[:HZ[:AMP]]", "file:PATH" (WAV PCM16/float, or raw s16le mono 48 kHz; looped) or "mic" (default input
-   device, macOS only; needs the microphone usage description and entitlement). Returns 0, NAPPLE_AUDIO_E_INVALID (bad spec / unreadable file) or
+   device, macOS only; needs the microphone usage description and entitlement). Returns 0, NAPPLE_AUDIO_E_INVALID (bad spec / unreadable file) NAPPLE_AUDIO_E_DENIED (permission hook said no) or
    NAPPLE_AUDIO_E_UNSUPPORTED (mic unavailable). The default source reads env NAPPLE_AUDIN_SOURCE once when no source is installed (unset = silence). */
 int napple_audin_install_source_spec(const char *spec);
 int napple_audin_install_default_source(void);
+/* Permission flow for "mic": before the capture unit is started the hook is called (from the thread installing the source, so it may block on the system
+   prompt). It returns nonzero when the host holds / was granted microphone access; 0 makes the install fail with NAPPLE_AUDIO_E_DENIED and the
+   guest keeps recording silence. NULL (the default) = no check, the OS decides. Setting a hook never starts a capture by itself. */
+typedef int (*napple_audin_permission_fn)(void *user);
+void napple_audin_set_permission_hook(napple_audin_permission_fn fn, void *user);
 typedef struct napple_audin napple_audin;
 typedef struct napple_audin_stats {
     uint64_t frames;           /* frames delivered to the guest                                              */

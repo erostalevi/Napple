@@ -15,6 +15,8 @@
 struct napple_frontend {
     void *impl;
 }; /* impl: retained NappleFE */
+/* Library applet sheets open at the moment (applet_sheets.m): the game gets no keyboard / pad input while one is up. */
+static int g_sheets;
 static NappleFE *FE(napple_frontend *f) { return (__bridge NappleFE *)f->impl; }
 #define LOGF(...)                                                                                                                                              \
     do {                                                                                                                                                       \
@@ -643,7 +645,7 @@ static const int kSuperSteps[] = {100, 150, 200, 300};
 }
 /* The game keeps its input while the panel is open (keyboard / mouse), unless the pad opened it or the user turned pass-through off. */
 - (void)refreshOverlayInputMode {
-    if (self.input) napple_input_set_blocked(self.input, (self.overlayVisible && (self.overlayPadMode || !self.settings.panel_passthrough)) || fe_textbar_visible(self));
+    if (self.input) napple_input_set_blocked(self.input, (self.overlayVisible && (self.overlayPadMode || !self.settings.panel_passthrough)) || fe_textbar_visible(self) || g_sheets > 0);
     fe_nav_mode_changed();
 }
 - (void)showOverlay:(BOOL)show {
@@ -1019,4 +1021,18 @@ int napple_frontend_text_input_blocking(napple_frontend *f, const napple_text_re
     napple_frontend_text_input(f, req, blocking_done, &b);
     dispatch_semaphore_wait(b.sem, DISPATCH_TIME_FOREVER);
     return b.accepted;
+}
+
+/* Applet sheets: input to the game is blocked while one is up and the keyboard focus returns to the game afterwards (main thread). */
+void fe_sheet_begin(napple_frontend *f) {
+    if (!f || !f->impl) return;
+    g_sheets++;
+    [FE(f) refreshOverlayInputMode];
+}
+void fe_sheet_end(napple_frontend *f) {
+    if (!f || !f->impl) return;
+    if (g_sheets > 0) g_sheets--;
+    [FE(f) refreshOverlayInputMode];
+    [FE(f).window makeKeyWindow];
+    [FE(f) resignToGame];
 }

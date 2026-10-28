@@ -173,7 +173,7 @@ enum {
 };
 
 /* Payloads (follow op_hdr). All pointer-sized fields are raw guest/GPU addresses or handles; nothing points into guest-owned objects. */
-typedef struct { uint64_t hash[6]; uint32_t stage_mask, pad; } p_bind_program;                                /* shader blob hash per NVN stage */
+typedef struct { uint64_t hash[6]; uint32_t stage_mask, sample_shading; } p_bind_program;                     /* shader blob hash per NVN stage; sample_shading: nvnProgramSetSampleShading on (rate > 0) */
 typedef struct { uint32_t first, n; } p_range;                                                   /* followed by n items */
 typedef struct { uint32_t stage, first, n, pad; } p_stage_range;                                 /* followed by n items */
 typedef struct { uint64_t addr, size; } bufrange;
@@ -219,6 +219,7 @@ typedef struct cmdrec {
 #define CMDREC_MAGIC MAGIC('R', 'E', 'C', '1')
 void cmdrec_retain(cmdrec *r);
 void cmdrec_release(cmdrec *r);
+cmdrec *cmdrec_acquire(uint64_t h);      /* lookup + retain (release it); NULL if stale */
 cmdrec *cmdrec_from_handle(uint64_t h);   /* NULL if stale */
 const uint8_t *cmdrec_data(const cmdrec *r);   /* command records, unpacking if needed */
 void gfx_cmdrec_pool_freed(const void *mem, size_t size);     /* a memory pool was finalized: lists recorded into it are gone */

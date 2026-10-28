@@ -112,3 +112,44 @@ fn personalized_ticket_without_key_is_skipped_and_named() {
         Err(napple_build::error::BuildError { .. })
     ));
 }
+
+/// Truncations and byte flips of real-writer output must end in `Err`, never a panic. Loading
+/// and reading `main` through the NCZ view are both exercised (the stream is decoded lazily).
+#[test]
+fn truncated_and_corrupt_real_containers_do_not_panic() {
+    let ks = keys(true);
+    let dir = std::env::temp_dir().join(format!("napple-cr-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let probe = |bytes: &[u8]| {
+        let p = dir.join("probe.nsz");
+        std::fs::write(&p, bytes).unwrap();
+        if let Ok(c) = Container::load_with_keys(&p, Some(&ks)) {
+            for s in c.ncas.values() {
+                let _ = Nca::open(s.clone(), &ks, &c.tks);
+            }
+            let _ = main_len(&c, &ks);
+        }
+    };
+    for f in [
+        "c00_solid.nsz.bin",
+        "c00_block.nsz.bin",
+        "g4000_block.nsz.bin",
+        "c00.xcz.bin",
+        "rights_solid.nsz.bin",
+    ] {
+        let good = std::fs::read(fx(f)).unwrap();
+        let n = good.len();
+        for cut in [0, 3, 4, 0x20, 0x100, 0x1000, n / 4, n / 2, n - n / 8, n - 1] {
+            probe(&good[..cut.min(n)]);
+        }
+        // flip one byte in the container header, the NCZ header region and the zstd data
+        for at in [0x8, 0x10, 0x18, 0x200, 0x4000, 0x4010, 0x4048, n / 2, n - 9] {
+            let mut bad = good.clone();
+            if at < n {
+                bad[at] ^= 0xFF;
+                probe(&bad);
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

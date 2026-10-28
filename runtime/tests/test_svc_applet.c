@@ -69,6 +69,7 @@ int main(void) {
     svc_call(af, 210, NULL, 0, &c); CHECK(c.nout_copy == 1 && c.out_copy[0] != 0 && c.nout_objects == 0 && !event_is_signaled(c.out_copy[0]), "cmd 210 returns an event copy handle");
     /* rows made impl by ipc-polish: the answers a single-program, offline title sees */
     svc_call(sc, 41, NULL, 0, &c); CHECK(c.result == 0x1480, "IsSystemBufferSharingEnabled: not granted to an application");
+    svc_call(sc, 42, NULL, 0, &c); CHECK(c.result == 0x1480, "GetSystemSharedLayerHandle: refused like 41, no placeholder handles");
     svc_call(af, 110, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == -1, "GetPreviousProgramIndex: -1 (not started by another program)");
     svc_call(af, 20, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == 0, "EnsureSaveData: no extra size needed");
     { uint32_t kind = 2; svc_call(af, 1, &kind, 4, &c); CHECK(c.result == 0 && c.nout_objects == 1 && ((Storage *)c.out_objects[0]->state)->size == 0x88, "PopLaunchParameter(account preselect) hands a 0x88 storage once");

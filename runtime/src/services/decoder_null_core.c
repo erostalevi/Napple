@@ -51,16 +51,17 @@ static int null_decode(void *ctx, const DecodeRequest *r, DecodeResult *out) {
     if (!c->width) return 1; /* no size known yet (stream starts mid-GOP): no frame */
     w = c->width;
     h = c->height;
-    size_t ysz = (size_t)w * h, csz = (size_t)w * ((h + 1) / 2);
-    if (!r->luma || !r->chroma || r->luma_cap < ysz || r->chroma_cap < csz) return -1;
     uint32_t hash = 2166136261u;
     for (size_t i = 0; i < r->bitstream_size; i++) hash = (hash ^ r->bitstream[i]) * 16777619u;
-    memset(r->luma, (int)(32 + (hash & 0x7f)), ysz);
-    memset(r->chroma, 128, csz);
+    size_t ysz = (size_t)w * h;
+    uint8_t *f = malloc(ysz + (size_t)w * ((h + 1) / 2));
+    if (!f) return -1;
+    memset(f, (int)(32 + (hash & 0x7f)), ysz);
+    memset(f + ysz, 128, (size_t)w * ((h + 1) / 2));
+    int rc = decoder_write_nv12(r, f, w, h, out);
+    free(f);
+    if (rc) return -1;
     c->frames++;
-    out->width = w;
-    out->height = h;
-    out->pitch = w;
     out->bt709 = h > 576;
     out->full_range = 0;
     return 0;
@@ -74,6 +75,24 @@ static int null_configure(void *ctx, const DecoderConfig *cfg) {
     return 0;
 }
 const DecoderBackend decoder_backend_null = {"null", null_open, null_close, null_decode, null_reset, null_configure, DECODER_BACKEND_ABI};
+
+static size_t row_pitch(uint32_t p, int w) { return p >= (uint32_t)w ? p : (size_t)w; }
+int decoder_write_nv12(const DecodeRequest *r, const uint8_t *nv12, int w, int h, DecodeResult *out) {
+    if (!r->luma || !r->chroma || w <= 0 || h <= 0) return -1;
+    size_t lp = row_pitch(r->luma_pitch, w), cp = row_pitch(r->chroma_pitch, w), crows = ((size_t)h + 1) / 2;
+    if (r->luma_cap < lp * (h - 1) + w || r->chroma_cap < cp * (crows - 1) + w) return -1;
+    const uint8_t *uv = nv12 + (size_t)w * h;
+    if (lp == (size_t)w) memcpy(r->luma, nv12, (size_t)w * h);
+    else
+        for (int y = 0; y < h; y++) memcpy(r->luma + y * lp, nv12 + (size_t)y * w, (size_t)w);
+    if (cp == (size_t)w) memcpy(r->chroma, uv, (size_t)w * crows);
+    else
+        for (size_t y = 0; y < crows; y++) memcpy(r->chroma + y * cp, uv + y * w, (size_t)w);
+    out->width = w;
+    out->height = h;
+    out->pitch = (int)lp;
+    return 0;
+}
 
 static const DecoderBackend *installed;
 const DecoderBackend *decoder_backend_current(void) { return installed ? installed : &decoder_backend_null; }

@@ -271,6 +271,9 @@ The amiibo, key, store, online-provider and Mii-folder variables below can also 
 `NAPPLE_CLEARLOG`, `NAPPLE_EMPTYTRACE`, `NAPPLE_RC_OFF`, `NAPPLE_UBOLOG` and `NAPPLE_WINTRACE` appear only in archived change notes under `docs/archive/`. No source file
 reads them. `NAPPLE_PACING_FIXED` and `NAPPLE_PACING_GAME` (gfx pacing) and `NAPPLE_AUDIO_E_PROTOCOL` (audio error code) are C enum constants, not environment variables.
 
-| `NAPPLE_MOVIE_MODECTOR` | Bind MK8D's three-argument `movie::Decoder` constructor to the host decoder (off: the menu preview videos stay black but the menus run; on: the game waits for video that cannot decode yet). |
+| `NAPPLE_MOVIE_MODECTOR` | Bind MK8D's three-argument `movie::Decoder` constructor to the host decoder (off, the default: the preview videos go through the title's own library to nvhost-nvdec + VIC, which play since media-nvdec-preview 2026-10-27; on: the game waits for video the host decoder cannot start, its parameter sets are not in the format). |
+| `NAPPLE_MEDIA_TRACE` | `1`: debug prints of the nvdrv media path to stderr: nvmap allocations and pins, relocations, unresolved device addresses, engine registers at the first executes, NVDEC decodes (slot, NAL types, IDRs), VIC output format and centre samples, engine stats every 60 executes. |
+| `NAPPLE_NVDEC_DUMP` | `<file>`: writes the H.264 stream exactly as the decoder backend gets it (the synthesized SPS/PPS at each configure, then every access unit, Annex B), to replay a title's video offline. The file holds game data: keep it out of the repository. |
+| `NAPPLE_DECODER` | `null`: keep the null decoder backend instead of VideoToolbox for nvhost-nvdec (diagnostics). |
 | `NAPPLE_MOVIE_TC` | Log movie decoder call counters, queue state and the first input buffers every 2 s. |
 | `NAPPLE_PREPLOG`, `NAPPLE_T2TLOG`, `NAPPLE_CUBELOG`, `NAPPLE_DEBUG_EQUAL_LEQUAL` | gfx diagnostics for the look-ahead pass, texture-to-texture copies, cube-map passes and depth EQUAL bisecting. |

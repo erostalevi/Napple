@@ -74,7 +74,7 @@ static uint32_t run_clip(const Clip *c, int *ok) {
             memcpy(cfg.h264_annexb + o, "\0\0\0\1", 4); o += 4; memcpy(cfg.h264_annexb + o, c->pps, c->ppsn); o += c->ppsn; cfg.h264_annexb_size = o;
             CHECK(b->configure(ctx, &cfg) == 0, "configure");
         }
-        DecodeRequest r = {DEC_CODEC_H264, NULL, 0, bs, n, 0, luma, chroma, sizeof luma, sizeof chroma};
+        DecodeRequest r = {DEC_CODEC_H264, NULL, 0, bs, n, 0, luma, chroma, sizeof luma, sizeof chroma, 0, 0};
         DecodeResult out; memset(&out, 0, sizeof out);
         memset(luma, 0, sizeof luma);
         int rc = b->decode(ctx, &r, &out);
@@ -98,6 +98,42 @@ static uint32_t run_clip(const Clip *c, int *ok) {
     b->close(ctx);
     return sum;
 }
+/* The guest's surfaces have a row pitch above the width (NVDEC picture-info pitches): rows land at the pitch, the padding is not touched, the same pixels
+ * as the packed decode come out, and a surface one row short is refused. */
+static void run_pitched(const Clip *c, uint32_t packed_sum) {
+    enum { P = W + 64, PC = W + 32 };
+    const DecoderBackend *b = decoder_backend_current();
+    void *ctx = b->open(DEC_CODEC_H264);
+    DecoderConfig cfg; memset(&cfg, 0, sizeof cfg); cfg.codec = DEC_CODEC_H264; cfg.width = W; cfg.height = H;
+    size_t o = 0; memcpy(cfg.h264_annexb, "\0\0\0\1", 4); o = 4; memcpy(cfg.h264_annexb + o, c->sps, c->spsn); o += c->spsn;
+    memcpy(cfg.h264_annexb + o, "\0\0\0\1", 4); o += 4; memcpy(cfg.h264_annexb + o, c->pps, c->ppsn); o += c->ppsn; cfg.h264_annexb_size = o;
+    CHECK(ctx && b->configure(ctx, &cfg) == 0, "pitched: open + configure");
+    static uint8_t luma[P * H], chroma[PC * H / 2], pl[W * H], pc[W * H / 2];
+    uint32_t sum = 2166136261u; int pad_ok = 1;
+    for (int i = 0; i < N; i++) {
+        size_t n; uint8_t *bs = annexb(c, i, i == 0, &n);
+        memset(luma, 0xEE, sizeof luma); memset(chroma, 0xEE, sizeof chroma);
+        DecodeRequest r = {DEC_CODEC_H264, NULL, 0, bs, n, 0, luma, chroma, sizeof luma, sizeof chroma, P, PC};
+        DecodeResult out; memset(&out, 0, sizeof out);
+        int rc = b->decode(ctx, &r, &out);
+        CHECK(rc == 0 && out.width == W && out.height == H && out.pitch == P, "pitched frame %d: rc %d %dx%d pitch %d", i, rc, out.width, out.height, out.pitch);
+        for (int y = 0; y < H; y++) { memcpy(pl + y * W, luma + y * P, W); for (int x = W; x < P; x++) pad_ok &= luma[y * P + x] == 0xEE; }
+        for (int y = 0; y < H / 2; y++) { memcpy(pc + y * W, chroma + y * PC, W); for (int x = W; x < PC; x++) pad_ok &= chroma[y * PC + x] == 0xEE; }
+        sum = fnv(fnv(sum, pl, sizeof pl), pc, sizeof pc);
+        free(bs);
+    }
+    CHECK(pad_ok, "pitched: bytes between width and pitch untouched");
+    CHECK(sum == packed_sum, "pitched decode gives the packed frames (%08x vs %08x)", sum, packed_sum);
+    size_t n; uint8_t *bs = annexb(c, 0, 1, &n); DecodeResult out;
+    DecodeRequest small = {DEC_CODEC_H264, NULL, 0, bs, n, 0, luma, chroma, (size_t)P * (H - 1), sizeof chroma, P, PC};
+    b->reset(ctx); b->configure(ctx, &cfg);
+    CHECK(b->decode(ctx, &small, &out) < 0, "pitched: luma surface one row short is refused");
+    DecodeRequest bad = {DEC_CODEC_H264, NULL, 0, bs, n, 0, luma, chroma, sizeof luma, sizeof chroma, W / 2, 0}; /* pitch below the width: packed */
+    b->reset(ctx); b->configure(ctx, &cfg);
+    CHECK(b->decode(ctx, &bad, &out) == 0 && out.pitch == W, "pitch below the width falls back to packed (pitch %d)", out.pitch);
+    free(bs);
+    b->close(ctx);
+}
 int main(void) {
     Clip c;
     if (!encode(&c, 0, 1)) { CHECK(0, "VideoToolbox encode failed"); return 1; }
@@ -105,6 +141,7 @@ int main(void) {
     uint32_t s1 = run_clip(&c, &ok1), s2 = run_clip(&c, &ok2);
     CHECK(s1 == s2, "decoding is deterministic (%08x vs %08x)", s1, s2);
     printf("frame checksum over %d frames: %08x\n", N, s1);
+    run_pitched(&c, s1);
     /* too-small surface */
     printf("%d checks, %d failed\n", g_checked, g_failed);
     return g_failed != 0;

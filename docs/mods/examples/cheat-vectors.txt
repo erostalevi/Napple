@@ -1,0 +1,30 @@
+// Shared fixture: crates/napple-mods (cheats.rs test) and runtime/tests/host/test_mods_cheats.c both parse this file, decode every cheat and
+// expect all of them supported, except [Unsupported] (a code type outside the table), which both must report as unsupported.
+[Store with offset register]
+40010000 00000000 00000100
+01010000 00000010 000000AB
+[Loop four times]
+30020000 00000003
+04010000 00000010 00000077
+31020000
+[Increment store]
+40060000 00000000 00000030
+68061000 00000000 00001234
+61061000 00000000 00000099
+[Pointer chain]
+58110000 00000008
+54011000 00000004
+{Master with a condition}
+14150000 00001000 00000001
+30020000 00000001
+74010000 00000001
+31020000
+21000000
+04000000 00000020 00000001
+20000000
+[Pause and resume]
+FF000000
+04000000 00000030 00000001
+FF100000
+[Unsupported]
+A0000000

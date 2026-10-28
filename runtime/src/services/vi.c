@@ -3,6 +3,7 @@
  * signalled by a host thread at the back end's vsync period. */
 #include "../ipc.h"
 #include "../gfx.h"
+#include "../mods_runtime.h"
 #include "../timescale.h"
 #include "napple_display.h"
 #include "vi_core.h"
@@ -41,6 +42,7 @@ static void *vsync_thread(void *arg) {
             nanosleep(&ts, NULL);
         }
         timescale_count_vsync();
+        mods_cheats_frame(); /* mods/cheats.txt, once per frame, before the guest is told about the vsync */
         pthread_mutex_lock(&vlock);
         for (unsigned i = 0; i < nvsync; i++) event_signal_handle(vsync_events[i]);
         pthread_mutex_unlock(&vlock);

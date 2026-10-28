@@ -194,6 +194,158 @@ static void test_gs(void) {
     CHECK(px(pxx(-0.5f) - 7, pxy(-0.5f) + 7) == RED && px(pxx(-0.5f) - 9, pxy(-0.5f)) == 0, "quad extent is the emitted size");
 }
 
+/* ---- 2b. geometry shader instancing: 2 invocations, invocation i shifts its quad by +i in x ---- */
+#define I2F_U32(d, b) (0x5cb8000000000000ull | (uint64_t)(d) | (2ull << 8) | (2ull << 10) | ((uint64_t)(b) << 20) | PT_BITS)
+static int gs_quad(uint64_t *gi, int n, int shift_reg) { /* emits a quad of half-size 0.25 around vertex 0 (+ shift_reg in x when >= 0) */
+    const float s = 0.25f, cx[4] = {-s, s, -s, s}, cy[4] = {-s, -s, s, s};
+    for (int c = 0; c < 4; c++) {
+        gi[n++] = ALDV(0, 0x70, 4, 255);
+        gi[n++] = fadd32i(0, 0, cx[c]);
+        gi[n++] = fadd32i(1, 1, cy[c]);
+        if (shift_reg >= 0) gi[n++] = fadd(0, 0, shift_reg);
+        gi[n++] = ASTP(0, 0x70, 4, 0);
+        gi[n++] = OUT_EMIT(10);
+    }
+    return n;
+}
+static void test_gs_instanced(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float v[2][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, 0.5f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    uint64_t gi[40];
+    int n = 0;
+    gi[n++] = S2R(2, 0x11); /* SR_INVOCATION_ID */
+    gi[n++] = I2F_U32(8, 2); /* r8: the position load below fills r0..r3 */
+    n = gs_quad(gi, n, 8);
+    gi[n++] = ins_exit();
+    /* SPH word 2 bits 24..31: 2 invocations per primitive */
+    NVNshaderData sd[3] = {vs_pos(), stage(2, gi, n, 0, 2u << 24, 7u << 24, 4), fs_red()};
+    NVNprogram *prog = program(3, sd);
+    h_begin(&h);
+    common_state(0);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    clear_rt();
+    L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_POINTS, 0, 2);
+    readback();
+    h_submit(&h);
+    uint32_t a = px(pxx(-0.5f), pxy(-0.5f)), b = px(pxx(0.5f), pxy(0.5f)), c = px(pxx(0.5f), pxy(-0.5f)), e = px(pxx(-0.5f), pxy(0.5f));
+    CHECK(a == RED && b == RED, "invocation 0 quads at both points: %08x %08x", a, b);
+    CHECK(c == RED, "invocation 1 quad of point 0 shifted by +1 in x: %08x", c);
+    CHECK(e == 0, "nothing where no invocation emits: %08x", e);
+}
+
+/* ---- 2c. triangle strip with adjacency: the GS forwards the triangle's own vertices (input vertices 0, 2, 4) ---- */
+static void test_gs_strip_adjacency(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    /* 8 vertices = 2 triangles: triangle vertices (even) form the quad [-0.5, 0.5]^2, adjacency vertices (odd) sit far away */
+    const float v[8][4] = {{-0.5f, -0.5f, 0, 1}, {2, 2, 0, 1}, {0.5f, -0.5f, 0, 1}, {2, 2, 0, 1}, {-0.5f, 0.5f, 0, 1}, {2, 2, 0, 1}, {0.5f, 0.5f, 0, 1}, {2, 2, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    uint64_t gi[24];
+    int n = 0;
+    gi[n++] = ins_mov32i(10, 2);
+    gi[n++] = ins_mov32i(11, 4);
+    gi[n++] = ALDV(0, 0x70, 4, 255); gi[n++] = ASTP(0, 0x70, 4, 0); gi[n++] = OUT_EMIT(12);
+    gi[n++] = ALDV(0, 0x70, 4, 10); gi[n++] = ASTP(0, 0x70, 4, 0); gi[n++] = OUT_EMIT(12);
+    gi[n++] = ALDV(0, 0x70, 4, 11); gi[n++] = ASTP(0, 0x70, 4, 0); gi[n++] = OUT_EMIT(12);
+    gi[n++] = ins_exit();
+    NVNshaderData sd[3] = {vs_pos(), stage(2, gi, n, 0, 0, 7u << 24, 3), fs_red()};
+    NVNprogram *prog = program(3, sd);
+    NVNpolygonState ps;
+    h_begin(&h);
+    common_state(0);
+    L(nvnPolygonStateSetDefaults)(&ps); L(nvnPolygonStateSetCullFace)(&ps, NVN_FACE_NONE); L(nvnCommandBufferBindPolygonState)(h.cb, &ps);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    clear_rt();
+    L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_TRIANGLE_STRIP_ADJACENCY, 0, 8);
+    readback();
+    h_submit(&h);
+    uint32_t c0 = px(32, 32), c1 = px(pxx(-0.4f), pxy(-0.4f)), c2 = px(pxx(0.4f), pxy(0.4f)), o = px(pxx(0.8f), pxy(0.8f)), o2 = px(2, 2);
+    CHECK(c0 == RED && c1 == RED && c2 == RED, "both strip triangles drawn from their own vertices: %08x %08x %08x", c0, c1, c2);
+    CHECK(o == 0 && o2 == 0, "adjacency vertices are not drawn: %08x %08x", o, o2);
+}
+
+/* ---- 2d. indirect draw with a geometry program (arguments read at encode time) ---- */
+static void test_gs_indirect(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float v[3][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, 0.5f, 0, 1}, {0.5f, -0.5f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    uint64_t gi[32];
+    int n = gs_quad(gi, 0, -1);
+    gi[n++] = ins_exit();
+    NVNshaderData sd[3] = {vs_pos(), stage(2, gi, n, 0, 0, 7u << 24, 4), fs_red()};
+    NVNprogram *prog = program(3, sd);
+    uint32_t *args = (uint32_t *)(h.mem + OFF_CTL + 0x100); /* count, instances, first, base instance: the two points from vertex 1 */
+    args[0] = 2; args[1] = 1; args[2] = 1; args[3] = 0;
+    h_begin(&h);
+    common_state(0);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    clear_rt();
+    L(nvnCommandBufferDrawArraysIndirect)(h.cb, NVN_DRAW_PRIMITIVE_POINTS, (NVNbufferAddress)(uintptr_t)args);
+    readback();
+    h_submit(&h);
+    uint32_t a = px(pxx(-0.5f), pxy(-0.5f)), b = px(pxx(0.5f), pxy(0.5f)), c = px(pxx(0.5f), pxy(-0.5f));
+    CHECK(b == RED && c == RED, "indirect GS draw: quads at vertices 1 and 2: %08x %08x", b, c);
+    CHECK(a == 0, "vertex 0 (before `first`) not drawn: %08x", a);
+}
+
+/* ---- 2e. transform feedback of geometry shader output: the quads' triangles, decomposed from the strips, counted on the GPU ---- */
+static void test_gs_xfb(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float v[2][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, 0.5f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    uint64_t gi[32];
+    int n = gs_quad(gi, 0, -1);
+    gi[n++] = ins_exit();
+    NVNshaderData sd[3] = {vs_pos(), stage(2, gi, n, 0, 0, 7u << 24, 4), fs_red()};
+    NVNprogram *prog = program(3, sd);
+    gfx_xfb_layout xl;
+    memset(&xl, 0, sizeof xl);
+    xl.count = 1;
+    xl.stride[0] = 16;
+    xl.e[0] = (ShaderXfbEntry){0x70, 0, 4, 0};
+    CHECK(gfx_program_set_xfb_layout(prog, &xl), "xfb layout registered for the geometry program");
+    memset(h.mem + OFF_X0, 0xee, 0x4000);
+    memset(h.mem + OFF_CTL, 0xee, 64);
+    NVNbufferAddress ctl = (NVNbufferAddress)(uintptr_t)(h.mem + OFF_CTL);
+    h_begin(&h);
+    common_state(1);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    NVNbufferRange xr[1] = {{(NVNbufferAddress)(uintptr_t)(h.mem + OFF_X0), 0x4000}};
+    L(nvnCommandBufferBindTransformFeedbackBuffers)(h.cb, 0, 1, xr);
+    L(nvnCommandBufferBeginTransformFeedback)(h.cb, ctl);
+    L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_POINTS, 0, 2);
+    L(nvnCommandBufferEndTransformFeedback)(h.cb, ctl);
+    h_submit(&h);
+    /* per point: strip c0 c1 c2 c3 -> triangles (c0, c1, c2), (c2, c1, c3) */
+    const float s = 0.25f, cx[4] = {-s, s, -s, s}, cy[4] = {-s, -s, s, s};
+    const int tri[6] = {0, 1, 2, 2, 1, 3};
+    const uint32_t *x0 = (const uint32_t *)(h.mem + OFF_X0);
+    int bad = 0;
+    for (int p = 0; p < 2; p++)
+        for (int i = 0; i < 6; i++) {
+            const uint32_t *w = x0 + (p * 6 + i) * 4;
+            if (w[0] != fbits(v[p][0] + cx[tri[i]]) || w[1] != fbits(v[p][1] + cy[tri[i]]) || w[2] != fbits(0) || w[3] != fbits(1)) bad++;
+        }
+    if (bad) printf("  gs xfb vertex 0: %08x %08x %08x %08x (expected %08x %08x)\n", x0[0], x0[1], x0[2], x0[3], fbits(-0.75f), fbits(-0.75f));
+    CHECK(bad == 0, "GS output captured as 12 decomposed triangle vertices (%d differ)", bad);
+    CHECK(x0[12 * 4] == 0xeeeeeeeeu, "nothing written past the captured vertices");
+    const uint32_t *cw = (const uint32_t *)(h.mem + OFF_CTL);
+    CHECK(cw[0] == 12 * 16 && cw[4] == 16, "control memory written by the GPU: bytes %u stride %u", cw[0], cw[4]);
+    /* DrawTransformFeedback from that control memory (GPU-side count): the two quads appear */
+    NVNshaderData sd2[2] = {vs_pos(), fs_red()};
+    NVNprogram *plain = program(2, sd2);
+    h_begin(&h);
+    common_state(0);
+    L(nvnCommandBufferBindVertexBuffer)(h.cb, 0, (NVNbufferAddress)(uintptr_t)(h.mem + OFF_X0), 0x4000);
+    L(nvnCommandBufferBindProgram)(h.cb, plain, ALL_GFX_BITS);
+    clear_rt();
+    L(nvnCommandBufferDrawTransformFeedback)(h.cb, NVN_DRAW_PRIMITIVE_TRIANGLES, ctl);
+    readback();
+    h_submit(&h);
+    uint32_t a = px(pxx(-0.5f), pxy(-0.5f)), b = px(pxx(0.5f), pxy(0.5f)), e = px(32, 32);
+    CHECK(a == RED && b == RED && e == 0, "DrawTransformFeedback of the GPU-counted capture draws the quads: %08x %08x %08x", a, b, e);
+}
+
 /* ---- 3. tessellation ---- */
 static void test_tess(void) {
     float *vb = (float *)(h.mem + OFF_VB);
@@ -266,6 +418,10 @@ int main(void) {
     g_rt = h_tex(&h, NVN_TEXTURE_TARGET_2D, NVN_FORMAT_RGBA8, W, W, 1, OFF_RT, NVN_TEXTURE_FLAGS_DISPLAY);
     test_xfb();
     test_gs();
+    test_gs_instanced();
+    test_gs_strip_adjacency();
+    test_gs_indirect();
+    test_gs_xfb();
     test_tess();
     return h_finish("t_stages", &h);
 }

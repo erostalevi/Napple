@@ -563,6 +563,16 @@ fn html_document_written_next_to_romfs_map() {
         std::fs::read(base.join("html/a.png")).unwrap(),
         [0x89, b'P', b'N', b'G']
     );
+    // nested directories of the RomFS become nested directories under html/
+    assert_eq!(
+        std::fs::read(base.join("html/img/ui/b.png")).unwrap(),
+        [1, 2, 3]
+    );
+    assert_eq!(std::fs::read(base.join("html/img/c.png")).unwrap(), [4, 5]);
+    assert_eq!(
+        std::fs::read(base.join("html/css/main.css")).unwrap(),
+        b"body{}"
+    );
     // a title without an HtmlDocument gets no html/ directory
     let _t2 = tmp("nohtml");
     let g2 = make_game(&_t2, false);

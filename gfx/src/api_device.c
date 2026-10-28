@@ -179,14 +179,13 @@ NVN(nvnQueueSubmitCommands, void, NVNqueue *q, int n, const NVNcommandHandle *h)
     if (!list) return;
     int cnt = 0;
     for (int i = 0; i < n; i++) {
-        cmdrec *r = cmdrec_from_handle(h[i]);
+        cmdrec *r = cmdrec_acquire(h[i]);
         if (!r) {
             static _Atomic uint64_t n_stale;
             uint64_t k = atomic_fetch_add(&n_stale, 1);
             if (k < 20 || (k & (k - 1)) == 0) LOGW("QueueSubmitCommands: stale or invalid command handle %#llx ignored (%llu so far)", (unsigned long long)h[i], (unsigned long long)k + 1);
             continue;
         }
-        cmdrec_retain(r);
         atomic_store_explicit(&r->last_use, cmdrec_now(), memory_order_relaxed);
         list[cnt++] = r;
     }

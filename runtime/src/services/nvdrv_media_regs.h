@@ -16,7 +16,7 @@
 #define NVDEC_SET_CONTROL_PARAMS 0x100
 #define NVDEC_SET_DRV_PIC_SETUP_OFFSET 0x101 /* picture-info structure */
 #define NVDEC_SET_IN_BUF_BASE_OFFSET 0x102   /* coded frame */
-#define NVDEC_SET_PICTURE_INDEX 0x103
+#define NVDEC_SET_PICTURE_INDEX 0x103 /* a running frame number in MK8D's stream (0, 1, 2, ... past the 17 slots), not the output slot: H.264 takes curr_pic_idx below */
 #define NVDEC_SET_SLICE_OFFSETS_BUF_OFFSET 0x104
 #define NVDEC_SET_COLOC_DATA_OFFSET 0x105
 #define NVDEC_SET_HISTORY_OFFSET 0x106
@@ -46,7 +46,10 @@
 #define NVDEC_H264_W_PITCH_LUMA 35
 #define NVDEC_H264_W_PITCH_CHROMA 36
 #define NVDEC_H264_W_FLAGS 44 /* b1 direct_8x8_inference, b2 weighted_pred, b3 constrained_intra, b8-11 log2_max_frame_num-4, b12-13 chroma_format_idc, b14-15 poc type, b16-21 pic_init_qp-26 (signed), b22-26 chroma_qp_index_offset (signed), b27-31 second */
-#define NVDEC_H264_W_FLAGS2 45 /* b0-1 weighted_bipred_idc */
+#define NVDEC_H264_W_FLAGS2 45 /* b0-1 weighted_bipred_idc, b2-8 curr_pic_idx (the DPB slot this picture is decoded into), b9-13 curr_col_idx, b14-29 frame_number:
+                                * the public emulator's layout of this 64-bit word shifted up by 8 (the shift b6 matched for the low fields); curr_pic_idx confirmed on
+                                * MK8D's stream 2026-10-27 (it follows the slot registers the SDK rewrites) */
+#define NVDEC_H264_CURR_PIC_IDX(w45) (((w45) >> 2) & 0x7f)
 #define NVDEC_H264_PIC_WORDS 46
 #define NVDEC_PIC_STREAM_LEN_WORD_H264 18
 #define NVDEC_PIC_STREAM_LEN_WORD_VP9 12
@@ -55,18 +58,22 @@
 /* status structure written after an execute (0x20 bytes): u32 mbs_correct, u32 mbs_in_error, u32 reserved, u32 error (0 = ok), u32 width, u32 height, ... */
 
 /* VIC (class 0x5D) */
-/* Register numbers as MK8D's stream writes them (2026-10-27): slot 0 input luma/chroma at 0x100/0x101, config structure 0x1c1, output luma/chroma 0x1c8/0x1c9.
- * Its config structure address (0x610110 << 8) lies outside every pinned handle (see nvdrv.c nv_resolve), so the real layout is not read: with no readable
- * config the execute copies the NV12 input to the NV12 output surfaces (MK8D's output surfaces are NV12-sized). */
+/* Methods as the public emulator sources name them (yuzu's vic.h): 0x1c1 SetControlParams, 0x1c2 SetConfigStructOffset, 0x1c8 / 0x1c9 output surface luma /
+ * chroma; slot 0's input surface luma / chroma are the words MK8D writes at 0x100 / 0x101 (2026-10-27 trace). Addresses are device addresses >> 8. The b6 map
+ * read 0x1c1 as the config address: MK8D's 0x610110 there is the control word (it resolves nowhere), the config address is the 0x1c2 write. */
 #define VIC_SET_INPUT0_LUMA_OFFSET 0x100
 #define VIC_SET_INPUT0_CHROMA_OFFSET 0x101
-#define VIC_SET_CONFIG_STRUCT_OFFSET 0x1c1
+#define VIC_SET_CONTROL_PARAMS 0x1c1
+#define VIC_SET_CONFIG_STRUCT_OFFSET 0x1c2
 #define VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET 0x1c8
 #define VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET 0x1c9
-/* Napple's reduced configuration structure (the real one is larger; only these words are read): u32 src_w, src_h, dst_w, dst_h, pixel_format
- * (0 A8B8G8R8 = bytes R,G,B,A; 1 X8B8G8R8; 2 A8R8G8B8 = bytes B,G,R,A), matrix (0 BT.601, 1 BT.709), full_range, alpha (8 bit, for A formats), dst_pitch (bytes, 0 = tight). */
-enum { VIC_FMT_ABGR = 0, VIC_FMT_XBGR = 1, VIC_FMT_ARGB = 2 };
-#define VIC_CFG_WORDS 9
+/* Config structure: only the output surface configuration (u64 at +0x20) is read. Bits 0-6 pixel format, 11-14 block kind (0 = pitch linear, else block linear),
+ * 15-18 log2 block height in GOBs, 32-45 surface width - 1, 46-59 surface height - 1. Pixel formats: 0x1f RGBA8 (bytes R,G,B,A), 0x20 BGRA8, 0x23 RGBX8
+ * (alpha 255), 0x44 NV12 (Y8 + interleaved U8V8, 4:2:0). Pitch-linear rows: width*4 for RGB, the width aligned to 256 for NV12 (as the emulator writes them).
+ * Input: NV12 of the surface size, rows aligned to 256 (or packed when the input surface is too small for that). Colour: BT.601 limited range. */
+#define VIC_CFG_OUTPUT_SURFACE 0x20
+#define VIC_CFG_BYTES 0x28
+enum { VIC_FMT_RGBA8 = 0x1f, VIC_FMT_BGRA8 = 0x20, VIC_FMT_RGBX8 = 0x23, VIC_FMT_NV12 = 0x44 };
 
 /* NVJPG (class 0xC0) */
 #define NVJPG_SET_DRV_PIC_SETUP_OFFSET 0x101

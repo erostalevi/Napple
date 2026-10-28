@@ -649,7 +649,9 @@ int main(void) {
             XL_OK(tv, STAGE_VERTEX, z, 0, "TLD in a vertex shader", ins_ald(8, 0x80, 2), i_tld(0, 8, 12, 8, 1, 0, 0xf, 0, 0, 1), ins_exit());
             CHECK(HAS(tv, "t0.read(uint2(uint(int(r8)), uint(int(r9))), uint(r12))"), "no resolution scale in vertex shaders");
             maxwell_free(tv);
-            XL_REFUSE(tm, STAGE_FRAGMENT, z, 0xf, "multisampled", "TLD.MS", i_tld(0, 8, 12, 8, 1, 0, 0xf, 0, 1, 0), ins_exit());
+            XL_OK(tm, STAGE_FRAGMENT, z, 0xf, "TLD.MS", i_tld(0, 8, 12, 8, 1, 0, 0xf, 0, 1, 0), ins_exit());
+            CHECK(HAS(tm, "texture2d_ms<float> t0") && HAS(tm, "t0.get_num_samples() - 1u)"), "TLD.MS reads a texture2d_ms by sample index (t_xlate_stages.inc has the rest)");
+            maxwell_free(tm);
             XL_REFUSE(tc, STAGE_FRAGMENT, z, 0xf, "cube", "TLD cube", i_tld(0, 8, 12, 8, 3, 0, 0xf, 0, 0, 0), ins_exit());
             XL_OK(xd, STAGE_FRAGMENT, z, 0xf, "TXD 2D", i_txd(0, 8, 12, 8, 1, 0, 0xf, 0), ins_exit());
             CHECK(HAS(xd, "t0.sample(s0, float2(as_type<float>(r8), as_type<float>(r9)), gradient2d(float2(as_type<float>(r12), as_type<float>(r13)), "

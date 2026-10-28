@@ -28,7 +28,10 @@ void applet_error_code_text(const AppletErrorInfo *e, char *buf, size_t cap);
 typedef struct {
     uint32_t type, min_len, max_len;
     int password, numeric;
+    char header[400], sub[800], guide[800]; /* UTF-8 of the config's header (+0x24), sub (+0xA6) and guide (+0x1A8) texts; empty when absent */
 } AppletSwkbdConfig;
+/* UTF-16LE (at most max_units units, stops at a NUL) to UTF-8 with surrogate pairs; always NUL-terminated. */
+void applet_utf16le_to_utf8(const uint8_t *p, unsigned max_units, char *out, size_t cap);
 #define APPLET_SWKBD_MAX_LEN 500u
 void applet_swkbd_parse(const uint8_t *cfg /* may be NULL */, size_t size, AppletSwkbdConfig *c);
 /* Fit a typed text to the config: truncates to max_len characters (UTF-8 code points; 0 = no limit), returns 0 when the result has fewer than min_len

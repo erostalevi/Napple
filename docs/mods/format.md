@@ -86,18 +86,26 @@ A patch targets one module by **module build id** (the 32-byte id in the NSO hea
 
 `cheats/<BUILDID16>.txt`, named by the first 16 hex digits (8 bytes) of the main module's build id (Atmosphere layout). Text format: `[Name]` starts a cheat (up to 64 bytes), `{Name}` a master code, following lines hold 8-digit hex words separated by spaces; `//` lines are comments.
 
-### Cheat opcode subset
+### Cheat opcode table
 
-Napple decodes and runs the subset below (compatible with Atmosphere code types 0, 1 and 2). Anything else decodes as "unsupported", the decoder stops at that word and `validate` warns, so a cheat file with extra codes is still usable up to that point.
+Napple decodes and runs the opcodes below. They follow Atmosphere's cheat code types 0 to 7 in the forms listed; **this table is Napple's own definition**, written from memory of the Atmosphere format and not yet checked against a real cheat collection, so a cheat from the wild may behave differently until that Mac-side check is done. Anything not listed (key-press conditions, code types 8, 9, A, B, C, FFF, register save/restore) decodes as "unsupported": a cheat that uses one is not run at all (the build and `validate` warn), because a half-run pointer chain would write to the wrong place. Sixteen 64-bit registers `r0..rF` start at zero for every run of a cheat.
 
 | Words | Meaning |
 |---|---|
-| `0TMR00AA AAAAAAAA VVVVVVVV (VVVVVVVV)` | **Store**: write value `V` (`T` bytes: 1, 2, 4 or 8; the 8-byte form has a fourth word) at address `A` (40 bits: low byte of the first word then the second word) in region `M`. `R` (offset register) must be 0. |
-| `1TMC00AA AAAAAAAA VVVVVVVV (VVVVVVVV)` | **Begin conditional**: run the following ops only if the value at `A` compares to `V` with `C`: 1 `>`, 2 `>=`, 3 `<`, 4 `<=`, 5 `==`, 6 `!=`. |
-| `21000000` | **Else** of the innermost conditional. |
-| `20000000` | **End conditional**. Conditionals nest; an unmatched end/else or a missing end is an error in the decoder. |
+| `0TMR00AA AAAAAAAA VVVVVVVV (VVVVVVVV)` | **Store**: write `V` (`T` bytes: 1, 2, 4 or 8; the 8-byte form has a fourth word) at region `M` base + `A` (40 bits: low byte of the first word then the second word) + register `R`. |
+| `1TMC00AA AAAAAAAA VVVVVVVV (VVVVVVVV)` | **Begin conditional**: run the following ops only if the value at region `M` + `A` compares to `V` with `C`: 1 `>`, 2 `>=`, 3 `<`, 4 `<=`, 5 `==`, 6 `!=` (unsigned). |
+| `21000000` / `20000000` | **Else** / **End** of the innermost conditional. Conditionals and loops must nest properly. |
+| `300R0000 VVVVVVVV` ... `310R0000` | **Loop**: `rR = V`, then the body runs, and at the end `if rR != 0 { rR -= 1; jump back }`: the body runs `V + 1` times. A loop inside a false conditional is skipped with it. A run is cut off after 2^20 steps (reported as aborted) so a hostile `FFFFFFFF` loop cannot hang a frame. |
+| `400R0000 VVVVVVVV VVVVVVVV` | **Load immediate**: `rR = V` (64 bit). |
+| `5TMR00AA AAAAAAAA` | **Load from memory**: `rR` = `T` bytes at region `M` base + `A`. |
+| `5T0R10AA AAAAAAAA` | **Load through a register**: `rR` = `T` bytes at the absolute guest address `rR + A` (pointer chains). |
+| `6T0RIor0 VVVVVVVV VVVVVVVV` | **Store through a register**: write the low `T` bytes of `V` at the absolute address `rR` (+ register `r` when `o` = 1; `o` = 0 means no offset and `r` must be 0). `I` = 1 adds `T` to `rR` afterwards. |
+| `7T0RC000 VVVVVVVV (VVVVVVVV)` | **Arithmetic** (legacy form): `rR = (rR op V)` truncated to `T` bytes; `C`: 0 `+`, 1 `-`, 2 `*`, 3 `<<`, 4 `>>` (shifts of 64 or more give 0). The 8-byte form has a third word. |
+| `FF000000` / `FF100000` | Pause / resume the cheat process: accepted and ignored (cheats run synchronously with a frame). |
 
-Regions `M`: 0 main (module memory), 1 heap, 2 alias, 3 aslr base. Values are little endian. The interpreter (`cheats::run`) works on a `CheatMemory` trait: the runtime supplies the real memory, which is a Mac follow-up. Planned next (not yet decoded): loops, offset registers, key-press conditions, arithmetic.
+Regions `M`: 0 main (module memory; **writes below the module's data segment are refused**, the text is read-only in the rewritten layout), 1 heap, 2 alias, 3 aslr base. Values are little endian. The Rust interpreter (`cheats::run` on a `CheatMemory`) is used for tests and validation; the runtime has a C twin (`runtime/src/mods_cheats.c`) and both are tested against the same fixture, `examples/cheat-vectors.txt`.
+
+At build time `napple build --mods` writes `<data dir>/mods/cheats.txt` (the enabled mods' cheats for the main module's build id, all of them enabled, masters first as in the file); the runtime runs every cheat once per frame from the display's vsync thread, before the guest is signalled. There is no per-cheat toggle yet (that is UI work).
 
 ## RomFS overlay
 

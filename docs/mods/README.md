@@ -4,7 +4,7 @@ A `.napmod` is a small zip that anyone can create and share: a game fix, a wides
 
 | Page | For | What it covers |
 |---|---|---|
-| [Format](format.md) | everyone | The layout of a `.napmod`, `mod.json`, every component, the cheat opcode subset, limits and the trust model |
+| [Format](format.md) | everyone | The layout of a `.napmod`, `mod.json`, every component, the cheat opcode table, limits and the trust model |
 | [Authoring](authoring.md) | mod makers | Write a pchtxt or IPS fix, find a build id, test it, pack and publish |
 | [Integration](integration.md) | contributors | The library API, the `napple-build` hook with its exact call site, and the Mac follow-up list |
 | [Example mod](examples/synthetic-fix/mod.json) | everyone | A made-up fix for a made-up title with every component (`examples/synthetic-fix/`, plus `examples/synthetic-module.bin` to try it on) |

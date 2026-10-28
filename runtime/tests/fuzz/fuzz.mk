@@ -33,7 +33,7 @@ FZ_SRC_nro := src/nro.c src/sha256.c
 # Linux-only targets: the IPC dispatcher and the services that build with the host stand-ins (tests/host, tests/linux/mach_shim.h).
 ifeq ($(FZ_UNAME),Linux)
 FZ_TARGETS += ipc
-FZ_SERVICES := $(filter-out src/services/host_info.c src/services/services.c src/services/audio.c src/services/hid.c,$(wildcard src/services/*.c))
+FZ_SERVICES := $(filter-out src/services/host_info.c src/services/services.c src/services/audio.c src/services/hid.c src/services/decoder_vt.c src/services/media_gfx_glue.c,$(wildcard src/services/*.c))
 FZ_SRC_ipc := $(FZ_SERVICES) src/kernel.c src/threads.c src/ksession.c src/kmsg.c src/kcode.c src/timescale.c tests/host/host_stubs.c tests/host/host_nomodules.c tests/host/host_save_dir.c tests/linux/applet_stubs.c tests/fuzz/ipc_stubs.c tests/linux/ipc_mock.c src/json.c src/sha256.c -include tests/linux/mach_shim.h -Itests/host -I../gfx/include -I../frontend/include -I../audio/include -I../input/include -Wno-error=implicit-function-declaration -Wno-error=int-conversion -DFUZZ_RUNTIME_FAIL -Wl,--allow-multiple-definition -Wl,--wrap=pthread_mutex_lock -Wl,--wrap=pthread_mutex_unlock -lm -ldl
 endif
 

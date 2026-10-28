@@ -8,6 +8,11 @@
 #define NREGS 0x1000
 #define MAX_GATHER_DEPTH 4
 void (*media_write_prepare)(void *addr, size_t n);
+int media_trace(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("NAPPLE_MEDIA_TRACE") && *getenv("NAPPLE_MEDIA_TRACE") != '0';
+    return v;
+}
 struct MediaEngine {
     uint32_t class_id, cur_class;
     NvMediaMem mem;
@@ -20,6 +25,31 @@ struct MediaEngine {
     MediaStats st;
 };
 
+/* NAPPLE_NVDEC_DUMP=<file>: the H.264 stream exactly as the backend gets it (the synthesized SPS/PPS at each configure, then every access unit), Annex B,
+ * for replaying a title's video offline. */
+static void media_dump(const uint8_t *p, size_t n) {
+    static FILE *f;
+    static int tried;
+    if (!tried) {
+        tried = 1;
+        const char *path = getenv("NAPPLE_NVDEC_DUMP");
+        if (path && *path) f = fopen(path, "wb");
+    }
+    if (f && p && n) {
+        fwrite(p, 1, n, f);
+        fflush(f);
+    }
+}
+/* NAPPLE_MEDIA_TRACE: the engine's non-zero method registers at an EXECUTE (the first few per class) */
+static void trace_regs(const MediaEngine *e) {
+    static int said[4];
+    int k = e->class_id == MEDIA_CLASS_NVDEC ? 0 : e->class_id == MEDIA_CLASS_VIC ? 1 : e->class_id == MEDIA_CLASS_NVJPG ? 2 : 3;
+    if (!media_trace() || said[k]++ >= 6) return;
+    fprintf(stderr, "[media] class %#x execute:", e->class_id);
+    for (uint32_t r = 0x40; r < 0x200; r++)
+        if (e->reg[r]) fprintf(stderr, " %#x=%#x", r, e->reg[r]);
+    fprintf(stderr, "\n");
+}
 MediaEngine *media_engine_new(uint32_t class_id, const NvMediaMem *mem) {
     if (class_id != MEDIA_CLASS_NVDEC && class_id != MEDIA_CLASS_VIC && class_id != MEDIA_CLASS_NVJPG && class_id != MEDIA_CLASS_MSENC) return NULL;
     MediaEngine *e = calloc(1, sizeof *e);
@@ -90,7 +120,22 @@ static int nvdec_synth_h264(const uint8_t *pic, size_t pic_avail, DecoderConfig 
     f.log2_max_poc_lsb = (int)w[NVDEC_H264_W_LOG2_MAX_POC_LSB_M4] + 4;
     f.direct_8x8_inference = (fl >> 1) & 1;
     f.chroma_format_idc = 1;
-    f.num_ref_frames = 16;
+    /* 15, not 16: the DPB holds at most 16 frames, and with 16 references VideoToolbox has no room left for the current non-reference (B) picture and
+     * evicts a reference the stream still uses (MK8D's preview: macroblock corruption mid-GOP; a replay of its stream decodes identically with 6..15, the
+     * stream needs 6, and breaks only at 16). The picture-info structure does not carry the stream's real count. */
+    f.num_ref_frames = 15;
+    { /* level_idc whose DPB (MaxDpbMbs, Table A-1) holds 16 frames (the references plus the current picture): the size-only level of the defaults (3.0 for
+       * MK8D's 1216 MBs) holds 6 */
+        static const struct {
+            int level;
+            long dpb_mbs;
+        } L[] = {{30, 8100}, {31, 18000}, {32, 20480}, {40, 32768}, {42, 34816}, {50, 110400}, {51, 184320}};
+        long need = 16L * wm * hm * (f.frame_mbs_only ? 1 : 2);
+        int lv = 51;
+        for (unsigned i = sizeof L / sizeof *L; i-- > 0;)
+            if (L[i].dpb_mbs >= need && L[i].level >= f.level_idc) lv = L[i].level; /* smallest qualifying level not below the size's own */
+        f.level_idc = lv;
+    }
     f.crop_left = f.crop_right = f.crop_top = f.crop_bottom = 0;
     uint8_t sps[64], pps[32];
     size_t sn = h264_build_sps(&f, sps, sizeof sps);
@@ -166,6 +211,7 @@ have_key:
     if (key == e->cfg_key) return 1;
     if (e->backend->reset) e->backend->reset(e->dec);
     if (e->backend->configure(e->dec, &cfg) < 0) return 0;
+    media_dump(cfg.h264_annexb, codec == DEC_CODEC_H264 ? cfg.h264_annexb_size : 0);
     e->cfg_key = key;
     e->st.configures++;
     return 1;
@@ -192,6 +238,14 @@ static void nvdec_execute(MediaEngine *e) {
     uint8_t *pic = surf(e, e->reg[NVDEC_SET_DRV_PIC_SETUP_OFFSET], &pic_avail);
     uint8_t *bs = surf(e, e->reg[NVDEC_SET_IN_BUF_BASE_OFFSET], &bs_avail);
     uint32_t idx = e->reg[NVDEC_SET_PICTURE_INDEX];
+    if (codec == DEC_CODEC_H264 && pic && pic_avail >= NVDEC_H264_PIC_WORDS * 4) { /* the slot comes from the picture-info structure */
+        uint32_t cur = NVDEC_H264_CURR_PIC_IDX(rd32(pic + NVDEC_H264_W_FLAGS2 * 4));
+        if (media_trace()) {
+            static int said;
+            if (said++ < 30) fprintf(stderr, "[nvdec] frame register %u, curr_pic_idx %u, frame_number %u\n", idx, cur, (rd32(pic + NVDEC_H264_W_FLAGS2 * 4) >> 14) & 0xffff);
+        }
+        if (cur < NVDEC_PIC_SLOTS) idx = cur;
+    }
     uint32_t lreg = idx < NVDEC_PIC_SLOTS ? e->reg[NVDEC_SET_PICTURE_LUMA_OFFSET0 + idx] : 0,
              creg = idx < NVDEC_PIC_SLOTS ? e->reg[NVDEC_SET_PICTURE_CHROMA_OFFSET0 + idx] : 0;
     if (!lreg) lreg = e->reg[NVDEC_SET_DISPLAY_BUF_LUMA_OFFSET];
@@ -205,6 +259,13 @@ static void nvdec_execute(MediaEngine *e) {
         if (l && l <= bs_avail) bs_len = l;
     }
     if (!bs || !luma || !chroma) {
+        if (media_trace()) {
+            static int said;
+            if (said++ < 12)
+                fprintf(stderr, "[nvdec] unmapped surface: picture index %u, bitstream reg %#x (%s), luma reg %#x (%s), chroma reg %#x (%s), pic-info reg %#x\n", idx,
+                        e->reg[NVDEC_SET_IN_BUF_BASE_OFFSET], bs ? "ok" : "MISSING", lreg, luma ? "ok" : "MISSING", creg, chroma ? "ok" : "MISSING",
+                        e->reg[NVDEC_SET_DRV_PIC_SETUP_OFFSET]);
+        }
         fail(e, 2);
         status[3] = 2;
         status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
@@ -216,15 +277,40 @@ static void nvdec_execute(MediaEngine *e) {
         status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
         return;
     }
-    DecodeRequest rq = {codec, pic, pic_avail, bs, bs_len, idx, luma, chroma, luma_avail, chroma_avail};
+    DecodeRequest rq = {codec, pic, pic_avail, bs, bs_len, idx, luma, chroma, luma_avail, chroma_avail, 0, 0};
+    if (codec == DEC_CODEC_H264 && pic && pic_avail >= NVDEC_H264_PIC_WORDS * 4) { /* the guest's surface pitches (MK8D: 0x200 for its 512-wide video) */
+        rq.luma_pitch = rd32(pic + NVDEC_H264_W_PITCH_LUMA * 4);
+        rq.chroma_pitch = rd32(pic + NVDEC_H264_W_PITCH_CHROMA * 4);
+        if (rq.luma_pitch > 0x10000) rq.luma_pitch = 0;
+        if (rq.chroma_pitch > 0x10000) rq.chroma_pitch = 0;
+    }
     DecodeResult rs = {0};
     if (media_write_prepare) {
         media_write_prepare(luma, luma_avail);
         media_write_prepare(chroma, chroma_avail);
     }
+    if (codec == DEC_CODEC_H264) media_dump(bs, bs_len);
     int rc = e->backend->decode(e->dec, &rq, &rs);
-    if (getenv("NAPPLE_MEDIA_TRACE")) {
+    if (media_trace()) {
         static int said;
+        int nal = -1, nals = 0, idr = 0;
+        for (size_t i = 0; i + 3 < bs_len; i++)
+            if (bs[i] == 0 && bs[i + 1] == 0 && bs[i + 2] == 1) {
+                int t = bs[i + 3] & 31;
+                if (nal < 0) nal = bs[i + 3];
+                nals++;
+                idr |= t == 5;
+            }
+        int beyond = 0; /* start codes in the buffer after the stream length (slices the length word does not cover?) */
+        for (size_t i = bs_len; i + 3 < bs_avail && i < bs_len + 0x40000; i++)
+            if (bs[i] == 0 && bs[i + 1] == 0 && bs[i + 2] == 1) beyond++;
+        if (said < 400 && pic && pic_avail >= 88 && (beyond || (e->st.executes > 140 && e->st.executes < 200)))
+            fprintf(stderr, "[nvdec] execute %llu: %d NAL units in %zu bytes, %d start codes after it (buffer %zu), pic words 18-21 %#x %#x %#x %#x, slice-offsets reg %#x\n",
+                    (unsigned long long)e->st.executes, nals, bs_len, beyond, bs_avail, rd32(pic + 72), rd32(pic + 76), rd32(pic + 80), rd32(pic + 84),
+                    e->reg[NVDEC_SET_SLICE_OFFSETS_BUF_OFFSET]);
+        if (said < 400 && (idr || said < 20 || rc != 0))
+            fprintf(stderr, "[nvdec] execute %llu slot %u: %d NAL units, first header %#x%s, %zu bytes, configures %llu\n", (unsigned long long)e->st.executes, idx, nals, nal,
+                    idr ? " (IDR)" : "", bs_len, (unsigned long long)e->st.configures);
         if (said++ < 20 || rc != 0)
             fprintf(stderr, "[nvdec] backend %s codec %d bitstream %zu luma_cap %zu chroma_cap %zu -> rc %d %dx%d\n", e->backend->name, codec, bs_len, luma_avail,
                     chroma_avail, rc, rs.width, rs.height);
@@ -241,20 +327,41 @@ static void nvdec_execute(MediaEngine *e) {
     status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
 }
 
-/* ---- VIC: NV12 -> RGBA/BGRA ---- */
+/* ---- VIC: NV12 -> RGBA/BGRA/NV12, pitch linear or block linear ---- */
 static uint8_t clamp8(int v) { return (uint8_t)(v < 0 ? 0 : v > 255 ? 255 : v); }
+/* Tegra block-linear layout: 64-byte x 8-row GOBs of 512 bytes, stacked (1 << bh) GOBs high per block, blocks row-major. (x in bytes, y in rows.) */
+static size_t bl_offset(size_t x, size_t y, size_t gobs_w, unsigned bh) {
+    size_t brows = (size_t)8 << bh, block = (y / brows) * gobs_w + x / 64;
+    return block * ((size_t)512 << bh) + ((y % brows) / 8) * 512 + ((x % 64) / 32) * 256 + ((y % 8) / 2) * 64 + ((x % 32) / 16) * 32 + (y % 2) * 16 + (x % 16);
+}
+static size_t bl_size(size_t row_bytes, size_t rows, unsigned bh) {
+    size_t brows = (size_t)8 << bh;
+    return ((row_bytes + 63) / 64) * ((rows + brows - 1) / brows) * ((size_t)512 << bh);
+}
+/* Bytes a plane of `rows` rows of `row_bytes` needs in the output layout (`pitch` for pitch linear). */
+static size_t plane_need(size_t row_bytes, size_t rows, size_t pitch, int block, unsigned bh) {
+    return block ? bl_size(row_bytes, rows, bh) : pitch * (rows - 1) + row_bytes;
+}
+/* Stores one row of a plane: pitch linear at row*pitch, block linear in 16-byte runs (a GOB keeps 16 consecutive bytes of a row together). */
+static void put_row(uint8_t *dst, const uint8_t *row, size_t row_bytes, size_t y, size_t pitch, int block, unsigned bh) {
+    if (!block) {
+        memcpy(dst + y * pitch, row, row_bytes);
+        return;
+    }
+    size_t gobs_w = (row_bytes + 63) / 64;
+    for (size_t x = 0; x < row_bytes; x += 16) memcpy(dst + bl_offset(x, y, gobs_w, bh), row + x, row_bytes - x < 16 ? row_bytes - x : 16);
+}
+static size_t align256(size_t v) { return (v + 255) & ~(size_t)255; }
 static void vic_execute(MediaEngine *e) {
-    size_t cfg_avail, l_avail, c_avail, o_avail;
+    size_t cfg_avail, l_avail, c_avail, o_avail, oc_avail = 0;
     uint8_t *cfg = surf(e, e->reg[VIC_SET_CONFIG_STRUCT_OFFSET], &cfg_avail);
     uint8_t *luma = surf(e, e->reg[VIC_SET_INPUT0_LUMA_OFFSET], &l_avail), *chroma = surf(e, e->reg[VIC_SET_INPUT0_CHROMA_OFFSET], &c_avail);
-    uint8_t *out = surf(e, e->reg[VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET], &o_avail);
+    uint8_t *out = surf(e, e->reg[VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET], &o_avail), *ochroma = surf(e, e->reg[VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET], &oc_avail);
     if (!luma || !chroma || !out) {
         fail(e, 2);
         return;
     }
-    if (!cfg || cfg_avail < VIC_CFG_WORDS * 4) { /* no readable config structure (the SDK's): plain NV12 -> NV12 copy of what fits */
-        size_t oc_avail = 0;
-        uint8_t *ochroma = surf(e, e->reg[VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET], &oc_avail);
+    if (!cfg || cfg_avail < VIC_CFG_BYTES) { /* no readable config structure: plain NV12 -> NV12 copy of what fits */
         if (!ochroma) {
             fail(e, 2);
             return;
@@ -268,41 +375,64 @@ static void vic_execute(MediaEngine *e) {
         e->st.vic_copies++;
         return;
     }
-    uint32_t sw = rd32(cfg), sh = rd32(cfg + 4), dw = rd32(cfg + 8), dh = rd32(cfg + 12), fmt = rd32(cfg + 16), matrix = rd32(cfg + 20), full = rd32(cfg + 24),
-             alpha = rd32(cfg + 28), pitch = rd32(cfg + 32);
-    if (!dw) dw = sw;
-    if (!dh) dh = sh;
-    if (!pitch) pitch = dw * 4;
-    if (!sw || !sh || sw > 8192 || sh > 8192 || dw > 8192 || dh > 8192 || fmt > VIC_FMT_ARGB || pitch < dw * 4 || l_avail < (size_t)sw * sh ||
-        c_avail < (size_t)sw * ((sh + 1) / 2) || o_avail < (size_t)pitch * dh) {
+    uint64_t oc;
+    memcpy(&oc, cfg + VIC_CFG_OUTPUT_SURFACE, 8);
+    uint32_t fmt = (uint32_t)(oc & 0x7f), kind = (uint32_t)((oc >> 11) & 15), bh = (uint32_t)((oc >> 15) & 15);
+    size_t w = (size_t)((oc >> 32) & 0x3fff) + 1, h = (size_t)((oc >> 46) & 0x3fff) + 1, ch = (h + 1) / 2;
+    int block = kind != 0, rgb = fmt == VIC_FMT_RGBA8 || fmt == VIC_FMT_BGRA8 || fmt == VIC_FMT_RGBX8;
+    if (media_trace()) {
+        static int said;
+        if (said++ < 6) fprintf(stderr, "[vic] output %zux%zu format %#x %s (block height %u GOBs)\n", w, h, fmt, block ? "block linear" : "pitch linear", 1u << bh);
+    }
+    /* input rows: 256-aligned when the surfaces are large enough for that (NVDEC's surfaces), else packed */
+    size_t ip = l_avail >= align256(w) * (h - 1) + w && c_avail >= align256(w) * (ch - 1) + w ? align256(w) : w;
+    if ((!rgb && fmt != VIC_FMT_NV12) || bh > 5 || l_avail < ip * (h - 1) + w || c_avail < ip * (ch - 1) + w) {
         fail(e, 4);
         return;
     }
-    /* 16.16 fixed point coefficients (as movie.c) */
-    const int rv = matrix ? 103206 : 91881, gu = matrix ? 12276 : 22554, gv = matrix ? 30679 : 46802, bu = matrix ? 121609 : 116130;
-    const int ys = full ? 65536 : 76309, yo = full ? 0 : 16, cscale = full ? 65536 : 74898;
-    if (media_write_prepare) media_write_prepare(out, o_avail);
-    for (uint32_t y = 0; y < dh; y++) {
-        uint32_t sy = (uint32_t)((uint64_t)y * sh / dh);
-        const uint8_t *yr = luma + (size_t)sy * sw, *uv = chroma + (size_t)(sy >> 1) * sw;
-        uint8_t *o = out + (size_t)y * pitch;
-        for (uint32_t x = 0; x < dw; x++) {
-            uint32_t sx = (uint32_t)((uint64_t)x * sw / dw);
-            int Y = ((yr[sx] - yo) * ys) >> 16, U = ((uv[sx & ~1u] - 128) * cscale) >> 16, V = ((uv[(sx & ~1u) + 1] - 128) * cscale) >> 16;
-            uint8_t r = clamp8(Y + ((rv * V) >> 16)), g = clamp8(Y - ((gu * U + gv * V) >> 16)), b = clamp8(Y + ((bu * U) >> 16)),
-                    a = fmt == VIC_FMT_XBGR ? 255 : (uint8_t)alpha;
-            if (fmt == VIC_FMT_ARGB) {
-                o[4 * x] = b;
-                o[4 * x + 1] = g;
-                o[4 * x + 2] = r;
-            } else {
-                o[4 * x] = r;
-                o[4 * x + 1] = g;
-                o[4 * x + 2] = b;
-            }
-            o[4 * x + 3] = a;
+    if (fmt == VIC_FMT_NV12) {
+        size_t op = align256(w);
+        if (!ochroma || o_avail < plane_need(w, h, op, block, bh) || oc_avail < plane_need(w, ch, op, block, bh)) {
+            fail(e, 4);
+            return;
         }
+        if (media_write_prepare) {
+            media_write_prepare(out, o_avail);
+            media_write_prepare(ochroma, oc_avail);
+        }
+        for (size_t y = 0; y < h; y++) put_row(out, luma + y * ip, w, y, op, block, bh);
+        for (size_t y = 0; y < ch; y++) put_row(ochroma, chroma + y * ip, w, y, op, block, bh);
+        e->st.frames++;
+        if (media_trace() && e->st.frames % 60 == 1)
+            fprintf(stderr, "[vic] NV12 frame %llu to luma %p: centre Y %u U %u V %u\n", (unsigned long long)e->st.frames, (void *)out, out[(h / 2) * op + w / 2],
+                    ochroma[(ch / 2) * op + (w / 2 & ~(size_t)1)], ochroma[(ch / 2) * op + (w / 2 & ~(size_t)1) + 1]);
+        return;
     }
+    size_t op = w * 4;
+    if (o_avail < plane_need(op, h, op, block, bh)) {
+        fail(e, 4);
+        return;
+    }
+    uint8_t *row = malloc(op);
+    if (!row) {
+        fail(e, 3);
+        return;
+    }
+    if (media_write_prepare) media_write_prepare(out, o_avail);
+    for (size_t y = 0; y < h; y++) { /* BT.601 limited range, 16.16 fixed point (as movie.c) */
+        const uint8_t *yr = luma + y * ip, *uv = chroma + (y >> 1) * ip;
+        for (size_t x = 0; x < w; x++) {
+            int Y = ((yr[x] - 16) * 76310) >> 16, U = uv[x & ~(size_t)1] - 128, V = uv[(x & ~(size_t)1) + 1] - 128;
+            uint8_t r = clamp8(Y + ((104597 * V) >> 16)), g = clamp8(Y - ((25675 * U + 53279 * V) >> 16)), b = clamp8(Y + ((132201 * U) >> 16));
+            uint8_t *o = row + 4 * x;
+            o[0] = fmt == VIC_FMT_BGRA8 ? b : r;
+            o[1] = g;
+            o[2] = fmt == VIC_FMT_BGRA8 ? r : b;
+            o[3] = 255;
+        }
+        put_row(out, row, op, y, op, block, bh);
+    }
+    free(row);
     e->st.frames++;
 }
 
@@ -393,6 +523,10 @@ static void nvjpg_execute(MediaEngine *e) {
 
 static void execute(MediaEngine *e) {
     e->st.executes++;
+    trace_regs(e);
+    if (media_trace() && e->st.executes % 60 == 0)
+        fprintf(stderr, "[media] class %#x: %llu executes, %llu frames, %llu errors (last %u), %llu configures\n", e->class_id, (unsigned long long)e->st.executes,
+                (unsigned long long)e->st.frames, (unsigned long long)e->st.errors, e->st.last_error, (unsigned long long)e->st.configures);
     switch (e->class_id) {
         case MEDIA_CLASS_NVDEC: nvdec_execute(e); break;
         case MEDIA_CLASS_VIC: vic_execute(e); break;

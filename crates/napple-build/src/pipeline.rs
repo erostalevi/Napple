@@ -66,6 +66,8 @@ pub struct Opts {
     pub launch: bool,
     /// `--mods`: `.napmod` files or folders applied to the modules before the AOT rewrite (and as a romfs overlay).
     pub mods: Vec<PathBuf>,
+    /// `--mods-strict`: a patch record that does not apply fails the build instead of becoming a note.
+    pub mods_strict: bool,
 }
 
 // Overall progress budget (percent).
@@ -251,6 +253,16 @@ pub(crate) fn rewrite_version_mods(
     crate::tables32::recompile_if_requested(&mdir)?; // AArch32 titles: writes modules/a32jit.dylib (NAPPLE_A32_RECOMPILE=0 skips)
     let mut reps = reports.into_inner().unwrap_or_default();
     reps.sort_by(|a, b| a.0.cmp(&b.0));
+    if let Ok(rd) = std::fs::read_dir(&mdir) {
+        // reports of an earlier `--mods` build in this directory are stale now
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            if n.ends_with(".mods.json") && !reps.iter().any(|(m, _)| format!("{m}.mods.json") == n)
+            {
+                let _ = std::fs::remove_file(e.path());
+            }
+        }
+    }
     for (name, rep) in &reps {
         std::fs::write(mdir.join(format!("{name}.mods.json")), rep.to_json())
             .map_err(|e| BuildError::io("write mods report", e))?;
@@ -899,6 +911,16 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         let (mods, mod_reports) =
             rewrite_version_mods(&v.exefs, &dir, &v.label, lo, hi, &modset.resolved)?;
         for (name, rep) in &mod_reports {
+            if o.mods_strict && !rep.misses.is_empty() {
+                return Err(BuildError::new(
+                    "mods",
+                    format!(
+                        "{} {name}: {} mod patch record(s) did not apply (--mods-strict; see modules/{name}.mods.json)",
+                        v.label,
+                        rep.misses.len()
+                    ),
+                ));
+            }
             if !rep.misses.is_empty() {
                 notes.push(format!("{} {name}: {} mod patch record(s) did not apply (see modules/{name}.mods.json)", v.label, rep.misses.len()));
             }
@@ -1210,14 +1232,25 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             false,
         );
         let mut mod_fields: Vec<(&str, String)> = Vec::new();
+        let main_bid = mod_reports
+            .iter()
+            .find(|(n, _)| n == "main")
+            .and_then(|(_, r)| napple_mods::util::norm_build_id(&r.build_id).ok());
+        // always: an empty set clears what an earlier `--mods` build left in this data directory
+        let rt = modset
+            .write_runtime_files(&game.join(&v.dir), main_bid.as_ref())
+            .map_err(|e| BuildError::new("mods", e.to_string()))?;
         if !modset.is_empty() {
             mod_fields.push(("mod_set", jstr(&modset.key())));
             mod_fields.push(("mods", modset.manifest_json(mod_reports)));
-            let n = modset
-                .write_overlay(&game.join(&v.dir))
-                .map_err(|e| BuildError::new("mods", e.to_string()))?;
-            if n > 0 {
+            if rt.overlay {
                 mod_fields.push(("mods_overlay", jstr(napple_mods::buildglue::OVERLAY_JSON)));
+            }
+            if rt.cheats > 0 {
+                mod_fields.push(("mods_cheats", jstr(napple_mods::buildglue::CHEATS_TXT)));
+            }
+            if rt.config {
+                mod_fields.push(("mods_config", jstr(napple_mods::buildglue::CONFIG_JSON)));
             }
         }
         if let Some(raw) = control.as_ref().and_then(|c| c.nacp_raw.as_ref()) {

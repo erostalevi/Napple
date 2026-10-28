@@ -59,4 +59,11 @@ void fe_simulators_install(void);
 /* textbar.m */
 void fe_textbar_show(NappleFE *fe, const napple_text_request *req, napple_text_done_fn done, void *user);
 BOOL fe_textbar_visible(NappleFE *fe);
+/* applet_sheets.m test aids (NAPPLE_SHEET_AUTO / NAPPLE_SHEET_SHOT), also used by the text bar */
+BOOL auto_action(NSString **action, double *ms);
+void shot_window(NSWindow *w, NSString *name);
+void shot_rect(NSRect screen_rect, NSString *name);
+/* frontend.m: applet sheets block the game's input while shown */
+void fe_sheet_begin(napple_frontend *f);
+void fe_sheet_end(napple_frontend *f);
 #endif

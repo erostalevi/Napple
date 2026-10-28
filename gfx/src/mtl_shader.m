@@ -13,7 +13,7 @@
 #import "mtl_priv.h"
 #include "cache_trim.h"
 
-#define TRANSLATOR_VERSION 12u /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 13u /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader
 @end
@@ -88,12 +88,23 @@ static void archive_open(void) {
     g_out_desc = [NSMutableArray array];
     g_archive_q = dispatch_queue_create("napple.gfx.archive", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0));
     NSString *path = g_archive_url.path;
-    if ([NSFileManager.defaultManager fileExistsAtPath:path]) {
+    NSString *marker = [path stringByAppendingString:@".loading"], *tmp = [path stringByAppendingString:@".tmp"];
+    NSFileManager *fm = NSFileManager.defaultManager;
+    [fm removeItemAtPath:tmp error:nil];                                 /* a save that never finished (crash, kill): the real file was never touched */
+    if ([fm fileExistsAtPath:marker]) {
+        /* The previous launch started loading this file and never finished (Metal's loader hung or the process was killed or crashed inside it): the file is suspect, and a
+         * corrupt archive made every later launch hang on the shader screen. Drop it; the next save rebuilds it. */
+        LOGW("binary archive %s: the last load did not finish: discarding it (it is rebuilt from this run)", path.UTF8String);
+        [fm removeItemAtPath:path error:nil];
+        [fm removeItemAtPath:marker error:nil];
+    }
+    if ([fm fileExistsAtPath:path]) {
         NSURL *url = g_archive_url;
-        /* A small file loads in well under a second: load it here so the first pipelines already hit it. Only a big one (default over 16 MB) goes to the background. */
-        uint64_t fsz = [[NSFileManager.defaultManager attributesOfItemAtPath:path error:nil] fileSize];
+        uint64_t fsz = [[fm attributesOfItemAtPath:path error:nil] fileSize];
+        dispatch_semaphore_t done = dispatch_semaphore_create(0);
         void (^load)(void) = ^{
             uint64_t t0 = gfx_now_ns();
+            [@"" writeToFile:marker atomically:NO encoding:NSUTF8StringEncoding error:nil];
             MTLBinaryArchiveDescriptor *ld = [MTLBinaryArchiveDescriptor new];
             ld.url = url;
             NSError *e2 = nil;
@@ -101,17 +112,20 @@ static void archive_open(void) {
             if (!a) {
                 LOGW("binary archive %s not usable (%s): rebuilding it", url.path.UTF8String, e2.localizedDescription.UTF8String);
                 [NSFileManager.defaultManager removeItemAtURL:url error:nil];
-                return;
+            } else {
+                pthread_mutex_lock(&g_ar_mu);
+                g_archive = a;
+                pthread_mutex_unlock(&g_ar_mu);
+                if (gfx_now_ns() - t0 > 500000000ull) LOGI("binary archive loaded in %.1f s", (double)(gfx_now_ns() - t0) / 1e9);
             }
-            pthread_mutex_lock(&g_ar_mu);
-            g_archive = a;
-            pthread_mutex_unlock(&g_ar_mu);
-            if (gfx_now_ns() - t0 > 500000000ull) LOGI("binary archive loaded in %.1f s", (double)(gfx_now_ns() - t0) / 1e9);
+            [NSFileManager.defaultManager removeItemAtPath:marker error:nil];  /* the load finished: the file is good (or gone) */
+            dispatch_semaphore_signal(done);
         };
-        if (fsz > (16ull << 20) && !getenv("NAPPLE_GFX_ARCHIVE_SYNC"))
-            dispatch_async(
-                dispatch_queue_create("napple.gfx.archive-load", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0)), load);
-        else load();
+        dispatch_async(dispatch_queue_create("napple.gfx.archive-load", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_UTILITY, 0)), load);
+        /* A small file loads in well under a second: wait for it so the first pipelines already hit it, but never longer than a few seconds: the boot must not hang on
+         * a file Metal cannot read (a big one, or a corrupt one, keeps loading in the background; every pipeline is compiled meanwhile). */
+        if (fsz <= (16ull << 20) && !getenv("NAPPLE_GFX_ARCHIVE_SYNC")) dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC));
+        else if (getenv("NAPPLE_GFX_ARCHIVE_SYNC")) dispatch_semaphore_wait(done, DISPATCH_TIME_FOREVER);
     }
 }
 static BOOL out_add(id<MTLBinaryArchive> a, id desc, NSError **err) {
@@ -122,7 +136,9 @@ static void archive_save(void) {
     if (!g_archive_dirty || g_archive_broken) return;
     for (int tries = 0; tries < ARCHIVE_SAVE_TRIES; tries++) {
         NSError *err = nil;
-        if ([g_out serializeToURL:g_archive_url error:&err]) {
+        /* Serialize next to the real file and rename over it: a crash or kill during the write can no longer leave a half-written archive at the real path. */
+        NSURL *tmpurl = [NSURL fileURLWithPath:[g_archive_url.path stringByAppendingString:@".tmp"]];
+        if ([g_out serializeToURL:tmpurl error:&err] && rename(tmpurl.path.fileSystemRepresentation, g_archive_url.path.fileSystemRepresentation) == 0) {
             g_archive_dirty = 0;
             NSDictionary *at = [NSFileManager.defaultManager attributesOfItemAtPath:g_archive_url.path error:nil];
             if ([at fileSize] > archive_max_bytes() && g_out_desc.count > 8) { /* over the cap: leave the oldest quarter out of the next save */
@@ -144,6 +160,7 @@ static void archive_save(void) {
             }
             return;
         }
+        if (!err) err = [NSError errorWithDomain:@"napple.gfx" code:1 userInfo:@{NSLocalizedDescriptionKey : @"renaming the saved archive into place failed"}];
         NSString *m = err.localizedDescription;
         NSRange r = [m rangeOfString:@"pipeline no. '"];
         NSUInteger n = r.location == NSNotFound ? NSNotFound : (NSUInteger)[m substringFromIndex:NSMaxRange(r)].integerValue;
@@ -958,6 +975,7 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     /* guest origin for SR_Y_DIRECTION: with the exact lower-left emulation (origin_flip, the default) flip_y is set exactly under the lower-left origin;
      * without it (NAPPLE_ORIGIN_FLIP=0, debug) the key does not carry the origin and the register keeps the lower-left answer */
     fk.upper_left = g_gfx.origin_flip && !k.flip_y;
+    fk.sample_shading = k.sample_shading != 0;
     fk.depth_slots = k.depth_slots[1];
     fk.stencil_slots = k.stencil_slots[1];
     fk.image_int_mask = k.img_int[1];
@@ -1253,6 +1271,7 @@ static GfxShader *stage_fs(const pipe_key *k, uint32_t vs_out_mask) {
     prog_io fio = program_io(k->fs);
     if (fio.ok && !fio.fs_indexed) fk.vs_out_mask = vs_out_mask | ~fio.fs_read;
     fk.upper_left = g_gfx.origin_flip && !k->flip_y;
+    fk.sample_shading = k->sample_shading != 0;
     fk.depth_slots = k->depth_slots[1];
     fk.stencil_slots = k->stencil_slots[1];
     fk.image_int_mask = k->img_int[1];
@@ -1301,6 +1320,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         ShaderKey vk = stage_vs_key(k);
         vk.point_prim = 1;
         vk.stage_out = sk->stage_out;
+        vk.capture_void = 1; /* nothing goes to the rasterizer: the vertex function is void and rasterization is off */
         if (xfb && sk->xfb_id) {
             vk.xfb_count = xfb->count;
             memcpy(vk.xfb_stride, xfb->stride, sizeof vk.xfb_stride);
@@ -1316,8 +1336,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         nk.a2c = 0;
         nk.topo = MTLPrimitiveTopologyClassPoint;
         pipe_desc_fill(d, &nk, vs->info.attr_mask, 1);
-        /* rasterization stays on: Metal wants a void vertex function without it, and the translated one returns its outputs. With no fragment function
-         * and the pass's 1x1 attachment-less target nothing is written. */
+        d.rasterizationEnabled = NO; /* the capture function is `vertex void` (ShaderKey.capture_void): no rasterizer work at all */
     } else if (sk->mode == SPK_GS_DRAW) {
         int points = sk->gs_topo == GS_OUT_POINTS;
         vfn = gs_passthrough_fn(sk->gs_slots, points);

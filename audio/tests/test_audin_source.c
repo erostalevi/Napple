@@ -44,6 +44,7 @@ static void capture(napple_audin *in, int16_t *dst, uint32_t frames, uint32_t ch
     CHECK(napple_audin_get_released(in, &tag, 1) == 1 && tag == 1, "buffer released");
 }
 
+static int perm_deny(void *u) { ++*(int *)u; return 0; }
 static void t_specs(void) {
     CHECK(napple_audin_install_source_spec("tone:bogus") == NAPPLE_AUDIO_E_INVALID, "bad tone");
     CHECK(napple_audin_install_source_spec("tone:440:2") == NAPPLE_AUDIO_E_INVALID, "amp out of range");
@@ -53,6 +54,14 @@ static void t_specs(void) {
     CHECK(!napple_audin_has_source(), "failed installs leave no source");
     CHECK(napple_audin_install_source_spec("tone") == 0 && napple_audin_has_source(), "default tone");
     CHECK(napple_audin_install_source_spec("silence") == 0 && !napple_audin_has_source(), "silence removes the source");
+    { /* permission hook: a refusal stops "mic" before any capture unit starts (so it is safe to run on macOS too), and the previous source is gone */
+        int asked = 0;
+        napple_audin_set_permission_hook(perm_deny, &asked);
+        CHECK(napple_audin_install_source_spec("mic") == NAPPLE_AUDIO_E_DENIED && asked == 1 && !napple_audin_has_source(), "denied microphone permission: E_DENIED, silence");
+        CHECK(napple_audin_install_source_spec("tone") == 0 && asked == 1, "other sources do not ask for permission");
+        CHECK(napple_audin_install_source_spec("silence") == 0, "back to silence");
+        napple_audin_set_permission_hook(NULL, NULL);
+    }
 #ifndef __APPLE__
     CHECK(napple_audin_install_source_spec("mic") == NAPPLE_AUDIO_E_UNSUPPORTED && !napple_audin_has_source(), "mic is unsupported off macOS");
 #endif

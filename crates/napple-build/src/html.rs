@@ -32,12 +32,11 @@ pub fn safe_rel(p: &str) -> Option<String> {
     Some(parts.join("/"))
 }
 
+/// Relative path and contents of each HtmlDocument file.
+pub type HtmlFiles = Vec<(String, Vec<u8>)>;
+
 /// Reads every file of the pack's HtmlDocument RomFS (`None` when the pack has none or it cannot be decrypted).
-pub fn read_html(
-    cont: &Container,
-    pack: &Pack,
-    keys: &KeySet,
-) -> Result<Option<Vec<(String, Vec<u8>)>>> {
+pub fn read_html(cont: &Container, pack: &Pack, keys: &KeySet) -> Result<Option<HtmlFiles>> {
     let Some(rec) = pack.meta.contents.iter().find(|c| c.ctype == CTYPE_HTML) else {
         return Ok(None);
     };
@@ -96,5 +95,19 @@ mod tests {
         assert_eq!(safe_rel("a/../../x"), None);
         assert_eq!(safe_rel("a\\b"), None);
         assert_eq!(safe_rel("/"), None);
+    }
+
+    #[test]
+    fn write_html_creates_nested_dirs_under_html() {
+        let dir = std::env::temp_dir().join(format!("napple-html-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let files = vec![
+            ("index.html".to_string(), b"i".to_vec()),
+            ("img/ui/a.png".to_string(), b"p".to_vec()),
+        ];
+        write_html(&dir, &files).unwrap();
+        assert_eq!(std::fs::read(dir.join("html/img/ui/a.png")).unwrap(), b"p");
+        assert_eq!(std::fs::read(dir.join("html/index.html")).unwrap(), b"i");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

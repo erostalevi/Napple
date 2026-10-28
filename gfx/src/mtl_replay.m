@@ -50,6 +50,7 @@ typedef struct {
     float alpha_ref;
     int64_t copy_row_stride, copy_img_stride;
     uint32_t patch_size;              /* tessellation (mtl_stages.inc): control points per input patch, NVN default levels */
+    uint8_t sample_shading;           /* the bound program asks for sample shading (p_bind_program.sample_shading) */
     float tess_outer[4], tess_inner[2];
     bufrange xfb[MAX_XFB_BUFFERS];    /* transform feedback buffer bindings */
 } nstate;
@@ -1127,6 +1128,7 @@ static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     k->depth_fmt = P.depth_fmt;
     k->stencil_fmt = P.stencil_fmt;
     k->samples = P.samples;
+    k->sample_shading = S.sample_shading && P.samples > 1; /* the fragment function then declares [[sample_id]] and runs per sample */
     k->topo = (uint32_t)topo_class(prim);
     for (int i = 0; i < 8; i++) {
         k->blend[i] = mtl_blend_resolve(S.blend[i]);
@@ -2169,10 +2171,19 @@ static void do_draw_elements(const p_draw_elems *d) {
 static void do_draw_indirect(const p_draw_ind *d, int indexed) {
     int native;
     MTLPrimitiveType pt = prim_native(d->mode, &native);
-    if (xfb_capturing()) LOG_ONCE(NAPPLE_LOG_WARN, "indirect draw during transform feedback: not captured");
-    if (stage_draw_needed(d->mode)) {
-        stage_skip("indirect draw with geometry / tessellation programs");
-        return;
+    if (xfb_capturing() || stage_draw_needed(d->mode)) {
+        /* The stage passes assemble primitives on the CPU, so the arguments are read at encode time (as do_dispatch reads indirect dispatch counts):
+         * right when the game wrote them before the submit, wrong for arguments another GPU pass of this submission produces (logged once). */
+        id<MTLBuffer> ab;
+        uint64_t ao;
+        if (!mtl_addr(d->indirect, indexed ? 20 : 16, &ab, &ao)) return;
+        uint32_t a[5] = {0};
+        memcpy(a, (const uint8_t *)ab.contents + ao, indexed ? 20 : 16);
+        LOG_ONCE(NAPPLE_LOG_INFO, "indirect draw with transform feedback / geometry / tessellation: arguments read at encode time (%u elements, %u instances)", a[0], a[1]);
+        sdraw sd = indexed ? (sdraw){d->mode, 0, a[0], a[4], a[1], d->idx_type, 1, (int32_t)a[3], d->idx_addr + (uint64_t)a[2] * (d->idx_type == 0 ? 1 : d->idx_type == 1 ? 2 : 4)}
+                           : (sdraw){d->mode, a[2], a[0], a[3], a[1], 0, 0, 0, 0};
+        if (!g_predict && stage_draw(&sd)) return;
+        if (g_predict && stage_draw_needed(d->mode)) return;
     }
     if (!native) {
         LOG_ONCE(NAPPLE_LOG_WARN, "indirect draw with primitive %u skipped", d->mode);
@@ -2705,6 +2716,72 @@ static void resolve_int(GfxTex *s, GfxTex *d, uint32_t ssl, uint32_t dlv, uint32
     [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     [e endEncoding];
 }
+/* Generic colour resolve (what Metal's fixed-function resolve refuses: another destination format, another size, an array slice of an integer source): a
+ * pass into the destination level / slice whose fragment function reads the multisampled source (texture2d_ms, or texture2d_ms_array at slice ssl) at the
+ * scaled pixel and averages the samples (float formats) or takes sample 0 (integer formats, as the 2D engine does). Format conversion happens on the write. */
+static id<MTLRenderPipelineState> resolve_generic_pso(MTLPixelFormat dst, int kind /* 0 float, 1 sint, 2 uint */, int array) {
+    static NSMutableDictionary<NSNumber *, id> *pso;
+    if (!pso) pso = [NSMutableDictionary new];
+    NSNumber *key = @((uint64_t)dst | (uint64_t)kind << 32 | (uint64_t)array << 40);
+    id p = pso[key];
+    if (p) return p;
+    const char *t = kind == 1 ? "int" : kind == 2 ? "uint" : "float";
+    NSString *src = [NSString
+        stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\nstruct RP { float2 scale; uint slice, ns; };\n"
+                          "vertex float4 rv(uint vid [[vertex_id]]) { float2 p = float2((vid << 1) & 2, vid & 2); return float4(p * 2.0 - 1.0, 0, 1); }\n"
+                          "fragment %s4 rf(float4 pos [[position]], texture2d_ms%s<%s> t [[texture(0)]], constant RP &rp [[buffer(0)]]) {\n"
+                          "  uint2 c = uint2(float2(pos.xy) * rp.scale);\n%s}\n",
+                         t, array ? "_array" : "", t,
+                         kind ? (array ? "  return t.read(c, rp.slice, 0);\n" : "  return t.read(c, 0);\n")
+                              : (array ? "  float4 a = 0; for (uint i = 0; i < rp.ns; i++) a += t.read(c, rp.slice, i); return a / float(rp.ns);\n"
+                                       : "  float4 a = 0; for (uint i = 0; i < rp.ns; i++) a += t.read(c, i); return a / float(rp.ns);\n")];
+    NSError *err = nil;
+    id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:src options:nil error:&err];
+    if (!lib) {
+        LOGE("generic resolve shader: %s", err.localizedDescription.UTF8String);
+        return nil;
+    }
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    pd.vertexFunction = [lib newFunctionWithName:@"rv"];
+    pd.fragmentFunction = [lib newFunctionWithName:@"rf"];
+    pd.colorAttachments[0].pixelFormat = dst;
+    p = [g_mtl.dev newRenderPipelineStateWithDescriptor:pd error:&err];
+    if (!p) {
+        LOGE("generic resolve pipeline for format %lu: %s", (unsigned long)dst, err.localizedDescription.UTF8String);
+        return nil;
+    }
+    pso[key] = p;
+    return p;
+}
+static void resolve_generic(GfxTex *s, GfxTex *d, uint32_t ssl, uint32_t dlv, uint32_t dsl) {
+    int kind = pf_is_int((uint32_t)s->pf) ? (pf_is_sint(s->pf) ? 1 : 2) : 0;
+    int array = s->tex.textureType == MTLTextureType2DMultisampleArray;
+    if (s->is_depth || d->is_depth || (kind != 0) != (pf_is_int((uint32_t)d->pf) != 0)) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "Downsample between depth or integer / float formats (%lu -> %lu) is not implemented", (unsigned long)s->pf, (unsigned long)d->pf);
+        return;
+    }
+    id<MTLRenderPipelineState> ps = resolve_generic_pso(d->pf, kind, array);
+    if (!ps) return;
+    LOG_ONCE(NAPPLE_LOG_INFO, "Downsample through the generic resolve pass (source format %lu %lux%lu%s -> destination %lu %lux%lu)", (unsigned long)s->pf,
+             (unsigned long)s->tex.width, (unsigned long)s->tex.height, array ? " array" : "", (unsigned long)d->pf, (unsigned long)(d->tex.width >> dlv),
+             (unsigned long)(d->tex.height >> dlv));
+    flush_clears();
+    end_encoders();
+    NSUInteger dw = MAX(1, d->tex.width >> dlv), dh = MAX(1, d->tex.height >> dlv);
+    struct { float scale[2]; uint32_t slice, ns; } rp = {{(float)s->tex.width / dw, (float)s->tex.height / dh}, ssl, (uint32_t)s->tex.sampleCount};
+    MTLRenderPassDescriptor *rpd = [MTLRenderPassDescriptor renderPassDescriptor];
+    rpd.colorAttachments[0].texture = d->tex;
+    rpd.colorAttachments[0].level = dlv;
+    rpd.colorAttachments[0].slice = dsl;
+    rpd.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    rpd.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:rpd];
+    [e setRenderPipelineState:ps];
+    [e setFragmentTexture:s->tex atIndex:0];
+    [e setFragmentBytes:&rp length:sizeof rp atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [e endEncoding];
+}
 static void do_downsample(const p_copy_t2t *c) {
     GfxTex *s = mtl_tex_get(&c->src.s, 1), *d = mtl_tex_get(&c->dst.s, 1);
     if (!s || !d) return;
@@ -2721,13 +2798,12 @@ static void do_downsample(const p_copy_t2t *c) {
     uint32_t dlv = c->dst.has_view && c->dst.view.set_levels ? c->dst.view.base_level : 0,
              dsl = c->dst.has_view && c->dst.view.set_layers ? c->dst.view.min_layer : 0;
     if (pf_is_int((uint32_t)s->pf)) {
-        resolve_int(s, d, ssl, dlv, dsl);
+        if (s->pf == d->pf && s->tex.textureType == MTLTextureType2DMultisample && !ssl) resolve_int(s, d, ssl, dlv, dsl);
+        else resolve_generic(s, d, ssl, dlv, dsl);
         return;
     }
     if (s->pf != d->pf || (d->tex.width >> dlv) != s->tex.width || (d->tex.height >> dlv) != s->tex.height) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "Downsample between different formats or sizes (%lu %lux%lu -> %lu %lux%lu) is not implemented", (unsigned long)s->pf,
-                 (unsigned long)s->tex.width, (unsigned long)s->tex.height, (unsigned long)d->pf, (unsigned long)(d->tex.width >> dlv),
-                 (unsigned long)(d->tex.height >> dlv));
+        resolve_generic(s, d, ssl, dlv, dsl);
         return;
     }
     flush_clears();
@@ -2932,6 +3008,7 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
             const p_bind_program *p = (const p_bind_program *)pl;
             for (int s = 0; s < 6; s++)
                 if (p->stage_mask & (1u << s)) { S.prog[s] = gfx_prog_resolve_hash(p->hash[s]); }
+            if (p->stage_mask & NVN_SHADER_STAGE_FRAGMENT_BIT) S.sample_shading = (uint8_t)p->sample_shading;
             g_pk_dirty = 1;
             break;
         }
@@ -3214,6 +3291,27 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
         case OP_XFB: do_xfb((const p_xfb *)pl); break;
         case OP_DRAW_XFB: { /* vertex count = bytes written to buffer 0 / its stride, from the control memory End / Pause stored */
             const p_draw_xfb *x = (const p_draw_xfb *)pl;
+            if (xfb_gpu_control(x->control)) { /* written on the GPU timeline: an indirect draw whose arguments a kernel derives from it */
+                int native;
+                MTLPrimitiveType pt = prim_native(x->mode, &native);
+                id<MTLBuffer> cb, ab;
+                uint64_t co;
+                uint32_t ao;
+                id<MTLComputePipelineState> ps = stage_kernel(SK_XFBARGS);
+                if (!native || !ps || !mtl_addr(x->control, 32, &cb, &co) || !ring_alloc(&g_ring, 16, 256, &ab, &ao)) {
+                    LOG_ONCE(NAPPLE_LOG_WARN, "DrawTransformFeedback of GPU-counted output with primitive %u skipped", x->mode);
+                    break;
+                }
+                id<MTLComputeCommandEncoder> ce = compute_encoder();
+                [ce setComputePipelineState:ps];
+                [ce setBuffer:cb offset:co atIndex:0];
+                [ce setBuffer:ab offset:ao atIndex:1];
+                [ce dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+                end_encoders();
+                g_vr_valid = 0;
+                if (prepare_draw(x->mode)) [g_re drawPrimitives:pt indirectBuffer:ab indirectBufferOffset:ao];
+                break;
+            }
             const uint32_t *c = xfb_ctl_mem(x->control);
             uint32_t n = c && c[4] ? c[0] / c[4] : 0;
             if (n) {

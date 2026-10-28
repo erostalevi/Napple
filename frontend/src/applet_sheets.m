@@ -23,7 +23,7 @@ static void after_ms(double ms, void (^blk)(void)) {
     }];
     [[NSRunLoop mainRunLoop] addTimer:t forMode:NSRunLoopCommonModes];
 }
-static BOOL auto_action(NSString **action, double *ms) {
+BOOL auto_action(NSString **action, double *ms) {
     const char *e = getenv("NAPPLE_SHEET_AUTO");
     if (!e || !*e) return NO;
     NSArray *p = [@(e) componentsSeparatedByString:@":"];
@@ -32,11 +32,19 @@ static BOOL auto_action(NSString **action, double *ms) {
     return YES;
 }
 /* Screenshot aid: the window's screen rectangle is captured with screencapture (cacheDisplay renders neither text nor web content here). */
-static void shot_window(NSWindow *w, NSString *name) {
+/* NAPPLE_SHEET_ORIGIN="x,y" (screen points from the top-left) and NAPPLE_SHEET_SIZE="w,h" put the sheet window somewhere clear before the shot (something
+ * else may cover the middle of the screen, e.g. a system permission prompt). */
+static void place_for_shot(NSWindow *w, BOOL resize) {
+    const char *o = getenv("NAPPLE_SHEET_ORIGIN"), *z = getenv("NAPPLE_SHEET_SIZE");
+    int x, y, cw, ch;
+    if (resize && z && sscanf(z, "%d,%d", &cw, &ch) == 2) [w setContentSize:NSMakeSize(cw, ch)];
+    if (o && sscanf(o, "%d,%d", &x, &y) == 2) [w setFrameTopLeftPoint:NSMakePoint(x, NSMaxY(NSScreen.screens.firstObject.frame) - y)];
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.4]];
+}
+void shot_rect(NSRect r, NSString *name) {
     const char *dir = getenv("NAPPLE_SHEET_SHOT");
-    if (!dir || !*dir || !w) return;
+    if (!dir || !*dir) return;
     [[NSFileManager defaultManager] createDirectoryAtPath:@(dir) withIntermediateDirectories:YES attributes:nil error:nil];
-    NSRect r = w.frame;
     CGFloat top = NSMaxY(NSScreen.screens.firstObject.frame) - NSMaxY(r);
     NSTask *t = [NSTask new];
     t.executableURL = [NSURL fileURLWithPath:@"/usr/sbin/screencapture"];
@@ -45,8 +53,14 @@ static void shot_window(NSWindow *w, NSString *name) {
     [t launchAndReturnError:nil];
     [t waitUntilExit];
 }
+void shot_window(NSWindow *w, NSString *name) {
+    if (!w || !getenv("NAPPLE_SHEET_SHOT")) return;
+    place_for_shot(w, [name isEqualToString:@"web"] || [name isEqualToString:@"album"]);
+    shot_rect(w.frame, name);
+}
 /* Runs `alert` modally: the shot and the scripted press happen once the loop runs. Returns the 1-based index of the pressed button. */
-static int run_alert(NSAlert *a, NSString *name, NSArray<NSString *> *actions) {
+static int run_alert(napple_frontend *f, NSAlert *a, NSString *name, NSArray<NSString *> *actions) {
+    fe_sheet_begin(f);
     [NSApp activateIgnoringOtherApps:YES];
     NSString *act;
     double ms;
@@ -63,6 +77,7 @@ static int run_alert(NSAlert *a, NSString *name, NSArray<NSString *> *actions) {
     NSModalResponse mr = a.runModal;
     if (getenv("NAPPLE_SHEET_DEBUG")) fprintf(stderr, "runModal took %.0f ms\n", (CFAbsoluteTimeGetCurrent() - t0) * 1000);
     if (getenv("NAPPLE_SHEET_DEBUG")) fprintf(stderr, "sheet %s: act %s response %ld\n", name.UTF8String, act.UTF8String, (long)mr);
+    fe_sheet_end(f);
     return (int)(mr - NSAlertFirstButtonReturn) + 1;
 }
 static NSString *uid_text(const uint8_t u[16]) {
@@ -72,7 +87,6 @@ static NSString *uid_text(const uint8_t u[16]) {
 }
 
 int napple_frontend_sheet_controller(napple_frontend *f, unsigned min, unsigned max, int connected, int single_mode, int *players) {
-    (void)f;
     return on_main(^{
         NSAlert *a = [NSAlert new];
         a.messageText = @"Controller support";
@@ -88,7 +102,7 @@ int napple_frontend_sheet_controller(napple_frontend *f, unsigned min, unsigned 
         a.accessoryView = pop;
         [a addButtonWithTitle:@"Confirm"];
         [a addButtonWithTitle:@"Cancel"];
-        int r = run_alert(a, @"controller", @[ @"confirm", @"cancel" ]);
+        int r = run_alert(f, a, @"controller", @[ @"confirm", @"cancel" ]);
         if (r != 1) return 0;
         *players = (int)lo + (int)pop.indexOfSelectedItem;
         return 1;
@@ -96,7 +110,6 @@ int napple_frontend_sheet_controller(napple_frontend *f, unsigned min, unsigned 
 }
 
 int napple_frontend_sheet_player_select(napple_frontend *f, const uint8_t (*uids)[16], unsigned count) {
-    (void)f;
     return on_main(^{
         NSAlert *a = [NSAlert new];
         a.messageText = @"Select a user";
@@ -107,13 +120,12 @@ int napple_frontend_sheet_player_select(napple_frontend *f, const uint8_t (*uids
         a.accessoryView = pop;
         [a addButtonWithTitle:@"Select"];
         [a addButtonWithTitle:@"Cancel"];
-        int r = run_alert(a, @"player_select", @[ @"confirm", @"cancel" ]);
+        int r = run_alert(f, a, @"player_select", @[ @"confirm", @"cancel" ]);
         return r == 1 ? (int)pop.indexOfSelectedItem : -1;
     });
 }
 
 void napple_frontend_sheet_error(napple_frontend *f, const char *title, const char *message) {
-    (void)f;
     NSString *t = @(title ? title : ""), *m = @(message ? message : "");
     on_main(^{
         NSAlert *a = [NSAlert new];
@@ -121,7 +133,7 @@ void napple_frontend_sheet_error(napple_frontend *f, const char *title, const ch
         a.messageText = t;
         a.informativeText = m;
         [a addButtonWithTitle:@"OK"];
-        return run_alert(a, @"error", @[ @"confirm" ]);
+        return run_alert(f, a, @"error", @[ @"confirm" ]);
     });
 }
 
@@ -151,19 +163,24 @@ void napple_frontend_sheet_error(napple_frontend *f, const char *title, const ch
 }
 @end
 /* Shows the window built by `setup` (main thread) and blocks the caller until it finishes; returns the code. */
-static NSInteger run_sheet(SheetWin *(^setup)(void)) {
+static NSInteger run_sheet(napple_frontend *f, SheetWin *(^setup)(void)) {
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     __block SheetWin *owner = nil;
     on_main(^{
         owner = setup();
         if (!owner) return 0;
         owner.sem = sem;
+        fe_sheet_begin(f);
         [NSApp activateIgnoringOtherApps:YES];
         [owner.win makeKeyAndOrderFront:nil];
         return 0;
     });
     if (!owner) return -1;
     dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+    on_main(^{
+        fe_sheet_end(f);
+        return 0;
+    });
     return owner.code;
 }
 static NSButton *sheet_button(NSString *title, NSInteger code, SheetWin *owner) {
@@ -198,9 +215,8 @@ static void press(NSArray<NSButton *> *buttons, NSArray<NSString *> *names) {
 }
 
 int napple_frontend_sheet_image(napple_frontend *f, const uint8_t *rgba, unsigned w, unsigned h, unsigned index, unsigned count, int can_select) {
-    (void)f;
     NSData *px = [NSData dataWithBytes:rgba length:(NSUInteger)w * h * 4]; /* the caller's buffer is reused: copy before leaving the thread */
-    NSInteger code = run_sheet(^SheetWin *{
+    NSInteger code = run_sheet(f, ^SheetWin *{
         SheetWin *owner = [SheetWin new];
         owner.closeCode = -1;
         NSWindow *win = sheet_window([NSString stringWithFormat:@"Album %u of %u", index + 1, count], NSMakeSize(720, 480), owner);
@@ -295,10 +311,9 @@ int napple_frontend_sheet_image(napple_frontend *f, const uint8_t *rgba, unsigne
 @end
 
 int napple_frontend_sheet_web(napple_frontend *f, const char *url, const char *read_root, char *last_url, size_t cap) {
-    (void)f;
     NSString *u = @(url ? url : ""), *root = read_root && *read_root ? @(read_root) : nil;
     __block NSString *last = u;
-    NSInteger code = run_sheet(^SheetWin *{
+    NSInteger code = run_sheet(f, ^SheetWin *{
         NSURL *target = [NSURL URLWithString:u];
         if (!target || (!target.isFileURL && ![@[ @"http", @"https" ] containsObject:target.scheme.lowercaseString])) return nil;
         SheetWin *owner = [SheetWin new];

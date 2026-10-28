@@ -1,5 +1,7 @@
 /* acc:u0: one offline local user. */
 #include "../ipc.h"
+#include "account_core.h"
+#include "applet_lib_core.h"
 #include "host_info.h"
 #include "online_provider.h"
 #include <stdio.h>
@@ -8,13 +10,31 @@
 
 const uint8_t g_user_id[16] = {0x4e, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x55, 0x73, 0x65, 0x72, 0, 0, 0, 0, 0, 1};
 
+/* The profiles this process offers (NAPPLE_PROFILES, read once). */
+static unsigned profile_n;
+static unsigned profile_count(void) {
+    if (!profile_n) profile_n = account_profile_count_spec(getenv("NAPPLE_PROFILES"));
+    return profile_n;
+}
+#ifdef NAPPLE_ACCOUNT_TEST
+static void profile_count_reset_for_test(void) { profile_n = 0; }
+#endif
+static unsigned profile_lister(uint8_t (*uids)[16], unsigned max) {
+    unsigned n = profile_count();
+    if (n > max) n = max;
+    for (unsigned i = 0; i < n; i++) account_profile_uid(g_user_id, i, uids[i]);
+    return n;
+}
+/* The IProfile object's state is its profile index + 1 (NULL = the first). */
+static unsigned profile_index(const IpcObject *s) { return s && s->state ? (unsigned)(uintptr_t)s->state - 1 : 0; }
 static void profile_get_base(IpcObject *s, IpcCall *c) {
-    (void)s;
     uint8_t base[0x38] = {0};
-    memcpy(base, g_user_id, 16);
+    account_profile_uid(g_user_id, profile_index(s), base);
     uint64_t t = 1600000000;
     memcpy(base + 16, &t, 8);
-    snprintf((char *)base + 24, 0x20, "%s", host_user_name());
+    char name[0x20];
+    account_profile_name(host_user_name(), profile_index(s), name, sizeof name);
+    snprintf((char *)base + 24, 0x20, "%s", name);
     ipc_out(c, base, sizeof base);
 }
 static void profile_get(IpcObject *s, IpcCall *c) {
@@ -117,20 +137,20 @@ static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IP
 
 static void acc_user_count(IpcObject *s, IpcCall *c) {
     (void)s;
-    int32_t v = 1;
+    int32_t v = (int32_t)profile_count();
     IPC_OUT(c, v);
 }
 static void acc_user_exists(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint8_t v = !memcmp(ipc_in(c, 0, 16), g_user_id, 16);
+    uint8_t v = account_profile_find(g_user_id, profile_count(), ipc_in(c, 0, 16)) >= 0;
     IPC_OUT(c, v);
 }
 static void acc_list_users(IpcObject *s, IpcCall *c) {
     (void)s;
     const IpcBuf *b = ipc_out_buf(c, 0);
     if (b) {
-        uint8_t list[16 * 8] = {0};
-        memcpy(list, g_user_id, 16);
+        uint8_t list[16 * ACCOUNT_MAX_PROFILES] = {0};
+        for (unsigned i = 0; i < profile_count(); i++) account_profile_uid(g_user_id, i, list + 16 * i);
         uint64_t n = b->size < sizeof list ? b->size : sizeof list;
         ipc_write_buf(c, b, list, n);
     }
@@ -141,7 +161,8 @@ static void acc_last_opened(IpcObject *s, IpcCall *c) {
 }
 static void acc_get_profile(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, IPC_OBJECT("IProfile", profile_cmds, NULL, NULL));
+    int i = account_profile_find(g_user_id, profile_count(), ipc_in(c, 0, 16));
+    ipc_out_object(c, IPC_OBJECT("IProfile", profile_cmds, (void *)(uintptr_t)(i > 0 ? (unsigned)i + 1 : 0), NULL));
 }
 static void acc_bool_false(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -185,6 +206,7 @@ static const IpcCmd acc_cmds[] = {
 };
 static IpcObject *acc_open(void) { return IPC_OBJECT("acc:u0", acc_cmds, calloc(1, sizeof(AccSession)), acc_destroy); }
 void service_register_account(void) {
+    applet_set_profile_lister(profile_lister);
     ipc_register_service("acc:u0", acc_open);
     ipc_register_service("acc:u1", acc_open);
     (void)acc_bool_true;

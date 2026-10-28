@@ -817,10 +817,12 @@ typedef struct {
     DeltaEnt *ents;
     uint32_t nents;
     RomfsMap *map;
+    RomfsMerged *merged; /* mod overlay applied to the tables (virtual image); size is then the merged size */
 } StorageFile;
 static void storage_destroy(IpcObject *o) {
     StorageFile *s = o->state;
     if (!s) return;
+    romfs_merged_close(s->merged);
     if (s->map) romfs_map_close(s->map);
     else if (s->ents) {
         for (int i = 0; i < 2; i++)
@@ -829,7 +831,7 @@ static void storage_destroy(IpcObject *o) {
     } else close(s->fd);
     free(s);
 }
-static ssize_t storage_pread(StorageFile *st, void *dst, size_t len, uint64_t off) {
+static ssize_t storage_base_pread(StorageFile *st, void *dst, size_t len, uint64_t off) {
     if (st->map) return romfs_map_pread(st->map, dst, len, off);
     if (!st->ents) return pread(st->fd, dst, len, (off_t)off);
     uint32_t lo = 0, hi = st->nents; /* last entry with data_offset <= off */
@@ -843,6 +845,32 @@ static ssize_t storage_pread(StorageFile *st, void *dst, size_t len, uint64_t of
     if (off >= end || e->source > 1) return -1;
     size_t n = len < end - off ? len : (size_t)(end - off);
     return pread(st->src_fd[e->source], dst, n, (off_t)(e->source_offset + (off - e->data_offset)));
+}
+static ssize_t storage_base_read_cb(void *ctx, void *dst, size_t len, uint64_t off) { return storage_base_pread(ctx, dst, len, off); }
+static ssize_t storage_pread(StorageFile *st, void *dst, size_t len, uint64_t off) {
+    return st->merged ? romfs_merged_pread(st->merged, dst, len, off) : storage_base_pread(st, dst, len, off);
+}
+/* Mod overlay (<data-dir>/mods/overlay.json, napple build --mods): the guest parses the RomFS tables itself, so the base image is replaced by
+ * a virtual one whose tables carry the overlay and whose file data points at the original image or the mod files. Any failure serves the original. */
+static IpcObject *storage_with_overlay(IpcObject *o) {
+    if (!o || !o->state || !g_cfg.data_dir || getenv("NAPPLE_NO_MODS")) return o;
+    StorageFile *st = o->state;
+    RomfsOverlay *ov = romfs_overlay_load(g_cfg.data_dir);
+    if (!ov) return o;
+    char why[128] = "";
+    uint64_t sz = 0;
+    RomfsMerged *m = romfs_merge_open(ov, storage_base_read_cb, st, st->size, &sz, why, sizeof why);
+    romfs_overlay_free(ov);
+    if (!m) {
+        LOG("fs", "mods: romfs overlay not applied (%s); serving the original RomFS", why);
+        return o;
+    }
+    unsigned rep, add, rem, skip;
+    romfs_merged_stats(m, &rep, &add, &rem, &skip);
+    st->merged = m;
+    st->size = sz;
+    LOG("fs", "mods: romfs overlay applied: %u replaced, %u added, %u removed, %u skipped (%llu bytes)", rep, add, rem, skip, (unsigned long long)sz);
+    return o;
 }
 static void storage_read(IpcObject *self, IpcCall *c) {
     StorageFile *st = self->state;
@@ -979,7 +1007,7 @@ static IpcObject *open_romfs_delta(IpcCall *c) {
     LOG("fs", "RomFS storage: delta layer over %s (%u extents, %llu bytes)", base, st->nents, (unsigned long long)st->size);
     return IPC_OBJECT("IStorage", storage_cmds, st, storage_destroy);
 }
-static IpcObject *open_romfs_storage(IpcCall *c) {
+static IpcObject *open_romfs_storage_base(IpcCall *c) {
     char path[1200];
     snprintf(path, sizeof path, "%s/romfs.bin", g_cfg.data_dir);
     if (access(path, R_OK) != 0) {
@@ -1006,6 +1034,7 @@ static IpcObject *open_romfs_storage(IpcCall *c) {
     if (!o) summary_note("romfs.bin missing");
     return o;
 }
+static IpcObject *open_romfs_storage(IpcCall *c) { return storage_with_overlay(open_romfs_storage_base(c)); }
 /* OpenDataStorageByDataId(u8 storage id, u64 data id), commands 30 and 202: add-on content (DLC) data ids resolve to the DLC's romfs image
  * (misc.c, aoc:u); any other id is a system data archive, served when <data-dir>/sysdata/ (or <data-dir>/../sysdata/)<id as 16 hex digits>.bin exists (the console reads
  * them from the system NAND), else not found. */

@@ -38,6 +38,31 @@ void applet_error_code_text(const AppletErrorInfo *e, char *buf, size_t cap) {
     else snprintf(buf, cap, "2%03u-%04u", e->first_word & 0x1ffu, (e->first_word >> 9) & 0x1fffu);
 }
 
+void applet_utf16le_to_utf8(const uint8_t *p, unsigned max_units, char *out, size_t cap) {
+    size_t o = 0;
+    if (!cap) return;
+    for (unsigned i = 0; i < max_units; i++) {
+        uint32_t u = (uint32_t)p[2 * i] | (uint32_t)p[2 * i + 1] << 8;
+        if (!u) break;
+        if (u >= 0xd800 && u < 0xdc00 && i + 1 < max_units) {
+            uint32_t lo = (uint32_t)p[2 * i + 2] | (uint32_t)p[2 * i + 3] << 8;
+            if (lo >= 0xdc00 && lo < 0xe000) {
+                u = 0x10000 + ((u - 0xd800) << 10) + (lo - 0xdc00);
+                i++;
+            }
+        }
+        char b[4];
+        size_t l;
+        if (u < 0x80) b[0] = (char)u, l = 1;
+        else if (u < 0x800) b[0] = (char)(0xc0 | u >> 6), b[1] = (char)(0x80 | (u & 0x3f)), l = 2;
+        else if (u < 0x10000) b[0] = (char)(0xe0 | u >> 12), b[1] = (char)(0x80 | (u >> 6 & 0x3f)), b[2] = (char)(0x80 | (u & 0x3f)), l = 3;
+        else b[0] = (char)(0xf0 | u >> 18), b[1] = (char)(0x80 | (u >> 12 & 0x3f)), b[2] = (char)(0x80 | (u >> 6 & 0x3f)), b[3] = (char)(0x80 | (u & 0x3f)), l = 4;
+        if (o + l + 1 > cap) break;
+        memcpy(out + o, b, l);
+        o += l;
+    }
+    out[o] = 0;
+}
 void applet_swkbd_parse(const uint8_t *k, size_t n, AppletSwkbdConfig *c) {
     memset(c, 0, sizeof *c);
     if (!k || n < 0x3B8) return;
@@ -48,6 +73,11 @@ void applet_swkbd_parse(const uint8_t *k, size_t n, AppletSwkbdConfig *c) {
     c->password = c->password != 0;
     c->numeric = c->type == 1;
     if (c->max_len > APPLET_SWKBD_MAX_LEN) c->max_len = APPLET_SWKBD_MAX_LEN;
+    if (n >= 0x4C8) {
+        applet_utf16le_to_utf8(k + 0x24, 65, c->header, sizeof c->header);
+        applet_utf16le_to_utf8(k + 0xA6, 129, c->sub, sizeof c->sub);
+        applet_utf16le_to_utf8(k + 0x1A8, 257, c->guide, sizeof c->guide);
+    }
 }
 int applet_swkbd_fit(const AppletSwkbdConfig *c, const char *text, char *out, size_t cap) {
     size_t o = 0;

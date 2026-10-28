@@ -98,6 +98,19 @@ int main(void) {
     CHECK(web_offline_resolve(root, "/manual/", res, sizeof res) == 0, "trailing slash -> index.html");
     snprintf(exp, sizeof exp, "%s/manual/index.html", root); CHECK(!strcmp(res, exp), "index.html default");
     CHECK(web_offline_resolve(root, "manual", res, sizeof res) == 0 && !strcmp(res, exp), "directory -> index.html");
+    wfile(root, "my dir/b c.html", "x");
+    CHECK(web_offline_resolve(root, "my%20dir/b%20c.html", res, sizeof res) == 0, "percent-encoded names decode");
+    CHECK(web_offline_resolve(root, "%2e%2e/x", res, sizeof res) == -1 && web_offline_resolve(root, "manual/%2E%2e/%2e%2E/x", res, sizeof res) == -1, "encoded dotdot rejected");
+    CHECK(web_offline_resolve(root, "manual%5cp2.html", res, sizeof res) == -1 && web_offline_resolve(root, "manual%00/p2.html", res, sizeof res) == -1, "encoded backslash and NUL rejected");
+    CHECK(web_offline_resolve(root, "manual/p2%2ehtml", res, sizeof res) == 0 && web_offline_resolve(root, "manual/p%", res, sizeof res) == -2, "a lone percent stays literal");
+    { char deep[0x400]; snprintf(deep, sizeof deep, "%s/a", root); mkdir(deep, 0755); strcat(deep, "/b"); mkdir(deep, 0755); strcat(deep, "/c"); mkdir(deep, 0755);
+      wfile(root, "a/b/c/index.html", "x"); wfile(root, "a/b/c/page.html", "x");
+      CHECK(web_offline_resolve(root, "offline:/a/b/c/page.html", res, sizeof res) == 0, "nested path resolves");
+      CHECK(web_offline_resolve(root, "a/b/c", res, sizeof res) == 0 && web_offline_resolve(root, "a/b/c/", res, sizeof res) == 0, "nested directory -> index.html");
+      CHECK(web_offline_resolve(root, "a/b/missing/page.html", res, sizeof res) == -2, "missing nested directory");
+      char link[0x400], outside[0x400]; snprintf(link, sizeof link, "%s/a/escape", root); snprintf(outside, sizeof outside, "/tmp/napple_web_out_XXXXXX"); CHECK(mkdtemp(outside) != NULL, "mkdtemp outside"); wfile(outside, "secret.html", "x");
+      if (symlink(outside, link) == 0) CHECK(web_offline_resolve(root, "a/escape/secret.html", res, sizeof res) == -1, "a symlink out of the tree is refused");
+      else CHECK(1, "symlink unavailable"); }
     CHECK(web_offline_resolve(root, "../etc/passwd", res, sizeof res) == -1, "dotdot rejected");
     CHECK(web_offline_resolve(root, "manual/../../x", res, sizeof res) == -1, "nested dotdot rejected");
     CHECK(web_offline_resolve(root, "manual\\p2.html", res, sizeof res) == -1, "backslash rejected");

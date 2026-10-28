@@ -72,6 +72,17 @@ static uint32_t submit(uint32_t chan, Buf *cb, const uint32_t *words, uint32_t n
 #define GATHER(n) ((6u << 28) | (n))
 #define GATHER_REG(off, incr, n) ((6u << 28) | ((off) << 16) | (1u << 15) | ((incr) << 14) | (n))
 static const MediaStats *stats(uint32_t fd) { return media_engine_stats(fds[fd].ch.eng); }
+/* VIC: a flat NV12 picture with rows of `pitch` bytes, and the config structure's output surface word (+0x20). */
+static void vic_fill(Buf *y, Buf *c, int w, int h, int pitch, uint8_t Y, uint8_t U, uint8_t V) {
+    memset(y->mem, 0, y->size); memset(c->mem, 0, c->size);
+    for (int r = 0; r < h; r++) memset(y->mem + r * pitch, Y, (size_t)w);
+    for (int r = 0; r < (h + 1) / 2; r++) for (int x = 0; x < w; x += 2) { c->mem[r * pitch + x] = U; c->mem[r * pitch + x + 1] = V; }
+}
+static void vic_cfg(Buf *cfg, uint32_t fmt, uint32_t kind, uint32_t bh, uint32_t w, uint32_t h) {
+    memset(cfg->mem, 0, VIC_CFG_BYTES);
+    uint64_t oc = fmt | ((uint64_t)kind << 11) | ((uint64_t)bh << 15) | ((uint64_t)(w - 1) << 32) | ((uint64_t)(h - 1) << 46);
+    memcpy(cfg->mem + VIC_CFG_OUTPUT_SURFACE, &oc, 8);
+}
 
 /* A backend that records what it is asked and produces a 16x16 frame. */
 static struct { int opened, closed, decoded, codec, resets, configures, refuse; DecodeRequest last; DecoderConfig cfg; uint8_t pic_head[8]; } rec;
@@ -161,9 +172,15 @@ int main(void) {
                        INCR(NVDEC_SET_STATUS_OFFSET, 1), st.iova >> 8, INCR(NVDEC_SET_PICTURE_LUMA_OFFSET0 + 2, 1), (luma.iova + 0x1000) >> 8, INCR(NVDEC_SET_PICTURE_CHROMA_OFFSET0 + 2, 1), (chroma.iova + 0x1000) >> 8,
                        IMM(NVM_EXECUTE, 0)};
     memset(bs.mem, 0, 0x2000); memcpy(bs.mem, h264_64x48, sizeof h264_64x48); len = sizeof h264_64x48; memset(pic.mem, 0, 0x100); memcpy(pic.mem + 18 * 4, &len, 4);
+    uint32_t cur2 = 2u << 2; memcpy(pic.mem + NVDEC_H264_W_FLAGS2 * 4, &cur2, 4); /* curr_pic_idx 2 */
     memset(luma.mem, 0, 0x4000);
     submit(dec, &cb, slot, sizeof slot / 4, NULL, 0);
-    CHECK(luma.mem[0] == 0 && luma.mem[0x1000] != 0 && chroma.mem[0x1000] == 128, "picture index 2 writes the slot-2 surfaces");
+    CHECK(luma.mem[0] == 0 && luma.mem[0x1000] != 0 && chroma.mem[0x1000] == 128, "curr_pic_idx 2 writes the slot-2 surfaces");
+    { /* the frame register (0x103) counts past the 17 slots (MK8D): the slot still comes from curr_pic_idx */
+        uint32_t past[sizeof slot / 4]; memcpy(past, slot, sizeof slot); past[6] = 20; memset(luma.mem, 0, 0x4000); errs = stats(dec)->errors;
+        CHECK(submit(dec, &cb, past, sizeof past / 4, NULL, 0) == NV_OK && stats(dec)->errors == errs && luma.mem[0x1000] != 0, "frame register 20, curr_pic_idx 2: slot 2, no error");
+    }
+    memset(pic.mem + NVDEC_H264_W_FLAGS2 * 4, 0, 4);
 
     /* unmapped output surface: error in status, no crash */
     uint32_t unmapped[sizeof prog / 4]; memcpy(unmapped, prog, sizeof prog); unmapped[10] = 0x7fff0000u >> 8; errs = stats(dec)->errors;
@@ -216,6 +233,7 @@ int main(void) {
     uint32_t dec2 = open_("/dev/nvhost-nvdec");
     Buf cb2 = mkbuf(dec2, 0x1000);
     memcpy(bs.mem, h264_64x48, sizeof h264_64x48); memset(pic.mem, 0, 0x100); memcpy(pic.mem, "PICINFO!", 8); len = 100; memcpy(pic.mem + 18 * 4, &len, 4);
+    { uint32_t c4 = 4u << 2; memcpy(pic.mem + NVDEC_H264_W_FLAGS2 * 4, &c4, 4); } /* curr_pic_idx 4 */
     uint32_t p2[] = {SETCL(MEDIA_CLASS_NVDEC), NONINCR(NVM_SET_APPLICATION_ID, 1), DEC_CODEC_H264, INCR(NVDEC_SET_DRV_PIC_SETUP_OFFSET, 3), pic.iova >> 8, bs.iova >> 8, 4,
                      INCR(NVDEC_SET_DISPLAY_BUF_LUMA_OFFSET, 2), luma.iova >> 8, chroma.iova >> 8, IMM(NVM_EXECUTE, 0)};
     CHECK(submit(dec2, &cb2, p2, sizeof p2 / 4, NULL, 0) == NV_OK, "submit with the recording backend");
@@ -267,7 +285,7 @@ int main(void) {
             uint32_t pw[NVDEC_H264_PIC_WORDS] = {0};
             pw[18] = 6; pw[19] = 1; pw[22] = 1; pw[24] = 1; pw[25] = 32; pw[26] = 38; pw[28] = 1; pw[30] = 4; pw[32] = 1; pw[35] = pw[36] = 0x200;
             pw[44] = 0x16u | (1u << 12) | (0x3fu << 16) | (28u << 22) | (28u << 27); /* direct_8x8, weighted_pred, 4:2:0, qp -1, chroma offsets -4 */
-            pw[45] = 2;
+            pw[45] = 2 | (1u << 2); /* weighted_bipred 2, curr_pic_idx 1 */
             memcpy(pic.mem, pw, sizeof pw);
             static const uint8_t slice[6] = {0, 0, 1, 0x65, 0x88, 0x84};
             memset(bs.mem, 0, 0x2000); memcpy(bs.mem, slice, sizeof slice);
@@ -281,6 +299,8 @@ int main(void) {
             CHECK(stats(d3)->thi_pairs == 8 && rec.configures == 1 && rec.decoded == 1 && rec.last.picture_index == 1, "THI pairs reach the registers: %llu pairs, configured %d, decoded %d", (unsigned long long)stats(d3)->thi_pairs, rec.configures, rec.decoded);
             CHECK(rec.cfg.width == 512 && rec.cfg.height == 608 && rec.cfg.h264.nsps == 1 && rec.cfg.h264.npps == 1 && !h264_parse_sps(rec.cfg.h264.sps[0] + 1, rec.cfg.h264.sps_size[0] - 1, &sps) && sps.width == 512 && sps.height == 608,
                   "H.264 without in-band sets: SPS synthesised from the picture-info structure (%dx%d)", rec.cfg.width, rec.cfg.height);
+            CHECK(sps.num_ref_frames == 15 && sps.level_idc == 32, "synthesised SPS: 15 reference frames (16 leaves VideoToolbox no slot for a B picture), level %d holds 16 frames of 1216 MBs",
+                  sps.level_idc);
             CHECK(!h264_parse_pps(rec.cfg.h264.pps[0] + 1, rec.cfg.h264.pps_size[0] - 1, &pps) && pps.cabac == 1 && pps.num_ref_idx_l0 == 5 && pps.weighted_pred == 1 && pps.weighted_bipred_idc == 2 && pps.pic_init_qp == 25 && pps.chroma_qp_index_offset == -4 && pps.deblocking_filter_control == 1,
                   "synthesised PPS: CABAC, 5 refs, weighted pred/bipred 2, QP 25, chroma offset %d", pps.chroma_qp_index_offset);
             submit(d3, &cb3, p6, sizeof p6 / 4, NULL, 0);
@@ -298,31 +318,50 @@ int main(void) {
     }
 
     /* ---- VIC ---- */
-    Buf vcb = mkbuf(vic, 0x1000), cfg = mkbuf(vic, 0x1000), yin = mkbuf(vic, 0x1000), cin = mkbuf(vic, 0x1000), out = mkbuf(vic, 0x10000);
-    memset(yin.mem, 81, 16 * 8); memset(cin.mem, 90, 16 * 4); for (int i = 0; i < 16 * 4; i += 2) cin.mem[i + 1] = 240; /* BT.601 limited red: Y 81, U 90, V 240 */
-    uint32_t c1[VIC_CFG_WORDS] = {16, 8, 0, 0, VIC_FMT_ABGR, 0, 0, 200, 0}; memcpy(cfg.mem, c1, sizeof c1);
-    uint32_t vprog[] = {SETCL(MEDIA_CLASS_VIC), INCR(VIC_SET_CONFIG_STRUCT_OFFSET, 1), cfg.iova >> 8, INCR(VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET, 1), out.iova >> 8, INCR(VIC_SET_INPUT0_LUMA_OFFSET, 2), yin.iova >> 8, cin.iova >> 8, IMM(NVM_EXECUTE, 0)};
-    CHECK(submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0) == NV_OK && stats(vic)->frames == 1 && stats(vic)->errors == 0, "VIC submit");
-    CHECK(out.mem[0] >= 250 && out.mem[1] <= 6 && out.mem[2] <= 6 && out.mem[3] == 200, "NV12 red -> RGBA bytes R,G,B,A = %u %u %u %u", out.mem[0], out.mem[1], out.mem[2], out.mem[3]);
-    uint32_t c2[VIC_CFG_WORDS] = {16, 8, 32, 16, VIC_FMT_ARGB, 0, 0, 255, 160}; memcpy(cfg.mem, c2, sizeof c2); memset(out.mem, 0, 0x10000);
-    submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0);
-    CHECK(out.mem[2] >= 250 && out.mem[0] <= 6 && out.mem[3] == 255 && out.mem[160 * 15 + 32 * 4 - 2] >= 250, "ARGB (B,G,R,A) at 32x16 with pitch 160: red in byte 2, last row written");
-    uint32_t c3[VIC_CFG_WORDS] = {16, 8, 0, 0, VIC_FMT_XBGR, 1, 1, 0, 0}; memcpy(cfg.mem, c3, sizeof c3);
-    memset(yin.mem, 255, 16 * 8); memset(cin.mem, 128, 16 * 4); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0);
-    CHECK(out.mem[0] == 255 && out.mem[1] == 255 && out.mem[2] == 255 && out.mem[3] == 255, "full-range white, X format has alpha 255");
-    memset(yin.mem, 16, 16 * 8); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0); CHECK(out.mem[0] == 16, "full range does not remove the black offset (Y 16 -> 16)");
-    uint32_t c4[VIC_CFG_WORDS] = {0}; memcpy(cfg.mem, c4, sizeof c4); errs = stats(vic)->errors;
-    CHECK(submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0) == NV_OK && stats(vic)->errors == errs + 1, "empty VIC configuration: counted error");
-    /* the SDK's streams carry a config address that no pinned handle covers (MK8D): the execute copies NV12 to the NV12 output surfaces */
-    {
-        Buf ochroma = mkbuf(vic, 0x1000);
+    Buf vcb = mkbuf(vic, 0x1000), cfg = mkbuf(vic, 0x1000), yin = mkbuf(vic, 0x8000), cin = mkbuf(vic, 0x4000), out = mkbuf(vic, 0x10000), ochroma = mkbuf(vic, 0x8000);
+    uint32_t vprog[] = {SETCL(MEDIA_CLASS_VIC), INCR(VIC_SET_CONTROL_PARAMS, 2), 0x610110, cfg.iova >> 8, INCR(VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET, 2), out.iova >> 8, ochroma.iova >> 8,
+                        INCR(VIC_SET_INPUT0_LUMA_OFFSET, 2), yin.iova >> 8, cin.iova >> 8, IMM(NVM_EXECUTE, 0)};
+    vic_fill(&yin, &cin, 16, 8, 256, 81, 90, 240); /* BT.601 limited red: Y 81, U 90, V 240 (input rows 256-aligned, as NVDEC writes them) */
+    vic_cfg(&cfg, VIC_FMT_RGBA8, 0, 0, 16, 8);
+    CHECK(submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0) == NV_OK && stats(vic)->frames == 1 && stats(vic)->errors == 0, "VIC submit (control word at 0x1c1, config at 0x1c2)");
+    CHECK(out.mem[0] >= 250 && out.mem[1] <= 6 && out.mem[2] <= 6 && out.mem[3] == 255, "NV12 red -> RGBA8 bytes R,G,B,A = %u %u %u %u", out.mem[0], out.mem[1], out.mem[2], out.mem[3]);
+    CHECK(out.mem[16 * 4 * 7 + 15 * 4] >= 250 && out.mem[16 * 4 * 8] == 0, "RGBA8 pitch linear: rows of width*4, last pixel written, nothing after");
+    vic_cfg(&cfg, VIC_FMT_BGRA8, 0, 0, 16, 8); memset(out.mem, 0, 0x10000); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0);
+    CHECK(out.mem[2] >= 250 && out.mem[0] <= 6 && out.mem[3] == 255, "BGRA8: red in byte 2");
+    vic_fill(&yin, &cin, 16, 8, 256, 235, 128, 128); vic_cfg(&cfg, VIC_FMT_RGBX8, 0, 0, 16, 8); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0);
+    CHECK(out.mem[0] == 255 && out.mem[1] == 255 && out.mem[2] == 255 && out.mem[3] == 255, "limited-range white (Y 235) -> 255, RGBX alpha 255");
+    vic_fill(&yin, &cin, 16, 8, 16, 16, 128, 128); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0);
+    CHECK(out.mem[0] == 0 && out.mem[1] == 0 && out.mem[2] == 0, "packed input rows (surface too small for 256-aligned rows) are read packed; black Y 16 -> 0");
+    { /* NV12 out: luma and chroma at 256-aligned rows, pitch linear */
+        for (int y = 0; y < 8; y++) for (int x = 0; x < 16; x++) yin.mem[y * 256 + x] = (uint8_t)(x + 16 * y);
+        for (int y = 0; y < 4; y++) for (int x = 0; x < 16; x++) cin.mem[y * 256 + x] = (uint8_t)(200 + x);
+        vic_cfg(&cfg, VIC_FMT_NV12, 0, 0, 16, 8); memset(out.mem, 0, 0x10000); memset(ochroma.mem, 0, 0x8000); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0);
+        CHECK(out.mem[0] == 0 && out.mem[15] == 15 && out.mem[256 + 3] == 19 && out.mem[256 * 7 + 15] == 127 && out.mem[16] == 0 && ochroma.mem[256 * 3 + 5] == 205,
+              "NV12 output, pitch 256: luma row 1 at 256, chroma row 3 at 768");
+    }
+    { /* block linear: NV12 128x32, 2 GOBs per block. GOB layout: (16,0)->32 (0,1)->16 (0,2)->64 (32,0)->256 (0,8)->512; next block (64,0)->1024; next block row (0,16)->2048 */
+        for (int y = 0; y < 32; y++) for (int x = 0; x < 128; x++) yin.mem[y * 256 + x] = (uint8_t)(x + 3 * y + 1);
+        vic_cfg(&cfg, VIC_FMT_NV12, 1, 1, 128, 32); memset(out.mem, 0, 0x10000); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0);
+#define LY(x, y) (uint8_t)((x) + 3 * (y) + 1)
+        CHECK(out.mem[0] == LY(0, 0) && out.mem[32] == LY(16, 0) && out.mem[16] == LY(0, 1) && out.mem[64] == LY(0, 2) && out.mem[256] == LY(32, 0) && out.mem[512] == LY(0, 8) &&
+              out.mem[1024] == LY(64, 0) && out.mem[2048] == LY(0, 16) && out.mem[2048 + 1024 + 512 + 256 + 64 + 32 + 16 + 5] == LY(64 + 32 + 16 + 5, 16 + 8 + 2 + 1),
+              "block-linear NV12 luma lands at the GOB offsets (%u %u %u %u)", out.mem[32], out.mem[16], out.mem[1024], out.mem[2048]);
+#undef LY
+        vic_fill(&yin, &cin, 32, 16, 256, 81, 90, 240); vic_cfg(&cfg, VIC_FMT_RGBA8, 1, 0, 32, 16); memset(out.mem, 0, 0x10000); submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0);
+        CHECK(out.mem[0] >= 250 && out.mem[3] == 255 && out.mem[512 * 2 + 3] == 255 && out.mem[512 * 4 - 1] == 255 && out.mem[512 * 4] == 0,
+              "block-linear RGBA8 32x16 (1 GOB high blocks): 4 GOBs written, nothing after");
+    }
+    errs = stats(vic)->errors;
+    vic_cfg(&cfg, 0x05, 0, 0, 16, 8); CHECK(submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0) == NV_OK && stats(vic)->errors == errs + 1, "unknown output format: counted error");
+    vic_cfg(&cfg, VIC_FMT_RGBA8, 0, 0, 160, 128); CHECK(submit(vic, &vcb, vprog, sizeof vprog / 4, NULL, 0) == NV_OK && stats(vic)->errors == errs + 2, "output surface too small: counted error");
+    { /* no readable config structure (0x1c2 not written or unmapped): the execute copies NV12 to the NV12 output surfaces */
         for (int i = 0; i < 16 * 8; i++) yin.mem[i] = (uint8_t)(i + 1);
         memset(cin.mem, 77, 16 * 4); memset(out.mem, 0, 0x100); memset(ochroma.mem, 0, 64);
-        uint32_t nprog[] = {SETCL(MEDIA_CLASS_VIC), INCR(VIC_SET_CONFIG_STRUCT_OFFSET, 1), 0x610110, INCR(VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET, 2), out.iova >> 8, ochroma.iova >> 8,
+        uint32_t nprog[] = {SETCL(MEDIA_CLASS_VIC), INCR(VIC_SET_CONTROL_PARAMS, 2), 0x610110, 0, INCR(VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET, 2), out.iova >> 8, ochroma.iova >> 8,
                             INCR(VIC_SET_INPUT0_LUMA_OFFSET, 2), yin.iova >> 8, cin.iova >> 8, IMM(NVM_EXECUTE, 0)};
         errs = stats(vic)->errors;
         CHECK(submit(vic, &vcb, nprog, sizeof nprog / 4, NULL, 0) == NV_OK && stats(vic)->errors == errs && stats(vic)->vic_copies == 1 && out.mem[0] == 1 && out.mem[100] == 101 && ochroma.mem[10] == 77,
-              "VIC with an unreadable config structure: NV12 copy (%llu copies)", (unsigned long long)stats(vic)->vic_copies);
+              "VIC with no readable config structure: NV12 copy (%llu copies)", (unsigned long long)stats(vic)->vic_copies);
     }
 
     /* ---- NVJPG ---- */

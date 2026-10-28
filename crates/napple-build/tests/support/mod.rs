@@ -124,6 +124,149 @@ pub fn romfs_flat(files: &[(&str, &[u8])]) -> Vec<u8> {
     h
 }
 
+/// RomFS image with real directories. Paths are `a/b/c.html`; every parent directory is created,
+/// in first-seen order (retail HtmlDocument images are nested like this).
+pub fn romfs_tree(files: &[(&str, &[u8])]) -> Vec<u8> {
+    const NONE: u32 = u32::MAX;
+    struct Dir {
+        name: String,
+        parent: u32,
+        sibling: u32,
+        child_dir: u32,
+        child_file: u32,
+    }
+    let mut dirs = vec![Dir {
+        name: String::new(),
+        parent: 0,
+        sibling: NONE,
+        child_dir: NONE,
+        child_file: NONE,
+    }];
+    // (name, parent dir index, data offset, size)
+    let mut fl: Vec<(String, usize, u64, u64)> = Vec::new();
+    let mut data = Vec::new();
+    for (path, d) in files {
+        let parts: Vec<&str> = path.split('/').collect();
+        let mut cur = 0usize;
+        for part in &parts[..parts.len() - 1] {
+            let found = (0..dirs.len())
+                .find(|&i| dirs[i].parent == cur as u32 && i != 0 && dirs[i].name == *part);
+            cur = match found {
+                Some(i) => i,
+                None => {
+                    dirs.push(Dir {
+                        name: part.to_string(),
+                        parent: cur as u32,
+                        sibling: NONE,
+                        child_dir: NONE,
+                        child_file: NONE,
+                    });
+                    dirs.len() - 1
+                }
+            };
+        }
+        fl.push((
+            parts[parts.len() - 1].to_string(),
+            cur,
+            data.len() as u64,
+            d.len() as u64,
+        ));
+        data.extend(*d);
+        while data.len() % 8 != 0 {
+            data.push(0);
+        }
+    }
+    let dir_len = |d: &Dir| 0x18 + ((d.name.len() + 3) & !3);
+    let mut dir_off = Vec::new();
+    let mut o = 0usize;
+    for d in &dirs {
+        dir_off.push(o as u32);
+        o += dir_len(d);
+    }
+    let dir_total = o;
+    let mut file_off = Vec::new();
+    let mut o = 0usize;
+    for (n, ..) in &fl {
+        file_off.push(o as u32);
+        o += 0x20 + ((n.len() + 3) & !3);
+    }
+    let file_total = o;
+    // sibling / child links, in creation order
+    for i in 1..dirs.len() {
+        let par = dirs[i].parent as usize;
+        match (0..i)
+            .rev()
+            .find(|&j| j != 0 && dirs[j].parent as usize == par && dirs[j].sibling == NONE)
+        {
+            Some(j) => dirs[j].sibling = dir_off[i],
+            None => dirs[par].child_dir = dir_off[i],
+        }
+    }
+    let mut fsib = vec![NONE; fl.len()];
+    for i in 0..fl.len() {
+        let par = fl[i].1;
+        match (0..i).rev().find(|&j| fl[j].1 == par && fsib[j] == NONE) {
+            Some(j) => fsib[j] = file_off[i],
+            None => dirs[par].child_file = file_off[i],
+        }
+    }
+    let mut dt = Vec::new();
+    for d in &dirs {
+        for v in [
+            dir_off[d.parent as usize],
+            d.sibling,
+            d.child_dir,
+            d.child_file,
+            NONE,
+            d.name.len() as u32,
+        ] {
+            dt.extend(v.to_le_bytes());
+        }
+        dt.extend(d.name.as_bytes());
+        while dt.len() % 4 != 0 {
+            dt.push(0);
+        }
+    }
+    assert_eq!(dt.len(), dir_total);
+    let mut ft = Vec::new();
+    for (i, (n, par, off, size)) in fl.iter().enumerate() {
+        ft.extend(dir_off[*par].to_le_bytes());
+        ft.extend(fsib[i].to_le_bytes());
+        ft.extend(off.to_le_bytes());
+        ft.extend(size.to_le_bytes());
+        ft.extend(NONE.to_le_bytes());
+        ft.extend((n.len() as u32).to_le_bytes());
+        ft.extend(n.as_bytes());
+        while ft.len() % 4 != 0 {
+            ft.push(0);
+        }
+    }
+    assert_eq!(ft.len(), file_total);
+    let dm = 0x50u64;
+    let fm = dm + dt.len() as u64;
+    let data_off = (fm + ft.len() as u64 + 0x1F) & !0x1F;
+    let mut h = Vec::new();
+    for v in [
+        0x50u64,
+        0,
+        0,
+        dm,
+        dt.len() as u64,
+        0,
+        0,
+        fm,
+        ft.len() as u64,
+        data_off,
+    ] {
+        h.extend(v.to_le_bytes());
+    }
+    h.extend(dt);
+    h.extend(ft);
+    h.resize(data_off as usize, 0);
+    h.extend(data);
+    h
+}
+
 pub struct BktrSpec {
     /// Plain patch storage (`[0, len)`), a multiple of 0x200.
     pub patch: Vec<u8>,
@@ -535,9 +678,12 @@ fn make_game_inner(
     let htmlnca = build_nca(
         APP_ID,
         4,
-        vec![Sec::Rom(romfs_flat(&[
+        vec![Sec::Rom(romfs_tree(&[
             ("index.html", b"<html>manual</html>"),
             ("a.png", &[0x89, b'P', b'N', b'G']),
+            ("img/ui/b.png", &[1, 2, 3]),
+            ("img/c.png", &[4, 5]),
+            ("css/main.css", b"body{}"),
         ]))],
     );
     let mut recs = vec![

@@ -127,6 +127,20 @@ $(HOST_BUILD)/test_romfs_overlay: tests/host/test_romfs_overlay.c src/services/r
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_romfs_overlay.c src/services/romfs_map.c -o $@
 HOST_TESTS += $(HOST_BUILD)/test_romfs_overlay
+# mods-runtime (2026-10-27-b7): merged RomFS image (overlay applied to the directory/file tables)
+$(HOST_BUILD)/test_romfs_merge: tests/host/test_romfs_merge.c src/services/romfs_map.c src/services/romfs_map.h $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_romfs_merge.c src/services/romfs_map.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_romfs_merge
+# mods-runtime (2026-10-27-b7): cheat engine (twin of crates/napple-mods/src/cheats.rs)
+$(HOST_BUILD)/test_mods_cheats: tests/host/test_mods_cheats.c src/mods_cheats.c src/mods_cheats.h $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_mods_cheats.c src/mods_cheats.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_mods_cheats
+$(HOST_BUILD)/test_mods_runtime: tests/host/test_mods_runtime.c src/mods_runtime.c src/mods_cheats.c src/json.c src/mods_runtime.h $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) -I../frontend/include tests/host/test_mods_runtime.c src/mods_runtime.c src/mods_cheats.c src/json.c -lm -o $@
+HOST_TESTS += $(HOST_BUILD)/test_mods_runtime
 # kernel-threads (2026-10-27): timer preemption of spinning guest threads
 $(HOST_BUILD)/test_threads_preempt: tests/host/test_threads_preempt.c $(HOST_KERNEL) $(HOST_HDRS)
 	@mkdir -p $(dir $@)

@@ -15,6 +15,7 @@
 #include "napple_display.h"
 #include "napple_gfx.h"
 #include "timescale.h"
+#include "mods_runtime.h"
 #if !NAPPLE_IOS
 #include "services/applet_lib_core.h"
 #include "services/applet_ui.h"
@@ -197,7 +198,10 @@ static void on_stats_text(void *u, char *out, size_t cap) {
     (void)u;
     napple_display_stats_text(out, (unsigned)cap);
 }
-static void push_gfx_settings(const napple_settings *s) {
+static void push_gfx_settings(const napple_settings *user) {
+    napple_settings modded = *user; /* a mod's config.json overrides this run only; the user's settings.json is never rewritten */
+    mods_config_apply_settings(&modded);
+    const napple_settings *s = &modded;
     GfxSettings g = {0};
     g.docked = !g_cfg.op_mode_handheld;
     if (s->internal_width && s->internal_height) g.internal_scale = (float)s->internal_height / (g.docked ? 1080.f : 720.f);
@@ -400,12 +404,57 @@ static int ui_open_web(const char *url, int offline, char *last_url, size_t cap)
 static int ui_show_image(const uint8_t *rgba, unsigned w, unsigned h, unsigned index, unsigned count) {
     return napple_frontend_sheet_image(g_fe, rgba, w, h, index, count, applet_ui_album_selecting());
 }
+
+/* Test aid: NAPPLE_DEBUG_SHEETS=<seconds> raises every applet sheet (error, controller, player select, software keyboard, web, album) from a thread of
+ * its own, the way a guest thread would, over the running title's window. Answers come from NAPPLE_SHEET_AUTO / NAPPLE_SWKBD_ANSWER, screenshots from
+ * NAPPLE_SHEET_SHOT; every result is logged as "debug-sheets: <sheet> -> <result>" (tools/e2e/e2e.py, step applets). Window mode only. */
+static void *debug_sheets_thread(void *arg) {
+    sleep((unsigned)(uintptr_t)arg);
+    const AppletErrorInfo *noerr = NULL;
+    ui_error(noerr, "2002-0002", "The network service is not available.");
+    LOG("main", "debug-sheets: error -> dismissed");
+    AppletControllerAnswer ca = {.min = 1, .max = 4, .connected = frontend_connected_pads(), .single_mode = 0, .players = 2};
+    int r = ui_controller(&ca);
+    LOG("main", "debug-sheets: controller -> %d players=%d connected=%d", r, ca.players, ca.connected);
+    uint8_t uids[2][16];
+    memset(uids, 0x4e, sizeof uids);
+    uids[1][0] = 1;
+    LOG("main", "debug-sheets: player select -> %d", ui_player_select((const uint8_t(*)[16])uids, 2));
+    char text[64] = "";
+    int ok = frontend_text_input("Enter a nickname", "Up to 10 characters", "name", "Link", 10, 1, 0, 0, text, sizeof text);
+    LOG("main", "debug-sheets: swkbd -> %d \"%s\"", ok, text);
+    char path[1100], url[1200], last[1024] = "";
+    snprintf(path, sizeof path, "%s/napple-debug-sheet.html", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
+    FILE *fp = fopen(path, "w");
+    if (fp) {
+        fputs("<html><body style='font:28px sans-serif'><h1>Napple web applet</h1><p>An offline page shown over the running title.</p></body></html>", fp);
+        fclose(fp);
+    }
+    snprintf(url, sizeof url, "file://%s", path);
+    LOG("main", "debug-sheets: web -> %d", ui_open_web(url, 1, last, sizeof last));
+    static uint8_t px[96 * 64 * 4];
+    for (unsigned i = 0; i < 96 * 64; i++) {
+        px[i * 4] = (uint8_t)(i % 96 * 2);
+        px[i * 4 + 1] = (uint8_t)(i / 96 * 3);
+        px[i * 4 + 2] = 160;
+        px[i * 4 + 3] = 255;
+    }
+    LOG("main", "debug-sheets: album -> %d", napple_frontend_sheet_image(g_fe, px, 96, 64, 0, 2, 1));
+    LOG("main", "debug-sheets: done");
+    return NULL;
+}
 static void register_applet_sheets(void) {
     applet_set_error_hook(ui_error);
     applet_set_controller_ui(ui_controller);
     applet_set_player_select_ui(ui_player_select);
     applet_ui_set_open_web(ui_open_web);
     applet_ui_set_show_image(ui_show_image);
+    const char *ds = getenv("NAPPLE_DEBUG_SHEETS");
+    if (ds) {
+        pthread_t t;
+        pthread_create(&t, NULL, debug_sheets_thread, (void *)(uintptr_t)atoi(ds));
+        pthread_detach(t);
+    }
 }
 #else
 static void register_applet_sheets(void) {}

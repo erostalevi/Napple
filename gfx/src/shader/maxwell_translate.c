@@ -348,11 +348,11 @@ static void attr_load_staged(Ctx *c, int dst, uint32_t addr, const char *idx) {
     if (idx && !patch) c->in_attr_mask = 0xffffffffu;
     if (c->stage == STAGE_GEOMETRY) {
         if (!idx && addr == 0x60 && !patch) {
-            sprintf(e, "(sp[2] + gid)");
+            sprintf(e, "(sp[2] + gs_pid)");
         } else if (patch) {
             sprintf(e, "0u /* patch attribute in a geometry shader */");
         } else {
-            sprintf(e, "as_type<uint>(stage_in[(sp[1] + gid * %uu + %s) * %uu + %s][%s])", gs_in_verts(c), vexp, STAGE_SLOTS, sl, cm);
+            sprintf(e, "as_type<uint>(stage_in[(sp[1] + gs_pid * %uu + %s) * %uu + %s][%s])", gs_in_verts(c), vexp, STAGE_SLOTS, sl, cm);
         }
     } else if (c->stage == STAGE_TESS_CTRL) {
         if (!idx && addr == 0x60 && !patch) sprintf(e, "(sp[2] + pid)");
@@ -850,6 +850,8 @@ static const char *tex_type_name(int t) {
         case TEXTYPE_2D_ARRAY: return "2d_array";
         case TEXTYPE_CUBE_ARRAY: return "cube_array";
         case TEXTYPE_1D_ARRAY: return "1d_array";
+        case TEXTYPE_2D_MS: return "2d_ms";
+        case TEXTYPE_2D_MS_ARRAY: return "2d_ms_array";
         default: return "2d";
     }
 }
@@ -1250,15 +1252,17 @@ static void emit_tld(Ctx *c, uint64_t w) {
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), aoffi = bits(w, 35, 1), ms = bits(w, 50, 1), has_lod = bits(w, 55, 1);
     uint32_t mask = (uint32_t)bits(w, 31, 4);
-    if (ms) {
-        fail(c, "tld of a multisampled texture");
+    if (ms && target != 1) {
+        fail(c, "tld.ms of a texture that is not 2D");
         return;
     }
     if (target == 3) {
         fail(c, "tld of a cube texture");
         return;
     }
-    int type = target == 0 ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D) : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D) : TEXTYPE_3D;
+    /* TLD.MS: the binding is a multisampled 2D texture (texture2d_ms, read by sample index; the only Maxwell access to one); the sample index is the Rb
+     * word after the lod (nouveau's operand order: lod, multisample index, offsets) and texture2d_ms has no levels */
+    int type = ms ? (array ? TEXTYPE_2D_MS_ARRAY : TEXTYPE_2D_MS) : target == 0 ? (array ? TEXTYPE_1D_ARRAY : TEXTYPE_1D) : target == 1 ? (array ? TEXTYPE_2D_ARRAY : TEXTYPE_2D) : TEXTYPE_3D;
     if (type == TEXTYPE_3D) array = false;
     int ncoord = target == 0 ? 1 : target == 1 ? 2 : 3;
     int slot = tex_slot(c, index, type, false, array);
@@ -1272,6 +1276,11 @@ static void emit_tld(Ctx *c, uint64_t w) {
     if (has_lod) {
         c->reg_used[pr] = 1;
         sprintf(lv, "uint(r%d)", pr);
+        pr++;
+    }
+    if (ms) {
+        c->reg_used[pr] = 1;
+        sprintf(lv, "min(uint(r%d), t%d.get_num_samples() - 1u)", pr, slot);
         pr++;
     }
     if (aoffi) {
@@ -2166,7 +2175,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             /* SR_Y_DIRECTION: -1 under the lower-left window origin (NVN's default; LASRecomp answers -1 for LAS, nxnative LAS notes), +1 under upper-left
          * (Ryujinx's constant, right for the upper-left titles it runs). The origin is the guest's, from the pipeline key. */
             case 0x12: set_reg(c, d, c->key && c->key->upper_left ? "0x3f800000u" : "0xbf800000u"); break;
-            case 0x11: set_reg(c, d, c->stage == STAGE_TESS_CTRL ? "inv" : "0u"); break;   // SR_INVOCATION_ID: the output control point of a tess control thread
+            case 0x11: set_reg(c, d, c->stage == STAGE_TESS_CTRL || c->stage == STAGE_GEOMETRY ? "inv" : "0u"); break;   // SR_INVOCATION_ID: the output control point of a tess control thread; the geometry instance (gid % sp[3])
             case 0x21: set_reg(c, d, c->stage == STAGE_COMPUTE || c->stage == STAGE_TESS_CTRL ? "tid.x" : "0u"); break;
             case 0x22: set_reg(c, d, "tid.y"); break;
             case 0x23: set_reg(c, d, "tid.z"); break;
@@ -2922,6 +2931,7 @@ static void stage_check(Ctx *c) {
         if (k && (k->xfb_count || k->stage_out)) fail(c, "transform feedback / stage-out requested for a %s shader", st == STAGE_FRAGMENT ? "fragment" : "compute");
     }
     if (st == STAGE_GEOMETRY && k && (k->xfb_count || k->stage_out)) fail(c, "transform feedback from a geometry shader is captured by the replay from gs_vtx / gs_idx (same record layout), not in the shader");
+    if (k && k->capture_void && (st != STAGE_VERTEX || (!k->xfb_count && !k->stage_out))) fail(c, "capture_void is for a vertex shader with stage_out / transform feedback");
 }
 
 // The vertex-stage epilogue that writes the stage-out record and the captured transform feedback components (before the clip-space flips: the values are the
@@ -3300,20 +3310,25 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
             if (info->xfb_buffer_mask & (1u << k)) sp(&args, ", device uint *xfb%d [[buffer(%d)]]", k, XFB_BUFFER_BASE + k);
     }
     if (stage == STAGE_VERTEX) {
-        sp(&s, "vertex VOut main0(VIn in [[stage_in]], uint vid [[vertex_id]], uint iid [[instance_id]]%s%s) {\n", "", args.buf ? args.buf : "");
+        /* capture_void: a capture-only pass (stage_out / xfb) returns nothing, so the pipeline may disable rasterization (Metal demands a void vertex function for that) */
+        sp(&s, "vertex %s main0(VIn in [[stage_in]], uint vid [[vertex_id]], uint iid [[instance_id]]%s%s) {\n", key && key->capture_void ? "void" : "VOut", "", args.buf ? args.buf : "");
         sp(&s, "  VOut out = {};\n  out.pos = float4(0, 0, 0, 1);\n");
         for (int i = 0; i < 32; i++)
             if (c->out_attr_mask & (1u << i)) sp(&s, "  out.v%d = float4(0, 0, 0, 1);\n", i);
     } else if (stage == STAGE_FRAGMENT) {
-        sp(&s, "fragment FOut main0(FIn in [[stage_in]], bool front_facing [[front_facing]]%s%s%s) {\n",
+        sp(&s, "fragment FOut main0(FIn in [[stage_in]], bool front_facing [[front_facing]]%s%s%s%s) {\n",
            c->uses_lane ? ", uint lane [[thread_index_in_simdgroup]]" : "", c->uses_point_coord ? ", float2 point_coord [[point_coord]]" : "",
+           c->key && c->key->sample_shading ? ", uint sample_id [[sample_id]]" : "" /* declared = Metal runs the function per sample (NVN sample shading) */,
            args.buf ? args.buf : "");
     } else if (stage == STAGE_GEOMETRY) {
         sp(&s,
            "kernel void main0(uint gid [[thread_position_in_grid]], constant uint *sp [[buffer(%d)]], device const float4 *stage_in [[buffer(%d)]], "
            "device float4 *gs_vtx [[buffer(%d)]], device uint *gs_idx [[buffer(%d)]]%s) {\n",
            STAGE_PARAM_BUFFER_INDEX, STAGE_IN_BUFFER_INDEX, GS_VERTEX_BUFFER_INDEX, GS_INDEX_BUFFER_INDEX, args.buf ? args.buf : "");
-        sp(&s, "  if (gid >= sp[0]) return;\n  float4 gso[%d];\n  for (uint i = 0u; i < %uu; i++) gso[i] = float4(0.0f, 0.0f, 0.0f, 1.0f);\n", STAGE_SLOTS, STAGE_SLOTS);
+        /* GS instancing: sp[3] invocations per input primitive (0 / 1 = one). Thread gid = primitive gs_pid, invocation inv; every thread owns its own
+         * gs_vtx / gs_idx slots (the replay sizes them per thread, output record index = gid * GS_MAXV + n). */
+        sp(&s, "  uint gs_ninv = max(sp[3], 1u);\n  if (gid >= sp[0] * gs_ninv) return;\n  uint gs_pid = gid / gs_ninv, inv = gid - gs_pid * gs_ninv;\n  float4 gso[%d];\n"
+               "  for (uint i = 0u; i < %uu; i++) gso[i] = float4(0.0f, 0.0f, 0.0f, 1.0f);\n", STAGE_SLOTS, STAGE_SLOTS);
         sp(&s, "  for (uint i = 0u; i < 2u * GS_MAXV; i++) gs_idx[gid * 2u * GS_MAXV + i] = 0xFFFFFFFFu;\n  uint gs_n = 0u, gs_ic = 0u;\n  bool gs_open = false;\n");
     } else if (stage == STAGE_TESS_CTRL) {
         sp(&s,
@@ -3382,7 +3397,8 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (xfb_epi.buf) sp(&s, "%s", xfb_epi.buf);
         if (key && key->flip_y) sp(&s, "  out.pos.y = -out.pos.y;\n");
         if (key && key->depth_minus_one) sp(&s, "  out.pos.z = (out.pos.z + out.pos.w) * 0.5f;\n");
-        sp(&s, "  return out;\n}\n");
+        if (stage == STAGE_VERTEX && key && key->capture_void) sp(&s, "  (void)out;\n}\n");
+        else sp(&s, "  return out;\n}\n");
     } else if (stage == STAGE_FRAGMENT) {
         sp(&s, "  FOut o;\n");
         int r = 0;

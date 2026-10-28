@@ -1,4 +1,5 @@
 /* Unit tests: acc:u0 (local user, profile, application info) and the network-account rows routed through the OnlineProvider. */
+#define NAPPLE_ACCOUNT_TEST 1
 #include "../src/services/account.c"
 #include "svc_test.h"
 #include "online_loopback.h"
@@ -17,6 +18,20 @@ int main(void) {
     IpcObject *u2 = acc_open(); CHECK(((AccSession *)u2->state)->app_info_initialized == 0, "the flag is per connection");
     svc_call(u, 101, NULL, 0, &c); CHECK(c.nout_objects == 1, "GetBaasAccountManagerForApplication"); IpcObject *m = c.out_objects[0];
 
+    /* more than one profile (NAPPLE_PROFILES): count, existence, list, per-uid profile, and the player-select lister */
+    setenv("NAPPLE_PROFILES", "3", 1);
+    profile_count_reset_for_test();
+    svc_call(u, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 3, "NAPPLE_PROFILES=3: three users");
+    { uint8_t uid[16]; account_profile_uid(g_user_id, 2, uid);
+      svc_call(u, 1, uid, 16, &c); CHECK(c.result == 0 && c.out[0] == 1, "the third user exists");
+      uid[15] = 9; svc_call(u, 1, uid, 16, &c); CHECK(c.out[0] == 0, "an unknown uid does not exist");
+      account_profile_uid(g_user_id, 1, uid); svc_call(u, 5, uid, 16, &c); CHECK(c.nout_objects == 1, "GetProfile for the second user");
+      svc_call(c.out_objects[0], 1, NULL, 0, &c); CHECK(c.result == 0 && !memcmp(c.out, uid, 16) && !strcmp((char *)c.out + 24, "Player 2"), "GetBase: second user's uid and name"); }
+    { uint8_t tab[8][16]; CHECK(profile_lister(tab, 8) == 3 && !memcmp(tab[0], g_user_id, 16) && tab[2][15] == 3, "profile lister: three uids, first is the local user");
+      CHECK(profile_lister(tab, 2) == 2, "profile lister respects the cap");
+      service_register_account(); CHECK(applet_profiles(tab, 8, g_user_id) == 3, "account registered the lister with the applet core"); }
+    unsetenv("NAPPLE_PROFILES"); profile_count_reset_for_test();
+    CHECK(account_profile_count_spec("99") == ACCOUNT_MAX_PROFILES && account_profile_count_spec("0") == 1 && account_profile_count_spec("x") == 1 && account_profile_count_spec(NULL) == 1, "NAPPLE_PROFILES clamps");
     /* NullProvider: not linked; the answers titles saw before this row was routed */
     online_provider_install(NULL);
     svc_call(m, 0, NULL, 0, &c); CHECK(c.result == 0, "CheckAvailability: ok");
