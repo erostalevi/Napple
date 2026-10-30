@@ -1,6 +1,8 @@
 /* api_cmd.c - NVN command buffers. Commands are recorded into host memory as compact records; EndRecording publishes an immutable,
  * reference-counted list that submissions and CallCommands refer to by handle. Nothing here touches Metal. */
 #include <compression.h>
+#include <dlfcn.h>
+#include <os/lock.h>
 #include <pthread.h>
 #include <sched.h>
 #include <sys/sysctl.h>
@@ -17,7 +19,16 @@ void gfx_api_link_cmd(void) {}
 #define TEX_MAGIC MAGIC('T', 'E', 'X', '0')
 #define PROG_MAGIC MAGIC('P', 'R', 'G', '0')
 
+/* The host part of a guest command buffer object. The guest object only holds a slot number and a generation (cmd_t.hid), never a pointer, and host parts
+ * are never freed: a finalized one keeps its slot and is reused by the next Initialize. A guest object that was copied, finalized, overwritten or left on a
+ * dead stack therefore resolves to "no host part" instead of to freed memory. ACNH starts used one stack-allocated command buffer from two threads at once
+ * (two threads on two cores recorded the same object's slot; see the 2026-10-28 b8 change note): every change of the recording state is made under the host part's
+ * lock, buffers that grow are freed only after a grace period (a writer of the other thread may still hold a pointer into them), and a command that has
+ * nowhere to go is written to a per-thread sink as large as the command. */
 typedef struct cmdbuf_host {
+    os_unfair_lock lk;                        /* recording state: buf/len/cap, children, rec_* (getters and setters of plain values do not take it) */
+    _Atomic uint32_t gen;                     /* generation of the guest object using this part; 0 while the part is free */
+    uint32_t slot;
     uint8_t *buf; size_t len, cap;            /* scratch for the recording in progress */
     cmdrec **children; uint32_t nchild, capchild;
     uintptr_t rec_lo;                         /* where the recording in progress started in command memory */
@@ -25,13 +36,77 @@ typedef struct cmdbuf_host {
     size_t cmd_size, ctl_size, used_est;
     PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC cb; void *cb_data;
     ptrdiff_t row_stride, img_stride;
-    uint8_t dummy[256];                       /* sink for commands recorded outside Begin/End */
     uint64_t rec_tid;                         /* thread that called BeginRecording (diagnostics: a recording used from two threads) */
     const void *owner;                        /* the guest cmd_t this host part was made for: a copied or moved guest object must not share it */
 } cmdbuf_host;
-/* The host part of a guest command buffer object, or NULL when the object was never initialised, was finalized, or is a byte copy of another one
- * (the guest may relocate or copy the object; two objects sharing one host part would double free it). */
-static inline cmdbuf_host *cb_host_of(const cmd_t *o) { cmdbuf_host *h = o ? o->h : NULL; return h && h->owner == o ? h : NULL; }
+/* Slot table: fixed chunks, published once and never moved or freed, so a lookup needs no lock. */
+#define CBH_CHUNK 4096u
+#define CBH_CHUNKS 1024u
+static _Atomic(cmdbuf_host *) *_Atomic g_cbh_tab[CBH_CHUNKS];
+static _Atomic uint32_t g_cbh_n, g_cbh_gen;
+static uint32_t *g_cbh_free, g_cbh_nfree, g_cbh_capfree;
+static pthread_mutex_t g_cbh_mu = PTHREAD_MUTEX_INITIALIZER;
+static cmdbuf_host *cbh_slot(uint32_t slot) {
+    if (slot >= atomic_load_explicit(&g_cbh_n, memory_order_acquire)) return NULL;
+    _Atomic(cmdbuf_host *) *ch = atomic_load_explicit(&g_cbh_tab[slot / CBH_CHUNK], memory_order_acquire);
+    return ch ? atomic_load_explicit(&ch[slot % CBH_CHUNK], memory_order_acquire) : NULL;
+}
+/* The host part of a guest command buffer object, or NULL when the object was never initialised, was finalized, is a byte copy of another one (the guest
+ * may relocate or copy the object; two objects sharing one host part would double free it) or holds garbage. The part stays valid memory for good; callers
+ * that change it take its lock and check cbh_live again. */
+static inline int cbh_live(const cmdbuf_host *h, const cmd_t *o, uint32_t gen) { return gen && atomic_load_explicit(&h->gen, memory_order_acquire) == gen && h->owner == o; }
+static cmdbuf_host *cb_host_of(const cmd_t *o) {
+    if (!o) return NULL;
+    uint64_t id = o->hid;
+    cmdbuf_host *h = (uint32_t)id ? cbh_slot((uint32_t)id - 1) : NULL;
+    return h && cbh_live(h, o, (uint32_t)(id >> 32)) ? h : NULL;
+}
+/* Locks the host part of o; NULL (nothing locked) when it has none. */
+static cmdbuf_host *cbh_lock(const cmd_t *o) {
+    cmdbuf_host *h = cb_host_of(o);
+    if (!h) return NULL;
+    os_unfair_lock_lock(&h->lk);
+    if (cbh_live(h, o, (uint32_t)(o->hid >> 32))) return h;
+    os_unfair_lock_unlock(&h->lk);                                  /* finalized by another thread meanwhile */
+    return NULL;
+}
+static void cbh_unlock(cmdbuf_host *h) { os_unfair_lock_unlock(&h->lk); }
+
+/* Deferred frees: a buffer replaced while another thread may still be writing a command into it is freed GRAVE_NS later. */
+#define GRAVE_NS 2000000000ull
+typedef struct grave { struct grave *next; void *p; uint64_t t; } grave;
+static grave *g_grave_head, **g_grave_tail = &g_grave_head;
+static pthread_mutex_t g_grave_mu = PTHREAD_MUTEX_INITIALIZER;
+static void grave_put(void *p) {
+    grave *g = malloc(sizeof *g), *dead = NULL;
+    uint64_t now = gfx_now_ns();
+    pthread_mutex_lock(&g_grave_mu);
+    if (g) { *g = (grave){NULL, p, now}; *g_grave_tail = g; g_grave_tail = &g->next; }
+    while (g_grave_head && now - g_grave_head->t >= GRAVE_NS) {        /* oldest first: collect the expired ones */
+        grave *x = g_grave_head;
+        g_grave_head = x->next;
+        if (!g_grave_head) g_grave_tail = &g_grave_head;
+        x->next = dead; dead = x;
+    }
+    pthread_mutex_unlock(&g_grave_mu);
+    if (!g) gfx_die("out of memory retiring a command buffer");
+    while (dead) { grave *x = dead; dead = x->next; free(x->p); free(x); }
+}
+
+/* Per-thread sink for commands that are not recorded (no host part, or outside Begin/End): as large as the largest such command, zeroed. */
+static _Thread_local uint8_t *t_sink;
+static _Thread_local size_t t_sink_cap;
+static void *cmd_sink(uint32_t payload) {
+    size_t need = payload + 16u;
+    if (need > t_sink_cap) {
+        free(t_sink);
+        t_sink_cap = need < 4096 ? 4096 : need * 2;
+        t_sink = malloc(t_sink_cap);
+        if (!t_sink) gfx_die("out of memory for a command sink");
+    }
+    memset(t_sink, 0, need);
+    return t_sink;
+}
 
 static _Atomic uint64_t g_rec_live;
 static _Atomic uint64_t g_rec_bytes;      /* bytes held by live recordings (headers + raw or packed command data) */
@@ -40,6 +115,62 @@ static _Atomic uint64_t g_rel_why[5];     /* 0 hard cap, 1 command memory overwr
 
 static int g_cmdtrace = -1;                 /* NAPPLE_GFX_CMDTRACE=1: log recording lifetimes (command handle debugging) */
 #define CMDTRACE(...) do { if (g_cmdtrace < 0) g_cmdtrace = getenv("NAPPLE_GFX_CMDTRACE") != NULL; if (g_cmdtrace) fprintf(stderr, "[cmdtrace] " __VA_ARGS__); } while (0)      /* recordings released by: grave cap, chunk reuse, dead, live cap, finalize (diagnostics) */
+
+/* NAPPLE_GFX_CBTRACE=1: command buffer lifetime events (Initialize/Finalize/Begin/End and calls on objects without a host part) go to a ring buffer; the
+ * first anomalies dump every event of the object involved (diagnostics for the ACNH start flake). */
+typedef struct { uint64_t t; uint64_t tid; const void *o; uint64_t h; uintptr_t lr, fp, stk_hi, stk_lo, tsd; uint64_t gtid; int gcore; uint32_t ev, magic, rec; uintptr_t bt[6]; } cbev;
+static uint64_t (*g_rt_tid)(void); static int (*g_rt_core)(void);   /* the runtime's guest thread id and core, when it is linked in (dlsym) */
+enum { CBEV_INIT, CBEV_FIN, CBEV_BEGIN, CBEV_END, CBEV_NULL, CBEV_REC_NULL, CBEV_ANOM };
+static const char *const cbev_name[] = {"init", "fin", "begin", "end", "null-host", "rec-null", "anomaly"};
+#define CBRING 65536
+static cbev *g_cbring; static _Atomic uint64_t g_cbpos; static int g_cbtrace = -1; static _Atomic int g_cbdumps;
+static void cbtrace(uint32_t ev, const cmd_t *o, uintptr_t lr) {
+    if (g_cbtrace < 0) {
+        g_cbtrace = getenv("NAPPLE_GFX_CBTRACE") != NULL;
+        if (g_cbtrace) { g_cbring = calloc(CBRING, sizeof *g_cbring); g_rt_tid = (uint64_t (*)(void))dlsym(RTLD_DEFAULT, "threads_current_id"); g_rt_core = (int (*)(void))dlsym(RTLD_DEFAULT, "threads_current_core"); }
+    }
+    if (!g_cbtrace || !g_cbring) return;
+    uint64_t tid; pthread_threadid_np(NULL, &tid);
+    cbev *e = &g_cbring[atomic_fetch_add(&g_cbpos, 1) % CBRING];
+    uintptr_t hi = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
+    uintptr_t tp; __asm__ volatile("mrs %0, tpidrro_el0" : "=r"(tp));
+    *e = (cbev){gfx_now_ns(), tid, o, o ? o->hid : 0, lr, (uintptr_t)__builtin_frame_address(0), hi, hi - pthread_get_stacksize_np(pthread_self()), tp, g_rt_tid ? g_rt_tid() : 0, g_rt_core ? g_rt_core() : -9, ev, o ? o->magic : 0, o ? o->recording : 0, {0}};
+    void **fp = __builtin_frame_address(0);
+    for (int i = 0; i < 6 && fp && !((uintptr_t)fp & 7); i++, fp = (void **)fp[0] > fp ? (void **)fp[0] : NULL) e->bt[i] = (uintptr_t)fp[1];
+}
+static void cbtrace_dump(const char *why, const cmd_t *o, uintptr_t lr) {
+    cbtrace(CBEV_ANOM, o, lr);
+    if (!g_cbtrace || !g_cbring || atomic_fetch_add(&g_cbdumps, 1) >= 8) return;
+    uint64_t end = atomic_load(&g_cbpos), beg = end > CBRING ? end - CBRING : 0;
+    Dl_info di = {0};
+    dladdr((void *)lr, &di);
+    fprintf(stderr, "[cbtrace] %s: cb %p (h %#llx magic %#x rec %u) lr %#lx (%s+%#lx in %s); its events:\n", why, (const void *)o, o ? (unsigned long long)o->hid : 0ull, o ? o->magic : 0, o ? o->recording : 0, (unsigned long)lr,
+            di.dli_sname ? di.dli_sname : "?", (unsigned long)(lr - (uintptr_t)di.dli_saddr), di.dli_fname ? di.dli_fname : "?");
+    int n = 0;
+    for (void **fp = __builtin_frame_address(0); fp && n < 12 && !((uintptr_t)fp & 7); fp = (void **)fp[0] > fp ? (void **)fp[0] : NULL, n++) {
+        Dl_info fi = {0}; uintptr_t r = (uintptr_t)fp[1];
+        if (!r) break;
+        dladdr((void *)r, &fi);
+        fprintf(stderr, "[cbtrace]   frame fp %p lr %#lx %s+%#lx\n", (void *)fp, (unsigned long)r, fi.dli_sname ? fi.dli_sname : "?", (unsigned long)(r - (uintptr_t)fi.dli_saddr));
+    }
+    if (o && (uint32_t)o->hid) { cmdbuf_host *hh = cbh_slot((uint32_t)o->hid - 1); fprintf(stderr, "[cbtrace]   slot %u of %u: host %p gen %u owner %p\n", (uint32_t)o->hid - 1, atomic_load(&g_cbh_n), (void *)hh, hh ? atomic_load(&hh->gen) : 0, hh ? hh->owner : NULL); }
+    uint64_t seen[16]; int nseen = 0;
+    for (uint64_t i = beg; i < end; i++) {
+        const cbev *e = &g_cbring[i % CBRING];
+        if (e->o != o && !(o && e->h && e->h == o->hid)) continue;
+        fprintf(stderr, "[cbtrace]   %.6f tid %llu %-9s cb %p h %#llx magic %#x rec %u lr %#lx fp %#lx pthread stack [%#lx,%#lx) tsd %#lx guest thread %#llx core %d\n", e->t / 1e9, (unsigned long long)e->tid, cbev_name[e->ev], e->o, (unsigned long long)e->h, e->magic, e->rec, (unsigned long)e->lr,
+                (unsigned long)e->fp, (unsigned long)e->stk_lo, (unsigned long)e->stk_hi, (unsigned long)e->tsd, (unsigned long long)e->gtid, e->gcore);
+        int first = 1;                                              /* backtrace: the first event of each thread, and every anomaly */
+        for (int k = 0; k < nseen; k++) if (seen[k] == e->tid) first = 0;
+        if (first && nseen < 16) seen[nseen++] = e->tid;
+        if (first || e->ev == CBEV_ANOM) {
+            fprintf(stderr, "[cbtrace]     bt");
+            for (int k = 0; k < 6 && e->bt[k]; k++) fprintf(stderr, " %#lx", (unsigned long)e->bt[k]);
+            fprintf(stderr, "\n");
+        }
+    }
+}
+#define LR() ((uintptr_t)__builtin_return_address(0))
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Recordings
@@ -277,35 +408,92 @@ uint64_t gfx_cmdrec_packed(void) { return atomic_load(&g_rec_packed); }
 static cmdbuf_host g_null_host;
 static cmdbuf_host *cbh_get(const void *c) {
     cmdbuf_host *h = cb_host_of((const cmd_t *)c);
-    if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "command buffer call on a null or finalized command buffer ignored"); return &g_null_host; }
+    if (!h) { cbtrace_dump("call on a null or finalized command buffer", c, LR()); LOG_ONCE(NAPPLE_LOG_WARN, "command buffer call on a null or finalized command buffer ignored"); return &g_null_host; }
     return h;
 }
 #define CBH(c) cbh_get(c)
 
+/* A free host part (from the free list, or a new slot). */
+static cmdbuf_host *cbh_alloc(void) {
+    cmdbuf_host *h = NULL;
+    pthread_mutex_lock(&g_cbh_mu);
+    if (g_cbh_nfree) h = cbh_slot(g_cbh_free[--g_cbh_nfree]);
+    else {
+        uint32_t slot = atomic_load(&g_cbh_n);
+        _Atomic(cmdbuf_host *) *ch = slot < CBH_CHUNK * CBH_CHUNKS ? atomic_load(&g_cbh_tab[slot / CBH_CHUNK]) : NULL;
+        if (slot < CBH_CHUNK * CBH_CHUNKS && !ch && (ch = calloc(CBH_CHUNK, sizeof *ch))) atomic_store_explicit(&g_cbh_tab[slot / CBH_CHUNK], ch, memory_order_release);
+        if (ch && (h = calloc(1, sizeof *h)) && (h->buf = malloc(4096))) {
+            h->lk = OS_UNFAIR_LOCK_INIT;
+            h->slot = slot;
+            h->cap = 4096;
+            atomic_store_explicit(&ch[slot % CBH_CHUNK], h, memory_order_release);
+            atomic_store_explicit(&g_cbh_n, slot + 1, memory_order_release);
+        } else if (h) { free(h); h = NULL; }
+    }
+    pthread_mutex_unlock(&g_cbh_mu);
+    return h;
+}
+/* Ends the guest object's use of h (locked; unlocked on return) and puts it on the free list. */
+static void cbh_retire(cmdbuf_host *h) {
+    /* recorded lists stay valid: they belong to the game's command memory, not to this object */
+    for (uint32_t i = 0; i < h->nchild; i++) cmdrec_release(h->children[i]);
+    h->nchild = 0;
+    h->len = 0;
+    atomic_store_explicit(&h->gen, 0, memory_order_release);
+    h->owner = NULL;
+    if (h->cap > (1u << 20)) {                                      /* do not keep a huge scratch on a free part */
+        uint8_t *nb = malloc(4096);
+        if (!nb) gfx_die("out of memory finalizing a command buffer");
+        grave_put(h->buf);
+        h->buf = nb; h->cap = 4096;
+    }
+    uint32_t slot = h->slot;
+    cbh_unlock(h);
+    pthread_mutex_lock(&g_cbh_mu);
+    if (g_cbh_nfree == g_cbh_capfree) {
+        uint32_t nc = g_cbh_capfree ? g_cbh_capfree * 2 : 256;
+        uint32_t *nf = realloc(g_cbh_free, nc * sizeof *nf);
+        if (!nf) gfx_die("out of memory finalizing a command buffer");
+        g_cbh_free = nf; g_cbh_capfree = nc;
+    }
+    g_cbh_free[g_cbh_nfree++] = slot;
+    pthread_mutex_unlock(&g_cbh_mu);
+}
+
 NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
     (void)d;
     cmd_t *o = (cmd_t *)c;
+    cmdbuf_host *old = cbh_lock(o);
+    if (old) cbh_retire(old);                                       /* initialised again without Finalize */
     memset(o, 0, sizeof *o);
-    cmdbuf_host *h = calloc(1, sizeof *h);
+    cmdbuf_host *h = cbh_alloc();
     if (!h) return 0;
-    h->cap = 4096;
-    h->buf = malloc(h->cap);
-    if (!h->buf) { free(h); return 0; }
-    o->magic = CB_MAGIC;
+    uint32_t gen;
+    do gen = atomic_fetch_add(&g_cbh_gen, 1) + 1; while (!gen);
+    os_unfair_lock_lock(&h->lk);
+    h->len = 0; h->nchild = 0; h->rec_lo = 0;
+    h->cmd_base = h->ctl_base = 0; h->cmd_size = h->ctl_size = h->used_est = 0;
+    h->cb = NULL; h->cb_data = NULL;
+    h->row_stride = h->img_stride = 0;
+    h->rec_tid = 0;
     h->owner = o;
-    o->h = h;
+    atomic_store_explicit(&h->gen, gen, memory_order_release);
+    cbh_unlock(h);
+    o->magic = CB_MAGIC;
+    o->hid = (uint64_t)gen << 32 | (h->slot + 1);
     o->inline_cur = ~0ull;      /* NVN 55 inline fast paths never find room: every call takes the API path */
     o->inline_end = 0;
+    cbtrace(CBEV_INIT, o, LR());
     return 1;
 }
 NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = cb_host_of(o);
-    if (o->magic != CB_MAGIC || !h) { memset(o, 0, sizeof *o); return; }
-    CMDTRACE("finalize cb %p\n", (void *)h);
-    /* recorded lists stay valid: they belong to the game's command memory, not to this object */
-    for (uint32_t i = 0; i < h->nchild; i++) cmdrec_release(h->children[i]);
-    free(h->children); free(h->buf); free(h);
+    cbtrace(CBEV_FIN, o, LR());
+    cmdbuf_host *h = o->magic == CB_MAGIC ? cbh_lock(o) : NULL;
+    if (h) {
+        CMDTRACE("finalize cb %p\n", (void *)h);
+        cbh_retire(h);
+    }
     memset(o, 0, sizeof *o);
 }
 NVN(nvnCommandBufferSetDebugLabel, void, NVNcommandBuffer *c, const char *l) { (void)c; (void)l; }
@@ -318,10 +506,12 @@ NVN(nvnCommandBufferSetCommandMemoryCallbackEnabled, void, NVNcommandBuffer *c, 
 
 /* Command and control memory belong to the game; recordings live in host memory, so the memory is only accounted (see the lifetime notes above). */
 NVN(nvnCommandBufferAddCommandMemory, void, NVNcommandBuffer *c, const NVNmemoryPool *p, ptrdiff_t off, size_t size) {
-    cmdbuf_host *h = CBH(c);
     uintptr_t base = (uintptr_t)((const pool_t *)p)->mem + (uintptr_t)off;
+    cmdbuf_host *h = cbh_lock((const cmd_t *)c);
+    if (!h) { CBH(c); return; }                                     /* (logs the call on a null buffer) */
     CMDTRACE("addmem cb %p [%#lx,%#lx) prev [%#lx,+%#zx) used %#zx\n", (void *)h, (unsigned long)base, (unsigned long)(base + size), (unsigned long)h->cmd_base, h->cmd_size, h->used_est);
     h->cmd_base = base; h->cmd_size = size; h->used_est = 0;
+    cbh_unlock(h);
 }
 NVN(nvnCommandBufferAddControlMemory, void, NVNcommandBuffer *c, void *m, size_t size) { cmdbuf_host *h = CBH(c); h->ctl_base = (uintptr_t)m; h->ctl_size = size; }
 NVN(nvnCommandBufferGetCommandMemorySize, size_t, const NVNcommandBuffer *c) { return CBH(c)->cmd_size; }
@@ -336,21 +526,17 @@ NVN(nvnCommandBufferIsRecording, NVNboolean, const NVNcommandBuffer *c) { return
 /* ---------------------------------------------------------------------------------------------------------------
  * Record writer
  * --------------------------------------------------------------------------------------------------------------- */
-static void *rec_op(NVNcommandBuffer *c, uint16_t op, uint32_t payload) {
-    cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = cb_host_of(o);
-    if (!h) { static uint8_t scratch[64]; LOG_ONCE(NAPPLE_LOG_WARN, "command recorded on a null or finalized command buffer ignored"); memset(scratch, 0, sizeof scratch); return scratch; }
-    if (!o->recording) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "command recorded outside BeginRecording/EndRecording (op %u) ignored", op);
-        return h->dummy;
-    }
-    { static int tr = -1; if (tr < 0) tr = getenv("NAPPLE_NVNTRACE") != NULL; if (tr) fprintf(stderr, "[nvntrace] cb %p op %u\n", (void *)c, op); }     /* record-order op stream (diagnostics) */
+/* Appends a record (h locked) and returns its zeroed payload. The caller fills the payload after the lock is dropped: a buffer that grows is therefore only
+ * retired (freed GRAVE_NS later), and a payload that another thread's EndRecording copies before it is filled reads as zeros (an empty record). */
+static void *rec_op_locked(cmdbuf_host *h, uint16_t op, uint32_t payload) {
     uint32_t size = (uint32_t)((sizeof(op_hdr) + payload + 7) & ~7u);
     if (h->len + size > h->cap) {
         size_t nc = h->cap * 2;
         while (nc < h->len + size) nc *= 2;
-        uint8_t *nb = realloc(h->buf, nc);
+        uint8_t *nb = malloc(nc);
         if (!nb) gfx_die("out of memory recording commands");
+        memcpy(nb, h->buf, h->len);
+        grave_put(h->buf);
         h->buf = nb; h->cap = nc;
     }
     op_hdr *hd = (op_hdr *)(h->buf + h->len);
@@ -358,7 +544,22 @@ static void *rec_op(NVNcommandBuffer *c, uint16_t op, uint32_t payload) {
     h->len += size;
     h->used_est += 16 + payload / 2;
     uint8_t *p = (uint8_t *)(hd + 1);
-    if (payload & 7) memset(p + (payload & ~7u), 0, 8);
+    memset(p, 0, size - sizeof *hd);
+    return p;
+}
+static void *rec_op(NVNcommandBuffer *c, uint16_t op, uint32_t payload) {
+    cmd_t *o = (cmd_t *)c;
+    cmdbuf_host *h = cbh_lock(o);
+    if (!h) { cbtrace_dump("command recorded on a null or finalized command buffer", o, LR()); LOG_ONCE(NAPPLE_LOG_WARN, "command recorded on a null or finalized command buffer ignored"); return cmd_sink(payload); }
+    if (!o->recording) {
+        cbh_unlock(h);
+        cbtrace_dump("command recorded outside Begin/End", o, LR());
+        LOG_ONCE(NAPPLE_LOG_WARN, "command recorded outside BeginRecording/EndRecording (op %u) ignored", op);
+        return cmd_sink(payload);
+    }
+    { static int tr = -1; if (tr < 0) tr = getenv("NAPPLE_NVNTRACE") != NULL; if (tr) fprintf(stderr, "[nvntrace] cb %p op %u\n", (void *)c, op); }     /* record-order op stream (diagnostics) */
+    void *p = rec_op_locked(h, op, payload);
+    cbh_unlock(h);
     return p;
 }
 #define REC(c, T, op) ((T *)rec_op((c), (op), sizeof(T)))
@@ -367,9 +568,11 @@ static void *rec_op(NVNcommandBuffer *c, uint16_t op, uint32_t payload) {
 
 NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = cb_host_of(o);
-    if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "BeginRecording on a null or finalized command buffer ignored"); return; }
+    cbtrace(CBEV_BEGIN, o, LR());
+    cmdbuf_host *h = cbh_lock(o);
+    if (!h) { cbtrace_dump("BeginRecording on a null or finalized command buffer", o, LR()); LOG_ONCE(NAPPLE_LOG_WARN, "BeginRecording on a null or finalized command buffer ignored"); return; }
     uint64_t me = (uint64_t)(uintptr_t)pthread_self();
+    if (o->recording) cbtrace_dump("BeginRecording while already recording", o, LR());
     if (o->recording) LOG_ONCE(NAPPLE_LOG_WARN, "BeginRecording while already recording (first begun by thread %#llx, now %#llx, cb %p)", (unsigned long long)h->rec_tid, (unsigned long long)me, (void *)c);
     h->rec_tid = me;
     h->len = 0;
@@ -377,15 +580,19 @@ NVN(nvnCommandBufferBeginRecording, void, NVNcommandBuffer *c) {
     for (uint32_t i = 0; i < h->nchild; i++) cmdrec_release(h->children[i]);
     h->nchild = 0;
     o->recording = 1;
+    cbh_unlock(h);
 }
 
 NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     cmd_t *o = (cmd_t *)c;
-    cmdbuf_host *h = cb_host_of(o);
-    if (!h) { LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording on a null or finalized command buffer ignored"); return 0; }
-    if (!o->recording) { LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording without BeginRecording (last begun by thread %#llx, now %#llx, cb %p)", (unsigned long long)h->rec_tid, (unsigned long long)(uintptr_t)pthread_self(), (void *)c); return 0; }
+    cbtrace(CBEV_END, o, LR());
+    cmdbuf_host *h = cbh_lock(o);
+    if (!h) { cbtrace_dump("EndRecording on a null or finalized command buffer", o, LR()); LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording on a null or finalized command buffer ignored"); return 0; }
+    if (!o->recording) cbtrace_dump("EndRecording without BeginRecording", o, LR());
+    if (h->rec_tid != (uint64_t)(uintptr_t)pthread_self()) cbtrace_dump("EndRecording from another thread", o, LR());
+    if (!o->recording) { LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording without BeginRecording (last begun by thread %#llx, now %#llx, cb %p)", (unsigned long long)h->rec_tid, (unsigned long long)(uintptr_t)pthread_self(), (void *)c); cbh_unlock(h); return 0; }
     if (h->rec_tid != (uint64_t)(uintptr_t)pthread_self()) LOG_ONCE(NAPPLE_LOG_WARN, "EndRecording from another thread than BeginRecording (%#llx vs %#llx, cb %p)", (unsigned long long)h->rec_tid, (unsigned long long)(uintptr_t)pthread_self(), (void *)c);
-    rec_op(c, OP_END, 0);
+    rec_op_locked(h, OP_END, 0);
     o->recording = 0;
     cmdrec *r = calloc(1, sizeof *r);
     uint8_t *data = malloc(h->len ? h->len : 1);
@@ -409,6 +616,7 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
         r->lo = (1ull << 62) + atomic_fetch_add(&synth, 1) * 2;
         r->hi = r->lo + 1;
     }
+    cbh_unlock(h);
     r->reg_idx = ~0u;
     r->handle = htab_alloc(r);
     atomic_fetch_add(&g_rec_live, 1);
@@ -416,7 +624,7 @@ NVN(nvnCommandBufferEndRecording, NVNcommandHandle, NVNcommandBuffer *c) {
     pthread_once(&g_packer_once, packer_start);
     reg_publish(r);
     LOGD("EndRecording -> handle %#llx (%u bytes recorded)", (unsigned long long)r->handle, r->len);
-    CMDTRACE("end %#llx cb %p [%#lx,%#lx) len %u\n", (unsigned long long)r->handle, (void *)h, (unsigned long)r->lo, (unsigned long)r->hi, r->len);
+    CMDTRACE("end %#llx cb %p [%#lx,%#lx) len %u\n", (unsigned long long)r->handle, (void *)c, (unsigned long)r->lo, (unsigned long)r->hi, r->len);
     return r->handle;
 }
 
@@ -429,7 +637,6 @@ void gfx_cmdrec_finalize_handle(uint64_t handle) {
 }
 
 static void add_children(NVNcommandBuffer *c, int n, const NVNcommandHandle *hs, int copy) {
-    cmdbuf_host *h = CBH(c);
     if (n <= 0) return;
     p_call *p = REC_N(c, p_call, OP_CALL, (size_t)n * 8);
     uint64_t *list = (uint64_t *)(p + 1);
@@ -439,14 +646,22 @@ static void add_children(NVNcommandBuffer *c, int n, const NVNcommandHandle *hs,
         if (!r) {
             static _Atomic uint64_t n_stale;
             uint64_t k = atomic_fetch_add(&n_stale, 1);
-            CMDTRACE("stale %#llx called in cb %p\n", (unsigned long long)hs[i], (void *)h);
+            CMDTRACE("stale %#llx called in cb %p\n", (unsigned long long)hs[i], (void *)c);
             if (k < 20 || (k & (k - 1)) == 0) LOGW("%s: stale or invalid command handle %#llx ignored (%llu so far; dropped: ceiling %llu, address overwritten %llu, handle finalized %llu, pool freed %llu)", copy ? "CopyCommands" : "CallCommands", (unsigned long long)hs[i], (unsigned long long)k + 1,
                                                    (unsigned long long)g_rel_why[0], (unsigned long long)g_rel_why[1], (unsigned long long)g_rel_why[2], (unsigned long long)g_rel_why[3]);
             continue;
         }
         atomic_store_explicit(&r->last_use, cmdrec_now(), memory_order_relaxed);
-        if (h->nchild == h->capchild) { h->capchild = h->capchild ? h->capchild * 2 : 16; h->children = realloc(h->children, h->capchild * sizeof *h->children); }
+        cmdbuf_host *h = cbh_lock((const cmd_t *)c);                /* the recording holds the reference; none when nothing is being recorded */
+        if (!h || !((const cmd_t *)c)->recording) { if (h) cbh_unlock(h); cmdrec_release(r); continue; }
+        if (h->nchild == h->capchild) {
+            uint32_t nc = h->capchild ? h->capchild * 2 : 16;
+            cmdrec **nch = realloc(h->children, nc * sizeof *nch);
+            if (!nch) gfx_die("out of memory recording a command call");
+            h->children = nch; h->capchild = nc;
+        }
         h->children[h->nchild++] = r;
+        cbh_unlock(h);
         list[cnt++] = (uint64_t)(uintptr_t)r;
     }
     p->count = cnt;

@@ -51,6 +51,10 @@
                                 * MK8D's stream 2026-10-27 (it follows the slot registers the SDK rewrites) */
 #define NVDEC_H264_CURR_PIC_IDX(w45) (((w45) >> 2) & 0x7f)
 #define NVDEC_H264_PIC_WORDS 46
+/* VP9 picture-info surface pitches (b8, PROPOSED: not matched against a real VP9 trace; the plausibility guard in nvdrv_media_core.c ignores a value that is below the
+ * picture width, above 0x10000 or not a multiple of 16, so a wrong word index degrades to packed rows rather than corrupting the output). */
+#define NVDEC_VP9_W_PITCH_LUMA 20
+#define NVDEC_VP9_W_PITCH_CHROMA 21
 #define NVDEC_PIC_STREAM_LEN_WORD_H264 18
 #define NVDEC_PIC_STREAM_LEN_WORD_VP9 12
 #define NVDEC_PIC_STREAM_LEN_WORD_H265 12
@@ -85,6 +89,23 @@ enum { VIC_FMT_RGBA8 = 0x1f, VIC_FMT_BGRA8 = 0x20, VIC_FMT_RGBX8 = 0x23, VIC_FMT
  * Status written (0x10 bytes): u32 error (0 ok, else JPEGCORE_*), width, height, bytes written. */
 enum { NVJPG_FMT_RGBA = 0, NVJPG_FMT_NV12 = 1 };
 #define NVJPG_SETUP_WORDS 6
+/* Encode (b8, Napple's extension of the reduced structure; the real nvjpg encode layout is not known): when the structure is NVJPG_SETUP_WORDS_ENC words long and
+ * word 6 is NVJPG_MODE_ENCODE, the input surface (NVJPG_SET_IN_BUF_BASE_OFFSET) holds RGBA8 pixels and the JPEG is written to NVJPG_SET_OUT_LUMA_OFFSET (out_cap
+ * bytes, word 1). Words: 6 mode (0 decode, 1 encode), 7 width, 8 height, 9 input pitch (0 = tight), 10 quality 1..100 (0 = 85), 11 4:2:0 flag (0 = 4:4:4).
+ * Word 0 is the input size in bytes (0 = pitch * height). Status: error, width, height, JPEG bytes written. Only format 0 (RGBA) is accepted as input. */
+#define NVJPG_SETUP_WORDS_ENC 12
+enum { NVJPG_MODE_DECODE = 0, NVJPG_MODE_ENCODE = 1 };
 
-/* MSENC (class 0x21): executes are accepted and counted; no bitstream is produced (status: 0 bytes). */
+/* MSENC (class 0x21), b8: H.264 encode of one NV12 frame per EXECUTE through the EncoderBackend (decoder_backend.h). The register layout is Napple's reduced
+ * one (PROPOSED: the real NVENC method map is not known). Surface registers are iova >> 8. Without a readable setup structure an execute is still accepted and
+ * counted and produces no bitstream (status: all zero), as before.
+ * Setup structure words: 0 width, 1 height, 2 luma pitch (0 = width), 3 chroma pitch (0 = width), 4 bitrate (bit/s, 0 = default), 5 fps (0 = default),
+ * 6 flags (bit0 force IDR), 7 output capacity in bytes (0 = what the mapping holds). Status (0x10 bytes): error (0 ok, MSENC_ERR_*), bytes written, flags
+ * (bit0 IDR), frame count. */
+#define MSENC_SET_SETUP_OFFSET 0x101
+#define MSENC_SET_IN_LUMA_OFFSET 0x102
+#define MSENC_SET_IN_CHROMA_OFFSET 0x103
+#define MSENC_SET_OUT_BITSTREAM_OFFSET 0x104
 #define MSENC_SET_STATUS_OFFSET 0x109
+#define MSENC_SETUP_WORDS 8
+enum { MSENC_ERR_ADDRESS = 2, MSENC_ERR_PARAMS = 4, MSENC_ERR_CODEC = 1, MSENC_ERR_FAILED = 3 };

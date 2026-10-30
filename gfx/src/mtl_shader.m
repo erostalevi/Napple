@@ -13,7 +13,7 @@
 #import "mtl_priv.h"
 #include "cache_trim.h"
 
-#define TRANSLATOR_VERSION 13u /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 14u /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader
 @end
@@ -1279,9 +1279,9 @@ static GfxShader *stage_fs(const pipe_key *k, uint32_t vs_out_mask) {
     return shader_variant(k->fs, &fk, 1);
 }
 /* Pass-through vertex function of the geometry output: record r of gs_vtx -> position + the generic slots the program stores (+ point size for points). */
-static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points) {
+static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip) {
     static NSMutableDictionary<NSNumber *, id<MTLFunction>> *cache;
-    NSNumber *ck = @(slots * 2 + (uint64_t)(points != 0));
+    NSNumber *ck = @((slots * 2 + (uint64_t)(points != 0)) ^ ((uint64_t)(clip & 3) << 62));
     @synchronized([GfxPipe class]) {
         if (!cache) cache = [NSMutableDictionary dictionary];
         if (cache[ck]) return cache[ck];
@@ -1296,6 +1296,9 @@ static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points) {
         [m appendString:@"  uint r = gs_idx[vid];\n  if (r == 0xFFFFFFFFu) { o = {}; o.pos = float4(0.0f, 0.0f, 2.0f, 1.0f); o.psize = 1.0f; return o; }\n"];
     else [m appendString:@"  uint r = vid;\n"];
     [m appendFormat:@"  device const float4 *s = gs_vtx + r * %uu;\n  o.pos = s[%d];\n", STAGE_SLOTS, STAGE_SLOT_POS];
+    /* the clip-space conversions happen here, not in the geometry kernel: gs_vtx keeps the program's own values for transform feedback */
+    if (clip & 1) [m appendString:@"  o.pos.y = -o.pos.y;\n"];
+    if (clip & 2) [m appendString:@"  o.pos.z = (o.pos.z + o.pos.w) * 0.5f;\n"];
     for (int i = 0; i < 32; i++)
         if (slots & (1ull << (STAGE_SLOT_GENERIC + i))) [m appendFormat:@"  o.v%d = s[%d];\n", i, STAGE_SLOT_GENERIC + i];
     if (points) [m appendFormat:@"  o.psize = %@;\n", (slots & (1ull << STAGE_SLOT_SYS)) ? @"max(s[0].w, 1.0f)" : @"1.0f"];
@@ -1339,13 +1342,48 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         d.rasterizationEnabled = NO; /* the capture function is `vertex void` (ShaderKey.capture_void): no rasterizer work at all */
     } else if (sk->mode == SPK_GS_DRAW) {
         int points = sk->gs_topo == GS_OUT_POINTS;
-        vfn = gs_passthrough_fn(sk->gs_slots, points);
+        vfn = gs_passthrough_fn(sk->gs_slots, points, sk->gs_clip);
         if (!vfn) return;
         fs = stage_fs(k, generic_mask(sk->gs_slots));
         if (k->fs && fs->state != 1) return;
         pipe_key nk = *k;
         nk.topo = points ? MTLPrimitiveTopologyClassPoint : sk->gs_topo == GS_OUT_LINE_STRIP ? MTLPrimitiveTopologyClassLine : MTLPrimitiveTopologyClassTriangle;
         pipe_desc_fill(d, &nk, 0, 0);
+    } else if (sk->mode == SPK_TESS_SOFT || sk->mode == SPK_TESS_SOFT_CAPTURE) {
+        /* tess eval as a plain vertex function over the software tessellator's coordinates: drawn as indexed line / triangle strips (SOFT), or run as
+         * points into stage-out records with rasterization off (SOFT_CAPTURE: the input of transform feedback / a geometry program) */
+        int cap = sk->mode == SPK_TESS_SOFT_CAPTURE;
+        ShaderKey tk = {0};
+        if (!cap) {
+            tk.flip_y = k->flip_y;
+            tk.depth_minus_one = k->depth_mode == 0;
+        }
+        tk.tess_soft = 1;
+        tk.stage_out = (uint8_t)cap;
+        tk.capture_void = (uint8_t)cap;
+        tk.tess_domain = sk->tess_domain;
+        tk.tess_out_vertices = sk->tess_cp;
+        tk.depth_slots = sk->te_depth;
+        tk.stencil_slots = sk->te_stencil;
+        tk.image_int_mask = sk->te_img_int;
+        tk.image_uint_mask = sk->te_img_uint;
+        vs = shader_variant(sk->prog, &tk, 1);
+        if (vs->state != 1) return;
+        vfn = vs->fn;
+        pipe_key nk = *k;
+        if (cap) {
+            memset(nk.color_fmt, 0, sizeof nk.color_fmt);
+            nk.depth_fmt = nk.stencil_fmt = 0;
+            nk.samples = 1;
+            nk.a2c = 0;
+            nk.topo = MTLPrimitiveTopologyClassPoint;
+        } else {
+            fs = stage_fs(k, vs->info.out_mask);
+            if (k->fs && fs->state != 1) return;
+            nk.topo = sk->tess_domain == TESS_DOMAIN_ISOLINE ? MTLPrimitiveTopologyClassLine : MTLPrimitiveTopologyClassTriangle;
+        }
+        pipe_desc_fill(d, &nk, 0, 0);
+        if (cap) d.rasterizationEnabled = NO;
     } else if (sk->mode == SPK_TESS) {
         ShaderKey tk = {0};
         tk.flip_y = k->flip_y;
@@ -1398,7 +1436,7 @@ GfxPipe *mtl_stage_pipe_get(const stage_pipe_key *k0, const gfx_xfb_layout *xfb)
         kn.k.nattr = kn.k.nstream = 0;
     }
     pipe_key_normalize(&kn.k);
-    if (kn.mode == SPK_CAPTURE) { /* the capture pass has no fragment stage and no attachments */
+    if (kn.mode == SPK_CAPTURE || kn.mode == SPK_TESS_SOFT_CAPTURE) { /* the capture pass has no fragment stage and no attachments */
         kn.k.fs = 0;
         memset(kn.k.blend, 0, sizeof kn.k.blend);
         memset(kn.k.blend_en, 0, sizeof kn.k.blend_en);

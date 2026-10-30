@@ -43,6 +43,11 @@ int main(void) {
     w32(c, 0x20, 0x123);
     CHECK(gfx_control_length(c) == 0x880, "implausible length word falls back to 0x880 (got %#x)", gfx_control_length(c));
     CHECK(!gfx_control_parse(c, 0x700, &ci), "a buffer shorter than the section is refused");
+    las_vertex(c);
+    w32(c, 0x20, 0x7d1); /* SMO / MK8D sections are 0x7d1 bytes: not a multiple of 4, still the real length */
+    CHECK(gfx_control_length(c) == 0x7d1 && gfx_control_parse(c, 0x7d1, &ci) && ci.length == 0x7d1, "odd section length 0x7d1 kept (got %#x)", gfx_control_length(c));
+    w32(c, 0x20, 0x11d0); /* the longest seen (LAS, a section with embedded assembly text) */
+    CHECK(gfx_control_length(c) == 0x11d0, "section length 0x11d0 kept (got %#x)", gfx_control_length(c));
     /* 3. varying table conversion: buffer 0 = position xyzw + generic 0 xy, buffer 1 = skip, generic 1 z */
     uint16_t stride[4] = {24, 8, 0, 0};
     uint8_t count[4] = {6, 2, 0, 0}, locs[4][128];
@@ -70,6 +75,18 @@ int main(void) {
     las_vertex(c);
     w32(c, 0x714, 1);
     CHECK(!gfx_control_xfb(c, sizeof c, &xl), "a fragment section never carries a layout");
+    /* 4b. the words that sections with embedded NV assembly text (!!NVvp5.0 / !!NVfp5.0; 18 of 20624 sections dumped from LAS, ACNH, SMO, b8) carry
+     * inside the candidate block: not a transform feedback layout (those programs capture nothing), and the consistency checks must refuse it */
+    las_vertex(c);
+    w32(c, 0x34, 0x340); w32(c, 0x38, 0xffffff01);
+    for (uint32_t o = 0x3c; o <= 0x54; o += 4) w32(c, o, 0xffffffff);
+    c[0x58] = 0xff;
+    CHECK(!gfx_control_xfb(c, sizeof c, &xl), "the assembly-text words at +0x034..+0x058 are not taken as a layout");
+    /* 4c. +0x718 in fragment sections holds fragment state (1 or 0x10000 in every fragment dumped): the tess reader never looks at a fragment section */
+    las_vertex(c);
+    w32(c, 0x714, 1);
+    w32(c, GLSLC_TESS_MODE_OFF, 1);
+    CHECK(!gfx_control_tess(c, sizeof c, &tp), "fragment state at +0x718 is not read as tessellation parameters");
     /* 5. synthetic tess eval section */
     las_vertex(c);
     w32(c, 0x714, 4);

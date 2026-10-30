@@ -18,7 +18,10 @@ struct MediaEngine {
     NvMediaMem mem;
     const DecoderBackend *backend;
     void *dec;
-    int dec_codec;
+    int dec_codec, vp9_width; /* width of the last VP9 key frame (inter frames carry none) */
+    const EncoderBackend *encoder;
+    void *enc;
+    uint32_t enc_frames;
     uint64_t cfg_key; /* hash of the parameter sets last handed to configure(); 0 = none yet */
     uint32_t reg[NREGS];
     uint32_t thi_method; /* latched by the THI_METHOD0 write, consumed by the THI_METHOD1 write */
@@ -57,16 +60,43 @@ MediaEngine *media_engine_new(uint32_t class_id, const NvMediaMem *mem) {
     e->class_id = e->cur_class = class_id;
     if (mem) e->mem = *mem;
     e->backend = decoder_backend_current();
+    e->encoder = encoder_backend_current();
     return e;
 }
 void media_engine_free(MediaEngine *e) {
     if (!e) return;
     if (e->dec) e->backend->close(e->dec);
+    if (e->enc) e->encoder->close(e->enc);
     free(e);
 }
 const MediaStats *media_engine_stats(const MediaEngine *e) { return &e->st; }
 uint32_t media_engine_reg(const MediaEngine *e, uint32_t off) { return off < NREGS ? e->reg[off] : 0; }
 uint32_t media_engine_class(const MediaEngine *e) { return e->class_id; }
+
+/* Pitches NVDEC wrote its output surfaces with, by surface register value (iova >> 8). VIC reads its input surfaces back with the pitch NVDEC used for them (the
+ * guest hands the same surfaces from one engine to the other), instead of guessing between 256-aligned and packed rows. Engines run under nvdrv's lock. */
+#define PITCH_HINTS 64
+static struct { uint32_t reg, pitch; } pitch_hint[PITCH_HINTS];
+static unsigned pitch_hint_next;
+void media_pitch_hints_reset(void) {
+    memset(pitch_hint, 0, sizeof pitch_hint);
+    pitch_hint_next = 0;
+}
+static void pitch_hint_set(uint32_t reg, uint32_t pitch) {
+    if (!reg || !pitch) return;
+    for (unsigned i = 0; i < PITCH_HINTS; i++)
+        if (pitch_hint[i].reg == reg) {
+            pitch_hint[i].pitch = pitch;
+            return;
+        }
+    pitch_hint[pitch_hint_next % PITCH_HINTS].reg = reg;
+    pitch_hint[pitch_hint_next++ % PITCH_HINTS].pitch = pitch;
+}
+static uint32_t pitch_hint_get(uint32_t reg) {
+    for (unsigned i = 0; i < PITCH_HINTS; i++)
+        if (reg && pitch_hint[i].reg == reg) return pitch_hint[i].pitch;
+    return 0;
+}
 
 static uint8_t *surf(MediaEngine *e, uint32_t reg_value, size_t *avail) {
     size_t a = 0;
@@ -283,6 +313,13 @@ static void nvdec_execute(MediaEngine *e) {
         rq.chroma_pitch = rd32(pic + NVDEC_H264_W_PITCH_CHROMA * 4);
         if (rq.luma_pitch > 0x10000) rq.luma_pitch = 0;
         if (rq.chroma_pitch > 0x10000) rq.chroma_pitch = 0;
+    } else if (codec == DEC_CODEC_VP9 && pic && pic_avail >= (NVDEC_VP9_W_PITCH_CHROMA + 1) * 4) {
+        Vp9Header vh; /* proposed words, guarded: only a plausible pitch (>= the key frame's width, multiple of 16) is used */
+        uint32_t lp = rd32(pic + NVDEC_VP9_W_PITCH_LUMA * 4), cp = rd32(pic + NVDEC_VP9_W_PITCH_CHROMA * 4);
+        int known = !vp9_parse_header(bs, bs_len, &vh) && vh.key_frame && vh.width ? vh.width : e->vp9_width;
+        if (known) e->vp9_width = known;
+        if (known && lp >= (uint32_t)known && lp <= 0x10000 && !(lp & 15)) rq.luma_pitch = lp;
+        if (known && cp >= (uint32_t)known && cp <= 0x10000 && !(cp & 15)) rq.chroma_pitch = cp;
     }
     DecodeResult rs = {0};
     if (media_write_prepare) {
@@ -320,6 +357,8 @@ static void nvdec_execute(MediaEngine *e) {
         status[3] = 3;
     } else if (rc == 0) {
         e->st.frames++;
+        pitch_hint_set(lreg, rq.luma_pitch >= (uint32_t)rs.width ? rq.luma_pitch : (uint32_t)rs.width);
+        pitch_hint_set(creg, rq.chroma_pitch >= (uint32_t)rs.width ? rq.chroma_pitch : (uint32_t)rs.width);
         status[0] = (uint32_t)(((rs.width + 15) / 16) * ((rs.height + 15) / 16)); /* macroblocks correct */
         status[4] = (uint32_t)rs.width;
         status[5] = (uint32_t)rs.height;
@@ -386,6 +425,8 @@ static void vic_execute(MediaEngine *e) {
     }
     /* input rows: 256-aligned when the surfaces are large enough for that (NVDEC's surfaces), else packed */
     size_t ip = l_avail >= align256(w) * (h - 1) + w && c_avail >= align256(w) * (ch - 1) + w ? align256(w) : w;
+    uint32_t hl = pitch_hint_get(e->reg[VIC_SET_INPUT0_LUMA_OFFSET]), hc = pitch_hint_get(e->reg[VIC_SET_INPUT0_CHROMA_OFFSET]);
+    if (hl && hl == hc && hl >= w && l_avail >= (size_t)hl * (h - 1) + w && c_avail >= (size_t)hl * (ch - 1) + w) ip = hl; /* what NVDEC wrote the surfaces with */
     if ((!rgb && fmt != VIC_FMT_NV12) || bh > 5 || l_avail < ip * (h - 1) + w || c_avail < ip * (ch - 1) + w) {
         fail(e, 4);
         return;
@@ -437,6 +478,40 @@ static void vic_execute(MediaEngine *e) {
 }
 
 /* ---- NVJPG ---- */
+static void nvjpg_encode(MediaEngine *e, const uint8_t *setup, const uint8_t *in, size_t in_avail, uint8_t *out, size_t out_avail) {
+    uint32_t status[4] = {0};
+    uint32_t in_size = rd32(setup), out_cap = rd32(setup + 4), fmt = rd32(setup + 16), w = rd32(setup + 28), h = rd32(setup + 32), pitch = rd32(setup + 36),
+             quality = rd32(setup + 40), sub = rd32(setup + 44);
+    uint32_t p = pitch ? pitch : w * 4;
+    int err = 0;
+    if (fmt != NVJPG_FMT_RGBA) err = 5;
+    else if (!w || !h || w > JPEGCORE_MAX_DIM || h > JPEGCORE_MAX_DIM || p < w * 4 || p > 0x100000 || in_avail < (size_t)p * (h - 1) + (size_t)w * 4 ||
+             (in_size && in_size < (size_t)p * (h - 1) + (size_t)w * 4))
+        err = 4;
+    size_t n = 0;
+    if (!err) {
+        if (!quality || quality > 100) quality = 85;
+        uint8_t *jpg = napjpeg_encode_rgba(in, (int)w, (int)h, (int)p, (int)quality, sub != 0, &n);
+        if (!jpg) err = 3;
+        else {
+            size_t cap = out_cap && out_cap < out_avail ? out_cap : out_avail;
+            if (n > cap) err = JPEGCORE_TOO_SMALL;
+            else {
+                if (media_write_prepare) media_write_prepare(out, n);
+                memcpy(out, jpg, n);
+            }
+            free(jpg);
+        }
+    }
+    if (err) {
+        fail(e, (uint32_t)err);
+        status[0] = (uint32_t)err;
+    } else {
+        e->st.frames++;
+        status[1] = w, status[2] = h, status[3] = (uint32_t)n;
+    }
+    status_write(e, NVJPG_SET_STATUS_OFFSET, status, 4);
+}
 static void nvjpg_execute(MediaEngine *e) {
     size_t setup_avail, in_avail, out_avail, chroma_avail;
     uint8_t *setup = surf(e, e->reg[NVJPG_SET_DRV_PIC_SETUP_OFFSET], &setup_avail), *in = surf(e, e->reg[NVJPG_SET_IN_BUF_BASE_OFFSET], &in_avail);
@@ -446,6 +521,10 @@ static void nvjpg_execute(MediaEngine *e) {
         fail(e, 2);
         status[0] = 100;
         status_write(e, NVJPG_SET_STATUS_OFFSET, status, 4);
+        return;
+    }
+    if (setup_avail >= NVJPG_SETUP_WORDS_ENC * 4 && rd32(setup + 24) == NVJPG_MODE_ENCODE) {
+        nvjpg_encode(e, setup, in, in_avail, out, out_avail);
         return;
     }
     uint32_t in_size = rd32(setup), out_cap = rd32(setup + 4), ow = rd32(setup + 8), oh = rd32(setup + 12), fmt = rd32(setup + 16), pitch = rd32(setup + 20);
@@ -521,6 +600,49 @@ static void nvjpg_execute(MediaEngine *e) {
     status_write(e, NVJPG_SET_STATUS_OFFSET, status, 4);
 }
 
+/* ---- MSENC: one NV12 frame per execute through the EncoderBackend ---- */
+static void msenc_execute(MediaEngine *e) {
+    uint32_t status[4] = {0};
+    size_t su_avail, l_avail, c_avail, o_avail;
+    uint8_t *su = surf(e, e->reg[MSENC_SET_SETUP_OFFSET], &su_avail), *luma = surf(e, e->reg[MSENC_SET_IN_LUMA_OFFSET], &l_avail),
+            *chroma = surf(e, e->reg[MSENC_SET_IN_CHROMA_OFFSET], &c_avail), *out = surf(e, e->reg[MSENC_SET_OUT_BITSTREAM_OFFSET], &o_avail);
+    if (!su && !e->reg[MSENC_SET_SETUP_OFFSET]) { /* nothing configured: accepted and counted, no bitstream */
+        status_write(e, MSENC_SET_STATUS_OFFSET, status, 4);
+        return;
+    }
+    uint32_t err = 0;
+    if (!su || su_avail < MSENC_SETUP_WORDS * 4 || !luma || !chroma || !out) err = MSENC_ERR_ADDRESS;
+    uint32_t w = 0, h = 0, lp = 0, cp = 0, br = 0, fps = 0, flags = 0, cap = 0;
+    if (!err) {
+        w = rd32(su), h = rd32(su + 4), lp = rd32(su + 8), cp = rd32(su + 12), br = rd32(su + 16), fps = rd32(su + 20), flags = rd32(su + 24), cap = rd32(su + 28);
+        size_t lpe = lp ? lp : w, cpe = cp ? cp : w;
+        if (!w || !h || (w & 1) || (h & 1) || w > 8192 || h > 8192 || lpe < w || cpe < w || lpe > 0x10000 || cpe > 0x10000 ||
+            l_avail < lpe * (h - 1) + w || c_avail < cpe * (h / 2 - 1) + w)
+            err = MSENC_ERR_PARAMS;
+    }
+    if (!err && !e->enc) {
+        e->enc = e->encoder->open(DEC_CODEC_H264);
+        if (!e->enc) err = MSENC_ERR_CODEC;
+    }
+    EncodeResult rs = {0};
+    if (!err) {
+        EncodeRequest rq = {DEC_CODEC_H264, (int)w, (int)h, luma, chroma, l_avail, c_avail, lp, cp, br, fps, (int)(flags & 1), out, cap && cap < o_avail ? cap : o_avail};
+        if (media_write_prepare) media_write_prepare(out, rq.out_cap);
+        if (e->encoder->encode(e->enc, &rq, &rs) < 0 || rs.size > rq.out_cap) err = MSENC_ERR_FAILED;
+    }
+    if (err) {
+        fail(e, err);
+        status[0] = err;
+    } else {
+        e->st.frames++;
+        e->enc_frames++;
+        status[1] = (uint32_t)rs.size;
+        status[2] = rs.idr ? 1 : 0;
+        status[3] = e->enc_frames;
+    }
+    status_write(e, MSENC_SET_STATUS_OFFSET, status, 4);
+}
+
 static void execute(MediaEngine *e) {
     e->st.executes++;
     trace_regs(e);
@@ -531,11 +653,7 @@ static void execute(MediaEngine *e) {
         case MEDIA_CLASS_NVDEC: nvdec_execute(e); break;
         case MEDIA_CLASS_VIC: vic_execute(e); break;
         case MEDIA_CLASS_NVJPG: nvjpg_execute(e); break;
-        case MEDIA_CLASS_MSENC: {
-            uint32_t z[4] = {0};
-            status_write(e, MSENC_SET_STATUS_OFFSET, z, 4); /* no bitstream produced */
-            break;
-        }
+        case MEDIA_CLASS_MSENC: msenc_execute(e); break;
     }
 }
 static int known_reg(const MediaEngine *e, uint32_t off) {
@@ -550,7 +668,7 @@ static int known_reg(const MediaEngine *e, uint32_t off) {
             return off == VIC_SET_INPUT0_LUMA_OFFSET || off == VIC_SET_INPUT0_CHROMA_OFFSET || off == VIC_SET_CONFIG_STRUCT_OFFSET ||
                    off == VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET || off == VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET || (off >= 0x1c2 && off <= 0x1cf);
         case MEDIA_CLASS_NVJPG: return off <= NVJPG_SET_OUT_CHROMA_OFFSET || off == NVJPG_SET_STATUS_OFFSET;
-        default: return off == MSENC_SET_STATUS_OFFSET;
+        default: return off >= MSENC_SET_SETUP_OFFSET && off <= MSENC_SET_OUT_BITSTREAM_OFFSET ? 1 : off == MSENC_SET_STATUS_OFFSET;
     }
 }
 static void write_reg(MediaEngine *e, uint32_t off, uint32_t v) {

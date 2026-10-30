@@ -147,8 +147,8 @@ struct cmdrec;
  * (end - cur) before writing raw GPU methods themselves; ~0 / 0 never fits, so every call takes the API path. */
 typedef struct cmdbuf {
     uint32_t magic, recording;
-    struct cmdbuf_host *h;
-    uint64_t inline_flags;                /* +0x10 */
+    uint64_t hid;                         /* host part: generation << 32 | table slot + 1 (never a pointer: the guest object may be copied, overwritten or left on a dead stack) */
+    uint64_t inline_flags;               /* +0x10 */
     uint64_t pad18;
     uint64_t inline_cur, inline_end;      /* +0x20, +0x28 */
 } cmd_t;

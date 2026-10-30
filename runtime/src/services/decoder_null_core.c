@@ -101,3 +101,66 @@ int decoder_backend_install(const DecoderBackend *b) {
     installed = b;
     return 0;
 }
+
+/* ---- null encoder: a fake but well-formed Annex B stream (SPS+PPS+IDR slice or a P slice) whose payload is a hash of the input, so tests can tell frames apart ---- */
+typedef struct {
+    unsigned frames;
+} NullEnc;
+static void *nullenc_open(int codec) { return codec == DEC_CODEC_H264 ? calloc(1, sizeof(NullEnc)) : NULL; }
+static void nullenc_close(void *c) { free(c); }
+static int nullenc_encode(void *ctx, const EncodeRequest *r, EncodeResult *out) {
+    NullEnc *c = ctx;
+    if (!r->out || r->width <= 0 || r->height <= 0 || !r->luma) return -1;
+    size_t lp = r->luma_pitch ? r->luma_pitch : (size_t)r->width;
+    if (lp < (size_t)r->width || r->luma_cap < lp * (r->height - 1) + r->width) return -1;
+    uint32_t hash = 2166136261u;
+    for (int y = 0; y < r->height; y++)
+        for (int x = 0; x < r->width; x++) hash = (hash ^ r->luma[(size_t)y * lp + x]) * 16777619u;
+    int idr = r->force_idr || c->frames == 0;
+    static const uint8_t sps_pps[] = {0, 0, 0, 1, 0x67, 0x42, 0xc0, 0x1e, 0xda, 0, 0, 0, 1, 0x68, 0xce, 0x3c, 0x80};
+    size_t need = (idr ? sizeof sps_pps : 0) + 4 + 1 + 4;
+    if (r->out_cap < need) return -1;
+    size_t n = 0;
+    if (idr) memcpy(r->out, sps_pps, sizeof sps_pps), n = sizeof sps_pps;
+    static const uint8_t sc[4] = {0, 0, 0, 1};
+    memcpy(r->out + n, sc, 4);
+    n += 4;
+    r->out[n++] = idr ? 0x65 : 0x41;
+    memcpy(r->out + n, &hash, 4); /* may contain zero bytes: a fake, not a conformant slice */
+    n += 4;
+    out->size = n;
+    out->idr = idr;
+    c->frames++;
+    return 0;
+}
+const EncoderBackend encoder_backend_null = {"null", nullenc_open, nullenc_close, nullenc_encode, ENCODER_BACKEND_ABI};
+static const EncoderBackend *enc_installed;
+const EncoderBackend *encoder_backend_current(void) { return enc_installed ? enc_installed : &encoder_backend_null; }
+int encoder_backend_install(const EncoderBackend *b) {
+    if (b && (b->abi != ENCODER_BACKEND_ABI || !b->open || !b->close || !b->encode)) return -1;
+    enc_installed = b;
+    return 0;
+}
+
+int vp9_superframe_split(const uint8_t *d, size_t n, size_t offs[8], size_t sizes[8]) {
+    if (!d || !n) return -1;
+    uint8_t m = d[n - 1];
+    if ((m & 0xe0) == 0xc0) {
+        int frames = (m & 7) + 1, mag = ((m >> 3) & 3) + 1;
+        size_t idx = 2 + (size_t)mag * frames;
+        if (n < idx || d[n - idx] != m) goto single;
+        const uint8_t *p = d + n - idx + 1;
+        size_t pos = 0;
+        for (int i = 0; i < frames; i++) {
+            size_t s = 0;
+            for (int b = 0; b < mag; b++) s |= (size_t)p[i * mag + b] << (8 * b);
+            if (pos + s > n - idx) return -1;
+            offs[i] = pos, sizes[i] = s;
+            pos += s;
+        }
+        return frames;
+    }
+single:
+    offs[0] = 0, sizes[0] = n;
+    return 1;
+}

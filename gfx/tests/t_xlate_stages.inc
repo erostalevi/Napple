@@ -108,7 +108,9 @@
         maxwell_free(t3);
         ShaderKey ti = tk;
         ti.tess_domain = TESS_DOMAIN_ISOLINE;
-        XL_REFUSE(t4, STAGE_TESS_CTRL, ti, 0, "isoline", "isoline tessellation", ins_exit());
+        XL_OK(t4, STAGE_TESS_CTRL, ti, 0, "TCS isoline", ST_AST(4, 0x00, 4, 1), ST_AST(4, 0x10, 2, 1), ins_exit());
+        CHECK(HAS(t4, "tess_fac[pid * 6u + i] = half(tess_patch[pid * 34u + 0u][i]);"), "isolines: the tess control program writes the quad factor record (the software tessellator reads outer[0..1])");
+        maxwell_free(t4);
         ti = tk;
         ti.tess_out_vertices = 33;
         XL_REFUSE(t5, STAGE_TESS_CTRL, ti, 0, "tess_out_vertices", "33 output control points", ins_exit());
@@ -142,6 +144,30 @@
         ex = tk;
         ex.tess_domain = TESS_DOMAIN_ISOLINE;
         XL_REFUSE(e4, STAGE_TESS_EVAL, ex, 0, "isoline", "TES isoline", ins_exit());
+        /* software tessellator (ShaderKey.tess_soft): a plain vertex function over tess_uv; isolines and stage-out allowed */
+        ex.tess_soft = true;
+        XL_OK(e5, STAGE_TESS_EVAL, ex, 0, "TES soft isoline", ST_ALD(4, 255, 0x2f0, 2, 255, 0, 0), ST_ALD(8, 255, 0x80, 4, 8, 0, 0), ST_AST(8, 0x70, 4, 0), ins_exit());
+        CHECK(HAS(e5, "vertex VOut main0(uint vid [[vertex_id]], uint iid [[instance_id]], constant uint *sp [[buffer(20)]], device const float4 *tess_vtx [[buffer(21)]], "
+                      "device const float4 *tess_patch [[buffer(22)]], device const float4 *tess_uv [[buffer(19)]]"),
+              "soft TES entry point: vertex id over tess_uv (buffer 19)");
+        CHECK(HAS(e5, "uint patch_id = as_type<uint>(tess_uv[vid].w);") && HAS(e5, "float3 tess_coord = tess_uv[vid].xyz;") && !HAS(e5, "[[patch("),
+              "soft TES: patch id and coordinate from the tessellator record, no post-tessellation attribute");
+        CHECK(HAS(e5, "r4 = as_type<uint>(tess_coord[0]);") && HAS(e5, "tess_vtx[(patch_id * 4u + vx) * 34u + 2u][0u]"), "soft TES reads coordinate and control points as before");
+        maxwell_free(e5);
+        ex.stage_out = true;
+        ex.capture_void = true;
+        ex.tess_domain = TESS_DOMAIN_TRIANGLE;
+        XL_OK(e6, STAGE_TESS_EVAL, ex, 0, "TES soft capture", ST_ALD(4, 255, 0x2f0, 2, 255, 0, 0), ST_AST(4, 0x70, 4, 0), ST_AST(4, 0x80, 4, 0), ins_exit());
+        CHECK(HAS(e6, "vertex void main0(uint vid [[vertex_id]]") && HAS(e6, "device float4 *stage_out [[buffer(29)]]") && HAS(e6, "constant uint *xfb_ctl [[buffer(28)]]"),
+              "soft TES capture: void function with the stage-out arguments");
+        CHECK(HAS(e6, "uint xo = xfb_ctl[0] * iid + (vid - xfb_ctl[1]);") && HAS(e6, "stage_out[xo * 34u + 1] = out.pos;") && HAS(e6, "stage_out[xo * 34u + 2] = out.v0;") &&
+                  HAS(e6, "(void)out;"),
+              "soft TES capture: position and generic 0 into the record of the vertex");
+        CHECK(e6->uses_stage_out && (e6->stage_slot_mask & 6ull) == 6ull, "ShaderInfo: stage-out slots of the soft TES");
+        maxwell_free(e6);
+        ShaderKey ev = z;
+        ev.tess_soft = true;
+        XL_REFUSE(e7, STAGE_VERTEX, ev, 0, "tess_soft", "tess_soft on a vertex shader", ins_exit());
     }
     /* ---- vertex stage capture: transform feedback and the stage-out record */
     {

@@ -2923,15 +2923,18 @@ static void stage_check(Ctx *c) {
     } else if (st == STAGE_TESS_CTRL || st == STAGE_TESS_EVAL) {
         if (!k || k->tess_out_vertices < 1 || k->tess_out_vertices > 32) fail(c, "tessellation needs ShaderKey.tess_out_vertices in 1..32");
         else if (st == STAGE_TESS_CTRL && (k->tess_in_vertices < 1 || k->tess_in_vertices > 32)) fail(c, "tess control needs ShaderKey.tess_in_vertices in 1..32");
-        else if (k->tess_domain == TESS_DOMAIN_ISOLINE) fail(c, "isoline tessellation (Metal has quad and triangle patches only)");
+        else if (k->tess_domain == TESS_DOMAIN_ISOLINE && st == STAGE_TESS_EVAL && !k->tess_soft) /* tess control: isolines write the quad factor record */
+            fail(c, "isoline tessellation needs the software tessellator (ShaderKey.tess_soft): Metal has quad and triangle patches only");
         else if (k->tess_domain > TESS_DOMAIN_ISOLINE) fail(c, "tessellation domain %u", (unsigned)k->tess_domain);
-        else if (st == STAGE_TESS_EVAL && (k->xfb_count || k->stage_out))
-            fail(c, "transform feedback from a tessellation evaluation shader (the vertex count exists only after tessellation: capture it with a following vertex-only pass)");
+        else if (st == STAGE_TESS_EVAL && (k->xfb_count || k->stage_out) && !k->tess_soft)
+            fail(c, "transform feedback / stage-out from a tessellation evaluation shader needs the software tessellator (ShaderKey.tess_soft)");
     } else if (st == STAGE_FRAGMENT || st == STAGE_COMPUTE) {
         if (k && (k->xfb_count || k->stage_out)) fail(c, "transform feedback / stage-out requested for a %s shader", st == STAGE_FRAGMENT ? "fragment" : "compute");
     }
     if (st == STAGE_GEOMETRY && k && (k->xfb_count || k->stage_out)) fail(c, "transform feedback from a geometry shader is captured by the replay from gs_vtx / gs_idx (same record layout), not in the shader");
-    if (k && k->capture_void && (st != STAGE_VERTEX || (!k->xfb_count && !k->stage_out))) fail(c, "capture_void is for a vertex shader with stage_out / transform feedback");
+    if (k && k->tess_soft && st != STAGE_TESS_EVAL) fail(c, "tess_soft is for a tess evaluation shader");
+    if (k && k->capture_void && ((st != STAGE_VERTEX && !(st == STAGE_TESS_EVAL && k->tess_soft)) || (!k->xfb_count && !k->stage_out)))
+        fail(c, "capture_void is for a vertex (or software-tessellated tess eval) shader with stage_out / transform feedback");
 }
 
 // The vertex-stage epilogue that writes the stage-out record and the captured transform feedback components (before the clip-space flips: the values are the
@@ -3105,7 +3108,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         return info;
     }
     Str xfb_epi = {0};
-    if (stage == STAGE_VERTEX) xfb_epilogue(c, &xfb_epi);
+    if (stage == STAGE_VERTEX || (stage == STAGE_TESS_EVAL && key && key->tess_soft)) xfb_epilogue(c, &xfb_epi);
     if (c->fail) {
         free(c->body.buf);
         free(xfb_epi.buf);
@@ -3303,7 +3306,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (i < 16) sp(&args, ", sampler s%d [[sampler(%d)]]", i, i);
     }
     emit_image_args(&args, info);
-    if (stage == STAGE_VERTEX && key && (key->xfb_count || key->stage_out)) {
+    if ((stage == STAGE_VERTEX || stage == STAGE_TESS_EVAL) && key && (key->xfb_count || key->stage_out)) {
         sp(&args, ", constant uint *xfb_ctl [[buffer(%d)]]", XFB_CTL_BUFFER_INDEX);
         if (key->stage_out) sp(&args, ", device float4 *stage_out [[buffer(%d)]]", STAGE_OUT_BUFFER_INDEX);
         for (int k = 0; k < MAX_XFB_BUFFERS; k++)
@@ -3337,6 +3340,15 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "device half *tess_fac [[buffer(%d)]]%s) {\n",
            STAGE_PARAM_BUFFER_INDEX, STAGE_IN_BUFFER_INDEX, TESS_VERTEX_BUFFER_INDEX, TESS_PATCH_BUFFER_INDEX, TESS_FACTOR_BUFFER_INDEX, args.buf ? args.buf : "");
         sp(&s, "  uint inv = tid.x, pid = ctaid.x;\n  if (pid >= sp[0]) return;\n");
+    } else if (stage == STAGE_TESS_EVAL && key->tess_soft) {
+        /* software tessellator (mtl_stages.inc): vertex id -> one tessellated vertex (u, v, w, patch id); iid only feeds the capture ordinal (xfb_ctl = {0, 0}) */
+        sp(&s,
+           "vertex %s main0(uint vid [[vertex_id]], uint iid [[instance_id]], constant uint *sp [[buffer(%d)]], device const float4 *tess_vtx [[buffer(%d)]], "
+           "device const float4 *tess_patch [[buffer(%d)]], device const float4 *tess_uv [[buffer(%d)]]%s) {\n",
+           key->capture_void ? "void" : "VOut", STAGE_PARAM_BUFFER_INDEX, TESS_VERTEX_BUFFER_INDEX, TESS_PATCH_BUFFER_INDEX, TESS_UV_BUFFER_INDEX, args.buf ? args.buf : "");
+        sp(&s, "  uint patch_id = as_type<uint>(tess_uv[vid].w);\n  float3 tess_coord = tess_uv[vid].xyz;\n  VOut out = {};\n  out.pos = float4(0, 0, 0, 1);\n");
+        for (int i = 0; i < 32; i++)
+            if (c->out_attr_mask & (1u << i)) sp(&s, "  out.v%d = float4(0, 0, 0, 1);\n", i);
     } else if (stage == STAGE_TESS_EVAL) {
         sp(&s,
            "[[patch(%s, %u)]] vertex VOut main0(uint patch_id [[patch_id]], %s tess_coord [[position_in_patch]], constant uint *sp [[buffer(%d)]], "
@@ -3397,7 +3409,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         if (xfb_epi.buf) sp(&s, "%s", xfb_epi.buf);
         if (key && key->flip_y) sp(&s, "  out.pos.y = -out.pos.y;\n");
         if (key && key->depth_minus_one) sp(&s, "  out.pos.z = (out.pos.z + out.pos.w) * 0.5f;\n");
-        if (stage == STAGE_VERTEX && key && key->capture_void) sp(&s, "  (void)out;\n}\n");
+        if (key && key->capture_void) sp(&s, "  (void)out;\n}\n");
         else sp(&s, "  return out;\n}\n");
     } else if (stage == STAGE_FRAGMENT) {
         sp(&s, "  FOut o;\n");

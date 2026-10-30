@@ -89,6 +89,8 @@ HOST_LOADER := src/module.c src/dispatch.c src/json.c src/nro.c src/sha256.c src
 HOST_HDRS := $(wildcard src/*.h) $(wildcard tests/host/*.h) tests/check.h
 # media-services (2026-10-26): the portable media engines nvdrv.c now calls (host1x parser, engines, null decoder backend, header parsers, JPEG codec)
 HOST_MEDIA := src/services/nvdrv_media_core.c src/services/decoder_null_core.c src/services/codec_headers_core.c src/services/jpeg_core.c
+# nvdrv-device-nodes (2026-10-28-b8): state-tracked nvhost-gpu / as-gpu / ctrl-gpu, linked wherever nvdrv.c is
+HOST_MEDIA += src/services/nvdrv_nodes_core.c
 HOST_TESTS := $(HOST_BUILD)/test_svc_async $(HOST_BUILD)/test_kernel_ipc $(HOST_BUILD)/test_loader $(HOST_BUILD)/test_nvdrv $(HOST_BUILD)/test_fs_savedata $(HOST_BUILD)/test_fs_journal $(HOST_BUILD)/test_ios_dylib
 HOST_FS := src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c tests/host/host_save_dir.c src/services/romfs_map.c
 $(HOST_BUILD)/test_kernel_ipc: tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) $(HOST_HDRS)
@@ -122,6 +124,11 @@ $(HOST_BUILD)/test_nvdrv_media: tests/test_svc_nvdrv_media.c src/services/nvdrv.
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) -DNAPPLE_HOST_TEST tests/test_svc_nvdrv_media.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c $(HOST_MEDIA) -lm -o $@
 HOST_TESTS += $(HOST_BUILD)/test_nvdrv_media
+# nvdrv-device-nodes (2026-10-28-b8): nvhost-gpu / as-gpu / ctrl-gpu through nvdrv's ioctl handlers
+$(HOST_BUILD)/test_nvdrv_nodes: tests/test_svc_nvdrv_nodes.c src/services/nvdrv.c src/services/nvdrv_nodes_core.h src/ipc.c $(HOST_KERNEL) $(HOST_MEDIA) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) -DNAPPLE_HOST_TEST tests/test_svc_nvdrv_nodes.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c $(HOST_MEDIA) -lm -o $@
+HOST_TESTS += $(HOST_BUILD)/test_nvdrv_nodes
 # mod-glue-core (2026-10-27): romfs overlay lookup from mods/overlay.json
 $(HOST_BUILD)/test_romfs_overlay: tests/host/test_romfs_overlay.c src/services/romfs_map.c src/services/romfs_map.h $(HOST_HDRS)
 	@mkdir -p $(dir $@)

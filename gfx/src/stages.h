@@ -22,7 +22,7 @@ typedef struct {
 enum { TESS_SPACING_EQUAL = 0, TESS_SPACING_FRACTIONAL_ODD = 1, TESS_SPACING_FRACTIONAL_EVEN = 2 };
 enum { TESS_WINDING_CCW = 0, TESS_WINDING_CW = 1 };
 typedef struct {
-    uint8_t domain;  /* TESS_DOMAIN_*: default TRIANGLE (NAPPLE_GFX_TESS_DOMAIN=quad|triangle changes the default) */
+    uint8_t domain;  /* TESS_DOMAIN_*: default TRIANGLE (NAPPLE_GFX_TESS_DOMAIN=quad|triangle changes the default); ISOLINE runs on the software tessellator */
     uint8_t spacing; /* TESS_SPACING_*: default EQUAL */
     uint8_t winding; /* TESS_WINDING_*: default CCW */
 } gfx_tess_params;

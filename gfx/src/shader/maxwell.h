@@ -45,6 +45,7 @@ enum { TEXTYPE_1D, TEXTYPE_2D, TEXTYPE_3D, TEXTYPE_CUBE, TEXTYPE_2D_ARRAY, TEXTY
 #define GS_INDEX_BUFFER_INDEX 22    /* geometry: `device uint *gs_idx`, 2 * gs_max_vertices indices per input primitive, 0xFFFFFFFF = primitive restart */
 #define TESS_VERTEX_BUFFER_INDEX 21 /* tess control writes / tess eval reads: `float4`, tess_out_vertices records per patch */
 #define TESS_PATCH_BUFFER_INDEX 22  /* tess control writes / tess eval reads: `float4`, one patch record (STAGE_SLOTS) per patch */
+#define TESS_UV_BUFFER_INDEX 19     /* tess eval with ShaderKey.tess_soft: the tessellated coordinates (the slot of stage_in, which tess eval does not read) */
 #define TESS_FACTOR_BUFFER_INDEX 23 /* tess control: `device half *`, the Metal MTLQuad/TriangleTessellationFactorsHalf of each patch */
 #define XFB_BUFFER_BASE 24          /* transform feedback buffer k is Metal buffer 24 + k (k < MAX_XFB_BUFFERS) */
 #define XFB_CTL_BUFFER_INDEX 28     /* `constant uint *xfb_ctl`: [0] vertices per instance, [1] first vertex, [2 + k] start of xfb buffer k in dwords */
@@ -92,7 +93,7 @@ typedef struct {
     /* tessellation */
     uint8_t tess_in_vertices;  /* tess control: control points per input patch (1..32) */
     uint8_t tess_out_vertices; /* tess control: output control points per patch = invocations per patch (1..32); tess eval: the same value (its input patch size) */
-    uint8_t tess_domain;       /* TESS_DOMAIN_*: tess control (selects the factor record) and tess eval (selects position_in_patch). Isolines are refused */
+    uint8_t tess_domain;       /* TESS_DOMAIN_*: tess control (selects the factor record) and tess eval (selects position_in_patch). Isolines need tess_soft */
     /* vertex stage capture */
     bool stage_out;         /* vertex: write every output to the stage-out buffer (the input of a geometry or tess control stage) instead of leaving it to the rasterizer */
     uint8_t xfb_count;      /* vertex: number of valid xfb[] entries */
@@ -100,6 +101,8 @@ typedef struct {
     ShaderXfbEntry xfb[MAX_XFB_ENTRIES];
     bool sample_shading; /* fragment: nvnProgramSetSampleShading on into a multisampled target: the function declares `[[sample_id]]`, which makes Metal run it once per sample */
     bool capture_void;   /* vertex with stage_out / xfb: emit `vertex void` (nothing returned to the rasterizer) so the capture pipeline can set rasterizationEnabled = NO */
+    bool tess_soft;      /* tess eval: a plain vertex function over the replay's software tessellator output (`device const float4 *tess_uv [[buffer(TESS_UV_BUFFER_INDEX)]]`,
+                          * vertex id -> (u, v, w, patch id as uint)) instead of a post-tessellation one: allows isolines, stage_out / transform feedback and capture_void */
 } ShaderKey;
 
 typedef struct {

@@ -113,14 +113,14 @@ GfxShader *mtl_shader_for(uint64_t hash, const ShaderKey *key);   /* translated 
 id<MTLComputePipelineState> mtl_compute_pipe(uint64_t hash, uint32_t img_int, uint32_t img_uint, GfxShader *__autoreleasing *sh);
 /* Stages beyond vertex / fragment (mtl_stages.inc, gfx.md section 13). A stage pipeline is the draw's normal key plus what the extra stage needs; built
  * synchronously on first use, not persisted or prewarmed. */
-enum { SPK_CAPTURE = 1, SPK_GS_DRAW = 2, SPK_TESS = 3 };
+enum { SPK_CAPTURE = 1, SPK_GS_DRAW = 2, SPK_TESS = 3, SPK_TESS_SOFT = 4, SPK_TESS_SOFT_CAPTURE = 5 }; /* SOFT: tess eval over the software tessellator (ShaderKey.tess_soft) */
 typedef struct stage_pipe_key {
     pipe_key k;                     /* the draw's own key (vs, fs, attachments, blend, vertex layout) */
     uint8_t mode;                   /* SPK_* */
     uint8_t stage_out;              /* SPK_CAPTURE: the vertex program writes its stage-out records */
     uint8_t gs_topo;                /* SPK_GS_DRAW: GS_OUT_* of the geometry program */
     uint8_t tess_domain, tess_spacing, tess_winding, tess_cp; /* SPK_TESS: stages.h parameters, control points per patch */
-    uint8_t pad;
+    uint8_t gs_clip;                /* SPK_GS_DRAW: clip-space conversions the pass-through vertex function applies (1 flip y, 2 depth [-1, 1] -> [0, 1]) */
     uint64_t prog;                  /* SPK_GS_DRAW: the geometry program; SPK_TESS: the tess eval program */
     uint64_t gs_slots;              /* SPK_GS_DRAW: ShaderInfo.stage_slot_mask of the geometry program */
     uint32_t xfb_id;                /* SPK_CAPTURE: content hash of the xfb layout below (0 = no transform feedback) */

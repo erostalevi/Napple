@@ -7,6 +7,7 @@
  * (NotImplemented) so a game that really needs a device reports it in the log and the compat summary. See docs/architecture/runtime-services.md. */
 #include "../ipc.h"
 #include "nvdrv_media_core.h"
+#include "nvdrv_nodes_core.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -23,7 +24,7 @@ enum {
     NV_INSUFFICIENT_MEMORY = 6,
     NV_ACCESS_DENIED = 0x10
 };
-typedef enum { DEV_NONE, DEV_NVMAP, DEV_CTRL, DEV_CHANNEL, DEV_DISP, DEV_OTHER } DevKind;
+typedef enum { DEV_NONE, DEV_NVMAP, DEV_CTRL, DEV_CHANNEL, DEV_DISP, DEV_OTHER, DEV_GPU_CHAN, DEV_GPU_AS, DEV_GPU_CTRL } DevKind;
 /* host1x client channel state (nvhost-nvdec / vic / nvjpg / msenc) */
 #define CHANNEL_SYNCPTS 16
 typedef struct {
@@ -40,6 +41,9 @@ typedef struct {
     int open;
     Channel ch;
     NvDisp disp; /* DEV_DISP: /dev/nvdisp-disp0 / disp1 */
+    NvGpuChan gchan; /* DEV_GPU_CHAN: /dev/nvhost-gpu (nvdrv_nodes_core) */
+    NvGpuAs gas;     /* DEV_GPU_AS: /dev/nvhost-as-gpu */
+    NvGpuCtrl gctl;  /* DEV_GPU_CTRL: /dev/nvhost-ctrl-gpu */
 } Fd;
 #define MAX_FD 64
 static Fd fds[MAX_FD];
@@ -88,7 +92,7 @@ static void syncpt_advance(uint32_t id, uint32_t n) {
         }
 }
 
-static const char *const known_other[] = {"/dev/nvhost-gpu",  "/dev/nvhost-as-gpu", "/dev/nvhost-ctrl-gpu", "/dev/nvhost-dbg-gpu", "/dev/nvhost-prof-gpu",
+static const char *const known_other[] = {"/dev/nvhost-dbg-gpu", "/dev/nvhost-prof-gpu",
                                           "/dev/nvhost-tsec", "/dev/nvdisp-ctrl",   "/dev/nvsched-ctrl",    "/dev/nvsched"};
 /* Display controller devices: the vblank syncpoint ids are those of the older Tegra host1x sources (NVSYNCPT_VBLANK0/1 = 26/27; unverified for Tegra X1). */
 static const struct {
@@ -549,6 +553,9 @@ static void nv_open(IpcObject *s, IpcCall *c) {
     uint32_t class_id = 0, disp_syncpt = 0;
     if (!strcmp(p, "/dev/nvmap")) kind = DEV_NVMAP;
     else if (!strcmp(p, "/dev/nvhost-ctrl")) kind = DEV_CTRL;
+    else if (!strcmp(p, "/dev/nvhost-gpu")) kind = DEV_GPU_CHAN;
+    else if (!strcmp(p, "/dev/nvhost-as-gpu")) kind = DEV_GPU_AS;
+    else if (!strcmp(p, "/dev/nvhost-ctrl-gpu")) kind = DEV_GPU_CTRL;
     else {
         for (unsigned i = 0; i < sizeof displays / sizeof *displays; i++)
             if (!strcmp(p, displays[i].path)) {
@@ -576,6 +583,9 @@ static void nv_open(IpcObject *s, IpcCall *c) {
                     nvdisp_init(&fds[i].disp, disp_now_ns(), 0);
                     fds[i].disp.syncpt = disp_syncpt;
                 }
+                if (kind == DEV_GPU_CHAN) nvgpu_chan_init(&fds[i].gchan, syncpt_alloc()); /* the channel's fence syncpoint */
+                if (kind == DEV_GPU_AS) nvgpu_as_init(&fds[i].gas);
+                if (kind == DEV_GPU_CTRL) nvgpu_ctrl_init(&fds[i].gctl, disp_now_ns());
                 snprintf(fds[i].path, sizeof fds[i].path, "%s", p);
                 fd = i;
                 err = NV_OK;
@@ -584,36 +594,41 @@ static void nv_open(IpcObject *s, IpcCall *c) {
         pthread_mutex_unlock(&lock);
     }
     LOGV("nvdrv", "Open(\"%s\") -> fd %u error %u", p, fd, err);
-    if (kind == DEV_OTHER) summary_note("nvdrv: opened %s (no GPU channel emulation, ioctls are refused)", p);
+    if (kind == DEV_OTHER) summary_note("nvdrv: opened %s (no ioctl surface, ioctls are refused)", p);
     IPC_OUT(c, fd);
     IPC_OUT(c, err);
 }
 /* Ioctl family: data goes in through the pointer/map input buffer, the same struct comes back through the output buffer. */
-/* /dev/nvhost-ctrl-gpu: what the Switch's GM20B (Maxwell, Tegra X1) reports. Games' NVN is the host's, so none asks; the newer SDK that firmware applets are built with
- * queries it itself while it sets up its graphics. GET_CHARACTERISTICS (type 'G', nr 5) is {u64 buffer size, u64 buffer address, 0xa0 bytes of characteristics}
- * on the Switch; the field order is the nvgpu uapi's, values those of the retail console. */
-static uint32_t ctrl_gpu_ioctl(unsigned nr, uint8_t *data, unsigned size) {
-    if (nr == 5 && size >= 0xb0) {
-        uint8_t *c = data + 0x10;
-        memset(c, 0, 0xa0);
-        uint32_t w[] = {0x120, 0xb, 0xa1, 1}; /* arch GM200, impl GM20B, revision A1, one GPC */
-        memcpy(c, w, sizeof w);
-        uint64_t l2 = 0x40000, flags = 0x55;
-        memcpy(c + 0x10, &l2, 8);
-        memcpy(c + 0x38, &flags, 8);
-        uint32_t t[] = {2, 0x20, 0x20000, 0x20000, 0x1b, 0x30000}; /* TPC per GPC, AXI bus, big page 128K, compression page 128K, PDE bits, big page sizes */
-        memcpy(c + 0x20, t, sizeof t);
-        uint32_t cls[] = {0x902d, 0xb197, 0xb1c0, 0xb06f, 0xa140,
-                          0xb0b5, 1,      0x503,  0x503,  0x20}; /* 2D, 3D, compute, gpfifo, i2m, copy; gpc mask, SM arch, warps */
-        memcpy(c + 0x40, cls, sizeof cls);
-        uint64_t chip = 0x6230326d67; /* "gm20b" */
-        memcpy(c + 0x88, &chip, 8);
-        uint64_t bs = 0xa0;
-        memcpy(data, &bs, 8);
-        return NV_OK;
+/* GPU nodes (nvdrv_nodes_core): state lives in the Fd; the nvmap sizes and the channel syncpoint come from here. Runs under the nvdrv lock. */
+static uint32_t gpu_nvmap_size(void *ctx, uint32_t handle) {
+    (void)ctx;
+    NvMapHandle *h = nvmap_find(handle);
+    return h ? h->size : 0;
+}
+static uint32_t gpu_syncpt_incr(void *ctx, uint32_t id) {
+    (void)ctx;
+    if (id >= NSYNC) return 0;
+    syncpt_max[id]++;
+    syncpt_advance(id, 1);
+    return syncpt[id];
+}
+static uint32_t gpu_node_ioctl(uint32_t fd, unsigned type, unsigned nr, uint8_t *data, unsigned size) {
+    static const NvGpuEnv env = {NULL, gpu_nvmap_size, gpu_syncpt_incr};
+    Fd *f = &fds[fd];
+    int r = NVG_NOT_IMPLEMENTED;
+    pthread_mutex_lock(&lock);
+    if (f->kind == DEV_GPU_CHAN && type == NVG_TYPE_CHANNEL) r = nvgpu_chan_ioctl(&f->gchan, &env, nr, data, size);
+    else if (f->kind == DEV_GPU_CTRL && type == NVG_TYPE_CTRL) r = nvgpu_ctrl_ioctl(&f->gctl, nr, data, size, disp_now_ns());
+    else if (f->kind == DEV_GPU_AS && type == NVG_TYPE_AS) {
+        NvGpuChan *chan = NULL;
+        if (nr == 1 && size >= 4) { /* BIND_CHANNEL names the channel by fd */
+            uint32_t cfd = rd32(data);
+            if (cfd < MAX_FD && fds[cfd].open && fds[cfd].kind == DEV_GPU_CHAN) chan = &fds[cfd].gchan;
+        }
+        r = nvgpu_as_ioctl(&f->gas, &env, chan, nr, data, size);
     }
-    LOG("nvdrv", "ctrl-gpu: ioctl nr %#x (size %#x) is not implemented", nr, size);
-    return NV_NOT_IMPLEMENTED;
+    pthread_mutex_unlock(&lock);
+    return (uint32_t)r;
 }
 static void do_ioctl(IpcCall *c, unsigned in_idx, unsigned out_idx) {
     uint32_t fd = IPC_IN(c, uint32_t, 0), cmd = IPC_IN(c, uint32_t, 4);
@@ -643,9 +658,10 @@ static void do_ioctl(IpcCall *c, unsigned in_idx, unsigned out_idx) {
             err = type == NVDISP_IOCTL_TYPE ? nvdisp_ioctl(&fds[fd].disp, nr, tmp, size, disp_now_ns()) : NV_NOT_IMPLEMENTED;
             if (err == NVDISP_BAD_PARAMETER) err = NV_BAD_PARAMETER;
             break;
-        default:
-            if (!strcmp(fds[fd].path, "/dev/nvhost-ctrl-gpu") && type == 0x47) err = ctrl_gpu_ioctl(nr, tmp, size);
-            break;
+        case DEV_GPU_CHAN:
+        case DEV_GPU_AS:
+        case DEV_GPU_CTRL: err = gpu_node_ioctl(fd, type, nr, tmp, size); break;
+        default: break;
     }
     if (out) ipc_write_buf(c, out, tmp, out->size < size ? out->size : size);
 done:
@@ -683,6 +699,13 @@ static void nv_close(IpcObject *s, IpcCall *c) {
     pthread_mutex_lock(&lock);
     if (fd < MAX_FD && fds[fd].open) {
         if (fds[fd].kind == DEV_CHANNEL) channel_release(&fds[fd].ch);
+        if (fds[fd].kind == DEV_GPU_CHAN) {
+            nvgpu_as_unbind(&fds[fd].gchan);
+            if (fds[fd].gchan.fence_id) syncpt_owned[fds[fd].gchan.fence_id] = 0;
+        }
+        if (fds[fd].kind == DEV_GPU_AS) /* channels bound to a closed address space lose it */
+            for (unsigned i = 1; i < MAX_FD; i++)
+                if (fds[i].open && fds[i].kind == DEV_GPU_CHAN && fds[i].gchan.as == &fds[fd].gas) nvgpu_as_unbind(&fds[i].gchan);
         fds[fd].open = 0;
         err = NV_OK;
     }

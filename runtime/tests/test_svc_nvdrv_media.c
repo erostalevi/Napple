@@ -102,6 +102,13 @@ static double psnr(const uint8_t *a, const uint8_t *b, size_t n4) {
     return se == 0 ? 99.0 : 10 * log10(255.0 * 255.0 / (se / (double)k));
 }
 
+/* b8: backends for the media-devices tests */
+static void *refuse_vp9_open(int codec) { return codec == DEC_CODEC_VP9 ? NULL : decoder_backend_null.open(codec); }
+static struct { int opened, closed, encoded; EncodeRequest last; } recenc;
+static void *recenc_open(int codec) { recenc.opened++; return codec == DEC_CODEC_H264 ? &recenc : NULL; }
+static void recenc_close(void *c) { (void)c; recenc.closed++; }
+static int recenc_encode(void *c, const EncodeRequest *r, EncodeResult *o) { (void)c; recenc.encoded++; recenc.last = *r; memcpy(r->out, "\0\0\0\1\x65", 5); o->size = 5; o->idr = 1; return 0; }
+
 int main(void) {
 #ifdef NAPPLE_HOST_TEST
     host_thread_attach(calloc(1, 0x200));
@@ -509,6 +516,182 @@ int main(void) {
         CHECK(ioctl_(d0, cmd_id(3, 16, 'X', 1), junk, 16) == NV_NOT_IMPLEMENTED, "nvdisp: another ioctl type is NotImplemented");
         CHECK(ioctl_(d0, cmd_id(3, 8, NVDISP_IOCTL_TYPE, NVDISP_GET_MODE), junk, 8) == NV_BAD_PARAMETER, "nvdisp: a too-small struct is BadParameter");
         close_(d0); close_(d1);
+    }
+
+    /* ---- b8 nvdrv-media-devices ---- */
+    { /* NVDEC output with pitch != width (H.264 pitches 0x80 for a 64-wide picture), then VIC reads those surfaces back with the pitch NVDEC used */
+        Buf dl = mkbuf(dec, 0x4000), dc = mkbuf(dec, 0x2000), dpic = mkbuf(dec, 0x1000), dbs = mkbuf(dec, 0x2000), dst = mkbuf(dec, 0x100);
+        memcpy(dbs.mem, h264_64x48, sizeof h264_64x48);
+        uint32_t l = sizeof h264_64x48, pitch = 0x80;
+        memcpy(dpic.mem + 18 * 4, &l, 4); memcpy(dpic.mem + NVDEC_H264_W_PITCH_LUMA * 4, &pitch, 4); memcpy(dpic.mem + NVDEC_H264_W_PITCH_CHROMA * 4, &pitch, 4);
+        memset(dl.mem, 0xab, dl.size); memset(dc.mem, 0xab, dc.size);
+        media_pitch_hints_reset();
+        uint32_t p1[] = {SETCL(MEDIA_CLASS_NVDEC), NONINCR(NVM_SET_APPLICATION_ID, 1), DEC_CODEC_H264, INCR(NVDEC_SET_DRV_PIC_SETUP_OFFSET, 3), dpic.iova >> 8, dbs.iova >> 8, 0,
+                         INCR(NVDEC_SET_STATUS_OFFSET, 1), dst.iova >> 8, INCR(NVDEC_SET_DISPLAY_BUF_LUMA_OFFSET, 2), dl.iova >> 8, dc.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        CHECK(submit(dec, &cb, p1, sizeof p1 / 4, NULL, 0) == NV_OK, "NVDEC 64x48 with pitch 0x80 submitted");
+        uint8_t g = dl.mem[0];
+        CHECK(dl.mem[63] == g && dl.mem[0x80 + 5] == g && dl.mem[47 * 0x80 + 63] == g && dl.mem[64] == 0xab && dl.mem[0x80 - 1] == 0xab && dl.mem[48 * 0x80] == 0xab,
+              "NVDEC luma rows at 0x80 byte steps, padding between width and pitch untouched, nothing past the last row");
+        CHECK(dc.mem[0] == 128 && dc.mem[0x80 + 63] == 128 && dc.mem[64] == 0xab && dc.mem[23 * 0x80 + 63] == 128 && dc.mem[24 * 0x80] == 0xab, "NVDEC chroma rows at 0x80 byte steps");
+        Buf vcfg = mkbuf(vic, 0x1000), vout = mkbuf(vic, 0x4000), voc = mkbuf(vic, 0x2000);
+        vic_cfg(&vcfg, VIC_FMT_NV12, 0, 0, 64, 48);
+        uint32_t p2[] = {SETCL(MEDIA_CLASS_VIC), INCR(VIC_SET_INPUT0_LUMA_OFFSET, 2), dl.iova >> 8, dc.iova >> 8, INCR(VIC_SET_CONFIG_STRUCT_OFFSET, 1), vcfg.iova >> 8,
+                         INCR(VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET, 2), vout.iova >> 8, voc.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        uint64_t verr = stats(vic)->errors;
+        CHECK(submit(vic, &cb, p2, sizeof p2 / 4, NULL, 0) == NV_OK && stats(vic)->errors == verr, "VIC executes on the NVDEC surfaces");
+        CHECK(vout.mem[0] == g && vout.mem[256 + 3] == g && vout.mem[47 * 256 + 63] == g && voc.mem[256] == 128, "VIC input read at NVDEC's pitch 0x80 (the 256-aligned guess would read padding), output at 256");
+        /* a VIC surface NVDEC never wrote falls back to 256-aligned rows (the old behaviour) */
+        media_pitch_hints_reset();
+        vic_fill(&dl, &dc, 64, 48, 256, 90, 128, 128);
+        CHECK(submit(vic, &cb, p2, sizeof p2 / 4, NULL, 0) == NV_OK && vout.mem[256 + 3] == 90 && vout.mem[47 * 256 + 63] == 90, "VIC without a pitch hint keeps the 256-aligned input rows");
+        /* VIC RGBA out from the 0x80-pitch input */
+        media_pitch_hints_reset();
+        vic_fill(&dl, &dc, 64, 48, 0x80, 180, 128, 128);
+        { uint32_t pp = 0x80; memcpy(dpic.mem + NVDEC_H264_W_PITCH_LUMA * 4, &pp, 4); }
+        submit(dec, &cb, p1, sizeof p1 / 4, NULL, 0); /* sets the hint again (overwrites the picture with the null backend's grey) */
+        g = dl.mem[0];
+        vic_cfg(&vcfg, VIC_FMT_RGBA8, 0, 0, 64, 48);
+        CHECK(submit(vic, &cb, p2, sizeof p2 / 4, NULL, 0) == NV_OK && vout.mem[47 * 256 + 63 * 4] == vout.mem[0] && vout.mem[3] == 255 && vout.mem[0] > 0, "VIC RGBA from pitch-0x80 input: last pixel equals the first");
+    }
+    { /* VP9 through the null backend with surface pitches (proposed picture-info words), the key frame's width remembered for the inter frame */
+        Buf vcb = mkbuf(dec, 0x1000), vbs = mkbuf(dec, 0x2000), vpic = mkbuf(dec, 0x1000), vl = mkbuf(dec, 0x4000), vc = mkbuf(dec, 0x2000), vst = mkbuf(dec, 0x100);
+        uint32_t vp[] = {SETCL(MEDIA_CLASS_NVDEC), NONINCR(NVM_SET_APPLICATION_ID, 1), DEC_CODEC_VP9, INCR(NVDEC_SET_DRV_PIC_SETUP_OFFSET, 3), vpic.iova >> 8, vbs.iova >> 8, 0,
+                         INCR(NVDEC_SET_STATUS_OFFSET, 1), vst.iova >> 8, INCR(NVDEC_SET_DISPLAY_BUF_LUMA_OFFSET, 2), vl.iova >> 8, vc.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        uint32_t pitch = 0x80, bad = 60, l;
+        for (int round = 0; round < 3; round++) {
+            const uint8_t *fr = round == 1 ? vp9_inter : vp9_key_70x38;
+            l = round == 1 ? sizeof vp9_inter : sizeof vp9_key_70x38;
+            uint32_t pl = round == 2 ? bad : pitch;
+            memset(vbs.mem, 0, 0x2000); memcpy(vbs.mem, fr, l); memset(vpic.mem, 0, 0x100); memcpy(vpic.mem + 12 * 4, &l, 4);
+            memcpy(vpic.mem + NVDEC_VP9_W_PITCH_LUMA * 4, &pl, 4); memcpy(vpic.mem + NVDEC_VP9_W_PITCH_CHROMA * 4, &pitch, 4);
+            memset(vl.mem, 0xab, vl.size); memset(vc.mem, 0xab, vc.size);
+            CHECK(submit(dec, &vcb, vp, sizeof vp / 4, NULL, 0) == NV_OK, "VP9 round %d submitted", round);
+            uint8_t g = vl.mem[0];
+            size_t lp = round == 2 ? 70 : 0x80; /* a pitch below the width is ignored: packed rows */
+            CHECK(vl.mem[69] == g && vl.mem[lp + 5] == g && vl.mem[37 * lp + 69] == g && vl.mem[70] == (round == 2 ? g : 0xab),
+                  "VP9 round %d (%s): luma rows %zu bytes apart", round, round == 0 ? "key frame" : round == 1 ? "inter frame reuses the key frame's width" : "pitch below width", lp);
+        }
+    }
+    { /* VP9 refused by the backend: a defined error in the status structure and the counters, and the channel keeps working for H.264 */
+        DecoderBackend refuse = decoder_backend_null; refuse.name = "refuse-vp9"; refuse.open = refuse_vp9_open;
+        CHECK(decoder_backend_install(&refuse) == 0, "refusing backend installed");
+        uint32_t rdec = open_("/dev/nvhost-nvdec");
+        Buf rcb = mkbuf(rdec, 0x1000), rbs = mkbuf(rdec, 0x2000), rpic = mkbuf(rdec, 0x1000), rl = mkbuf(rdec, 0x4000), rc_ = mkbuf(rdec, 0x2000), rst = mkbuf(rdec, 0x100);
+        uint32_t l = sizeof vp9_key_70x38;
+        memcpy(rbs.mem, vp9_key_70x38, l); memcpy(rpic.mem + 12 * 4, &l, 4); memset(rst.mem, 0xff, 32);
+        uint32_t rp[] = {SETCL(MEDIA_CLASS_NVDEC), NONINCR(NVM_SET_APPLICATION_ID, 1), DEC_CODEC_VP9, INCR(NVDEC_SET_DRV_PIC_SETUP_OFFSET, 3), rpic.iova >> 8, rbs.iova >> 8, 0,
+                         INCR(NVDEC_SET_STATUS_OFFSET, 1), rst.iova >> 8, INCR(NVDEC_SET_DISPLAY_BUF_LUMA_OFFSET, 2), rl.iova >> 8, rc_.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        CHECK(submit(rdec, &rcb, rp, sizeof rp / 4, NULL, 0) == NV_OK, "VP9 execute on a backend that refuses it is accepted by the ioctl");
+        uint32_t sw[8]; memcpy(sw, rst.mem, 32);
+        CHECK(stats(rdec)->errors == 1 && stats(rdec)->last_error == 1 && stats(rdec)->frames == 0 && sw[3] == 1 && sw[4] == 0 && rl.mem[0] == 0,
+              "VP9 refused: status error 1 (codec not supported), no size, no frame, nothing written (errors %llu last %u err %u)", (unsigned long long)stats(rdec)->errors, stats(rdec)->last_error, sw[3]);
+        memset(rbs.mem, 0, 0x2000); memcpy(rbs.mem, h264_64x48, sizeof h264_64x48); l = sizeof h264_64x48; memcpy(rpic.mem + 18 * 4, &l, 4);
+        rp[2] = DEC_CODEC_H264;
+        CHECK(submit(rdec, &rcb, rp, sizeof rp / 4, NULL, 0) == NV_OK && stats(rdec)->frames == 1 && stats(rdec)->errors == 1, "the same channel still decodes H.264 afterwards");
+        close_(rdec);
+        decoder_backend_install(NULL);
+    }
+    { /* VP9 superframe splitting (what a one-frame-per-sample backend needs) */
+        const uint8_t sf[] = {1, 2, 3, 4, 5, 0xc1, 3, 2, 0xc1};
+        size_t o[8], z[8];
+        CHECK(vp9_superframe_split(sf, sizeof sf, o, z) == 2 && o[0] == 0 && z[0] == 3 && o[1] == 3 && z[1] == 2, "superframe with a 1-byte-size index: frames 3 + 2 bytes");
+        CHECK(vp9_superframe_split(vp9_key_70x38, sizeof vp9_key_70x38, o, z) == 1 && z[0] == sizeof vp9_key_70x38, "no index: one frame");
+        const uint8_t bad[] = {1, 2, 0xc1, 9, 9, 0xc1};
+        CHECK(vp9_superframe_split(bad, sizeof bad, o, z) == -1, "a size that overruns the data is refused");
+    }
+    { /* NVJPG encode (RGBA in, JPEG out) and decode back through the same engine */
+        enum { W = 40, H = 24 };
+        Buf jcb = mkbuf(jpg, 0x1000), jsetup = mkbuf(jpg, 0x100), jrgba = mkbuf(jpg, 0x4000), jout = mkbuf(jpg, 0x4000), jst = mkbuf(jpg, 0x100), jdec = mkbuf(jpg, 0x4000), jin = mkbuf(jpg, 0x4000);
+        const uint32_t pitch = 0xc0; /* != W * 4 */
+        uint8_t src[W * H * 4];
+        for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) { uint8_t *q = src + (y * W + x) * 4; q[0] = (uint8_t)(x * 6); q[1] = (uint8_t)(y * 10); q[2] = (uint8_t)(100 + x + y); q[3] = 255; }
+        memset(jrgba.mem, 0xee, jrgba.size);
+        for (int y = 0; y < H; y++) memcpy(jrgba.mem + (size_t)y * pitch, src + y * W * 4, W * 4 > pitch ? pitch : W * 4);
+        uint32_t su[NVJPG_SETUP_WORDS_ENC] = {0, 0x4000, 0, 0, NVJPG_FMT_RGBA, 0, NVJPG_MODE_ENCODE, W, H, pitch, 92, 0};
+        memcpy(jsetup.mem, su, sizeof su);
+        uint32_t ep[] = {SETCL(MEDIA_CLASS_NVJPG), INCR(NVJPG_SET_DRV_PIC_SETUP_OFFSET, 4), jsetup.iova >> 8, jrgba.iova >> 8, jout.iova >> 8, 0, INCR(NVJPG_SET_STATUS_OFFSET, 1), jst.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        CHECK(submit(jpg, &jcb, ep, sizeof ep / 4, NULL, 0) == NV_OK, "NVJPG encode submitted");
+        uint32_t es[4]; memcpy(es, jst.mem, 16);
+        CHECK(es[0] == 0 && es[1] == W && es[2] == H && es[3] > 200 && es[3] < 0x4000 && jout.mem[0] == 0xff && jout.mem[1] == 0xd8 && jout.mem[es[3] - 2] == 0xff && jout.mem[es[3] - 1] == 0xd9,
+              "NVJPG encode: status ok %ux%u, %u bytes, SOI..EOI (err %u)", es[1], es[2], es[3], es[0]);
+        JpegInfo ji; CHECK(napjpeg_info(jout.mem, es[3], &ji) == JPEGCORE_OK && ji.width == W && ji.height == H && ji.ncomp == 3 && ji.h[0] == 1, "encoded JPEG parses as 4:4:4 %dx%d", ji.width, ji.height);
+        memcpy(jin.mem, jout.mem, es[3]);
+        uint32_t ds[NVJPG_SETUP_WORDS] = {es[3], 0x4000, 0, 0, NVJPG_FMT_RGBA, 0};
+        memset(jsetup.mem, 0, 0x100); memcpy(jsetup.mem, ds, sizeof ds);
+        uint32_t dp[] = {SETCL(MEDIA_CLASS_NVJPG), INCR(NVJPG_SET_DRV_PIC_SETUP_OFFSET, 4), jsetup.iova >> 8, jin.iova >> 8, jdec.iova >> 8, 0, INCR(NVJPG_SET_STATUS_OFFSET, 1), jst.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        CHECK(submit(jpg, &jcb, dp, sizeof dp / 4, NULL, 0) == NV_OK, "NVJPG decode of the encoded image submitted");
+        memcpy(es, jst.mem, 16);
+        CHECK(es[0] == 0 && es[1] == W && es[2] == H, "NVJPG decode status %ux%u err %u", es[1], es[2], es[0]);
+        double ps = psnr(src, jdec.mem, (size_t)W * H * 4);
+        CHECK(ps > 30.0, "NVJPG encode -> decode round trip, PSNR %.1f dB", ps);
+        /* 4:2:0 and the quality knob: smaller output */
+        su[10] = 30; su[11] = 1; memcpy(jsetup.mem, su, sizeof su);
+        submit(jpg, &jcb, ep, sizeof ep / 4, NULL, 0); uint32_t es2[4]; memcpy(es2, jst.mem, 16);
+        CHECK(es2[0] == 0 && es2[3] < es[3] && napjpeg_info(jout.mem, es2[3], &ji) == JPEGCORE_OK && ji.h[0] == 2 && ji.v[0] == 2, "quality 30 with 4:2:0 gives a smaller 2x2-sampled file (%u < %u bytes)", es2[3], es[3]);
+        /* errors: pitch below the row size, output too small, NV12 input */
+        uint32_t bad[NVJPG_SETUP_WORDS_ENC]; memcpy(bad, su, sizeof su); bad[9] = 16; memcpy(jsetup.mem, bad, sizeof bad);
+        submit(jpg, &jcb, ep, sizeof ep / 4, NULL, 0); memcpy(es, jst.mem, 16);
+        CHECK(es[0] == 4 && es[3] == 0, "NVJPG encode: pitch below the row size is error 4");
+        memcpy(bad, su, sizeof su); bad[1] = 100; memcpy(jsetup.mem, bad, sizeof bad);
+        submit(jpg, &jcb, ep, sizeof ep / 4, NULL, 0); memcpy(es, jst.mem, 16);
+        CHECK(es[0] == JPEGCORE_TOO_SMALL && es[3] == 0, "NVJPG encode: an output capacity smaller than the JPEG is TOO_SMALL");
+        memcpy(bad, su, sizeof su); bad[4] = NVJPG_FMT_NV12; memcpy(jsetup.mem, bad, sizeof bad);
+        submit(jpg, &jcb, ep, sizeof ep / 4, NULL, 0); memcpy(es, jst.mem, 16);
+        CHECK(es[0] == 5, "NVJPG encode: NV12 input is refused (error 5)");
+    }
+    { /* MSENC: encode requests through the EncoderBackend (null encoder, then a recording one); input with pitch != width */
+        enum { W = 32, H = 16 };
+        const uint32_t pitch = 0x40;
+        Buf mcb = mkbuf(enc, 0x1000), msu = mkbuf(enc, 0x100), mlu = mkbuf(enc, 0x1000), mch = mkbuf(enc, 0x800), mout = mkbuf(enc, 0x1000), mst = mkbuf(enc, 0x100);
+        uint32_t su[MSENC_SETUP_WORDS] = {W, H, pitch, pitch, 1000000, 30, 0, 0};
+        memcpy(msu.mem, su, sizeof su);
+        memset(mlu.mem, 0x40, mlu.size); memset(mch.mem, 0x80, mch.size);
+        uint32_t mp[] = {SETCL(MEDIA_CLASS_MSENC), INCR(MSENC_SET_SETUP_OFFSET, 4), msu.iova >> 8, mlu.iova >> 8, mch.iova >> 8, mout.iova >> 8, INCR(MSENC_SET_STATUS_OFFSET, 1), mst.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        uint32_t ms[4];
+        encoder_backend_install(NULL);
+        uint32_t enc2 = open_("/dev/nvhost-msenc"); /* engines take the installed encoder when the channel opens */
+        Buf ecb2 = mkbuf(enc2, 0x1000), esu = mkbuf(enc2, 0x100), elu = mkbuf(enc2, 0x1000), ech = mkbuf(enc2, 0x800), eout = mkbuf(enc2, 0x1000), est2 = mkbuf(enc2, 0x100);
+        memcpy(esu.mem, su, sizeof su); memset(elu.mem, 0x40, elu.size); memset(ech.mem, 0x80, ech.size);
+        uint32_t ep[] = {SETCL(MEDIA_CLASS_MSENC), INCR(MSENC_SET_SETUP_OFFSET, 4), esu.iova >> 8, elu.iova >> 8, ech.iova >> 8, eout.iova >> 8, INCR(MSENC_SET_STATUS_OFFSET, 1), est2.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        CHECK(submit(enc2, &ecb2, ep, sizeof ep / 4, NULL, 0) == NV_OK, "MSENC encode submitted (null encoder)");
+        memcpy(ms, est2.mem, 16);
+        CHECK(ms[0] == 0 && ms[1] > 17 && (ms[2] & 1) && ms[3] == 1 && !memcmp(eout.mem, "\0\0\0\1\x67", 5), "first frame: IDR with SPS/PPS in front, %u bytes, frame 1", ms[1]);
+        uint32_t first = ms[1];
+        memset(eout.mem, 0, 64); memset(elu.mem, 0x90, elu.size); /* different picture */
+        submit(enc2, &ecb2, ep, sizeof ep / 4, NULL, 0); memcpy(ms, est2.mem, 16);
+        CHECK(ms[0] == 0 && !(ms[2] & 1) && ms[3] == 2 && ms[1] < first && eout.mem[4] == 0x41, "second frame is a P slice (frame 2, %u bytes < %u)", ms[1], first);
+        su[6] = 1; memcpy(esu.mem, su, sizeof su);
+        submit(enc2, &ecb2, ep, sizeof ep / 4, NULL, 0); memcpy(ms, est2.mem, 16);
+        CHECK(ms[0] == 0 && (ms[2] & 1) && ms[3] == 3, "force-IDR flag gives a key frame again");
+        /* the padding bytes between width and pitch are not part of the picture: poking them must not change the stream */
+        uint8_t a[16]; memcpy(a, eout.mem, 16);
+        memset(elu.mem + W, 0x11, pitch - W); submit(enc2, &ecb2, ep, sizeof ep / 4, NULL, 0);
+        CHECK(!memcmp(a, eout.mem, 16), "bytes between width and the input pitch do not reach the encoder's picture");
+        /* errors */
+        uint32_t odd[MSENC_SETUP_WORDS]; memcpy(odd, su, sizeof su); odd[0] = 31; memcpy(esu.mem, odd, sizeof odd);
+        submit(enc2, &ecb2, ep, sizeof ep / 4, NULL, 0); memcpy(ms, est2.mem, 16);
+        CHECK(ms[0] == MSENC_ERR_PARAMS && ms[1] == 0, "odd width is MSENC_ERR_PARAMS");
+        memcpy(odd, su, sizeof su); odd[7] = 8; memcpy(esu.mem, odd, sizeof odd); /* 8 bytes of output room */
+        submit(enc2, &ecb2, ep, sizeof ep / 4, NULL, 0); memcpy(ms, est2.mem, 16);
+        CHECK(ms[0] == MSENC_ERR_FAILED && ms[1] == 0, "an output capacity too small for the stream is MSENC_ERR_FAILED");
+        memcpy(odd, su, sizeof su); odd[2] = 8; memcpy(esu.mem, odd, sizeof odd);
+        submit(enc2, &ecb2, ep, sizeof ep / 4, NULL, 0); memcpy(ms, est2.mem, 16);
+        CHECK(ms[0] == MSENC_ERR_PARAMS, "a pitch below the width is MSENC_ERR_PARAMS");
+        close_(enc2);
+        /* a recording encoder sees the request fields */
+        EncoderBackend rb = {"rec-enc", recenc_open, recenc_close, recenc_encode, ENCODER_BACKEND_ABI};
+        CHECK(encoder_backend_install(&rb) == 0, "recording encoder installed");
+        uint32_t enc3 = open_("/dev/nvhost-msenc");
+        Buf c3 = mkbuf(enc3, 0x1000), s3 = mkbuf(enc3, 0x100), l3 = mkbuf(enc3, 0x1000), h3 = mkbuf(enc3, 0x800), o3 = mkbuf(enc3, 0x1000), t3 = mkbuf(enc3, 0x100);
+        su[6] = 1; memcpy(s3.mem, su, sizeof su); memset(l3.mem, 0x40, l3.size);
+        uint32_t rp[] = {SETCL(MEDIA_CLASS_MSENC), INCR(MSENC_SET_SETUP_OFFSET, 4), s3.iova >> 8, l3.iova >> 8, h3.iova >> 8, o3.iova >> 8, INCR(MSENC_SET_STATUS_OFFSET, 1), t3.iova >> 8, IMM(NVM_EXECUTE, 0)};
+        CHECK(submit(enc3, &c3, rp, sizeof rp / 4, NULL, 0) == NV_OK && recenc.opened == 1 && recenc.encoded == 1 && recenc.last.width == W && recenc.last.height == H && recenc.last.luma_pitch == pitch &&
+              recenc.last.bitrate == 1000000 && recenc.last.fps == 30 && recenc.last.force_idr && recenc.last.out_cap == 0x1000, "the encoder gets size, pitches, bitrate, fps, force-IDR flag and the output room");
+        close_(enc3);
+        CHECK(recenc.closed == 1, "the encoder context is closed with the channel");
+        encoder_backend_install(NULL);
+        /* no setup structure: still accepted and counted, empty status, as before */
+        (void)mcb; (void)mp; (void)mst;
     }
 
     /* close frees the engines; a submit on a channel without addresses still behaves as before */

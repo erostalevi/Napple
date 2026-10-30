@@ -5,6 +5,8 @@
  *  2. geometry shader: points expanded to quads (4 emitted vertices, triangle strip) by compute emulation; pixels checked.
  *  3. tessellation: a quad patch with the NVN default levels (no tess control program) and a triangle patch whose levels the tess control program writes;
  *     the tess eval program places the vertices at control point 0 + tess coordinate; pixels checked.
+ *  4. software tessellator: tess eval output captured (quad, both windings; indirect triangle patches with a tess control program), isolines drawn and
+ *     captured, a geometry program after tessellation drawn and captured; exact words.
  * Hand-assembled Maxwell code, headless Metal (MTL_DEBUG_LAYER=1 in make test), no game data. */
 #include "nvn_harness.h"
 #include "stages.h"
@@ -24,10 +26,15 @@ enum { OFF_SH = 0x1000, OFF_VB = 0x20000, OFF_IB = 0x21000, OFF_X0 = 0x22000, OF
 static H h;
 static NVNtexture *g_rt;
 static int g_nsh;
-static uint8_t g_ctl[8][0x880];
+#define MAX_STAGES 30 /* 0x1000-byte shader slots between OFF_SH and OFF_VB */
+static uint8_t g_ctl[MAX_STAGES][0x880];
 
 /* builds one stage at its own 0x1000-byte slot of the pool; returns its shader data. sph: SPH words 2, 3, 4 to set (0 = leave) */
 static NVNshaderData stage(int st, const uint64_t *ins, int n, uint32_t omap, uint32_t w2, uint32_t w3, uint32_t w4) {
+    if (g_nsh >= MAX_STAGES) {
+        CHECK(0, "more than %d shader stages built", MAX_STAGES);
+        exit(1);
+    }
     uint8_t *m = h.mem + OFF_SH + 0x1000 * (size_t)g_nsh;
     uint8_t *ctl = g_ctl[g_nsh++];
     build_shader(m, ctl, st, ins, n, omap);
@@ -43,13 +50,17 @@ static NVNprogram *program(int n, const NVNshaderData *sd) {
     CHECK(L(nvnProgramSetShaders)(p, n, sd), "set shaders");
     return p;
 }
-static NVNshaderData vs_pos(void) { /* position from attribute 0 */
+static NVNshaderData vs_pos(void) { /* position from attribute 0 (built once, shared by the programs) */
+    static NVNshaderData sd;
     uint64_t i[] = {ALDV(0, 0x80, 4, 0), ASTP(0, 0x70, 4, 0), ins_exit()};
-    return stage(0, i, 3, 0, 0, 0, 0);
+    if (!sd.data) sd = stage(0, i, 3, 0, 0, 0, 0);
+    return sd;
 }
 static NVNshaderData fs_red(void) {
+    static NVNshaderData sd;
     uint64_t i[] = {ins_mov32i(0, 0x3f800000), ins_mov32i(1, 0), ins_mov32i(2, 0), ins_mov32i(3, 0x3f800000), ins_exit()};
-    return stage(1, i, 5, 0xf, 0, 0, 0);
+    if (!sd.data) sd = stage(1, i, 5, 0xf, 0, 0, 0);
+    return sd;
 }
 
 static void common_state(int raster_discard) {
@@ -412,6 +423,239 @@ static void test_tess(void) {
     }
 }
 
+/* ---- 4. software tessellator (src/mtl_stages.inc): capture of tess eval output, geometry after tessellation, isolines, indirect patches ---- */
+static NVNshaderData tes_cp0_uv(void) { /* tess eval: position = control point 0 + (u, v, 0, 0) */
+    static NVNshaderData sd;
+    uint64_t ti[] = {ALDV(0, 0x70, 4, 255), ALDV(8, 0x2f0, 2, 255), fadd(0, 0, 8), fadd(1, 1, 9), ASTP(0, 0x70, 4, 0), ins_exit()};
+    if (!sd.data) sd = stage(4, ti, 6, 0, 0, 0, 0);
+    return sd;
+}
+static gfx_xfb_layout xfb_pos16(void) { /* buffer 0: the position, 16 bytes per vertex */
+    gfx_xfb_layout xl;
+    memset(&xl, 0, sizeof xl);
+    xl.count = 1;
+    xl.stride[0] = 16;
+    xl.e[0] = (ShaderXfbEntry){0x70, 0, 4, 0};
+    return xl;
+}
+static void xfb_begin(NVNbufferAddress ctl) {
+    NVNbufferRange xr[1] = {{(NVNbufferAddress)(uintptr_t)(h.mem + OFF_X0), 0x4000}};
+    L(nvnCommandBufferBindTransformFeedbackBuffers)(h.cb, 0, 1, xr);
+    L(nvnCommandBufferBeginTransformFeedback)(h.cb, ctl);
+}
+/* compares the captured positions of buffer 0 with exp[n] (z = 0, w = 1); returns the number that differ */
+static int xfb_cmp(const float (*exp)[2], int n, const char *what) {
+    const uint32_t *x0 = (const uint32_t *)(h.mem + OFF_X0);
+    int bad = 0;
+    for (int i = 0; i < n; i++) {
+        const uint32_t *w = x0 + i * 4;
+        if (w[0] != fbits(exp[i][0]) || w[1] != fbits(exp[i][1]) || w[2] != fbits(0) || w[3] != fbits(1)) {
+            if (!bad) printf("  %s: vertex %d = %08x %08x %08x %08x, expected %08x %08x 0 3f800000\n", what, i, w[0], w[1], w[2], w[3], fbits(exp[i][0]), fbits(exp[i][1]));
+            bad++;
+        }
+    }
+    CHECK(x0[n * 4] == 0xeeeeeeeeu, "%s: nothing written past the %d captured vertices", what, n);
+    return bad;
+}
+/* the software tessellator's quad grid of n x n cells over [x0, x0 + 1] x [y0, y0 + 1]: triangles (a, b, c), (a, c, d) per cell, row-major */
+static int quad_grid(int n, float x0, float y0, float (*o)[2]) {
+    int w = 0;
+    for (int j = 0; j < n; j++)
+        for (int i = 0; i < n; i++) {
+            float u0 = (float)i / n, u1 = (float)(i + 1) / n, v0 = (float)j / n, v1 = (float)(j + 1) / n;
+            const float t[6][2] = {{u0, v0}, {u1, v0}, {u1, v1}, {u0, v0}, {u1, v1}, {u0, v1}};
+            for (int k = 0; k < 6; k++) { o[w][0] = x0 + t[k][0]; o[w][1] = y0 + t[k][1]; w++; }
+        }
+    return w;
+}
+
+/* 4a. transform feedback of tess eval output: quad patch at level 2 (no tess control program), drawn as well */
+static void test_tes_xfb(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float v[4][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, -0.5f, 0, 1}, {-0.5f, 0.5f, 0, 1}, {0.5f, 0.5f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    NVNshaderData sd[3] = {vs_pos(), tes_cp0_uv(), fs_red()};
+    NVNprogram *prog = program(3, sd);
+    gfx_tess_params tp = {TESS_DOMAIN_QUAD, TESS_SPACING_EQUAL, TESS_WINDING_CCW};
+    gfx_xfb_layout xl = xfb_pos16();
+    CHECK(gfx_program_set_tess_params(prog, &tp) && gfx_program_set_xfb_layout(prog, &xl), "tess params and xfb layout registered");
+    memset(h.mem + OFF_X0, 0xee, 0x4000);
+    memset(h.mem + OFF_CTL, 0xee, 64);
+    NVNbufferAddress ctl = (NVNbufferAddress)(uintptr_t)(h.mem + OFF_CTL);
+    h_begin(&h);
+    common_state(0);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    float outer[4] = {2, 2, 2, 2}, inner[2] = {2, 2};
+    L(nvnCommandBufferSetOuterTessellationLevels)(h.cb, outer);
+    L(nvnCommandBufferSetInnerTessellationLevels)(h.cb, inner);
+    L(nvnCommandBufferSetPatchSize)(h.cb, 4);
+    clear_rt();
+    xfb_begin(ctl);
+    L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_PATCHES, 0, 4);
+    L(nvnCommandBufferEndTransformFeedback)(h.cb, ctl);
+    readback();
+    h_submit(&h);
+    float exp[24][2];
+    int n = quad_grid(2, -0.5f, -0.5f, exp);
+    int bad = xfb_cmp(exp, n, "tes xfb");
+    CHECK(n == 24 && bad == 0, "quad patch at level 2 captured as 8 triangles in grid order (%d of %d differ)", bad, n);
+    const uint32_t *cw = (const uint32_t *)(h.mem + OFF_CTL);
+    CHECK(cw[0] == 24 * 16 && cw[4] == 16, "control memory: bytes %u stride %u", cw[0], cw[4]);
+    CHECK(px(32, 32) == RED && px(pxx(-0.45f), pxy(-0.45f)) == RED && px(4, 4) == 0, "the patch is also drawn (software path): %08x %08x %08x", px(32, 32),
+          px(pxx(-0.45f), pxy(-0.45f)), px(4, 4));
+    /* clockwise winding: every triangle's second and third vertices swap */
+    tp.winding = TESS_WINDING_CW;
+    CHECK(gfx_program_set_tess_params(prog, &tp), "cw params registered");
+    memset(h.mem + OFF_X0, 0xee, 0x4000);
+    h_begin(&h);
+    common_state(1);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    L(nvnCommandBufferSetOuterTessellationLevels)(h.cb, outer);
+    L(nvnCommandBufferSetInnerTessellationLevels)(h.cb, inner);
+    L(nvnCommandBufferSetPatchSize)(h.cb, 4);
+    xfb_begin(ctl);
+    L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_PATCHES, 0, 4);
+    L(nvnCommandBufferEndTransformFeedback)(h.cb, ctl);
+    h_submit(&h);
+    for (int t = 0; t < n; t += 3) {
+        float tmp[2] = {exp[t + 1][0], exp[t + 1][1]};
+        exp[t + 1][0] = exp[t + 2][0]; exp[t + 1][1] = exp[t + 2][1];
+        exp[t + 2][0] = tmp[0]; exp[t + 2][1] = tmp[1];
+    }
+    bad = xfb_cmp(exp, n, "tes xfb cw");
+    CHECK(bad == 0, "clockwise winding swaps each triangle's last two vertices (%d of %d differ)", bad, n);
+}
+
+/* 4b. indirect patches with a tess control program (levels 4, triangle domain) captured, rasterizer off */
+static void test_tes_xfb_indirect(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float v[3][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, -0.5f, 0, 1}, {-0.5f, 0.5f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    uint64_t ci[] = {S2R(0, 0x11), ALDV(4, 0x70, 4, 0), ASTP(4, 0x70, 4, 0), ins_mov32i(8, fbits(4)), ins_mov32i(9, fbits(4)), ins_mov32i(10, fbits(4)),
+                     ins_mov32i(11, fbits(4)), ASTP(8, 0x00, 4, 1), ASTP(8, 0x10, 2, 1), ins_exit()};
+    NVNshaderData sd[4] = {vs_pos(), stage(3, ci, 10, 0, 3u << 24, 0, 0), tes_cp0_uv(), fs_red()};
+    NVNprogram *prog = program(4, sd);
+    gfx_tess_params tp = {TESS_DOMAIN_TRIANGLE, TESS_SPACING_EQUAL, TESS_WINDING_CCW};
+    gfx_xfb_layout xl = xfb_pos16();
+    CHECK(gfx_program_set_tess_params(prog, &tp) && gfx_program_set_xfb_layout(prog, &xl), "tess params and xfb layout registered");
+    memset(h.mem + OFF_X0, 0xee, 0x4000);
+    memset(h.mem + OFF_CTL, 0xee, 64);
+    NVNbufferAddress ctl = (NVNbufferAddress)(uintptr_t)(h.mem + OFF_CTL);
+    uint32_t *args = (uint32_t *)(h.mem + OFF_CTL + 0x100); /* count, instances, first, base instance */
+    args[0] = 3; args[1] = 1; args[2] = 0; args[3] = 0;
+    h_begin(&h);
+    common_state(1);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    L(nvnCommandBufferSetPatchSize)(h.cb, 3);
+    xfb_begin(ctl);
+    L(nvnCommandBufferDrawArraysIndirect)(h.cb, NVN_DRAW_PRIMITIVE_PATCHES, (NVNbufferAddress)(uintptr_t)args);
+    L(nvnCommandBufferEndTransformFeedback)(h.cb, ctl);
+    h_submit(&h);
+    /* barycentric grid n = 4: rows j, triangles (i, j) (i + 1, j) (i, j + 1) and, inside, (i + 1, j) (i + 1, j + 1) (i, j + 1) */
+    float exp[48][2];
+    int w = 0;
+    const int nn = 4;
+    for (int j = 0; j < nn; j++)
+        for (int i = 0; i + j < nn; i++) {
+            const int t[2][3][2] = {{{i, j}, {i + 1, j}, {i, j + 1}}, {{i + 1, j}, {i + 1, j + 1}, {i, j + 1}}};
+            for (int q = 0; q < (i + j + 1 < nn ? 2 : 1); q++)
+                for (int k = 0; k < 3; k++) { exp[w][0] = -0.5f + (float)t[q][k][0] / nn; exp[w][1] = -0.5f + (float)t[q][k][1] / nn; w++; }
+        }
+    int bad = xfb_cmp(exp, w, "tes xfb indirect");
+    CHECK(w == 48 && bad == 0, "indirect triangle patch at the program's level 4: 16 triangles captured (%d of %d differ)", bad, w);
+    const uint32_t *cw = (const uint32_t *)(h.mem + OFF_CTL);
+    CHECK(cw[0] == 48 * 16 && cw[4] == 16, "control memory: bytes %u stride %u", cw[0], cw[4]);
+}
+
+/* 4c. isolines (Metal has none): outer {2, 4} = 2 lines of 4 segments, drawn and captured */
+static void test_isolines(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float y0 = -0.515625f; /* line rows land on pixel centres: rows 48 and 32 */
+    const float v[4][4] = {{-0.5f, y0, 0, 1}, {0.5f, y0, 0, 1}, {-0.5f, 0.5f, 0, 1}, {0.5f, 0.5f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    NVNshaderData sd[3] = {vs_pos(), tes_cp0_uv(), fs_red()};
+    NVNprogram *prog = program(3, sd);
+    gfx_tess_params tp = {TESS_DOMAIN_ISOLINE, TESS_SPACING_EQUAL, TESS_WINDING_CCW};
+    gfx_xfb_layout xl = xfb_pos16();
+    CHECK(gfx_program_set_tess_params(prog, &tp) && gfx_program_set_xfb_layout(prog, &xl), "isoline params and xfb layout registered");
+    memset(h.mem + OFF_X0, 0xee, 0x4000);
+    memset(h.mem + OFF_CTL, 0xee, 64);
+    NVNbufferAddress ctl = (NVNbufferAddress)(uintptr_t)(h.mem + OFF_CTL);
+    h_begin(&h);
+    common_state(0);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    float outer[4] = {2, 4, 0, 0}, inner[2] = {0, 0};
+    L(nvnCommandBufferSetOuterTessellationLevels)(h.cb, outer);
+    L(nvnCommandBufferSetInnerTessellationLevels)(h.cb, inner);
+    L(nvnCommandBufferSetPatchSize)(h.cb, 4);
+    clear_rt();
+    xfb_begin(ctl);
+    L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_PATCHES, 0, 4);
+    L(nvnCommandBufferEndTransformFeedback)(h.cb, ctl);
+    readback();
+    h_submit(&h);
+    float exp[16][2];
+    int w = 0;
+    for (int j = 0; j < 2; j++)
+        for (int i = 0; i < 4; i++)
+            for (int k = 0; k < 2; k++) { exp[w][0] = -0.5f + (float)(i + k) / 4; exp[w][1] = y0 + (float)j / 2; w++; }
+    int bad = xfb_cmp(exp, w, "isolines");
+    CHECK(bad == 0, "isolines: 2 lines x 4 segments captured as 16 line vertices (%d differ)", bad);
+    const uint32_t *cw = (const uint32_t *)(h.mem + OFF_CTL);
+    CHECK(cw[0] == 16 * 16 && cw[4] == 16, "control memory: bytes %u stride %u", cw[0], cw[4]);
+    uint32_t l0 = px(32, 48), l1 = px(24, 32), gap = px(32, 40), above = px(32, 20);
+    CHECK(l0 == RED && l1 == RED, "both lines drawn (v = 0 at row 48, v = 0.5 at row 32): %08x %08x", l0, l1);
+    CHECK(gap == 0 && above == 0, "no line at v = 1 (isolines stop before it) or between: %08x %08x", gap, above);
+}
+
+/* 4d. geometry and tessellation together: a quad patch at level 2 (8 triangles) -> the GS emits a quad around each triangle's vertex 0; its output is
+ * drawn and captured (8 x 2 triangles, GPU-counted) */
+static void test_tess_gs(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float v[4][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, -0.5f, 0, 1}, {-0.5f, 0.5f, 0, 1}, {0.5f, 0.5f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    uint64_t gi[32];
+    int n = gs_quad(gi, 0, -1);
+    gi[n++] = ins_exit();
+    NVNshaderData sd[4] = {vs_pos(), stage(2, gi, n, 0, 0, 7u << 24, 4), tes_cp0_uv(), fs_red()};
+    NVNprogram *prog = program(4, sd);
+    gfx_tess_params tp = {TESS_DOMAIN_QUAD, TESS_SPACING_EQUAL, TESS_WINDING_CCW};
+    gfx_xfb_layout xl = xfb_pos16();
+    CHECK(gfx_program_set_tess_params(prog, &tp) && gfx_program_set_xfb_layout(prog, &xl), "tess params and xfb layout registered");
+    memset(h.mem + OFF_X0, 0xee, 0x4000);
+    memset(h.mem + OFF_CTL, 0xee, 64);
+    NVNbufferAddress ctl = (NVNbufferAddress)(uintptr_t)(h.mem + OFF_CTL);
+    h_begin(&h);
+    common_state(0);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    float outer[4] = {2, 2, 2, 2}, inner[2] = {2, 2};
+    L(nvnCommandBufferSetOuterTessellationLevels)(h.cb, outer);
+    L(nvnCommandBufferSetInnerTessellationLevels)(h.cb, inner);
+    L(nvnCommandBufferSetPatchSize)(h.cb, 4);
+    clear_rt();
+    xfb_begin(ctl);
+    L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_PATCHES, 0, 4);
+    L(nvnCommandBufferEndTransformFeedback)(h.cb, ctl);
+    readback();
+    h_submit(&h);
+    /* triangle t of cell (i, j) has vertex 0 at (-0.5 + i / 2, -0.5 + j / 2); its quad strip c0 c1 c2 c3 -> triangles (c0, c1, c2), (c2, c1, c3) */
+    const float s = 0.25f, cx[4] = {-s, s, -s, s}, cy[4] = {-s, -s, s, s};
+    const int tri[6] = {0, 1, 2, 2, 1, 3};
+    float exp[48][2];
+    int w = 0;
+    for (int j = 0; j < 2; j++)
+        for (int i = 0; i < 2; i++)
+            for (int t = 0; t < 2; t++)
+                for (int k = 0; k < 6; k++) { exp[w][0] = -0.5f + (float)i / 2 + cx[tri[k]]; exp[w][1] = -0.5f + (float)j / 2 + cy[tri[k]]; w++; }
+    int bad = xfb_cmp(exp, w, "tess + gs xfb");
+    CHECK(bad == 0, "geometry output after tessellation captured in primitive order: 48 vertices (%d differ)", bad);
+    const uint32_t *cw = (const uint32_t *)(h.mem + OFF_CTL);
+    CHECK(cw[0] == 48 * 16 && cw[4] == 16, "control memory written by the GPU: bytes %u stride %u", cw[0], cw[4]);
+    uint32_t a = px(pxx(-0.6f), pxy(-0.6f)), b = px(pxx(0.1f), pxy(0.1f)), c = px(pxx(0.5f), pxy(0.5f)), d = px(pxx(0.4f), pxy(-0.6f));
+    CHECK(a == RED && b == RED, "GS quads drawn around the tessellated vertices: %08x %08x", a, b);
+    CHECK(c == 0 && d == 0, "nothing beyond [-0.75, 0.25]^2 (the tessellated triangles themselves are not drawn): %08x %08x", c, d);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (h_init(&h, W, W, NULL)) return 1;
@@ -423,5 +667,9 @@ int main(void) {
     test_gs_indirect();
     test_gs_xfb();
     test_tess();
+    test_tes_xfb();
+    test_tes_xfb_indirect();
+    test_isolines();
+    test_tess_gs();
     return h_finish("t_stages", &h);
 }

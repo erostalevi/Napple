@@ -8,6 +8,14 @@
  *   +0x748 compute work group x y z (u32 x 3)   +0x754 compute shared memory bytes
  *   +0x034..+0x05b a 40-byte block present in some vertex and fragment outputs (u32, then 33 bytes 01 ff ff ...): purpose unknown
  *   +0x7c8 code length, +0x7d0 a 16-byte digest, +0x7e0 code length, +0x7f4 0xc, +0x7f8..+0x820 fragment output / interpolation words, +0x830 flags
+ * b8 scan (2026-10-28, NAPPLE_GFX_CTL_DUMP of 45 s boots, 20624 sections: LAS 152, MK8D A32 1702, MK8D 64-bit 1822, ACNH 2462, SMO 14486; the readers below
+ * run over every one: all parse, no transform feedback layout and no tessellation word found, i.e. no false positive):
+ *   - +0x020 is not always a multiple of 4 (0x7d1 on SMO / MK8D) and reaches 0x11d0 (LAS): three families 0x7d0/0x7d1, 0x848/0x850, 0x880.
+ *   - +0x030..+0x6ef is zero everywhere except 18 sections that carry NV assembly text after the binary part: +0x034 = 0x340, +0x038 = 0xffffff01,
+ *     +0x03c..+0x054 = 0xffffffff, +0x058 = 0xff. Those programs capture nothing: that is not a layout (and the consistency checks refuse it, t_control).
+ *   - +0x718 is non-zero in fragment sections only (1 or 0x10000; +0x71c = 1, +0x724..+0x730 = 1.0f, +0x734 = 1..8, likely the colour output count):
+ *     per-stage state, so the tessellation candidate below is read for tess eval sections alone. Still no tess control / tess eval program in any title.
+ *   - geometry sections (ACNH 2, SMO 3) have nothing that matches their SPH (invocations, output topology, max vertices): ACNH's carry +0x828 = 4.
  * Transform feedback layout and tessellation parameters: of the four titles on hand (Link's Awakening, Mario Kart 8 Deluxe, Animal Crossing, Mario
  * Odyssey; RomFS shader archives, the modules' GLSLC outputs and the programs created in 45 s boots scanned 2026-10-27) only geometry programs exist
  * (Odyssey 3, Animal Crossing 2, Mario Kart 1; nothing in them beyond the fields above), no tess control / tess eval program at all, and no vertex or
@@ -25,7 +33,7 @@ extern "C" {
 
 #define GLSLC_CONTROL_MAGIC 0x98761234u
 #define GLSLC_CONTROL_MIN 0x760u   /* shortest section seen (the fields up to +0x758 are always there) */
-#define GLSLC_CONTROL_MAX 0x1000u
+#define GLSLC_CONTROL_MAX 0x2000u   /* longest seen: 0x11d0 (a LAS section with embedded assembly text) */
 
 typedef struct {
     uint32_t length;      /* +0x20, clamped to [GLSLC_CONTROL_MIN, GLSLC_CONTROL_MAX] (0x880 when the word is implausible) */

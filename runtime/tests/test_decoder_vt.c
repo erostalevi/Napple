@@ -134,7 +134,33 @@ static void run_pitched(const Clip *c, uint32_t packed_sum) {
     free(bs);
     b->close(ctx);
 }
+/* MSENC's VideoToolbox H.264 encoder (b8, written on Linux, first run on a Mac): pitched NV12 in, Annex B out, SPS/PPS before the key frame. */
+static void run_encoder(void) {
+    const EncoderBackend *e = &encoder_backend_videotoolbox;
+    CHECK(e->open(DEC_CODEC_VP9) == NULL, "encoder refuses VP9");
+    void *ctx = e->open(DEC_CODEC_H264);
+    CHECK(ctx != NULL, "encoder opens H.264");
+    if (!ctx) return;
+    enum { EW = 64, EH = 48, EP = 96 };
+    static uint8_t y[EP * EH], uv[EP * EH / 2], out[1 << 16];
+    memset(y, 0x55, sizeof y);
+    memset(uv, 0x80, sizeof uv);
+    EncodeRequest r = {DEC_CODEC_H264, EW, EH, y, uv, sizeof y, sizeof uv, EP, EP, 500000, 30, 0, out, sizeof out};
+    EncodeResult res = {0};
+    int rc = e->encode(ctx, &r, &res);
+    CHECK(rc == 0 && res.idr && res.size > 16 && !memcmp(out, "\0\0\0\1", 4) && (out[4] & 31) == 7, "first frame: key frame led by an SPS (rc %d, %zu bytes)", rc, res.size);
+    memset(y, 0x60, sizeof y);
+    rc = e->encode(ctx, &r, &res);
+    CHECK(rc == 0 && res.size > 4 && !memcmp(out, "\0\0\0\1", 4), "second frame encodes (rc %d, %zu bytes, idr %d)", rc, res.size, res.idr);
+    r.force_idr = 1;
+    rc = e->encode(ctx, &r, &res);
+    CHECK(rc == 0 && res.idr && (out[4] & 31) == 7, "force-IDR gives a key frame with parameter sets");
+    r.out_cap = 8;
+    CHECK(e->encode(ctx, &r, &res) < 0, "an output buffer that is too small is an error");
+    e->close(ctx);
+}
 int main(void) {
+    run_encoder();
     Clip c;
     if (!encode(&c, 0, 1)) { CHECK(0, "VideoToolbox encode failed"); return 1; }
     int ok1, ok2;

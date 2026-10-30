@@ -9,13 +9,15 @@
  *  3. geometry: the GS kernel (one thread per primitive) writes gs_vtx / gs_idx; the draw renders gs_idx as restart-separated strips (points: pulled through
  *     gs_idx, unused slots land outside the clip volume) with a pass-through vertex function.
  *     tessellation: the TCS kernel (one threadgroup per patch) writes tess_vtx / tess_patch / tess_fac (pre-filled with the NVN default levels); without a TCS
- *     the replay fills them. drawPatches runs the tess eval program as a post-tessellation vertex function.
+ *     the replay fills them. drawPatches runs the tess eval program as a post-tessellation vertex function; isolines, a capture of tess eval output and a
+ *     geometry program after tessellation go through the software tessellator instead (see draw_tessellation).
  *  4. transform feedback without a geometry / tessellation stage: a plain list draw (points, lines, triangles; non-indexed; whole primitives that fit) captures
  *     straight from the vertex program into the xfb buffers; any other draw captures records and a copy kernel writes the decomposed primitives in order.
  *     The written byte counts are kept here per buffer (CPU side: every count is known when the draw is encoded) and stored to the game's control memory
  *     at End / Pause, read back at Resume and by DrawTransformFeedback.
- * Not covered (logged once by name): capture of geometry or tessellation output, geometry and tessellation together, indirect draws with these stages,
- * triangle strips with adjacency, GS instancing (SR_INVOCATION_ID is 0), isolines. The primitive id runs on across instances. */
+ * Indirect draws read their arguments at encode time (mtl_replay.m). Not covered: MultiDraw*IndirectCount with these stages (drawn without them by
+ * mtl_replay.m), point-mode tessellation, the hardware's ring triangulation of unequal levels in the software tessellator. The primitive id runs on
+ * across instances. */
 
 /* Transform feedback control memory, Napple's own layout (the guest only hands it back to us): u32 bytes written per buffer [0..3], u32 vertex stride per
  * buffer [4..7] of the program that wrote them (DrawTransformFeedback draws bytes[0] / stride[0] vertices). */
@@ -630,24 +632,100 @@ static int gs_emits(uint64_t hash) {
     }
     return 0;
 }
-/* Geometry draw (passes 1-3). Returns 0 when the draw should go on without the geometry stage (pass-through or unusable program: logged once). */
-static int draw_geometry(const sdraw *d) {
-    uint64_t gsh = S.prog[2];
+/* Declared output of a geometry program (its SPH). 0 (logged once per program) when the draw should go on without the geometry stage. */
+typedef struct {
+    uint32_t maxv, inv;
+    uint8_t topo;
+} gs_decl;
+static int gs_decl_of(uint64_t gsh, gs_decl *g) {
     const uint32_t *w = sph_of(gsh);
     if (!w) { gs_fallback("no shader header"); return 0; }
-    uint32_t topo_hw = (w[3] >> 24) & 0xf, maxv = w[4] & 0xfff, inv = (w[2] >> 24) & 0xff;
-    uint8_t topo = topo_hw == 1 ? GS_OUT_POINTS : topo_hw == 6 ? GS_OUT_LINE_STRIP : GS_OUT_TRIANGLE_STRIP;
+    uint32_t topo_hw = (w[3] >> 24) & 0xf;
+    g->maxv = w[4] & 0xfff;
+    g->inv = (w[2] >> 24) & 0xff; /* SPH word 2 bits 24..31: invocations per primitive (GS instancing); the kernel runs nprim * inv threads (sp[3] = inv) */
+    g->topo = topo_hw == 1 ? GS_OUT_POINTS : topo_hw == 6 ? GS_OUT_LINE_STRIP : GS_OUT_TRIANGLE_STRIP;
     if (topo_hw != 1 && topo_hw != 6 && topo_hw != 7) LOG_ONCE(NAPPLE_LOG_WARN, "geometry output topology %u read as a triangle strip", topo_hw);
-    if (inv < 1) inv = 1; /* SPH word 2 bits 24..31: invocations per primitive (GS instancing); the kernel runs nprim * inv threads (sp[3] = inv) */
-    if (inv > 32) { gs_fallback("more than 32 invocations declared"); return 0; }
-    if (!maxv || !gs_emits(gsh)) {
+    if (g->inv < 1) g->inv = 1;
+    if (g->inv > 32) { gs_fallback("more than 32 invocations declared"); return 0; }
+    if (!g->maxv || !gs_emits(gsh)) {
         gs_fallback("pass-through geometry program (no output vertices declared or no OUT)");
         return 0;
     }
-    uint32_t nv = prim_vertices(d->mode, 1);
-    if (!nv || d->mode == NVN_DRAW_PRIMITIVE_PATCHES) { gs_fallback("input primitive not supported"); return 0; }
+    return 1;
+}
+
+/* Passes 2-3 of a geometry draw: the GS kernel over the input records rb / ro, primitive i being records seq[nv * i ..] (qb / qo); then the capture of
+ * its output (xl != NULL: the layout, xused its buffers) and the draw of it (want_draw; `prim` = the primitive the pipeline key is filled for). nprim =
+ * primitives; with spb, the capacity, while the GPU-side count sits in spb[0] (sp as the kernel reads it: input from the software tessellator), and the
+ * output slots of the threads past it are pre-filled as restarts. Returns 0 when the program did not compile (nothing encoded by this function). */
+static int gs_run(uint64_t gsh, const gs_decl *g, uint32_t prim, uint32_t nv, id<MTLBuffer> rb, uint32_t ro, id<MTLBuffer> qb, uint32_t qo, uint32_t nprim,
+                  id<MTLBuffer> spb, uint32_t spo, int want_draw, const gfx_xfb_layout *xl, uint32_t xused) {
     pipe_key k;
     memset(&k, 0, sizeof k);
+    uint32_t nthr = nprim * g->inv, maxv = g->maxv; /* one thread per (primitive, invocation): output slots are per thread */
+    ShaderKey gk = {0}; /* no clip-space conversions in the kernel (gs_vtx is also the transform feedback source): the pass-through function applies them */
+    gk.gs_in_vertices = (uint8_t)nv;
+    gk.gs_out_topology = g->topo;
+    gk.gs_max_vertices = (uint16_t)maxv;
+    stage_key_masks(2, &gk);
+    GfxShader *gs = nil;
+    id<MTLComputePipelineState> gps = mtl_compute_pipe_key(gsh, &gk, &gs);
+    if (!gps) return 0;
+    id<MTLBuffer> ib, vb, xb;
+    uint32_t io, vo, xo;
+    if (!nthr || !gather_records(rb, ro, qb, qo, nprim * nv, &ib, &io) || !stage_alloc((uint64_t)nthr * maxv * STAGE_SLOTS * 16, &vb, &vo) ||
+        !stage_alloc((uint64_t)nthr * maxv * 8, &xb, &xo)) {
+        stage_skip("geometry passes could not be set up (scratch or capture)");
+        return 1;
+    }
+    if (spb) [blit() fillBuffer:xb range:NSMakeRange(xo, (NSUInteger)nthr * maxv * 8) value:0xff];
+    id<MTLComputeCommandEncoder> ce = compute_encoder();
+    [ce setComputePipelineState:gps];
+    bind_stage(2, gs, ce, 1, NULL);
+    if (spb) [ce setBuffer:spb offset:spo atIndex:STAGE_PARAM_BUFFER_INDEX];
+    else {
+        uint32_t sp[4] = {nprim, 0, 0, g->inv};
+        [ce setBytes:sp length:sizeof sp atIndex:STAGE_PARAM_BUFFER_INDEX];
+    }
+    [ce setBuffer:ib offset:io atIndex:STAGE_IN_BUFFER_INDEX];
+    [ce setBuffer:vb offset:vo atIndex:GS_VERTEX_BUFFER_INDEX];
+    [ce setBuffer:xb offset:xo atIndex:GS_INDEX_BUFFER_INDEX];
+    dispatch_1d(ce, gps, nthr);
+    end_encoders();
+    if (xl) xfb_gpu_capture(xl, xused, vb, vo, xb, xo, nthr * 2 * maxv, 1, g->topo, gs->info.stage_slot_mask);
+    if (!want_draw) return 1;
+    if (!stage_draw_begin(&k, prim, g->topo == GS_OUT_TRIANGLE_STRIP)) return 1;
+    stage_pipe_key sk;
+    memset(&sk, 0, sizeof sk);
+    sk.k = k;
+    sk.mode = SPK_GS_DRAW;
+    sk.gs_topo = g->topo;
+    sk.prog = gsh;
+    sk.gs_slots = gs->info.stage_slot_mask;
+    sk.gs_clip = (uint8_t)((k.flip_y ? 1 : 0) | (k.depth_mode == 0 ? 2 : 0));
+    GfxPipe *p = mtl_stage_pipe_get(&sk, NULL);
+    if (!p) { stage_skip("geometry output pipeline failed"); return 1; }
+    stage_draw_state(p);
+    [g_re setVertexBuffer:vb offset:vo atIndex:GS_VERTEX_BUFFER_INDEX];
+    [g_re setVertexBuffer:xb offset:xo atIndex:GS_INDEX_BUFFER_INDEX];
+    uint32_t nidx = nthr * 2 * maxv;
+    if (g->topo == GS_OUT_POINTS) [g_re drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:nidx];
+    else
+        [g_re drawIndexedPrimitives:g->topo == GS_OUT_LINE_STRIP ? MTLPrimitiveTypeLineStrip : MTLPrimitiveTypeTriangleStrip
+                         indexCount:nidx
+                          indexType:MTLIndexTypeUInt32
+                        indexBuffer:xb
+                  indexBufferOffset:xo];
+    return 1;
+}
+
+/* Geometry draw (passes 1-3). Returns 0 when the draw should go on without the geometry stage (pass-through or unusable program: logged once). */
+static int draw_geometry(const sdraw *d) {
+    uint64_t gsh = S.prog[2];
+    gs_decl g;
+    if (!gs_decl_of(gsh, &g)) return 0;
+    uint32_t nv = prim_vertices(d->mode, 1);
+    if (!nv || d->mode == NVN_DRAW_PRIMITIVE_PATCHES) { gs_fallback("input primitive not supported"); return 0; }
     int want_draw = S.render_enable && !S.raster_discard && S.rt_valid;
     gfx_xfb_layout xl;
     uint32_t xused = 0;
@@ -660,79 +738,144 @@ static int draw_geometry(const sdraw *d) {
     uint32_t *ids = malloc((size_t)cap * 4);
     uint32_t nids = ids ? assemble(d->mode, e, n, nv, ids) : 0;
     free(e);
-    uint32_t nprim = nids / nv * d->instances, nthr = nprim * inv; /* one thread per (primitive, invocation): output slots are per thread */
-    id<MTLBuffer> rb, qb, ib, vb, xb;
-    uint32_t ro, qo, io, vo, xo;
-    ShaderKey gk = {0};
-    if (want_draw) { /* the emitted positions get the clip-space conversions of the pass (a capture-only draw keeps the program's own values) */
-        pass_info_from_rt();
-        fill_pipe_key(d->mode, &k);
-        gk.flip_y = k.flip_y;
-        gk.depth_minus_one = k.depth_mode == 0;
-    }
-    gk.gs_in_vertices = (uint8_t)nv;
-    gk.gs_out_topology = topo;
-    gk.gs_max_vertices = (uint16_t)maxv;
-    stage_key_masks(2, &gk);
-    GfxShader *gs = nil;
-    id<MTLComputePipelineState> gps = mtl_compute_pipe_key(gsh, &gk, &gs);
-    int ok = nprim && gps && capture_pass(d, lo, range, 1, NULL, NULL, &rb, &ro, NULL) && record_list(ids, nids, lo, range, d->instances, &qb, &qo) &&
-             gather_records(rb, ro, qb, qo, nprim * nv, &ib, &io) && stage_alloc((uint64_t)nthr * maxv * STAGE_SLOTS * 16, &vb, &vo) &&
-             stage_alloc((uint64_t)nthr * maxv * 8, &xb, &xo);
+    uint32_t nprim = nids / nv * d->instances;
+    id<MTLBuffer> rb, qb;
+    uint32_t ro, qo;
+    int ok = nprim && capture_pass(d, lo, range, 1, NULL, NULL, &rb, &ro, NULL) && record_list(ids, nids, lo, range, d->instances, &qb, &qo);
     free(ids);
-    if (!gps) {
+    if (!ok) {
+        if (nprim) stage_skip("geometry passes could not be set up (scratch or capture)");
+        return 1;
+    }
+    if (!gs_run(gsh, &g, d->mode, nv, rb, ro, qb, qo, nprim, nil, 0, want_draw, want_xfb ? &xl : NULL, xused)) {
         gs_fallback("the geometry program did not compile");
         return 0;
     }
-    if (!ok) {
-        stage_skip("geometry passes could not be set up (scratch or capture)");
-        return 1;
-    }
-    id<MTLComputeCommandEncoder> ce = compute_encoder();
-    [ce setComputePipelineState:gps];
-    bind_stage(2, gs, ce, 1, NULL);
-    uint32_t sp[4] = {nprim, 0, 0, inv};
-    [ce setBytes:sp length:sizeof sp atIndex:STAGE_PARAM_BUFFER_INDEX];
-    [ce setBuffer:ib offset:io atIndex:STAGE_IN_BUFFER_INDEX];
-    [ce setBuffer:vb offset:vo atIndex:GS_VERTEX_BUFFER_INDEX];
-    [ce setBuffer:xb offset:xo atIndex:GS_INDEX_BUFFER_INDEX];
-    dispatch_1d(ce, gps, nthr);
-    end_encoders();
-    if (want_xfb) xfb_gpu_capture(&xl, xused, vb, vo, xb, xo, nthr * 2 * maxv, 1, topo, gs->info.stage_slot_mask);
-    if (!want_draw) return 1;
-    if (!stage_draw_begin(&k, d->mode, topo == GS_OUT_TRIANGLE_STRIP)) return 1;
-    stage_pipe_key sk;
-    memset(&sk, 0, sizeof sk);
-    sk.k = k;
-    sk.mode = SPK_GS_DRAW;
-    sk.gs_topo = topo;
-    sk.prog = gsh;
-    sk.gs_slots = gs->info.stage_slot_mask;
-    GfxPipe *p = mtl_stage_pipe_get(&sk, NULL);
-    if (!p) { stage_skip("geometry output pipeline failed"); return 1; }
-    stage_draw_state(p);
-    [g_re setVertexBuffer:vb offset:vo atIndex:GS_VERTEX_BUFFER_INDEX];
-    [g_re setVertexBuffer:xb offset:xo atIndex:GS_INDEX_BUFFER_INDEX];
-    uint32_t nidx = nthr * 2 * maxv;
-    if (topo == GS_OUT_POINTS) [g_re drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:nidx];
-    else
-        [g_re drawIndexedPrimitives:topo == GS_OUT_LINE_STRIP ? MTLPrimitiveTypeLineStrip : MTLPrimitiveTypeTriangleStrip
-                         indexCount:nidx
-                          indexType:MTLIndexTypeUInt32
-                        indexBuffer:xb
-                  indexBufferOffset:xo];
     return 1;
 }
 
-/* Tessellated draw (passes 1-3): patches of S.patch_size control points. */
+/* ---- software tessellator (isolines, capture of tess eval output, geometry after tessellation) ------------------------------------------------
+ * Metal's tessellator feeds the rasterizer only: its vertices cannot be captured in order, it has no isoline domain and nothing can follow it. For
+ * those draws the replay tessellates itself: the tessgen kernel (one thread per patch) reads the same factor record Metal would (quad layout for
+ * isolines), and writes a fixed number of coordinate slots per patch (u, v, w, patch id) plus restart-separated index strips (3 + restart per
+ * triangle, 2 + restart per line segment, unused slots all restarts). The tess eval program then runs as a plain vertex function over those slots
+ * (ShaderKey.tess_soft): drawn as indexed strips, or into stage-out records (capture / geometry input).
+ * Topology: isolines follow GL exactly (outer[0] lines at v = j / n0, j < n0, each of outer[1] segments; spacing applies to outer[1] only). Quads and
+ * triangles are a uniform grid (quads nu x nv cells, nu from max(inner[0], outer[1], outer[3]), nv from max(inner[1], outer[0], outer[2]); triangles
+ * a barycentric grid of n = the largest level): with all levels equal and integer spacing it has the vertices of the hardware tessellation, but not its
+ * ring triangulation, and fractional spacing rounds the segment count up to the spacing's parity with evenly spaced vertices. A patch with an outer level
+ * <= 0 (or NaN) is culled. Levels are capped by t[3]: the CPU knows them without a tess control program; with one, NAPPLE_GFX_SOFT_TESS_MAX (16). */
+static NSString *const kTessMSL =
+    @"#include <metal_stdlib>\nusing namespace metal;\n"
+     "static uint tseg(float l, uint sp, uint L) { l = clamp(l, 1.0f, 64.0f); uint n = uint(ceil(l));\n"
+     "  if (sp == 1u) { if ((n & 1u) == 0u) n++; } else if (sp == 2u) { if (n < 2u) n = 2u; if ((n & 1u) != 0u) n++; } return max(min(n, L), 1u); }\n"
+     /* t: [0] patches, [1] domain (TESS_DOMAIN_*: 0 quad 1 triangle 2 isoline), [2] spacing, [3] level cap, [4] coordinate slots per patch,
+      * [5] index slots per patch, [6] clockwise, [7] factor halves per patch */
+     "kernel void tessgen(device const half *fac [[buffer(0)]], device float4 *uv [[buffer(1)]], device uint *idx [[buffer(2)]], constant uint *t [[buffer(3)]],\n"
+     "                    uint p [[thread_position_in_grid]]) {\n"
+     "  if (p >= t[0]) return; uint vc = t[4], ic = t[5], vb = p * vc, dom = t[1], L = t[3], w = 0u; bool cw = t[6] != 0u;\n"
+     "  device float4 *o = uv + vb; device uint *x = idx + p * ic; device const half *f = fac + p * t[7]; float pid = as_type<float>(p);\n"
+     "  for (uint k = 0u; k < vc; k++) o[k] = float4(0.0f, 0.0f, 0.0f, pid);\n"
+     "  for (uint k = 0u; k < ic; k++) x[k] = 0xFFFFFFFFu;\n"
+     "  uint nout = dom == 1u ? 3u : dom == 2u ? 2u : 4u;\n"
+     "  for (uint k = 0u; k < nout; k++) { float l = float(f[k]); if (!(l > 0.0f)) return; }\n"
+     "  if (dom == 2u) {\n"
+     "    uint n0 = min(uint(ceil(clamp(float(f[0]), 1.0f, 64.0f))), L), n1 = tseg(float(f[1]), t[2], L);\n"
+     "    for (uint j = 0u; j < n0; j++) for (uint i = 0u; i <= n1; i++) o[j * (n1 + 1u) + i] = float4(float(i) / float(n1), float(j) / float(n0), 0.0f, pid);\n"
+     "    for (uint j = 0u; j < n0; j++) for (uint i = 0u; i < n1; i++) { uint a = j * (n1 + 1u) + i; x[w] = vb + a; x[w + 1u] = vb + a + 1u; w += 3u; }\n"
+     "  } else if (dom == 0u) {\n"
+     "    uint nu = tseg(max(float(f[4]), max(float(f[1]), float(f[3]))), t[2], L), nv = tseg(max(float(f[5]), max(float(f[0]), float(f[2]))), t[2], L);\n"
+     "    for (uint j = 0u; j <= nv; j++) for (uint i = 0u; i <= nu; i++) o[j * (nu + 1u) + i] = float4(float(i) / float(nu), float(j) / float(nv), 0.0f, pid);\n"
+     "    for (uint j = 0u; j < nv; j++) for (uint i = 0u; i < nu; i++) { uint a = j * (nu + 1u) + i, b = a + 1u, c = a + nu + 2u, d = a + nu + 1u;\n"
+     "      x[w] = vb + a; x[w + 1u] = vb + (cw ? c : b); x[w + 2u] = vb + (cw ? b : c); w += 4u;\n"
+     "      x[w] = vb + a; x[w + 1u] = vb + (cw ? d : c); x[w + 2u] = vb + (cw ? c : d); w += 4u; }\n"
+     "  } else {\n"
+     "    uint n = tseg(max(max(float(f[0]), float(f[1])), max(float(f[2]), float(f[3]))), t[2], L);\n"
+     "    for (uint j = 0u; j <= n; j++) for (uint i = 0u; i + j <= n; i++) { float u = float(i) / float(n), v = float(j) / float(n);\n"
+     "      o[j * (n + 1u) - j * (j - 1u) / 2u + i] = float4(u, v, max(1.0f - u - v, 0.0f), pid); }\n"
+     "    for (uint j = 0u; j < n; j++) for (uint i = 0u; i + j < n; i++) {\n"
+     "      uint a = j * (n + 1u) - j * (j - 1u) / 2u + i, b = a + 1u, c = (j + 1u) * (n + 1u) - (j + 1u) * j / 2u + i, d = c + 1u;\n"
+     "      x[w] = vb + a; x[w + 1u] = vb + (cw ? c : b); x[w + 2u] = vb + (cw ? b : c); w += 4u;\n"
+     "      if (i + j + 1u < n) { x[w] = vb + b; x[w + 1u] = vb + (cw ? c : d); x[w + 2u] = vb + (cw ? d : c); w += 4u; } }\n"
+     "  } }\n"
+     /* the tessellated primitives as geometry input: index strips -> packed record ordinals (nv per primitive, tail zeroed) and the GS kernel's sp
+      * {count, 0, 0, invocations}. t: [0] index slots, [1] vertices per primitive (2 / 3), [2] invocations */
+     "kernel void tesslist(device const uint *idx [[buffer(0)]], device uint *seq [[buffer(1)]], device uint *sp [[buffer(2)]], constant uint *t [[buffer(3)]],\n"
+     "                     uint tid [[thread_position_in_grid]]) {\n"
+     "  if (tid != 0u) return; uint g = t[1] + 1u, n = 0u;\n"
+     "  for (uint i = 0u; i + g <= t[0]; i += g) { if (idx[i] == 0xFFFFFFFFu) continue; for (uint k = 0u; k < t[1]; k++) seq[n * t[1] + k] = idx[i + k]; n++; }\n"
+     "  for (uint k = n * t[1]; k < (t[0] / g) * t[1]; k++) seq[k] = 0u;\n"
+     "  sp[0] = n; sp[1] = 0u; sp[2] = 0u; sp[3] = t[2]; }\n";
+static id<MTLComputePipelineState> tess_kernel(int which) { /* 0 tessgen, 1 tesslist */
+    static id<MTLComputePipelineState> ps[2];
+    static int failed;
+    if (ps[which] || failed) return ps[which];
+    NSError *e = nil;
+    id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:kTessMSL options:nil error:&e];
+    for (int i = 0; lib && i < 2; i++) ps[i] = [g_mtl.dev newComputePipelineStateWithFunction:[lib newFunctionWithName:i ? @"tesslist" : @"tessgen"] error:&e];
+    if (!ps[0] || !ps[1]) {
+        LOGE("software tessellator kernels: %s", e.localizedDescription.UTF8String);
+        failed = 1;
+    }
+    return ps[which];
+}
+/* Coordinate / index slots per patch of the software tessellator at level cap L. */
+static void tess_soft_slots(uint8_t domain, uint32_t L, uint32_t *vc, uint32_t *ic) {
+    if (domain == TESS_DOMAIN_ISOLINE) { *vc = L * (L + 1); *ic = L * L * 3; }
+    else if (domain == TESS_DOMAIN_QUAD) { *vc = (L + 1) * (L + 1); *ic = L * L * 8; }
+    else { *vc = (L + 1) * (L + 2) / 2; *ic = L * L * 4; }
+}
+static uint32_t tess_soft_cap(void) {
+    static uint32_t cap;
+    if (!cap) {
+        const char *s = getenv("NAPPLE_GFX_SOFT_TESS_MAX");
+        int v = s ? atoi(s) : 16;
+        cap = v < 1 ? 1 : v > 64 ? 64 : (uint32_t)v;
+    }
+    return cap;
+}
+/* The software tessellated tess eval program into stage-out records (one per coordinate slot, rb / ro) in an attachment-less pass. */
+static int tes_soft_capture(const stage_pipe_key *tsk, id<MTLBuffer> vb, uint32_t vo, id<MTLBuffer> pb, uint32_t po, id<MTLBuffer> ub, uint32_t uo, uint32_t nvert,
+                            uint32_t npatch, id<MTLBuffer> __autoreleasing *rb, uint32_t *ro, uint64_t *slot_mask) {
+    stage_pipe_key sk = *tsk;
+    fill_pipe_key(NVN_DRAW_PRIMITIVE_POINTS, &sk.k);
+    sk.mode = SPK_TESS_SOFT_CAPTURE;
+    GfxPipe *p = mtl_stage_pipe_get(&sk, NULL);
+    if (!p || !stage_alloc((uint64_t)nvert * STAGE_SLOTS * 16, rb, ro)) return 0;
+    *slot_mask = p->vs->info.stage_slot_mask;
+    flush_clears();
+    end_encoders();
+    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    rp.renderTargetWidth = 1;
+    rp.renderTargetHeight = 1;
+    rp.defaultRasterSampleCount = 1;
+    g_re = [g_cb renderCommandEncoderWithDescriptor:rp];
+    g_enc_serial++;
+    [g_re setRenderPipelineState:p->ps];
+    bind_stage(4, p->vs, g_re, 0, NULL);
+    uint32_t sp[4] = {npatch, 0, 0, 0}, ctl[2 + MAX_XFB_BUFFERS] = {0};
+    [g_re setVertexBytes:sp length:sizeof sp atIndex:STAGE_PARAM_BUFFER_INDEX];
+    [g_re setVertexBytes:ctl length:sizeof ctl atIndex:XFB_CTL_BUFFER_INDEX];
+    [g_re setVertexBuffer:vb offset:vo atIndex:TESS_VERTEX_BUFFER_INDEX];
+    [g_re setVertexBuffer:pb offset:po atIndex:TESS_PATCH_BUFFER_INDEX];
+    [g_re setVertexBuffer:ub offset:uo atIndex:TESS_UV_BUFFER_INDEX];
+    [g_re setVertexBuffer:*rb offset:*ro atIndex:STAGE_OUT_BUFFER_INDEX];
+    [g_re drawPrimitives:MTLPrimitiveTypePoint vertexStart:0 vertexCount:nvert];
+    [g_re endEncoding];
+    g_re = nil;
+    P.open = 0;
+    return 1;
+}
+
+/* Tessellated draw (passes 1-3): patches of S.patch_size control points. Metal's tessellator draws triangle and quad patches; isolines, a capture of the
+ * tess eval output and a geometry program after tessellation go through the software tessellator above. Captures its own transform feedback. */
 static void draw_tessellation(const sdraw *d) {
     uint64_t tcs = S.prog[3], tes = S.prog[4];
-    if (S.prog[2]) { stage_skip("geometry and tessellation together are not supported"); return; }
     if (!tes) { stage_skip(d->mode == NVN_DRAW_PRIMITIVE_PATCHES ? "patches without a tess evaluation program" : "tess control program without patches"); return; }
     if (d->mode != NVN_DRAW_PRIMITIVE_PATCHES) { stage_skip("tessellation programs bound for a draw that is not PATCHES"); return; }
     gfx_tess_params tp;
     gfx_tess_get_params(tes, &tp);
-    if (tp.domain == TESS_DOMAIN_ISOLINE) { stage_skip("isoline tessellation (Metal has quad and triangle patches only)"); return; }
+    int iso = tp.domain == TESS_DOMAIN_ISOLINE;
     uint32_t nv = prim_vertices(d->mode, 0), tov = nv;
     if (tcs) {
         const uint32_t *w = sph_of(tcs);
@@ -740,7 +883,14 @@ static void draw_tessellation(const sdraw *d) {
         if (t) tov = t;
     }
     if (tov < 1 || tov > 32) { stage_skip("tess control output patch size out of 1..32"); return; }
-    if (!S.render_enable || S.raster_discard || !S.rt_valid) return;
+    gs_decl g;
+    int use_gs = S.prog[2] && gs_decl_of(S.prog[2], &g); /* a pass-through geometry program: drawn without it (as the plain geometry path does) */
+    int want_draw = S.render_enable && !S.raster_discard && S.rt_valid;
+    gfx_xfb_layout xl;
+    uint32_t xused = 0;
+    int want_xfb = xfb_capturing() && xfb_layout_for(use_gs ? S.prog[2] : tes, &xl) && xfb_buffers_ok(&xl, &xused);
+    if (!want_draw && !want_xfb) return;
+    int soft = iso || use_gs || want_xfb;
     uint32_t *e = NULL, lo = 0, hi = 0;
     uint32_t n = draw_elements(d, &e, &lo, &hi);
     if (!n) return;
@@ -749,10 +899,7 @@ static void draw_tessellation(const sdraw *d) {
     uint32_t nids = ids ? assemble(d->mode, e, n, nv, ids) : 0;
     free(e);
     uint32_t npatch = nids / nv * d->instances;
-    pipe_key k;
-    pass_info_from_rt();
-    fill_pipe_key(d->mode, &k);
-    int quad = tp.domain == TESS_DOMAIN_QUAD;
+    int quad = tp.domain != TESS_DOMAIN_TRIANGLE; /* isolines use the quad factor record (outer[0] lines, outer[1] segments) */
     uint32_t nfac = quad ? 6 : 4;
     id<MTLBuffer> rb, qb, vb, pb, fb;
     uint32_t ro, qo, vo, po, fo;
@@ -761,7 +908,10 @@ static void draw_tessellation(const sdraw *d) {
     int ok = npatch && capture_pass(d, lo, range, 1, NULL, NULL, &rb, &ro, NULL) && record_list(ids, nids, lo, range, d->instances, &qb, &qo) &&
              (fac = stage_alloc((uint64_t)npatch * nfac * 2, &fb, &fo)) && (patch = stage_alloc((uint64_t)npatch * STAGE_SLOTS * 16, &pb, &po));
     free(ids);
-    if (!ok) { stage_skip("tessellation passes could not be set up (scratch or capture)"); return; }
+    if (!ok) {
+        if (npatch) stage_skip("tessellation passes could not be set up (scratch or capture)");
+        return;
+    }
     for (uint32_t i = 0; i < npatch; i++) { /* NVN default levels: the factors, and the level slots of the patch record */
         __fp16 *f = fac + i * nfac;
         if (quad) {
@@ -802,12 +952,8 @@ static void draw_tessellation(const sdraw *d) {
         vb = ob;
         vo = oo;
     }
-    end_encoders();
-    if (!stage_draw_begin(&k, d->mode, 1)) return;
     stage_pipe_key sk;
     memset(&sk, 0, sizeof sk);
-    sk.k = k;
-    sk.mode = SPK_TESS;
     sk.prog = tes;
     sk.tess_domain = tp.domain;
     sk.tess_spacing = tp.spacing;
@@ -815,26 +961,116 @@ static void draw_tessellation(const sdraw *d) {
     sk.tess_cp = (uint8_t)tov;
     ds_slot_masks(4, &sk.te_depth, &sk.te_stencil);
     image_masks(4, &sk.te_img_int, &sk.te_img_uint);
+    pipe_key k;
+    if (!soft) {
+        end_encoders();
+        if (!stage_draw_begin(&k, d->mode, 1)) return;
+        sk.k = k;
+        sk.mode = SPK_TESS;
+        GfxPipe *p = mtl_stage_pipe_get(&sk, NULL);
+        if (!p) { stage_skip("tessellation pipeline failed"); return; }
+        stage_draw_state(p);
+        bind_stage(4, p->vs, g_re, 0, NULL);
+        uint32_t sp[4] = {npatch, 0, 0, 0};
+        [g_re setVertexBytes:sp length:sizeof sp atIndex:STAGE_PARAM_BUFFER_INDEX];
+        [g_re setVertexBuffer:vb offset:vo atIndex:TESS_VERTEX_BUFFER_INDEX];
+        [g_re setVertexBuffer:pb offset:po atIndex:TESS_PATCH_BUFFER_INDEX];
+        [g_re setTessellationFactorBuffer:fb offset:fo instanceStride:0];
+        [g_re drawPatches:tov patchStart:0 patchCount:npatch patchIndexBuffer:nil patchIndexBufferOffset:0 instanceCount:1 baseInstance:0];
+        return;
+    }
+    /* software tessellation: level cap, coordinates + index strips */
+    uint32_t L = tess_soft_cap();
+    if (!tcs) {
+        float m = 1;
+        for (int j = 0; j < 4; j++) m = S.tess_outer[j] > m ? S.tess_outer[j] : m;
+        for (int j = 0; j < 2; j++) m = S.tess_inner[j] > m ? S.tess_inner[j] : m;
+        L = m >= 63 ? 64 : (uint32_t)ceilf(m) + 1; /* + 1: room for the parity round-up of fractional spacing */
+    } else LOG_ONCE(NAPPLE_LOG_INFO, "software tessellation after a tess control program: levels capped at %u (NAPPLE_GFX_SOFT_TESS_MAX)", L);
+    uint32_t vc, ic;
+    tess_soft_slots(tp.domain, L, &vc, &ic);
+    id<MTLBuffer> ub, xb, tb;
+    uint32_t uo, xo, to;
+    uint32_t *t = stage_alloc(32, &tb, &to);
+    id<MTLComputePipelineState> gen = tess_kernel(0);
+    if (!t || !gen || (uint64_t)npatch * vc > 0xffffffffu / STAGE_SLOTS || !stage_alloc((uint64_t)npatch * vc * 16, &ub, &uo) || !stage_alloc((uint64_t)npatch * ic * 4, &xb, &xo)) {
+        stage_skip("software tessellation could not be set up (kernels or scratch)");
+        return;
+    }
+    uint32_t tv[8] = {npatch, tp.domain, tp.spacing, L, vc, ic, tp.winding == TESS_WINDING_CW, nfac};
+    memcpy(t, tv, sizeof tv);
+    id<MTLComputeCommandEncoder> ce = compute_encoder();
+    [ce setComputePipelineState:gen];
+    [ce setBuffer:fb offset:fo atIndex:0];
+    [ce setBuffer:ub offset:uo atIndex:1];
+    [ce setBuffer:xb offset:xo atIndex:2];
+    [ce setBuffer:tb offset:to atIndex:3];
+    dispatch_1d(ce, gen, npatch);
+    end_encoders();
+    uint32_t nvert = npatch * vc, nidx = npatch * ic, pv = iso ? 2 : 3;
+    if (use_gs || want_xfb) {
+        id<MTLBuffer> sb;
+        uint32_t so;
+        uint64_t mask = 0;
+        if (!tes_soft_capture(&sk, vb, vo, pb, po, ub, uo, nvert, npatch, &sb, &so, &mask)) {
+            stage_skip("software tessellation capture failed (tess eval program or scratch)");
+            return;
+        }
+        if (!use_gs) xfb_gpu_capture(&xl, xused, sb, so, xb, xo, nidx, 1, iso ? GS_OUT_LINE_STRIP : GS_OUT_TRIANGLE_STRIP, mask);
+        else {
+            id<MTLBuffer> qb2, spb, lb;
+            uint32_t qo2, spo, lo2, cap = nidx / (pv + 1);
+            uint32_t *lt = stage_alloc(16, &lb, &lo2);
+            id<MTLComputePipelineState> lst = tess_kernel(1);
+            if (!lt || !lst || !stage_alloc((uint64_t)cap * pv * 4, &qb2, &qo2) || !stage_alloc(16, &spb, &spo)) {
+                stage_skip("tessellation -> geometry list could not be set up");
+                return;
+            }
+            lt[0] = nidx;
+            lt[1] = pv;
+            lt[2] = g.inv;
+            ce = compute_encoder();
+            [ce setComputePipelineState:lst];
+            [ce setBuffer:xb offset:xo atIndex:0];
+            [ce setBuffer:qb2 offset:qo2 atIndex:1];
+            [ce setBuffer:spb offset:spo atIndex:2];
+            [ce setBuffer:lb offset:lo2 atIndex:3];
+            [ce dispatchThreads:MTLSizeMake(1, 1, 1) threadsPerThreadgroup:MTLSizeMake(1, 1, 1)];
+            end_encoders();
+            if (!gs_run(S.prog[2], &g, iso ? NVN_DRAW_PRIMITIVE_LINES : NVN_DRAW_PRIMITIVE_TRIANGLES, pv, sb, so, qb2, qo2, cap, spb, spo, want_draw,
+                        want_xfb ? &xl : NULL, xused))
+                stage_skip("the geometry program after tessellation did not compile");
+            return;
+        }
+    }
+    if (!want_draw || !stage_draw_begin(&k, iso ? NVN_DRAW_PRIMITIVE_LINES : NVN_DRAW_PRIMITIVE_TRIANGLES, !iso)) return;
+    sk.k = k;
+    sk.mode = SPK_TESS_SOFT;
     GfxPipe *p = mtl_stage_pipe_get(&sk, NULL);
-    if (!p) { stage_skip("tessellation pipeline failed"); return; }
+    if (!p) { stage_skip("software tessellation pipeline failed"); return; }
     stage_draw_state(p);
     bind_stage(4, p->vs, g_re, 0, NULL);
     uint32_t sp[4] = {npatch, 0, 0, 0};
     [g_re setVertexBytes:sp length:sizeof sp atIndex:STAGE_PARAM_BUFFER_INDEX];
     [g_re setVertexBuffer:vb offset:vo atIndex:TESS_VERTEX_BUFFER_INDEX];
     [g_re setVertexBuffer:pb offset:po atIndex:TESS_PATCH_BUFFER_INDEX];
-    [g_re setTessellationFactorBuffer:fb offset:fo instanceStride:0];
-    [g_re drawPatches:tov patchStart:0 patchCount:npatch patchIndexBuffer:nil patchIndexBufferOffset:0 instanceCount:1 baseInstance:0];
+    [g_re setVertexBuffer:ub offset:uo atIndex:TESS_UV_BUFFER_INDEX];
+    [g_re drawIndexedPrimitives:iso ? MTLPrimitiveTypeLineStrip : MTLPrimitiveTypeTriangleStrip
+                     indexCount:nidx
+                      indexType:MTLIndexTypeUInt32
+                    indexBuffer:xb
+              indexBufferOffset:xo];
 }
 
 /* Entry from do_draw_arrays / do_draw_elements: transform feedback capture first, then the draw's stages. Returns 1 when the draw was handled here. */
 static int stage_draw(const sdraw *d) {
     if (g_predict) return stage_draw_needed(d->mode);
-    int gs_path = !g_no_stages && S.prog[2] && !S.prog[3] && !S.prog[4] && d->mode != NVN_DRAW_PRIMITIVE_PATCHES; /* draw_geometry captures its own output */
-    if (xfb_capturing() && !gs_path) xfb_capture(d);
+    int tess = S.prog[3] || S.prog[4] || d->mode == NVN_DRAW_PRIMITIVE_PATCHES;
+    int own = !g_no_stages && (tess || S.prog[2]); /* draw_geometry / draw_tessellation capture their own output */
+    if (xfb_capturing() && !own) xfb_capture(d);
     if (!stage_draw_needed(d->mode)) return 0;
     if (!S.prog[ST_VS]) return 1;
-    if (S.prog[3] || S.prog[4] || d->mode == NVN_DRAW_PRIMITIVE_PATCHES) {
+    if (tess) {
         draw_tessellation(d);
         return 1;
     }

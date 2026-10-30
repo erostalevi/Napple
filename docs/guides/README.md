@@ -9,6 +9,7 @@ Background on how the pieces fit: [architecture](../architecture/overview.md); p
 | [add-svc.md](add-svc.md) | Add or extend a Horizon svc (`svc_register`, register layout, AArch32 table, NPDM svc mask, host tests). |
 | [add-nvn-function.md](add-nvn-function.md) | Add an NVN API function (`names.txt`, `NVN()` macro, command recording versus immediate, replay in `mtl_replay.m`, `gfx/tests`). |
 | [add-maxwell-shader-op.md](add-maxwell-shader-op.md) | Add a Maxwell instruction to the shader translator and test that the generated MSL is right. |
+| [gpu-title-scan.md](gpu-title-scan.md) | Scan a title's shader control sections for the GPU stages it uses and pick the fewest titles to cover them all. |
 | [add-game-support.md](add-game-support.md) | Bring up a new game: `napple build`, headless boot, reading the failure, title page, compatibility matrix. |
 | [add-signatures.md](add-signatures.md) | Add per-build signatures to `knownSignatures/`: format, `napple sigs`, what must never be committed. |
 | [debugging.md](debugging.md) | Crash and hang triage: `CRASH` output, tracing, screenshots, perf log, scripted input, the four reference titles. |

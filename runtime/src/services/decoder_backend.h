@@ -88,3 +88,38 @@ const DecoderBackend *decoder_backend_current(void);
  * the abi differs or open/close/decode is missing. */
 int decoder_backend_install(const DecoderBackend *b);
 extern const DecoderBackend decoder_backend_videotoolbox;
+
+/* ---- EncoderBackend (b8 nvdrv-media-devices): where the MSENC engine sends encode work. Same rules as the decoder: installed once before channels open,
+ * synchronous, never abort(), tolerate garbage. The default is the null encoder (decoder_null_core.c: a deterministic fake Annex B stream, for tests and
+ * for titles that only need the engine to answer). The Mac backend is VideoToolbox H.264 (decoder_vt.c). */
+#define ENCODER_BACKEND_ABI 1
+typedef struct {
+    int codec;                         /* DEC_CODEC_H264 only */
+    int width, height;                 /* coded size, even */
+    const uint8_t *luma, *chroma;      /* NV12 input planes (host pointers into guest memory) */
+    size_t luma_cap, chroma_cap;
+    uint32_t luma_pitch, chroma_pitch; /* bytes per row, 0 = packed (width) */
+    uint32_t bitrate, fps;             /* 0 = backend default */
+    int force_idr;
+    uint8_t *out;                      /* bitstream destination and its capacity */
+    size_t out_cap;
+} EncodeRequest;
+typedef struct {
+    size_t size; /* bytes written to out */
+    int idr;     /* the access unit is a key frame (SPS/PPS are in front of it) */
+} EncodeResult;
+typedef struct EncoderBackend {
+    const char *name;
+    void *(*open)(int codec); /* NULL when the codec is not supported */
+    void (*close)(void *ctx);
+    int (*encode)(void *ctx, const EncodeRequest *req, EncodeResult *out); /* 0 = ok, <0 = error (including "out_cap too small") */
+    uint32_t abi;
+} EncoderBackend;
+extern const EncoderBackend encoder_backend_null;
+extern const EncoderBackend encoder_backend_videotoolbox;
+const EncoderBackend *encoder_backend_current(void);
+int encoder_backend_install(const EncoderBackend *b); /* NULL restores the null encoder; -1 on a bad abi/missing function */
+
+/* Splits a VP9 superframe (index marker 0b110xxxxx at both ends) into its frames; returns the count (1 when there is no index), at most `max`. Offsets and
+ * sizes point into data. Returns -1 for a malformed index. A backend that needs one frame per sample (VideoToolbox) uses it. */
+int vp9_superframe_split(const uint8_t *data, size_t size, size_t offs[8], size_t sizes[8]);

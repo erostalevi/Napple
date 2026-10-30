@@ -10,8 +10,8 @@ static uint32_t rd32(const uint8_t *p, size_t off) {
 }
 
 uint32_t gfx_control_length(const uint8_t *ctl) {
-    uint32_t n = rd32(ctl, 0x20);
-    return n >= GLSLC_CONTROL_MIN && n <= GLSLC_CONTROL_MAX && !(n & 3) ? n : 0x880u;
+    uint32_t n = rd32(ctl, 0x20); /* not always a multiple of 4: SMO and MK8D have 0x7d1-byte sections */
+    return n >= GLSLC_CONTROL_MIN && n <= GLSLC_CONTROL_MAX ? n : 0x880u;
 }
 
 int gfx_control_parse(const uint8_t *ctl, size_t len, gfx_control_info *info) {

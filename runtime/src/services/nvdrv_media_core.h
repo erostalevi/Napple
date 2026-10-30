@@ -27,6 +27,8 @@ void media_engine_free(MediaEngine *e);
 /* Runs one command buffer. MEDIA_OK, MEDIA_BAD_STREAM (unknown opcode, truncated op) or MEDIA_BAD_ADDRESS (a gather that is not mapped). A failed decode is
  * not an error here: it is counted, reported in the status structure the guest asked for, and the stream continues. */
 int media_engine_run(MediaEngine *e, const uint32_t *words, uint32_t n);
+/* Forgets the surface pitches NVDEC recorded for VIC (tests). */
+void media_pitch_hints_reset(void);
 const MediaStats *media_engine_stats(const MediaEngine *e);
 uint32_t media_engine_reg(const MediaEngine *e, uint32_t offset); /* last value written to a register of the engine class (tests, traces) */
 uint32_t media_engine_class(const MediaEngine *e);
