@@ -35,7 +35,7 @@ pub fn parse_ticket(d: &[u8]) -> Result<Ticket> {
     })
 }
 
-/// Name of the user-supplied console key (hex of the 0x230-byte decrypted eticket device key:
+/// Name of the user-supplied console key (hex of the decrypted eticket device key, at least 0x204 bytes, Lockpick dumps are 0x210:
 /// private exponent D at 0x00, modulus N at 0x100, public exponent E at 0x200, big-endian).
 pub const DEVICE_KEY: &str = "eticket_rsa_keypair";
 

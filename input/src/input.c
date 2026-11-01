@@ -712,6 +712,20 @@ static uint32_t choose_style(uint32_t supported, int pref, int *handheld_only) {
     if (supported & RETRO_STYLES) return first_bit(supported & RETRO_STYLES);
     return NAPPLE_STYLE_FULL_KEY;
 }
+uint64_t napple_style_buttons(uint32_t style, uint64_t b) {
+    const uint64_t a = NAPPLE_BTN_MASK(NAPPLE_BTN_A);
+    switch (style) {
+        case NAPPLE_STYLE_PALMA: return (b & a) ? b | NAPPLE_BTN_MASK(NAPPLE_BTN_PALMA) : b;
+        case NAPPLE_STYLE_HANDHELD_LARK: return (b & NAPPLE_BTN_MASK(NAPPLE_BTN_B)) ? b | NAPPLE_BTN_MASK(NAPPLE_BTN_HANDHELD_LEFT_B) : b;
+        case NAPPLE_STYLE_LAGON:
+            if (b & NAPPLE_BTN_MASK(NAPPLE_BTN_STICK_R_LEFT)) b |= NAPPLE_BTN_MASK(NAPPLE_BTN_LAGON_C_LEFT);
+            if (b & NAPPLE_BTN_MASK(NAPPLE_BTN_STICK_R_UP)) b |= NAPPLE_BTN_MASK(NAPPLE_BTN_LAGON_C_UP);
+            if (b & NAPPLE_BTN_MASK(NAPPLE_BTN_STICK_R_RIGHT)) b |= NAPPLE_BTN_MASK(NAPPLE_BTN_LAGON_C_RIGHT);
+            if (b & NAPPLE_BTN_MASK(NAPPLE_BTN_STICK_R_DOWN)) b |= NAPPLE_BTN_MASK(NAPPLE_BTN_LAGON_C_DOWN);
+            return b;
+        default: return b;
+    }
+}
 static uint32_t attrs_for(uint32_t style) {
     switch (style) {
         case NAPPLE_STYLE_HANDHELD:
@@ -772,6 +786,7 @@ void napple_input_update(napple_input *in, uint64_t now) {
         napple_npad_state st;
         map_slot(in, slot, &st);
         st.attributes = attrs_for(style);
+        st.buttons = napple_style_buttons(style, st.buttons);
         in->pad_state[slot] = st;
         if (in->slot_style[slot] != (int)style) {
             if (in->slot_style[slot]) {
@@ -792,6 +807,8 @@ void napple_input_update(napple_input *in, uint64_t now) {
             napple_hid_push_gc_trigger(shm, l, slot, (uint32_t)(lt * 0x7fff), (uint32_t)(rt * 0x7fff));
         }
         if (style == NAPPLE_STYLE_LARK) napple_hid_set_lark_type(shm, l, slot, NAPPLE_LARK_NL, NAPPLE_LARK_INVALID);
+        if (style == NAPPLE_STYLE_LUCIA) napple_hid_set_retro_types(shm, l, slot, NAPPLE_LUCIA_U, NAPPLE_LUCIA_INVALID);
+        if (style == NAPPLE_STYLE_LAGER) napple_hid_set_retro_types(shm, l, slot, NAPPLE_LUCIA_INVALID, NAPPLE_LUCIA_U);
         if (handheld_only && slot == 0) { /* handheld-only titles read npad id 0x20 */
             if (in->slot_style[9] != (int)style) {
                 in->slot_style[9] = (int)style;
@@ -827,7 +844,7 @@ void napple_input_update(napple_input *in, uint64_t now) {
         in->six_have[slot] = 1;
         if (style == NAPPLE_STYLE_JOY_DUAL) napple_hid_push_sixaxis(shm, l, slot, 3, &six);
         if (handheld_only && slot == 0) napple_hid_push_sixaxis(shm, l, 9, 1, &six);
-        napple_hid_set_npad_device(shm, l, slot, 0, 0, src < in->npads ? (uint32_t)in->pads[src].battery : 4u);
+        napple_hid_set_npad_device(shm, l, slot, napple_hid_device_type_for(style), 0, src < in->npads ? (uint32_t)in->pads[src].battery : 4u);
     }
     /* capture next controller press for the remap UI */
     if (in->capture) {

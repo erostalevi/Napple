@@ -237,10 +237,28 @@ int napple_audin_install_source_spec(const char *spec) {
     return NAPPLE_AUDIO_E_INVALID;
 }
 
+/* No NAPPLE_AUDIN_SOURCE: the microphone is the default when the host allows it. Granted access starts the capture; "undetermined" starts it only
+   in an app bundle that can show the system prompt; denied, restricted, unsupported or a failed start leave the guest recording silence (rc 0). */
+static int install_auto_mic(void) {
+    int perm = nae_mic_permission();
+    if (perm == NAE_MIC_DENIED) {
+        napple_audio_log(NULL, "audin source: microphone not available to this process: audin records silence");
+        return NAPPLE_AUDIO_OK;
+    }
+    if (perm == NAE_MIC_UNDETERMINED && !nae_mic_can_prompt()) {
+        napple_audio_log(NULL, "audin source: microphone permission not yet granted and this process cannot ask for it: audin records silence");
+        return NAPPLE_AUDIO_OK;
+    }
+    int rc = napple_audin_install_source_spec("mic");
+    if (rc) napple_audio_log(NULL, "audin source: microphone could not be used (%d): audin records silence", rc);
+    else napple_audio_log(NULL, "audin source: mic (default)");
+    return NAPPLE_AUDIO_OK;
+}
+
 int napple_audin_install_default_source(void) {
     if (napple_audin_has_source()) return NAPPLE_AUDIO_OK;
     const char *spec = getenv("NAPPLE_AUDIN_SOURCE");
-    if (!spec || !*spec) return NAPPLE_AUDIO_OK; /* silence: a headset with no audio */
+    if (!spec || !*spec) return install_auto_mic();
     int rc = napple_audin_install_source_spec(spec);
     if (rc) napple_audio_log(NULL, "NAPPLE_AUDIN_SOURCE=%s not usable (%d): audin records silence", spec, rc);
     else napple_audio_log(NULL, "audin source: %s", spec);

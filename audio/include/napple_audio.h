@@ -185,9 +185,13 @@ int napple_audin_has_source(void);
 size_t napple_audin_device_name(char *out, size_t cap); /* writes the NUL-terminated device name, returns length */
 /* Capture source from a spec string: "silence", "tone[:HZ[:AMP]]", "file:PATH" (WAV PCM16/float, or raw s16le mono 48 kHz; looped) or "mic" (default input
    device, macOS only; needs the microphone usage description and entitlement). Returns 0, NAPPLE_AUDIO_E_INVALID (bad spec / unreadable file) NAPPLE_AUDIO_E_DENIED (permission hook said no) or
-   NAPPLE_AUDIO_E_UNSUPPORTED (mic unavailable). The default source reads env NAPPLE_AUDIN_SOURCE once when no source is installed (unset = silence). */
+   NAPPLE_AUDIO_E_UNSUPPORTED (mic unavailable). The default source reads env NAPPLE_AUDIN_SOURCE once when no source is installed (unset = the microphone when the process may use it, else silence: see below). */
 int napple_audin_install_source_spec(const char *spec);
 int napple_audin_install_default_source(void);
+/* Unset NAPPLE_AUDIN_SOURCE on macOS: the default is "mic" when the process holds microphone access (AVCaptureDevice status authorized) or sits in an
+   app bundle with NSMicrophoneUsageDescription and has not been asked yet (the OS prompt appears); denied / restricted / command-line runs keep silence and
+   napple_audin_install_default_source still returns 0. NAPPLE_AUDIN_SOURCE=silence turns it off. env NAPPLE_AUDIN_MIC_PERMISSION=granted|undetermined|denied
+   overrides the detected state (tests). */
 /* Permission flow for "mic": before the capture unit is started the hook is called (from the thread installing the source, so it may block on the system
    prompt). It returns nonzero when the host holds / was granted microphone access; 0 makes the install fail with NAPPLE_AUDIO_E_DENIED and the
    guest keeps recording silence. NULL (the default) = no check, the OS decides. Setting a hook never starts a capture by itself. */
