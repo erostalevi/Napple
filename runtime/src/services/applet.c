@@ -1864,6 +1864,29 @@ static void *debug_launch_thread(void *arg) {
     LOG("applet", "debug launch: firmware applet %s, output %llu bytes", ok ? "ran" : "did not run", (unsigned long long)(a.nout ? a.outq[0]->size : 0));
     return NULL;
 }
+/* Debug/test aid: NAPPLE_OPEN_MANUAL=<seconds>[:<RegionLang>] opens the running title's offline manual after that many seconds, as the HOME menu's
+ * "Manual" entry does (the offline applet with the manual's OfflineHtmlPage; the frontend's web sheet shows it, NAPPLE_WEB_ANSWER answers it scripted).
+ * The language defaults to the system language. */
+static void *open_manual_thread(void *arg) {
+    const char *spec = arg;
+    sleep((unsigned)atoi(spec));
+    const char *colon = strchr(spec, ':');
+    char code[9] = {0};
+    uint64_t v = host_desired_language();
+    memcpy(code, &v, 8);
+    const char *lang = colon && colon[1] ? colon + 1 : web_manual_lang(code);
+    char rel[0x200] = "", last[WEB_URL_MAX] = "";
+    const char *root = applet_web_html_root();
+    if (!root || web_manual_path(root, lang, rel, sizeof rel)) {
+        LOG("applet", "manual: this title has no offline manual (html root %s)", root ? root : "none");
+        return NULL;
+    }
+    LOG("applet", "manual: opening %s (language %s) from %s/html-document", rel, lang, root);
+    uint32_t why = 0;
+    int r = applet_web_open_manual(lang, &why, last, sizeof last);
+    LOG("applet", "manual: %s, exit reason %u, last page %s", r ? "could not be shown" : "shown", why, last);
+    return NULL;
+}
 void service_register_applet(void) {
     ipc_register_service("appletOE", oe_open);
     /* The portable web / offline web (0x13, 0x17) and album (0x15) applets answer through the handler table (libapplet_run_registered). Their
@@ -1876,9 +1899,16 @@ void service_register_applet(void) {
         if (!getenv("NAPPLE_HTML_ROOT") && access(html, R_OK) == 0) applet_web_set_html_root(html);
     }
     const char *d = getenv("NAPPLE_DEBUG_LAUNCH_APPLET");
+    const char *man = getenv("NAPPLE_OPEN_MANUAL");
 #ifdef NAPPLE_LIB
     d = NULL; /* only the host image launches */
+    man = NULL;
 #endif
+    if (man && *man) {
+        pthread_t t;
+        pthread_create(&t, NULL, open_manual_thread, (void *)man);
+        pthread_detach(t);
+    }
     if (d) {
         pthread_t t;
         pthread_create(&t, NULL, debug_launch_thread, (void *)(uintptr_t)atoi(d));
