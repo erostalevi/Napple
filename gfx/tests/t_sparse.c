@@ -1,7 +1,8 @@
 /* t_sparse.c - sparse textures (NVN_TEXTURE_FLAGS_SPARSE on a virtual memory pool), the documented fallback of api_texture.c: the Metal texture is fully resident
  * and reads the guest storage through the virtual pool, so a tile mapped with nvnMemoryPoolMapVirtual shows its physical pages and an unmapped tile reads as
  * zero (the reservation is zero-filled), as on the console. A 256x256 RGBA8 sparse texture has 64 KiB tiles of 128x128 texels; tile (0, 0) is the first
- * 64 KiB of its block-linear storage. Tile (1, 0) is mapped afterwards and drawn into by the GPU (a copy): the texture keeps it.
+ * 64 KiB of its block-linear storage. Tile (1, 0) is mapped afterwards and drawn into by the GPU (a copy): the texture keeps it. Then tile (0, 0) is
+ * remapped to other physical pages and unmapped after the texture was uploaded: the texture follows the residency change (re-uploaded).
  * Headless Metal (MTL_DEBUG_LAYER=1 in make test), no game data. */
 #include "nvn_harness.h"
 #include <sys/mman.h>
@@ -61,5 +62,24 @@ int main(void) {
     h_submit(&h);
     CHECK(px(130, 3) == 0xff00ff00u && px(255, 127) == 0xff00ff00u, "GPU copy into the newly mapped tile (1, 0): %08x %08x", px(130, 3), px(255, 127));
     CHECK(px(5, 5) == 0xff336699u && px(5, 200) == 0, "the other tiles are unchanged: %08x %08x", px(5, 5), px(5, 200));
+    /* residency change after upload: tile (0, 0) is remapped to physical [128 KiB, 192 KiB) (other contents) and then unmapped; the texture follows both */
+    for (size_t i = 0; i < 0x10000 / 4; i++) ((uint32_t *)(phys_mem + 0x20000))[i] = 0xff0000ffu;
+    mapreq_t r3 = {phys, 0x20000, 0, 0x10000, 0, 0};
+    CHECK(L(nvnMemoryPoolMapVirtual)(virt, 1, (const NVNmappingRequest *)&r3), "remap tile (0, 0)");
+    h_begin(&h);
+    memset(h.mem + OFF_RB, 0xcd, 256 * 256 * 4);
+    h_readback(&h, t, 0, 0, 256, 256, OFF_RB);
+    h_submit(&h);
+    printf("after remap: tile (0,0) %08x %08x | tile (1,0) %08x\n", px(0, 0), px(127, 127), px(130, 3));
+    CHECK(px(0, 0) == 0xff0000ffu && px(127, 127) == 0xff0000ffu, "tile (0, 0) remapped after the upload reads its new physical pages: %08x %08x", px(0, 0), px(127, 127));
+    CHECK(px(130, 3) == 0xff00ff00u, "tile (1, 0) keeps the GPU copy: %08x", px(130, 3));
+    mapreq_t r4 = {NULL, 0, 0, 0x10000, 0, 0};
+    CHECK(L(nvnMemoryPoolMapVirtual)(virt, 1, (const NVNmappingRequest *)&r4), "unmap tile (0, 0)");
+    h_begin(&h);
+    memset(h.mem + OFF_RB, 0xcd, 256 * 256 * 4);
+    h_readback(&h, t, 0, 0, 256, 256, OFF_RB);
+    h_submit(&h);
+    printf("after unmap: tile (0,0) %08x | tile (1,0) %08x\n", px(0, 0), px(130, 3));
+    CHECK(px(0, 0) == 0 && px(127, 127) == 0, "tile (0, 0) unmapped after the upload reads zero: %08x %08x", px(0, 0), px(127, 127));
     return h_finish("t_sparse", &h);
 }

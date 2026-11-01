@@ -255,16 +255,25 @@ GfxTex *mtl_tex_get(const texsnap *s, int for_gpu_write) {
             g_tt_hash[j] = h;
         }
     }
-    if (t && (t->scale_gen != mtl_scale_generation() || (for_gpu_write && !t->gpu_owned && t->rsx == 1 && t->rsy == 1))) mtl_tex_rescale(t, for_gpu_write);
+    /* A sparse texture (NVN_TEXTURE_FLAGS_SPARSE) never becomes GPU-owned: the GPU writes some tiles (copies into newly resident tiles), the guest memory and its
+     * residency still decide the others, and its re-uploads only touch the tiles whose pages changed (upload_texture_part). Not render-scaled either. */
+    int sparse = t && (t->key.d.flags & 0x20);
+    if (t && (t->scale_gen != mtl_scale_generation() || (for_gpu_write && !sparse && !t->gpu_owned && t->rsx == 1 && t->rsy == 1))) mtl_tex_rescale(t, for_gpu_write);
     pthread_mutex_unlock(&g_tt_mu);
     if (t) {
         t->last_use = atomic_load(&g_gfx.frames);
-        if (for_gpu_write) t->gpu_owned = 1;
+        if (for_gpu_write && !sparse) t->gpu_owned = 1;
     }
     return t;
 }
 
+/* nvnMemoryPoolMapVirtual (api_memory.c) replaces the pool records of the remapped range of a virtual pool: the textures there are not gone (their
+ * storage changed residency, the dirty tracking sees it and a sparse texture re-uploads the changed tiles), so they are kept, with what the GPU wrote
+ * into them. Thread-local: the remap runs on the calling thread. */
+static _Thread_local int g_remapping;
+void mtl_tex_remap_scope(int on) { g_remapping = on; }
 void mtl_tex_forget_range(const void *mem, uint64_t size) {
+    if (g_remapping) return;
     uintptr_t lo = (uintptr_t)mem, hi = lo + size;
     pthread_mutex_lock(&g_tt_mu);
     NSMutableArray *dead = [NSMutableArray array];
@@ -325,7 +334,27 @@ static void expand3_to_4(const uint8_t *src, uint8_t *dst, uint32_t npix, int co
     }
 }
 
-static void upload_texture(GfxTex *t) {
+/* Sparse textures (NVN_TEXTURE_FLAGS_SPARSE): a residency change (nvnMemoryPoolMapVirtual remapping or unmapping pages) after an upload makes the pages
+ * dirty, and a full re-upload from guest memory would wipe what the GPU wrote into the other tiles (GPU writes never reach guest memory). So a 2D sparse
+ * texture re-uploads only the tiles whose storage changed: the tile shape of api_texture.c (64 KiB of level-0 storage per tile, tiles in row-major
+ * order), the levels after level 0 as a whole when their pages changed. */
+typedef struct {
+    const uint8_t *dirty; /* per level-0 tile: re-upload it */
+    uint32_t tw, th, ntx; /* tile size in texels, tiles per row */
+    int rest;             /* levels after level 0 changed */
+} part_upload;
+static int sparse_tiles(const napple_texdesc *d, uint32_t *tw, uint32_t *th) {
+    if (!(d->flags & 0x20) || d->target != 1 || d->samples > 1 || napple_tex_is_linear(d)) return 0; /* NVN_TEXTURE_FLAGS_SPARSE, 2D */
+    int bw = 1, bh = 1, bpb = napple_fmt_bpb(d->format, &bw, &bh);
+    if (!bpb) return 0;
+    uint32_t w = bpb == 1 ? 256 : bpb == 2 ? 256 : bpb == 4 ? 128 : bpb == 8 ? 128 : 64, h = bpb == 1 ? 256 : bpb == 2 ? 128 : bpb == 4 ? 128 : bpb == 8 ? 64 : 64;
+    *tw = w * (uint32_t)bw;
+    *th = h * (uint32_t)bh;
+    return 1;
+}
+
+static void upload_texture_part(GfxTex *t, const part_upload *part);
+static void upload_texture_part(GfxTex *t, const part_upload *part) {
     const napple_texdesc *d = &t->key.d;
     if (t->samples > 1 || t->is_depth || d->target == 10) return;
     napple_texlayout L;
@@ -340,6 +369,7 @@ static void upload_texture(GfxTex *t) {
     uint32_t nlay = layered ? L.layers : 1;
     int linear = napple_tex_is_linear(d);
     for (uint32_t lv = 0; lv < t->levels; lv++) {
+        if (part && lv > 0 && !part->rest) break;
         for (uint32_t ly = 0; ly < nlay; ly++) {
             uint32_t row_bytes, rows, slices, bpb2;
             uint64_t base;
@@ -359,7 +389,16 @@ static void upload_texture(GfxTex *t) {
             }
             MTLRegion region = MTLRegionMake3D(0, 0, 0, w, h, d->target == 2 ? slices : 1);
             NSUInteger slice = layered ? ly : 0;
-            if (bc_decode) {
+            if (part && lv == 0 && !bc_decode && !t->expand_rgb) { /* the changed tiles only (sparse, see part_upload) */
+                uint32_t nty = (h + part->th - 1) / part->th;
+                for (uint32_t ty = 0; ty < nty; ty++)
+                    for (uint32_t tx = 0; tx < part->ntx; tx++) {
+                        if (!part->dirty[ty * part->ntx + tx]) continue;
+                        uint32_t x0 = tx * part->tw, y0 = ty * part->th, rw = MIN(part->tw, w - x0), rh = MIN(part->th, h - y0);
+                        const uint8_t *src = tmp + (size_t)(y0 / bh) * row_bytes + (size_t)(x0 / bw) * bpb;
+                        [t->tex replaceRegion:MTLRegionMake2D(x0, y0, rw, rh) mipmapLevel:0 slice:slice withBytes:src bytesPerRow:row_bytes bytesPerImage:0];
+                    }
+            } else if (bc_decode) {
                 uint8_t *px = malloc((size_t)w * h * bcpp);
                 if (px && napple_bc_decode((uint32_t)d->format, tmp, row_bytes, w, h, px, (size_t)w * bcpp) == 0)
                     [t->tex replaceRegion:region mipmapLevel:lv slice:slice withBytes:px bytesPerRow:(size_t)w * bcpp bytesPerImage:(size_t)w * h * bcpp];
@@ -451,9 +490,25 @@ void mtl_tex_prepare_sample(GfxTex *t) {
     if (t->stamp && t->checked == now) return;
     t->checked = now;
     if (t->stamp && !dirty_since(t->key.mem, (size_t)t->key.size, t->stamp)) return;
+    /* a sparse texture uploaded before: which tiles changed (checked against the old stamp, before the pages are protected again) */
+    uint32_t tw, th;
+    uint8_t *dirty = NULL;
+    part_upload part = {0};
+    if (t->stamp && sparse_tiles(&t->key.d, &tw, &th)) {
+        uint64_t l0 = t->levels > 1 ? napple_tex_level_offset(&t->key.d, 1) : t->key.size;
+        uint32_t ntx = (t->w + tw - 1) / tw, nty = (t->h + th - 1) / th;
+            if (l0 <= t->key.size && (uint64_t)ntx * nty * 0x10000 <= l0 + 0xffff && (dirty = calloc((size_t)ntx * nty, 1))) {
+            for (uint32_t i = 0; i < ntx * nty; i++) {
+                uint64_t o = (uint64_t)i * 0x10000;
+                if (o < l0) dirty[i] = (uint8_t)dirty_since(t->key.mem + o, (size_t)MIN(0x10000, l0 - o), t->stamp);
+            }
+            part = (part_upload){dirty, tw, th, ntx, t->levels > 1 && dirty_since(t->key.mem + l0, (size_t)(t->key.size - l0), t->stamp)};
+        }
+    }
     dirty_protect(t->key.mem, (size_t)t->key.size); /* protect, stamp, then read: no write can be lost */
     t->stamp = dirty_now();
-    upload_texture(t);
+    upload_texture_part(t, dirty ? &part : NULL);
+    free(dirty);
     mtl_tex_written(t);
 }
 
