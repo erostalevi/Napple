@@ -80,6 +80,7 @@ typedef struct {
     bool uses_vabsdiff4, uses_isel, uses_idp;   // helper functions to emit
     bool uses_stencil;                          // a texture binding is a stencil view: uint texture + the StencilTex wrapper
     bool uses_itex;                             // a texture binding is an integer colour texture: texture2d<uint|int> + the IntTex wrapper
+    bool uses_txq;                              // TXQ / TXA size queries: the txq_* helpers (the binding's type is only known at the end)
     bool has_pexit, uses_ljs, uses_lmb;         // PEXIT in the program / PLONGJMP stack and local memory base to declare
     int ald_vertex;         // register holding the vertex index of the ALD/AST being translated (RZ = none), set by the handler
     bool ald_patch, ald_out, ald_vlatched;   // ald_vlatched: the vertex index was copied to `vx` (the destination registers may overlap it)
@@ -1046,6 +1047,10 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
                 slot = tex_slot(c, index, TEXTYPE_2D, false, false);
                 sprintf(call, "t%d.read(%s, uint(%s))", slot, RSC2(c, slot, "uint2(%s, %s)", A, A1), Bv);
                 break;
+            case 6: /* 2D.LZ.MS (yuzu's reading; Super Mario Odyssey): texel (Ra, Ra+1) of a multisampled texture, sample Rb (clamped like TLD.MS) */
+                slot = tex_slot(c, index, TEXTYPE_2D_MS, false, false);
+                sprintf(call, "t%d.read(%s, min(uint(%s), t%d.get_num_samples() - 1u))", slot, RSC2(c, slot, "uint2(%s, %s)", A, A1), Bv, slot);
+                break;
             case 7:
                 slot = tex_slot(c, index, TEXTYPE_3D, false, false);
                 sprintf(call, "t%d.read(uint3(%s, %s, %s))", slot, A, A1, Bv);
@@ -1110,8 +1115,11 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
         strcpy(lod, ", level(0)");
     }
     if (aoffi) {
+        /* 4-bit signed texel offsets x, y, z in the register's low bytes. Metal takes int2 (2D), int3 (3D: Super Mario Odyssey samples 3D textures with
+         * AOFFI) and no offset at all for 1D and cube textures (where the hardware has none to apply either) */
         c->reg_used[pr] = 1;
-        sprintf(off, ", int2(int(r%d << 28) >> 28, int(r%d << 24) >> 28)", pr, pr);
+        if (type == TEXTYPE_3D) sprintf(off, ", int3(int(r%d << 28) >> 28, int(r%d << 24) >> 28, int(r%d << 20) >> 28)", pr, pr, pr);
+        else if (type == TEXTYPE_2D || type == TEXTYPE_2D_ARRAY) sprintf(off, ", int2(int(r%d << 28) >> 28, int(r%d << 24) >> 28)", pr, pr);
         pr++;
     }
     if (dc) {
@@ -1143,10 +1151,7 @@ static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
     uint32_t mask = (uint32_t)bits(w, 31, 4);
     int comp = tmml ? 0 : (int)bits(w, 56, 2);
     int aoff = tmml ? 0 : (int)bits(w, 54, 2);
-    if (aoff == 2) {
-        fail(c, "texture gather with per-texel offsets (PTP: Metal needs constant offsets)");
-        return;
-    }
+    if (aoff == 2 && tmml) aoff = 0;
     if (aoff == 3) {
         fail(c, "texture gather with reserved offset mode");
         return;
@@ -1179,6 +1184,28 @@ static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
     static const char *const cn[] = {"x", "y", "z", "w"};
     char cexpr[900];
     sprintf(cexpr, "%s(%s)", vec, coords);
+    char ptp[4][300] = {"", "", "", ""}; /* PTP: the coordinate expression of each texel's gather */
+    if (aoff == 2) {
+        /* PTP: one texel offset per gathered texel, 6-bit signed x / y fields at bits 0, 8 (texel 0), 16, 24 (texel 1) of Rpr and the same in Rpr+1
+         * (texels 2, 3) (yuzu's MakeOffsetPTP; Super Mario Odyssey uses it). As SPIRV-Cross lowers textureGatherOffsets to MSL: component i of the
+         * result is the base texel (.w) of a gather at offset i; the runtime offset moves the coordinate by whole texels as for AOFFI below. */
+        if (ncoord != 2) {
+            fail(c, "texture gather with per-texel offsets on target %d", target);
+            return;
+        }
+        char gs[200];
+        if (c->stage == STAGE_VERTEX) sprintf(gs, "float2(t%d.get_width(), t%d.get_height())", slot, slot);
+        else {
+            c->uses_rscale = true;
+            sprintf(gs, "(float2(t%d.get_width(), t%d.get_height()) / rscale[%d].xy)", slot, slot, slot + 1);
+        }
+        c->reg_used[pr] = c->reg_used[pr + 1] = 1;
+        for (int i = 0; i < 4; i++) {
+            int r = pr + i / 2, sh = 16 * (i & 1);
+            snprintf(ptp[i], sizeof ptp[i], "float2(%s) + float2(int2(int(r%d << %du) >> 26, int(r%d << %du) >> 26)) / %s", coords, r, 26 - sh, r, 18 - sh, gs);
+        }
+        pr += 2;
+    }
     if (aoff == 1 && !tmml) {
         /* AOFFI: a per-thread texel offset in Rpr (4-bit signed x, y). Metal only takes constant gather offsets, but a whole-texel offset keeps the
          * fractional position, so gathering at coord + offset / size selects exactly the shifted 2x2 footprint (the sampler's wrap/clamp still applies) */
@@ -1213,6 +1240,21 @@ static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
                 }
             }
         sp(&c->body, "    }\n");
+        return;
+    }
+    if (aoff == 2) {
+        char g[4][700];
+        for (int i = 0; i < 4; i++) {
+            if (dc) snprintf(g[i], sizeof g[i], "t%d.gather_compare(s%d, %s%s%s, as_type<float>(r%d)).w", slot, slot, ptp[i], array ? ", " : "", layer, pr);
+            else if (c->info->tex[slot].depth || c->info->tex[slot].shadow)
+                snprintf(g[i], sizeof g[i], "float(t%d.gather(s%d, %s%s%s).w)", slot, slot, ptp[i], array ? ", " : "", layer);
+            else snprintf(g[i], sizeof g[i], "t%d.gather(s%d, %s%s%s, int2(0), component::%s).w", slot, slot, ptp[i], array ? ", " : "", layer, cn[comp]);
+        }
+        if (dc) c->reg_used[pr] = 1;
+        char *pcall = malloc(4 * 700 + 32);
+        sprintf(pcall, "float4(%s, %s, %s, %s)", g[0], g[1], g[2], g[3]);
+        write_tex_result(c, slot, pcall, mask, d, RZ, false, false);
+        free(pcall);
         return;
     }
     if (dc) {
@@ -1597,13 +1639,13 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (c->stage != STAGE_VERTEX) {                // report the guest size of scaled allocations
                 c->uses_rscale = true;
                 sp(&c->body,
-                   "    { uint lv = %s; uint4 q = uint4(uint(round(float(t%d.get_width(lv)) / rscale[%d].x)), "
-                   "uint(round(float(t%d.get_height(lv)) / rscale[%d].y)), 1, t%d.get_num_mip_levels());\n",
+                   "    { uint lv = %s; uint4 q = uint4(uint(round(float(txq_w(t%d, lv)) / rscale[%d].x)), "
+                   "uint(round(float(txq_h(t%d, lv)) / rscale[%d].y)), 1, txq_n(t%d));\n",
                    R(a), slot, slot + 1, slot, slot + 1, slot);
             } else {
-                sp(&c->body, "    { uint lv = %s; uint4 q = uint4(t%d.get_width(lv), t%d.get_height(lv), 1, t%d.get_num_mip_levels());\n", R(a), slot, slot,
-                   slot);
+                sp(&c->body, "    { uint lv = %s; uint4 q = uint4(txq_w(t%d, lv), txq_h(t%d, lv), 1, txq_n(t%d));\n", R(a), slot, slot, slot);
             }
+            c->uses_txq = true;
             int n = 0;
             for (int i = 0; i < 4; i++)
                 if (mask & (1u << i)) {
@@ -3260,6 +3302,18 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "  template <typename... A> float4 sample(sampler, float2 uv, uint layer, A...) const { return stx(at(int2(floor(uv * float2(t.get_width(), t.get_height()))), layer)); }\n"
            "  template <typename... A> float4 gather(sampler, float2 uv, uint layer, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
            "    return as_type<float4>(uint4(at(b + int2(0, 1), layer), at(b + int2(1, 1), layer), at(b + int2(1, 0), layer), at(b, layer))); } };\n");
+    }
+    if (c->uses_txq) {
+        /* TXQ / TXA: the binding's texture type is only fixed once the whole program is read (a later TLDS.MS makes it multisampled), so the size query
+         * goes through overloads: multisampled textures take no level argument and have one level. */
+        sp(&s, "template <typename T> static inline uint txq_w(T t, uint l) { return t.get_width(l); }\n"
+               "template <typename T> static inline uint txq_h(T t, uint l) { return t.get_height(l); }\n"
+               "template <typename T> static inline uint txq_n(T t) { return t.get_num_mip_levels(); }\n");
+        static const char *const ms[3] = {"texture2d_ms", "texture2d_ms_array", "depth2d_ms"};
+        for (int i = 0; i < 3; i++)
+            sp(&s, "template <typename E, access A> static inline uint txq_w(%s<E, A> t, uint) { return t.get_width(); }\n"
+                   "template <typename E, access A> static inline uint txq_h(%s<E, A> t, uint) { return t.get_height(); }\n"
+                   "template <typename E, access A> static inline uint txq_n(%s<E, A>) { return 1u; }\n", ms[i], ms[i], ms[i]);
     }
     if (c->uses_itex) {
         /* Integer colour textures (ShaderKey.tex_uint_slots / tex_sint_slots): Metal cannot filter an integer texture and the registers receive the texel's
