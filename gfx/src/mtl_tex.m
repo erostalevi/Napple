@@ -452,6 +452,7 @@ void mtl_tex_prepare_sample(GfxTex *t) {
     dirty_protect(t->key.mem, (size_t)t->key.size); /* protect, stamp, then read: no write can be lost */
     t->stamp = dirty_now();
     upload_texture(t);
+    mtl_tex_written(t);
 }
 
 /* ---------------------------------------------------------------------------------------------------------------
@@ -507,6 +508,340 @@ static int view_valid(id<MTLTexture> tex, MTLPixelFormat *pf, MTLTextureType wan
     }
 }
 
+/* ---------------------------------------------------------------------------------------------------------------
+ * Copy-backed views (mtl_priv.h): what newTextureView cannot do over the same storage
+ * --------------------------------------------------------------------------------------------------------------- */
+/* Bytes per texel (per 4x4 block for BC); *cls: 0 colour, 1 depth / stencil, 2 block-compressed (BC, 4x4). 0 = not handled (ASTC, YUV, ...). The depth plane
+ * of Depth32Float_Stencil8 counts as 4 bytes: that is what a blit with MTLBlitOptionDepthFromDepthStencil writes. */
+static uint32_t pf_bytes(MTLPixelFormat f, int *cls) {
+    *cls = 0;
+    switch ((NSUInteger)f) {
+        case 10: case 11: case 12: case 13: case 14: return 1;
+        case 20: case 22: case 23: case 24: case 25: case 30: case 32: case 33: case 34: case 40: case 41: case 42: case 43: return 2;
+        case 53: case 54: case 55: case 60: case 62: case 63: case 64: case 65: case 70: case 71: case 72: case 73: case 74: case 80: case 81:
+        case 90: case 91: case 92: case 93: return 4;
+        case 103: case 104: case 105: case 110: case 112: case 113: case 114: case 115: return 8;
+        case 123: case 124: case 125: return 16;
+        case 130: case 131: case 140: case 141: *cls = 2; return 8;
+        case 132: case 133: case 134: case 135: case 142: case 143: case 150: case 151: case 152: case 153: *cls = 2; return 16;
+        case 253: *cls = 1; return 1;          /* Stencil8 */
+        case 250: *cls = 1; return 2;          /* Depth16Unorm */
+        case 252: case 260: *cls = 1; return 4; /* Depth32Float, Depth32Float_Stencil8 (depth plane) */
+        default: return 0;
+    }
+}
+static int pf_int_kind(MTLPixelFormat f) { /* 0 float / normalized, 1 sint, 2 uint */
+    switch ((NSUInteger)f) {
+        case 14: case 24: case 34: case 54: case 64: case 74: case 104: case 114: case 124: return 1;
+        case 13: case 23: case 33: case 53: case 63: case 73: case 91: case 103: case 113: case 123: return 2;
+        default: return 0;
+    }
+}
+/* A multisampled depth texture viewed as one of these colour formats is converted by a per-sample pass (alias_ms_pso). Only float-sampled formats: the
+ * translator declares multisampled textures as texture2d_ms<float>. */
+static int ms_alias_dst_ok(MTLPixelFormat src, MTLPixelFormat dst) {
+    return (src == MTLPixelFormatDepth32Float || src == MTLPixelFormatDepth32Float_Stencil8) && dst == MTLPixelFormatRGBA8Unorm;
+}
+/* Single-channel unsigned integer formats: a copy in one of them is bound like a stencil view (ShaderKey.stencil_slots: texture2d<uint>, (value, 0, 0, 1) as
+ * integer bits), the only integer sampling the translator declares. Other integer copies cannot be bound (see view_fmt_class). */
+static int pf_uint1(MTLPixelFormat f) { return f == MTLPixelFormatR8Uint || f == MTLPixelFormatR16Uint || f == MTLPixelFormatR32Uint; }
+/* How a sampled view's format is honoured: */
+enum {
+    VF_SAME,  /* the texture's own format */
+    VF_VIEW,  /* a Metal format view (same size class, both plain colour, or an sRGB pair) */
+    VF_DEPTH, /* a depth texture viewed as a single-channel format whose texel reads back as the same register bits: R32F / R32UI / R32I of 32-bit float depth (the
+               * shader moves texel results into registers bit for bit, so the float depth IS the integer view's value), R16 unorm of Depth16. Sampled as depth. */
+    VF_ALIAS, /* same bytes per texel / block, another class: a copy (GfxAlias) */
+    VF_NONE,  /* not expressible (another texel size, ASTC, a 24-bit depth format read as bits, an integer format the translator cannot declare): the texture's own
+               * format, reported once */
+};
+static int view_fmt_class(const texsnap *s, MTLPixelFormat have, MTLPixelFormat want, uint32_t samples) {
+    if (want == have || want == MTLPixelFormatInvalid) return VF_SAME;
+    if (same_class_srgb(want, have)) return VF_VIEW;
+    int ch, cw;
+    uint32_t bh = pf_bytes(have, &ch), bw = pf_bytes(want, &cw);
+    if (!bh || !bw) return VF_NONE;
+    int d24 = ch == 1 && (s->d.format == 0x33 || s->d.format == 0x35); /* NVN DEPTH24 / DEPTH24_STENCIL8 are stored as 32-bit float depth: their packed bits do not exist here */
+    if (ch == 1 && cw == 0 &&
+        ((have == MTLPixelFormatDepth16Unorm && want == MTLPixelFormatR16Unorm) ||
+         ((have == MTLPixelFormatDepth32Float || have == MTLPixelFormatDepth32Float_Stencil8) &&
+          (want == MTLPixelFormatR32Float || (!d24 && (want == MTLPixelFormatR32Uint || want == MTLPixelFormatR32Sint))))))
+        return VF_DEPTH;
+    if (ch == 0 && cw == 0) return bh == bw ? VF_VIEW : VF_NONE;
+    if (bh != bw || have == MTLPixelFormatStencil8 || want == MTLPixelFormatStencil8 || want == MTLPixelFormatDepth32Float_Stencil8 || d24) return VF_NONE;
+    if (cw == 0 && pf_int_kind(want) && !(pf_uint1(want) && samples == 1)) return VF_NONE; /* the translator samples it as float (texture2d<float>) */
+    if (samples > 1) return ch == 1 && cw == 0 && ms_alias_dst_ok(have, want) ? VF_ALIAS : VF_NONE;
+    return VF_ALIAS;
+}
+/* The Metal format a view's NVN format names (BC decoded on GPUs without BC, as in mtl_tex_format_info); Invalid when the view keeps the texture's format. */
+static MTLPixelFormat view_pf(const view_t *v, int has_view) {
+    if (!has_view || !v->set_format) return MTLPixelFormatInvalid;
+    uint32_t m = 0, bcpf;
+    int bpp;
+    MTLPixelFormat pf = napple_fmt_to_mtl(v->format, &m, NULL) && m ? (MTLPixelFormat)m : MTLPixelFormatInvalid;
+    if (!g_mtl.bc_ok && napple_bc_unpacked((uint32_t)v->format, &bcpf, &bpp)) pf = (MTLPixelFormat)bcpf;
+    return pf;
+}
+int mtl_tex_samples_as_uint(const texsnap *s, const view_t *v, int has_view) {
+    MTLPixelFormat pf;
+    int dep, st;
+    mtl_tex_format_info(s, &pf, &dep, &st);
+    MTLPixelFormat want = view_pf(v, has_view);
+    return view_fmt_class(s, pf, want, s->d.samples > 1 ? (uint32_t)s->d.samples : 1) == VF_ALIAS && pf_uint1(want);
+}
+int mtl_tex_samples_as_depth(const texsnap *s, const view_t *v, int has_view) {
+    MTLPixelFormat pf;
+    int dep, st;
+    mtl_tex_format_info(s, &pf, &dep, &st);
+    MTLPixelFormat want = view_pf(v, has_view);
+    int c = view_fmt_class(s, pf, want, s->d.samples > 1 ? (uint32_t)s->d.samples : 1);
+    if (c == VF_ALIAS) { int cw; pf_bytes(want, &cw); return cw == 1; }
+    return dep;
+}
+
+enum { AK_BYTES = 1, AK_MS_DEPTH, AK_TYPE };
+@interface GfxAlias : NSObject {
+@public
+    id<MTLTexture> src, tex; /* the source storage it copies from (a re-allocated source makes a new alias), the copy */
+    __weak GfxTex *owner;    /* the texture it is a view of (its wgen when the copy is encoded is what the copy holds) */
+    id<MTLBuffer> scratch;   /* AK_BYTES: staging bytes */
+    NSMutableDictionary<NSNumber *, id<MTLTexture>> *views; /* swizzle / format views of tex */
+    int kind;
+    uint32_t l0, nl, s0, ns;
+    uint64_t gen;            /* source wgen the queued / last copy reads */
+    int queued, filled;
+}
+@end
+@implementation GfxAlias
+@end
+static NSMutableArray<GfxAlias *> *g_alias_q;
+static pthread_mutex_t g_alias_mu = PTHREAD_MUTEX_INITIALIZER;
+uint32_t mtl_tex_alias_pending(void) { return (uint32_t)g_alias_q.count; }
+
+static int pf_is_bc(MTLPixelFormat f) { return f >= MTLPixelFormatBC1_RGBA && f <= MTLPixelFormatBC7_RGBAUnorm_sRGB; }
+/* Size of the copy of source level `lv` in the alias' texels: one alias texel per source block (BC -> plain), four per block the other way. */
+static void alias_level_size(id<MTLTexture> s, MTLPixelFormat dst_pf, uint32_t lv, NSUInteger *w, NSUInteger *h) {
+    NSUInteger sw = MAX(1, s.width >> lv), sh = MAX(1, s.height >> lv);
+    int sbc = pf_is_bc(s.pixelFormat), dbc = pf_is_bc(dst_pf);
+    if (sbc && !dbc) { sw = (sw + 3) / 4; sh = (sh + 3) / 4; }
+    else if (!sbc && dbc) { sw *= 4; sh *= 4; }
+    *w = sw;
+    *h = sh;
+}
+static GfxAlias *alias_create(GfxTex *t, int kind, MTLPixelFormat pf, MTLTextureType type, uint32_t l0, uint32_t nl, uint32_t s0, uint32_t ns) {
+    id<MTLTexture> s = t->tex;
+    MTLTextureDescriptor *td = [MTLTextureDescriptor new];
+    td.textureType = type;
+    td.pixelFormat = pf;
+    NSUInteger w, h;
+    alias_level_size(s, pf, l0, &w, &h);
+    td.width = w;
+    td.height = (type == MTLTextureType1D || type == MTLTextureType1DArray) ? 1 : h;
+    td.depth = type == MTLTextureType3D ? (s.textureType == MTLTextureType3D ? MAX(1, s.depth >> l0) : ns) : 1;
+    td.mipmapLevelCount = s.sampleCount > 1 ? 1 : nl;
+    td.arrayLength = type == MTLTextureTypeCube || type == MTLTextureType3D || type == MTLTextureType2D || type == MTLTextureType1D || type == MTLTextureType2DMultisample
+                         ? 1
+                         : type == MTLTextureTypeCubeArray ? MAX(1, ns / 6) : ns;
+    td.sampleCount = s.sampleCount;
+    td.storageMode = MTLStorageModePrivate;
+    td.usage = MTLTextureUsageShaderRead | MTLTextureUsagePixelFormatView | (kind == AK_MS_DEPTH ? MTLTextureUsageRenderTarget : 0);
+    id<MTLTexture> a = [g_mtl.dev newTextureWithDescriptor:td];
+    if (!a) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "copy-backed texture view (format %lu type %lu %lux%lu) could not be allocated", (unsigned long)pf, (unsigned long)type,
+                 (unsigned long)w, (unsigned long)h);
+        return nil;
+    }
+    GfxAlias *al = [GfxAlias new];
+    al->src = s;
+    al->owner = t;
+    al->tex = a;
+    al->kind = kind;
+    al->l0 = l0;
+    al->nl = (uint32_t)td.mipmapLevelCount;
+    al->s0 = s0;
+    al->ns = ns;
+    al->views = [NSMutableDictionary dictionary];
+    al->gen = ~0ull;
+    return al;
+}
+/* The alias for (key), refreshed if the source moved on; the copy is encoded later (mtl_tex_alias_flush). */
+static GfxAlias *alias_get(GfxTex *t, uint64_t key, int kind, MTLPixelFormat pf, MTLTextureType type, uint32_t l0, uint32_t nl, uint32_t s0, uint32_t ns) {
+    if (!t->aliases) t->aliases = [NSMutableDictionary dictionary];
+    NSNumber *k = @(key);
+    GfxAlias *al = t->aliases[k];
+    if (al && al->src != t->tex) al = nil; /* the source was re-allocated (render scale): copy from the new storage */
+    if (!al) {
+        al = alias_create(t, kind, pf, type, l0, nl, s0, ns);
+        if (!al) return nil;
+        t->aliases[k] = al;
+        LOG_ONCE(NAPPLE_LOG_INFO, "copy-backed texture views in use (first: kind %d, format %lu -> %lu, type %lu -> %lu, levels %u+%u slices %u+%u)", kind,
+                 (unsigned long)t->tex.pixelFormat, (unsigned long)pf, (unsigned long)t->tex.textureType, (unsigned long)type, l0, nl, s0, ns);
+    }
+    if (al->gen != t->wgen) {
+        al->gen = t->wgen;
+        if (!al->queued) {
+            al->queued = 1;
+            pthread_mutex_lock(&g_alias_mu);
+            if (!g_alias_q) g_alias_q = [NSMutableArray array];
+            [g_alias_q addObject:al];
+            pthread_mutex_unlock(&g_alias_mu);
+        }
+    }
+    return al;
+}
+
+/* Multisampled depth -> multisampled colour, one fragment per sample: the value (float formats), its bits (32-bit integer formats), the 16-bit unorm code
+ * (16-bit integer formats of Depth16) or the bytes of the float (RGBA8). */
+static NSString *const kAliasMSL =
+    @"#include <metal_stdlib>\nusing namespace metal;\n"
+     "struct VO { float4 pos [[position]]; };\n"
+     "vertex VO al_vs(uint vid [[vertex_id]]) { VO o; float2 p = float2((vid << 1) & 2, vid & 2); o.pos = float4(p * 2.0 - 1.0, 0, 1); return o; }\n"
+     "struct AP { uint layer, mode; };\n" /* mode 0 bits, 1 unorm16 code, 2 unpack RGBA8 unorm, 3 RGBA8 bytes as uint */
+     "static uint al_bits(float v, uint mode) { return mode == 1 ? uint(rint(saturate(v) * 65535.0)) : as_type<uint>(v); }\n"
+     "fragment float4 al_f(VO i [[stage_in]], depth2d_ms<float> d [[texture(0)]], constant AP &p [[buffer(0)]], uint s [[sample_id]]) {\n"
+     "  float v = d.read(uint2(i.pos.xy), s); return p.mode == 2 ? unpack_unorm4x8_to_float(as_type<uint>(v)) : float4(v, 0, 0, 1); }\n"
+     "fragment uint4 al_u(VO i [[stage_in]], depth2d_ms<float> d [[texture(0)]], constant AP &p [[buffer(0)]], uint s [[sample_id]]) {\n"
+     "  uint b = al_bits(d.read(uint2(i.pos.xy), s), p.mode); return p.mode == 3 ? uint4(b & 255u, (b >> 8) & 255u, (b >> 16) & 255u, b >> 24) : uint4(b, 0, 0, 1); }\n"
+     "fragment int4 al_i(VO i [[stage_in]], depth2d_ms<float> d [[texture(0)]], constant AP &p [[buffer(0)]], uint s [[sample_id]]) {\n"
+     "  return int4(as_type<int>(al_bits(d.read(uint2(i.pos.xy), s), p.mode)), 0, 0, 1); }\n"
+     "fragment float4 al_fa(VO i [[stage_in]], depth2d_ms_array<float> d [[texture(0)]], constant AP &p [[buffer(0)]], uint s [[sample_id]]) {\n"
+     "  float v = d.read(uint2(i.pos.xy), p.layer, s); return p.mode == 2 ? unpack_unorm4x8_to_float(as_type<uint>(v)) : float4(v, 0, 0, 1); }\n"
+     "fragment uint4 al_ua(VO i [[stage_in]], depth2d_ms_array<float> d [[texture(0)]], constant AP &p [[buffer(0)]], uint s [[sample_id]]) {\n"
+     "  uint b = al_bits(d.read(uint2(i.pos.xy), p.layer, s), p.mode); return p.mode == 3 ? uint4(b & 255u, (b >> 8) & 255u, (b >> 16) & 255u, b >> 24) : uint4(b, 0, 0, 1); }\n"
+     "fragment int4 al_ia(VO i [[stage_in]], depth2d_ms_array<float> d [[texture(0)]], constant AP &p [[buffer(0)]], uint s [[sample_id]]) {\n"
+     "  return int4(as_type<int>(al_bits(d.read(uint2(i.pos.xy), p.layer, s), p.mode)), 0, 0, 1); }\n";
+static id<MTLRenderPipelineState> alias_ms_pso(MTLPixelFormat dst, int array, uint32_t samples) {
+    static NSMutableDictionary<NSNumber *, id<MTLRenderPipelineState>> *cache;
+    static id<MTLLibrary> lib;
+    NSNumber *k = @((uint64_t)dst | (uint64_t)array << 16 | (uint64_t)samples << 20);
+    id<MTLRenderPipelineState> ps = cache[k];
+    if (ps) return ps;
+    NSError *err = nil;
+    if (!lib) lib = [g_mtl.dev newLibraryWithSource:kAliasMSL options:nil error:&err];
+    if (!lib) {
+        LOGE("copy-backed view shader: %s", err.localizedDescription.UTF8String);
+        return nil;
+    }
+    int ik = pf_int_kind(dst);
+    NSString *fn = [NSString stringWithFormat:@"al_%s%s", ik == 1 ? "i" : ik == 2 ? "u" : "f", array ? "a" : ""];
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    pd.vertexFunction = [lib newFunctionWithName:@"al_vs"];
+    pd.fragmentFunction = [lib newFunctionWithName:fn];
+    pd.colorAttachments[0].pixelFormat = dst;
+    pd.rasterSampleCount = samples;
+    ps = [g_mtl.dev newRenderPipelineStateWithDescriptor:pd error:&err];
+    if (!ps) {
+        LOGE("copy-backed view pipeline (format %lu): %s", (unsigned long)dst, err.localizedDescription.UTF8String);
+        return nil;
+    }
+    if (!cache) cache = [NSMutableDictionary dictionary];
+    cache[k] = ps;
+    return ps;
+}
+static void alias_copy_ms(id<MTLCommandBuffer> cb, GfxAlias *al) {
+    MTLPixelFormat dst = al->tex.pixelFormat;
+    int array = al->src.textureType == MTLTextureType2DMultisampleArray;
+    id<MTLRenderPipelineState> ps = alias_ms_pso(dst, array, (uint32_t)al->src.sampleCount);
+    if (!ps) return;
+    uint32_t mode = al->src.pixelFormat == MTLPixelFormatDepth16Unorm && pf_int_kind(dst) ? 1
+                    : dst == MTLPixelFormatRGBA8Unorm                                    ? 2
+                    : dst == MTLPixelFormatRGBA8Uint                                     ? 3
+                                                                                         : 0;
+    for (uint32_t j = 0; j < al->ns; j++) {
+        MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+        rp.colorAttachments[0].texture = al->tex;
+        rp.colorAttachments[0].slice = al->tex.textureType == MTLTextureType2DMultisampleArray ? j : 0;
+        rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> e = [cb renderCommandEncoderWithDescriptor:rp];
+        uint32_t p[2] = {al->s0 + j, mode};
+        [e setRenderPipelineState:ps];
+        [e setFragmentTexture:al->src atIndex:0];
+        [e setFragmentBytes:p length:sizeof p atIndex:0];
+        [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [e endEncoding];
+    }
+}
+/* AK_BYTES: source -> staging buffer -> alias, level by level and slice by slice (the bytes are reinterpreted, nothing converted).
+ * AK_TYPE: same format, 3D depth slices <-> 2D (array) slices, texture to texture. */
+static void alias_copy_blit(id<MTLCommandBuffer> cb, GfxAlias *al) {
+    id<MTLTexture> s = al->src, d = al->tex;
+    int cls;
+    uint32_t bpb = pf_bytes(s.pixelFormat, &cls);
+    MTLBlitOption opt = s.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone;
+    int s3d = s.textureType == MTLTextureType3D, d3d = d.textureType == MTLTextureType3D;
+    int sbc = pf_is_bc(s.pixelFormat), dbc = pf_is_bc(d.pixelFormat);
+    /* staging layout: per level, per slice, rows of source blocks; offsets 256-aligned */
+    uint64_t need = 0;
+    if (al->kind == AK_BYTES)
+        for (uint32_t i = 0; i < al->nl; i++) {
+            NSUInteger w = MAX(1, s.width >> (al->l0 + i)), h = MAX(1, s.height >> (al->l0 + i));
+            if (sbc) { w = (w + 3) / 4; h = (h + 3) / 4; }
+            need += (((uint64_t)w * h * bpb + 255) & ~255ull) * al->ns;
+        }
+    if (al->kind == AK_BYTES && (!al->scratch || al->scratch.length < need)) {
+        al->scratch = [g_mtl.dev newBufferWithLength:need ? need : 256 options:MTLResourceStorageModePrivate];
+        if (!al->scratch) return;
+    }
+    id<MTLBlitCommandEncoder> be = [cb blitCommandEncoder];
+    uint64_t off = 0;
+    for (uint32_t i = 0; i < al->nl; i++) {
+        uint32_t slv = al->l0 + i;
+        NSUInteger sw = MAX(1, s.width >> slv), sh = MAX(1, s.height >> slv), sdep = s3d ? MAX(1, s.depth >> slv) : 1;
+        NSUInteger dw = MAX(1, d.width >> i), dh = MAX(1, d.height >> i);
+        for (uint32_t j = 0; j < al->ns; j++) {
+            uint32_t ss = al->s0 + j;
+            if (s3d && ss >= sdep) break;
+            NSUInteger sslice = s3d ? 0 : ss, sz = s3d ? ss : 0, dslice = d3d ? 0 : j, dz = d3d ? j : 0;
+            if (d3d && j >= MAX(1, d.depth >> i)) break;
+            if (al->kind == AK_TYPE) {
+                NSUInteger cw = MIN(sw, dw), chh = MIN(sh, dh);
+                [be copyFromTexture:s sourceSlice:sslice sourceLevel:slv sourceOrigin:MTLOriginMake(0, 0, sz) sourceSize:MTLSizeMake(cw, chh, 1)
+                          toTexture:d destinationSlice:dslice destinationLevel:i destinationOrigin:MTLOriginMake(0, 0, dz)];
+                continue;
+            }
+            NSUInteger bw = sbc ? (sw + 3) / 4 : sw, bh = sbc ? (sh + 3) / 4 : sh, row = bw * bpb, img = row * bh;
+            [be copyFromTexture:s sourceSlice:sslice sourceLevel:slv sourceOrigin:MTLOriginMake(0, 0, sz) sourceSize:MTLSizeMake(sw, sh, 1)
+                         toBuffer:al->scratch destinationOffset:off destinationBytesPerRow:row destinationBytesPerImage:img options:opt];
+            /* the same blocks in the alias' texels: one texel per block (BC source), 4x4 texels per block (BC alias), else 1:1 */
+            NSUInteger cw = sbc && !dbc ? bw : (!sbc && dbc ? MIN(bw * 4, dw) : MIN(sw, dw)), chh = sbc && !dbc ? bh : (!sbc && dbc ? MIN(bh * 4, dh) : MIN(sh, dh));
+            cw = MIN(cw, dw);
+            chh = MIN(chh, dh);
+            [be copyFromBuffer:al->scratch sourceOffset:off sourceBytesPerRow:row sourceBytesPerImage:img sourceSize:MTLSizeMake(cw, chh, 1)
+                     toTexture:d destinationSlice:dslice destinationLevel:i destinationOrigin:MTLOriginMake(0, 0, dz)];
+            off += (img + 255) & ~255ull;
+        }
+    }
+    [be endEncoding];
+}
+void mtl_tex_alias_flush(id<MTLCommandBuffer> cb) {
+    pthread_mutex_lock(&g_alias_mu);
+    NSArray<GfxAlias *> *list = [g_alias_q copy];
+    [g_alias_q removeAllObjects];
+    pthread_mutex_unlock(&g_alias_mu);
+    for (GfxAlias *al in list) {
+        al->queued = 0;
+        al->filled = 1;
+        GfxTex *o = al->owner;
+        if (o) al->gen = o->wgen; /* written again since it was queued (the pass split to make the copy closed it): the copy is current now */
+        if (al->kind == AK_MS_DEPTH) alias_copy_ms(cb, al);
+        else alias_copy_blit(cb, al);
+    }
+}
+/* The alias texture seen through the requested format / type / swizzle (a view of the copy when they differ from how it was allocated). */
+static id<MTLTexture> alias_view(GfxAlias *al, MTLPixelFormat pf, MTLTextureType type, MTLTextureSwizzleChannels sw, uint64_t key) {
+    int identity = sw.red == MTLTextureSwizzleRed && sw.green == MTLTextureSwizzleGreen && sw.blue == MTLTextureSwizzleBlue && sw.alpha == MTLTextureSwizzleAlpha;
+    if (identity && pf == al->tex.pixelFormat && type == al->tex.textureType) return al->tex;
+    NSNumber *k = @(key);
+    id<MTLTexture> v = al->views[k];
+    if (v) return v;
+    NSUInteger slices = al->tex.textureType == MTLTextureTypeCube ? 6 : al->tex.textureType == MTLTextureTypeCubeArray ? al->tex.arrayLength * 6 : al->tex.arrayLength;
+    v = [al->tex newTextureViewWithPixelFormat:pf textureType:type levels:NSMakeRange(0, al->tex.mipmapLevelCount) slices:NSMakeRange(0, MAX(1, slices)) swizzle:sw];
+    if (!v) v = al->tex;
+    al->views[k] = v;
+    return v;
+}
+
 id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, int has_view, int stype, int shadow, int ds_mode) {
     (void)shadow;
     MTLTextureType want = shader_type(stype, 0, t->tex.textureType);
@@ -523,26 +858,30 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
             s0 = v->min_layer;
             ns = v->nlayers;
         }
-        if (v->set_format) {
-            uint32_t m = 0, bcpf;
-            int bpp;
-            if (napple_fmt_to_mtl(v->format, &m, NULL) && m) pf = (MTLPixelFormat)m;
-            if (!g_mtl.bc_ok && napple_bc_unpacked((uint32_t)v->format, &bcpf, &bpp))
-                pf = (MTLPixelFormat)bcpf; /* BC textures are stored decoded on GPUs without BC (same mapping as mtl_tex_format_info) */
-        }
     }
+    /* the view's format: a Metal format view, the depth texture itself (R32F of Depth32F reads the same values), a copy (VF_ALIAS) or, when nothing fits, the
+     * texture's own format */
+    MTLPixelFormat vpf = view_pf(v, has_view);
+    int fc = view_fmt_class(&t->key, t->pf, vpf, t->samples);
+    if (fc == VF_VIEW || fc == VF_ALIAS) pf = vpf;
+    else if (fc == VF_NONE)
+        LOG_ONCE(NAPPLE_LOG_INFO, "texture view format %#x (Metal %lu) of a format %#x texture (Metal %lu) is not expressible: sampled in the texture's format",
+                 v->format, (unsigned long)vpf, t->key.d.format, (unsigned long)t->pf);
+    int dst_cls = 0;
+    if (fc == VF_ALIAS) pf_bytes(vpf, &dst_cls);
+    int samples_depth = fc == VF_ALIAS ? dst_cls == 1 : t->is_depth;
     /* a shader that samples a single 2D image of an array / cube texture (the game bound the whole texture, no layer range): its first layer */
     if ((want == MTLTextureType2D || want == MTLTextureType1D) && ns > 1) ns = 1;
     if (l0 + nl > t->tex.mipmapLevelCount) { nl = l0 < t->tex.mipmapLevelCount ? t->tex.mipmapLevelCount - l0 : 1; }
     /* swizzle: view swizzle composed with the format component map and the texture-level swizzle */
     uint32_t m = 0;
     uint8_t fswz[4];
-    napple_fmt_to_mtl(t->key.d.format, &m, fswz);
+    napple_fmt_to_mtl(fc == VF_VIEW || fc == VF_ALIAS ? v->format : t->key.d.format, &m, fswz); /* the component map of the format the texels are read as */
     uint8_t user[4] = {tswz[0], tswz[1], tswz[2], tswz[3]};
     if (has_view && v->set_swizzle) memcpy(user, v->swz, 4);
     uint8_t out[4];
     for (int i = 0; i < 4; i++) out[i] = user[i] < 2 ? user[i] : fswz[user[i] - 2];
-    if (t->is_depth) {
+    if (samples_depth) {
         out[0] = 2;
         out[1] = 3;
         out[2] = 4;
@@ -552,6 +891,45 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
      * Depth32Float_Stencil8 texture; a Stencil8 texture is its own stencil view). The depth plane is what the combined format already samples as. */
     int stencil_view = t->has_stencil && (has_view && v->set_ds ? v->ds_mode : ds_mode) == 1;
     if (stencil_view) pf = t->pf == MTLPixelFormatStencil8 ? MTLPixelFormatStencil8 : MTLPixelFormatX32_Stencil8;
+    /* copy-backed views: a format the storage cannot be viewed as (same bytes per texel, another class), or 2D slices of a 3D texture / a 3D view of a 2D array */
+    {
+        MTLTextureType have = t->tex.textureType;
+        int akind = 0;
+        MTLTextureType atype = want;
+        MTLPixelFormat apf = pf;
+        uint32_t anl = nl ? nl : 1, ans = ns ? ns : 1;
+        if (fc == VF_ALIAS && !stencil_view) {
+            akind = t->samples > 1 ? AK_MS_DEPTH : AK_BYTES;
+            MTLPixelFormat same = t->tex.pixelFormat;
+            if (akind == AK_MS_DEPTH) atype = ans > 1 || have == MTLTextureType2DMultisampleArray ? MTLTextureType2DMultisampleArray : MTLTextureType2DMultisample;
+            else if (!view_valid(t->tex, &same, want, l0, anl, s0, ans) && have != MTLTextureType3D)
+                atype = ans == 1 ? MTLTextureType2D : MTLTextureType2DArray;
+            if (akind == AK_MS_DEPTH && (want != MTLTextureType2DMultisample && want != MTLTextureType2DMultisampleArray)) akind = 0; /* not sampled as multisampled */
+        } else if (t->samples == 1 && !stencil_view && ((have == MTLTextureType3D && (want == MTLTextureType2D || want == MTLTextureType2DArray)) ||
+                                                        (have == MTLTextureType2DArray && want == MTLTextureType3D))) {
+            akind = AK_TYPE;
+            apf = t->tex.pixelFormat;
+            if (have == MTLTextureType3D) {
+                uint32_t dep = (uint32_t)MAX(1, t->tex.depth >> l0);
+                if (s0 >= dep) s0 = dep - 1;
+                if (s0 + ans > dep) ans = dep - s0;
+                if (want == MTLTextureType2D) ans = 1;
+            }
+        }
+        if (akind) {
+            uint64_t akey = (uint64_t)apf | (uint64_t)atype << 12 | (uint64_t)l0 << 16 | (uint64_t)anl << 20 | (uint64_t)s0 << 24 | (uint64_t)ans << 36 |
+                            (uint64_t)akind << 60;
+            GfxAlias *al = alias_get(t, akey, akind, apf, atype, l0, anl, s0, ans);
+            if (al) {
+                MTLTextureSwizzleChannels asw =
+                    MTLTextureSwizzleChannelsMake((MTLTextureSwizzle)out[0], (MTLTextureSwizzle)out[1], (MTLTextureSwizzle)out[2], (MTLTextureSwizzle)out[3]);
+                uint64_t vkey = (uint64_t)pf | (uint64_t)atype << 12 | (uint64_t)(out[0] & 7) << 48 | (uint64_t)(out[1] & 7) << 51 | (uint64_t)(out[2] & 7) << 54 |
+                                (uint64_t)(out[3] & 7) << 57;
+                return alias_view(al, pf, atype, asw, vkey);
+            }
+        }
+        if (fc == VF_ALIAS) pf = t->pf; /* no copy: the texture's own format */
+    }
     int identity = out[0] == 2 && out[1] == 3 && out[2] == 4 && out[3] == 5;
     int full = l0 == 0 && nl == t->tex.mipmapLevelCount && s0 == 0;
     if (identity && pf == t->pf && want == t->tex.textureType && full && (ns == (t->tex.arrayLength ? t->tex.arrayLength : 1) || want == MTLTextureTypeCube))

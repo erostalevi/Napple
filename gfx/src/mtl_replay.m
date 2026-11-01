@@ -221,8 +221,17 @@ static void state_reset(void) {
  * --------------------------------------------------------------------------------------------------------------- */
 static void dbg_dump_pass(void);
 static void vis_close(void);
+/* Attachments of the open render pass: written when it closes (copy-backed views of them refresh, mtl_tex_written). */
+static __strong GfxTex *g_pass_att[9];
+static void pass_att_written(void) {
+    for (int i = 0; i < 9; i++) {
+        mtl_tex_written(g_pass_att[i]);
+        g_pass_att[i] = nil;
+    }
+}
 static void end_encoders(void) {
     if (g_re) {
+        pass_att_written();
         vis_close();
         g_pass_vis = 0;
         [g_re endEncoding];
@@ -445,6 +454,7 @@ static int pass_begin(void) {
     if (P.open) return 1;
     if (!S.rt_valid) return 0;
     end_encoders();
+    if (mtl_tex_alias_pending()) mtl_tex_alias_flush(g_cb); /* copy-backed views queued since the last pass */
     pass_info_from_rt();
     if (!P.w) return 0;
     if (getenv("NAPPLE_SCALE_DIAG")) { /* every distinct pass whose attachments do not all match guest size x scale (render target scaling bugs) */
@@ -566,6 +576,8 @@ static int pass_begin(void) {
     }
     g_re = [g_cb renderCommandEncoderWithDescriptor:rp];
     if (!g_re) return 0;
+    for (uint32_t i = 0; i < S.rt.n && i < 8; i++) g_pass_att[i] = rp.colorAttachments[i].texture ? mtl_tex_get(&S.rt.color[i].s, 1) : nil;
+    g_pass_att[8] = S.rt.depth.s.valid ? mtl_tex_get(&S.rt.depth.s, 1) : nil;
     g_pass_vis = g_occl && g_vis;
     g_enc_serial++;
     P.open = 1;
@@ -760,6 +772,7 @@ static void dbg_dump_att(const char *dir, uint32_t a, int npass) {
 }
 static void pass_end(void) {
     if (g_re) {
+        pass_att_written();
         vis_close();
         g_pass_vis = 0;
         [g_re endEncoding];
@@ -1111,8 +1124,8 @@ static void ds_slot_masks(int stage, uint32_t *depth, uint32_t *stencil) {
         int dep, st;
         mtl_tex_format_info(&e->s, &pf, &dep, &st);
         int stencil_view = st && (e->view.set_ds ? e->view.ds_mode : e->s.ds_mode) == 1;
-        if (pf == MTLPixelFormatStencil8 || stencil_view) *stencil |= 1u << slot;
-        else if (dep) *depth |= 1u << slot;
+        if (pf == MTLPixelFormatStencil8 || stencil_view || mtl_tex_samples_as_uint(&e->s, &e->view, 1)) *stencil |= 1u << slot; /* uint copies read like stencil views */
+        else if (mtl_tex_samples_as_depth(&e->s, &e->view, 1)) *depth |= 1u << slot; /* a depth texture read through a copy in a colour format is not (mtl_tex_view) */
     }
 }
 
@@ -1536,7 +1549,10 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
             if (gt) {
                 mtl_tex_prepare_sample(gt);
                 tex = mtl_tex_image_view(gt, im->kind, im->type, im->atomic);
-                if (tex && (im->access & IMGACC_WRITE)) gt->gpu_owned = 1; /* the shader writes it: the Metal texture is the data from now on */
+                if (tex && (im->access & IMGACC_WRITE)) {
+                    gt->gpu_owned = 1; /* the shader writes it: the Metal texture is the data from now on */
+                    mtl_tex_written(gt);
+                }
             }
         }
         if (!tex) {
@@ -1681,6 +1697,10 @@ static void do_draw_texture(const p_draw_tex *dt) {
     if (!gt) return;
     mtl_tex_prepare_sample(gt);
     id<MTLTexture> tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, TEXTYPE_2D, 0, e->s.ds_mode);
+    if (mtl_tex_alias_pending()) { /* copy-backed view: refreshed between two halves of the pass */
+        pass_end();
+        if (!pass_begin()) return;
+    }
     id<MTLSamplerState> smp = (sp && tsc < (uint32_t)sp->n && sp->samp_used[tsc]) ? mtl_sampler_get(&sp->samp[tsc]) : nil;
     if (!smp) {
         static samp_par def;
@@ -1968,6 +1988,19 @@ static int prepare_draw(uint32_t prim) {
     }
     bind_stage(ST_VS, p->vs, g_re, 0, NULL);
     if (p->fs) bind_stage(ST_FS, p->fs, g_re, 0, NULL);
+    if (mtl_tex_alias_pending()) {
+        /* A copy-backed texture view (mtl_tex_view) is stale: the copy needs an encoder of its own. Close the pass (the clears it folded in are stored), let
+         * pass_begin encode the copies and reopen it loading the attachments, then set the draw's state again. */
+        pass_end();
+        if (!pass_begin()) return 0;
+        vis_draw();
+        [g_re setRenderPipelineState:p->ps];
+        [g_re setDepthStencilState:depth_stencil_state()];
+        apply_raster_state();
+        bind_vertex_streams();
+        bind_stage(ST_VS, p->vs, g_re, 0, NULL);
+        if (p->fs) bind_stage(ST_FS, p->fs, g_re, 0, NULL);
+    }
     P.draws++;
     atomic_fetch_add(&g_gfx.draws, 1);
     return 1;
@@ -2217,6 +2250,7 @@ static id<MTLComputeCommandEncoder> compute_encoder(void) {
     if (!g_ce) {
         flush_clears();
         end_encoders();
+        if (mtl_tex_alias_pending()) mtl_tex_alias_flush(g_cb);
         g_ce = [g_cb computeCommandEncoder];
         g_enc_serial++;
     }
@@ -2297,6 +2331,12 @@ static void do_dispatch(uint32_t x, uint32_t y, uint32_t z, uint64_t indirect) {
     id<MTLComputeCommandEncoder> ce = compute_encoder();
     [ce setComputePipelineState:ps];
     bind_stage(ST_CS, sh, ce, 1, cnt);
+    if (mtl_tex_alias_pending()) { /* a copy-backed view must be refreshed before the dispatch reads it: close the encoder, copy, bind again */
+        end_encoders();
+        ce = compute_encoder();
+        [ce setComputePipelineState:ps];
+        bind_stage(ST_CS, sh, ce, 1, cnt);
+    }
     MTLSize local = MTLSizeMake(sh->local[0] ? sh->local[0] : 1, sh->local[1] ? sh->local[1] : 1, sh->local[2] ? sh->local[2] : 1);
     [ce dispatchThreadgroups:MTLSizeMake(cnt[0], cnt[1], cnt[2]) threadsPerThreadgroup:local];
     atomic_fetch_add(&g_gfx.dispatches, 1);
@@ -2412,6 +2452,7 @@ static void copy_d24_to_tex(GfxTex *t, const p_copy_xfer *c, const uint8_t *src,
 static void do_copy_xfer(const p_copy_xfer *c, int to_tex) {
     GfxTex *t = mtl_tex_get(&c->tex.s, to_tex);
     if (!t) return;
+    if (to_tex) mtl_tex_written(t);
     int bw, bh;
     int bpb = napple_fmt_bpb(t->key.d.format, &bw, &bh);
     if (!bpb || t->expand_rgb) {
@@ -2596,6 +2637,7 @@ static void copy_t2t_draw(GfxTex *s, GfxTex *d, uint32_t slv, uint32_t dlv, uint
 static void do_copy_t2t(const p_copy_t2t *c) {
     GfxTex *s = mtl_tex_get(&c->src.s, 0), *d = mtl_tex_get(&c->dst.s, 1);
     if (!s || !d) return;
+    mtl_tex_written(d);
     if (getenv("NAPPLE_T2TLOG")) {
         static int n;
         if (n++ < 400) fprintf(stderr, "[t2t] %ux%u type %lu fmt %lu (own %d) -> %ux%u type %lu fmt %lu (own %d) dview layers %d+%d dsl %d\n", s->w, s->h, (unsigned long)s->tex.textureType, (unsigned long)s->pf, s->gpu_owned, d->w, d->h,
@@ -2789,6 +2831,7 @@ static void resolve_generic(GfxTex *s, GfxTex *d, uint32_t ssl, uint32_t dlv, ui
 static void do_downsample(const p_copy_t2t *c) {
     GfxTex *s = mtl_tex_get(&c->src.s, 1), *d = mtl_tex_get(&c->dst.s, 1);
     if (!s || !d) return;
+    mtl_tex_written(d);
     if (s->tex.sampleCount < 2) {
         LOG_ONCE(NAPPLE_LOG_WARN, "Downsample from a single-sampled texture: copied instead");
         p_copy_t2t cc = *c;
@@ -2848,6 +2891,7 @@ static void do_downsample(const p_copy_t2t *c) {
 static void do_clear_tex(const p_copy_xfer *c) {
     GfxTex *t = mtl_tex_get(&c->tex.s, 1);
     if (!t) return;
+    mtl_tex_written(t);
     end_encoders();
     uint32_t kind = c->flags & 0xff, mask = (c->flags >> 8) & 0xf;
     uint32_t lv = c->tex.has_view && c->tex.view.set_levels ? c->tex.view.base_level : 0;
