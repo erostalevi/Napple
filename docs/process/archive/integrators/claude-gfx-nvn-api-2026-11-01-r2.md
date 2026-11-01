@@ -6,7 +6,7 @@ head: cbe70a6 (code at 30e67b4; the integrator-file commit follows)
 env: mac
 date: 2026-11-01
 areas: [gfx, runtime/a32 (generated table only), tools]
-status: ready
+status: integrated
 ---
 
 # claude/gfx-nvn-api-2026-11-01-r2: the 14 missing NVN entry points, refused MSAA branches, ACNH program hash
@@ -67,3 +67,11 @@ Logs: `/Users/neto/NappleWork/logs/gfxnvn-r2-{acnh,mk8d,smo,las}/` (run.log, sho
 ## Needs from other areas
 - Translator (gfx-shader-views / shader owner): a ShaderKey bit for the provoking vertex mode (flat inputs taken from the first vs last vertex) if a title ever sets it.
 - obj.h owner: consider shrinking guest-visible host layouts (prog_t and others) to the smallest SDK's reserved sizes; prog_t now only uses up to +0x88 by convention (static assert in api_program.c).
+
+## Integration result
+- Date: 2026-11-01. Merged into main as f0a7b07 (integ/gfx-nvn-api fe2256f, branch head 946e770), after ipc-depth-hid, ipc-depth-sys, sweep-media-r2. Outcome: **Clean** (no conflicts).
+- `integrate:` fixes: none. Native ports: none (Metal throughout; the a32 table generator stays Python).
+- `python3 tools/gen_a32_nvn.py` reproduces the committed `a32_nvn_sigs.inc` byte for byte (537 functions).
+- Tests: `make -C gfx test` ALL TESTS PASSED; `t_nvn_ext`, `t_nvn_ext_prog` ok; `t_msaa_copy` ok also under `MTL_DEBUG_LAYER=1`; `NVN: 537 of 537 entry points implemented`. `make -C runtime test` + `test-services` rc 0, all suites `"failed":0`.
+- Four-title boots (runtime binary, 60 s headless, private copied `--save-root`, under `.run.lock`): SMO, MK8D, LAS, ACNH rc 0, `notify-running`, `missing_ipc []`, no crashes, skipped draws 0, unimplemented calls 0. `NVN lookup of unknown name` / `no host implementation` / `program hash` lines: ACNH 27 -> 0, MK8D 4 -> 0 (baseline = the same boots on main before this merge). Only remaining warning: ACNH's pre-existing "texture slot 0 ... type 5 but type 2".
+- Corrections to this file's instructions: none.
