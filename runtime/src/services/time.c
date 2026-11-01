@@ -12,6 +12,7 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
+#include "sys_default.h"
 
 static const uint8_t clock_source[16] = {0x4e, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x43, 0x6c, 1, 2, 3, 4, 5, 6, 7, 8};
 
@@ -80,6 +81,7 @@ static const IpcCmd system_clock_cmds[] = {
     {1, "SetCurrentTime", sc_noop, IPC_IMPL},
     {2, "GetSystemClockContext", sc_get_context, IPC_IMPL},
     {3, "SetSystemClockContext", sc_noop, IPC_IMPL},
+    {4, "GetOperationEventReadableHandle", sysd_event, IPC_STUB},
 };
 static void steady_now(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -283,6 +285,8 @@ static const IpcCmd timezone_cmds[] = {
     {101, "ToCalendarTimeWithMyRule", tz_to_calendar_my_rule, IPC_IMPL},
     {201, "ToPosixTime", tz_to_posix, IPC_IMPL},
     {202, "ToPosixTimeWithMyRule", tz_to_posix_my_rule, IPC_IMPL},
+    {1, "SetDeviceLocationName", sysd_ok, IPC_STUB},
+    {6, "GetDeviceLocationNameAndUpdatedTime", sysd_z60, IPC_STUB},
 };
 
 /* ClockSnapshot (400/401) and the calculations on snapshots (500/501). The "user" and "network" clocks are the same host clock: the host's time
@@ -425,6 +429,7 @@ static const IpcCmd static_cmds[] = {
     {401, "GetClockSnapshotFromSystemClockContext", st_get_snapshot_ctx, IPC_IMPL},
     {500, "CalculateStandardUserSystemClockDifferenceByUser", st_user_clock_difference, IPC_IMPL},
     {501, "CalculateSpanBetween", st_span_between, IPC_IMPL},
+    {201, "GetStandardUserSystemClockAutomaticCorrectionUpdatedTime", sysd_z24, IPC_STUB},
 };
 static IpcObject *time_open(void) { return IPC_OBJECT("time:u", static_cmds, NULL, NULL); }
 void service_register_time(void) {

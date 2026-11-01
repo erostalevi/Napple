@@ -3,6 +3,7 @@
  * guesses from memory of the public documentation (unverified); an id not listed fails loudly through the generic unknown-command policy. */
 #include "svc_common.h"
 #include "hz_result.h"
+#include "sys_default.h"
 
 static void offline(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -58,6 +59,12 @@ static const IpcCmd olsc_cmds[] = {
     {14, "GetSyncAreaUsage", zero_ok, IPC_IMPL},
     {15, "ResetSyncArea", zero_ok, IPC_IMPL},
     {16, "GetSyncAreaStatus", zero_ok, IPC_IMPL},
+    {18, "GetSaveDataBackupInfoCache", sysd_err_generic, IPC_STUB},
+    {19, "UpdateSaveDataBackupInfoCacheAsync", sysd_err_generic, IPC_STUB},
+    {22, "DeleteSaveDataBackupAsync", sysd_err_generic, IPC_STUB},
+    {25, "ListDownloadableSaveDataBackupInfoAsync", sysd_err_generic, IPC_STUB},
+    {26, "DownloadSaveDataBackupAsync", sysd_err_generic, IPC_STUB},
+    {27, "UploadSaveDataBackupAsync", sysd_err_generic, IPC_STUB},
 };
 static IpcObject *olsc_open(void) { return IPC_OBJECT("olsc:u", olsc_cmds, NULL, NULL); }
 void service_register_olsc(void) { ipc_register_service("olsc:u", olsc_open); }

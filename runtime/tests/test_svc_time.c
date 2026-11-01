@@ -89,6 +89,14 @@ int main(void) {
     int64_t st0 = steady_seconds();   /* the real guest tick counts from host boot, not from 0 as in the Linux mock */
     memset(&c, 0, sizeof c); c.in = ctxin; c.in_size = sizeof ctxin; svc_set_out_buf(&c, snapA, sizeof snapA); svc_call_c(st, 401, &c);
     time_snapshot_read(snapA, &sn); CHECK(c.result == 0 && sn.type == 1 && sn.user_time >= offs + st0 && sn.user_time <= offs + steady_seconds() + 1, "snapshot from a clock context: offset + steady time");
+    { /* ipc-depth-sys: rows the time tables lacked */
+        IpcCall d; svc_call(st, 201, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 24, "GetStandardUserSystemClockAutomaticCorrectionUpdatedTime: a zeroed SteadyClockTimePoint");
+        svc_call(st, 0, NULL, 0, &d); IpcObject *uc = d.out_objects[0];
+        svc_call(uc, 4, NULL, 0, &d); CHECK(d.result == 0 && d.nout_copy + d.nout_move >= 1, "ISystemClock::GetOperationEventReadableHandle: an event that never fires");
+        svc_call(st, 3, NULL, 0, &d); IpcObject *tz = d.out_objects[0];
+        svc_call(tz, 6, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 60, "ITimeZoneService::GetDeviceLocationNameAndUpdatedTime: name + steady time point");
+        CHECK(svc_find(tz, 6)->status == IPC_STUB, "...marked as a documented default");
+    }
     printf("{\"test\":\"svc_time\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

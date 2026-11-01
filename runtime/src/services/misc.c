@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include "sys_default.h"
 
 static void noop(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -178,6 +179,13 @@ static const IpcCmd aoc_cmds[] = {
     {13, "NotifyMountAddOnContentWithProcessId", noop, IPC_IMPL},
     {14, "NotifyUnmountAddOnContentWithProcessId", noop, IPC_IMPL},
     {50, "CheckAddOnContentMountStatus", noop, IPC_IMPL},
+    {100, "CreateEcPurchasedEventManager", sysd_err_generic, IPC_STUB},
+    {101, "CreatePermanentEcPurchasedEventManager", sysd_err_generic, IPC_STUB},
+    {110, "CreateContentsServiceManager", sysd_err_generic, IPC_STUB},
+    {200, "SetRequiredAddOnContentsOnContentsAvailabilityTransition", sysd_ok, IPC_STUB},
+    {300, "SetupHostAddOnContent", sysd_ok, IPC_STUB},
+    {301, "GetRegisteredAddOnContentPath", sysd_err_generic, IPC_STUB},
+    {302, "UpdateCachedList", sysd_ok, IPC_STUB},
 };
 static IpcObject *aoc_open(void) { return IPC_OBJECT("aoc:u", aoc_cmds, NULL, NULL); }
 
@@ -185,6 +193,7 @@ static IpcObject *aoc_open(void) { return IPC_OBJECT("aoc:u", aoc_cmds, NULL, NU
  * returns no unlock requirement, the safety level is 0 (none). Command ids are from the author's memory of the public documentation [unverified];
  * a command that is not in the table still stops the runtime with the usual unknown-command log, which is the signal to add it. */
 static const IpcCmd pctl_service_cmds[] = {
+    /* rows 1006 and up are the documented answers of a console with parental controls off (no restriction, nothing locked, no play timer): implemented, not stubs */
     {1, "Initialize", noop, IPC_IMPL},
     {1001, "CheckFreeCommunicationPermission", noop, IPC_IMPL},
     {1002, "ConfirmLaunchApplicationPermission", noop, IPC_IMPL},
@@ -198,6 +207,35 @@ static const IpcCmd pctl_service_cmds[] = {
     {1061, "ConfirmStereoVisionPermission", noop, IPC_IMPL},
     {1062, "EndFreeCommunication", noop, IPC_IMPL},
     {1451, "IsStereoVisionPermitted", ret_u8_1, IPC_IMPL},
+    {1006, "IsRestrictionTemporaryUnlocked", sysd_z1, IPC_IMPL},
+    {1007, "RevertRestrictionTemporaryUnlocked", sysd_ok, IPC_IMPL},
+    {1008, "EnterRestrictedSystemSettings", sysd_ok, IPC_IMPL},
+    {1009, "LeaveRestrictedSystemSettings", sysd_ok, IPC_IMPL},
+    {1010, "IsRestrictedSystemSettingsEntered", sysd_z1, IPC_IMPL},
+    {1011, "RevertRestrictedSystemSettingsEntered", sysd_ok, IPC_IMPL},
+    {1012, "GetRestrictedFeatures", sysd_z4, IPC_IMPL},
+    {1013, "ConfirmStereoVisionPermission", sysd_ok, IPC_IMPL},
+    {1014, "ConfirmPlayableApplicationVideoOld", sysd_ok, IPC_IMPL},
+    {1015, "ConfirmPlayableApplicationVideo", sysd_ok, IPC_IMPL},
+    {1016, "ConfirmShowNewsPermission", sysd_ok, IPC_IMPL},
+    {1017, "EndFreeCommunication", sysd_ok, IPC_IMPL},
+    {1033, "SetSafetyLevel", sysd_ok, IPC_IMPL},
+    {1034, "GetSafetyLevelSettings", sysd_z12, IPC_IMPL},
+    {1063, "SetStereoVisionRestriction", sysd_ok, IPC_IMPL},
+    {1064, "ResetConfirmedStereoVisionPermission", sysd_ok, IPC_IMPL},
+    {1452, "StopPlayTimer", sysd_ok, IPC_IMPL},
+    {1453, "IsPlayTimerEnabled", sysd_z1, IPC_IMPL},
+    {1454, "GetPlayTimerRemainingTime", sysd_z8, IPC_IMPL},
+    {1455, "IsRestrictedByPlayTimer", sysd_z1, IPC_IMPL},
+    {1457, "GetPlayTimerEventToRequestSuspension", sysd_event, IPC_IMPL},
+    {1458, "IsPlayTimerAlarmDisabled", sysd_z1, IPC_IMPL},
+    {1471, "NotifyWrongPinCodeInputManyTimes", sysd_ok, IPC_IMPL},
+    {1472, "CancelNetworkRequest", sysd_ok, IPC_IMPL},
+    {1473, "GetUnlinkedEvent", sysd_event, IPC_IMPL},
+    {1474, "ClearUnlinkedEvent", sysd_ok, IPC_IMPL},
+    {1601, "DisableAllFeatures", sysd_ok, IPC_IMPL},
+    {1602, "PostEnableAllFeatures", sysd_ok, IPC_IMPL},
+    {1603, "IsAllFeaturesDisabled", sysd_z1, IPC_IMPL},
 };
 static void pctl_create(IpcObject *s, IpcCall *c) {
     (void)s;

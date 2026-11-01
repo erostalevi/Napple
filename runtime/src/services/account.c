@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sys_default.h"
 
 const uint8_t g_user_id[16] = {0x4e, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x55, 0x73, 0x65, 0x72, 0, 0, 0, 0, 0, 1};
 
@@ -133,7 +134,13 @@ static void manager_na_cache(IpcObject *s, IpcCall *c) {
 }
 static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IPC_IMPL},
                                       {1, "GetAccountId", manager_account_id, IPC_IMPL},
-                                      {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_IMPL}};
+                                      {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_IMPL},
+    {2, "EnsureIdTokenCacheAsync", sysd_err_generic, IPC_STUB},
+    {3, "LoadIdTokenCacheDeprecated", sysd_err_generic, IPC_STUB},
+    {4, "LoadIdTokenCache", sysd_err_generic, IPC_STUB},
+    {150, "CreateAuthorizationRequest", sysd_err_generic, IPC_STUB},
+    {160, "StoreOpenContext", sysd_ok, IPC_STUB},
+    {170, "LoadNetworkServiceLicenseKindAsync", sysd_err_generic, IPC_STUB}};
 
 static void acc_user_count(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -203,6 +210,15 @@ static const IpcCmd acc_cmds[] = {
     {141, "ListQualifiedUsers", acc_list_users, IPC_IMPL},
     {150, "IsUserAccountSwitchLocked", acc_bool_false, IPC_IMPL},
     {160, "InitializeApplicationInfoV2", acc_initialize, IPC_IMPL},
+    {6, "GetProfileDigest", sysd_z16, IPC_STUB},
+    {52, "TrySelectUserWithoutInteraction", sysd_err_generic, IPC_STUB},
+    {102, "AuthenticateApplicationAsync", sysd_err_generic, IPC_STUB},
+    {103, "CheckNetworkServiceAvailabilityAsync", sysd_err_generic, IPC_STUB},
+    {110, "StoreSaveDataThumbnail", sysd_ok, IPC_STUB},
+    {111, "ClearSaveDataThumbnail", sysd_ok, IPC_STUB},
+    {120, "CreateGuestLoginRequest", sysd_err_generic, IPC_STUB},
+    {130, "LoadOpenContext", sysd_err_generic, IPC_STUB},
+    {131, "ListOpenContextStoredUsers", sysd_err_generic, IPC_STUB},
 };
 static IpcObject *acc_open(void) { return IPC_OBJECT("acc:u0", acc_cmds, calloc(1, sizeof(AccSession)), acc_destroy); }
 void service_register_account(void) {
