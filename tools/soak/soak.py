@@ -148,7 +148,9 @@ def one_run(a, target, outdir, index, seconds, save_root, extra_env):
     cmd = [a.runtime, dd, "--seconds", str(seconds), "--save-root", save_root]
     if not a.headed:
         cmd.insert(2, "--headless")
-    if not a.no_lock:                       # every run is its own gamelock.py call (FIFO): nothing holds the lock between runs
+    if a.lockf:                             # a batch's run lock (lockf on a shared file) instead of gamelock.py, one run per lock hold
+        cmd = ["lockf", "-k", a.lockf] + cmd
+    elif not a.no_lock:                     # every run is its own gamelock.py call (FIFO): nothing holds the lock between runs
         cmd = [sys.executable, GAMELOCK, "--"] + cmd
     if a.dry_run:
         print("DRY:", " ".join(cmd))
@@ -179,7 +181,13 @@ def one_run(a, target, outdir, index, seconds, save_root, extra_env):
     rec = {"target": target, "index": index, "kind": kind, "rc": rc, "wall_s": round(wall, 1), "requested_s": seconds, "frames": frames,
            "detail": detail, "sig": signature(kind, text), "runtime": a.runtime, "headed": bool(a.headed), "time": int(t_end),
            "locked_wait_s": round((started or t_end) - t_wait - 0, 1)}
-    if kind == "ok":
+    # command buffer misuse seen by the gfx recorder: NAPPLE_GFX_CBTRACE=1 anomaly dumps and the recorder's own warnings (counted on every run)
+    rec["cb_anomalies"] = len(re.findall(r"^\[cbtrace\] \S", text, re.M))
+    rec["rec_warnings"] = len(re.findall(r"\[napple-gfx\] warn: .*Recording", text))
+    if kind == "ok" and (rec["cb_anomalies"] or rec["rec_warnings"]):   # an ok run with recorder anomalies keeps its log too
+        rec["log"] = os.path.basename(log)
+        open(log, "w").write(trim(text))
+    elif kind == "ok":
         os.remove(log)
     else:
         rec["key_lines"] = key_lines(kind, text)
@@ -199,6 +207,7 @@ def summarise(records):
         sigs = collections.Counter((r["kind"], r["sig"]) for r in rs if r["kind"] != "ok")
         summ[t] = {"runs": len(rs), "ok": c["ok"], "hang": c["hang"], "break": c["break"], "segfault": c["segfault"], "exit": c["exit"],
                    "fail_rate": round(1 - c["ok"] / len(rs), 3) if rs else 0, "wall_s_total": round(sum(r["wall_s"] for r in rs)),
+                   "runs_with_cb_anomalies": sum(1 for r in rs if r.get("cb_anomalies") or r.get("rec_warnings")),
                    "signatures": [{"kind": k, "sig": s, "count": n} for (k, s), n in sigs.most_common()]}
     return summ
 
@@ -209,6 +218,9 @@ def write_summary(outdir, records):
     rows = ["| target | runs | ok | hang | break | segfault | exit | fail rate |", "|---|---|---|---|---|---|---|---|"]
     for t, s in summ.items():
         rows.append("| %s | %d | %d | %d | %d | %d | %d | %.0f%% |" % (t, s["runs"], s["ok"], s["hang"], s["break"], s["segfault"], s["exit"], s["fail_rate"] * 100))
+    rows.append("")
+    for t, s in summ.items():
+        rows.append("%s: %d run(s) with command buffer anomalies (NAPPLE_GFX_CBTRACE dumps or recorder warnings)" % (t, s.get("runs_with_cb_anomalies", 0)))
     sig = ["", "Signatures:"]
     for t, s in summ.items():
         for g in s["signatures"]:
@@ -245,7 +257,7 @@ def run_series(a, target, n, seconds, what):
         recs.append(rec)
         with open(os.path.join(out, "runs.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
-        print("[%s %d/%d] %s frames=%d wall=%.0fs %s" % (target, i, n, rec["kind"], rec["frames"], rec["wall_s"], rec["sig"]), flush=True)
+        print("[%s %d/%d] %s frames=%d wall=%.0fs cb=%d %s" % (target, i, n, rec["kind"], rec["frames"], rec["wall_s"], rec.get("cb_anomalies", 0) + rec.get("rec_warnings", 0), rec["sig"]), flush=True)
         if a.stop_after and sum(r["kind"] != "ok" for r in recs) >= a.stop_after:
             break
     if recs:
@@ -266,6 +278,7 @@ def main():
     ap.add_argument("--headed", action="store_true", help="open the game window instead of running headless")
     ap.add_argument("--runtime", default=DEFAULT_RUNTIME)
     ap.add_argument("--out", default=DEFAULT_OUT)
+    ap.add_argument("--lockf", default=os.environ.get("NAPPLE_SOAK_LOCKF", ""), help="run each start under `lockf -k FILE` instead of gamelock.py (e.g. /Users/neto/NappleWork/.run.lock)")
     ap.add_argument("--grace", type=int, default=45, help="watchdog: seconds past the requested time before a run counts as hung and is killed")
     ap.add_argument("--trace-ipc", default="1", help="NAPPLE_TRACE_IPC value (1 = error results only, all = every command; huge logs)")
     ap.add_argument("--no-lock", action="store_true", help="do not take the game lock (only when no other session uses the Mac)")
@@ -280,7 +293,7 @@ def main():
             try:
                 d, _ = data_dir(t)
                 print("%-12s %s %s" % (t, d, "ok" if os.path.isdir(d) else "MISSING"))
-            except Exception as e:
+            except (Exception, SystemExit) as e:                    # data_dir raises SystemExit for a missing version
                 print("%-12s unavailable (%s)" % (t, e))
         return
     if a.cmd == "summary":

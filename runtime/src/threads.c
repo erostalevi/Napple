@@ -239,17 +239,25 @@ static void core_checkpoint(void) {
 
 /* ---- timer preemption -------------------------------------------------------------------------------------------------
  * Horizon switches threads on a timer as well as at svc: a thread of better priority that waits for a core takes it from a running one, and
- * equal-priority threads share a core in 10 ms slices. A guest thread that spins in user code (a flag poll, a try-lock loop) never reaches
+ * every 10 ms the kernel rotates the run queue of one priority per core (KScheduler::RotateScheduledQueue with the preemption priorities
+ * {59, 59, 59, 63}): only threads of priority 59 share an application core in slices. Threads of any other priority keep their core against
+ * an equal-priority thread until they block or yield. Slicing every priority (the first version of this code) made ACNH's prio-44 job workers
+ * lose their core for 10 ms inside their job windows, which hardware never does, and two threads then recorded one command buffer
+ * (docs/archive/changes/2026-11-01-claude-sched-applets-2026-11-01-r1.md). A guest thread that spins in user code (a flag poll, a try-lock loop) never reaches
  * an svc, so on its own the cooperative scheduler would keep the core for good and starve the waiter (SMO: a prio-47 thread spinning on core
  * 0 while the prio-44 main thread waited). The slice thread looks at every core a few ms apart; when a thread waits for a core that its owner
  * should give up, it sends the owner SIGPROF. The handler (on the thread's signal stack) switches only when the interrupted pc is guest code
  * (never inside the runtime, so no host lock is held) and the thread is not inside a preemption-disabled section (TLR disable_count: then
  * interrupt_flag is raised and SynchronizePreemptionState does the switch, as on the kernel). Threads inside an svc get the existing
- * svc-exit checkpoint instead of a signal. NAPPLE_SLICE_MS=<n> sets the slice (default 10), 0 turns timer preemption off. */
+ * svc-exit checkpoint instead of a signal. NAPPLE_SLICE_MS=<n> sets the slice (default 10), 0 turns timer preemption off (better-priority
+ * preemption included); NAPPLE_SLICE_ALL=1 slices equal-priority threads of every priority (the old behaviour, for comparisons). */
 #define SLICE_DEFAULT_MS 10
 #define SLICE_TICK_NS 2000000
+#define SLICE_PRIO 59 /* the preemption priority of the application cores 0..2 */
 static int64_t g_slice_ns = SLICE_DEFAULT_MS * 1000000ll;
-static int g_slice_started, g_preempt_any_pc;
+static int g_slice_started, g_preempt_any_pc, g_slice_all;
+/* Do equal-priority threads of priority `prio` rotate on an application core? */
+static int slice_rotates(int prio) { return g_slice_all || prio == SLICE_PRIO; }
 /* Host unit tests run "guest" code in plain C: every pc counts as preemptible there. */
 void threads_preempt_test_any_pc(int on) { g_preempt_any_pc = on; }
 static uint64_t sig_pc(void *uc) {
@@ -293,7 +301,7 @@ static int slice_scan(int64_t now, Thread **signals) {
         for (Thread *w = g_core_wait; w && !need; w = w->cnext) {
             if (!core_allowed(w, c)) continue;
             if (g_core_resv[c] && g_core_resv[c] != w) continue;
-            need = w->prio < o->prio || (w->prio == o->prio && now - (int64_t)o->core_since >= g_slice_ns);
+            need = w->prio < o->prio || (w->prio == o->prio && slice_rotates(o->prio) && now - (int64_t)o->core_since >= g_slice_ns);
         }
         if (!need) continue;
         if (__atomic_load_n(&o->svc_regs, __ATOMIC_ACQUIRE)) o->preempt = 1; /* inside an svc: its exit checkpoint does the switch */
@@ -331,6 +339,8 @@ void threads_preempt_start(void) {
     if (g_slice_started || !cores_enabled()) return;
     const char *e = getenv("NAPPLE_SLICE_MS");
     if (e && *e) g_slice_ns = (int64_t)atoi(e) * 1000000ll;
+    e = getenv("NAPPLE_SLICE_ALL");
+    g_slice_all = e && *e && *e != '0';
     if (g_slice_ns <= 0) return;
     g_slice_started = 1;
     struct sigaction sa;
@@ -520,7 +530,9 @@ uint32_t threads_register_main(void) {
     t->started = 1;
     t->prio = 44;
     t->core = g_npdm.valid ? g_npdm.main_core : 0;
-    t->mask = CORE_MASK_ALL;
+    /* Horizon starts the main thread with the affinity of its ideal core only (KThread::Initialize). Host unit tests adopt threads without an npdm
+     * and keep them free to run on any core. */
+    t->mask = g_npdm.valid && t->core >= 0 && t->core < NCORE ? 1ull << t->core : CORE_MASK_ALL;
     t->pt = pthread_self();
     t->cur_core = -1;
     if (g_npdm.valid) t->prio = g_npdm.main_priority;
@@ -845,6 +857,8 @@ static void svc_set_thread_priority(uint64_t *r) {
     }
     pthread_mutex_lock(&G);
     Thread *t = thread_of((uint32_t)r[0]);
+    if (t && getenv("NAPPLE_THREAD_LOG"))
+        LOG("threads", "SetThreadPriority id %#llx by thread %#llx: %d (was %d)", (unsigned long long)t->id, (unsigned long long)threads_current_id(), (int)r[1], t->prio);
     if (t) t->prio = (int)r[1];
     r[0] = t ? 0 : R_INVALID_HANDLE;
     pthread_mutex_unlock(&G);
@@ -879,6 +893,9 @@ static void svc_set_thread_core_mask(uint64_t *r) {
         else if (c != -1)
             res = R_INVALID_PROCESSOR_ID;
         if (!res) {
+            if (getenv("NAPPLE_THREAD_LOG"))
+                LOG("threads", "SetThreadCoreMask id %#llx by thread %#llx: ideal %d mask %#llx (was %d / %#llx)", (unsigned long long)t->id,
+                    (unsigned long long)threads_current_id(), c, (unsigned long long)m, t->core, (unsigned long long)t->mask);
             t->core = c;
             t->mask = m;
             if (t == self_or_null() && t->cur_core >= 0 && !core_allowed(t, t->cur_core)) {
