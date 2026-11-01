@@ -580,9 +580,10 @@ static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_si
     }
     {
         uint32_t pb = collect_performance(r, perf, perf_size, perf_target);
-        if (pb && !r->perf_logged) {
+        if (!r->perf_logged && (pb || perf_size || r->param.performance_frame_count > 0)) { /* once: the first update that shows the title uses performance metrics */
             r->perf_logged = 1;
-            napple_audio_log(&r->host, "performance buffer written: %u bytes in a %zu byte buffer (format %d)", pb, perf_size, perf_geom(r).v2 ? 2 : 1);
+            napple_audio_log(&r->host, "performance buffer: %u bytes written into the %zu byte buffer the title supplied (format %d, %d frames kept)", pb, perf_size,
+                             perf_geom(r).v2 ? 2 : 1, r->param.performance_frame_count);
         }
         memcpy(w, &pb, 4);
     } /* performance: bytes of history in the perf buffer */
