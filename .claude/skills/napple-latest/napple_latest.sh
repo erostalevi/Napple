@@ -9,7 +9,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/../../.." && pwd)"
-NP="$ROOT/Napple"
+NP="$ROOT/Napple"; [ -d "$NP/runtime" ] || NP="$ROOT"   # flat checkout: the git root is the Napple tree
 G() { git -C "$ROOT" "$@"; }
 export PATH="/opt/homebrew/opt/rustup/bin:$HOME/.cargo/bin:/opt/homebrew/bin:$PATH"
 
