@@ -20,6 +20,15 @@ int main(void) {
     audio_device_changed();
     CHECK(event_is_signaled(ev) && event_is_signaled(evi), "a device change signals every device event");
     svc_call(dev, 13, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 1.0f, "master volume setting");
+    { /* 13.0.0+: 13 with an output buffer is GetActiveAudioOutputDeviceName; 14-21 */
+        char nm[0x100] = {0}; memset(&c, 0, sizeof c); svc_set_out_buf(&c, nm, sizeof nm); svc_call_c(dev, 13, &c);
+        CHECK(c.out_size == 0 && nm[0] != 0, "13 with an out buffer writes the active output device name");
+        memset(nm, 0, sizeof nm); memset(&c, 0, sizeof c); svc_set_out_buf(&c, nm, sizeof nm); svc_call_c(dev, 14, &c);
+        CHECK(SVC_OUT(&c, int32_t, 0) == 1 && nm[0] != 0, "ListAudioOutputDeviceName");
+        svc_call(dev, 17, NULL, 0, &c); uint32_t evo = c.out_copy[0]; audio_device_changed(); CHECK(event_is_signaled(evo), "output device notification fires on a change");
+        uint8_t on = 1; svc_call(dev, 19, &on, 1, &c); svc_call(dev, 20, NULL, 0, &c); CHECK(c.out[0] == 1, "volume auto-tune flag round trip");
+        svc_call(dev, 21, NULL, 0, &c); CHECK(c.out_size == 1, "IsActiveOutputDeviceEstimatedLowLatency answers");
+    }
 
 #ifdef __linux__ /* guest buffers are host pointers here; macOS would need a mapped guest region */
     /* audout: open through the manager so the table is the real one */
@@ -45,6 +54,7 @@ int main(void) {
     svc_call(o, 11, NULL, 0, &c); CHECK(c.out[0] == 1, "FlushAudioOutBuffers reports a flush");
     svc_call(o, 11, NULL, 0, &c); CHECK(c.out[0] == 0, "second flush has nothing to do");
     svc_call(o, 10, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 580, "flush does not count as played");
+    float vol = 0.25f; svc_call(o, 12, &vol, 4, &c); svc_call(o, 13, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.25f, "audout volume round trip");
 
     /* audin: the first open installs the source named by NAPPLE_AUDIN_SOURCE and the buffers carry it */
     napple_audin_set_source(NULL, NULL);
@@ -73,6 +83,7 @@ int main(void) {
     Renderer plain = {0};
     IpcObject fake = {"IAudioRenderer", rend_cmds, sizeof rend_cmds / sizeof rend_cmds[0], &plain, NULL, 1};
     svc_call(&fake, 11, NULL, 0, &c); CHECK(c.result != 0, "ExecuteAudioRendererRendering on a threaded renderer is an error");
+    float drop = 0.5f; svc_call(&fake, 12, &drop, 4, &c); svc_call(&fake, 13, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.5f, "voice drop parameter round trip");
     printf("{\"test\":\"svc_audio\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

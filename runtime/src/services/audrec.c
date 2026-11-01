@@ -90,6 +90,16 @@ static void ar_end_time(IpcObject *s, IpcCall *c) {
     }
     IPC_OUT(c, end);
 }
+static void ar_flush(IpcObject *s, IpcCall *c) { /* 10 -> bool: the queued buffers complete now */
+    Rec *r = s->state;
+    uint8_t v = (uint8_t)audrec_flush(&r->q);
+    signal_if_ready(r);
+    IPC_OUT(c, v);
+}
+static void ar_attach_work_buffer(IpcObject *s, IpcCall *c) { /* 11 (9.0.0+): the host recorder keeps its state itself; the buffer is not needed */
+    (void)s;
+    (void)c;
+}
 static const IpcCmd recorder_cmds[] = {
     {0, "GetFinalOutputRecorderState", ar_state, IPC_IMPL},
     {1, "StartFinalOutputRecorder", ar_start, IPC_IMPL},
@@ -101,6 +111,8 @@ static const IpcCmd recorder_cmds[] = {
     {7, "GetFinalOutputRecorderBufferEndTime", ar_end_time, IPC_IMPL},
     {8, "AppendFinalOutputRecorderBufferAuto", ar_append, IPC_IMPL},
     {9, "GetReleasedFinalOutputRecorderBuffersAuto", ar_released, IPC_IMPL},
+    {10, "FlushFinalOutputRecorderBuffers", ar_flush, IPC_IMPL},
+    {11, "AttachWorkBuffer", ar_attach_work_buffer, IPC_IMPL},
 };
 static void ar_destroy(IpcObject *o) { free(o->state); }
 
