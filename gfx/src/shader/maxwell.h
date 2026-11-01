@@ -103,6 +103,10 @@ typedef struct {
     bool capture_void;   /* vertex with stage_out / xfb: emit `vertex void` (nothing returned to the rasterizer) so the capture pipeline can set rasterizationEnabled = NO */
     bool tess_soft;      /* tess eval: a plain vertex function over the replay's software tessellator output (`device const float4 *tess_uv [[buffer(TESS_UV_BUFFER_INDEX)]]`,
                           * vertex id -> (u, v, w, patch id as uint)) instead of a post-tessellation one: allows isolines, stage_out / transform feedback and capture_void */
+    uint32_t tex_uint_slots; /* binding slots (numbered as depth_slots) whose bound texture or view is an unsigned / signed integer colour format: declared
+                              * `texture2d<uint|int> tN_i` (2D or 2D array) and read through the IntTex wrapper, all four channels as raw integer bits (what the
+                              * hardware writes to the registers for integer formats). Other targets keep the float declaration. stencil_slots win. */
+    uint32_t tex_sint_slots;
 } ShaderKey;
 
 typedef struct {
@@ -110,6 +114,7 @@ typedef struct {
     uint8_t type;           /* TEXTYPE_* */
     bool shadow, is_array, is_image, bindless, depth;
     bool stencil; /* bound as a stencil view (ShaderKey.stencil_slots): the Metal texture must be a uint stencil view, not a float or depth texture */
+    uint8_t int_kind; /* IMGKIND_UINT / IMGKIND_INT: an integer colour texture (ShaderKey.tex_uint_slots / tex_sint_slots); IMGKIND_FLOAT otherwise */
     uint32_t bindless_cbuf, bindless_offset;
 } ShaderTexture;
 

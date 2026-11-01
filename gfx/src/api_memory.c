@@ -190,6 +190,7 @@ static void vmap_cut(pool_t *vp, uint64_t voff, uint64_t size) {
     }
 }
 
+void mtl_tex_remap_scope(int on); /* mtl_tex.m: textures of a remapped range are kept (residency change, not a freed pool) */
 NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappingRequest *reqs) {
     pool_t *vp = (pool_t *)p;
     if (vp->magic != POOL_MAGIC || !(vp->flags & NVN_MEMORY_POOL_FLAGS_VIRTUAL)) { LOGE("MapVirtual on a pool that is not virtual"); return 0; }
@@ -201,7 +202,9 @@ NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappi
         if (r[i].voff < 0 || r[i].size <= 0 || (uint64_t)r[i].voff + (uint64_t)r[i].size > vp->size) { LOGE("MapVirtual: range outside the pool"); return 0; }
         uint64_t voff = (uint64_t)r[i].voff, size = (uint64_t)r[i].size;
         uint8_t *dst = vp->mem + voff;
+        mtl_tex_remap_scope(1);
         vmap_cut(vp, voff, size);
+        mtl_tex_remap_scope(0);
         pool_t *pp = r[i].phys;
         if (!pp || pp->magic != POOL_MAGIC || !(pp->flags & NVN_MEMORY_POOL_FLAGS_PHYSICAL)) {
             /* unmap: the range reads as zero again */

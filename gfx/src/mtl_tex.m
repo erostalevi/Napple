@@ -255,16 +255,25 @@ GfxTex *mtl_tex_get(const texsnap *s, int for_gpu_write) {
             g_tt_hash[j] = h;
         }
     }
-    if (t && (t->scale_gen != mtl_scale_generation() || (for_gpu_write && !t->gpu_owned && t->rsx == 1 && t->rsy == 1))) mtl_tex_rescale(t, for_gpu_write);
+    /* A sparse texture (NVN_TEXTURE_FLAGS_SPARSE) never becomes GPU-owned: the GPU writes some tiles (copies into newly resident tiles), the guest memory and its
+     * residency still decide the others, and its re-uploads only touch the tiles whose pages changed (upload_texture_part). Not render-scaled either. */
+    int sparse = t && (t->key.d.flags & 0x20);
+    if (t && (t->scale_gen != mtl_scale_generation() || (for_gpu_write && !sparse && !t->gpu_owned && t->rsx == 1 && t->rsy == 1))) mtl_tex_rescale(t, for_gpu_write);
     pthread_mutex_unlock(&g_tt_mu);
     if (t) {
         t->last_use = atomic_load(&g_gfx.frames);
-        if (for_gpu_write) t->gpu_owned = 1;
+        if (for_gpu_write && !sparse) t->gpu_owned = 1;
     }
     return t;
 }
 
+/* nvnMemoryPoolMapVirtual (api_memory.c) replaces the pool records of the remapped range of a virtual pool: the textures there are not gone (their
+ * storage changed residency, the dirty tracking sees it and a sparse texture re-uploads the changed tiles), so they are kept, with what the GPU wrote
+ * into them. Thread-local: the remap runs on the calling thread. */
+static _Thread_local int g_remapping;
+void mtl_tex_remap_scope(int on) { g_remapping = on; }
 void mtl_tex_forget_range(const void *mem, uint64_t size) {
+    if (g_remapping) return;
     uintptr_t lo = (uintptr_t)mem, hi = lo + size;
     pthread_mutex_lock(&g_tt_mu);
     NSMutableArray *dead = [NSMutableArray array];
@@ -325,7 +334,27 @@ static void expand3_to_4(const uint8_t *src, uint8_t *dst, uint32_t npix, int co
     }
 }
 
-static void upload_texture(GfxTex *t) {
+/* Sparse textures (NVN_TEXTURE_FLAGS_SPARSE): a residency change (nvnMemoryPoolMapVirtual remapping or unmapping pages) after an upload makes the pages
+ * dirty, and a full re-upload from guest memory would wipe what the GPU wrote into the other tiles (GPU writes never reach guest memory). So a 2D sparse
+ * texture re-uploads only the tiles whose storage changed: the tile shape of api_texture.c (64 KiB of level-0 storage per tile, tiles in row-major
+ * order), the levels after level 0 as a whole when their pages changed. */
+typedef struct {
+    const uint8_t *dirty; /* per level-0 tile: re-upload it */
+    uint32_t tw, th, ntx; /* tile size in texels, tiles per row */
+    int rest;             /* levels after level 0 changed */
+} part_upload;
+static int sparse_tiles(const napple_texdesc *d, uint32_t *tw, uint32_t *th) {
+    if (!(d->flags & 0x20) || d->target != 1 || d->samples > 1 || napple_tex_is_linear(d)) return 0; /* NVN_TEXTURE_FLAGS_SPARSE, 2D */
+    int bw = 1, bh = 1, bpb = napple_fmt_bpb(d->format, &bw, &bh);
+    if (!bpb) return 0;
+    uint32_t w = bpb == 1 ? 256 : bpb == 2 ? 256 : bpb == 4 ? 128 : bpb == 8 ? 128 : 64, h = bpb == 1 ? 256 : bpb == 2 ? 128 : bpb == 4 ? 128 : bpb == 8 ? 64 : 64;
+    *tw = w * (uint32_t)bw;
+    *th = h * (uint32_t)bh;
+    return 1;
+}
+
+static void upload_texture_part(GfxTex *t, const part_upload *part);
+static void upload_texture_part(GfxTex *t, const part_upload *part) {
     const napple_texdesc *d = &t->key.d;
     if (t->samples > 1 || t->is_depth || d->target == 10) return;
     napple_texlayout L;
@@ -340,6 +369,7 @@ static void upload_texture(GfxTex *t) {
     uint32_t nlay = layered ? L.layers : 1;
     int linear = napple_tex_is_linear(d);
     for (uint32_t lv = 0; lv < t->levels; lv++) {
+        if (part && lv > 0 && !part->rest) break;
         for (uint32_t ly = 0; ly < nlay; ly++) {
             uint32_t row_bytes, rows, slices, bpb2;
             uint64_t base;
@@ -359,7 +389,16 @@ static void upload_texture(GfxTex *t) {
             }
             MTLRegion region = MTLRegionMake3D(0, 0, 0, w, h, d->target == 2 ? slices : 1);
             NSUInteger slice = layered ? ly : 0;
-            if (bc_decode) {
+            if (part && lv == 0 && !bc_decode && !t->expand_rgb) { /* the changed tiles only (sparse, see part_upload) */
+                uint32_t nty = (h + part->th - 1) / part->th;
+                for (uint32_t ty = 0; ty < nty; ty++)
+                    for (uint32_t tx = 0; tx < part->ntx; tx++) {
+                        if (!part->dirty[ty * part->ntx + tx]) continue;
+                        uint32_t x0 = tx * part->tw, y0 = ty * part->th, rw = MIN(part->tw, w - x0), rh = MIN(part->th, h - y0);
+                        const uint8_t *src = tmp + (size_t)(y0 / bh) * row_bytes + (size_t)(x0 / bw) * bpb;
+                        [t->tex replaceRegion:MTLRegionMake2D(x0, y0, rw, rh) mipmapLevel:0 slice:slice withBytes:src bytesPerRow:row_bytes bytesPerImage:0];
+                    }
+            } else if (bc_decode) {
                 uint8_t *px = malloc((size_t)w * h * bcpp);
                 if (px && napple_bc_decode((uint32_t)d->format, tmp, row_bytes, w, h, px, (size_t)w * bcpp) == 0)
                     [t->tex replaceRegion:region mipmapLevel:lv slice:slice withBytes:px bytesPerRow:(size_t)w * bcpp bytesPerImage:(size_t)w * h * bcpp];
@@ -451,9 +490,25 @@ void mtl_tex_prepare_sample(GfxTex *t) {
     if (t->stamp && t->checked == now) return;
     t->checked = now;
     if (t->stamp && !dirty_since(t->key.mem, (size_t)t->key.size, t->stamp)) return;
+    /* a sparse texture uploaded before: which tiles changed (checked against the old stamp, before the pages are protected again) */
+    uint32_t tw, th;
+    uint8_t *dirty = NULL;
+    part_upload part = {0};
+    if (t->stamp && sparse_tiles(&t->key.d, &tw, &th)) {
+        uint64_t l0 = t->levels > 1 ? napple_tex_level_offset(&t->key.d, 1) : t->key.size;
+        uint32_t ntx = (t->w + tw - 1) / tw, nty = (t->h + th - 1) / th;
+            if (l0 <= t->key.size && (uint64_t)ntx * nty * 0x10000 <= l0 + 0xffff && (dirty = calloc((size_t)ntx * nty, 1))) {
+            for (uint32_t i = 0; i < ntx * nty; i++) {
+                uint64_t o = (uint64_t)i * 0x10000;
+                if (o < l0) dirty[i] = (uint8_t)dirty_since(t->key.mem + o, (size_t)MIN(0x10000, l0 - o), t->stamp);
+            }
+            part = (part_upload){dirty, tw, th, ntx, t->levels > 1 && dirty_since(t->key.mem + l0, (size_t)(t->key.size - l0), t->stamp)};
+        }
+    }
     dirty_protect(t->key.mem, (size_t)t->key.size); /* protect, stamp, then read: no write can be lost */
     t->stamp = dirty_now();
-    upload_texture(t);
+    upload_texture_part(t, dirty ? &part : NULL);
+    free(dirty);
     mtl_tex_written(t);
 }
 
@@ -557,6 +612,7 @@ enum {
     VF_NONE,  /* not expressible (another texel size, ASTC, a 24-bit depth format read as bits, an integer format the translator cannot declare): the texture's own
                * format, reported once */
 };
+static int g_int_slots; /* the replay marks integer sampled bindings (it calls mtl_tex_int_kind): integer views can then be copies the shader reads as integers */
 static int view_fmt_class(const texsnap *s, MTLPixelFormat have, MTLPixelFormat want, uint32_t samples) {
     if (want == have || want == MTLPixelFormatInvalid) return VF_SAME;
     if (same_class_srgb(want, have)) return VF_VIEW;
@@ -571,7 +627,9 @@ static int view_fmt_class(const texsnap *s, MTLPixelFormat have, MTLPixelFormat 
         return VF_DEPTH;
     if (ch == 0 && cw == 0) return bh == bw ? VF_VIEW : VF_NONE;
     if (bh != bw || have == MTLPixelFormatStencil8 || want == MTLPixelFormatStencil8 || want == MTLPixelFormatDepth32Float_Stencil8 || d24) return VF_NONE;
-    if (cw == 0 && pf_int_kind(want) && !(pf_uint1(want) && samples == 1)) return VF_NONE; /* the translator samples it as float (texture2d<float>) */
+    /* an integer view is a copy when the shader can declare it as an integer texture: single-channel uint as a stencil slot, any integer format once the replay
+     * fills ShaderKey.tex_uint_slots / tex_sint_slots (g_int_slots); otherwise the translator samples it as float (texture2d<float>) */
+    if (cw == 0 && pf_int_kind(want) && !(pf_uint1(want) && samples == 1) && !(g_int_slots && samples == 1)) return VF_NONE;
     if (samples > 1) return ch == 1 && cw == 0 && ms_alias_dst_ok(have, want) ? VF_ALIAS : VF_NONE;
     return VF_ALIAS;
 }
@@ -591,6 +649,21 @@ int mtl_tex_samples_as_uint(const texsnap *s, const view_t *v, int has_view) {
     MTLPixelFormat want = view_pf(v, has_view);
     return view_fmt_class(s, pf, want, s->d.samples > 1 ? (uint32_t)s->d.samples : 1) == VF_ALIAS && pf_uint1(want);
 }
+/* The component type of the Metal texture a sampled binding gets (its own format, a format view or a copy): IMGKIND_UINT / IMGKIND_INT for integer colour
+ * formats (ShaderKey.tex_uint_slots / tex_sint_slots), IMGKIND_FLOAT otherwise. Single-channel uint copies stay on the stencil-slot path
+ * (mtl_tex_samples_as_uint) and depth reads on the depth path. Calling it tells view_fmt_class that integer views may be copies. */
+int mtl_tex_int_kind(const texsnap *s, const view_t *v, int has_view) {
+    g_int_slots = 1;
+    MTLPixelFormat pf;
+    int dep, st;
+    mtl_tex_format_info(s, &pf, &dep, &st);
+    uint32_t samples = s->d.samples > 1 ? (uint32_t)s->d.samples : 1;
+    MTLPixelFormat want = view_pf(v, has_view);
+    int c = view_fmt_class(s, pf, want, samples);
+    if (c == VF_DEPTH || (c == VF_ALIAS && pf_uint1(want) && samples == 1)) return IMGKIND_FLOAT;
+    int k = pf_int_kind(c == VF_VIEW || c == VF_ALIAS ? want : pf);
+    return k == 1 ? IMGKIND_INT : k == 2 ? IMGKIND_UINT : IMGKIND_FLOAT;
+}
 int mtl_tex_samples_as_depth(const texsnap *s, const view_t *v, int has_view) {
     MTLPixelFormat pf;
     int dep, st;
@@ -601,7 +674,7 @@ int mtl_tex_samples_as_depth(const texsnap *s, const view_t *v, int has_view) {
     return dep;
 }
 
-enum { AK_BYTES = 1, AK_MS_DEPTH, AK_TYPE };
+enum { AK_BYTES = 1, AK_MS_DEPTH, AK_TYPE, AK_CUBE };
 @interface GfxAlias : NSObject {
 @public
     id<MTLTexture> src, tex; /* the source storage it copies from (a re-allocated source makes a new alias), the copy */
@@ -765,9 +838,23 @@ static void alias_copy_ms(id<MTLCommandBuffer> cb, GfxAlias *al) {
     }
 }
 /* AK_BYTES: source -> staging buffer -> alias, level by level and slice by slice (the bytes are reinterpreted, nothing converted).
- * AK_TYPE: same format, 3D depth slices <-> 2D (array) slices, texture to texture. */
+ * AK_TYPE: same format, 3D depth slices <-> 2D (array) slices, texture to texture.
+ * AK_CUBE: a cube view of a square 2D texture (or of a 2D array with fewer than six layers from the view's first one): every face is a copy of that
+ * layer. The console reads faces 1..5 from the memory after the storage (Animal Crossing binds a 15x15 R8 texture of 2.5 KiB as a cube: unrelated bytes
+ * there); the copy gives every face the image the game wrote instead of a dummy texture. */
 static void alias_copy_blit(id<MTLCommandBuffer> cb, GfxAlias *al) {
     id<MTLTexture> s = al->src, d = al->tex;
+    if (al->kind == AK_CUBE) {
+        id<MTLBlitCommandEncoder> be = [cb blitCommandEncoder];
+        for (uint32_t i = 0; i < al->nl; i++) {
+            NSUInteger w = MAX(1, d.width >> i), h = MAX(1, d.height >> i);
+            for (NSUInteger f = 0; f < 6; f++)
+                [be copyFromTexture:s sourceSlice:al->s0 sourceLevel:al->l0 + i sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
+                          toTexture:d destinationSlice:f destinationLevel:i destinationOrigin:MTLOriginMake(0, 0, 0)];
+        }
+        [be endEncoding];
+        return;
+    }
     int cls;
     uint32_t bpb = pf_bytes(s.pixelFormat, &cls);
     MTLBlitOption opt = s.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone;
@@ -921,6 +1008,12 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
                 if (s0 + ans > dep) ans = dep - s0;
                 if (want == MTLTextureType2D) ans = 1;
             }
+        } else if (t->samples == 1 && !stencil_view && want == MTLTextureTypeCube && t->tex.width == t->tex.height &&
+                   (have == MTLTextureType2D || (have == MTLTextureType2DArray && s0 + 6 > (uint32_t)t->tex.arrayLength))) {
+            akind = AK_CUBE; /* a cube of a 2D texture (no six layers to view): the layer copied to every face */
+            apf = t->tex.pixelFormat;
+            ans = 6;
+            if (have == MTLTextureType2D) s0 = 0;
         }
         if (akind) {
             uint64_t akey = (uint64_t)apf | (uint64_t)atype << 12 | (uint64_t)l0 << 16 | (uint64_t)anl << 20 | (uint64_t)s0 << 24 | (uint64_t)ans << 36 |
@@ -953,8 +1046,18 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
         MTLTextureType have = t->tex.textureType;
         MTLTextureType alt = (have == MTLTextureTypeCube || have == MTLTextureTypeCubeArray) ? (ns == 1 ? MTLTextureType2D : MTLTextureType2DArray) : have;
         if (alt != want && have != MTLTextureType3D && view_valid(t->tex, &pf, alt, l0, nl ? nl : 1, s0, ns ? ns : 1)) {
-            LOG_ONCE(NAPPLE_LOG_INFO, "texture view type %lu of a type %lu texture is not expressible: viewed as type %lu over levels %u+%u slices %u+%u",
-                     (unsigned long)want, (unsigned long)have, (unsigned long)alt, l0, nl, s0, ns);
+            {
+                napple_texdesc cd = t->key.d;
+                napple_texlayout cl;
+                cd.target = 8; /* NVN_TEXTURE_TARGET_CUBE */
+                cd.depth = 6;
+                napple_tex_layout(&cd, &cl);
+                LOG_ONCE(NAPPLE_LOG_INFO,
+                         "texture view type %lu of a type %lu texture is not expressible: viewed as type %lu over levels %u+%u slices %u+%u (texture %ux%ux%u fmt %#x, %u "
+                         "levels, storage %llu bytes; a cube of it needs %llu)",
+                         (unsigned long)want, (unsigned long)have, (unsigned long)alt, l0, nl, s0, ns, t->key.d.width, t->key.d.height, t->key.d.depth, t->key.d.format,
+                         t->key.d.levels, (unsigned long long)t->key.size, (unsigned long long)cl.size);
+            }
             want = alt;
             key = (key & ~(0xfull << 12)) | ((uint64_t)want << 12);
             k = @(key);
