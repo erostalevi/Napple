@@ -374,3 +374,30 @@ Ordering: ALLOC_GPFIFO_EX2 needs a bound address space (InvalidState), ALLOC_OBJ
 
 ### media-live (2026-11-01, r1): media verified on real titles
 Verified on the Mac ([note](../archive/changes/2026-11-01-claude-media-live-2026-11-01-r1.md)): MK8D's preview video through nvhost-nvdec (H.264, VideoToolbox) + VIC (NV12 pitch linear), 300 decodes and 0 errors in a 110 s menu run, frames dumped with `NAPPLE_VIC_DUMP`; LAS's opening movie through `movie.c` (VP9 1920x1080 on libvpx in NVN texture mode + Vorbis 48 kHz 6-channel on stb_vorbis, out-of-band headers, default on), 6600 frames, 0 errors; SMO and ACNH boot unchanged with movie audio on. The caps album round trip (caps:su save -> caps:u list -> accessor LoadAlbumFile -> caps:dc / ImageIO decode) is verified end to end on real MK8D frames by `test_svc_caps_e2e` (no title of the four opens caps). nvdrv now logs the first Open of each device path into the run summary: MK8D opens nvhost-ctrl, nvmap, nvhost-nvdec, nvhost-vic; LAS, SMO and ACNH open no device. No title of the four opens nvdisp-disp0, nvjpg or msenc (still tested only). The engine class's THI word 0 (INCR_SYNCPT) is no longer counted as an unknown register.
+
+### IPC reference lists (ipc-depth-hid, 2026-11-01-r2)
+`runtime/tests/ipc_reference/<interface>.txt` lists, per interface, the command ids a title can send: `id<TAB>name<TAB>min_fw<TAB>y|n`, first line
+`# interface <name> (<source>)` where `<name>` is the interface string the runtime gives the object (the first argument of `IPC_OBJECT`, e.g. `hid`,
+`IAudioDevice`, `audren:u`, matched exactly; `# alias <iface>` and `# table <file.c>:<table>` comment directives help when the binding cannot be read from
+the source). `y` = reachable by an application on firmware up to 22.x (removed commands stay `y`); `n` = system/debug only, Switch 2, 23.0.0+ or unnamed.
+`runtime/tests/test_ipc_reference.c` (part of `make test` and `make test-host`; `make test-ipc-reference` for detail, `-v` also lists rows absent from the
+reference and name differences) reads the command tables from the sources and fails when an app-reachable id has no row. Lists from switchbrew / libnx
+(ids, names, firmware only). This package's lists: hid (148 app-reachable ids, all with rows), IAppletResource, IActiveVibrationDeviceList, hidbus, irs,
+audren:u / IAudioRenderer / IAudioDevice, audout:u / IAudioOut, audin:u / IAudioIn, audrec:u / IFinalOutputRecorder, hwopus / IHardwareOpusDecoder, psm /
+IPsmSession, apm / apm::ISession, fgm / fgm::IRequest (renamed from IRequest, which nifm also uses), lbl, spsm, set, set:sys (partial), set:fd and its
+iterator, btm:u / IBtmUserCore. Rows added or renumbered in this round:
+* `hid`: 86 rows (all `IPC_IMPL`): six-axis fusion get, accelerometer parameters/play mode, unaltered passthrough, the xpad-era commands (no xpad: empty
+  lists, lifo handles refused), SingleWithDestination (in place, never reassigned), GC ERM rumble, permit-vibration sessions, vibration in bool / mode
+  [mode layout unverified], seven six-axis sensor (state kept, no samples written), forced console six-axis, npad IMU, USB full-key, battery and
+  interface queries (from the backend's active style), the Palma operation model (handle = npad id of a pad reporting the Palma style; operations
+  complete at once and signal the event; data layouts unverified), touch emulation, digitizer, mouse library version. **133-136 were one id low** (133
+  answered the center clamp, 136 was missing); Clear (136) takes only the aruid and clears every style.
+* audio: IAudioDevice 13 answers the master volume (before 13.0.0) or the active output device name (13.0.0+, the request carries an output buffer), 14-21;
+  IAudioRenderer 12/13 voice drop; IAudioOut 12/13 volume (`IPC_STUB`: stored and read back, not applied, libnapple_audio has no per-stream gain); IAudioIn
+  7/10 UAC appends (supersedes the "not implemented" note in the table above); audin:u 5; hwopus 8/9; IHardwareOpusDecoder 8/9; IFinalOutputRecorder 10/11.
+  OpenAudioIn records the Mac microphone when the process may use it, silence otherwise (`NAPPLE_AUDIN_SOURCE` overrides).
+* `set` 11 is GetDeviceNickName (was a key code map; `NAPPLE_DEVICE_NICKNAME`, default "Napple"), 12 GetKeyCodeMapByPort; `set:sys` time zone name moved
+  62 → 53, 62 is GetDebugModeFlag (retail), 77 nickname, 79 product model (Nx). psm 18; lbl 26 EnableVrMode (renamed), 27-29; spsm 0-5 named after
+  switchbrew + 4/5; IBtmUserCore 19-21 renumbered (19 BleDisconnect, 20 BleGetConnectionState, 21 AcquireBlePairingEvent) and 1, 2, 22-37 added
+  (1/2 scan filter parameters are `IPC_STUB` zeros; everything needing a connection fails "not connected").
+See `docs/archive/changes/2026-11-01-claude-ipc-depth-hid-2026-11-01-r2.md`.
