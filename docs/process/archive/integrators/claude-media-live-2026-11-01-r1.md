@@ -6,7 +6,7 @@ head: d8ba88f
 env: mac
 date: 2026-11-01
 areas: [runtime/services (nvdrv media, caps), runtime/movie]
-status: ready
+status: integrated
 ---
 
 # claude/media-live-2026-11-01-r1: verify video, movie audio and album JPEG on real titles
@@ -95,3 +95,11 @@ None: everything was compiled and run on this Mac. `disp_note` (nvdisp first-ioc
 ## Needs from other areas
 - `tools/golden/routes.json` (not owned): LAS `boot-to-village` needs `L+R` at the title screen ("Press L+R"); with A only it never leaves the opening movie.
 - Coverage: nvdisp / nvjpg / msenc / caps can only be verified by a title that uses them; none of the four test titles does.
+
+## Integration result
+- Date: 2026-11-01. Merged into local `main` as f557b4a (`--no-ff` merge of a2b5a21, on top of sweep-small). Outcome: **Clean** (no `integrate:` fixes, no native ports; nothing Linux-only in the diff). The expected `nvdrv.c` / doc conflict hotspots did not occur (sweep-small touched neither).
+- Tests on this Mac (scratch worktree, same tree as the merge): gfx lib/adapter, audio, input, frontend, runtime build clean; `make -C audio test`, `make -C input test`, `make -C runtime test` (test_media, test_decoder_vt green) and `make -C runtime test-services` (60 service tests, 0 failed: svc_caps_e2e 22, svc_nvdrv_media 172, svc_nvdrv_nodes 105, svc_bcat 137) all rc 0.
+- Real frame e2e: `NAPPLE_CAPS_E2E_PNG=<SMO 1280x720 frame>` -> 23 checks, 0 failed (caps:dc 47.1 dB, ImageIO 47.4 dB, caps:dc vs ImageIO 55.8 dB).
+- MK8D 80 s (How to test 3, run lock, audio device off, copied saves): exit 0; NVDEC class 0xf0 and VIC class 0x5d 60/120/180 executes per channel, **0 errors**; the four `nvdrv: opened` notes and **no** "outside the known map" note in the summary; VIC dumps `v-<n>-{1,60,120}.ppm` are clean pictures (Mario kart preview frame checked by eye).
+- LAS 45 s (How to test 4): VP9 mode 2 + Vorbis out-of-band headers complete, `audout opened: 48000 Hz, 6 channels`, `Vorbis: 500 packets, 10.0 s ... RMS 1838`, 900 frames at 0.46-0.76 ms, no decode error.
+- Correction to "How to test": `boot_test.sh` writes into the shared `work/saves`; the integration runs used the runtime binary directly with a copied save root.
