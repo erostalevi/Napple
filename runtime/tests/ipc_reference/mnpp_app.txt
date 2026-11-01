@@ -1,0 +1,6 @@
+# interface mnpp:app (nn::mnpp::detail::ipc::IServiceForApplication; switchbrew 'BCAT services' command table; layout facts only)
+# (push.c fills the runtime table at registration; these named rows are laid over its generous range)
+# table services/push.c:mnpp_rows
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	Initialize	1.0.0	y
+1	SubmitEvent	1.0.0	y

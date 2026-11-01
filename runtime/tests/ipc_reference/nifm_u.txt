@@ -1,0 +1,3 @@
+# interface nifm:u (nn::nifm::detail::IStaticService; switchbrew 'Network Interface services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+5	CreateGeneralService	3.0.0	y

@@ -1,0 +1,24 @@
+# interface IApplicationDisplayService (nn::visrv::sf::IApplicationDisplayService; switchbrew 'VI services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+100	GetRelayService	1.0.0	y
+101	GetSystemDisplayService	1.0.0	y
+102	GetManagerDisplayService	1.0.0	y
+103	GetIndirectDisplayTransactionService	2.0.0	y
+1000	ListDisplays	1.0.0	y
+1010	OpenDisplay	1.0.0	y
+1011	OpenDefaultDisplay	1.0.0	y
+1020	CloseDisplay	1.0.0	y
+1101	SetDisplayEnabled	1.0.0	y
+1102	GetDisplayResolution	1.0.0	y
+2020	OpenLayer	1.0.0	y
+2021	CloseLayer	1.0.0	y
+2030	CreateStrayLayer	1.0.0	y
+2031	DestroyStrayLayer	1.0.0	y
+2101	SetLayerScalingMode	1.0.0	y
+2102	ConvertScalingMode	5.0.0	y
+2103	Unknown	21.0.0	n
+2450	GetIndirectLayerImageMap	1.0.0	y
+2451	GetIndirectLayerImageCropMap	1.0.0	y
+2460	GetIndirectLayerImageRequiredMemoryInfo	1.0.0	y
+5202	GetDisplayVsyncEvent	1.0.0	y
+5203	GetDisplayVsyncEventForDebug	1.0.0	n

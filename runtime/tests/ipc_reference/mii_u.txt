@@ -1,0 +1,3 @@
+# interface mii:u (nn::mii::detail::IStaticService; switchbrew 'Shared Database services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	GetDatabaseService	1.0.0	y

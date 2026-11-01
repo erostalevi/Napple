@@ -140,6 +140,55 @@ static int find_table(const char *file, const char *ident, size_t pos) {
     return best >= 0 ? best : after;
 }
 
+/* Offset of the body of the object-like macro `#define <name> <body>` in s (or 0); *end gets the end of its (backslash-continued) line. */
+static size_t find_macro(const char *s, const char *name, size_t *end) {
+    size_t n = strlen(name);
+    for (const char *p = s; (p = strstr(p, "#define")); p += 7) {
+        size_t i = skip_ws(s, (size_t)(p - s) + 7);
+        if (strncmp(s + i, name, n) || is_ident(s[i + n]) || s[i + n] == '(') continue;
+        size_t b = i + n, e = b;
+        while (s[e] && !(s[e] == '\n' && s[e - 1] != '\\')) e++;
+        *end = e;
+        return b;
+    }
+    return 0;
+}
+/* Rows `{id, "name", fn, IPC_IMPL|IPC_STUB}` between from and to; an identifier between rows that names an object-like macro of the same
+ * file (a shared block of rows, e.g. mii.c READ_CMDS) is expanded in place. */
+static void parse_rows(const char *s, size_t from, size_t to, Table *t, unsigned *cap, int depth) {
+    for (size_t j = from; j < to; j++) {
+        if (s[j] == '"') { /* a string outside an entry (cannot happen in a row table, but skip it) */
+            char tmp[8];
+            j = read_string(s, j, tmp, sizeof tmp) - 1;
+            continue;
+        }
+        if (is_ident(s[j]) && !is_ident(s[j - 1]) && !isdigit((unsigned char)s[j])) {
+            char name[96];
+            size_t k = read_ident(s, j, name, sizeof name), mend;
+            size_t mb = depth < 4 ? find_macro(s, name, &mend) : 0;
+            if (mb) parse_rows(s, mb, mend, t, cap, depth + 1);
+            j = k - 1;
+            continue;
+        }
+        if (s[j] != '{') continue;
+        size_t e = match_brace(s, j), k = skip_ws(s, j + 1);
+        char *num_end;
+        unsigned long id = strtoul(s + k, &num_end, 0);
+        if (num_end != s + k) {
+            k = skip_ws(s, (size_t)(num_end - s));
+            if (s[k] == ',') {
+                k = skip_ws(s, k + 1);
+                Row r = {.id = (unsigned)id};
+                if (s[k] == '"') read_string(s, k, r.name, sizeof r.name);
+                for (size_t q = k; q + 8 <= e; q++)
+                    if (!strncmp(s + q, "IPC_STUB", 8) && !is_ident(s[q + 8]) && !is_ident(s[q - 1])) r.stub = 1;
+                if (t->nrows == *cap) t->rows = realloc(t->rows, (*cap = *cap ? *cap * 2 : 16) * sizeof *t->rows);
+                t->rows[t->nrows++] = r;
+            }
+        }
+        j = e;
+    }
+}
 static void parse_tables(const char *file, const char *s) {
     for (const char *p = s; (p = strstr(p, "IpcCmd")); p += 6) {
         size_t i = (size_t)(p - s);
@@ -164,30 +213,7 @@ static void parse_tables(const char *file, const char *s) {
         t->pos = (size_t)(p - s);
         t->end = end;
         unsigned cap = 0;
-        for (size_t j = i + 1; j < end; j++) {
-            if (s[j] == '"') { /* a string outside an entry (cannot happen in a row table, but skip it) */
-                char tmp[8];
-                j = read_string(s, j, tmp, sizeof tmp) - 1;
-                continue;
-            }
-            if (s[j] != '{') continue;
-            size_t e = match_brace(s, j), k = skip_ws(s, j + 1);
-            char *num_end;
-            unsigned long id = strtoul(s + k, &num_end, 0);
-            if (num_end != s + k) {
-                k = skip_ws(s, (size_t)(num_end - s));
-                if (s[k] == ',') {
-                    k = skip_ws(s, k + 1);
-                    Row r = {.id = (unsigned)id};
-                    if (s[k] == '"') read_string(s, k, r.name, sizeof r.name);
-                    for (size_t q = k; q + 8 <= e; q++)
-                        if (!strncmp(s + q, "IPC_STUB", 8) && !is_ident(s[q + 8]) && !is_ident(s[q - 1])) r.stub = 1;
-                    if (t->nrows == cap) t->rows = realloc(t->rows, (cap = cap ? cap * 2 : 16) * sizeof *t->rows);
-                    t->rows[t->nrows++] = r;
-                }
-            }
-            j = e;
-        }
+        parse_rows(s, i + 1, end, t, &cap, 0);
     }
 }
 static int inside_table(const char *file, size_t pos) {
