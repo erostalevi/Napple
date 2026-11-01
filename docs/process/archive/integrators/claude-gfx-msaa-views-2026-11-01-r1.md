@@ -6,7 +6,7 @@ head: ee967c2 (code at bb08672; the integrator-file commit follows)
 env: mac
 date: 2026-11-01
 areas: [gfx]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/gfx-msaa-views-2026-11-01-r1: MSAA views, copy-backed texture views, sample shading, depth resolve, sparse
@@ -94,3 +94,10 @@ Logs: `/Users/neto/NappleWork/logs/gfxmsaa-{base,new}-{mk8d,smo,las,acnh}/` (run
 - (done) Translator per-sample inputs: landed on gfx-stages-live as 8e26ad2.
 - Translator: integer sampled textures (`texture2d<uint/int>` by format, like `image_int_mask`) so multi-channel integer views can be copies too (gfx-stages-live / shader owner).
 - `gfx/src/nvnapi/names.txt` + api: `nvnTextureBuilderGetViewOffset`, `nvnDeviceWaitForError` lookups seen in ACNH / MK8D.
+
+## Integration result
+- Date: 2026-11-01. Merged into local `main` as 550afc8 (`--no-ff` merge of 7197269), after gfx-stages-live (which carries this branch's sample-shading translator patch as 8e26ad2). Outcome: **Small fix** (one `integrate:` commit, 284e5a7, asked for by both hand-offs): the one-line `if (stage_draw_indirect_count(d)) return;` at the top of `do_draw_indirect_count` in `gfx/src/mtl_replay.m`, `__attribute__((unused))` dropped from `stage_draw_indirect_count` (`mtl_stages.inc`) and the two `NAPPLE_TEST_IND_COUNT_STAGES` guards removed from `gfx/tests/t_stages.c` (test 2e now always built). No native ports (Metal-only code already).
+- Tests on this Mac: `make -C gfx -j6 test` -> ALL TESTS PASSED both before and after the hook (t_view_copy ok, t_view_copy_draw ok, t_sparse ok, t_stages ok 0 skipped incl. 2e, t_msaa ok, t_resolve_depth ok); `T_STRICT=1 MTL_DEBUG_LAYER=1 gfx/build/tests/t_sample_shading` -> **ok (0 skipped)**, per sample 3.375 3.875 3.125 3.625 vs per pixel 3.5 x4 (the KNOWN checks pass with both branches merged). `t_stages` 2e logs `MultiDraw*IndirectCount with transform feedback / geometry / tessellation: count and arguments read at encode time (2 of 3 draws)`. Full rebuild of gfx/audio/input/frontend/runtime clean; `make -C audio|input|runtime test` and `runtime test-services` (60 tests, 0 failed) rc 0.
+- Four-title regression boots on the combined tree (all four r1 branches + the hook; scratch runtime, run lock, audio device off, copied saves, `NAPPLE_SCREENSHOT`): LAS 60 s 3524 frames, SMO 60 s 3521 frames, MK8D 60 s 3493 frames, ACNH 90 s 2665 frames; all exit 0, 0 skipped draws, 0 unimplemented calls, no Metal validation line; warning counts LAS 0 / SMO 0 / MK8D 2 / ACNH 28 (the same sets the session runs reported). Screenshots checked by eye: LAS beach, SMO Bowser fireball scene, MK8D engine-class menu with the NVDEC preview panel, ACNH Nook Inc. counter, all rendered correctly.
+- ACNH (How to test 2): `copy-backed texture views in use (first: kind 3, format 92 -> 92, type 7 -> 2, levels 0+1 slices 0+1)`, `1 refreshes`, and no `... using the whole texture` line. A different fallback note appeared once: `texture view type 5 of a type 2 texture is not expressible: viewed as type 2 over levels 0+4 slices 0+1` (a cube-type view of a 2D texture; not covered by the copy kinds, left as is).
+- Still unverified: MSAA / sample shading / Downsample / ResolveDepthBuffer on a real title (none of the four uses them), AK_BYTES / AK_MS_DEPTH copy kinds and the pass split on a real title.

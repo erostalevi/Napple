@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r1
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_c89e1641-2d09-4870-9b87-c73343780cea
 launched_at: 2026-11-01
@@ -39,3 +39,5 @@ Close `gpu_fixed/MSAA / resolve` and `gpu_fixed/texture views / sparse` (+0.15 p
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-01, outcome **Small fix** (284e5a7: the indirect-count stage hook in `mtl_replay.m` + test-guard removal), merged on local `main` as 550afc8. Report: `docs/process/archive/integrators/claude-gfx-msaa-views-2026-11-01-r1.md` (Integration result).
+Open: no title of the four uses MSAA / sample shading (unit-tested only); integer sampled textures in the translator; `nvnTextureBuilderGetViewOffset` / `nvnDeviceWaitForError` names; cube view of a 2D texture in ACNH still falls back; sparse residency changes after upload.
