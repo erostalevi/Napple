@@ -1,0 +1,24 @@
+# interface acc:u0 (nn::account::IAccountServiceForApplication; switchbrew 'Account services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	GetUserCount	1.0.0	y
+1	GetUserExistence	1.0.0	y
+2	ListAllUsers	1.0.0	y
+3	ListOpenUsers	1.0.0	y
+4	GetLastOpenedUser	1.0.0	y
+5	GetProfile	1.0.0	y
+6	GetProfileDigest	3.0.0	y
+50	IsUserRegistrationRequestPermitted	1.0.0	y
+52	TrySelectUserWithoutInteraction	19.0.0	y
+99	DebugActivateOpenContextRetention	6.0.0	n
+100	InitializeApplicationInfoV0	1.0.0	y
+101	GetBaasAccountManagerForApplication	1.0.0	y
+102	AuthenticateApplicationAsync	1.0.0	y
+103	CheckNetworkServiceAvailabilityAsync	4.0.0	y
+110	StoreSaveDataThumbnail	1.0.0	y
+111	ClearSaveDataThumbnail	1.0.0	y
+120	CreateGuestLoginRequest	1.0.0	y
+130	LoadOpenContext	5.0.0	y
+131	ListOpenContextStoredUsers	6.0.0	y
+140	InitializeApplicationInfo	6.0.0	y
+141	ListQualifiedUsers	6.0.0	y
+150	IsUserAccountSwitchLocked	6.0.0	y

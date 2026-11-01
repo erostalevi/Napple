@@ -1,0 +1,23 @@
+# interface pdm:qry (nn::pdm::detail::IQueryService; switchbrew 'Shared Database services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+4	QueryPlayStatisticsByApplicationId	1.0.0	y
+5	QueryPlayStatisticsByApplicationIdAndUserAccountId	1.0.0	y
+8	QueryPlayEvent	1.0.0	y
+9	GetAvailablePlayEventRange	1.0.0	y
+10	QueryAccountEvent	3.0.0	y
+11	QueryAccountPlayEvent	4.0.0	y
+12	GetAvailableAccountPlayEventRange	4.0.0	y
+17	QueryLastPlayTime	10.0.0	y
+18	QueryApplicationPlayStatisticsForSystem	10.0.0	n
+19	QueryApplicationPlayStatisticsByUserAccountIdForSystem	10.0.0	n
+30	Unknown	22.0.0	n
+31	Unknown	22.0.0	n
+32	Unknown	23.0.0	n
+33	Unknown	23.0.0	n
+34	Unknown	23.0.0	n
+35	Unknown	23.0.0	n
+100	Unknown	20.0.0	n
+110	Unknown	20.0.0	n
+118	Unknown	20.0.0	n
+119	Unknown	20.0.0	n
+130	Unknown	23.0.0	n

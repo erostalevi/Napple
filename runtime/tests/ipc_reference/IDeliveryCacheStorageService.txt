@@ -1,0 +1,5 @@
+# interface IDeliveryCacheStorageService (nn::bcat::ipc::IDeliveryCacheStorageService; switchbrew 'BCAT services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	CreateFileService	1.0.0	y
+1	CreateDirectoryService	1.0.0	y
+10	EnumerateDeliveryCacheDirectory	1.0.0	y

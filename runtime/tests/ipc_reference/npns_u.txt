@@ -1,0 +1,23 @@
+# interface npns:u (nn::npns::INpnsUser; switchbrew 'NPNS services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+1	ListenAll	1.0.0	y
+2	ListenTo	1.0.0	y
+3	Receive	1.0.0	y
+4	ReceiveRaw	1.0.0	y
+5	GetReceiveEvent	1.0.0	y
+7	GetStateChangeEvent	1.0.0	y
+8	ListenToByName	18.0.0	y
+21	CreateToken	1.0.0	y
+23	DestroyToken	1.0.0	y
+25	QueryIsTokenValid	1.0.0	y
+26	ListenToMyApplicationId	5.0.0	y
+101	Suspend	1.0.0	y
+102	Resume	1.0.0	y
+103	GetState	1.0.0	y
+104	GetStatistics	3.0.0	y
+111	GetJid	1.0.0	y
+120	CreateNotificationReceiver	7.0.0	y
+151	GetStateWithHandover	8.0.0	y
+152	GetStateChangeEventWithHandover	8.0.0	y
+153	GetDropEventWithHandover	8.0.0	y
+154	CreateTokenAsync	12.0.0	y

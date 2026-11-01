@@ -1,0 +1,27 @@
+# interface IBcatService (nn::bcat::ipc::IBcatService; switchbrew 'BCAT services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+10100	RequestSyncDeliveryCache	1.0.0	y
+10101	RequestSyncDeliveryCacheWithDirectoryName	5.0.0	y
+10200	CancelSyncDeliveryCacheRequest	5.0.0	y
+20100	RequestSyncDeliveryCacheWithApplicationId	1.0.0	y
+20101	RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName	5.0.0	y
+20300	GetDeliveryCacheStorageUpdateNotifier	8.0.0	y
+20301	RequestSuspendDeliveryTask	8.0.0	y
+20400	RegisterSystemApplicationDeliveryTask	9.0.0	y
+20401	UnregisterSystemApplicationDeliveryTask	9.0.0	y
+20410	SetSystemApplicationDeliveryTaskTimer	9.1.0	y
+20500	StopBackgroundService	22.0.0	y
+30100	SetPassphrase	1.0.0	y
+30200	RegisterDeliveryTask	3.0.0	y
+30201	UnregisterDeliveryTask	3.0.0	y
+30202	BlockDeliveryTask	3.0.0	y
+30203	UnblockDeliveryTask	3.0.0	y
+30210	SetDeliveryTaskTimer	9.1.0	y
+30300	RegisterSystemApplicationDeliveryTasks	8.0.0	y
+90100	GetDeliveryTaskList	1.0.0	y
+90101	GetDeliveryTaskListForSystem	11.0.0	n
+90200	GetDeliveryList	1.0.0	y
+90201	ClearDeliveryCacheStorage	3.0.0	y
+90202	ClearDeliveryTaskSubscriptionStatus	8.0.0	y
+90300	GetPushNotificationLog	3.0.0	y
+90301	GetDeliveryCacheStorageUsage	11.0.0	y
