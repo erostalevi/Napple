@@ -14,15 +14,16 @@
       ],
       "routes": {
         "boot-to-village": {
-          "seconds": 150,
-          "input": "20:A:0.3,24:A:0.3,28:A:0.3,40:A:0.3,50:A:0.3,60:A:0.3,70:A:0.3,80:A:0.3,90:A:0.3",
+          "seconds": 190,
+          "input": "88:L+R:0.6,91:L+R:0.6,94:A:0.2,96.5:A:0.2,99:A:0.2,101.5:DOWN:0.2,103:A:0.2,105:A:0.2,108:B:0.2,110.5:B:0.2,113:B:0.2,115.5:B:0.2,118:B:0.2,120.5:B:0.2,123:B:0.2,125.5:B:0.2,128:B:0.2,130.5:B:0.2,133:B:0.2,135.5:B:0.2,138:B:0.2,140.5:B:0.2,143:LS_DOWN:3.0,147:B:0.2,149:B:0.2,151:B:0.2,153:LS_UP:0.5,154:LS_RIGHT:0.5,155:A:0.2,156:A:0.2,158:B:0.2,160:B:0.2,162:B:0.2,164:B:0.2,166:B:0.2,168:B:0.2,170:B:0.2,172:B:0.2,174:B:0.2,176:B:0.2,178:LS_LEFT:0.6,179:LS_DOWN:3.0,182.5:LS_DOWN:2.0",
           "frames": [
-            1500,
-            3000,
-            4500,
-            6000
+            5100,
+            5700,
+            6300,
+            9700,
+            10700
           ],
-          "notes": "title, file select, intro, beach/village; refine frames when a route is approved"
+          "notes": "fresh save: the opening movie (VP9 + Vorbis, ~84 s, not skippable), title (5100: Press L+R), file select -> New Game -> difficulty Normal -> name (software keyboard applet returns \"Link\") -> OK, Link wakes in Tarin's house (6300), B through the dialogue, walk to the door (Tarin stops him), talk to Tarin, the shield (9700), out of the door into Mabe Village (10700, name banner). Verified headless on the Mac 2026-11-01 (sweep-media r2). Time-based input: needs an otherwise idle Mac at ~60 fps; 190 s is longer than the 120 s batch guideline because the unskippable movie takes 84 s"
         }
       }
     },
