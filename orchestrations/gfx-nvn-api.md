@@ -6,10 +6,10 @@ base: orchestrate/2026-11-01-r2
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_c89e1641-2d09-4870-9b87-c73343780cea (reused gfx-msaa-views r1 session)
+launched_at: 2026-11-01
 ---
 
 # gfx-nvn-api: the 14 missing NVN entry points, refused MSAA branches, ACNH program-hash warning
