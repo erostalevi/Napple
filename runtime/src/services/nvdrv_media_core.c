@@ -23,6 +23,7 @@ struct MediaEngine {
     void *enc;
     uint32_t enc_frames;
     uint64_t cfg_key; /* hash of the parameter sets last handed to configure(); 0 = none yet */
+    unsigned seq;     /* engines created so far in this process, this one included (names the NAPPLE_VIC_DUMP files) */
     uint32_t reg[NREGS];
     uint32_t thi_method; /* latched by the THI_METHOD0 write, consumed by the THI_METHOD1 write */
     MediaStats st;
@@ -58,6 +59,8 @@ MediaEngine *media_engine_new(uint32_t class_id, const NvMediaMem *mem) {
     MediaEngine *e = calloc(1, sizeof *e);
     if (!e) return NULL;
     e->class_id = e->cur_class = class_id;
+    static unsigned created;
+    e->seq = __atomic_add_fetch(&created, 1, __ATOMIC_RELAXED);
     if (mem) e->mem = *mem;
     e->backend = decoder_backend_current();
     e->encoder = encoder_backend_current();
@@ -391,6 +394,56 @@ static void put_row(uint8_t *dst, const uint8_t *row, size_t row_bytes, size_t y
     for (size_t x = 0; x < row_bytes; x += 16) memcpy(dst + bl_offset(x, y, gobs_w, bh), row + x, row_bytes - x < 16 ? row_bytes - x : 16);
 }
 static size_t align256(size_t v) { return (v + 255) & ~(size_t)255; }
+/* NAPPLE_VIC_DUMP=<prefix>: the NV12 picture a VIC execute converts, as <prefix>-<engine>-<frame>.ppm (engine: creation order; RGB, BT.601 limited
+ * range as below), for the VIC frame numbers listed in NAPPLE_VIC_DUMP_FRAMES (comma separated; default 1,60,120,240). Headless evidence that a
+ * title's video decodes to real pictures; the files hold game frames: keep them out of the repository. */
+static int vic_dump_wanted(uint64_t frame, const char **prefix) {
+    static const char *pre;
+    static uint64_t list[16];
+    static int n = -1;
+    if (n < 0) {
+        n = 0;
+        pre = getenv("NAPPLE_VIC_DUMP");
+        if (pre && !*pre) pre = NULL;
+        const char *l = getenv("NAPPLE_VIC_DUMP_FRAMES");
+        if (!l || !*l) l = "1,60,120,240";
+        while (*l && n < 16) {
+            char *end;
+            unsigned long long v = strtoull(l, &end, 10);
+            if (end == l) break;
+            list[n++] = v;
+            l = *end == ',' ? end + 1 : end;
+        }
+    }
+    *prefix = pre;
+    if (!pre) return 0;
+    for (int i = 0; i < n; i++)
+        if (list[i] == frame) return 1;
+    return 0;
+}
+static void vic_dump(unsigned seq, uint64_t frame, const uint8_t *luma, const uint8_t *chroma, size_t ip, size_t w, size_t h) {
+    const char *pre;
+    if (!vic_dump_wanted(frame, &pre)) return;
+    char path[1024];
+    snprintf(path, sizeof path, "%s-%u-%llu.ppm", pre, seq, (unsigned long long)frame);
+    FILE *f = fopen(path, "wb");
+    if (!f) return;
+    fprintf(f, "P6\n%zu %zu\n255\n", w, h);
+    uint8_t *row = malloc(w * 3);
+    for (size_t y = 0; row && y < h; y++) {
+        const uint8_t *yr = luma + y * ip, *uv = chroma + (y >> 1) * ip;
+        for (size_t x = 0; x < w; x++) {
+            int Y = ((yr[x] - 16) * 76310) >> 16, U = uv[x & ~(size_t)1] - 128, V = uv[(x & ~(size_t)1) + 1] - 128;
+            row[3 * x] = clamp8(Y + ((104597 * V) >> 16));
+            row[3 * x + 1] = clamp8(Y - ((25675 * U + 53279 * V) >> 16));
+            row[3 * x + 2] = clamp8(Y + ((132201 * U) >> 16));
+        }
+        fwrite(row, 1, w * 3, f);
+    }
+    free(row);
+    fclose(f);
+    fprintf(stderr, "[vic] frame %llu (%zux%zu) -> %s\n", (unsigned long long)frame, w, h, path);
+}
 static void vic_execute(MediaEngine *e) {
     size_t cfg_avail, l_avail, c_avail, o_avail, oc_avail = 0;
     uint8_t *cfg = surf(e, e->reg[VIC_SET_CONFIG_STRUCT_OFFSET], &cfg_avail);
@@ -444,6 +497,7 @@ static void vic_execute(MediaEngine *e) {
         for (size_t y = 0; y < h; y++) put_row(out, luma + y * ip, w, y, op, block, bh);
         for (size_t y = 0; y < ch; y++) put_row(ochroma, chroma + y * ip, w, y, op, block, bh);
         e->st.frames++;
+        vic_dump(e->seq, e->st.frames, luma, chroma, ip, w, h);
         if (media_trace() && e->st.frames % 60 == 1)
             fprintf(stderr, "[vic] NV12 frame %llu to luma %p: centre Y %u U %u V %u\n", (unsigned long long)e->st.frames, (void *)out, out[(h / 2) * op + w / 2],
                     ochroma[(ch / 2) * op + (w / 2 & ~(size_t)1)], ochroma[(ch / 2) * op + (w / 2 & ~(size_t)1) + 1]);
@@ -475,6 +529,7 @@ static void vic_execute(MediaEngine *e) {
     }
     free(row);
     e->st.frames++;
+    vic_dump(e->seq, e->st.frames, luma, chroma, ip, w, h);
 }
 
 /* ---- NVJPG ---- */
@@ -680,6 +735,10 @@ static void write_reg(MediaEngine *e, uint32_t off, uint32_t v) {
     }
     if (e->cur_class != e->class_id || off >= NREGS) {
         e->st.foreign_writes++;
+        return;
+    }
+    if (off == 0) { /* the engine class's THI word 0 is INCR_SYNCPT too (MK8D's NVDEC and VIC streams end with one per submit): counted, as above */
+        e->st.syncpt_incrs++;
         return;
     }
     if (off == NVM_THI_METHOD0) { /* the SDK drives the engines through the THI: a (method, data) pair of writes to words 0x10 / 0x11 */
