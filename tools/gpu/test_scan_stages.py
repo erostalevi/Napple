@@ -65,7 +65,56 @@ def romfs(files):
     return img + bytes(data_off - len(img)) + bytes(data)
 
 
+def code_area(stage_type, n_ins, tail=b""):
+    """A GLSLC-like code area: magic, SPH (word 0 ShaderType at bits 10..13) at +0x30, instructions from +0x80 ending with EXIT + BRA-to-self, then `tail`."""
+    c = bytearray(0x80)
+    struct.pack_into("<I", c, 0, 0x12345678)
+    struct.pack_into("<I", c, 0x30, 1 | (stage_type << 10))
+    for i in range(n_ins):
+        c += struct.pack("<Q", 0x5c98078000070000 + i)
+    c += struct.pack("<QQ", 0xe30000000007000f, 0xe2400fffff87000f)
+    c += bytes((-len(c)) % 0x20)
+    return bytes(c) + tail
+
+
 class T(unittest.TestCase):
+    def test_extract_bnsh_and_bahs(self):
+        """extract pairs a section with its code through the BNSH record, and writes BAHS code areas alone, cut after the terminal branch."""
+        code = code_area(1, 5)
+        sec = bytearray(section(0))
+        struct.pack_into("<III", sec, 0x6fc, 0, len(code), len(code))
+        bnsh = bytearray(b"BNSH" + bytes(0x3c))  # header 0x40
+        rec_off = len(bnsh)
+        bnsh += bytes(0x20)  # record: u64 control offset, u64 code offset (patched below)
+        ctl_off = len(bnsh)
+        bnsh += sec + bytes((-len(sec)) % 0x100)
+        c_off = len(bnsh)
+        bnsh += code
+        struct.pack_into("<QQ", bnsh, rec_off, ctl_off, c_off)
+        consts = struct.pack("<4f", 1.0, 0.5, 0.25, 2.0)
+        bahs = bytearray(b"BAHS" + bytes(0xfc))
+        sec_f = bytearray(section(1))
+        bahs += sec_f + bytes((-len(sec_f) - len(bahs)) % 0x100)
+        bahs += code_area(5, 3, consts)
+        bahs += bytes((-len(bahs)) % 0x100)
+        with tempfile.TemporaryDirectory() as d:
+            open(d + "/a.bnsh", "wb").write(bytes(bnsh))
+            open(d + "/b.bahs", "wb").write(bytes(bahs))
+            corpus = S.Corpus(d + "/out", "t")
+            progs, st = S.scan_paths([d + "/a.bnsh", d + "/b.bahs"], True, corpus)
+            files = sorted(os.listdir(d + "/out"))
+            self.assertEqual(st["paired"], 1)
+            self.assertEqual(st["covered_by_code_areas"], 1)
+            vs = [f for f in files if f.endswith("_vs.bin")]
+            ps = [f for f in files if f.endswith("_ps.bin")]
+            self.assertEqual((len(vs), len(ps)), (1, 1))
+            self.assertEqual(open(d + "/out/" + vs[0], "rb").read(), code)
+            self.assertTrue(os.path.exists(d + "/out/" + vs[0][:-4] + ".ctl"))
+            area = open(d + "/out/" + ps[0], "rb").read()
+            self.assertEqual(area, code_area(5, 3))  # the constants after the terminal branch are cut off
+            self.assertFalse(os.path.exists(d + "/out/" + ps[0][:-4] + ".ctl"))
+
+
     def test_romfs_sarc_yaz0(self):
         """A RomFS image whose files hide sections in a Yaz0-compressed SARC and in plain data; distinct counts by content."""
         inner = sarc([b"pad!" * 3 + section(2), section(0, xfb=True)])
