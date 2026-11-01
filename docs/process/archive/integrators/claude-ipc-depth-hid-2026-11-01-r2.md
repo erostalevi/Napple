@@ -6,7 +6,7 @@ head: 525c48c
 env: mac
 date: 2026-11-01
 areas: [runtime/services, runtime/tests, runtime/Makefile, docs]
-status: ready
+status: integrated
 ---
 
 # claude/ipc-depth-hid-2026-11-01-r2: IPC reference lists + runner, and the missing rows for hid, audio and the system-device services
@@ -81,3 +81,12 @@ None unbuilt: everything compiled and the unit tests ran on this Mac. Untested o
 ## Needs from other areas
 - audio/ (libnapple_audio): a per-stream gain so IAudioOut SetAudioOutVolume (12) can be applied (row is `IPC_STUB` until then).
 - input/: none required; Palma connection handles rely on the backend reporting the Palma style for a slot (it already does when the title announces it).
+
+## Integration result
+- Date: 2026-11-01. Merged into main as 9175dff (integ/ipc-depth-hid 8a29610, branch head a1f26f1). Outcome: **Clean**.
+- `integrate:` fixes: none. Native ports: none (the runner and the service rows are portable C on purpose; left as C).
+- Build on the Mac (scratch worktree): `make -C gfx lib adapter`, `audio`, `input`, `frontend`, `runtime`: rc 0.
+- Tests: `make -C runtime test` + `test-services`: rc 0, 64 suites, all `"failed":0`; `{"test":"ipc_reference","fixtures":30,"app_reachable":368,"missing":0,"errors":0}`.
+- Four-title boots (runtime binary, `--headless --seconds 60`, private copied `--save-root`, under `.run.lock`): SMO, MK8D, LAS, ACNH (ff1d1c05670db602) all rc 0, `last_stage notify-running`, `missing_ipc []`, no crashes, `stubbed_ipc` only the pre-existing `nvdrv:13`.
+- GPL check: the fixtures hold ids, names and firmware versions only; the service code adds original handlers (libnx/switchbrew named only in comments as the layout source). No libnx code copied.
+- Corrections to this file's instructions: none needed.

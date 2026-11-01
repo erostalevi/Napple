@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r2
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: orchestrator background agent, worktree .claude/worktrees/ipc-depth-hid-r2
 launched_at: 2026-11-01
@@ -39,3 +39,5 @@ Build the lists from libnx wrappers and switchbrew as layout facts only (ids, na
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-01: Clean, merged into main as 9175dff (branch head a1f26f1). Unit tests and four-title boots green; no fixes needed.
+Integrator file: `docs/process/archive/integrators/claude-ipc-depth-hid-2026-11-01-r2.md`.
