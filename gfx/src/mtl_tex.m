@@ -674,7 +674,7 @@ int mtl_tex_samples_as_depth(const texsnap *s, const view_t *v, int has_view) {
     return dep;
 }
 
-enum { AK_BYTES = 1, AK_MS_DEPTH, AK_TYPE };
+enum { AK_BYTES = 1, AK_MS_DEPTH, AK_TYPE, AK_CUBE };
 @interface GfxAlias : NSObject {
 @public
     id<MTLTexture> src, tex; /* the source storage it copies from (a re-allocated source makes a new alias), the copy */
@@ -838,9 +838,23 @@ static void alias_copy_ms(id<MTLCommandBuffer> cb, GfxAlias *al) {
     }
 }
 /* AK_BYTES: source -> staging buffer -> alias, level by level and slice by slice (the bytes are reinterpreted, nothing converted).
- * AK_TYPE: same format, 3D depth slices <-> 2D (array) slices, texture to texture. */
+ * AK_TYPE: same format, 3D depth slices <-> 2D (array) slices, texture to texture.
+ * AK_CUBE: a cube view of a square 2D texture (or of a 2D array with fewer than six layers from the view's first one): every face is a copy of that
+ * layer. The console reads faces 1..5 from the memory after the storage (Animal Crossing binds a 15x15 R8 texture of 2.5 KiB as a cube: unrelated bytes
+ * there); the copy gives every face the image the game wrote instead of a dummy texture. */
 static void alias_copy_blit(id<MTLCommandBuffer> cb, GfxAlias *al) {
     id<MTLTexture> s = al->src, d = al->tex;
+    if (al->kind == AK_CUBE) {
+        id<MTLBlitCommandEncoder> be = [cb blitCommandEncoder];
+        for (uint32_t i = 0; i < al->nl; i++) {
+            NSUInteger w = MAX(1, d.width >> i), h = MAX(1, d.height >> i);
+            for (NSUInteger f = 0; f < 6; f++)
+                [be copyFromTexture:s sourceSlice:al->s0 sourceLevel:al->l0 + i sourceOrigin:MTLOriginMake(0, 0, 0) sourceSize:MTLSizeMake(w, h, 1)
+                          toTexture:d destinationSlice:f destinationLevel:i destinationOrigin:MTLOriginMake(0, 0, 0)];
+        }
+        [be endEncoding];
+        return;
+    }
     int cls;
     uint32_t bpb = pf_bytes(s.pixelFormat, &cls);
     MTLBlitOption opt = s.pixelFormat == MTLPixelFormatDepth32Float_Stencil8 ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone;
@@ -994,6 +1008,12 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
                 if (s0 + ans > dep) ans = dep - s0;
                 if (want == MTLTextureType2D) ans = 1;
             }
+        } else if (t->samples == 1 && !stencil_view && want == MTLTextureTypeCube && t->tex.width == t->tex.height &&
+                   (have == MTLTextureType2D || (have == MTLTextureType2DArray && s0 + 6 > (uint32_t)t->tex.arrayLength))) {
+            akind = AK_CUBE; /* a cube of a 2D texture (no six layers to view): the layer copied to every face */
+            apf = t->tex.pixelFormat;
+            ans = 6;
+            if (have == MTLTextureType2D) s0 = 0;
         }
         if (akind) {
             uint64_t akey = (uint64_t)apf | (uint64_t)atype << 12 | (uint64_t)l0 << 16 | (uint64_t)anl << 20 | (uint64_t)s0 << 24 | (uint64_t)ans << 36 |

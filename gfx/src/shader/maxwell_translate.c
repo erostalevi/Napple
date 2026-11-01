@@ -1929,6 +1929,23 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             sprintf(t, "(%s * %s + %s)", R(a), bv, cv);
         }
         set_reg(c, d, t);
+    } else if (OPM(0x1800000000000000ull, 0xfc00000000000000ull)) {   // LEA.HI, constant buffer form (opcode 000110)
+        /* Real words in Super Mario Odyssey's compute programs (18f77f9000270000: r0 = c4[0x8] + (r0 >> 2)); layout as yuzu reads it (LEA_HI_C): Rd [0,8),
+         * offset low word Ra [8,16), cbuf [20,34) / [34,39), offset high word [39,47), scale [51,56), .NEG 56 (negates the 64-bit offset), .X 57 (adds the
+         * carry). d = B + low word of ({hi:a} >> (32 - scale)), i.e. the high word of the offset shifted left by scale. */
+        int sc = (int)bits(w, 51, 5);
+        bool neg = bits(w, 56, 1), x = bits(w, 57, 1);
+        char cb[160], off[256];
+        const char *bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+        sprintf(off, "((ulong(%s) << 32) | ulong(%s))", R((int)bits(w, 39, 8)), R(a));
+        if (neg) {
+            char t2[300];
+            sprintf(t2, "(0ul - %s)", off);
+            strcpy(off, t2);
+        }
+        if (x) c->uses_cc = true;
+        sprintf(t, "(%s + uint(%s >> %du)%s)", bv, off, 32 - sc, x ? " + cc" : "");
+        set_reg(c, d, t);
     } else if (OPM(0x5bd0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bd0000000000000ull, 0xfff0000000000000ull) ||
                OPM(0x36d0000000000000ull, 0xfef8000000000000ull)) {   // LEA (.LO, and .HI in the reg and cbuf forms)
         /* Bit layout from memory; no real word in the corpora. B by the opcode class, bit 45 negates B. .LO (opcode bit 51 clear): d = (a << scale) + B,

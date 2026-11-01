@@ -834,6 +834,10 @@ int main(void) {
             CHECK(HAS(hi, "r1 = (((r4 << 3u) | (r2 >> 29u)) + r3);"), "LEA.HI: high word of the shifted 64-bit pair");
             CHECK(HAS(hi, "r5 = (r4 + r3);") && HAS(hi, "r6 = (((r4 << 7u) | (r2 >> 25u)) + r3 + cc)"), "LEA.HI scale 0 and .X");
             maxwell_free(hi);
+            /* LEA.HI, constant buffer form (opcode 000110): a real word of Super Mario Odyssey's compute programs (r0 = c4[0x8] + (r0 >> 2)) */
+            XL_OK(lh, STAGE_FRAGMENT, z, 0xf, "LEA.HI cbuf", 0x18f77f9000270000ull, ins_exit());
+            CHECK(HAS(lh, "cb4[0][2] + uint(((ulong(0u) << 32) | ulong(r0)) >> 2u)"), "LEA.HI cbuf: c4[0x8] + high word of ({RZ:r0} << 30)");
+            maxwell_free(lh);
             XL_OK(li, STAGE_FRAGMENT, z, 0xf, "LEA imm", i_lea_lo(0x36, 1, 2, 0x10, 4, 0), ins_exit());
             CHECK(HAS(li, "r1 = ((r2 << 4u) + 0x00000010u)"), "LEA.LO with an immediate B");
             maxwell_free(li);
