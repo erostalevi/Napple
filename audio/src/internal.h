@@ -41,6 +41,9 @@ void nae_mic_ring_reset(void);
 uint32_t nae_mic_read(void *user, float *mono, uint32_t frames, uint32_t rate); /* the `mic` capture source */
 int nae_mic_start(void);                                                        /* 0 or -1 (no device / permission / not macOS) */
 void nae_mic_stop(void);
+enum { NAE_MIC_DENIED = -1, NAE_MIC_UNDETERMINED = 0, NAE_MIC_GRANTED = 1 };
+int nae_mic_permission(void);  /* host microphone access for this process (override: env NAPPLE_AUDIN_MIC_PERMISSION) */
+int nae_mic_can_prompt(void);  /* the process may raise the system prompt (it carries NSMicrophoneUsageDescription) */
 
 /* ---- wire formats of the audren update protocol ---- */
 typedef struct {

@@ -173,7 +173,30 @@ static void t_mic_ring(void) {
 static void t_env(void) {
     napple_audin_install_source_spec("silence");
     unsetenv("NAPPLE_AUDIN_SOURCE");
-    CHECK(napple_audin_install_default_source() == 0 && !napple_audin_has_source(), "unset env = silence");
+    setenv("NAPPLE_AUDIN_MIC_PERMISSION", "denied", 1);
+    CHECK(napple_audin_install_default_source() == 0 && !napple_audin_has_source(), "unset env, microphone denied = silence, no failure");
+    setenv("NAPPLE_AUDIN_MIC_PERMISSION", "undetermined", 1);
+    CHECK(napple_audin_install_default_source() == 0 && !napple_audin_has_source(), "unset env, permission not asked and this process cannot prompt = silence");
+    CHECK(nae_mic_permission() == NAE_MIC_UNDETERMINED && !nae_mic_can_prompt(), "permission override is read");
+    setenv("NAPPLE_AUDIN_MIC_PERMISSION", "denied", 1);
+    { /* a denying hook on top of a granted state: the default install still reports success and records silence */
+        int asked = 0;
+        setenv("NAPPLE_AUDIN_MIC_PERMISSION", "granted", 1);
+        napple_audin_set_permission_hook(perm_deny, &asked);
+        CHECK(napple_audin_install_default_source() == 0 && !napple_audin_has_source() && asked == 1, "granted but the app hook refuses = silence, no failure");
+        napple_audin_set_permission_hook(NULL, NULL);
+        setenv("NAPPLE_AUDIN_MIC_PERMISSION", "denied", 1);
+    }
+    {
+        napple_audin *in = open_in(48000, 1);
+        int16_t buf[480];
+        memset(buf, 0x55, sizeof buf);
+        capture(in, buf, 480, 1);
+        int z = 1;
+        for (int k = 0; k < 480; k++) z &= buf[k] == 0;
+        CHECK(z, "with the microphone denied audin still returns silence");
+        napple_audin_close(in);
+    }
     setenv("NAPPLE_AUDIN_SOURCE", "tone:220", 1);
     CHECK(napple_audin_install_default_source() == 0 && napple_audin_has_source(), "env tone installed");
     setenv("NAPPLE_AUDIN_SOURCE", "tone:880", 1);
@@ -182,6 +205,7 @@ static void t_env(void) {
     setenv("NAPPLE_AUDIN_SOURCE", "bogus", 1);
     CHECK(napple_audin_install_default_source() == NAPPLE_AUDIO_E_INVALID && !napple_audin_has_source(), "bad env falls back to silence");
     unsetenv("NAPPLE_AUDIN_SOURCE");
+    unsetenv("NAPPLE_AUDIN_MIC_PERMISSION");
 }
 
 int main(void) {
