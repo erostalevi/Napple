@@ -57,9 +57,10 @@ void napple_hid_layout_for(int profile, napple_hid_layout *l) {
     l->npad_system_properties = at + 8;
     l->npad_button_properties = at + 16;
     l->npad_battery = at + 20;
-    /* GC trigger lifo: 17 entries of {u64 sampling, u32 l, u32 r} (entry 0x18) at 0x4C20 of the 0x5000 entry, followed by the NpadLarkType words (switchbrew
-       "HID services" NpadInternalState / yuzu NpadInternalState; recalled, unverified). Older firmware has neither. */
-    if (profile != NAPPLE_HID_LAYOUT_COMPAT) l->npad_gc_trigger = 0x4C20;
+    /* GC trigger lifo: header 0x20, then 17 entries of {u64 sampling, u64 sampling, u32 l, u32 r} (entry 0x18), at 0x4228 of the 0x5000 entry, followed by the
+       words lark_type_l_and_main (0x43E0), lark_type_r, lucia_type, lager_type (libnx HidNpadInternalState; 0x4208 is the "Mutex on pre-10.0.0" block, so the
+       sections after 0x4188 are the same on every firmware, but only 10.0.0+ titles read them). Older firmware profile has neither here. */
+    if (profile != NAPPLE_HID_LAYOUT_COMPAT) l->npad_gc_trigger = 0x4228;
     l->revision = (uint32_t)profile;
     l->gesture = l->npad_base + 10 * l->npad_stride; /* right after the ten npad entries; section size 0x800 */
     l->console_sixaxis = l->gesture + 0x800;
@@ -218,6 +219,24 @@ void napple_hid_set_lark_type(uint8_t *shm, const napple_hid_layout *l, int slot
     uint8_t *b = shm + l->npad_base + (uint32_t)slot * l->npad_stride + l->npad_gc_trigger + napple_hid_lifo_bytes(GC_TRIGGER_STATE);
     put32(b, left_and_main);
     put32(b + 4, right);
+}
+void napple_hid_set_retro_types(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t lucia, uint32_t lager) {
+    if (slot < 0 || slot > 9 || !l->npad_gc_trigger) return;
+    uint8_t *b = shm + l->npad_base + (uint32_t)slot * l->npad_stride + l->npad_gc_trigger + napple_hid_lifo_bytes(GC_TRIGGER_STATE);
+    put32(b + 8, lucia);
+    put32(b + 12, lager);
+}
+uint32_t napple_hid_device_type_for(uint32_t style) {
+    switch (style) {
+        case NAPPLE_STYLE_GC: return NAPPLE_DEVTYPE_FULL_KEY; /* "Pro Controller and Gc controller" */
+        case NAPPLE_STYLE_PALMA: return NAPPLE_DEVTYPE_PALMA;
+        case NAPPLE_STYLE_LARK: return NAPPLE_DEVTYPE_LARK_NES_LEFT;
+        case NAPPLE_STYLE_HANDHELD_LARK: return NAPPLE_DEVTYPE_HANDHELD_LARK_NES_LEFT;
+        case NAPPLE_STYLE_LUCIA: return NAPPLE_DEVTYPE_LUCIA;
+        case NAPPLE_STYLE_LAGON: return NAPPLE_DEVTYPE_LAGON;
+        case NAPPLE_STYLE_LAGER: return NAPPLE_DEVTYPE_LAGER;
+        default: return 0; /* the standard styles keep reporting 0 (unchanged from before the retro pads) */
+    }
 }
 
 void napple_hid_push_sixaxis(uint8_t *shm, const napple_hid_layout *l, int slot, int idx, const napple_sixaxis_state *st) {
