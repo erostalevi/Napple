@@ -27,6 +27,8 @@
 #define NVDEC_SET_PICTURE_LUMA_OFFSET0 0x10c   /* + picture index, 17 slots (MK8D's stream, 2026-10-27: all 17 written, luma 0x10c.., chroma 0x11d..) */
 #define NVDEC_SET_PICTURE_CHROMA_OFFSET0 0x11d /* + picture index */
 #define NVDEC_PIC_SLOTS 17
+#define NVDEC_SET_UNNAMED_0x140 0x140 /* MK8D writes one constant buffer address here before every execute (0x100210 << 8 in its stream); name and use unknown, the
+                                        * decode does not need it: accepted as a known register so it stays out of the unknown-register count */
 /* word index of the coded-frame size inside the picture-info structure, per codec (0 = unknown: the whole input surface is the frame) */
 /* Words of the H.264 picture-info structure (nvdec_h264_pic_s, matched against MK8D's 512x608 CABAC stream: 0xa8fe = the 43262-byte slice at word 18, 32 x 38
  * macroblocks at words 25/26, pitches 0x200 at 35/36, chroma_format_idc 1, poc type 0, bit-field word 44 as below). */

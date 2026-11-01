@@ -29,6 +29,7 @@
 #include "movie_audio_core.h"
 #include "vt_h264.h"
 #include <arm_neon.h>
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,6 +108,10 @@ typedef struct {
     int h264;
     int vorbis, arate, ach; /* Vorbis audio: rate and channel count once the header packets are in */
     VorbisPcm *vp;
+    uint64_t pcm_frames;     /* Vorbis: PCM frames handed to the game */
+    int pcm_peak;            /* Vorbis: largest |sample| since the last level line */
+    uint64_t pcm_clip;       /* Vorbis: samples at full scale since the last level line (decoder output beyond +-1.0, clamped) */
+    double pcm_sq, pcm_n;    /* Vorbis: sum of squares and sample count since the last level line */
     VtH264 *vt; /* H.264 decoder (VideoToolbox) instead of libvpx */
     uint8_t *in[IN_BUFS];
     int in_free[IN_BUFS], nin_free;
@@ -325,6 +330,26 @@ static void release_due(Movie *m, Signals *s, uint64_t now) {
     m->ready[m->nready++] = d;
     note(m, s, EV_OUTPUT);
 }
+/* Vorbis output level: every 500 packets a line with the PCM time handed over and the peak / RMS / full-scale count of those packets (s16), so a
+ * headless run with the audio device off still shows that the movie's sound decodes to signal, not silence (or noise clipped at full scale). */
+static void pcm_level(Movie *m, const int16_t *pcm, int frames) {
+    int n = frames * (m->ach > 0 ? m->ach : 1);
+    for (int i = 0; i < n; i++) {
+        int v = pcm[i] < 0 ? -pcm[i] : pcm[i];
+        if (v > m->pcm_peak) m->pcm_peak = v;
+        m->pcm_clip += v >= 32767;
+        m->pcm_sq += (double)pcm[i] * pcm[i];
+    }
+    m->pcm_n += n;
+    m->pcm_frames += (uint64_t)frames;
+    if (m->frames % 500) return;
+    MLOG("Vorbis: %llu packets, %.1f s of %d-channel PCM; last 500 packets peak %d RMS %.0f, %llu of %.0f samples at full scale (s16)",
+         (unsigned long long)m->frames, m->arate > 0 ? (double)m->pcm_frames / m->arate : 0.0, m->ach, m->pcm_peak,
+         m->pcm_n > 0 ? sqrt(m->pcm_sq / m->pcm_n) : 0.0, (unsigned long long)m->pcm_clip, m->pcm_n);
+    m->pcm_peak = 0;
+    m->pcm_clip = 0;
+    m->pcm_sq = m->pcm_n = 0;
+}
 static void tc_report(void) {
     static uint64_t last;
     uint64_t n = now_ns();
@@ -415,6 +440,7 @@ static int decode_one(Movie *m, Signals *s, const Pending *p) {
             if (frames > 0) {
                 push_ready(m, s, slot, 0, p->time, frames * m->ach * 2);
                 m->frames++;
+                pcm_level(m, (const int16_t *)m->out[slot], frames);
             }
         }
     } else if (p->size > 0 && m->h264) {
