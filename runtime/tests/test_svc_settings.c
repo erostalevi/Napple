@@ -36,15 +36,23 @@ int main(void) {
     svc_call(set, 4, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == SET_REGION_EUR, "GetRegionCode follows the language");
     SET_LANG("ja"); svc_call(set, 4, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == SET_REGION_JPN, "GetRegionCode ja");
     svc_call(set, 8, NULL, 0, &c); CHECK(c.out[0] == 0, "not a quest unit");
+    { char nick[0x80] = {0}; memset(&c, 0, sizeof c); svc_set_out_buf(&c, nick, sizeof nick); svc_call_c(set, 11, &c); CHECK(!strcmp(nick, "Napple"), "set GetDeviceNickName (11)");
+      setenv("NAPPLE_DEVICE_NICKNAME", "Desk", 1); memset(&c, 0, sizeof c); svc_set_out_buf(&c, nick, sizeof nick); svc_call_c(set, 11, &c); CHECK(!strcmp(nick, "Desk"), "nickname from the environment");
+      unsetenv("NAPPLE_DEVICE_NICKNAME");
+      static uint8_t km[SET_KEYMAP_SIZE]; uint32_t port = 0; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&port; c.in_size = 4; svc_set_out_buf(&c, km, sizeof km); svc_call_c(set, 12, &c);
+      CHECK(c.result == 0, "GetKeyCodeMapByPort"); }
     svc_call(set, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == code("ja"), "GetLanguageCode");
     svc_call(set, 6, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 18, "18 language codes");
     svc_call(sys, 23, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == SET_COLOR_BLACK, "colour set id");
-    svc_call(sys, 62, NULL, 0, &c); CHECK(c.out_size == SET_TZ_NAME_SIZE && !strcmp((const char *)c.out, "UTC"), "time zone name");
+    svc_call(sys, 53, NULL, 0, &c); CHECK(c.out_size == SET_TZ_NAME_SIZE && !strcmp((const char *)c.out, "UTC"), "time zone name (53)");
+    svc_call(sys, 62, NULL, 0, &c); CHECK(c.out_size == 1 && c.out[0] == 0, "GetDebugModeFlag: retail (62)");
+    svc_call(sys, 79, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 1, "GetProductModel: Nx");
+    { char nick[0x80] = {0}; memset(&c, 0, sizeof c); svc_set_out_buf(&c, nick, sizeof nick); svc_call_c(sys, 77, &c); CHECK(!strcmp(nick, "Napple"), "set:sys GetDeviceNickName"); }
     uint8_t fw[0x100]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, fw, sizeof fw); svc_call_c(sys, 3, &c);
     CHECK(c.result == 0 && fw[0] == 18 && !strcmp((char *)fw + 0x68, "18.1.0"), "firmware version 18.1.0");
     uint8_t small[0x10]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, small, sizeof small); svc_call_c(sys, 3, &c); CHECK(c.result != 0, "buffer too small");
     { /* key code maps: the US layout, 16 bytes per HID usage */
-        uint8_t km[SET_KEYMAP_SIZE]; unsigned ids[3] = {7, 9, 11};
+        uint8_t km[SET_KEYMAP_SIZE]; unsigned ids[3] = {7, 9, 12}; /* 11 is GetDeviceNickName (10.1.0+), 12 GetKeyCodeMapByPort (18.0.0+) */
         for (int i = 0; i < 3; i++) {
             memset(km, 0xcc, sizeof km); memset(&c, 0, sizeof c); svc_set_out_buf(&c, km, sizeof km); svc_call_c(set, ids[i], &c);
             const uint8_t *a = km + 0x04 * SET_KEYMAP_ENTRY, *one = km + 0x1e * SET_KEYMAP_ENTRY, *zero = km + 0x27 * SET_KEYMAP_ENTRY, *none = km + 0x01 * SET_KEYMAP_ENTRY;
