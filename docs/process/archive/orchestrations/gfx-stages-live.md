@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r1
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_cfe1eb24-e8f8-4de9-9612-8b8e842af693
 launched_at: 2026-11-01
@@ -41,3 +41,5 @@ Close `gpu_fixed/transform feedback`, `gpu_fixed/geometry shaders`, `gpu_fixed/t
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-01, outcome **Clean**, merged on local `main` as 5b0cf26. Report: `docs/process/archive/integrators/claude-gfx-stages-live-2026-11-01-r1.md` (Integration result).
+Open: geometry never drawn in a scripted game run (needs a later-game SMO save or the ACNH ocean keyboard); tess and XFB are used by none of the four titles (tested only); integer sampled textures in the translator (asked by gfx-msaa-views).

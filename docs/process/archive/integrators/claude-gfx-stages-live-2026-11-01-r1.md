@@ -6,7 +6,7 @@ head: bf2d684d53ac0d241e78567d832147f9dd954f74  # last work commit; the integrat
 env: mac
 date: 2026-11-01
 areas: [gfx/shader, gfx/stages, tools/gpu, docs]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/gfx-stages-live-2026-11-01-r1: geometry / tessellation / transform feedback against the real titles
@@ -92,3 +92,9 @@ status: ready-with-caveats
 ## Needs from other areas
 - gfx-msaa-views (`mtl_replay.m`): the one-line `stage_draw_indirect_count` hook above.
 - Anyone with a later-game SMO save, or an ACNH save that opens the ocean keyboard: an in-game verification run (see How to test 6).
+
+## Integration result
+- Date: 2026-11-01. Merged into local `main` as 5b0cf26 (`--no-ff` merge of 255319f, after sweep-small and media-live, before gfx-msaa-views as the user asked: 8e26ad2 carries gfx-msaa-views' sample-shading translator patch). Outcome: **Clean** (no `integrate:` fixes at merge time; no native ports: the translator is portable on purpose and `scan_stages.py` is plain Python).
+- Tests on this Mac (scratch worktree, same tree as the merge): `make -C gfx -j6 test` -> ALL TESTS PASSED (t_stages ok 0 skipped incl. 2f, t_control ok, t_xlate ok, t_msaa ok, t_stages_dumped skipped without a dump); `python3 -I tools/gpu/test_scan_stages.py` OK (6 tests).
+- Real programs (How to test 2) with the ready-made dumps: SMO `3 geometry programs run, 9 (program, primitive) runs emitted vertices`, ACNH `2 geometry programs run, 6 ...`, both `t_stages_dumped: ok (0 skipped)` with `MTL_DEBUG_LAYER=1` and `stage path ran: geometry` lines for fccb3f42c7f70682 / ab99b39df97424a4 / d68a01153da65dbd and 8c8302af6b2a4b88 / c00085a7efde947a.
+- The `mtl_replay.m` hook for `stage_draw_indirect_count` and the four-title regression boots are recorded below (after gfx-msaa-views landed).
