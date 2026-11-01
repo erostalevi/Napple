@@ -6,7 +6,7 @@ head: 53e508c (code; the integrator file itself is one docs commit on top)
 env: mac
 date: 2026-11-01
 areas: [audio, input, content/napple-core, runtime/services/bcat]
-status: ready
+status: integrated
 ---
 
 # claude/sweep-small-2026-11-01-r1: close seven small partial items (audren perf, audin mic, retro pad styles, NSZ, tickets, NCA2/0, bcat storage)
@@ -70,3 +70,12 @@ Safe to fix directly: compile errors in the non-Apple `audin_mic.c` branch, incl
 ## Needs from other areas
 - `runtime/src/services/audio.c` (OpenAudioIn comment) and `docs/architecture/runtime-services.md` rows for audren perf / hid GC / bcat should be refreshed to the new facts (not mine to edit).
 - `percent-analysis/verified.json`: the seven items can move from partial to impl/verified with the evidence above, except NCA2/NCA0 (stay partial) and the audren boot proof if the boot result above says the title supplied no buffer.
+
+## Integration result
+- Date: 2026-11-01. Merged into local `main` as ff449a7 (`--no-ff` merge of c7d1107 on top of the orchestration plan merge 1c35090). Outcome: **Clean** (no `integrate:` fixes, no native ports).
+- License check (requested by the user): the diff was read for code copied from GPL projects (yuzu, skyline audio-core). None found: the changes are this repo's own code; what came from the public reference code is layout facts only (offsets, sizes, enum values such as `DeliveryCacheProgressStatus::Done = 9`, the BCAT meta entry sizes, libnx `HidNpadInternalState` offsets). The comments cite the sources.
+- C left alone on purpose: `bcat_core.c` (portable, shared with the Linux harness), `audin_mic.c` non-Apple stub branch (not compiled on the Mac; trivial).
+- Tests on this Mac (scratch worktree, same tree as the merge): `make -C gfx lib adapter`, `audio`, `input`, `frontend`, `runtime` build clean; `make -C audio test` (audin_source 52 checks, audren green), `make -C input test` (styles 49, hid_sections 26), `make -C runtime test` and `make -C runtime test-services` (59 service tests, 0 failed; svc_bcat 137 checks) all rc 0; `cargo test --release -p napple-core -p napple-build` all ok.
+- Real material: `ticket_real` ok, `nca_versions_real` (39 NCAs, all NCA3) ok, `nsz_real` (partial NSZ, 3 NCAs converted, read back identical) ok; `napple build <that nsz> --update-romfs materialize --data-only`: every module sha256 and the build id equal the shared NSP build's manifest (only the romfs sha differs, expected: materialize vs the shared build's in-place romfs).
+- Headless SMO 60 s (run lock, audio device off, copy of the shared saves): exit 0, audren REV3 opened, no `RequestUpdate failed` / audren error; no `performance buffer:` line (SMO supplies no performance buffer, as the file says).
+- Correction to "How to test" 2: `tools/boot_test.sh` writes into the shared `work/saves`; the integration run used the runtime binary directly with a copied save root instead.

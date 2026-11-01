@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r1
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_afc5486b-71f2-45b6-b9f1-22a1a94901ac
 launched_at: 2026-11-01
@@ -44,3 +44,5 @@ Turn these %Analysis items from partial to impl, each with a test, or verified w
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-01, outcome **Clean**, merged on local `main` as ff449a7. Report: `docs/process/archive/integrators/claude-sweep-small-2026-11-01-r1.md` (Integration result). GPL check: no copied code (layout facts only).
+Open: NCA2/NCA0 stay synthetic-only (no such NCA in the material); audren perf buffer never supplied by the four titles (unit-test proof only); `runtime/src/services/audio.c` OpenAudioIn comment and `runtime-services.md` rows to refresh; design decision on device types for standard styles and audin default auto vs opt-in.
