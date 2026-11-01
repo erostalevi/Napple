@@ -1,0 +1,20 @@
+# interface IAudioRenderer (switchbrew Audio_services; libnx audout.c/audin.c/audren.c/hwopus.c)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: firmware 23.0.0+
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+0	GetSampleRate	1.0.0	y
+1	GetSampleCount	1.0.0	y
+2	GetMixBufferCount	1.0.0	y
+3	GetState	1.0.0	y
+4	RequestUpdate	1.0.0	y
+5	Start	1.0.0	y
+6	Stop	1.0.0	y
+7	QuerySystemEvent	1.0.0	y
+8	SetRenderingTimeLimit	1.0.0	y
+9	GetRenderingTimeLimit	1.0.0	y
+10	RequestUpdateAuto	3.0.0	y
+11	ExecuteAudioRendererRendering	3.0.0	y
+12	SetVoiceDropParameter	15.0.0	y
+13	GetVoiceDropParameter	15.0.0	y
+14	SetAsyncMemoryPoolControlEnabled	23.0.0	n
