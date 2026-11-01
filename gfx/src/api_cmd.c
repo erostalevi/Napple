@@ -674,11 +674,12 @@ NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcom
  * State binding
  * --------------------------------------------------------------------------------------------------------------- */
 int gfx_program_sample_shading(const NVNprogram *p, float *rate); /* api_program.c */
+int gfx_program_hashes(const NVNprogram *p, uint64_t out[6]);     /* api_program.c */
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *prog, int stages) {
     p_bind_program *p = REC(c, p_bind_program, OP_BIND_PROGRAM);
     const prog_t *pr = (const prog_t *)prog;
     memset(p, 0, sizeof *p);
-    if (pr && pr->magic == PROG_MAGIC) memcpy(p->hash, pr->hash, sizeof p->hash);
+    gfx_program_hashes(prog, p->hash); /* host copy: the guest object may be smaller than prog_t (api_program.c) */
     p->stage_mask = (uint32_t)stages;
     if (pr && pr->magic == PROG_MAGIC && (stages & NVN_SHADER_STAGE_FRAGMENT_BIT)) {
         float rate = 0;

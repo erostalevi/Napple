@@ -8,14 +8,69 @@ void gfx_api_link_program(void) {}
 
 #define PROG_MAGIC MAGIC('P', 'R', 'G', '0')
 
+/* Stage hashes of each program, also kept host-side by program address. prog_t (152 bytes) assumes the guest's NVNprogram is that large; a title whose SDK
+ * declares it smaller has its next object over the tail of prog_t (hash[] starts at +0x68), and the guest's writes there show up as bogus stage hashes at
+ * BindProgram (Animal Crossing: "program hash 0x3"). BindProgram takes the hashes from here and reports such an overwrite once (gfx_program_hashes). */
+/* Animal Crossing's neighbour object starts at +0x88 at the latest: nothing is written into the guest object from there on (hash[4] / hash[5], tess eval and
+ * compute, live only host-side; GUEST_HASHES stages are mirrored in the object for programs the guest copies by value). */
+#define GUEST_BYTES (offsetof(prog_t, hash) + 4 * sizeof(uint64_t))
+#define GUEST_HASHES 4
+_Static_assert(offsetof(prog_t, hash) + GUEST_HASHES * sizeof(uint64_t) <= 0x88, "prog_t's guest-visible part must stay below +0x88");
+#define PH_N 16384
+static struct { const void *p; uint64_t hash[6]; } g_ph[PH_N];
+static pthread_mutex_t g_ph_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t ph_slot(const void *p) { return (uint32_t)(((uintptr_t)p >> 4) * 2654435761u) % PH_N; }
+static void ph_set(const void *p, const uint64_t *h) {
+    uint32_t i = ph_slot(p);
+    pthread_mutex_lock(&g_ph_mu);
+    g_ph[i].p = h ? p : NULL;
+    if (h) memcpy(g_ph[i].hash, h, sizeof g_ph[i].hash);
+    pthread_mutex_unlock(&g_ph_mu);
+}
+static int ph_get(const void *p, uint64_t out[6]) {
+    uint32_t i = ph_slot(p);
+    int ok = 0;
+    pthread_mutex_lock(&g_ph_mu);
+    if (g_ph[i].p == p) { memcpy(out, g_ph[i].hash, sizeof g_ph[i].hash); ok = 1; }
+    pthread_mutex_unlock(&g_ph_mu);
+    return ok;
+}
+/* The stage hashes of a program for BindProgram and the per-program state setters (api_state.c): the host copy; for an address the table does not know (a
+ * program object the guest copied by value, an evicted slot) the guest object's, with values that cannot be shader hashes (small integers: guest data over
+ * the tail of prog_t) dropped. Returns 0 when `p` is not an initialized program. */
+int gfx_program_hashes(const NVNprogram *p, uint64_t out[6]) {
+    const prog_t *o = (const prog_t *)p;
+    memset(out, 0, 6 * sizeof *out);
+    if (!o || o->magic != PROG_MAGIC) return 0;
+    if (ph_get(p, out)) {
+        if (memcmp(out, o->hash, GUEST_HASHES * sizeof *out)) {
+            int k = 0;
+            while (k < GUEST_HASHES && out[k] == o->hash[k]) k++;
+            LOG_ONCE(NAPPLE_LOG_INFO, "program %p: stage hash %d (object offset %#zx) holds %#llx, SetShaders stored %#llx: the guest object is smaller than prog_t "
+                     "(host copy used)", (const void *)p, k, offsetof(prog_t, hash) + 8 * (size_t)k, (unsigned long long)o->hash[k], (unsigned long long)out[k]);
+        }
+        return 1;
+    }
+    memcpy(out, o->hash, GUEST_HASHES * sizeof *out);
+    for (int k = 0; k < GUEST_HASHES; k++)
+        if (out[k] && out[k] < 0x100000) {
+            LOG_ONCE(NAPPLE_LOG_INFO, "program %p (not set up at this address: copied by value?): stage hash %d holds %#llx, dropped", (const void *)p, k,
+                     (unsigned long long)out[k]);
+            out[k] = 0;
+        }
+    return 1;
+}
+
 NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) {
     (void)d;
     prog_t *o = (prog_t *)p;
-    memset(o, 0, sizeof *o);
+    memset(o, 0, GUEST_BYTES);
     o->magic = PROG_MAGIC;
+    static const uint64_t none[6];
+    ph_set(p, none);
     return 1;
 }
-NVN(nvnProgramFinalize, void, NVNprogram *p) { memset(p, 0, sizeof(prog_t)); }
+NVN(nvnProgramFinalize, void, NVNprogram *p) { memset(p, 0, GUEST_BYTES); ph_set(p, NULL); }
 
 /* ProgramSetShaders may name a stage's code by a bare offset into a shader-code pool (Animal Crossing sets its window-pass program, and others, this way: the
  * address it adds the offset to is 0). The game checks the result and, when the call fails, never binds the program: the window pass then drew with the previous
@@ -74,7 +129,9 @@ uint64_t gfx_prog_resolve_hash(uint64_t h) {
 static NVNboolean set_shaders(NVNprogram *p, int n, const uint8_t *data, size_t stride) {
     prog_t *o = (prog_t *)p;
     if (o->magic != PROG_MAGIC || n < 0 || n > 6) return 0;
-    memset(o->hash, 0, sizeof o->hash);
+    uint64_t hs[6] = {0};                                 /* stage hashes: host table + the guest-visible GUEST_HASHES */
+    memset(o->hash, 0, GUEST_HASHES * sizeof *hs);
+    ph_set(p, hs);
     o->nstage = 0;
     static _Atomic uint32_t g_grp;
     uint32_t grp = atomic_fetch_add(&g_grp, 1) + 1;     /* the stubs of one call belong together */
@@ -87,7 +144,7 @@ static NVNboolean set_shaders(NVNprogram *p, int n, const uint8_t *data, size_t 
         if (code < 0x100000000ull && accept_off) {   /* every host pointer is above the 4 GiB page-zero of an arm64 Mac process: a pool offset */
             int stage = (int)*(const uint32_t *)(control + 0x714);
             if (stage < 0 || stage > 5 || i >= 6) { LOGE("ProgramSetShaders: control section names stage %d", stage); return 0; }
-            o->hash[stage] = stub_new(code, stage, control, grp);
+            hs[stage] = stub_new(code, stage, control, grp);
             o->nstage++;
             continue;
         }
@@ -104,9 +161,11 @@ static NVNboolean set_shaders(NVNprogram *p, int n, const uint8_t *data, size_t 
         { static int k; if (k++ < 4) { const uint32_t *w = (const uint32_t *)(uintptr_t)code; LOGD("normal code %#llx words %08x %08x %08x %08x %08x %08x %08x %08x (stage %d codelen %#x)", (unsigned long long)code, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], stage, *(const uint32_t *)(control + 0x700)); } }
         uint64_t h = gfx_shader_register(stage, code, control);
         if (!h) return 0;
-        o->hash[stage] = h;
+        hs[stage] = h;
         o->nstage++;
     }
+    memcpy(o->hash, hs, GUEST_HASHES * sizeof *hs);
+    ph_set(p, hs);
     return 1;
 }
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *d) { return set_shaders(p, n, (const uint8_t *)d, sizeof(NVNshaderData)); }
