@@ -33,7 +33,9 @@ struct DevicesView: View {
                                 deviceState(d).fixedSize()
                                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.tint).opacity(m.iosDeviceId == d.id ? 1 : 0).frame(width: 16).accessibilityLabel("Selected")
                             }
-                            .padding(6)
+                            .padding(8)
+                            .background(m.iosDeviceId == d.id ? Color.accentColor.opacity(0.14) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                            .animation(.smooth(duration: 0.2), value: m.iosDeviceId)
                             .contentShape(.rect)
                             .onTapGesture { m.iosDeviceId = d.id; m.destination = .device(d.id) }
                             .accessibilityElement(children: .combine)
@@ -53,7 +55,7 @@ struct DevicesView: View {
                                 Toggle("Launch after install", isOn: $m.iosLaunchAfterInstall).toggleStyle(.switch).controlSize(.small)
                             }
                         }
-                        if let msg = m.installMessage, m.pane == .devices { Banner(text: msg, tone: m.installing ? .info : .good) }
+                        if let msg = m.installMessage, m.pane == .devices { Banner(text: msg, tone: m.installing ? .info : (m.installFailed ? .bad : .good)) }
                     }
                 }
 

@@ -63,6 +63,7 @@ void ring_end(ring *r);                                  /* returns chunks to th
     id<MTLTexture> tex;
     MTLPixelFormat pf;
     int is_depth, has_stencil, gpu_owned, expand_rgb;
+    uint32_t valid_w, valid_h;   /* extent (guest pixels, origin 0,0) the game last copied into this texture when that was less than the whole of it; 0 = unknown / whole (see compute_crop) */
     uint64_t stamp;                   /* dirty-tracking stamp of the last upload (0 = never uploaded) */
     uint64_t checked;                 /* dirty epoch at the last check */
     uint64_t last_use;

@@ -11,7 +11,7 @@ import Foundation
 /// Everything is idempotent and never touches files it did not create.
 public struct EngineInstaller: Sendable {
     public static let requiredFiles = ["napple", "napple-runtime", "napple-launcher"]
-    public static let optionalFiles = ["napple-runtime-ios", "libnapple-applet.dylib", "matrix.json"]
+    public static let optionalFiles = ["napple-runtime-ios", "libnapple-applet-ios.dylib", "napple-runtime-ios-sim", "libnapple-applet-ios-sim.dylib", "libnapple-applet.dylib", "matrix.json"]
     /// How many engine versions stay installed (the newest ones); the picker in Studio's build screen lists them.
     public static let keptVersions = 5
     public static let profileMarkerBegin = "# >>> napple >>>"

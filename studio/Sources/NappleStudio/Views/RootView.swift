@@ -4,22 +4,20 @@ import NappleStudioCore
 
 struct RootView: View {
     @Environment(AppModel.self) private var m
-    @State private var columns: NavigationSplitViewVisibility = .all
 
     var body: some View {
         @Bindable var m = m
-        NavigationSplitView(columnVisibility: $columns) {
-            Sidebar()
-        } detail: {
-            detail
-                .navigationTitle(m.pane.title)
-                .inspector(isPresented: $m.showInspector) { LogInspector().inspectorColumnWidth(min: 220, ideal: 300, max: 520) }
+        VStack(spacing: 0) {
+            HeaderBar()
+            if m.pane == .add { StepBar().padding(.top, 4).padding(.bottom, 12).transition(.opacity) }
+            content
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .toolbar { MainToolbar() }
-        // A narrow window cannot hold sidebar + content + log: the sidebar folds away while the log is open (SwiftUI otherwise loops on the layout and aborts).
-        .onChange(of: m.showInspector) { _, open in
-            if open, (m.window?.frame.width ?? 1000) < 940 { columns = .detailOnly } else if !open { columns = .all }
-        }
+        .background(Background())
+        .animation(.smooth(duration: 0.25), value: m.pane)
+        .toolbar(removing: .title)
+        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
         .overlay(alignment: .bottom) { ToastHost() }
         .overlay { if m.dropTargeted { DropOverlay() } }
         .onDrop(of: [.fileURL], isTargeted: $m.dropTargeted) { providers in
@@ -31,73 +29,103 @@ struct RootView: View {
             return true
         }
         .sheet(isPresented: $m.showLegal) { LegalSheet() }
+        .sheet(isPresented: $m.showInspector) { LogSheet() }
         .sheet(isPresented: Binding(get: { m.needsSetup && m.pane == .add && m.tour == nil }, set: { _ in })) { SetupSheet() }
         .background(WindowAccessor { m.window = $0 })
     }
 
-    @ViewBuilder private var detail: some View {
+    @ViewBuilder private var content: some View {
         switch m.pane {
-        case .library: LibraryView()
-        case .add: AddGameView()
-        case .devices: DevicesView()
+        case .library: LibraryView().transition(.opacity)
+        case .add: AddGameView().transition(.opacity)
+        case .devices: DevicesView().transition(.opacity)
         }
     }
 }
 
-struct Sidebar: View {
+struct Background: View {
+    var body: some View {
+        LinearGradient(colors: [Color.accentColor.opacity(0.10), Color.clear], startPoint: .top, endPoint: .center)
+            .background(.background)
+            .ignoresSafeArea()
+    }
+}
+
+/// Top row: where you are, a way back, and the few things that live outside the flow.
+struct HeaderBar: View {
     @Environment(AppModel.self) private var m
     var body: some View {
-        @Bindable var m = m
-        List(selection: $m.pane) {
-            Section("Games") {
-                row(.library, badge: m.libraryItems.isEmpty ? nil : "\(m.libraryItems.count)")
-                row(.add, badge: m.isBuilding ? "●" : nil)
+        HStack(spacing: 12) {
+            if m.pane == .library {
+                Text("Napple Studio").font(.title2.weight(.semibold))
+            } else {
+                Button { m.goHome() } label: { Label("Games", systemImage: "chevron.left") }
+                    .buttonStyle(.plain).foregroundStyle(.tint).font(.body.weight(.medium))
+                    .disabled(m.isBuilding).accessibilityIdentifier("header.back")
+                if m.pane == .devices { Text("iPhone & iPad").font(.title2.weight(.semibold)) }
             }
-            Section("Devices") { row(.devices, badge: nil) }
+            Spacer()
+            if m.pane == .library {
+                Button { m.pickFilesAndAdd() } label: { Label("Add Game", systemImage: "plus") }
+                    .buttonStyle(.glassProminent).controlSize(.large).accessibilityIdentifier("toolbar.add")
+            }
+            if m.pane != .devices {
+                Button { m.pane = .devices } label: { Image(systemName: "iphone.gen3") }.buttonStyle(.plain).help("iPhone & iPad").accessibilityLabel("iPhone and iPad")
+            }
+            Button { m.showInspector = true } label: { Image(systemName: "text.alignleft") }.buttonStyle(.plain).help("Show the log (⌥⌘L)").accessibilityLabel("Log")
+            SettingsLink { Image(systemName: "gearshape") }.buttonStyle(.plain).help("Settings")
+            Circle().fill(m.cli == nil ? Color.orange : Color.green).frame(width: 8, height: 8)
+                .help(m.cli == nil ? "Engine not found" : (m.engineMessage ?? "Engine ready")).accessibilityLabel(m.cli == nil ? "Engine not found" : "Engine ready")
         }
-        .listStyle(.sidebar)
-        .navigationSplitViewColumnWidth(min: 140, ideal: 160, max: 210)
-        .safeAreaInset(edge: .bottom) { EngineFooter() }
-    }
-    private func row(_ p: Pane, badge: String?) -> some View {
-        NavigationLink(value: p) {
-            Label(p.title, systemImage: p.symbol).badge(badge ?? "")
-        }
-        .accessibilityIdentifier("sidebar.\(p.rawValue)")
+        .font(.title3)
+        .padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 8)
     }
 }
 
-struct EngineFooter: View {
+/// 1 Game, 2 Options, 3 Build, 4 Done: the whole Add flow at a glance.
+struct StepBar: View {
     @Environment(AppModel.self) private var m
+    private static let names: [LocalizedStringKey] = ["Game", "Options", "Build", "Done"]
+    private var current: Int {
+        switch m.phase {
+        case .idle, .planning: 0
+        case .ready: 1
+        case .building: 2
+        case .done: 3
+        case .failed: m.plan == nil ? 0 : 2
+        }
+    }
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            if let e = m.engineMessage { Text(e).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
-            Label(m.cli == nil ? "Engine not found" : "Engine ready", systemImage: m.cli == nil ? "exclamationmark.triangle" : "checkmark.seal")
-                .font(.caption).foregroundStyle(m.cli == nil ? .orange : .secondary)
+        HStack(spacing: 0) {
+            ForEach(0..<4, id: \.self) { i in
+                if i > 0 { Rectangle().fill(i <= current ? Color.accentColor : Color.secondary.opacity(0.25)).frame(height: 2).frame(maxWidth: 60) }
+                VStack(spacing: 4) {
+                    ZStack {
+                        Circle().fill(i <= current ? Color.accentColor : Color.secondary.opacity(0.18)).frame(width: 26, height: 26)
+                        if i < current { Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.white) }
+                        else { Text("\(i + 1)").font(.caption.weight(.semibold)).foregroundStyle(i == current ? Color.white : Color.secondary) }
+                    }
+                    Text(Self.names[i]).font(.caption).foregroundStyle(i == current ? Color.primary : Color.secondary)
+                }
+            }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
+        .animation(.smooth, value: current)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Step \(current + 1) of 4")
     }
 }
 
-struct MainToolbar: ToolbarContent {
+/// The build log, on demand.
+struct LogSheet: View {
     @Environment(AppModel.self) private var m
-    var body: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
-            Button { m.pickFilesAndAdd() } label: { Label("Add Game", systemImage: "plus") }
-                .help("Add a game file (⌘O)").accessibilityIdentifier("toolbar.add")
-            if m.isBuilding {
-                Button(role: .cancel) { m.cancelBuild() } label: { Label("Cancel Build", systemImage: "xmark.circle") }
-            } else if m.canBuild && m.pane == .add {
-                Button { m.startBuild() } label: { Label("Build", systemImage: "hammer") }
-                    .buttonStyle(.glassProminent).help("Build (⌘B)").accessibilityIdentifier("toolbar.build")
-            }
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack { Text("Log").font(.headline); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }.padding(14)
+            Divider()
+            LogInspector()
         }
-        ToolbarSpacer(.fixed, placement: .primaryAction)
-        ToolbarItem(placement: .primaryAction) {
-            Toggle(isOn: Binding(get: { m.showInspector }, set: { m.showInspector = $0 })) { Label("Log", systemImage: "sidebar.trailing") }
-                .help("Show the build log (⌥⌘L)")
-        }
+        .frame(width: 640, height: 460)
     }
 }
 

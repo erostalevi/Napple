@@ -235,6 +235,8 @@ static int mkdir_p(const char *path) {
     fe.layer.contentsScale = s;
     fe.layer.drawableSize = CGSizeMake(MAX(1, self.bounds.size.width * s), MAX(1, self.bounds.size.height * s));
     [CATransaction commit];
+    static CGSize logged;
+    if (!CGSizeEqualToSize(logged, self.bounds.size)) { logged = self.bounds.size; LOGF("view %.0fx%.0f pt, scale %.1f, drawable %.0fx%.0f px", self.bounds.size.width, self.bounds.size.height, s, fe.layer.drawableSize.width, fe.layer.drawableSize.height); }
     UIScreen *sc = self.window.windowScene.screen;
     if (sc) fe.displayHz = (double)sc.maximumFramesPerSecond;
     if (fe.cfg.callbacks.on_resize) fe.cfg.callbacks.on_resize(fe.cfg.callbacks.user, (int)fe.layer.drawableSize.width, (int)fe.layer.drawableSize.height, s);
@@ -855,6 +857,7 @@ napple_frontend *napple_frontend_create(const napple_frontend_config *c) {
         l.pixelFormat = MTLPixelFormatBGRA8Unorm;
         l.framebufferOnly = YES;
         l.opaque = YES;
+        l.contentsGravity = kCAGravityResize;
         l.backgroundColor = UIColor.blackColor.CGColor;
         fe.layer = l;
         fe.displayHz = 60;

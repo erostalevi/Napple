@@ -571,7 +571,7 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             resolve_exec(
                 &o.runtime,
                 RUNTIME_NAME,
-                "runtime/build-ios/napple-runtime",
+                if target.is_sim() { "runtime/build-ios-sim/napple-runtime" } else { "runtime/build-ios/napple-runtime" },
                 "the iOS runtime binary (make -C runtime -f Makefile.ios on a Mac)",
             )?,
             PathBuf::new(),
@@ -1430,7 +1430,11 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         let n = crate::ios::dylibize(&game, &app.join("Frameworks"), target.platform())?;
         notes.push(format!("{n} rewritten module(s) packed as Mach-O dylibs in Frameworks/ (iOS maps executable code only from signed files)"));
         // the runtime as a library, beside the iOS runtime (tools/build_ios.sh): what runs the Mii Maker inside the game app (no exec on iOS)
-        let lib = runtime.with_file_name("libnapple-applet.dylib");
+        // A bundled runtime is named napple-runtime-<suffix> and its library libnapple-applet-<suffix>.dylib (Studio ships the macOS library under the plain
+        // name next to them, which must never end up in an iOS app); a checkout's runtime/build-ios[-sim]/ has the plain name beside its runtime.
+        let suffix = runtime.file_name().and_then(|n| n.to_str()).and_then(|n| n.strip_prefix("napple-runtime-")).unwrap_or("");
+        let lib = if suffix.is_empty() { runtime.with_file_name("libnapple-applet.dylib") } else { runtime.with_file_name(format!("libnapple-applet-{suffix}.dylib")) };
+        let lib = if lib.is_file() { lib } else if runtime.parent().and_then(|d| d.file_name()).and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("build-")) { runtime.with_file_name("libnapple-applet.dylib") } else { lib };
         if lib.is_file() {
             std::fs::copy(&lib, app.join("Frameworks/libnapple-applet.dylib"))
                 .map_err(|e| BuildError::io("copy libnapple-applet.dylib", e))?;

@@ -33,14 +33,13 @@ struct StudioApp: App {
         WindowGroup("Napple Studio", id: "main") {
             RootView()
                 .environment(model)
-                .controlSize(.small)
                 .onAppear { delegate.model = model; model.refreshLibrary(adoptOutput: true) }
                 .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                     model.refreshLibrary()
                 }
-                .frame(minWidth: 680, minHeight: 440)
+                .frame(minWidth: 620, minHeight: 520)
         }
-        .defaultSize(width: 880, height: 580)
+        .defaultSize(width: 760, height: 680)
         .commands {
             CommandGroup(replacing: .newItem) {
                 Button("Add Game…") { model.pickFilesAndAdd() }.keyboardShortcut("o")

@@ -36,9 +36,9 @@ public struct DeviceService: Sendable {
         return (all, note)
     }
 
-    public func install(app: URL, on d: IOSDevice) async throws {
+    public func install(app: URL, on d: IOSDevice, onLine: (@Sendable (String) -> Void)? = nil) async throws {
         let args = d.simulator ? ["simctl", "install", d.id, app.path] : ["devicectl", "device", "install", "app", "--device", d.id, app.path]
-        do { _ = try await tools.xcrun(args) }
+        do { _ = try await tools.xcrun(args, onLine: onLine) }
         catch { throw CLIError.failed(code: 1, message: ErrorText.humanize("error: [install] \(error.localizedDescription)")) }
     }
 

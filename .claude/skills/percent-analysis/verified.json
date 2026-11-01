@@ -1,0 +1,452 @@
+{
+ "gpu_fixed/transform feedback": {
+  "status": "partial",
+  "note": "gfx/src/mtl_stages.inc + api_cmd.c (8963560, afd9e63): record+replay capture pass, exact-word t_stages; no registered real-title XFB layout (stages.h registry by blob hash only), XFB of GS/TES output not done",
+  "date": "2026-10-27"
+ },
+ "gpu_fixed/geometry shaders": {
+  "status": "partial",
+  "note": "mtl_stages.inc GS compute dispatch + strip draw (t_stages point->quad); pass-through/untranslatable GS falls back to no-GS draw; GS+tess together and indirect draws open; no title binds one",
+  "date": "2026-10-27"
+ },
+ "gpu_fixed/tessellation": {
+  "status": "partial",
+  "note": "mtl_stages.inc TCS dispatch + drawPatches, quad/triangle domains (t_stages); isoline refused, domain defaults to triangle until control section read, TES params registry only; no title reaches it",
+  "date": "2026-10-27"
+ },
+ "gpu_fixed/MSAA / resolve": {
+  "status": "partial",
+  "note": "mtl_replay.m resolves colour/depth/stencil/int; ResolveDepthBuffer is a recorded barrier (api_cmd.c:733); nvnProgramSetSampleShading stored (api_program.c:123) but not applied; no MSAA texture-views",
+  "date": "2026-10-27"
+ },
+ "gpu_fixed/texture views / sparse": {
+  "status": "partial",
+  "note": "gfx/src/mtl_tex.m view_valid: views Metal cannot express fall back to the whole texture (999f703 made it informational); no sparse",
+  "date": "2026-10-27"
+ },
+ "gpu_fixed/indirect draw/dispatch": {
+  "status": "impl",
+  "note": "api_cmd.c:490,494 OP_DRAW_IND_COUNT; mtl_replay.m:1172-1205 (unaligned args skipped)",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/queries / counters (occlusion, timestamp)": {
+  "status": "impl",
+  "note": "gfx/src/mtl_replay.m vis_draw/vis_close: SAMPLES_PASSED via Metal visibility results (uncommitted, verified in SMO headless runs); other pipeline-statistics counters report 0",
+  "date": "2026-10-24"
+ },
+ "nvdrv//dev/nvhost-nvdec, vic, nvjpg, msenc": {
+  "status": "partial",
+  "note": "b8: pitch!=width, VP9 via VideoToolbox, NVJPG+MSENC encode (nvdrv_media_core.c, decoder_vt.c, test_svc_nvdrv_media.c); no title has driven them",
+  "date": "2026-11-01"
+ },
+ "media/JPEG (nvjpg / caps)": {
+  "status": "partial",
+  "note": "jpeg_core.c baseline codec used by caps_core.c:62 (album JPEG store/loads) and nvdrv_media_core NVJPG (ec0439c); tested on Linux only, no guest has used it",
+  "date": "2026-10-26"
+ },
+ "media/H.264": {
+  "status": "partial",
+  "note": "vt_h264.c movie path + decoder_vt.c NVDEC backend; VP9 refused; preview panel video unverified; movie audio off by default",
+  "date": "2026-10-27"
+ },
+ "applets/controller applet": {
+  "status": "impl",
+  "note": "77f8466 AppKit controller sheet + UI hook (applet_ui.h), host tests with scripted answers; no title drove it live",
+  "date": "2026-10-27"
+ },
+ "applets/error applet": {
+  "status": "impl",
+  "note": "77f8466 AppKit error sheet, applet_lib_core, tested",
+  "date": "2026-10-27"
+ },
+ "applets/player select (profile)": {
+  "status": "impl",
+  "note": "77f8466 player-select sheet; single profile list unless applet_set_profile_lister registered (account.c)",
+  "date": "2026-10-27"
+ },
+ "content/DLC (AddOnContent) mounting": {
+  "status": "impl",
+  "note": "aoc:u + fs data-id 30/202 + build --dlc; ACNH 3.0.3 (3 DLC) and MK8D (Booster Course Pass) boot headless with DLC mounted; DLC content use not exercised",
+  "date": "2026-10-26"
+ },
+ "audio/I3DL2 reverb": {
+  "status": "impl",
+  "note": "audio/src/reverb.c full Ryujinx-port network, mix.c:~419-435 effect type 5 (earlier 'missing' entry was stale)",
+  "date": "2026-10-24"
+ },
+ "audio/audin (microphone)": {
+  "status": "partial",
+  "note": "audio/src/audin_mic.c AUHAL capture now built on macOS and the generated apps carry NSMicrophoneUsageDescription + audio-input entitlement (c38f077); still opt-in (NAPPLE_AUDIN_SOURCE=mic), the mic test skips on macOS, no title verified",
+  "date": "2026-10-27"
+ },
+ "input/IR camera (irs)": {
+  "status": "partial",
+  "note": "runtime/src/services/irs.c: Activate/SetFunctionLevel/ActivateWithFunctionLevel/RunImageTransferEx/RunIrLed rows now implemented (tested); tera plugin and pointing (DPD) remain stubs; layouts unverified on a title",
+  "date": "2026-10-27"
+ },
+ "fs_runtime/save data extra data / size queries": {
+  "status": "impl",
+  "note": "Napple/runtime/src/services/fs.c:268-277,643 SaveDataExtraData (0x200) + WriteSaveDataFileSystemExtraData; fs.c impl 31->53",
+  "date": "2026-10-24"
+ },
+ "loader/NRO runtime loading (ro:1)": {
+  "status": "impl",
+  "note": "Napple/runtime/src/ro.c:1-132 ldr:ro + ro:1 registered from main.c:181; maps the AOT image by module id (NRO without AOT image stops the runtime). Scan misses it: it only reads runtime/src/services",
+  "date": "2026-10-24"
+ },
+ "Maxwell shader ISA/TLD": {
+  "status": "missing",
+  "note": "gfx/src/shader/maxwell_translate.c: only TLDS/TEXS decoded; no LDS/STS shared-memory path (threadgroup only used for barrier, :1499)",
+  "date": "2026-10-24"
+ },
+ "Maxwell shader ISA/LDS": {
+  "status": "missing",
+  "note": "gfx/src/shader/maxwell_translate.c: only TLDS/TEXS decoded; no LDS/STS shared-memory path (threadgroup only used for barrier, :1499)",
+  "date": "2026-10-24"
+ },
+ "Maxwell shader ISA/STS": {
+  "status": "missing",
+  "note": "gfx/src/shader/maxwell_translate.c: only TLDS/TEXS decoded; no LDS/STS shared-memory path (threadgroup only used for barrier, :1499)",
+  "date": "2026-10-24"
+ },
+ "loader/NSO segments (LZ4)": {
+  "status": "impl",
+  "note": "crates/napple-core/src/infrastructure/nso.rs:42 lz4 block decompress + size check",
+  "date": "2026-10-24"
+ },
+ "loader/MOD0 / dynamic relocations": {
+  "status": "impl",
+  "note": "relocs.rs:93 RELR/RELA/JMPREL; runtime/src/module.c:214 relocate",
+  "date": "2026-10-24"
+ },
+ "loader/multi-module (rtld, sdk, subsdkN)": {
+  "status": "impl",
+  "note": "cli.rs:17 is_module; module.c:282 cross-module lookup",
+  "date": "2026-10-24"
+ },
+ "loader/host overrides of guest imports": {
+  "status": "impl",
+  "note": "runtime/src/module.c:94,224 host_symbols_register; used by main.c:184, movie.c:553",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/RGBA8 / BGRA8 (+sRGB)": {
+  "status": "impl",
+  "note": "gfx/src/tex/napple_fmt.c RGBA8/BGRA8 + sRGB entries",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/BC1-BC3": {
+  "status": "impl",
+  "note": "napple_fmt.c native Metal BC, CPU fallback napple_bcdec.c",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/BC4/BC5": {
+  "status": "impl",
+  "note": "napple_fmt.c 0x49-0x4c native + CPU fallback",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/BC6H/BC7": {
+  "status": "impl",
+  "note": "napple_fmt.c 0x4d-0x50 native + napple_bcdec.c fallback",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/ASTC (all block sizes)": {
+  "status": "impl",
+  "note": "napple_fmt.c astc_off 14 sizes LDR+sRGB",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/float formats (RGBA16F/32F, R11G11B10F)": {
+  "status": "impl",
+  "note": "napple_fmt.c exact mappings; 3-component RGB8/16/32 unsupported",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/block-linear swizzle": {
+  "status": "impl",
+  "note": "gfx/src/tex_xfer.c:37-59 deswizzle + napple_layout.c GOB math",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/compute dispatch": {
+  "status": "impl",
+  "note": "api_cmd.c:498 record, mtl_replay.m:1217 dispatchThreadgroups",
+  "date": "2026-10-24"
+ },
+ "gpu_fixed/shader cache (persisted MSL/pipelines)": {
+  "status": "impl",
+  "note": "mtl_shader.m:44-110 MSL cache + binary archive",
+  "date": "2026-10-24"
+ },
+ "nvdrv//dev/nvmap": {
+  "status": "impl",
+  "note": "nvdrv.c:55-112 nvmap ioctls",
+  "date": "2026-10-24"
+ },
+ "nvdrv//dev/nvhost-ctrl": {
+  "status": "impl",
+  "note": "nvdrv.c:114-125 syncpt/event ioctls",
+  "date": "2026-10-24"
+ },
+ "audio/audren voices PCM16": {
+  "status": "impl",
+  "note": "audio/src/mix.c:169-205",
+  "date": "2026-10-24"
+ },
+ "audio/ADPCM": {
+  "status": "impl",
+  "note": "mix.c:171-194",
+  "date": "2026-10-24"
+ },
+ "audio/final mix / submix": {
+  "status": "impl",
+  "note": "mix.c:259-275,523-538",
+  "date": "2026-10-24"
+ },
+ "audio/splitter": {
+  "status": "impl",
+  "note": "mix.c:54-95,507-533",
+  "date": "2026-10-24"
+ },
+ "audio/delay": {
+  "status": "impl",
+  "note": "effects.c:34-40 delay line",
+  "date": "2026-10-24"
+ },
+ "audio/reverb": {
+  "status": "impl",
+  "note": "effects.c:96-130 type 4",
+  "date": "2026-10-24"
+ },
+ "audio/aux send/return": {
+  "status": "impl",
+  "note": "mix.c:288 mix_aux",
+  "date": "2026-10-24"
+ },
+ "audio/biquad filter": {
+  "status": "impl",
+  "note": "internal.h:61, mix.c effect type 6",
+  "date": "2026-10-24"
+ },
+ "audio/limiter / light limiter": {
+  "status": "impl",
+  "note": "mix.c:316 mix_limiter",
+  "date": "2026-10-24"
+ },
+ "audio/compressor": {
+  "status": "impl",
+  "note": "effects.c type 9",
+  "date": "2026-10-24"
+ },
+ "audio/capture effect": {
+  "status": "impl",
+  "note": "mix.c:351 mix_capture",
+  "date": "2026-10-24"
+ },
+ "audio/audout": {
+  "status": "impl",
+  "note": "audout.c",
+  "date": "2026-10-24"
+ },
+ "audio/hwopus multistream": {
+  "status": "impl",
+  "note": "hwopus.c:31-99 OpusMSDecoder",
+  "date": "2026-10-24"
+ },
+ "input/Pro / FullKey": {
+  "status": "impl",
+  "note": "input.c:325-340",
+  "date": "2026-10-24"
+ },
+ "input/Handheld": {
+  "status": "impl",
+  "note": "input.c:330-333",
+  "date": "2026-10-24"
+ },
+ "input/Joy-Con dual / left / right": {
+  "status": "impl",
+  "note": "input.c:332-343",
+  "date": "2026-10-24"
+ },
+ "input/six-axis motion": {
+  "status": "impl",
+  "note": "motion.c, hid.c:66-82 (IsSixAxisSensorAtRest stub)",
+  "date": "2026-10-24"
+ },
+ "input/touchscreen": {
+  "status": "impl",
+  "note": "input.c:416 single finger touch",
+  "date": "2026-10-24"
+ },
+ "input/mouse / keyboard (HID)": {
+  "status": "impl",
+  "note": "input.c:426,435",
+  "date": "2026-10-24"
+ },
+ "input/vibration": {
+  "status": "impl",
+  "note": "input.c:169-178 + CoreHaptics gamepad.m",
+  "date": "2026-10-24"
+ },
+ "input/npad assignment / hold type / multi-player": {
+  "status": "impl",
+  "note": "hid.c + hid_core: deactivate/disconnect/swap/merge assignment implemented with tests (6188d06)",
+  "date": "2026-10-26"
+ },
+ "fs_runtime/RomFS as IStorage": {
+  "status": "impl",
+  "note": "fs.c:463-495",
+  "date": "2026-10-24"
+ },
+ "fs_runtime/transactional save data": {
+  "status": "impl",
+  "note": "fs.c:182-261 journal",
+  "date": "2026-10-24"
+ },
+ "fs_runtime/cache storage": {
+  "status": "impl",
+  "note": "fs.c:370 journaled cache",
+  "date": "2026-10-24"
+ },
+ "fs_runtime/temporary storage": {
+  "status": "impl",
+  "note": "fs.c:524-535",
+  "date": "2026-10-24"
+ },
+ "fs_runtime/sdcard": {
+  "status": "impl",
+  "note": "fs.c:524 open_host_fs (no SD status services)",
+  "date": "2026-10-24"
+ },
+ "content/XCI (HFS0)": {
+  "status": "impl",
+  "note": "xci.rs parse_xci, real XCIs ingested",
+  "date": "2026-10-24"
+ },
+ "content/NSP (PFS0)": {
+  "status": "impl",
+  "note": "legacy.rs:53, pfs.rs",
+  "date": "2026-10-24"
+ },
+ "content/NCA3 + AES-XTS header": {
+  "status": "impl",
+  "note": "nca.rs:87-92, bktr.rs:74",
+  "date": "2026-10-24"
+ },
+ "content/titlekey (rights id) crypto": {
+  "status": "impl",
+  "note": "nca.rs:113-122 common tickets",
+  "date": "2026-10-24"
+ },
+ "content/BKTR update patching": {
+  "status": "impl",
+  "note": "bktr.rs, napple build --updates (unit tests synthetic; delta romfs path refuses base-IVFC reads)",
+  "date": "2026-10-24"
+ },
+ "content/CNMT metadata": {
+  "status": "impl",
+  "note": "cnmt.rs",
+  "date": "2026-10-24"
+ },
+ "content/NACP control data": {
+  "status": "impl",
+  "note": "nacp.rs, control.rs:8",
+  "date": "2026-10-24"
+ },
+ "content/NPDM / ACID / ACI0": {
+  "status": "impl",
+  "note": "napple-core npdm.rs + runtime/src/npdm.c",
+  "date": "2026-10-24"
+ },
+ "content/RomFS (IVFC)": {
+  "status": "impl",
+  "note": "romfs.rs streaming dump",
+  "date": "2026-10-24"
+ },
+ "media/VP9 (host decoder)": {
+  "status": "impl",
+  "note": "runtime/src/movie.c libvpx; LAS plays its VP9 movie (2400 frames decoded in a 45 s headless boot), SMO/MK8D boots",
+  "date": "2026-10-26"
+ },
+ "gpu_fixed/depth/stencil formats": {
+  "status": "impl",
+  "note": "stencil_slots wired (mtl_replay.m:1120, a6a7099) and t_stencil_sample reads stencil view as uint in a fragment program (afd9e63); only 2D/2D-array stencil views",
+  "date": "2026-10-27"
+ },
+ "input/GameCube / Palma / NES styles": {
+  "status": "partial",
+  "note": "input.c/hid_core style constants (e129cfd), tested on Linux; GC trigger lifo unwritten",
+  "date": "2026-10-27"
+ },
+ "input/gesture / debugpad": {
+  "status": "impl",
+  "note": "runtime/src/services/hid.c:561-573,712,731 ActivateDebugPad/ActivateGesture IPC_IMPL; input gesture recognizer + debug pad sections (4dd5909, 9aeece7) with host tests",
+  "date": "2026-10-26"
+ },
+ "fs_runtime/bcat storage": {
+  "status": "partial",
+  "note": "runtime/src/services/bcat.c + bcat_core.c: provider hook (bcat_set_provider), folder provider NAPPLE_BCAT_DIR, directory/file/enumerate services with MD5 digests, tested on Linux; layouts from memory",
+  "date": "2026-10-27"
+ },
+ "applets/swkbd (software keyboard)": {
+  "status": "partial",
+  "note": "applet.c frontend_text_input + sheet; inline calls pass empty header/sub (applet.c ~1462); no guest drove it",
+  "date": "2026-10-27"
+ },
+ "media/Vorbis/Opus movie audio": {
+  "status": "partial",
+  "note": "runtime/src/movie.c:63-72 Vorbis path via movie_audio_core (stb_vorbis), off unless NAPPLE_MOVIE_VORBIS=1; out-of-band header reading pending; AAC not hooked",
+  "date": "2026-10-26"
+ },
+ "audio/performance metrics": {
+  "status": "partial",
+  "note": "audio/src/audren.c collect_performance: frame history (performance_frame_count frames held until collected, whole frames copied oldest first); header layout and modelled costs still from documentation memory, unverified on a title",
+  "date": "2026-10-27"
+ },
+ "nvdrv//dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)": {
+  "status": "partial",
+  "note": "runtime/src/services/nvdrv_nodes_core.c (b8): state-tracked channel/AS/ctrl ioctls, test_svc_nvdrv_nodes.c; header says layouts PROPOSED, not checked against real traces",
+  "date": "2026-11-01"
+ },
+ "nvdrv//dev/nvdisp-disp0": {
+  "status": "partial",
+  "note": "nvdrv_media_core.c:777-830 nvdisp vblank count/wait ioctls, nvdrv.c:658 routed; synthetic tests only",
+  "date": "2026-11-01"
+ },
+ "content/NCA2 / NCA0": {
+  "status": "partial",
+  "note": "napple-core nca.rs: NCA2 (per-FS-header XTS sector 0) tested synthetically; NCA0 key area via user RSA key nca0_key_area_rsa is a proposal, no retail file seen",
+  "date": "2026-10-27"
+ },
+ "content/personalized tickets": {
+  "status": "partial",
+  "note": "napple-core ticket.rs encrypted_title_key: RSA-OAEP-SHA256 with the user eticket_rsa_keypair, tested against an OpenSSL vector; keypair layout and napple-build container.rs wiring pending",
+  "date": "2026-10-27"
+ },
+ "content/NSZ / XCZ (zstd)": {
+  "status": "partial",
+  "note": "ncz.rs: tolerates a first section straddling the 0x4000 boundary (nsz writers); still synthetic round trips only, no real dump ingested",
+  "date": "2026-10-27"
+ },
+ "content/IVFC hash-tree verification": {
+  "status": "impl",
+  "note": "napple-core ivfc.rs: master hash and every level checked on romfs_data, romfs_data_verified streams the data level; tested on synthetic trees (real RomFS check is a Mac/user step)",
+  "date": "2026-10-27"
+ },
+ "applets/photo viewer / album": {
+  "status": "impl",
+  "note": "applet_album_register called at applet.c:1872; album sheet in frontend (77f8466, d4f2960); tested with scripted answers",
+  "date": "2026-10-27"
+ },
+ "applets/web / offline web": {
+  "status": "partial",
+  "note": "applet_web_register wired (applet.c:1871) + WebKit sheet window; HtmlDocument extraction at build (853463f) but never run on a real title's html/ layout",
+  "date": "2026-10-27"
+ },
+ "applets/mii edit": {
+  "status": "impl",
+  "note": "runtime/src/services/applet.c:693-980 firmware applet host: applet 0x12 runs the user's firmware Mii Maker (0100000000001009) as a child napple-runtime or in-process libnapple-applet.dylib, storage-file protocol; verified end to end on macOS by tools/e2e (new Mii in MiiDatabase.dat, read by MK8D mii:u) in 2026-10-27-tie-up.md row 5",
+  "date": "2026-10-27"
+ },
+ "ipc/ro:1 / ldr:ro": {
+  "status": "impl",
+  "note": "runtime/src/ro.c:128-132 registers ldr:ro and ro:1; main.c:191",
+  "date": "2026-10-24"
+ }
+}

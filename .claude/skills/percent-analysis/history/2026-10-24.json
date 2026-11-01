@@ -1,0 +1,1698 @@
+{
+ "date": "2026-10-24",
+ "commit": "1f4b902",
+ "dirty_files": 2,
+ "measured_percent": 82.2,
+ "domains": [
+  {
+   "key": "cpu_rewrite",
+   "title": "CPU: AOT A64 rewrite",
+   "weight": 14,
+   "ratio": 1.0,
+   "points": 14.0,
+   "counts": {
+    "core": [
+     11,
+     11
+    ],
+    "common": [
+     1,
+     1
+    ],
+    "rare": [
+     1,
+     1
+    ]
+   },
+   "missing": [],
+   "extra": {}
+  },
+  {
+   "key": "loader",
+   "title": "Loader: NSO/NRO/modules/relocs",
+   "weight": 5,
+   "ratio": 0.8462,
+   "points": 4.23,
+   "counts": {
+    "core": [
+     3,
+     3
+    ],
+    "common": [
+     1,
+     2
+    ],
+    "rare": [
+     0,
+     0
+    ]
+   },
+   "missing": [
+    {
+     "name": "NRO runtime loading (ro:1)",
+     "tier": "common",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: no ldr:ro / ro:1 service in runtime/src/services"
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  },
+  {
+   "key": "kernel",
+   "title": "Kernel: Horizon svcs + scheduling",
+   "weight": 10,
+   "ratio": 0.9167,
+   "points": 9.17,
+   "counts": {
+    "core": [
+     39,
+     39
+    ],
+    "common": [
+     13,
+     14
+    ],
+    "rare": [
+     0,
+     11
+    ]
+   },
+   "missing": [
+    {
+     "name": "0x36 SynchronizePreemptionState",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "0x20 SendSyncRequestLight",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x23 SendAsyncRequestWithUserBuffer",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x2E GetDebugFutureThreadInfo",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x2F GetLastThreadInfo",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x33 GetThreadContext3",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x40 CreateSession",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x41 AcceptSession",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x43 ReplyAndReceive",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x4B CreateCodeMemory",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x4C ControlCodeMemory",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "0x50 CreateSharedMemory",
+     "tier": "rare",
+     "status": "missing"
+    }
+   ],
+   "extra": {
+    "registered": 52
+   }
+  },
+  {
+   "key": "ipc",
+   "title": "IPC: HLE services (coverage)",
+   "weight": 10,
+   "ratio": 0.6724,
+   "points": 6.72,
+   "counts": {
+    "core": [
+     22,
+     22
+    ],
+    "common": [
+     5,
+     19
+    ],
+    "rare": [
+     2,
+     12
+    ]
+   },
+   "missing": [
+    {
+     "name": "sfdnsres",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "mii:u",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "caps:su",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "caps:u",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "ldn:u",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "psm",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "lbl",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "irs",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "bcat:u",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "audin:u",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "ro:1 / ldr:ro",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "ncm",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "ns:am2 / ns:ec",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "spsm",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "audrec:u",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "hidbus",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "olsc:u",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "ectx:aw",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "pdm:qry",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "fgm",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "set:fd",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "btm:u",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "ovln:snd",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "ns:vm",
+     "tier": "rare",
+     "status": "missing"
+    }
+   ],
+   "extra": {
+    "cmd_impl": 224,
+    "cmd_stub": 335,
+    "per_file": {
+     "account.c": [
+      11,
+      8
+     ],
+     "apm.c": [
+      4,
+      2
+     ],
+     "applet.c": [
+      48,
+      87
+     ],
+     "audio.c": [
+      52,
+      10
+     ],
+     "fs.c": [
+      31,
+      5
+     ],
+     "hid.c": [
+      22,
+      30
+     ],
+     "host_info.c": [
+      0,
+      0
+     ],
+     "lm.c": [
+      3,
+      0
+     ],
+     "misc.c": [
+      2,
+      17
+     ],
+     "nvdrv.c": [
+      6,
+      8
+     ],
+     "offline.c": [
+      1,
+      146
+     ],
+     "pl.c": [
+      7,
+      0
+     ],
+     "services.c": [
+      0,
+      0
+     ],
+     "settings.c": [
+      8,
+      4
+     ],
+     "time.c": [
+      14,
+      12
+     ],
+     "vi.c": [
+      13,
+      6
+     ]
+    },
+    "offline_stub_services": [
+     "bsd:u",
+     "friend:u",
+     "nfc:user",
+     "nfp:user",
+     "nifm:u",
+     "nsd",
+     "prepo",
+     "ssl"
+    ]
+   }
+  },
+  {
+   "key": "ipc_depth",
+   "title": "IPC: command depth (impl vs stub)",
+   "weight": 5,
+   "ratio": 0.4007,
+   "points": 2.0,
+   "counts": {
+    "core": [
+     0,
+     0
+    ],
+    "common": [
+     0,
+     0
+    ],
+    "rare": [
+     0,
+     0
+    ]
+   },
+   "missing": [],
+   "extra": {
+    "impl": 224,
+    "stub": 335
+   }
+  },
+  {
+   "key": "nvn",
+   "title": "GPU: NVN API surface",
+   "weight": 12,
+   "ratio": 0.8011,
+   "points": 9.61,
+   "counts": {
+    "core": [
+     419,
+     523
+    ],
+    "common": [
+     0,
+     0
+    ],
+    "rare": [
+     0,
+     0
+    ]
+   },
+   "missing": [
+    {
+     "name": "nvnDeviceBuilderGetFlags",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderSetQueuePriority",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetQueuePriority",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetDevice",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetFlags",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetCommandMemorySize",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetComputeMemorySize",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetControlMemorySize",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetCommandFlushThreshold",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetMemorySize",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnQueueBuilderGetMemory",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnWindowBuilderSetNumActiveTextures",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnWindowBuilderGetDevice",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnWindowBuilderGetNumTextures",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnWindowBuilderGetTexture",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnWindowBuilderGetNumActiveTextures",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnWindowSetNumActiveTextures",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnWindowGetNumActiveTextures",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnWindowGetNumTextures",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnProgramSetShadersExt",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnProgramSetSampleShading",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnMemoryPoolBuilderGetDevice",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnMemoryPoolBuilderGetMemory",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnMemoryPoolBuilderGetSize",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnMemoryPoolBuilderGetFlags",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBufferBuilderGetDevice",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBufferBuilderGetMemoryPool",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBufferBuilderGetMemoryOffset",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBufferBuilderGetSize",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnTextureBuilderGetDevice",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnTextureBuilderGetPackagedTextureLayout",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnTextureBuilderGetMemoryPool",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnTextureBuilderGetMemoryOffset",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnTextureBuilderGetRawStorageClass",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnTextureGetMemoryPool",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnTextureGetMemoryOffset",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnTextureGetRawStorageClass",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetDevice",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetMinMagFilter",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetWrapMode",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetLodClamp",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetLodBias",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetCompare",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetBorderColor",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetBorderColori",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetBorderColorui",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetMaxAnisotropy",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerBuilderGetReductionFilter",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetMinMagFilter",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetWrapMode",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetLodClamp",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetLodBias",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetCompare",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetBorderColor",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetBorderColori",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetBorderColorui",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetMaxAnisotropy",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSamplerGetReductionFilter",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateSetAdvancedMode",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateSetAdvancedOverlap",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateSetAdvancedPremultipliedSrc",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateSetAdvancedNormalizedDst",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateGetBlendTarget",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateGetBlendFunc",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateGetBlendEquation",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateGetAdvancedMode",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateGetAdvancedOverlap",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateGetAdvancedPremultipliedSrc",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnBlendStateGetAdvancedNormalizedDst",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnColorStateSetLogicOp",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnColorStateSetAlphaTest",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnColorStateGetBlendEnable",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnColorStateGetLogicOp",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnColorStateGetAlphaTest",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnChannelMaskStateGetChannelMask",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnMultisampleStateGetSampleLocationsGrid",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferSetCommandMemoryCallbackEnabled",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferBindTransformFeedbackBuffer",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferBindTransformFeedbackBuffers",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferBeginTransformFeedback",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferEndTransformFeedback",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferPauseTransformFeedback",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferResumeTransformFeedback",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferDrawTransformFeedback",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferMultiDrawArraysIndirectCount",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferMultiDrawElementsIndirectCount",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferDrawTexture",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferSetColorReductionEnable",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferSetColorReductionThresholds",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSyncInitializeFromFencedGLSync",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnSyncCreateGLSync",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnEventBuilderGetStorage",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnEventBuilderGetMemoryPool",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnEventBuilderGetMemoryOffset",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnEventGetMemoryPool",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnEventGetMemoryOffset",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferSetStencilCullCriteria",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferInsertCheckpointStatic",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnCommandBufferInsertCheckpointDynamic",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnDeviceSetAutomaticCheckpointsEnable",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnDeviceSetAutomaticCheckpointsSamplingInterval",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnDeviceSetAutomaticCheckpointsByDebugGroup",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnDeviceSetCheckpointCallStacksEnable",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "nvnDeviceSetCheckpointMaxCallStacksDepth",
+     "tier": "core",
+     "status": "missing"
+    }
+   ],
+   "extra": {
+    "catalog": 523,
+    "defined": 419,
+    "stub_like": 0,
+    "missing_by_object": {
+     "CommandBuffer": 16,
+     "SamplerBuilder": 11,
+     "BlendState": 11,
+     "QueueBuilder": 10,
+     "SamplerGet": 10,
+     "WindowBuilder": 5,
+     "TextureBuilder": 5,
+     "ColorState": 5,
+     "DeviceSet": 5,
+     "MemoryPool": 4,
+     "BufferBuilder": 4,
+     "TextureGet": 3,
+     "EventBuilder": 3,
+     "WindowGet": 2,
+     "ProgramSet": 2
+    }
+   }
+  },
+  {
+   "key": "shader",
+   "title": "GPU: Maxwell shader ISA",
+   "weight": 12,
+   "ratio": 0.7485,
+   "points": 8.98,
+   "counts": {
+    "core": [
+     71,
+     74
+    ],
+    "common": [
+     18,
+     35
+    ],
+    "rare": [
+     1,
+     42
+    ]
+   },
+   "missing": [
+    {
+     "name": "TLD",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "LDS",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "STS",
+     "tier": "core",
+     "status": "missing"
+    },
+    {
+     "name": "IMAD",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "VOTE",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "ATOM",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "ATOMS",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "RED",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "TXD",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "LEA",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "OUT",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "SUST",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "SULD",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "SUATOM",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "DADD",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "DMUL",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "DFMA",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "DSETP",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "DMNMX",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "CS2R",
+     "tier": "common",
+     "status": "missing"
+    },
+    {
+     "name": "VMAD",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "VADD",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "VSET",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "VSETP",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "VMNMX",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "VABSDIFF",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "VABSDIFF4",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "VSHL",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "VSHR",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "IDE",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "IDP",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "IMADSP",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "JMP",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "JMX",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "CAL",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "JCAL",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "RET",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "PEXIT",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "LONGJMP",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "PLONGJMP",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "B2R",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "R2B",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "CCTL",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "CCTLL",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "BPT",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "RAM",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "SAM",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "RTT",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "FCHK",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "PIXLD",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "ISBERD",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "LEPC",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "GETCRSPTR",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "SETCRSPTR",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "GETLMEMBASE",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "SETLMEMBASE",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "STP",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "SURED",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "TXA",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "DSET",
+     "tier": "rare",
+     "status": "missing"
+    },
+    {
+     "name": "IMAD32I",
+     "tier": "rare",
+     "status": "missing"
+    }
+   ],
+   "extra": {
+    "explicit_failures": [
+     "bfe brev",
+     "bindless texture handle is not a constant buffer load",
+     "cbuf %d clashes with gmem",
+     "cset",
+     "csetp test %d",
+     "indexed attribute load",
+     "indexed ld a[]",
+     "mufu %d",
+     "prmt mode",
+     "r2p cc",
+     "texs info %d",
+     "texture gather of target %d",
+     "texture gather with offsets (Metal needs constant offsets)",
+     "tld4s with offsets",
+     "tlds info %d",
+     "too many bindless texture handles",
+     "too many textures",
+     "txq type %d",
+     "unknown instruction %016llx at %#x"
+    ]
+   }
+  },
+  {
+   "key": "gpu_fixed",
+   "title": "GPU: formats + pipeline features",
+   "weight": 8,
+   "ratio": 0.8274,
+   "points": 6.62,
+   "counts": {
+    "core": [
+     9,
+     9
+    ],
+    "common": [
+     2,
+     7
+    ],
+    "rare": [
+     0,
+     1
+    ]
+   },
+   "missing": [
+    {
+     "name": "transform feedback",
+     "tier": "common",
+     "status": "missing",
+     "hits": 18,
+     "first": "gfx/src/nvnapi/nvn_protos.h:360",
+     "verified": "2026-10-24: gfx/src/nvnapi/nvn_protos.h only (prototypes); no record/replay path, round-2/3 notes list it unimplemented"
+    },
+    {
+     "name": "geometry shaders",
+     "tier": "common",
+     "status": "missing",
+     "hits": 8,
+     "first": "gfx/src/mtl_shader.m:374",
+     "verified": "2026-10-24: gfx/src/mtl_shader.m:374 hit is the word 'geometry' in a debug comment; no geometry stage in the translator"
+    },
+    {
+     "name": "tessellation",
+     "tier": "common",
+     "status": "missing",
+     "hits": 6,
+     "first": "gfx/src/api_cmd.c:438",
+     "verified": "2026-10-24: gfx/src/api_cmd.c:437-439 SetPatchSize / tess levels are no-ops; no tess stages translated"
+    },
+    {
+     "name": "indirect draw/dispatch",
+     "tier": "common",
+     "status": "partial",
+     "hits": 26,
+     "first": "gfx/src/obj.h:181",
+     "verified": "2026-10-24: gfx/src/api_cmd.c:483/488 indirect draw + dispatch recorded; multi-draw-indirect-count missing"
+    },
+    {
+     "name": "MSAA / resolve",
+     "tier": "common",
+     "status": "partial",
+     "hits": 142,
+     "first": "gfx/src/mtl_shader.m:382",
+     "verified": "2026-10-24: gfx/src/mtl_replay.m:1149 depth/MS texture copies refused; resolve exists for render targets"
+    },
+    {
+     "name": "texture views / sparse",
+     "tier": "rare",
+     "status": "partial",
+     "hits": 12,
+     "first": "gfx/src/mtl_scale.m:74",
+     "verified": "2026-10-24: gfx/src/mtl_tex.m view_valid: views Metal cannot express fall back to the whole texture; no sparse"
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  },
+  {
+   "key": "nvdrv",
+   "title": "GPU: nvdrv / host1x devices",
+   "weight": 2,
+   "ratio": 0.9,
+   "points": 1.8,
+   "counts": {
+    "core": [
+     2,
+     2
+    ],
+    "common": [
+     0,
+     1
+    ],
+    "rare": [
+     2,
+     2
+    ]
+   },
+   "missing": [
+    {
+     "name": "/dev/nvhost-nvdec, vic, nvjpg, msenc",
+     "tier": "common",
+     "status": "stub",
+     "hits": 3,
+     "first": "runtime/src/services/nvdrv.c:43",
+     "verified": "2026-10-24: runtime/src/services/nvdrv.c:43 device names only; no decode engines (H.264 via nvdec missing)"
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  },
+  {
+   "key": "audio",
+   "title": "Audio: audren/audout/opus",
+   "weight": 7,
+   "ratio": 0.9167,
+   "points": 6.42,
+   "counts": {
+    "core": [
+     7,
+     7
+    ],
+    "common": [
+     5,
+     6
+    ],
+    "rare": [
+     2,
+     3
+    ]
+   },
+   "missing": [
+    {
+     "name": "I3DL2 reverb",
+     "tier": "common",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: no i3dl2 in audio/src (reverb.h is the plain reverb)"
+    },
+    {
+     "name": "audin (microphone)",
+     "tier": "rare",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: audin:u not implemented (IPC list)"
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  },
+  {
+   "key": "input",
+   "title": "Input: hid / npad",
+   "weight": 5,
+   "ratio": 0.96,
+   "points": 4.8,
+   "counts": {
+    "core": [
+     6,
+     6
+    ],
+    "common": [
+     2,
+     2
+    ],
+    "rare": [
+     2,
+     3
+    ]
+   },
+   "missing": [
+    {
+     "name": "IR camera (irs)",
+     "tier": "rare",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: irs not implemented"
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  },
+  {
+   "key": "content",
+   "title": "Content: containers, crypto, updates, DLC",
+   "weight": 5,
+   "ratio": 0.9143,
+   "points": 4.57,
+   "counts": {
+    "core": [
+     9,
+     10
+    ],
+    "common": [
+     1,
+     1
+    ],
+    "rare": [
+     3,
+     3
+    ]
+   },
+   "missing": [
+    {
+     "name": "DLC (AddOnContent) mounting",
+     "tier": "core",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: runtime/src/services/misc.c:10 aoc:u reports no DLC; build can select DLC but runtime never mounts it"
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  },
+  {
+   "key": "fs_runtime",
+   "title": "FS: saves + storage",
+   "weight": 2,
+   "ratio": 0.8571,
+   "points": 1.71,
+   "counts": {
+    "core": [
+     2,
+     2
+    ],
+    "common": [
+     2,
+     3
+    ],
+    "rare": [
+     2,
+     2
+    ]
+   },
+   "missing": [
+    {
+     "name": "save data extra data / size queries",
+     "tier": "common",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: runtime/src/services/fs.c no extra-data / size commands"
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  },
+  {
+   "key": "applets",
+   "title": "Library applets",
+   "weight": 2,
+   "ratio": 0.4808,
+   "points": 0.96,
+   "counts": {
+    "core": [
+     1,
+     2
+    ],
+    "common": [
+     0,
+     2
+    ],
+    "rare": [
+     1,
+     3
+    ]
+   },
+   "missing": [
+    {
+     "name": "controller applet",
+     "tier": "core",
+     "status": "partial",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: runtime/src/services/applet.c:220 answers offline as a confirmation with one virtual pad; no UI / real assignment"
+    },
+    {
+     "name": "error applet",
+     "tier": "common",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: runtime/src/services/applet.c:250 only swkbd + controller are run"
+    },
+    {
+     "name": "player select (profile)",
+     "tier": "common",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: runtime/src/services/applet.c:250 not dispatched"
+    },
+    {
+     "name": "web / offline web",
+     "tier": "rare",
+     "status": "missing",
+     "hits": 0,
+     "first": null
+    },
+    {
+     "name": "mii edit",
+     "tier": "rare",
+     "status": "missing",
+     "hits": 0,
+     "first": null
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  },
+  {
+   "key": "media",
+   "title": "Video / media decode",
+   "weight": 1,
+   "ratio": 0.6111,
+   "points": 0.61,
+   "counts": {
+    "core": [
+     1,
+     2
+    ],
+    "common": [
+     1,
+     1
+    ],
+    "rare": [
+     0,
+     1
+    ]
+   },
+   "missing": [
+    {
+     "name": "H.264",
+     "tier": "core",
+     "status": "missing",
+     "hits": 0,
+     "first": null,
+     "verified": "2026-10-24: runtime/src/movie.c VP9 only; round-2 notes: H.264 skipped"
+    },
+    {
+     "name": "JPEG (nvjpg / caps)",
+     "tier": "rare",
+     "status": "stub",
+     "hits": 3,
+     "first": "runtime/src/services/nvdrv.c:44",
+     "verified": "2026-10-24: runtime/src/services/nvdrv.c:44 name only"
+    }
+   ],
+   "extra": {
+    "probe": true
+   }
+  }
+ ],
+ "todo_markers": 36,
+ "previous": {
+  "date": "2026-10-24",
+  "measured_percent": 82.2,
+  "final_percent": 81.2,
+  "domains": {
+   "cpu_rewrite": 14.0,
+   "loader": 4.23,
+   "kernel": 9.17,
+   "ipc": 6.72,
+   "ipc_depth": 2.0,
+   "nvn": 9.61,
+   "shader": 8.98,
+   "gpu_fixed": 6.62,
+   "nvdrv": 1.8,
+   "audio": 6.42,
+   "input": 4.8,
+   "content": 4.57,
+   "fs_runtime": 1.71,
+   "applets": 0.96,
+   "media": 0.61
+  }
+ },
+ "final_percent": 81.2
+}

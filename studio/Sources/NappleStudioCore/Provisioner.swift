@@ -79,7 +79,7 @@ public struct Provisioner: Sendable {
 
     /// The xcodebuild invocation (also shown in the UI).
     public static func commandLine(projectDir: URL) -> [String] {
-        ["xcrun", "xcodebuild", "-project", projectDir.appendingPathComponent("Stub.xcodeproj").path, "-target", "Stub", "-configuration", "Debug",
+        ["xcrun", "xcodebuild", "-project", projectDir.appendingPathComponent("Stub.xcodeproj").path, "-scheme", "Stub", "-configuration", "Debug",
          "-sdk", "iphoneos", "-destination", "generic/platform=iOS", "-allowProvisioningUpdates", "-allowProvisioningDeviceRegistration",
          "-derivedDataPath", projectDir.appendingPathComponent("DerivedData").path, "build"]
     }

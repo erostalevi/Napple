@@ -2609,6 +2609,10 @@ static void do_copy_t2t(const p_copy_t2t *c) {
     uint32_t sx, sy, sz, sw, sh, sd, dx, dy, dz, dw, dh, dd;
     copy_region_dims(s, c->sregion, slv, &sx, &sy, &sz, &sw, &sh, &sd);
     copy_region_dims(d, c->dregion, dlv, &dx, &dy, &dz, &dw, &dh, &dd);
+    /* A title that allocates a 1080p swapchain but renders 720p (LAS in handheld mode) copies its frame into the corner of the window texture and sets no
+     * window crop: remember the extent so the present path shows that part, not the whole texture with the game in one corner. */
+    if (!dlv && !dsl && dx == 0 && dy == 0 && (dw < d->w || dh < d->h)) { d->valid_w = dw; d->valid_h = dh; }
+    else if (dx == 0 && dy == 0 && dw >= d->w && dh >= d->h) d->valid_w = d->valid_h = 0;
     { /* render target scaling: the regions are in guest pixels, the allocations may be larger (mtl_scale.m) */
         float srx = s->rsx > 0 ? s->rsx : 1, sry = s->rsy > 0 ? s->rsy : 1, drx = d->rsx > 0 ? d->rsx : 1, dry = d->rsy > 0 ? d->rsy : 1;
         if (srx != 1 || sry != 1 || drx != 1 || dry != 1) {
