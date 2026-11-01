@@ -8,6 +8,7 @@
 #include <dirent.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <errno.h>
 #include <sys/sysctl.h>
 
 #import "mtl_priv.h"
@@ -138,7 +139,20 @@ static void archive_save(void) {
         NSError *err = nil;
         /* Serialize next to the real file and rename over it: a crash or kill during the write can no longer leave a half-written archive at the real path. */
         NSURL *tmpurl = [NSURL fileURLWithPath:[g_archive_url.path stringByAppendingString:@".tmp"]];
-        if ([g_out serializeToURL:tmpurl error:&err] && rename(tmpurl.path.fileSystemRepresentation, g_archive_url.path.fileSystemRepresentation) == 0) {
+        BOOL ser = [g_out serializeToURL:tmpurl error:&err];
+        int ren = ser ? rename(tmpurl.path.fileSystemRepresentation, g_archive_url.path.fileSystemRepresentation) : -1, ren_errno = ren ? errno : 0;
+        if (ser && ren) {
+            /* The archive was written but could not be moved into place: say why, keep the archive on and try again at the next save (a transient cause
+             * must not disable it for the whole run); only repeated failures disable it. */
+            static int rename_fails;
+            struct stat st;
+            int tmp_there = stat(tmpurl.path.fileSystemRepresentation, &st) == 0;
+            LOGW("binary archive: moving %s into place failed (%s; the written file %s)%s", tmpurl.path.UTF8String, strerror(ren_errno),
+                 tmp_there ? "is there" : "is gone", ++rename_fails >= 3 ? ": archive disabled for this run" : ": retried at the next save");
+            if (rename_fails >= 3) g_archive_broken = 1;
+            return;
+        }
+        if (ser && !ren) {
             g_archive_dirty = 0;
             NSDictionary *at = [NSFileManager.defaultManager attributesOfItemAtPath:g_archive_url.path error:nil];
             if ([at fileSize] > archive_max_bytes() && g_out_desc.count > 8) { /* over the cap: leave the oldest quarter out of the next save */
