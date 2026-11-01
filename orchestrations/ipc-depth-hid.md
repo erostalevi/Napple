@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r2
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: launched
+status: handed-off
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: orchestrator background agent, worktree .claude/worktrees/ipc-depth-hid-r2
 launched_at: 2026-11-01
