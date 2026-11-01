@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """scan_stages.py - which GPU stages does a Switch title use, without playing it.
 
-  scan_stages.py scan <dir> [--title-id ID] [-o out.json]   scan a CTL_DUMP directory (*.ctl) or a RomFS dump (shader archives)
+  scan_stages.py scan <dir|romfs image>... [--title-id ID] [-o out.json] [--quick]
+                                                           scan CTL_DUMP directories (*.ctl), extracted shader archives, or RomFS images
+                                                           (`napple build --dump-romfs`, base / patched update / DLC): files inside SARC
+                                                           archives and Yaz0 / zstd compression are opened (model archives carry shader
+                                                           programs too: MK8D course and driver .szs); --quick inflates only paths that
+                                                           look like shader data
   scan_stages.py cover scan1.json scan2.json ...            smallest set of titles covering every feature seen
 
 Layout offsets are read from gfx/src/shader/control.h / control.c (see parse_offsets); nothing is duplicated silently:
 if the header no longer defines an offset the tool falls back to the value below and says so on stderr.
 Python 3 standard library only. Tested on synthetic sections; not verified on real titles (Mac check: docs/guides/gpu-title-scan.md).
 """
-import argparse, itertools, json, os, re, struct, sys
+import argparse, hashlib, itertools, json, mmap, os, re, struct, sys
 
 MAGIC = 0x98761234
 STAGE_NAMES = {0: "vs", 1: "fs", 2: "gs", 3: "tcs", 4: "tes", 5: "cs"}
@@ -66,7 +71,8 @@ def decode(sec, off=None):
     c_off, c_size = u32(sec, off["const_off"]), u32(sec, off["const_size"])
     if stage > 5 or not code_len or code_len > 16 << 20 or c_off > code_len or c_size > 0x10000 or len(sec) < length:
         return None
-    r = {"stage": STAGE_NAMES[stage], "length": length, "code_len": code_len, "features": []}
+    r = {"stage": STAGE_NAMES[stage], "length": length, "code_len": code_len, "features": [],
+         "digest": hashlib.sha1(bytes(sec[:length])).hexdigest()[:16]}  # the same program sits in many archives: distinct = distinct digests
     if stage == 0 or stage == 2 or stage == 4:
         if xfb(sec, length, off):
             r["features"].append("xfb")
@@ -117,11 +123,11 @@ def find_sections(blob, off=None):
 def yaz0(b):
     if b[:4] != b"Yaz0":
         return b
-    size, out, p = struct.unpack_from(">I", b, 4)[0], bytearray(), 16
-    while len(out) < size and p < len(b):
+    size, out, p, n_in = struct.unpack_from(">I", b, 4)[0], bytearray(), 16, len(b)
+    while len(out) < size and p < n_in:
         code = b[p]; p += 1
         for bit in range(8):
-            if len(out) >= size or p >= len(b):
+            if len(out) >= size or p >= n_in:
                 break
             if code & (0x80 >> bit):
                 out.append(b[p]); p += 1
@@ -133,13 +139,136 @@ def yaz0(b):
                     n = b[p] + 0x12; p += 1
                 else:
                     n += 2
-                for _ in range(n):
-                    out.append(out[-dist])
+                if dist >= n:  # no overlap: one slice copy
+                    s = len(out) - dist
+                    out += out[s:s + n]
+                else:
+                    for _ in range(n):
+                        out.append(out[-dist])
     return bytes(out)
 
 
-def scan_dir(path):
-    progs, files = [], 0
+try:  # Python 3.14+: zstd in the standard library (ACNH's .zs files); older Pythons count them as not inflated
+    from compression import zstd as _zstd
+except ImportError:
+    _zstd = None
+ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
+SHADERISH = re.compile(r"shader|bfsha|bnsh|sharc|nvn|gfx|effect|ptcl", re.I)
+
+
+def inflate(data, stats):
+    """Yaz0 / zstd payload -> bytes; None when it cannot be inflated here (counted in stats)."""
+    try:
+        if data[:4] == b"Yaz0":
+            return yaz0(data)
+        if data[:4] == ZSTD_MAGIC:
+            if _zstd is None:
+                stats["zstd_skipped"] = stats.get("zstd_skipped", 0) + 1
+                return None
+            return _zstd.decompress(data)
+    except Exception:  # truncated / dictionary-compressed: counted, never fatal
+        stats["inflate_failed"] = stats.get("inflate_failed", 0) + 1
+        return None
+    return data
+
+
+def sarc_files(b):
+    """Yield (name index, bytes) of the files of a SARC archive (little or big endian); nothing when b is not one."""
+    if len(b) < 0x20 or b[:4] != b"SARC":
+        return
+    e = "<" if b[6:8] == b"\xff\xfe" else ">"
+    data_off = struct.unpack_from(e + "I", b, 0xc)[0]
+    if b[0x14:0x18] != b"SFAT":
+        return
+    n = struct.unpack_from(e + "H", b, 0x1a)[0]
+    for i in range(n):
+        o = 0x20 + 16 * i
+        if o + 16 > len(b):
+            return
+        start, end = struct.unpack_from(e + "II", b, o + 8)
+        if data_off + end <= len(b) and start <= end:
+            yield i, b[data_off + start:data_off + end]
+
+
+def scan_blob(data, name, progs, stats, inflate_all, depth=0):
+    """Search one file's bytes (inflating and opening archives) for control sections; appends to progs."""
+    if data[:4] in (b"Yaz0", ZSTD_MAGIC):
+        if not (inflate_all or SHADERISH.search(name)):
+            stats["compressed_not_opened"] = stats.get("compressed_not_opened", 0) + 1
+            return
+        data = inflate(data, stats)
+        if data is None:
+            return
+        stats["inflated"] = stats.get("inflated", 0) + 1
+    if data[:4] == b"SARC" and depth < 4:
+        for i, f in sarc_files(data):
+            scan_blob(f, "%s/#%d" % (name, i), progs, stats, inflate_all or bool(SHADERISH.search(name)), depth + 1)
+        return
+    got = list(find_sections(data)) if len(data) >= 0x760 else []
+    if got:
+        stats["files_with_sections"] = stats.get("files_with_sections", 0) + 1
+    for d in got:
+        d["file"] = name
+        progs.append(d)
+
+
+ROMFS_HDR = 0x50
+ROMFS_MAX_FILE = 512 << 20  # larger files (movies, streamed audio) are not searched
+
+
+def romfs_entries(m):
+    """Yield (path, offset, size) of the files of a RomFS image (mmap / bytes). Raises ValueError when m is not one."""
+    hdr = struct.unpack_from("<10Q", m, 0)
+    if hdr[0] != ROMFS_HDR:
+        raise ValueError("not a RomFS image")
+    dmeta, dmeta_sz, fmeta, fmeta_sz, data = hdr[3], hdr[4], hdr[7], hdr[8], hdr[9]
+    dirs = {}
+    o = 0
+    while o + 0x18 <= dmeta_sz:
+        parent, _, _, _, _, nl = struct.unpack_from("<6I", m, dmeta + o)
+        dirs[o] = (parent, bytes(m[dmeta + o + 0x18:dmeta + o + 0x18 + nl]).decode("utf-8", "replace"))
+        o += (0x18 + nl + 3) & ~3
+
+    def path_of(d):
+        parts, seen = [], 0
+        while d in dirs and d != 0 and seen < 64:
+            parts.append(dirs[d][1]); d = dirs[d][0]; seen += 1
+        return "/".join(reversed(parts))
+    o = 0
+    while o + 0x20 <= fmeta_sz:
+        parent, _, off, size, _, nl = struct.unpack_from("<IIQQII", m, fmeta + o)
+        name = bytes(m[fmeta + o + 0x20:fmeta + o + 0x20 + nl]).decode("utf-8", "replace")
+        dp = path_of(parent)
+        yield (dp + "/" if dp else "") + name, data + off, size
+        o += (0x20 + nl + 3) & ~3
+
+
+def is_romfs(path):
+    try:
+        with open(path, "rb") as fh:
+            h = fh.read(16)
+        return len(h) == 16 and struct.unpack_from("<Q", h)[0] == ROMFS_HDR
+    except OSError:
+        return False
+
+
+def scan_romfs(path, inflate_all=True, label=None):
+    """Scan every file of a RomFS image for control sections (archives and compression opened). Returns (progs, stats)."""
+    progs, stats = [], {"files": 0, "skipped_large": 0}
+    label = label or os.path.basename(path)
+    with open(path, "rb") as fh, mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ) as m:
+        for name, off, size in romfs_entries(m):
+            stats["files"] += 1
+            if size > ROMFS_MAX_FILE or off + size > len(m):
+                stats["skipped_large"] += 1
+                continue
+            scan_blob(m[off:off + size], label + ":" + name, progs, stats, inflate_all)
+    return progs, stats
+
+
+def scan_dir(path, inflate_all=True, stats=None):
+    """Scan a directory: *.ctl files are decoded directly, any other file is searched (archives / compression opened)."""
+    progs, stats = [], stats if stats is not None else {}
     for dp, _, fs in os.walk(path):
         for f in sorted(fs):
             fp = os.path.join(dp, f)
@@ -154,39 +283,63 @@ def scan_dir(path):
                     d["file"] = os.path.relpath(fp, path)
                     progs.append(d)
                 continue
-            if f.endswith((".code", ".json")) or len(data) < 0x760:
+            if f.endswith((".code", ".json")) or len(data) < 0x10:
                 continue
-            data = yaz0(data) if data[:4] == b"Yaz0" else data
-            got = list(find_sections(data))
-            if got:
-                files += 1
-            for d in got:
-                d["file"] = os.path.relpath(fp, path)
-                progs.append(d)
-    return progs, files
+            scan_blob(data, os.path.relpath(fp, path), progs, stats, inflate_all)
+    return progs, stats.get("files_with_sections", 0)
 
 
-def summarize(progs, title_id):
+def scan_paths(paths, inflate_all=True):
+    """scan_dir / scan_romfs over several inputs (a title's base, update and DLC). Returns (progs, stats)."""
+    progs, stats = [], {}
+    for p in paths:
+        if os.path.isdir(p):
+            pp, _ = scan_dir(p, True, stats)
+            for d in pp:
+                d["file"] = os.path.basename(os.path.abspath(p)) + ":" + d["file"]
+        elif is_romfs(p):
+            pp, st = scan_romfs(p, inflate_all)
+            for k, v in st.items():
+                stats[k] = stats.get(k, 0) + v
+        else:
+            pp = []
+            with open(p, "rb") as fh:
+                scan_blob(fh.read(), os.path.basename(p), pp, stats, True)
+        progs += pp
+    return progs, stats
+
+
+def summarize(progs, title_id, stats=None):
     st = {k: 0 for k in ("vs", "fs", "gs", "tcs", "tes", "cs", "xfb", "tess_isoline", "tess_triangle", "tess_quad")}
-    seen = set()
+    seen, rare, distinct = set(), [], {}
     for p in progs:  # the same program is dumped or archived more than once: count distinct by content key
         key = (p.get("file"), p.get("offset"), p["stage"], p["code_len"], tuple(p["features"]))
         if key in seen:
             continue
         seen.add(key)
+        distinct.setdefault(p["stage"], set()).add(p.get("digest"))
         st[p["stage"]] += 1
         for f in p["features"]:
             st[f] += 1
-    return {"title_id": title_id, "programs": len(seen), "stages": st, "not_decodable": UNDECODABLE,
-            "features": sorted(f for f in FEATURES if st[f]), "offsets_from": OFF_SOURCE}
+        if p["stage"] in ("gs", "tcs", "tes") or p["features"]:
+            rare.append({k: p[k] for k in ("file", "offset", "stage", "length", "code_len", "features", "digest") if k in p})
+    r = {"title_id": title_id, "programs": len(seen), "stages": st, "not_decodable": UNDECODABLE,
+         "distinct": {k: len(v) for k, v in sorted(distinct.items())},
+         "features": sorted(f for f in FEATURES if st[f]), "offsets_from": OFF_SOURCE, "stage_programs": rare[:200]}
+    if stats is not None:
+        r["inputs"] = stats
+    return r
 
 
 def human(s):
     st = s["stages"]
     lines = ["title %s: %d programs" % (s["title_id"], s["programs"]),
              "  stages: " + ", ".join("%s=%d" % (k, v) for k, v in st.items() if v),
+             "  distinct control sections: " + ", ".join("%s=%d" % kv for kv in s.get("distinct", {}).items()),
              "  features: " + (", ".join(s["features"]) or "none beyond vs/fs"),
              "  not decodable yet (no known control-section field): " + ", ".join(s["not_decodable"])]
+    if s.get("inputs"):
+        lines.append("  inputs: " + ", ".join("%s=%d" % kv for kv in sorted(s["inputs"].items())))
     return "\n".join(lines)
 
 
@@ -217,12 +370,13 @@ def cover(scans):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("scan"); s.add_argument("dir"); s.add_argument("--title-id", default=None); s.add_argument("-o", "--out")
+    s = sub.add_parser("scan"); s.add_argument("dir", nargs="+"); s.add_argument("--title-id", default=None); s.add_argument("-o", "--out")
+    s.add_argument("--quick", action="store_true", help="inflate only compressed RomFS files whose path looks like shader data (misses model archives)")
     c = sub.add_parser("cover"); c.add_argument("scans", nargs="+")
     a = ap.parse_args(argv)
     if a.cmd == "scan":
-        progs, _ = scan_dir(a.dir)
-        res = summarize(progs, a.title_id or os.path.basename(os.path.abspath(a.dir)))
+        progs, stats = scan_paths(a.dir, not a.quick)
+        res = summarize(progs, a.title_id or os.path.basename(os.path.abspath(a.dir[0])), stats)
         txt = json.dumps(res, indent=2)
         if a.out:
             open(a.out, "w").write(txt + "\n")
