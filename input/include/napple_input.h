@@ -181,9 +181,15 @@ enum { NAPPLE_LARK_INVALID = 0, NAPPLE_LARK_H1 = 1, NAPPLE_LARK_H2 = 2, NAPPLE_L
 void napple_hid_set_lark_type(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t left_and_main, uint32_t right);
 enum { NAPPLE_LUCIA_INVALID = 0, NAPPLE_LUCIA_J = 1, NAPPLE_LUCIA_E = 2, NAPPLE_LUCIA_U = 3 }; /* NpadLuciaType and NpadLagerType share these values */
 void napple_hid_set_retro_types(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t lucia_type, uint32_t lager_type);
-/* HidDeviceTypeBits (libnx) a retro / GameCube / Palma style reports in the npad entry's device type word; 0 for the standard styles. */
+/* HidDeviceTypeBits (libnx) each style reports in the npad entry's device type word: the standard styles as a console's pads (Pro Controller FullKey,
+   handheld HandheldLeft | HandheldRight, a Joy-Con pair JoyLeft | JoyRight, one Joy-Con its side), the retro / GameCube / Palma ones their own bit.
+   NAPPLE_NPAD_DEVICE_TYPES=0 keeps the standard styles at 0, the value they reported before sweep-media r2 (2026-11-01). */
 enum {
     NAPPLE_DEVTYPE_FULL_KEY = 1u << 0,
+    NAPPLE_DEVTYPE_HANDHELD_LEFT = 1u << 2,
+    NAPPLE_DEVTYPE_HANDHELD_RIGHT = 1u << 3,
+    NAPPLE_DEVTYPE_JOY_LEFT = 1u << 4,
+    NAPPLE_DEVTYPE_JOY_RIGHT = 1u << 5,
     NAPPLE_DEVTYPE_PALMA = 1u << 6,
     NAPPLE_DEVTYPE_LARK_NES_LEFT = 1u << 9,
     NAPPLE_DEVTYPE_HANDHELD_LARK_NES_LEFT = 1u << 13,

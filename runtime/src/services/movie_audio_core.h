@@ -43,3 +43,36 @@ int opuspcm_packet(OpusPcm *o, const uint8_t *pkt, size_t size, int16_t *out, in
 void opuspcm_flush(OpusPcm *o);
 int opuspcm_available(void);
 #define OPUSPCM_MAX_FRAMES 5760 /* 120 ms at 48 kHz */
+
+/* AAC (movie::Decoder type 4, mime audio/mp4a-latm). The library hands over raw access units as MediaCodec does, with the AudioSpecificConfig as csd-0;
+ * ADTS-framed units (sync word 0xFFF) are accepted too, their header is stripped and configures the decoder when no csd-0 came. The parsers are portable;
+ * the decoder is AudioToolbox (macOS / iOS: create returns NULL elsewhere and aacpcm_available() is 0). Output is interleaved s16 in WAVE channel order
+ * (L R C LFE Ls Rs ...), the order Android's SoftAAC2 (the movie library's own decoder) produces. */
+typedef struct {
+    int object_type; /* 2 = AAC-LC, 5 = SBR (HE-AAC), 29 = PS (HE-AAC v2), ... */
+    int rate;        /* core sampling rate (Hz) */
+    int channels;    /* channel configuration 1..7 (7 = 8 channels), 0 = in a program config element (not supported) */
+    int sbr;         /* explicit SBR / PS signalling: output at twice the core rate */
+} AacConfig;
+/* AudioSpecificConfig (ISO 14496-3 1.6.2.1): object type (5 bits, escape 31), frequency index (4 bits, 15 = explicit 24-bit rate), channel config. 0 or -1. */
+int aac_parse_asc(const uint8_t *asc, size_t size, AacConfig *out);
+/* ADTS header: returns its length (7, or 9 with CRC) and the whole frame length in *frame_len, 0 when p does not start with one. */
+size_t aac_parse_adts(const uint8_t *p, size_t size, AacConfig *out, size_t *frame_len);
+/* Two-byte AudioSpecificConfig for a plain configuration (object type < 31, a standard rate, channels 1..7): writes it and returns 2, or 0. */
+size_t aac_make_asc(const AacConfig *c, uint8_t out[2]);
+/* channels 1..8 -> channel configuration (7 for 8 channels), 0 for others */
+int aac_channel_config(int channels);
+
+typedef struct AacPcm AacPcm;
+/* From an AudioSpecificConfig (csd-0), or with asc NULL from rate / channels (AAC-LC); with neither the decoder waits for an ADTS header. */
+AacPcm *aacpcm_create(const uint8_t *asc, size_t asc_size, int rate, int channels);
+void aacpcm_destroy(AacPcm *a);
+/* One access unit (raw, or ADTS-framed). *frames = sample frames written (0 while the decoder primes). AUDIO_OK, AUDIO_BAD, AUDIO_NEED_MORE (no configuration
+ * yet: raw unit before any csd-0 / ADTS header), AUDIO_UNSUPPORTED. */
+int aacpcm_packet(AacPcm *a, const uint8_t *pkt, size_t size, int16_t *out, int max_frames, int *frames);
+int aacpcm_ready(const AacPcm *a);
+int aacpcm_rate(const AacPcm *a);     /* output rate (twice the core rate with SBR) */
+int aacpcm_channels(const AacPcm *a);
+void aacpcm_flush(AacPcm *a);
+int aacpcm_available(void);
+#define AACPCM_MAX_FRAMES 2048 /* 1024 per access unit, 2048 with SBR */

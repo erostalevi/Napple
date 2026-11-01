@@ -17,6 +17,7 @@
 #include "napple_input.h"
 #include "gesture.h"
 #include <stdatomic.h>
+#include <stdlib.h>
 #include <string.h>
 
 #define RING 17u
@@ -226,8 +227,18 @@ void napple_hid_set_retro_types(uint8_t *shm, const napple_hid_layout *l, int sl
     put32(b + 8, lucia);
     put32(b + 12, lager);
 }
+static int standard_device_types(void) { /* read each time (one getenv per npad state update) so tests and hosts can switch it */
+    const char *e = getenv("NAPPLE_NPAD_DEVICE_TYPES");
+    return !(e && !strcmp(e, "0"));
+}
 uint32_t napple_hid_device_type_for(uint32_t style) {
+    int std = standard_device_types();
     switch (style) {
+        case NAPPLE_STYLE_FULL_KEY: return std ? NAPPLE_DEVTYPE_FULL_KEY : 0;
+        case NAPPLE_STYLE_HANDHELD: return std ? NAPPLE_DEVTYPE_HANDHELD_LEFT | NAPPLE_DEVTYPE_HANDHELD_RIGHT : 0;
+        case NAPPLE_STYLE_JOY_DUAL: return std ? NAPPLE_DEVTYPE_JOY_LEFT | NAPPLE_DEVTYPE_JOY_RIGHT : 0;
+        case NAPPLE_STYLE_JOY_LEFT: return std ? NAPPLE_DEVTYPE_JOY_LEFT : 0;
+        case NAPPLE_STYLE_JOY_RIGHT: return std ? NAPPLE_DEVTYPE_JOY_RIGHT : 0;
         case NAPPLE_STYLE_GC: return NAPPLE_DEVTYPE_FULL_KEY; /* "Pro Controller and Gc controller" */
         case NAPPLE_STYLE_PALMA: return NAPPLE_DEVTYPE_PALMA;
         case NAPPLE_STYLE_LARK: return NAPPLE_DEVTYPE_LARK_NES_LEFT;
@@ -235,7 +246,7 @@ uint32_t napple_hid_device_type_for(uint32_t style) {
         case NAPPLE_STYLE_LUCIA: return NAPPLE_DEVTYPE_LUCIA;
         case NAPPLE_STYLE_LAGON: return NAPPLE_DEVTYPE_LAGON;
         case NAPPLE_STYLE_LAGER: return NAPPLE_DEVTYPE_LAGER;
-        default: return 0; /* the standard styles keep reporting 0 (unchanged from before the retro pads) */
+        default: return 0;
     }
 }
 

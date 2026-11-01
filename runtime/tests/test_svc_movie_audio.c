@@ -165,6 +165,34 @@ int main(void) {
         opuspcm_flush(o); opuspcm_destroy(o);
         CHECK(opuspcm_create(3, 0) == NULL, "three channels not supported by this decoder object");
     } else printf("note: Opus not built here (no NAPPLE_HAVE_OPUS); the Opus checks run on the Mac build\n");
+    /* AAC configuration parsers (portable): AudioSpecificConfig, explicit SBR, escaped rate, ADTS headers, and the two-byte ASC writer */
+    {
+        AacConfig c;
+        const uint8_t lc[2] = {0x11, 0x90}; /* AAC-LC, 48000 Hz (index 3), stereo */
+        CHECK(!aac_parse_asc(lc, 2, &c) && c.object_type == 2 && c.rate == 48000 && c.channels == 2 && !c.sbr, "ASC AAC-LC 48 kHz stereo");
+        const uint8_t he[4] = {0x2b, 0x92, 0x08, 0x00}; /* SBR (5), 22050 Hz core (index 7), stereo, extension 44100 (index 4), core AAC-LC */
+        CHECK(!aac_parse_asc(he, 4, &c) && c.sbr && c.object_type == 2 && c.rate == 22050 && c.channels == 2, "ASC explicit SBR: core %d Hz, object %d", c.rate, c.object_type);
+        const uint8_t esc[5] = {0x17, 0x80, 0x5d, 0xc0, 0x08}; /* AAC-LC, index 15: explicit 24-bit rate 48000 (0x00bb80), mono */
+        CHECK(!aac_parse_asc(esc, 5, &c) && c.rate == 48000 && c.channels == 1, "ASC explicit rate %d Hz, %d channel", c.rate, c.channels);
+        const uint8_t six[2] = {0x11, 0xb0}; /* channel configuration 6 (5.1) */
+        CHECK(!aac_parse_asc(six, 2, &c) && c.channels == 6, "ASC 5.1");
+        CHECK(aac_parse_asc(lc, 1, &c) == -1 && aac_parse_asc(NULL, 2, &c) == -1, "ASC too short refused");
+        uint8_t mk[2];
+        AacConfig w = {2, 44100, 8, 0};
+        CHECK(aac_make_asc(&w, mk) == 2 && !aac_parse_asc(mk, 2, &c) && c.rate == 44100 && c.channels == 8, "ASC writer round trip (44.1 kHz, 7.1)");
+        w.rate = 12345;
+        CHECK(aac_make_asc(&w, mk) == 0, "ASC writer refuses a non-standard rate");
+        /* ADTS: AAC-LC (profile 1), 48 kHz, stereo, protection absent, frame of 0x123 bytes */
+        size_t len = 0x123;
+        uint8_t ad[9] = {0xff, 0xf1, (uint8_t)((1 << 6) | (3 << 2) | 0), (uint8_t)((2 << 6) | (len >> 11)), (uint8_t)(len >> 3), (uint8_t)(((len & 7) << 5) | 0x1f), 0xfc};
+        size_t fl = 0;
+        CHECK(aac_parse_adts(ad, 7, &c, &fl) == 7 && fl == len && c.object_type == 2 && c.rate == 48000 && c.channels == 2, "ADTS header (7 bytes, frame %zu)", fl);
+        ad[1] = 0xf0;
+        CHECK(aac_parse_adts(ad, 9, &c, &fl) == 9, "ADTS header with CRC is 9 bytes");
+        ad[0] = 0xfe;
+        CHECK(aac_parse_adts(ad, 9, &c, &fl) == 0, "no sync word: not ADTS");
+        CHECK(aac_channel_config(8) == 7 && aac_channel_config(7) == 0 && aac_channel_config(6) == 6, "channel configuration of 8 / 7 / 6 channels");
+    }
     printf("{\"test\":\"svc_movie_audio\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }
