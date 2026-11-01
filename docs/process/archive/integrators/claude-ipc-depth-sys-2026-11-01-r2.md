@@ -6,7 +6,7 @@ head: 0666ec7 (code; the integrator file is one docs commit on top)
 env: mac
 date: 2026-11-01
 areas: [runtime/services, runtime/tests]
-status: ready
+status: integrated
 ---
 
 # claude/ipc-depth-sys-2026-11-01-r2: IPC reference fixtures and missing command rows for the system / offline services
@@ -55,3 +55,19 @@ Safe to fix directly: result-code choices (`sysd_err_*`), zero-output sizes in `
 ## Needs from other areas
 - ipc-depth-hid: the runner must skip `n` rows and treat `IPC_STUB` rows as present.
 - `docs/architecture/runtime-services.md`: refresh the fsp-srv / nifm / friend rows to mention the documented defaults (append only).
+
+## Integration result
+- Date: 2026-11-01. Merged into main as 8cf2ce9 (integ/ipc-depth-sys 1953832, branch head 8c0cda2), after ipc-depth-hid (the runner). Outcome: **Small fix**.
+- After the merge, `test_ipc_reference` read all 99 fixtures (30 hid + 69 sys) but reported 50 app-reachable ids missing, all binding problems of the static check, not missing rows:
+  - `IDatabaseService` (16): mii.c builds its tables with the `READ_CMDS` macro, which the runner did not expand.
+  - `npns:u` (21), `notif:a` (6), `nim:eca` (3), `mnpp:app` (2), `ngct:u` (2): push.c fills its tables at registration (generous range 0..31 + `extra()` calls), invisible to a source scan ("no command table is bound").
+- `integrate:` fixes (2):
+  1. 34abd60 `runtime/tests/test_ipc_reference.c`: an identifier between rows that names an object-like `#define` of the same file is expanded in place (depth-limited). Test code only.
+  2. 1953832 `runtime/src/services/push.c`: the switchbrew-named rows (the former `extra()` rows plus the fixture ids inside the range) are static `IpcCmd` tables laid over the generous range at registration; every id keeps its previous handler and IPC_IMPL/IPC_STUB status (in-range rows only gain their names). The five fixtures got a `# table services/push.c:<name>_rows` line. `test_svc_push` (14 checks) unchanged and green.
+- Result: `{"test":"ipc_reference","fixtures":99,"app_reachable":1116,"missing":0,"errors":0}`. No row was genuinely missing.
+- Native ports: none (pure IPC tables; left as C on purpose).
+- Tests: `make -C runtime test` + `test-services`: rc 0, 65 suites, all `"failed":0` (incl. `svc_sysdef_offline`, `svc_push`, `svc_pctl`, `svc_bcat`, `svc_time`).
+- Four-title boots (runtime binary, 60 s headless, private copied `--save-root`, under `.run.lock`): SMO, MK8D, LAS, ACNH all rc 0, `notify-running`, `missing_ipc []`, no crashes, `stubbed_ipc` only `nvdrv:13`.
+- GPL check: fixtures hold ids / names / firmware versions; `sys_default.h` and the rows are original code. No libnx code copied.
+- Corrections to this file's instructions: "How to test" 2 uses `tools/boot_test.sh` (writes the shared `work/saves`); the integrator ran the runtime binary directly with a private save root instead. Step 3 (local scripts) is superseded by `make -C runtime test-ipc-reference`.
+- Left for later: the `docs/architecture/runtime-services.md` refresh of the fsp-srv / nifm / friend rows (Needs from other areas) was not done here.

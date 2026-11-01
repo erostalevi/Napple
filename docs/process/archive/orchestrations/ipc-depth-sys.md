@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r2
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_afc5486b-71f2-45b6-b9f1-22a1a94901ac (reused sweep-small r1 session, sonnet)
 launched_at: 2026-11-01
@@ -37,3 +37,5 @@ Build lists from libnx `source/services/*.c` wrappers and switchbrew, layout fac
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-01: Small fix, merged into main as 8cf2ce9 (branch head 8c0cda2). Two `integrate:` fixes so the 69 fixtures bind under ipc-depth-hid's runner (macro rows in mii.c, runtime-filled push.c tables); 99 fixtures / 1116 app-reachable ids, 0 missing. Unit tests and four-title boots green.
+Integrator file: `docs/process/archive/integrators/claude-ipc-depth-sys-2026-11-01-r2.md`.
