@@ -233,7 +233,13 @@ def pair_code(data, got, stats):
             stats["unpaired"] = stats.get("unpaired", 0) + 1
 
 
-BRA_SELF = struct.pack("<Q", 0xe2400fffff87000f)  # BRA to itself: the loop GLSLC appends after a program's last EXIT
+def u64(b, o):
+    return struct.unpack_from("<Q", b, o)[0]
+
+
+def is_terminal_bra(w):
+    """GLSLC ends a program with a tight backward BRA after its last EXIT: to itself (e2400fffff87000f) or to the EXIT before it (e2400fffff07000f)."""
+    return w >> 52 == 0xe24 and ((w >> 20) & 0xffffff) in (0xfffff8, 0xfffff0)
 SPH_STAGE = {1: "vs", 2: "tcs", 3: "tes", 4: "gs", 5: "fs"}  # SPH word 0 bits 10..13 (ShaderType)
 
 
@@ -251,10 +257,10 @@ def code_areas(data, after):
         if cur % 0x100 == 0 and cur + 0x80 <= end:
             st = SPH_STAGE.get((u32(data, cur + 0x30) >> 10) & 0xf)
             if st:
-                # the instructions end at GLSLC's terminal branch-to-self (after the last EXIT); constants follow on a 0x100 boundary: cut them off
+                # the instructions end at GLSLC's terminal backward branch (after the last EXIT); constants follow on a 0x100 boundary: cut them off
                 stop = end
                 for o in range(cur + 0x80, end - 7, 8):
-                    if data[o:o + 8] == BRA_SELF:
+                    if is_terminal_bra(u64(data, o)):
                         stop = min(end, cur + ((o + 8 - cur + 0x1f) & ~0x1f))
                         break
                 out.append({"stage": st, "code": bytes(data[cur:stop]), "ctl": b"", "offset": cur})
