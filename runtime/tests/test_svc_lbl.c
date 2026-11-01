@@ -37,6 +37,10 @@ int main(void) {
     svc_call(o, 18, &d0, 4, &c); CHECK(SVC_OUT(&c, float, 0) == 0.0f, "direction 0 untouched");
     uint32_t d2 = 2; svc_call(o, 18, &d2, 4, &c); CHECK(c.result != 0, "bad direction");
     f = 0.35f; svc_call(o, 24, &f, 4, &c); svc_call(o, 26, NULL, 0, &c); svc_call(o, 5, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.35f, "VR apply sets the applied brightness");
+    svc_call(o, 28, NULL, 0, &c); CHECK(c.out[0] == 1, "IsVrModeEnabled after EnableVrMode");
+    svc_call(o, 27, NULL, 0, &c); svc_call(o, 28, NULL, 0, &c); CHECK(c.out[0] == 0, "DisableVrMode");
+    svc_call(o, 5, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) != 0.35f, "leaving VR mode applies the normal brightness");
+    svc_call(o, 29, NULL, 0, &c); CHECK(c.out_size == 1 && c.out[0] == 0, "auto brightness not supported (no sensor)");
     svc_call(o, 19, NULL, 0, &c); CHECK(c.result == 0, "brightness mapping accepted");
     printf("{\"test\":\"svc_lbl\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;

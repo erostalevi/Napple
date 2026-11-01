@@ -13,6 +13,7 @@ typedef struct {
     int dimming, auto_brightness;
     float ambient_lux;
     int ambient_over_limit;
+    int vr_mode; /* EnableVrMode .. DisableVrMode: the VR brightness is the one applied */
 } LblState;
 
 void lbl_state_init(LblState *s);

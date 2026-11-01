@@ -193,6 +193,13 @@ static void psm_charge_info_event(IpcObject *s, IpcCall *c) {
     ipc_out_copy_handle(c, r);
 }
 
+/* 18 GetBatteryChargeCalibratedEvent: fires when the fuel gauge finishes a calibration; the host battery never runs one, so it never fires. */
+static void psm_calibrated_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t r = 0;
+    event_create(&r);
+    ipc_out_copy_handle(c, r);
+}
 static const IpcCmd psm_cmds[] = {
     {0, "GetBatteryChargePercentage", psm_get_percentage, IPC_IMPL},
     {1, "GetChargerType", psm_get_charger_type, IPC_IMPL},
@@ -211,6 +218,7 @@ static const IpcCmd psm_cmds[] = {
     {14, "IsEnoughPowerSupplied", psm_is_enough_power, IPC_IMPL},
     {15, "GetBatteryAgePercentage", psm_get_age_percentage, IPC_IMPL},
     {16, "GetBatteryChargeInfoEvent", psm_charge_info_event, IPC_IMPL},
+    {18, "GetBatteryChargeCalibratedEvent", psm_calibrated_event, IPC_IMPL},
 };
 static IpcObject *psm_open(void) { return IPC_OBJECT("psm", psm_cmds, NULL, NULL); }
 void service_register_psm(void) { ipc_register_service("psm", psm_open); }

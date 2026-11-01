@@ -127,10 +127,24 @@ static void lbl_get_delay_level(IpcObject *s, IpcCall *c) { /* (u32 direction) *
     float v = state()->reflection_delay[dir];
     IPC_OUT(c, v);
 }
-static void lbl_apply_vr_current(IpcObject *s, IpcCall *c) {
+/* VR mode (Labo VR): 26 EnableVrMode applies the VR brightness, 27 DisableVrMode goes back to the normal one, 28 IsVrModeEnabled. Row 26 was
+ * named ApplyCurrentBrightnessSettingToBacklightForVrMode before 2026-11-01 (switchbrew: EnableVrMode); its effect on the backlight is the same. */
+static void lbl_enable_vr(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
+    state()->vr_mode = 1;
     lbl_apply_vr(state());
+}
+static void lbl_disable_vr(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    state()->vr_mode = 0;
+    lbl_apply(state());
+}
+static void lbl_is_vr(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = (uint8_t)state()->vr_mode;
+    IPC_OUT(c, v);
 }
 
 static const IpcCmd lbl_cmds[] = {
@@ -159,7 +173,10 @@ static const IpcCmd lbl_cmds[] = {
     {23, "IsAmbientLightSensorAvailable", svc_ret_u8_0, IPC_IMPL},   /* the host exposes no sensor */
     {24, "SetCurrentBrightnessSettingForVrMode", lbl_set_vr, IPC_IMPL},
     {25, "GetCurrentBrightnessSettingForVrMode", lbl_get_vr, IPC_IMPL},
-    {26, "ApplyCurrentBrightnessSettingToBacklightForVrMode", lbl_apply_vr_current, IPC_IMPL},
+    {26, "EnableVrMode", lbl_enable_vr, IPC_IMPL},
+    {27, "DisableVrMode", lbl_disable_vr, IPC_IMPL},
+    {28, "IsVrModeEnabled", lbl_is_vr, IPC_IMPL},
+    {29, "IsAutoBrightnessControlSupported", svc_ret_u8_0, IPC_IMPL}, /* no ambient light sensor on the host (23 says the same) */
 };
 static IpcObject *lbl_open(void) { return IPC_OBJECT("lbl", lbl_cmds, NULL, NULL); }
 void service_register_lbl(void) { ipc_register_service("lbl", lbl_open); }
