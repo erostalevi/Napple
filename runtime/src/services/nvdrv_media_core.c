@@ -718,9 +718,9 @@ static int known_reg(const MediaEngine *e, uint32_t off) {
         case MEDIA_CLASS_NVDEC:
             return off <= NVDEC_SET_DISPLAY_BUF_CHROMA_OFFSET ||
                    (off >= NVDEC_SET_PICTURE_LUMA_OFFSET0 && off < NVDEC_SET_PICTURE_LUMA_OFFSET0 + NVDEC_PIC_SLOTS) ||
-                   (off >= NVDEC_SET_PICTURE_CHROMA_OFFSET0 && off < NVDEC_SET_PICTURE_CHROMA_OFFSET0 + NVDEC_PIC_SLOTS);
+                   (off >= NVDEC_SET_PICTURE_CHROMA_OFFSET0 && off < NVDEC_SET_PICTURE_CHROMA_OFFSET0 + NVDEC_PIC_SLOTS) || off == NVDEC_SET_UNNAMED_0x140;
         case MEDIA_CLASS_VIC:
-            return off == VIC_SET_INPUT0_LUMA_OFFSET || off == VIC_SET_INPUT0_CHROMA_OFFSET || off == VIC_SET_CONFIG_STRUCT_OFFSET ||
+            return off == VIC_SET_INPUT0_LUMA_OFFSET || off == VIC_SET_INPUT0_CHROMA_OFFSET || off == VIC_SET_CONTROL_PARAMS || off == VIC_SET_CONFIG_STRUCT_OFFSET ||
                    off == VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET || off == VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET || (off >= 0x1c2 && off <= 0x1cf);
         case MEDIA_CLASS_NVJPG: return off <= NVJPG_SET_OUT_CHROMA_OFFSET || off == NVJPG_SET_STATUS_OFFSET;
         default: return off >= MSENC_SET_SETUP_OFFSET && off <= MSENC_SET_OUT_BITSTREAM_OFFSET ? 1 : off == MSENC_SET_STATUS_OFFSET;
