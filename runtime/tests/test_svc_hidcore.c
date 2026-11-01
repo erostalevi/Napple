@@ -59,6 +59,26 @@ int main(void) {
         CHECK((HIDC_STYLES_ALL_PAD & HIDC_STYLE_GC) && (HIDC_STYLES_ALL_PAD & HIDC_STYLE_PALMA) && (HIDC_STYLES_ALL_PAD & HIDC_STYLE_LARK) && (HIDC_STYLES_ALL_PAD & HIDC_STYLES_STANDARD) == HIDC_STYLES_STANDARD, "system policy covers GameCube, Palma, NES");
         CHECK(hidc_capture_assign(&s, HIDC_STYLE_GC, 3) == 0 && hidc_capture_get(&s, HIDC_STYLE_GC) == 3, "capture assignment accepts the GameCube style");
     }
+    { /* ipc-depth-hid (2026-11-01-r2) */
+        HidCore k; hidc_init(&k);
+        HidcSensor *s = hidc_sensor(&k, 0x42);
+        CHECK(s && s->acc_x == 0.0f && s->acc_play_mode == 0 && !s->passthrough, "accelerometer defaults");
+        CHECK(hidc_vibration_allowed(&k), "vibration allowed by default"); k.vibration_permitted = 0; CHECK(!hidc_vibration_allowed(&k), "muted");
+        k.vib_session = 1; CHECK(hidc_vibration_allowed(&k), "a permit session overrides the mute");
+        CHECK(hidc_erm_set(&k, 7, 1) == 0 && hidc_erm_get(&k, 7) == 1 && hidc_erm_get(&k, 8) == 0, "ERM command per handle");
+        CHECK(hidc_erm_set(&k, 7, 3) == -1 && hidc_erm_get(&k, 7) == 1, "ERM command above StopHard refused");
+        for (uint32_t i = 0; i < 8; i++) hidc_erm_set(&k, 100 + i, 0);
+        CHECK(hidc_erm_set(&k, 999, 0) == -2, "ERM table bounded");
+        hidc_capture_assign(&k, HIDC_STYLE_FULL_KEY, 3); hidc_capture_assign(&k, HIDC_STYLE_GC, 4); hidc_capture_clear_all(&k);
+        CHECK(hidc_capture_get(&k, HIDC_STYLE_FULL_KEY) == -1 && hidc_capture_get(&k, HIDC_STYLE_GC) == -1, "clear every capture assignment");
+        HidcPalma *p = hidc_palma(&k, 0x20);
+        CHECK(p == &k.palma[9] && hidc_palma(&k, 9) == NULL && hidc_palma(&k, 1ull << 32) == NULL, "Palma handle = npad id");
+        uint8_t w[3] = {9, 8, 7};
+        CHECK(hidc_palma_app_write(p, HIDC_PALMA_APP_SIZE - 3, w, 3) == 0 && p->op_type == HIDC_PALMA_OP_WRITE_APP_SECTION, "app section write at the end");
+        CHECK(hidc_palma_app_write(p, HIDC_PALMA_APP_SIZE - 2, w, 3) == -1, "app section write past the end refused");
+        CHECK(hidc_palma_app_read(p, HIDC_PALMA_APP_SIZE - 3, 3) == 0 && p->op_data[0] == 9 && p->op_data[2] == 7, "app section read back");
+        CHECK(hidc_palma_app_read(p, 0, HIDC_PALMA_DATA + 1) == -1, "read larger than the operation data refused");
+    }
     printf("{\"test\":\"svc_hidcore\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }
