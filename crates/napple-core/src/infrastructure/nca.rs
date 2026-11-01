@@ -247,6 +247,27 @@ impl Nca {
         self.key_gen
     }
 
+    /// What an NCZ writer records for the AES-CTR sections, in file order: (file offset, size, key, counter). The
+    /// counter is the section's high half followed by zeros; the stream offset is the absolute file
+    /// offset, as `NczSource` applies it.
+    pub fn ctr_sections(&self) -> Vec<(u64, u64, [u8; 16], [u8; 16])> {
+        let Some(key) = self.ctr_key else {
+            return Vec::new();
+        };
+        let mut v: Vec<_> = self
+            .sections
+            .iter()
+            .filter(|s| s.enc == Enc::Ctr)
+            .map(|s| {
+                let mut ctr = [0u8; 16];
+                ctr[..8].copy_from_slice(&s.ctr_hi);
+                (s.start, s.end - s.start, key, ctr)
+            })
+            .collect();
+        v.sort_by_key(|s| s.0); // file order: section indices need not follow it
+        v
+    }
+
     /// Decrypted view of a section's bytes (offsets relative to section start).
     pub fn section(&self, idx: usize) -> Result<Src> {
         let s = self
