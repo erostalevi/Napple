@@ -115,8 +115,9 @@ NVN(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const void *d) { 
 NVN(nvnProgramSetSubroutineLinkage, NVNboolean, NVNprogram *p, int n, const NVNsubroutineLinkageMapPtr *m) { (void)p; (void)n; (void)m; return 1; }
 /* Sample shading: kept in a side table keyed by the program address, NOT in the program object. The guest's NVNprogram may be smaller than the 0xC0 bytes of this
  * header (the SDK it was built with decides; writing past prog_t's 152 bytes crashed Animal Crossing at boot by corrupting a neighbour). Metal has no pipeline switch
- * for it: a fragment function runs once per sample exactly when it reads [[sample_id]] or a per-sample interpolant, a property of the translated shader, so
- * nothing enters the pipeline key. The debug label is accepted and dropped. */
+ * for it: a fragment function runs once per sample exactly when it reads [[sample_id]] or a per-sample interpolant, a property of the translated shader. BindProgram
+ * records the flag (p_bind_program.sample_shading, api_cmd.c), the replay puts it in the pipeline key of multisampled passes and the fragment function is translated
+ * with [[sample_id]] (ShaderKey.sample_shading). Any rate > 0 shades every sample (Metal has no minimum sample fraction). The debug label is accepted and dropped. */
 #define SS_N 4096
 static struct { const void *p; uint32_t en; float rate; } g_ss[SS_N];
 static pthread_mutex_t g_ss_mu = PTHREAD_MUTEX_INITIALIZER;

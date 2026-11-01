@@ -71,6 +71,8 @@ void ring_end(ring *r);                                  /* returns chunks to th
     float rsx, rsy;                   /* render target scaling (mtl_scale.m): the Metal texture is w * rsx by h * rsy; 1 when not scaled */
     uint32_t scale_gen;               /* mtl_scale_generation() when rsx / rsy were decided */
     NSMutableDictionary<NSNumber *, id<MTLTexture>> *views;
+    NSMutableDictionary<NSNumber *, id> *aliases; /* copy-backed views (GfxAlias, mtl_tex.m): views Metal cannot make over this texture's storage */
+    uint64_t wgen;                    /* bumped whenever the GPU or the CPU writes the texture (mtl_tex_written); copy-backed views refresh when it moves */
 }
 @end
 GfxTex *mtl_tex_get(const texsnap *s, int for_gpu_write);                 /* find or create; replay thread */
@@ -81,6 +83,16 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
 uint32_t mtl_bcrt_pending(void);                    /* shadows of block-compressed render targets waiting to be copied back */
 void mtl_bcrt_flush(id<MTLCommandBuffer> cb);        /* copy them back (no encoder may be open on cb) */
 id<MTLTexture> mtl_tex_image_view(GfxTex *t, int kind, int type, int atomic);   /* surface image view (IMGKIND_*, TEXTYPE_*); nil when the texture type does not fit */
+/* Copy-backed views: a sampled view Metal cannot express over the texture's storage (a reinterpretation across format classes of the same block size: depth
+ * as an integer / packed colour format, block-compressed as the integer format of one block, colour as depth; a multisampled depth texture as a multisampled
+ * colour one; 2D slices of a 3D texture or a 3D view of a 2D array) is a separate texture that mtl_tex_view keeps a copy in. It returns that texture and queues
+ * a refresh whenever the source was written since (wgen); the replay encodes the queued copies with no encoder open (mtl_tex_alias_flush) before the draw
+ * or dispatch that samples it. */
+static inline void mtl_tex_written(GfxTex *t) { if (t) t->wgen++; }
+uint32_t mtl_tex_alias_pending(void);                    /* refreshes queued and not yet encoded */
+void mtl_tex_alias_flush(id<MTLCommandBuffer> cb);       /* encode them (no encoder may be open on cb) */
+int  mtl_tex_samples_as_depth(const texsnap *s, const view_t *v, int has_view);   /* the sampled view is a depth texture (shader declares depth2d): ds slot masks */
+int  mtl_tex_samples_as_uint(const texsnap *s, const view_t *v, int has_view);    /* the sampled view is a copy in R8 / R16 / R32 UINT: bound as a stencil slot (texture2d<uint>) */
 id<MTLTexture> mtl_tex_attach_view(GfxTex *t, const view_t *v, int has_view, uint32_t *level, uint32_t *slice);
 int  mtl_tex_format_info(const texsnap *s, MTLPixelFormat *pf, int *is_depth, int *has_stencil);
 id<MTLSamplerState> mtl_sampler_get(const samp_par *p);
