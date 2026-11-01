@@ -187,3 +187,17 @@ test-a32: $(BUILD)/tests/a32/difftest $(BUILD)/napple-runtime
 $(BUILD)/tests/test_decoder_vt: tests/test_decoder_vt.c src/services/decoder_vt.c src/vt_h264.c src/services/decoder_null_core.c src/services/codec_headers_core.c tests/check.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Isrc/services tests/test_decoder_vt.c src/services/decoder_vt.c src/vt_h264.c src/services/decoder_null_core.c src/services/codec_headers_core.c -lm -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework ImageIO -framework CoreGraphics -o $@
+
+# ipc-depth-hid (2026-11-01-r2): every application-reachable command id of tests/ipc_reference/*.txt must have a row in the runtime's command
+# tables (tests/test_ipc_reference.c reads the sources; portable C, so it runs in `test` and `test-host`). `make test-ipc-reference` lists details.
+$(BUILD)/tests/test_ipc_reference: tests/test_ipc_reference.c
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O1 -g -Wall -Wextra $< -o $@
+test: $(BUILD)/tests/test_ipc_reference
+$(HOST_BUILD)/test_ipc_reference: tests/test_ipc_reference.c
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -std=gnu11 -O1 -g -Wall -Wextra $< -o $@
+test-host: $(HOST_BUILD)/test_ipc_reference
+test-ipc-reference: $(BUILD)/tests/test_ipc_reference
+	./$< -v
+.PHONY: test-ipc-reference

@@ -1,0 +1,6 @@
+# interface audrec:u (switchbrew Audio_services IFinalOutputRecorderManager; libnx audrec.c)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: -
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+0	OpenFinalOutputRecorder	1.0.0	y

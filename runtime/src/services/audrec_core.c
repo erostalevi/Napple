@@ -46,3 +46,9 @@ int audrec_end_time(const AudrecQueue *q, uint64_t tag, uint64_t *end) {
     return 0;
 }
 unsigned audrec_count(const AudrecQueue *q) { return q->nqueued + q->nreleased; }
+int audrec_flush(AudrecQueue *q) {
+    int any = q->nqueued != 0;
+    for (unsigned i = 0; i < q->nqueued && q->nreleased < AUDREC_QUEUE_MAX; i++) complete(q, q->queued[i]);
+    q->nqueued = 0;
+    return any;
+}

@@ -401,7 +401,7 @@ static void hid_six_axis_off(IpcObject *s, IpcCall *c) {
 /* Vibration. HidVibrationDeviceHandle (u32) = bytes {type, npad style index, player number (npad id), device index 0 left / 1 right}; the value is
  * {amp_low, freq_low, amp_high, freq_high} floats. Rumble reaches the physical pad through the input backend (CoreHaptics, input/src/gamepad.m). */
 static void vib_apply(uint32_t handle, const napple_vibration *v) {
-    if (!HC()->vibration_permitted) return; /* PermitVibration(false): the title muted rumble */
+    if (!hidc_vibration_allowed(HC())) return; /* PermitVibration(false) outside a permit session: the title muted rumble */
     uint32_t npad_id = (handle >> 16) & 0xff, side = (handle >> 24) & 0xff, style = (handle >> 8) & 0xff;
     if (style == 1 || npad_id == 0x20) npad_id = 0x20; /* handheld */
     if (side > 1) return;
@@ -670,8 +670,8 @@ static void hid_center_clamp(IpcObject *s, IpcCall *c) {
     (void)s;
     if (IN_OK(c, 0, uint8_t)) HC()->center_clamp = IPC_IN(c, uint8_t, 0) != 0;
 }
-/* Capture button assignment: Set(style u32 at 0, aruid at 8, button index u64 at 16), Clear(style). The Capture press itself reaches the host's
- * screenshot hotkey; the table decides which npad button bit would mirror it, which the host pads never set. */
+/* Capture button assignment: Set(style u32 at 0, aruid at 8, buttons u64 at 16) (135), Clear(aruid) (136, every style). The Capture press itself
+ * reaches the host's screenshot hotkey; the table decides which npad buttons would mirror it, which the host pads never set. */
 static void hid_set_capture_button(IpcObject *s, IpcCall *c) {
     (void)s;
     if (!IN_OK(c, 0, uint32_t)) return;
@@ -680,8 +680,8 @@ static void hid_set_capture_button(IpcObject *s, IpcCall *c) {
 }
 static void hid_clear_capture_button(IpcObject *s, IpcCall *c) {
     (void)s;
-    if (!IN_OK(c, 0, uint32_t)) return;
-    if (hidc_capture_clear(HC(), IPC_IN(c, uint32_t, 0))) c->result = R_HID_INVALID_ARG;
+    (void)c;
+    hidc_capture_clear_all(HC());
 }
 static void hid_keyboard_lock(IpcObject *s, IpcCall *c) { /* 32(HidKeyboardLockKeyEvent bits u32) */
     (void)s;
@@ -746,28 +746,543 @@ static void hid_set_touch_resolution(IpcObject *s, IpcCall *c) { /* 1004(u32 wid
     ensure_input();
     napple_input_set_screen_size(g_input, (int)w, (int)h);
 }
+
+/* ---- ipc-depth-hid (2026-11-01-r2): the rest of the application-reachable IHidServer commands (tests/ipc_reference/hid.txt) ----------------------
+ * Argument layouts follow the libnx wrappers / switchbrew; the ones marked [unverified] were not checked against a real SDK and are read
+ * defensively (a short request is ignored, not fatal). */
+#define R_HID_PALMA_NOT_CONNECTED HZ_RESULT(HZ_MOD_HID, 3302) /* [unverified] no Palma on this npad */
+#define R_HID_PALMA_NO_OPERATION HZ_RESULT(HZ_MOD_HID, 3303)  /* [unverified] GetPalmaOperationInfo before any operation */
+/* Mouse wheel delta pushed by the system (19.0.0-22.5.0): {s32 delta, aruid} or {aruid, s32} [unverified]; it reaches the backend as a scroll. */
+static void hid_add_mouse_wheel(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, int32_t)) return;
+    int32_t d = IN_OK(c, 8, int32_t) && IPC_IN(c, uint64_t, 0) == 0x1000 ? IPC_IN(c, int32_t, 8) : IPC_IN(c, int32_t, 0);
+    ensure_input();
+    napple_input_mouse_scroll(g_input, 0.0f, (float)d);
+}
+static void hid_activate_debug_mouse(IpcObject *s, IpcCall *c) { /* 26: the debug mouse is the host mouse, always sampled */
+    (void)s;
+    (void)c;
+    HC()->debug_mouse_active = 1;
+}
+/* JoyXpad / the xpad six-axis sensors (pre-Npad interfaces, removed in 23.0.0): this host has no xpad, so the id lists are empty (55, 59),
+ * activation is accepted and a lifo handle request names an id that cannot exist. The npad six-axis path (66/67) is what titles read. */
+static void hid_activate_joy_xpad(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->joy_xpad_active = 1;
+}
+static void hid_xpad_no_device(IpcObject *s, IpcCall *c) {
+    (void)s;
+    c->result = R_HID_INVALID_ARG;
+}
+static void hid_xpad_sensor_toggle(IpcObject *s, IpcCall *c) { /* 60, 61, 63, 64(xpad id): no xpad sensor exists; accepted */
+    (void)s;
+    (void)c;
+}
+static HidcSensor *sensor_arg(IpcCall *c, uint32_t off) { return IN_OK(c, off, uint32_t) ? hidc_sensor(HC(), IPC_IN(c, uint32_t, off)) : NULL; }
+static void hid_get_fusion_params(IpcObject *s, IpcCall *c) { /* 71(handle, aruid) -> {f32 gain, f32 reduction} */
+    (void)s;
+    HidcSensor *x = sensor_arg(c, 0);
+    float v[2] = {x ? x->gain : HIDC_DEFAULT_GAIN, x ? x->reduction : HIDC_DEFAULT_REDUCTION};
+    ipc_out(c, v, sizeof v);
+}
+static void hid_set_acc_params(IpcObject *s, IpcCall *c) { /* 73(handle, f32 x, f32 y, aruid) */
+    (void)s;
+    if (!IN_OK(c, 8, float)) return;
+    HidcSensor *x = sensor_arg(c, 0);
+    if (x) {
+        x->acc_x = IPC_IN(c, float, 4);
+        x->acc_y = IPC_IN(c, float, 8);
+    }
+}
+static void hid_get_acc_params(IpcObject *s, IpcCall *c) { /* 74(handle, aruid) -> {f32, f32} */
+    (void)s;
+    HidcSensor *x = sensor_arg(c, 0);
+    float v[2] = {x ? x->acc_x : 0.0f, x ? x->acc_y : 0.0f};
+    ipc_out(c, v, sizeof v);
+}
+static void hid_reset_acc_params(IpcObject *s, IpcCall *c) { /* 75 */
+    (void)s;
+    HidcSensor *x = sensor_arg(c, 0);
+    if (x) {
+        x->acc_x = 0.0f;
+        x->acc_y = 0.0f;
+    }
+}
+static void hid_set_acc_play_mode(IpcObject *s, IpcCall *c) { /* 76(handle, u32 mode, aruid) */
+    (void)s;
+    if (!IN_OK(c, 4, uint32_t)) return;
+    HidcSensor *x = sensor_arg(c, 0);
+    if (x) x->acc_play_mode = IPC_IN(c, uint32_t, 4);
+}
+static void hid_get_acc_play_mode(IpcObject *s, IpcCall *c) { /* 77 -> u32 */
+    (void)s;
+    HidcSensor *x = sensor_arg(c, 0);
+    uint32_t v = x ? x->acc_play_mode : 0;
+    IPC_OUT(c, v);
+}
+static void hid_reset_acc_play_mode(IpcObject *s, IpcCall *c) { /* 78 */
+    (void)s;
+    HidcSensor *x = sensor_arg(c, 0);
+    if (x) x->acc_play_mode = 0;
+}
+static void hid_ret_false(IpcObject *s, IpcCall *c) { /* 83 IsFirmwareUpdateAvailableForSixAxisSensor: a host pad never needs one */
+    (void)s;
+    uint8_t v = 0;
+    IPC_OUT(c, v);
+}
+static void hid_set_passthrough(IpcObject *s, IpcCall *c) { /* 84(bool, handle at 4, aruid) */
+    (void)s;
+    if (!IN_OK(c, 4, uint32_t)) return;
+    HidcSensor *x = sensor_arg(c, 4);
+    if (x) x->passthrough = IPC_IN(c, uint8_t, 0) != 0;
+}
+static void hid_get_passthrough(IpcObject *s, IpcCall *c) { /* 85(handle, aruid) -> bool */
+    (void)s;
+    HidcSensor *x = sensor_arg(c, 0);
+    uint8_t v = x ? (uint8_t)x->passthrough : 0;
+    IPC_OUT(c, v);
+}
+static void hid_reset_newly_assigned(IpcObject *s, IpcCall *c) { /* 89: the host never flags a sensor as newly assigned, so there is nothing to clear */
+    (void)s;
+    (void)c;
+}
+static void hid_set_gesture_ranges(IpcObject *s, IpcCall *c) { /* 92: four floats kept for the title [unverified layout]; the recogniser reports 1280x720 */
+    (void)s;
+    HC()->gesture_ranges_set = 1;
+    for (int i = 0; i < 4; i++) HC()->gesture_ranges[i] = IN_OK(c, 4 * i, float) ? IPC_IN(c, float, 4 * i) : 0.0f;
+}
+/* 133 SetNpadJoyAssignmentModeSingleWithDestination(npad id, u32 type, aruid) -> {bool reassigned, u32 new npad id}: the host pads are never two
+ * detachable halves, so the pad switches to single mode in place and nothing is moved to another npad. */
+static void hid_assign_single_dest(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    uint32_t id = IPC_IN(c, uint32_t, 0);
+    if (hidc_slot_from_id(id) < 0) {
+        c->result = R_HID_INVALID_NPAD;
+        return;
+    }
+    ensure_input();
+    napple_input_set_assignment_mode(g_input, 1);
+    struct {
+        uint8_t reassigned, pad[3];
+        uint32_t id;
+    } o = {0, {0}, id};
+    ipc_out(c, &o, sizeof o);
+}
+static void hid_gc_8bit_raw(IpcObject *s, IpcCall *c) { /* 137(bool, aruid) [unverified]: the GC stick values are already 8-bit on this host */
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) HC()->gc_8bit_raw = IPC_IN(c, uint8_t, 0) != 0;
+}
+/* GameCube controller rumble (ERM motor): 207 SendVibrationGcErmCommand(handle, aruid, u64 command), 208 GetActualVibrationGcErmCommand(handle, aruid). */
+static uint64_t pick_u64_after_handle(IpcCall *c) {
+    if (IN_OK(c, 16, uint64_t)) {
+        uint64_t a = IPC_IN(c, uint64_t, 8), b = IPC_IN(c, uint64_t, 16);
+        return a == 0x1000 ? b : a;
+    }
+    return IN_OK(c, 8, uint64_t) ? IPC_IN(c, uint64_t, 8) : 0;
+}
+static void hid_send_gc_erm(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    uint32_t h = IPC_IN(c, uint32_t, 0);
+    uint64_t cmd = pick_u64_after_handle(c);
+    if (hidc_erm_set(HC(), h, cmd)) {
+        c->result = R_HID_INVALID_ARG;
+        return;
+    }
+    ensure_input();
+    napple_vibration v = cmd == 1 ? (napple_vibration){1.0f, 160.f, 1.0f, 320.f} : (napple_vibration){0, 160.f, 0, 320.f};
+    vib_apply(h, &v);
+}
+static void hid_get_gc_erm(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t v = IN_OK(c, 0, uint32_t) ? hidc_erm_get(HC(), IPC_IN(c, uint32_t, 0)) : 0;
+    IPC_OUT(c, v);
+}
+static void hid_begin_vib_session(IpcObject *s, IpcCall *c) { /* 209(aruid): vibration allowed until 210 even if PermitVibration(false) */
+    (void)s;
+    (void)c;
+    HC()->vib_session = 1;
+}
+static void hid_end_vib_session(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->vib_session = 0;
+}
+static void hid_send_vibration_bool(IpcObject *s, IpcCall *c) { /* 212(handle u32, bool at 4, aruid) [unverified layout]: on = full amplitude */
+    (void)s;
+    if (!IN_OK(c, 4, uint8_t)) return;
+    ensure_input();
+    napple_vibration v = IPC_IN(c, uint8_t, 4) ? (napple_vibration){1.0f, 160.f, 1.0f, 320.f} : (napple_vibration){0, 160.f, 0, 320.f};
+    vib_apply(IPC_IN(c, uint32_t, 0), &v);
+}
+/* 213/214 (17.0.0+): SendVibrationValue(s) with a mode word [unverified layout: the value follows the handle as in 201]; the mode is not used. */
+static void hid_send_vibration_mode(IpcObject *s, IpcCall *c) {
+    if (!IN_OK(c, 4, napple_vibration)) return;
+    hid_send_vibration(s, c);
+}
+/* Seven six-axis sensor (the console's IMU at 7 samples per frame, written into two transfer memories the title gives at Initialize). The flags
+ * and the fusion strength are kept; no samples are written, so the title's lifo stays empty (a console whose sensor reports nothing yet). */
+static void hid_seven_activate(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->seven_active = 1;
+}
+static void hid_seven_start(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->seven_started = 1;
+}
+static void hid_seven_stop(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->seven_started = 0;
+}
+static void hid_seven_init(IpcObject *s, IpcCall *c) { /* 306(aruid, u64 size1, u64 size2, two transfer memory copy handles) */
+    (void)s;
+    HC()->seven_init = 1;
+    HC()->seven_mem_size[0] = IN_OK(c, 8, uint64_t) ? IPC_IN(c, uint64_t, 8) : 0;
+    HC()->seven_mem_size[1] = IN_OK(c, 16, uint64_t) ? IPC_IN(c, uint64_t, 16) : 0;
+}
+static void hid_seven_finalize(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    HC()->seven_init = 0;
+    HC()->seven_started = 0;
+}
+static void hid_seven_set_strength(IpcObject *s, IpcCall *c) { /* 308(f32, aruid) */
+    (void)s;
+    if (IN_OK(c, 0, float)) HC()->seven_strength = IPC_IN(c, float, 0);
+}
+static void hid_seven_get_strength(IpcObject *s, IpcCall *c) { /* 309(aruid) -> f32 */
+    (void)s;
+    float v = HC()->seven_strength;
+    IPC_OUT(c, v);
+}
+static void hid_seven_reset_timestamp(IpcObject *s, IpcCall *c) { /* 310: no sample was written, so the next one starts at 0 anyway */
+    (void)s;
+    (void)c;
+}
+static void hid_console_six_force_on(IpcObject *s, IpcCall *c) { /* 311 */
+    (void)s;
+    (void)c;
+    HC()->console_six_active = 1;
+    HC()->console_six_started = 1;
+    console_six_apply();
+}
+static void hid_console_six_force_off(IpcObject *s, IpcCall *c) { /* 312 */
+    (void)s;
+    (void)c;
+    HC()->console_six_active = 0;
+    console_six_apply();
+}
+static void hid_npad_imu(IpcObject *s, IpcCall *c) { /* 320 EnableNpadImu / 321 DisableNpadImu (21.0.0+, arguments [unverified]): the npad six-axis sampling */
+    (void)s;
+    int on = c->cmd == 320;
+    HC()->npad_imu = on;
+    ensure_input();
+    napple_input_set_sixaxis_enabled(g_input, on);
+}
+static void hid_usb_full_key_enabled(IpcObject *s, IpcCall *c) { /* 400 -> bool */
+    (void)s;
+    uint8_t v = (uint8_t)HC()->usb_full_key;
+    IPC_OUT(c, v);
+}
+static void hid_usb_full_key_enable(IpcObject *s, IpcCall *c) { /* 401(bool, aruid) */
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) HC()->usb_full_key = IPC_IN(c, uint8_t, 0) != 0;
+}
+static uint32_t npad_style_of(uint32_t id) {
+    int slot = hidc_slot_from_id(id);
+    if (slot < 0) return 0;
+    ensure_input();
+    return napple_input_active_style(g_input, slot);
+}
+static void hid_usb_full_key_connected(IpcObject *s, IpcCall *c) { /* 402(npad id) -> bool: host pads are not Switch Pro Controllers on a USB rail */
+    (void)s;
+    uint8_t v = 0;
+    IPC_OUT(c, v);
+}
+static void hid_has_battery(IpcObject *s, IpcCall *c) { /* 403(npad id) -> bool: a connected pad other than the handheld console reports a battery */
+    (void)s;
+    uint32_t st = IN_OK(c, 0, uint32_t) ? npad_style_of(IPC_IN(c, uint32_t, 0)) : 0;
+    uint8_t v = st && !(st & (HIDC_STYLE_HANDHELD | HIDC_STYLE_HANDHELD_LARK));
+    IPC_OUT(c, v);
+}
+static void hid_has_lr_battery(IpcObject *s, IpcCall *c) { /* 404(npad id) -> {bool left, bool right} */
+    (void)s;
+    uint32_t st = IN_OK(c, 0, uint32_t) ? npad_style_of(IPC_IN(c, uint32_t, 0)) : 0;
+    uint8_t v[2] = {(uint8_t)!!(st & (HIDC_STYLE_JOY_DUAL | HIDC_STYLE_JOY_LEFT)), (uint8_t)!!(st & (HIDC_STYLE_JOY_DUAL | HIDC_STYLE_JOY_RIGHT))};
+    ipc_out(c, v, 2);
+}
+/* HidNpadInterfaceType: 1 Bluetooth, 2 Rail (attached to the console), 3 USB, 4 embedded; 0 when no pad is connected [unverified for 0]. */
+static uint8_t interface_of(uint32_t st) { return !st ? 0 : (st & (HIDC_STYLE_HANDHELD | HIDC_STYLE_HANDHELD_LARK)) ? 2 : 1; }
+static void hid_npad_interface(IpcObject *s, IpcCall *c) { /* 405(npad id) -> u8 */
+    (void)s;
+    uint8_t v = interface_of(IN_OK(c, 0, uint32_t) ? npad_style_of(IPC_IN(c, uint32_t, 0)) : 0);
+    IPC_OUT(c, v);
+}
+static void hid_npad_lr_interface(IpcObject *s, IpcCall *c) { /* 406(npad id) -> {u8 left, u8 right} */
+    (void)s;
+    uint32_t st = IN_OK(c, 0, uint32_t) ? npad_style_of(IPC_IN(c, uint32_t, 0)) : 0;
+    uint8_t i = interface_of(st);
+    uint8_t v[2] = {(st & (HIDC_STYLE_JOY_DUAL | HIDC_STYLE_JOY_LEFT | HIDC_STYLE_HANDHELD)) ? i : 0, (st & (HIDC_STYLE_JOY_DUAL | HIDC_STYLE_JOY_RIGHT | HIDC_STYLE_HANDHELD)) ? i : 0};
+    ipc_out(c, v, 2);
+}
+/* 407/408(in buffer of npad ids, aruid) -> npad id: every host pad reads as full, so the first connected id of the list wins (the first id when none is). */
+static void hid_highest_battery(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint32_t *ids = b ? ipc_buf_ptr(b) : NULL;
+    uint64_t n = ids ? b->size / 4 : 0;
+    uint32_t pick = n ? ids[0] : 0;
+    for (uint64_t i = 0; i < n && i < 16; i++)
+        if (npad_style_of(ids[i])) {
+            pick = ids[i];
+            break;
+        }
+    IPC_OUT(c, pick);
+}
+/* Palma (Poke Ball Plus): the device behind an npad that reports the Palma style (input/ maps a host pad to it when the title announces Palma).
+ * Every operation completes at once and signals the operation-complete event; GetPalmaOperationInfo returns its type and data. Layouts of the
+ * operation data are [unverified]: step count u32 at 0, database version s32 at 0, application section bytes at 0. */
+static HidcPalma *palma_at(IpcCall *c, uint32_t off) {
+    if (!IN_OK(c, off, uint64_t)) {
+        c->result = R_HID_PALMA_NOT_CONNECTED;
+        return NULL;
+    }
+    HidcPalma *p = hidc_palma(HC(), IPC_IN(c, uint64_t, off));
+    if (!p) c->result = R_HID_PALMA_NOT_CONNECTED;
+    return p;
+}
+static void palma_done(HidcPalma *p, uint64_t type, const void *data, uint32_t n) {
+    hidc_palma_complete(p, type, 0, data, n);
+    if (p->event) event_signal_handle(p->event);
+}
+static void palma_signal(HidcPalma *p) {
+    if (p->event) event_signal_handle(p->event);
+}
+static void hid_palma_handle(IpcObject *s, IpcCall *c) { /* 500(npad id, aruid) -> connection handle */
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    uint32_t id = IPC_IN(c, uint32_t, 0);
+    if (!(npad_style_of(id) & HIDC_STYLE_PALMA)) {
+        c->result = R_HID_PALMA_NOT_CONNECTED;
+        return;
+    }
+    uint64_t h = id;
+    IPC_OUT(c, h);
+}
+static void hid_palma_init(IpcObject *s, IpcCall *c) { /* 501(handle) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (p) p->initialized = 1;
+}
+static void hid_palma_event(IpcObject *s, IpcCall *c) { /* 502(handle) -> event */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    uint32_t r = 0, w = event_create(&r);
+    p->event = w;
+    ipc_out_copy_handle(c, r);
+}
+static void hid_palma_op_info(IpcObject *s, IpcCall *c) { /* 503(handle) -> u64 type, out buffer operation data */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    if (!p->has_op) {
+        c->result = R_HID_PALMA_NO_OPERATION;
+        return;
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b) ipc_write_buf(c, b, p->op_data, sizeof p->op_data);
+    IPC_OUT(c, p->op_type);
+}
+static void hid_palma_play(IpcObject *s, IpcCall *c) { /* 504(handle, u64 activity) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (p) palma_done(p, HIDC_PALMA_OP_PLAY_ACTIVITY, NULL, 0);
+}
+static void hid_palma_fr_mode(IpcObject *s, IpcCall *c) { /* 505(handle, u64 fr mode) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    p->fr_mode = IN_OK(c, 8, uint64_t) ? IPC_IN(c, uint64_t, 8) : 0;
+    palma_done(p, HIDC_PALMA_OP_SET_FR_MODE, NULL, 0);
+}
+static void hid_palma_read_step(IpcObject *s, IpcCall *c) { /* 506(handle): the host counts no steps */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (p) palma_done(p, HIDC_PALMA_OP_READ_STEP, &p->steps, sizeof p->steps);
+}
+static void hid_palma_enable_step(IpcObject *s, IpcCall *c) { /* 507({bool, handle at 8}) [unverified order] */
+    (void)s;
+    HidcPalma *p = palma_at(c, 8);
+    if (!p) return;
+    p->step_enabled = IPC_IN(c, uint8_t, 0) != 0;
+    palma_done(p, HIDC_PALMA_OP_ENABLE_STEP, NULL, 0);
+}
+static void hid_palma_reset_step(IpcObject *s, IpcCall *c) { /* 508(handle) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    p->steps = 0;
+    palma_done(p, HIDC_PALMA_OP_RESET_STEP, NULL, 0);
+}
+static void hid_palma_read_app(IpcObject *s, IpcCall *c) { /* 509(handle, u64 address, u64 size) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    if (!IN_OK(c, 16, uint64_t) || hidc_palma_app_read(p, IPC_IN(c, uint64_t, 8), IPC_IN(c, uint64_t, 16))) {
+        c->result = R_HID_INVALID_ARG;
+        return;
+    }
+    palma_signal(p);
+}
+static void hid_palma_write_app(IpcObject *s, IpcCall *c) { /* 510(handle, u64 address, u64 size, in buffer) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const void *src = b ? ipc_buf_ptr(b) : NULL;
+    uint64_t size = IN_OK(c, 16, uint64_t) ? IPC_IN(c, uint64_t, 16) : 0;
+    if (b && size > b->size) size = b->size;
+    if (!src || hidc_palma_app_write(p, IN_OK(c, 8, uint64_t) ? IPC_IN(c, uint64_t, 8) : 0, src, size)) {
+        c->result = R_HID_INVALID_ARG;
+        return;
+    }
+    palma_signal(p);
+}
+static void hid_palma_unique_code(IpcObject *s, IpcCall *c) { /* 511(handle): an all-zero code, or the op fails once invalidated [unverified] */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    hidc_palma_complete(p, HIDC_PALMA_OP_READ_UNIQUE_CODE, p->unique_code_invalid ? R_HID_INVALID_ARG : 0, NULL, 0);
+    palma_signal(p);
+}
+static void hid_palma_unique_invalid(IpcObject *s, IpcCall *c) { /* 512(handle) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    p->unique_code_invalid = 1;
+    palma_done(p, HIDC_PALMA_OP_SET_UNIQUE_CODE_INVALID, NULL, 0);
+}
+static void hid_palma_write_entry(IpcObject *s, IpcCall *c) { /* 513 activity, 514 RGB LED pattern, 515 wave entry: accepted (no LED or speaker on the host) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    uint64_t type = c->cmd == 513 ? HIDC_PALMA_OP_WRITE_ACTIVITY_ENTRY : c->cmd == 514 ? HIDC_PALMA_OP_WRITE_RGB_LED_ENTRY : HIDC_PALMA_OP_WRITE_WAVE_ENTRY;
+    palma_done(p, type, NULL, 0);
+}
+static void hid_palma_set_db_version(IpcObject *s, IpcCall *c) { /* 516({s32 version, handle at 8}) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 8);
+    if (!p) return;
+    p->db_version = IPC_IN(c, int32_t, 0);
+    palma_done(p, HIDC_PALMA_OP_WRITE_DB_VERSION, NULL, 0);
+}
+static void hid_palma_get_db_version(IpcObject *s, IpcCall *c) { /* 517(handle) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (p) palma_done(p, HIDC_PALMA_OP_READ_DB_VERSION, &p->db_version, sizeof p->db_version);
+}
+static void hid_palma_suspend(IpcObject *s, IpcCall *c) { /* 518({u32 feature set, handle at 8}) */
+    (void)s;
+    HidcPalma *p = palma_at(c, 8);
+    if (p) p->feature_suspended = (int)IPC_IN(c, uint32_t, 0);
+}
+static void hid_palma_op_result(IpcObject *s, IpcCall *c) { /* 519(handle): the last operation's result is the command's result */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (p) c->result = p->has_op ? p->op_result : R_HID_PALMA_NO_OPERATION;
+}
+static void hid_palma_play_log(IpcObject *s, IpcCall *c) { /* 520 ReadPalmaPlayLog / 521 ResetPalmaPlayLog({u16 index, handle at 8}): no play log on the host */
+    (void)s;
+    HidcPalma *p = palma_at(c, 8);
+    if (p) palma_signal(p);
+}
+static void hid_palma_flag(IpcObject *s, IpcCall *c) { /* 522 all connectable, 523 paired connectable, 525/527 boost mode: {bool, aruid} */
+    (void)s;
+    int v = IN_OK(c, 0, uint8_t) && IPC_IN(c, uint8_t, 0) != 0;
+    if (c->cmd == 522) HC()->palma_all_connectable = v;
+    else if (c->cmd == 523) HC()->palma_paired_connectable = v;
+    else HC()->palma_boost = v;
+}
+static void hid_palma_accept(IpcObject *s, IpcCall *c) { /* 524 PairPalma, 526 CancelWritePalmaWaveEntry(handle): the device is paired and writes are instant */
+    (void)s;
+    palma_at(c, 0);
+}
+static void hid_palma_bdaddr(IpcObject *s, IpcCall *c) { /* 528(handle) -> 6-byte address: a locally administered one per npad slot */
+    (void)s;
+    HidcPalma *p = palma_at(c, 0);
+    if (!p) return;
+    uint8_t a[8] = {0x02, 0x4e, 0x41, 0x50, 0x4c, (uint8_t)(p - HC()->palma), 0, 0};
+    ipc_out(c, a, 6);
+}
+static void hid_palma_disallow(IpcObject *s, IpcCall *c) { /* 529(aruid, in buffer of addresses): no other Palma can connect to a host anyway */
+    (void)s;
+    (void)c;
+}
+static void hid_touch_emulation(IpcObject *s, IpcCall *c) { /* 1005(bool, aruid) [unverified layout] */
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) HC()->touch_emulation_enter = IPC_IN(c, uint8_t, 0) != 0;
+}
+static void hid_activate_digitizer(IpcObject *s, IpcCall *c) { /* 2000: no digitizer (pen) on a host; the section stays empty, as with none attached */
+    (void)s;
+    (void)c;
+    HC()->digitizer_active = 1;
+}
+static void hid_mouse_lib_version(IpcObject *s, IpcCall *c) { /* 3150(u32 version, aruid) [unverified layout] */
+    (void)s;
+    if (IN_OK(c, 0, uint32_t)) HC()->mouse_lib_version = IPC_IN(c, uint32_t, 0);
+}
 static const IpcCmd hid_cmds[] = {
     {0, "CreateAppletResource", hid_create_applet_resource, IPC_IMPL},
     {1, "ActivateDebugPad", hid_activate_debug_pad, IPC_IMPL},
     {11, "ActivateTouchScreen", noop, IPC_IMPL},
     {21, "ActivateMouse", noop, IPC_IMPL},
+    {22, "AddMouseWheelDelta", hid_add_mouse_wheel, IPC_IMPL},
+    {26, "ActivateDebugMouse", hid_activate_debug_mouse, IPC_IMPL},
     {31, "ActivateKeyboard", noop, IPC_IMPL},
     {32, "SendKeyboardLockKeyEvent", hid_keyboard_lock, IPC_IMPL},
     {40, "AcquireXpadIdEventHandle", event_handle, IPC_IMPL},
     {41, "ReleaseXpadIdEventHandle", noop, IPC_IMPL},
     {51, "ActivateXpad", noop, IPC_IMPL},
     {55, "GetXpadIds", hid_get_xpad_ids, IPC_IMPL},
+    {56, "ActivateJoyXpad", hid_activate_joy_xpad, IPC_IMPL},
+    {58, "GetJoyXpadLifoHandle", hid_xpad_no_device, IPC_IMPL},
+    {59, "GetJoyXpadIds", hid_get_xpad_ids, IPC_IMPL},
+    {60, "ActivateSixAxisSensor", hid_xpad_sensor_toggle, IPC_IMPL},
+    {61, "DeactivateSixAxisSensor", hid_xpad_sensor_toggle, IPC_IMPL},
+    {62, "GetSixAxisSensorLifoHandle", hid_xpad_no_device, IPC_IMPL},
+    {63, "ActivateJoySixAxisSensor", hid_xpad_sensor_toggle, IPC_IMPL},
+    {64, "DeactivateJoySixAxisSensor", hid_xpad_sensor_toggle, IPC_IMPL},
+    {65, "GetJoySixAxisSensorLifoHandle", hid_xpad_no_device, IPC_IMPL},
     {66, "StartSixAxisSensor", hid_six_axis, IPC_IMPL},
     {67, "StopSixAxisSensor", hid_six_axis_off, IPC_IMPL},
     {68, "IsSixAxisSensorFusionEnabled", hid_fusion_enabled, IPC_IMPL},
     {69, "EnableSixAxisSensorFusion", hid_enable_fusion, IPC_IMPL},
     {70, "SetSixAxisSensorFusionParameters", hid_set_fusion_params, IPC_IMPL},
+    {71, "GetSixAxisSensorFusionParameters", hid_get_fusion_params, IPC_IMPL},
     {72, "ResetSixAxisSensorFusionParameters", hid_reset_fusion_params, IPC_IMPL},
+    {73, "SetAccelerometerParameters", hid_set_acc_params, IPC_IMPL},
+    {74, "GetAccelerometerParameters", hid_get_acc_params, IPC_IMPL},
+    {75, "ResetAccelerometerParameters", hid_reset_acc_params, IPC_IMPL},
+    {76, "SetAccelerometerPlayMode", hid_set_acc_play_mode, IPC_IMPL},
+    {77, "GetAccelerometerPlayMode", hid_get_acc_play_mode, IPC_IMPL},
+    {78, "ResetAccelerometerPlayMode", hid_reset_acc_play_mode, IPC_IMPL},
     {79, "SetGyroscopeZeroDriftMode", hid_set_zero_drift, IPC_IMPL},
     {80, "GetGyroscopeZeroDriftMode", hid_get_zero_drift, IPC_IMPL},
     {81, "ResetGyroscopeZeroDriftMode", hid_reset_zero_drift, IPC_IMPL},
     {82, "IsSixAxisSensorAtRest", hid_six_at_rest, IPC_IMPL},
+    {83, "IsFirmwareUpdateAvailableForSixAxisSensor", hid_ret_false, IPC_IMPL},
+    {84, "EnableSixAxisSensorUnalteredPassthrough", hid_set_passthrough, IPC_IMPL},
+    {85, "IsSixAxisSensorUnalteredPassthroughEnabled", hid_get_passthrough, IPC_IMPL},
+    {89, "ResetIsSixAxisSensorDeviceNewlyAssigned", hid_reset_newly_assigned, IPC_IMPL},
     {91, "ActivateGesture", hid_activate_gesture, IPC_IMPL},
+    {92, "SetGestureOutputRanges", hid_set_gesture_ranges, IPC_IMPL},
     {100, "SetSupportedNpadStyleSet", hid_set_styles, IPC_IMPL},
     {101, "GetSupportedNpadStyleSet", hid_get_styles, IPC_IMPL},
     {102, "SetSupportedNpadIdType", hid_set_id_types, IPC_IMPL},
@@ -790,9 +1305,12 @@ static const IpcCmd hid_cmds[] = {
     {130, "SwapNpadAssignment", hid_swap_assignment, IPC_IMPL},
     {131, "IsUnintendedHomeButtonInputProtectionEnabled", hid_home_protect_get, IPC_IMPL},
     {132, "EnableUnintendedHomeButtonInputProtection", hid_home_protect_set, IPC_IMPL},
-    {133, "SetNpadAnalogStickUseCenterClamp", hid_center_clamp, IPC_IMPL},
-    {134, "SetNpadCaptureButtonAssignment", hid_set_capture_button, IPC_IMPL},
-    {135, "ClearNpadCaptureButtonAssignment", hid_clear_capture_button, IPC_IMPL},
+    /* 133-136 were one id low before 2026-11-01 (133 answered the center clamp): ids from switchbrew / libnx */
+    {133, "SetNpadJoyAssignmentModeSingleWithDestination", hid_assign_single_dest, IPC_IMPL},
+    {134, "SetNpadAnalogStickUseCenterClamp", hid_center_clamp, IPC_IMPL},
+    {135, "SetNpadCaptureButtonAssignment", hid_set_capture_button, IPC_IMPL},
+    {136, "ClearNpadCaptureButtonAssignment", hid_clear_capture_button, IPC_IMPL},
+    {137, "SetNpadGcAnalogStick8bitRawValue", hid_gc_8bit_raw, IPC_IMPL},
     {200, "GetVibrationDeviceInfo", hid_vibration_device_info, IPC_IMPL},
     {201, "SendVibrationValue", hid_send_vibration, IPC_IMPL},
     {202, "GetActualVibrationValue", hid_get_actual_vibration, IPC_IMPL},
@@ -800,15 +1318,76 @@ static const IpcCmd hid_cmds[] = {
     {204, "PermitVibration", hid_permit_vibration, IPC_IMPL},
     {205, "IsVibrationPermitted", hid_is_vibration_permitted, IPC_IMPL},
     {206, "SendVibrationValues", hid_send_vibrations, IPC_IMPL},
+    {207, "SendVibrationGcErmCommand", hid_send_gc_erm, IPC_IMPL},
+    {208, "GetActualVibrationGcErmCommand", hid_get_gc_erm, IPC_IMPL},
+    {209, "BeginPermitVibrationSession", hid_begin_vib_session, IPC_IMPL},
+    {210, "EndPermitVibrationSession", hid_end_vib_session, IPC_IMPL},
     {211, "IsVibrationDeviceMounted", hid_device_mounted, IPC_IMPL},
+    {212, "SendVibrationValueInBool", hid_send_vibration_bool, IPC_IMPL},
+    {213, "SendVibrationValueInMode", hid_send_vibration_mode, IPC_IMPL},
+    {214, "SendVibrationValuesInMode", hid_send_vibrations, IPC_IMPL},
     {300, "ActivateConsoleSixAxisSensor", hid_console_six_activate, IPC_IMPL},
     {301, "StartConsoleSixAxisSensor", hid_console_six_start, IPC_IMPL},
     {302, "StopConsoleSixAxisSensor", hid_console_six_stop, IPC_IMPL},
+    {303, "ActivateSevenSixAxisSensor", hid_seven_activate, IPC_IMPL},
+    {304, "StartSevenSixAxisSensor", hid_seven_start, IPC_IMPL},
+    {305, "StopSevenSixAxisSensor", hid_seven_stop, IPC_IMPL},
+    {306, "InitializeSevenSixAxisSensor", hid_seven_init, IPC_IMPL},
+    {307, "FinalizeSevenSixAxisSensor", hid_seven_finalize, IPC_IMPL},
+    {308, "SetSevenSixAxisSensorFusionStrength", hid_seven_set_strength, IPC_IMPL},
+    {309, "GetSevenSixAxisSensorFusionStrength", hid_seven_get_strength, IPC_IMPL},
+    {310, "ResetSevenSixAxisSensorTimestamp", hid_seven_reset_timestamp, IPC_IMPL},
+    {311, "ForceActivateConsoleSixAxisSensor", hid_console_six_force_on, IPC_IMPL},
+    {312, "ForceDeactivateConsoleSixAxisSensor", hid_console_six_force_off, IPC_IMPL},
+    {320, "EnableNpadImu", hid_npad_imu, IPC_IMPL},
+    {321, "DisableNpadImu", hid_npad_imu, IPC_IMPL},
+    {400, "IsUsbFullKeyControllerEnabled", hid_usb_full_key_enabled, IPC_IMPL},
+    {401, "EnableUsbFullKeyController", hid_usb_full_key_enable, IPC_IMPL},
+    {402, "IsUsbFullKeyControllerConnected", hid_usb_full_key_connected, IPC_IMPL},
+    {403, "HasBattery", hid_has_battery, IPC_IMPL},
+    {404, "HasLeftRightBattery", hid_has_lr_battery, IPC_IMPL},
+    {405, "GetNpadInterfaceType", hid_npad_interface, IPC_IMPL},
+    {406, "GetNpadLeftRightInterfaceType", hid_npad_lr_interface, IPC_IMPL},
+    {407, "GetNpadOfHighestBatteryLevel", hid_highest_battery, IPC_IMPL},
+    {408, "GetNpadOfHighestBatteryLevelForJoyRight", hid_highest_battery, IPC_IMPL},
+    {500, "GetPalmaConnectionHandle", hid_palma_handle, IPC_IMPL},
+    {501, "InitializePalma", hid_palma_init, IPC_IMPL},
+    {502, "AcquirePalmaOperationCompleteEvent", hid_palma_event, IPC_IMPL},
+    {503, "GetPalmaOperationInfo", hid_palma_op_info, IPC_IMPL},
+    {504, "PlayPalmaActivity", hid_palma_play, IPC_IMPL},
+    {505, "SetPalmaFrModeType", hid_palma_fr_mode, IPC_IMPL},
+    {506, "ReadPalmaStep", hid_palma_read_step, IPC_IMPL},
+    {507, "EnablePalmaStep", hid_palma_enable_step, IPC_IMPL},
+    {508, "ResetPalmaStep", hid_palma_reset_step, IPC_IMPL},
+    {509, "ReadPalmaApplicationSection", hid_palma_read_app, IPC_IMPL},
+    {510, "WritePalmaApplicationSection", hid_palma_write_app, IPC_IMPL},
+    {511, "ReadPalmaUniqueCode", hid_palma_unique_code, IPC_IMPL},
+    {512, "SetPalmaUniqueCodeInvalid", hid_palma_unique_invalid, IPC_IMPL},
+    {513, "WritePalmaActivityEntry", hid_palma_write_entry, IPC_IMPL},
+    {514, "WritePalmaRgbLedPatternEntry", hid_palma_write_entry, IPC_IMPL},
+    {515, "WritePalmaWaveEntry", hid_palma_write_entry, IPC_IMPL},
+    {516, "SetPalmaDataBaseIdentificationVersion", hid_palma_set_db_version, IPC_IMPL},
+    {517, "GetPalmaDataBaseIdentificationVersion", hid_palma_get_db_version, IPC_IMPL},
+    {518, "SuspendPalmaFeature", hid_palma_suspend, IPC_IMPL},
+    {519, "GetPalmaOperationResult", hid_palma_op_result, IPC_IMPL},
+    {520, "ReadPalmaPlayLog", hid_palma_play_log, IPC_IMPL},
+    {521, "ResetPalmaPlayLog", hid_palma_play_log, IPC_IMPL},
+    {522, "SetIsPalmaAllConnectable", hid_palma_flag, IPC_IMPL},
+    {523, "SetIsPalmaPairedConnectable", hid_palma_flag, IPC_IMPL},
+    {524, "PairPalma", hid_palma_accept, IPC_IMPL},
+    {525, "SetPalmaBoostMode", hid_palma_flag, IPC_IMPL},
+    {526, "CancelWritePalmaWaveEntry", hid_palma_accept, IPC_IMPL},
+    {527, "EnablePalmaBoostMode", hid_palma_flag, IPC_IMPL},
+    {528, "GetPalmaBluetoothAddress", hid_palma_bdaddr, IPC_IMPL},
+    {529, "SetDisallowedPalmaConnection", hid_palma_disallow, IPC_IMPL},
     {1000, "SetNpadCommunicationMode", hid_set_comm_mode, IPC_IMPL},
     {1001, "GetNpadCommunicationMode", hid_get_comm_mode, IPC_IMPL},
     {1002, "SetTouchScreenConfiguration", hid_set_touch_config, IPC_IMPL},
     {1003, "IsFirmwareUpdateNeededForNotification", hid_fw_update_needed, IPC_IMPL},
     {1004, "SetTouchScreenResolution", hid_set_touch_resolution, IPC_IMPL},
+    {1005, "EnableNxTouchScreenEmulationForTouchEnter", hid_touch_emulation, IPC_IMPL},
+    {2000, "ActivateDigitizer", hid_activate_digitizer, IPC_IMPL},
+    {3150, "SetMouseLibraryVersion", hid_mouse_lib_version, IPC_IMPL},
 };
 static IpcObject *hid_open(void) { return IPC_OBJECT("hid", hid_cmds, NULL, NULL); }
 void service_register_hid(void) { ipc_register_service("hid", hid_open); }
