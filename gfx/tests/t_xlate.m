@@ -222,6 +222,130 @@ static uint64_t i_vmnmx(int d, int a, int b, int c_, int asel, int asg, int bsel
            ((uint64_t)sat << 55) | ((uint64_t)mx << 56) | PT_BITS;
 }
 
+#ifdef __APPLE__
+/* ---- Corpus mode: NAPPLE_SHADER_CORPUS=<dir> (tools/gpu/scan_stages.py extract writes <tag>_<digest>_<vs|ps|gs|tcs|tes|cs>.bin + .ctl, one directory per
+ * title or all in one): every program is translated with its stage's key (geometry / tess fields from the SPH) and compiled by Metal with the options the
+ * runtime uses (MSL 3.1 when the program needs it), at most 3 compiles at a time. Prints per tag: programs, translated, compiled, and the failures
+ * grouped by message (NAPPLE_SHADER_CORPUS_LIST=1 names every failing file). The corpus is game data: it lives outside the repository. */
+typedef struct {
+    char tag[32];
+    int total, ok, comp;
+} corpus_tag;
+static void corpus_file(const char *path, const char *name, corpus_tag *t, NSMutableDictionary<NSString *, NSNumber *> *fails, int list) {
+    FILE *f = fopen(path, "rb");
+    if (!f) return;
+    uint8_t *buf = malloc(1 << 22);
+    size_t len = fread(buf, 1, 1 << 22, f);
+    fclose(f);
+    char cp[1100];
+    snprintf(cp, sizeof cp, "%.*s.ctl", (int)(strlen(path) - 4), path);
+    f = fopen(cp, "rb");
+    if (f) {
+        uint8_t c[0x880];
+        size_t m = fread(c, 1, sizeof c, f);
+        fclose(f);
+        uint32_t off;
+        if (m > 0x704) {
+            memcpy(&off, c + 0x700, 4);
+            if (off && off <= len) len = off;
+        }
+    }
+    int stage = strstr(name, "_ps.") ? STAGE_FRAGMENT : strstr(name, "_cs.") ? STAGE_COMPUTE : strstr(name, "_gs.") ? STAGE_GEOMETRY
+              : strstr(name, "_tcs.") ? STAGE_TESS_CTRL : strstr(name, "_tes.") ? STAGE_TESS_EVAL : STAGE_VERTEX;
+    ShaderKey ck = {0};
+    const uint32_t *sph = (const uint32_t *)(buf + 0x30);
+    if (stage == STAGE_GEOMETRY && len > 0x50) {
+        uint32_t topo = (sph[3] >> 24) & 0xf;
+        ck.gs_max_vertices = (uint16_t)(sph[4] & 0xfff);
+        ck.gs_out_topology = topo == 1 ? GS_OUT_POINTS : topo == 6 ? GS_OUT_LINE_STRIP : GS_OUT_TRIANGLE_STRIP;
+        ck.gs_in_vertices = 3;
+    } else if (stage == STAGE_TESS_CTRL && len > 0x50) {
+        ck.tess_in_vertices = 3;
+        ck.tess_out_vertices = (uint8_t)((sph[2] >> 24) ? (sph[2] >> 24) : 3);
+        ck.tess_domain = TESS_DOMAIN_TRIANGLE;
+    } else if (stage == STAGE_TESS_EVAL) {
+        ck.tess_out_vertices = 3;
+        ck.tess_domain = TESS_DOMAIN_TRIANGLE;
+    }
+    ShaderInfo *r = maxwell_translate(buf, len, stage, &ck);
+    free(buf);
+    NSString *why = nil;
+    int ok = r && r->msl, comp = 0;
+    if (!ok) why = [NSString stringWithFormat:@"translate: %s", r ? r->error : "no result"];
+    else {
+        NSError *e = nil;
+        MTLCompileOptions *o = [MTLCompileOptions new];
+        o.languageVersion = r->needs_msl31 ? MTLLanguageVersion3_1 : MTLLanguageVersion3_0;
+        o.preserveInvariance = YES;
+        o.fastMathEnabled = NO;
+        comp = [g_dev newLibraryWithSource:@(r->msl) options:o error:&e] != nil;
+        if (!comp) {
+            NSString *msg = e.localizedDescription ?: @"?";
+            NSRange er = [msg rangeOfString:@"error: "];
+            if (er.location != NSNotFound) msg = [msg substringFromIndex:er.location];
+            NSRange nl = [msg rangeOfString:@"\n"];
+            if (nl.location != NSNotFound) msg = [msg substringToIndex:nl.location];
+            why = [@"metal: " stringByAppendingString:msg];
+        }
+    }
+    maxwell_free(r);
+    @synchronized(fails) {
+        t->total++;
+        t->ok += ok;
+        t->comp += comp;
+        if (why) {
+            /* group by message with the program-specific numbers removed */
+            NSRegularExpression *rx = [NSRegularExpression regularExpressionWithPattern:@"(0x[0-9a-fA-F]+|\\b[0-9]+\\b)" options:0 error:nil];
+            NSString *key = [rx stringByReplacingMatchesInString:why options:0 range:NSMakeRange(0, why.length) withTemplate:@"N"];
+            fails[key] = @(fails[key].intValue + 1);
+            if (list || fails[key].intValue <= 2) printf("  FAIL %s: %.300s\n", name, why.UTF8String);
+        }
+    }
+}
+static void corpus_run(const char *dir) {
+    NSMutableArray<NSString *> *files = [NSMutableArray array];
+    NSDirectoryEnumerator *en = [[NSFileManager defaultManager] enumeratorAtPath:@(dir)];
+    for (NSString *p in en)
+        if ([p hasSuffix:@".bin"]) [files addObject:p];
+    [files sortUsingSelector:@selector(compare:)];
+    static corpus_tag tags[32];
+    int ntag = 0, list = getenv("NAPPLE_SHADER_CORPUS_LIST") != NULL;
+    NSMutableDictionary<NSString *, NSNumber *> *fails = [NSMutableDictionary dictionary];
+    NSOperationQueue *q = [NSOperationQueue new];
+    q.maxConcurrentOperationCount = 3; /* a shared Mac: at most 3 Metal compiles at a time */
+    for (NSString *p in files) {
+        NSString *name = p.lastPathComponent;
+        NSRange us = [name rangeOfString:@"_"];
+        char tag[32];
+        snprintf(tag, sizeof tag, "%s", us.location != NSNotFound ? [name substringToIndex:us.location].UTF8String : "corpus");
+        int ti = 0;
+        while (ti < ntag && strcmp(tags[ti].tag, tag)) ti++;
+        if (ti == ntag && ntag < 32) snprintf(tags[ntag++].tag, sizeof tags[0].tag, "%s", tag);
+        if (ti >= 32) ti = 31;
+        corpus_tag *t = &tags[ti];
+        NSString *full = [@(dir) stringByAppendingPathComponent:p];
+        [q addOperationWithBlock:^{
+            @autoreleasepool {
+                corpus_file(full.UTF8String, name.UTF8String, t, fails, list);
+            }
+        }];
+    }
+    [q waitUntilAllOperationsAreFinished];
+    int total = 0, ok = 0, comp = 0;
+    for (int i = 0; i < ntag; i++) {
+        printf("corpus %s: %d programs, %d translated, %d compile with Metal\n", tags[i].tag, tags[i].total, tags[i].ok, tags[i].comp);
+        total += tags[i].total;
+        ok += tags[i].ok;
+        comp += tags[i].comp;
+    }
+    NSArray *keys = [fails keysSortedByValueUsingComparator:^NSComparisonResult(NSNumber *a, NSNumber *b) { return [b compare:a]; }];
+    for (NSString *k in keys) printf("  %5d x %.300s\n", fails[k].intValue, k.UTF8String);
+    printf("corpus: %d shaders, %d translated, %d compile with Metal\n", total, ok, comp);
+    CHECK(total == 0 || ok * 100 >= total * 95, "translation rate below 95%%");
+    CHECK(comp == ok, "%d translated shaders failed Metal compilation", ok - comp);
+}
+#endif
+
 int main(void) {
     POOL {
 #ifdef __APPLE__
@@ -825,55 +949,10 @@ int main(void) {
             }
 #endif
         }
-        const char *dir = getenv("NAPPLE_SHADER_CORPUS");
-        if (dir) {
-            int total = 0, ok = 0, comp = 0;
-            DIR *d = opendir(dir);
-            struct dirent *de;
-            while (d && (de = readdir(d))) {
-                size_t n = strlen(de->d_name);
-                if (n < 4 || strcmp(de->d_name + n - 4, ".bin")) continue;
-                char p[1024];
-                snprintf(p, sizeof p, "%s/%s", dir, de->d_name);
-                FILE *f = fopen(p, "rb");
-                if (!f) continue;
-                static uint8_t buf[1 << 20];
-                size_t len = fread(buf, 1, sizeof buf, f);
-                fclose(f);
-                snprintf(p + strlen(p) - 4, 8, ".ctl");
-                f = fopen(p, "rb");
-                if (f) {
-                    uint8_t c[0x880];
-                    size_t m = fread(c, 1, sizeof c, f);
-                    fclose(f);
-                    uint32_t off;
-                    if (m > 0x704) {
-                        memcpy(&off, c + 0x700, 4);
-                        if (off && off <= len) len = off;
-                    }
-                }
-                int stage = strstr(de->d_name, "_ps.") ? STAGE_FRAGMENT : strstr(de->d_name, "_cs.") ? STAGE_COMPUTE : STAGE_VERTEX;
-                ShaderKey ck = {0};
-                ck.flip_y = false;
-                ShaderInfo *r = xl(buf, len, stage, ck);
-                total++;
-                if (r->msl) {
-                    ok++;
 #ifdef __APPLE__
-                    NSString *ce = nil;
-                    if (compiles(r->msl, &ce)) comp++;
-                    else printf("  METAL COMPILE FAIL %s: %.200s\n", de->d_name, ce.UTF8String);
-#else
-                    comp++; /* no Metal here: compile status unknown, not counted as a failure */
+        const char *dir = getenv("NAPPLE_SHADER_CORPUS");
+        if (dir) corpus_run(dir);
 #endif
-                } else printf("  TRANSLATE FAIL %s: %s\n", de->d_name, r->error);
-                maxwell_free(r);
-            }
-            if (d) closedir(d);
-            printf("corpus: %d shaders, %d translated, %d compile with Metal\n", total, ok, comp);
-            CHECK(total == 0 || ok * 100 >= total * 95, "translation rate below 95%%");
-            CHECK(comp == ok, "%d translated shaders failed Metal compilation", ok - comp);
-        }
     }
 #ifndef __APPLE__
     printf("t_xlate: %d Metal compile checks skipped (no Metal on this host)\n", g_unverified);

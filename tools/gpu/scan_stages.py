@@ -8,6 +8,14 @@
                                                            programs too: MK8D course and driver .szs); --quick inflates only paths that
                                                            look like shader data
   scan_stages.py cover scan1.json scan2.json ...            smallest set of titles covering every feature seen
+  scan_stages.py extract <dir|romfs image>... -o <corpus dir> --tag <title>
+                                                           write every distinct program as <tag>_<digest>_<vs|ps|gs|tcs|tes|cs>.bin
+                                                           (code area) + .ctl (control section) for the t_xlate corpus mode
+                                                           (NAPPLE_SHADER_CORPUS). Code is paired with its control section through
+                                                           the BNSH program record (u64 control offset, u64 code offset, relative
+                                                           to the BNSH header; length = the section's +0x704 code length), or the
+                                                           .code file next to a NAPPLE_GFX_CTL_DUMP .ctl. Game data: keep the corpus
+                                                           outside the repository.
 
 Layout offsets are read from gfx/src/shader/control.h / control.c (see parse_offsets); nothing is duplicated silently:
 if the header no longer defines an offset the tool falls back to the value below and says so on stderr.
@@ -190,7 +198,77 @@ def sarc_files(b):
             yield i, b[data_off + start:data_off + end]
 
 
-def scan_blob(data, name, progs, stats, inflate_all, depth=0):
+CODE_MAGIC = struct.pack("<I", 0x12345678)  # first word of every GLSLC code area (then zeros up to the SPH at +0x30)
+BNSH_MAGIC = b"BNSH"
+CORPUS_STAGE = {"vs": "vs", "fs": "ps", "gs": "gs", "tcs": "tcs", "tes": "tes", "cs": "cs"}
+
+
+def pair_code(data, got, stats):
+    """Attach d["code"] (bytes) to the decoded sections `got` of blob `data` through the BNSH program records: per BNSH region, the 8-aligned u64
+    values are indexed once and each section's offset relative to the BNSH header is looked up; the record starts with u64 control offset, u64 code
+    offset (the size words after them differ between BNSH versions: bfsha u32 code size + u32 control size, VFXB effects others), the code must
+    start with CODE_MAGIC (compute code has no header: instructions from its first word) and is the section's code_len (+0x704) bytes long. Sections without a record keep no code."""
+    bnsh = []
+    i = data.find(BNSH_MAGIC)
+    while i >= 0:
+        if i % 8 == 0:
+            bnsh.append(i)
+        i = data.find(BNSH_MAGIC, i + 1)
+    if not bnsh:
+        stats["sections_without_bnsh"] = stats.get("sections_without_bnsh", 0) + len(got)
+        return
+    bounds = bnsh[1:] + [len(data)]
+    for bo, end in zip(bnsh, bounds):
+        mine = [d for d in got if bo <= d["offset"] < end and "code" not in d]
+        if not mine:
+            continue
+        want = {d["offset"] - bo: d for d in mine}
+        n = (end - bo) // 8
+        mv = memoryview(data)[bo:bo + 8 * n].cast("Q")
+        for k, v in enumerate(mv):
+            d = want.get(v)
+            if d is None or "code" in d:
+                continue
+            p = bo + 8 * k
+            if p + 24 > len(data):
+                continue
+            code_off = struct.unpack_from("<Q", data, p + 8)[0]
+            c, code_size = bo + code_off, d["code_len"]
+            if 0x80 <= code_size and c + code_size <= len(data) and (data[c:c + 4] == CODE_MAGIC or d["stage"] == "cs"):  # compute: no header
+                d["code"] = bytes(data[c:c + code_size])
+                d["ctl"] = bytes(data[d["offset"]:d["offset"] + d["length"]])
+        mv.release()
+    for d in got:
+        if "code" in d:
+            stats["paired"] = stats.get("paired", 0) + 1
+        else:
+            stats["unpaired"] = stats.get("unpaired", 0) + 1
+
+
+class Corpus:
+    """Writer of distinct programs for the t_xlate corpus mode: <dir>/<tag>_<digest of control + code>_<stage>.bin / .ctl."""
+
+    def __init__(self, out, tag):
+        self.out, self.tag, self.seen, self.written = out, tag, set(), {}
+        os.makedirs(out, exist_ok=True)
+
+    def add(self, d):
+        if "code" not in d:
+            return
+        h = hashlib.sha1(d["ctl"] + d["code"]).hexdigest()[:16]
+        if h in self.seen:
+            return
+        self.seen.add(h)
+        base = os.path.join(self.out, "%s_%s_%s" % (self.tag, h, CORPUS_STAGE[d["stage"]]))
+        with open(base + ".bin", "wb") as f:
+            f.write(d["code"])
+        with open(base + ".ctl", "wb") as f:
+            f.write(d["ctl"])
+        self.written[d["stage"]] = self.written.get(d["stage"], 0) + 1
+        del d["code"], d["ctl"]
+
+
+def scan_blob(data, name, progs, stats, inflate_all, depth=0, corpus=None):
     """Search one file's bytes (inflating and opening archives) for control sections; appends to progs."""
     if data[:4] in (b"Yaz0", ZSTD_MAGIC):
         if not (inflate_all or SHADERISH.search(name)):
@@ -202,13 +280,17 @@ def scan_blob(data, name, progs, stats, inflate_all, depth=0):
         stats["inflated"] = stats.get("inflated", 0) + 1
     if data[:4] == b"SARC" and depth < 4:
         for i, f in sarc_files(data):
-            scan_blob(f, "%s/#%d" % (name, i), progs, stats, inflate_all or bool(SHADERISH.search(name)), depth + 1)
+            scan_blob(f, "%s/#%d" % (name, i), progs, stats, inflate_all or bool(SHADERISH.search(name)), depth + 1, corpus)
         return
     got = list(find_sections(data)) if len(data) >= 0x760 else []
     if got:
         stats["files_with_sections"] = stats.get("files_with_sections", 0) + 1
+        if corpus is not None:
+            pair_code(data, got, stats)
     for d in got:
         d["file"] = name
+        if corpus is not None:
+            corpus.add(d)
         progs.append(d)
 
 
@@ -252,7 +334,7 @@ def is_romfs(path):
         return False
 
 
-def scan_romfs(path, inflate_all=True, label=None):
+def scan_romfs(path, inflate_all=True, label=None, corpus=None):
     """Scan every file of a RomFS image for control sections (archives and compression opened). Returns (progs, stats)."""
     progs, stats = [], {"files": 0, "skipped_large": 0}
     label = label or os.path.basename(path)
@@ -262,11 +344,11 @@ def scan_romfs(path, inflate_all=True, label=None):
             if size > ROMFS_MAX_FILE or off + size > len(m):
                 stats["skipped_large"] += 1
                 continue
-            scan_blob(m[off:off + size], label + ":" + name, progs, stats, inflate_all)
+            scan_blob(m[off:off + size], label + ":" + name, progs, stats, inflate_all, 0, corpus)
     return progs, stats
 
 
-def scan_dir(path, inflate_all=True, stats=None):
+def scan_dir(path, inflate_all=True, stats=None, corpus=None):
     """Scan a directory: *.ctl files are decoded directly, any other file is searched (archives / compression opened)."""
     progs, stats = [], stats if stats is not None else {}
     for dp, _, fs in os.walk(path):
@@ -281,30 +363,37 @@ def scan_dir(path, inflate_all=True, stats=None):
                 d = decode(data)
                 if d:
                     d["file"] = os.path.relpath(fp, path)
+                    if corpus is not None:  # NAPPLE_GFX_CTL_DUMP: the code area sits next to it
+                        try:
+                            with open(fp[:-4] + ".code", "rb") as fh:
+                                d["code"], d["ctl"] = fh.read(), data[:d["length"]]
+                        except OSError:
+                            pass
+                        corpus.add(d)
                     progs.append(d)
                 continue
             if f.endswith((".code", ".json")) or len(data) < 0x10:
                 continue
-            scan_blob(data, os.path.relpath(fp, path), progs, stats, inflate_all)
+            scan_blob(data, os.path.relpath(fp, path), progs, stats, inflate_all, 0, corpus)
     return progs, stats.get("files_with_sections", 0)
 
 
-def scan_paths(paths, inflate_all=True):
+def scan_paths(paths, inflate_all=True, corpus=None):
     """scan_dir / scan_romfs over several inputs (a title's base, update and DLC). Returns (progs, stats)."""
     progs, stats = [], {}
     for p in paths:
         if os.path.isdir(p):
-            pp, _ = scan_dir(p, True, stats)
+            pp, _ = scan_dir(p, True, stats, corpus)
             for d in pp:
                 d["file"] = os.path.basename(os.path.abspath(p)) + ":" + d["file"]
         elif is_romfs(p):
-            pp, st = scan_romfs(p, inflate_all)
+            pp, st = scan_romfs(p, inflate_all, None, corpus)
             for k, v in st.items():
                 stats[k] = stats.get(k, 0) + v
         else:
             pp = []
             with open(p, "rb") as fh:
-                scan_blob(fh.read(), os.path.basename(p), pp, stats, True)
+                scan_blob(fh.read(), os.path.basename(p), pp, stats, True, 0, corpus)
         progs += pp
     return progs, stats
 
@@ -373,6 +462,8 @@ def main(argv=None):
     s = sub.add_parser("scan"); s.add_argument("dir", nargs="+"); s.add_argument("--title-id", default=None); s.add_argument("-o", "--out")
     s.add_argument("--quick", action="store_true", help="inflate only compressed RomFS files whose path looks like shader data (misses model archives)")
     c = sub.add_parser("cover"); c.add_argument("scans", nargs="+")
+    e = sub.add_parser("extract"); e.add_argument("dir", nargs="+"); e.add_argument("-o", "--out", required=True); e.add_argument("--tag", required=True)
+    e.add_argument("--quick", action="store_true", help="as for scan")
     a = ap.parse_args(argv)
     if a.cmd == "scan":
         progs, stats = scan_paths(a.dir, not a.quick)
@@ -383,6 +474,16 @@ def main(argv=None):
         else:
             print(txt)
         sys.stderr.write(human(res) + "\n")
+        return 0
+    if a.cmd == "extract":
+        corpus = Corpus(a.out, a.tag)
+        progs, stats = scan_paths(a.dir, not a.quick, corpus)
+        stats.update({"written_" + k: v for k, v in corpus.written.items()})
+        stats["distinct_written"] = len(corpus.seen)
+        print(json.dumps(stats, indent=2, sort_keys=True))
+        sys.stderr.write("%s: %d sections, %d distinct programs written to %s (%s); %d sections without code\n" % (
+            a.tag, len(progs), len(corpus.seen), a.out, ", ".join("%s=%d" % kv for kv in sorted(corpus.written.items())),
+            stats.get("unpaired", 0) + stats.get("sections_without_bnsh", 0)))
         return 0
     res = cover([json.load(open(p)) for p in a.scans])
     print(json.dumps(res, indent=2))
