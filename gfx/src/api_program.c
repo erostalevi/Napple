@@ -130,6 +130,12 @@ NVN(nvnProgramSetSampleShading, void, NVNprogram *p, uint32_t enable, float rate
     pthread_mutex_unlock(&g_ss_mu);
 }
 NVN(nvnProgramSetDebugLabel, void, NVNprogram *p, const char *l) { (void)p; (void)l; }
+/* Subtile (tiled cache) size the program asks for: none here (0 x 0 = the driver's choice); Metal's tile renderer picks its own. */
+NVN(nvnProgramGetSubtileSize, void, const NVNprogram *p, int *w, int *h) {
+    (void)p;
+    if (w) *w = 0;
+    if (h) *h = 0;
+}
 /* test hook: the stored sample shading (enable, rate) */
 int gfx_program_sample_shading(const NVNprogram *p, float *rate) {
     uint32_t i = (uint32_t)(((uintptr_t)p >> 4) * 2654435761u) % SS_N;

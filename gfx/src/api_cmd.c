@@ -503,6 +503,7 @@ NVN(nvnCommandBufferGetMemoryCallback, PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC, co
 NVN(nvnCommandBufferGetMemoryCallbackData, void *, const NVNcommandBuffer *c) { return CBH(c)->cb_data; }
 /* Recordings live in host memory, so command memory never runs out and the out-of-memory callback is never due: enabling it changes nothing. */
 NVN(nvnCommandBufferSetCommandMemoryCallbackEnabled, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
+NVN(nvnCommandBufferSetControlMemoryCallbackEnabled, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }   /* control memory is host-allocated here: the callback is never needed */
 
 /* Command and control memory belong to the game; recordings live in host memory, so the memory is only accounted (see the lifetime notes above). */
 NVN(nvnCommandBufferAddCommandMemory, void, NVNcommandBuffer *c, const NVNmemoryPool *p, ptrdiff_t off, size_t size) {
@@ -741,6 +742,14 @@ NVN(nvnCommandBufferBindSeparateTexture, void, NVNcommandBuffer *c, NVNshaderSta
 NVN(nvnCommandBufferBindSeparateSampler, void, NVNcommandBuffer *c, NVNshaderStage st, int idx, NVNseparateSamplerHandle h) { bind_handles(c, OP_BIND_SEPSAMP, st, idx, 1, &h.value); }
 NVN(nvnCommandBufferBindSeparateTextures, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateTextureHandle *h) { bind_handles(c, OP_BIND_SEPTEX, st, first, n, &h->value); }
 NVN(nvnCommandBufferBindSeparateSamplers, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateSamplerHandle *h) { bind_handles(c, OP_BIND_SEPSAMP, st, first, n, &h->value); }
+/* The *Deferred binds (newer NVN; Animal Crossing looks them up) bind like their plain counterparts: the arrays are copied into the recording. Should the console
+ * read them when the command buffer executes instead, a game that rewrites the array between recording and submission would see the old values here. */
+NVN(nvnCommandBufferBindUniformBuffersDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *r) { bind_ranges(c, OP_BIND_UBO, st, first, n, r); }
+NVN(nvnCommandBufferBindStorageBuffersDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *r) { bind_ranges(c, OP_BIND_SSBO, st, first, n, r); }
+NVN(nvnCommandBufferBindTexturesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNtextureHandle *h) { bind_handles(c, OP_BIND_TEX, st, first, n, h); }
+NVN(nvnCommandBufferBindImagesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNimageHandle *h) { bind_handles(c, OP_BIND_IMG, st, first, n, h); }
+NVN(nvnCommandBufferBindSeparateTexturesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateTextureHandle *h) { bind_handles(c, OP_BIND_SEPTEX, st, first, n, &h->value); }
+NVN(nvnCommandBufferBindSeparateSamplersDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateSamplerHandle *h) { bind_handles(c, OP_BIND_SEPSAMP, st, first, n, &h->value); }
 
 uint64_t gfx_dpool_handle(const void *guest_pool);
 NVN(nvnCommandBufferSetTexturePool, void, NVNcommandBuffer *c, const NVNtexturePool *p) { *REC(c, uint64_t, OP_SET_TEXPOOL) = p ? gfx_dpool_handle(p) : 0; }
@@ -855,6 +864,18 @@ NVN(nvnCommandBufferBindCoverageModulationTable, void, NVNcommandBuffer *c, cons
 NVN(nvnCommandBufferSetColorReductionEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
 NVN(nvnCommandBufferSetColorReductionThresholds, void, NVNcommandBuffer *c, int a, int b) { (void)c; (void)a; (void)b; }
 NVN(nvnCommandBufferSetStencilCullCriteria, void, NVNcommandBuffer *c, int a, int b, int d) { (void)c; (void)a; (void)b; (void)d; }
+/* Tiled-cache and ZCull tuning: Metal's tile-based renderer chooses its own tile size and depth compression, so both are hints with nothing to apply. */
+NVN(nvnCommandBufferOverrideSubtileSize, void, NVNcommandBuffer *c, int w, int h) { (void)c; (void)w; (void)h; }
+NVN(nvnCommandBufferSetZCullZF32CompressionEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
+/* Provoking vertex (the vertex whose flat-shaded outputs a primitive uses). Metal has no switch for it and the translator has no key bit to rotate the flat
+ * inputs yet: the mode is kept (gfx_cmd_provoking_vertex_mode, tests) and a non-zero mode is reported once. */
+static _Atomic int g_provoking_mode;
+int gfx_cmd_provoking_vertex_mode(void) { return atomic_load(&g_provoking_mode); }
+NVN(nvnCommandBufferSetProvokingVertexMode, void, NVNcommandBuffer *c, int mode) {
+    (void)c;
+    atomic_store(&g_provoking_mode, mode);
+    if (mode) LOG_ONCE(NAPPLE_LOG_INFO, "SetProvokingVertexMode(%d): flat-shaded outputs keep Metal's provoking vertex (no translator support yet)", mode);
+}
 NVN(nvnCommandBufferSetProgramSubroutines, void, NVNcommandBuffer *c, NVNprogram *p, NVNshaderStage s, const int a, const int b, const int *v) { (void)c; (void)p; (void)s; (void)a; (void)b; (void)v; }
 
 /* ---------------------------------------------------------------------------------------------------------------
