@@ -2,7 +2,8 @@
  *  1. transform feedback: a plain triangle list captured straight from the vertex program, then (after Pause / Resume) an indexed, instanced triangle strip
  *     captured through stage-out records and the copy kernel; the captured words are compared exactly, the control memory holds the byte counts, and
  *     DrawTransformFeedback draws the captured vertices.
- *  2. geometry shader: points expanded to quads (4 emitted vertices, triangle strip) by compute emulation; pixels checked.
+ *  2. geometry shader: points expanded to quads (4 emitted vertices, triangle strip) by compute emulation; pixels checked. GLSLC's vertex handles
+ *     (SR_INVOCATION_INFO + ISBERD + ALD a[Rv], 2f) captured word for word.
  *  3. tessellation: a quad patch with the NVN default levels (no tess control program) and a triangle patch whose levels the tess control program writes;
  *     the tess eval program places the vertices at control point 0 + tess coordinate; pixels checked.
  *  4. software tessellator: tess eval output captured (quad, both windings; indirect triangle patches with a tess control program), isolines drawn and
@@ -299,6 +300,41 @@ static void test_gs_indirect(void) {
     CHECK(a == 0, "vertex 0 (before `first`) not drawn: %08x", a);
 }
 
+/* ---- 2e. MultiDrawArraysIndirectCount with a geometry program: count and records read at encode time (stage_draw_indirect_count) ----
+ * Needs the one-line hook in do_draw_indirect_count (mtl_replay.m, owned by another area at the time of writing): built only with
+ * -DNAPPLE_TEST_IND_COUNT_STAGES until that hook lands (integrators/claude-gfx-stages-live-2026-11-01-r1.md). */
+#ifdef NAPPLE_TEST_IND_COUNT_STAGES
+static void test_gs_indirect_count(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float v[3][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, 0.5f, 0, 1}, {0.5f, -0.5f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    uint64_t gi[32];
+    int n = gs_quad(gi, 0, -1);
+    gi[n++] = ins_exit();
+    NVNshaderData sd[3] = {vs_pos(), stage(2, gi, n, 0, 0, 7u << 24, 4), fs_red()};
+    NVNprogram *prog = program(3, sd);
+    /* three records 32 bytes apart (one point each: vertices 1, 2, 0); count = 2 of max 3, so vertex 0's record is not drawn */
+    uint32_t *args = (uint32_t *)(h.mem + OFF_CTL + 0x200), *count = (uint32_t *)(h.mem + OFF_CTL + 0x1f0);
+    memset(args, 0, 96);
+    for (int r = 0; r < 3; r++) {
+        args[8 * r + 0] = 1;
+        args[8 * r + 1] = 1;
+        args[8 * r + 2] = (uint32_t)(r + 1) % 3;
+    }
+    *count = 2;
+    h_begin(&h);
+    common_state(0);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    clear_rt();
+    L(nvnCommandBufferMultiDrawArraysIndirectCount)(h.cb, NVN_DRAW_PRIMITIVE_POINTS, (NVNbufferAddress)(uintptr_t)args, (NVNbufferAddress)(uintptr_t)count, 3, 32);
+    readback();
+    h_submit(&h);
+    uint32_t a = px(pxx(-0.5f), pxy(-0.5f)), b = px(pxx(0.5f), pxy(0.5f)), c = px(pxx(0.5f), pxy(-0.5f));
+    CHECK(b == RED && c == RED, "indirect-count GS draw: quads at vertices 1 and 2 (records 0, 1): %08x %08x", b, c);
+    CHECK(a == 0, "record 2 (past the count) not drawn: %08x", a);
+}
+#endif
+
 /* ---- 2e. transform feedback of geometry shader output: the quads' triangles, decomposed from the strips, counted on the GPU ---- */
 static void test_gs_xfb(void) {
     float *vb = (float *)(h.mem + OFF_VB);
@@ -355,6 +391,63 @@ static void test_gs_xfb(void) {
     h_submit(&h);
     uint32_t a = px(pxx(-0.5f), pxy(-0.5f)), b = px(pxx(0.5f), pxy(0.5f)), e = px(32, 32);
     CHECK(a == RED && b == RED && e == 0, "DrawTransformFeedback of the GPU-counted capture draws the quads: %08x %08x %08x", a, b, e);
+}
+
+/* ---- 2f. GLSLC's input vertex handles: S2R SR_INVOCATION_INFO (0x1d), ISBERD, ALD a[Rv] (the prologue of Super Mario Odyssey's alThunderShader
+ * geometry programs). INVOCATION_INFO = vertex count << 16 | invocation, ISBERD maps a handle to the ALD vertex operand, and the "no vertex" handle
+ * 0x80000000 reads 0 (it read stage_in out of bounds before). A line in, a 3-vertex line strip out: vertex 1, vertex 0, the 0x80000000 vertex,
+ * each with INVOCATION_INFO in generic 0.x; exact words of the capture. ---- */
+#define ISBERD(d, a) (0xefd0000000000000ull | (uint64_t)(d) | ((uint64_t)(a) << 8) | PT_BITS)
+static void test_gs_handles(void) {
+    float *vb = (float *)(h.mem + OFF_VB);
+    const float v[2][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, 0.25f, 0, 1}};
+    memcpy(vb, v, sizeof v);
+    uint64_t gi[24];
+    int n = 0;
+    gi[n++] = S2R(8, 0x1d);
+    gi[n++] = ins_mov32i(6, 1); gi[n++] = ISBERD(1, 6);
+    gi[n++] = ins_mov32i(7, 0); gi[n++] = ISBERD(2, 7);
+    gi[n++] = ins_mov32i(3, 0x80000000u);
+    gi[n++] = ALDV(12, 0x70, 4, 1); gi[n++] = ASTP(12, 0x70, 4, 0); gi[n++] = ASTP(8, 0x80, 1, 0); gi[n++] = OUT_EMIT(20);
+    gi[n++] = ALDV(12, 0x70, 4, 2); gi[n++] = ASTP(12, 0x70, 4, 0); gi[n++] = ASTP(8, 0x80, 1, 0); gi[n++] = OUT_EMIT(20);
+    gi[n++] = ALDV(12, 0x70, 4, 3); gi[n++] = ASTP(12, 0x70, 4, 0); gi[n++] = ASTP(8, 0x80, 1, 0); gi[n++] = OUT_EMIT(20);
+    gi[n++] = ins_exit();
+    NVNshaderData sd[3] = {vs_pos(), stage(2, gi, n, 0, 0, 6u << 24, 3), fs_red()}; /* SPH: line strip, 3 vertices */
+    NVNprogram *prog = program(3, sd);
+    gfx_xfb_layout xl;
+    memset(&xl, 0, sizeof xl);
+    xl.count = 2;
+    xl.stride[0] = 20;
+    xl.e[0] = (ShaderXfbEntry){0x70, 0, 4, 0};
+    xl.e[1] = (ShaderXfbEntry){0x80, 0, 1, 16};
+    CHECK(gfx_program_set_xfb_layout(prog, &xl), "xfb layout registered for the geometry program");
+    memset(h.mem + OFF_X0, 0xee, 0x4000);
+    memset(h.mem + OFF_CTL, 0xee, 64);
+    NVNbufferAddress ctl = (NVNbufferAddress)(uintptr_t)(h.mem + OFF_CTL);
+    h_begin(&h);
+    common_state(1);
+    L(nvnCommandBufferBindProgram)(h.cb, prog, ALL_GFX_BITS);
+    NVNbufferRange xr[1] = {{(NVNbufferAddress)(uintptr_t)(h.mem + OFF_X0), 0x4000}};
+    L(nvnCommandBufferBindTransformFeedbackBuffers)(h.cb, 0, 1, xr);
+    L(nvnCommandBufferBeginTransformFeedback)(h.cb, ctl);
+    L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_LINES, 0, 2);
+    L(nvnCommandBufferEndTransformFeedback)(h.cb, ctl);
+    h_submit(&h);
+    /* strip (v1, v0, none) -> lines (v1, v0), (v0, none) */
+    const float none[4] = {0, 0, 0, 0};
+    const float *exp[4] = {v[1], v[0], v[0], none};
+    const uint32_t *x0 = (const uint32_t *)(h.mem + OFF_X0);
+    int bad = 0;
+    for (int i = 0; i < 4; i++) {
+        const uint32_t *w = x0 + i * 5;
+        for (int c = 0; c < 4; c++) bad += w[c] != fbits(exp[i][c]);
+        bad += w[4] != (2u << 16);
+    }
+    if (bad)
+        for (int i = 0; i < 4; i++) printf("  handles: vertex %d: %08x %08x %08x %08x info %08x\n", i, x0[i * 5], x0[i * 5 + 1], x0[i * 5 + 2], x0[i * 5 + 3], x0[i * 5 + 4]);
+    CHECK(bad == 0, "ISBERD handles select input vertices 1 and 0, the 0x80000000 handle reads 0, INVOCATION_INFO = 2 << 16 (%d words differ)", bad);
+    const uint32_t *cw = (const uint32_t *)(h.mem + OFF_CTL);
+    CHECK(cw[0] == 4 * 20, "control memory: %u bytes captured (4 vertices of 20 bytes)", cw[0]);
 }
 
 /* ---- 3. tessellation ---- */
@@ -665,7 +758,11 @@ int main(void) {
     test_gs_instanced();
     test_gs_strip_adjacency();
     test_gs_indirect();
+#ifdef NAPPLE_TEST_IND_COUNT_STAGES
+    test_gs_indirect_count();
+#endif
     test_gs_xfb();
+    test_gs_handles();
     test_tess();
     test_tes_xfb();
     test_tes_xfb_indirect();
