@@ -2269,6 +2269,7 @@ static NSString *const kIndCountMSL = @"#include <metal_stdlib>\nusing namespace
                                        "  if (i >= p.x) return; uint n = min(count[0], p.x); device const uint *s = (device const uint *)(src + i * p.y);\n"
                                        "  for (uint w = 0; w < p.z; w++) dst[i * p.z + w] = i < n ? s[w] : 0; }\n";
 static void do_draw_indirect_count(const p_draw_ind_count *d) {
+    if (stage_draw_indirect_count(d)) return; /* transform feedback / geometry / tessellation: count and records read at encode time (mtl_stages.inc) */
     int native;
     MTLPrimitiveType pt = prim_native(d->mode, &native);
     if (!native) {

@@ -1119,7 +1119,7 @@ static int stage_draw(const sdraw *d) {
  * runs the stages, or draws natively what needs none (a pass-through geometry program, a capture-only draw). Returns 1 when handled here; called
  * first by do_draw_indirect_count. */
 static void do_draw_indirect(const p_draw_ind *d, int indexed); /* mtl_replay.m */
-__attribute__((unused)) static int stage_draw_indirect_count(const p_draw_ind_count *d) {
+static int stage_draw_indirect_count(const p_draw_ind_count *d) {
     if (!xfb_capturing() && !stage_draw_needed(d->mode)) return 0;
     if (g_predict) return stage_draw_needed(d->mode); /* the look-ahead pass: stage pipelines are built at the draw */
     if ((d->stride & 3) || (d->indirect & 3) || (d->count_addr & 3) || !d->max_draws) {

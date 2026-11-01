@@ -301,9 +301,7 @@ static void test_gs_indirect(void) {
 }
 
 /* ---- 2e. MultiDrawArraysIndirectCount with a geometry program: count and records read at encode time (stage_draw_indirect_count) ----
- * Needs the one-line hook in do_draw_indirect_count (mtl_replay.m, owned by another area at the time of writing): built only with
- * -DNAPPLE_TEST_IND_COUNT_STAGES until that hook lands (integrators/claude-gfx-stages-live-2026-11-01-r1.md). */
-#ifdef NAPPLE_TEST_IND_COUNT_STAGES
+ * Goes through the hook at the top of do_draw_indirect_count (mtl_replay.m). */
 static void test_gs_indirect_count(void) {
     float *vb = (float *)(h.mem + OFF_VB);
     const float v[3][4] = {{-0.5f, -0.5f, 0, 1}, {0.5f, 0.5f, 0, 1}, {0.5f, -0.5f, 0, 1}};
@@ -333,7 +331,6 @@ static void test_gs_indirect_count(void) {
     CHECK(b == RED && c == RED, "indirect-count GS draw: quads at vertices 1 and 2 (records 0, 1): %08x %08x", b, c);
     CHECK(a == 0, "record 2 (past the count) not drawn: %08x", a);
 }
-#endif
 
 /* ---- 2e. transform feedback of geometry shader output: the quads' triangles, decomposed from the strips, counted on the GPU ---- */
 static void test_gs_xfb(void) {
@@ -758,9 +755,7 @@ int main(void) {
     test_gs_instanced();
     test_gs_strip_adjacency();
     test_gs_indirect();
-#ifdef NAPPLE_TEST_IND_COUNT_STAGES
     test_gs_indirect_count();
-#endif
     test_gs_xfb();
     test_gs_handles();
     test_tess();
