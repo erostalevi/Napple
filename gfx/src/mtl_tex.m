@@ -1026,8 +1026,18 @@ id<MTLTexture> mtl_tex_view(GfxTex *t, const uint8_t tswz[4], const view_t *v, i
         MTLTextureType have = t->tex.textureType;
         MTLTextureType alt = (have == MTLTextureTypeCube || have == MTLTextureTypeCubeArray) ? (ns == 1 ? MTLTextureType2D : MTLTextureType2DArray) : have;
         if (alt != want && have != MTLTextureType3D && view_valid(t->tex, &pf, alt, l0, nl ? nl : 1, s0, ns ? ns : 1)) {
-            LOG_ONCE(NAPPLE_LOG_INFO, "texture view type %lu of a type %lu texture is not expressible: viewed as type %lu over levels %u+%u slices %u+%u",
-                     (unsigned long)want, (unsigned long)have, (unsigned long)alt, l0, nl, s0, ns);
+            {
+                napple_texdesc cd = t->key.d;
+                napple_texlayout cl;
+                cd.target = 8; /* NVN_TEXTURE_TARGET_CUBE */
+                cd.depth = 6;
+                napple_tex_layout(&cd, &cl);
+                LOG_ONCE(NAPPLE_LOG_INFO,
+                         "texture view type %lu of a type %lu texture is not expressible: viewed as type %lu over levels %u+%u slices %u+%u (texture %ux%ux%u fmt %#x, %u "
+                         "levels, storage %llu bytes; a cube of it needs %llu)",
+                         (unsigned long)want, (unsigned long)have, (unsigned long)alt, l0, nl, s0, ns, t->key.d.width, t->key.d.height, t->key.d.depth, t->key.d.format,
+                         t->key.d.levels, (unsigned long long)t->key.size, (unsigned long long)cl.size);
+            }
             want = alt;
             key = (key & ~(0xfull << 12)) | ((uint64_t)want << 12);
             k = @(key);

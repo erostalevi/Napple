@@ -9,6 +9,7 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <errno.h>
+#include <signal.h>
 #include <sys/sysctl.h>
 
 #import "mtl_priv.h"
@@ -92,6 +93,13 @@ static void archive_open(void) {
     NSString *marker = [path stringByAppendingString:@".loading"], *tmp = [path stringByAppendingString:@".tmp"];
     NSFileManager *fm = NSFileManager.defaultManager;
     [fm removeItemAtPath:tmp error:nil];                                 /* a save that never finished (crash, kill): the real file was never touched */
+    /* the same for the per-process temporary names (<file>.tmp.<pid>) of processes that are gone */
+    for (NSString *f in [fm contentsOfDirectoryAtPath:path.stringByDeletingLastPathComponent error:nil]) {
+        NSString *pre = [path.lastPathComponent stringByAppendingString:@".tmp."];
+        if (![f hasPrefix:pre]) continue;
+        int pid = [f substringFromIndex:pre.length].intValue;
+        if (pid > 0 && kill(pid, 0) != 0 && errno == ESRCH) [fm removeItemAtPath:[path.stringByDeletingLastPathComponent stringByAppendingPathComponent:f] error:nil];
+    }
     if ([fm fileExistsAtPath:marker]) {
         /* The previous launch started loading this file and never finished (Metal's loader hung or the process was killed or crashed inside it): the file is suspect, and a
          * corrupt archive made every later launch hang on the shader screen. Drop it; the next save rebuilds it. */
@@ -137,9 +145,19 @@ static void archive_save(void) {
     if (!g_archive_dirty || g_archive_broken) return;
     for (int tries = 0; tries < ARCHIVE_SAVE_TRIES; tries++) {
         NSError *err = nil;
-        /* Serialize next to the real file and rename over it: a crash or kill during the write can no longer leave a half-written archive at the real path. */
-        NSURL *tmpurl = [NSURL fileURLWithPath:[g_archive_url.path stringByAppendingString:@".tmp"]];
+        /* Serialize next to the real file and rename over it: a crash or kill during the write can no longer leave a half-written archive at the real path. The
+         * temporary name carries the process id: two processes of one title share the cache directory (a second instance, a test run next to the app), and
+         * with one name the second rename found the file already moved ("renaming the saved archive into place failed", MK8D). */
+        NSURL *tmpurl = [NSURL fileURLWithPath:[g_archive_url.path stringByAppendingFormat:@".tmp.%d", (int)getpid()]];
         BOOL ser = [g_out serializeToURL:tmpurl error:&err];
+        struct stat tst;
+        if (ser && stat(tmpurl.path.fileSystemRepresentation, &tst) != 0) {
+            /* Metal writes nothing (and still answers YES) when the archive gained nothing since its last serialization: a pipeline added again that it
+             * already held marks the save dirty without changing it. The file on disk is current. (Renaming the missing file failed and disabled the
+             * archive for the run: "renaming the saved archive into place failed", MK8D.) */
+            g_archive_dirty = 0;
+            return;
+        }
         int ren = ser ? rename(tmpurl.path.fileSystemRepresentation, g_archive_url.path.fileSystemRepresentation) : -1, ren_errno = ren ? errno : 0;
         if (ser && ren) {
             /* The archive was written but could not be moved into place: say why, keep the archive on and try again at the next save (a transient cause
@@ -535,8 +553,9 @@ static void cache_store(NSString *path, const ShaderInfo *info) {
     NSMutableData *d = [NSMutableData dataWithBytes:&h length:sizeof h];
     [d appendBytes:&copy length:sizeof copy];
     [d appendBytes:info->msl length:h.msl_size];
-    [d writeToFile:[path stringByAppendingString:@".tmp"] atomically:NO];
-    rename([path stringByAppendingString:@".tmp"].UTF8String, path.UTF8String);
+    NSString *tmp = [path stringByAppendingFormat:@".tmp.%d", (int)getpid()]; /* per process: instances of one title share the cache directory */
+    [d writeToFile:tmp atomically:NO];
+    if (rename(tmp.UTF8String, path.UTF8String)) unlink(tmp.UTF8String);
 }
 static int cache_load(NSString *path, ShaderInfo *info) {
     if (!path) return 0;
