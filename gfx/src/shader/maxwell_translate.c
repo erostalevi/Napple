@@ -424,7 +424,10 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
         if (addr >= 0x70 && addr < 0x80) {
             c->uses_frag_coord = true;
             int comp = (addr >> 2) & 3;
-            if (comp < 2) {   // guest pixel units: the render target may be allocated larger
+            if (comp < 2 && c->key && c->key->sample_shading) {   // per-sample shading: the sample's own position (Metal's [[position]] stays at the pixel centre)
+                c->uses_rscale = true;
+                sprintf(e, "as_type<uint>((floor(in.pos[%d]) + get_sample_position(sample_id)[%d] - rscale[0][%d]) / rscale[0][%d])", comp, comp, comp + 2, comp);
+            } else if (comp < 2) {   // guest pixel units: the render target may be allocated larger
                 c->uses_rscale = true;
                 sprintf(e, "as_type<uint>((in.pos[%d] - rscale[0][%d]) / rscale[0][%d])", comp, comp + 2, comp);
             } else {
@@ -3287,7 +3290,11 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         sp(&s, "struct FIn {\n  float4 pos [[position]];\n");
         for (int i = 0; i < 32; i++) {
             if (!(c->in_attr_mask & (1u << i))) continue;
-            const char *interp = (c->flat_mask & (1u << i)) ? " [[flat]]" : (c->noperspective_mask & (1u << i)) ? " [[center_no_perspective]]" : "";
+            /* per-sample shading interpolates at each sample (as the hardware does with sample shading on) */
+            int ss = c->key && c->key->sample_shading;
+            const char *interp = (c->flat_mask & (1u << i))             ? " [[flat]]"
+                                 : (c->noperspective_mask & (1u << i)) ? (ss ? " [[sample_no_perspective]]" : " [[center_no_perspective]]")
+                                                                        : (ss ? " [[sample_perspective]]" : "");
             sp(&s, "  float4 v%d [[user(locn%d)]]%s;\n", i, i, interp);
         }
         sp(&s, "};\n");
