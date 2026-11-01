@@ -2869,7 +2869,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
              * operand an attribute value and the kernel read stage_in out of bounds. */
             uint32_t nv = c->stage == STAGE_GEOMETRY ? (uint32_t)gs_in_verts(c) : c->stage == STAGE_TESS_CTRL ? (c->key ? c->key->tess_in_vertices : 1u)
                                                                                                              : (c->key ? c->key->tess_out_vertices : 1u);
-            if (c->stage == STAGE_GEOMETRY && nv > 1) sprintf(t, "((%s + %uu) %% %uu)", R(a), (uint32_t)bits(w, 20, 10), nv);
+            if (c->stage == STAGE_GEOMETRY) sprintf(t, "((%s + %uu) %% %uu)", R(a), (uint32_t)bits(w, 20, 10), nv ? nv : 1u);
             else sprintf(t, "(%s + %uu)", R(a), (uint32_t)bits(w, 20, 10));
             set_reg(c, d, t);
         } else {

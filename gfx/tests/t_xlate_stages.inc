@@ -59,6 +59,10 @@
             CHECK(HAS(gh, "r1 = ((r6 + 3u) % 2u);"), "GS ISBERD: the handle (+ imm) maps back to a vertex index");
             CHECK(HAS(gh, "(vx < 2u ? as_type<uint>(stage_in[(sp[1] + gs_pid * 2u + vx) * 34u + 1u][0u]) : 0u)"), "GS ALD: a vertex past the primitive reads 0");
             maxwell_free(gh);
+            g2k.gs_in_vertices = 1; /* points: the handle of instance i is i, which maps back to vertex 0 */
+            XL_OK(gp, STAGE_GEOMETRY, g2k, 0, "GS point handles", (0xefd0000000000000ull | 1 | (6ull << 8) | PT_BITS), ins_exit());
+            CHECK(HAS(gp, "r1 = ((r6 + 0u) % 1u);"), "GS ISBERD with point input: every instance's handle is vertex 0");
+            maxwell_free(gp);
             ShaderKey tk = z;
             tk.tess_in_vertices = 4;
             tk.tess_out_vertices = 4;
