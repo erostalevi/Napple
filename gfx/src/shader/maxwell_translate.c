@@ -352,7 +352,10 @@ static void attr_load_staged(Ctx *c, int dst, uint32_t addr, const char *idx) {
         } else if (patch) {
             sprintf(e, "0u /* patch attribute in a geometry shader */");
         } else {
-            sprintf(e, "as_type<uint>(stage_in[(sp[1] + gs_pid * %uu + %s) * %uu + %s][%s])", gs_in_verts(c), vexp, STAGE_SLOTS, sl, cm);
+            /* a vertex operand past the primitive (the 0x80000000 "no vertex" handle) reads 0 instead of another primitive's or unmapped records */
+            if (c->ald_vertex == RZ) sprintf(e, "as_type<uint>(stage_in[(sp[1] + gs_pid * %uu + 0u) * %uu + %s][%s])", gs_in_verts(c), STAGE_SLOTS, sl, cm);
+            else sprintf(e, "(%s < %uu ? as_type<uint>(stage_in[(sp[1] + gs_pid * %uu + %s) * %uu + %s][%s]) : 0u)", vexp, gs_in_verts(c), gs_in_verts(c), vexp, STAGE_SLOTS,
+                         sl, cm);
         }
     } else if (c->stage == STAGE_TESS_CTRL) {
         if (!idx && addr == 0x60 && !patch) sprintf(e, "(sp[2] + pid)");
@@ -421,7 +424,10 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
         if (addr >= 0x70 && addr < 0x80) {
             c->uses_frag_coord = true;
             int comp = (addr >> 2) & 3;
-            if (comp < 2) {   // guest pixel units: the render target may be allocated larger
+            if (comp < 2 && c->key && c->key->sample_shading) {   // per-sample shading: the sample's own position (Metal's [[position]] stays at the pixel centre)
+                c->uses_rscale = true;
+                sprintf(e, "as_type<uint>((floor(in.pos[%d]) + get_sample_position(sample_id)[%d] - rscale[0][%d]) / rscale[0][%d])", comp, comp, comp + 2, comp);
+            } else if (comp < 2) {   // guest pixel units: the render target may be allocated larger
                 c->uses_rscale = true;
                 sprintf(e, "as_type<uint>((in.pos[%d] - rscale[0][%d]) / rscale[0][%d])", comp, comp + 2, comp);
             } else {
@@ -2176,6 +2182,17 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
          * (Ryujinx's constant, right for the upper-left titles it runs). The origin is the guest's, from the pipeline key. */
             case 0x12: set_reg(c, d, c->key && c->key->upper_left ? "0x3f800000u" : "0xbf800000u"); break;
             case 0x11: set_reg(c, d, c->stage == STAGE_TESS_CTRL || c->stage == STAGE_GEOMETRY ? "inv" : "0u"); break;   // SR_INVOCATION_ID: the output control point of a tess control thread; the geometry instance (gid % sp[3])
+            /* SR_INVOCATION_INFO: bits 16..23 = vertices of the input primitive (geometry) / control points of the input patch (tessellation), bits 0..7 = the
+             * invocation (geometry instance; yuzu answers 0x00ff0000 for geometry and patch vertices << 16 for tessellation). GLSLC's geometry
+             * prologue builds the input vertex handles from it: handle k = (info & 0xff) * ((info >> 16) & 0xff) + k, ISBERD, and 0x80000000 (no
+             * vertex) when k >= the vertex count (Super Mario Odyssey's alThunderShader programs). */
+            case 0x1d:
+                if (c->stage == STAGE_GEOMETRY) sprintf(t, "((%uu << 16) | (inv & 0xffu))", (unsigned)gs_in_verts(c));
+                else if (c->stage == STAGE_TESS_CTRL) sprintf(t, "(%uu << 16)", c->key ? (unsigned)c->key->tess_in_vertices : 1u);
+                else if (c->stage == STAGE_TESS_EVAL) sprintf(t, "(%uu << 16)", c->key ? (unsigned)c->key->tess_out_vertices : 1u);
+                else strcpy(t, "0u /* sr 0x1d */");
+                set_reg(c, d, t);
+                break;
             case 0x21: set_reg(c, d, c->stage == STAGE_COMPUTE || c->stage == STAGE_TESS_CTRL ? "tid.x" : "0u"); break;
             case 0x22: set_reg(c, d, "tid.y"); break;
             case 0x23: set_reg(c, d, "tid.z"); break;
@@ -2848,15 +2865,27 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xf0c0000000000000ull, 0xfff8000000000000ull)) {   // R2B: register to barrier state
         // The inverse of B2R: the barrier state is not materialised, so the write is dropped: no-op
     } else if (OPM(0xefd0000000000000ull, 0xfff8000000000000ull)) {   // ISBERD: read the attribute (ISBE) memory at the address in Ra
-        /* Rd = a[Ra + imm10 at 20]: the indexed attribute read (AL2P + ALD.PHYS family) in the stage's own input space, so it shares the ALD register-addressed path */
-        c->ald_vertex = RZ;
-        c->ald_patch = false;
-        c->ald_out = false;
-        sp(&c->body, "    { uint ix = %s;\n", R(a));
-        char ib[48];
-        sprintf(ib, "(ix + %uu)", (uint32_t)bits(w, 20, 10));
-        attr_load(c, d, 0, ib);
-        sp(&c->body, "    }\n");
+        if (c->stage == STAGE_GEOMETRY || c->stage == STAGE_TESS_CTRL || c->stage == STAGE_TESS_EVAL) {
+            /* In these stages ISBERD turns an input vertex handle (built from SR_INVOCATION_INFO, see S2R) into the vertex operand of ALD a[Rv][..]: the
+             * ALD path takes vertex indices, so the handle maps back to its index (yuzu copies the register; the handle of geometry instance i is
+             * i * vertices + k, hence the remainder). Reading it as an attribute address (the vertex / fragment reading below) made the vertex
+             * operand an attribute value and the kernel read stage_in out of bounds. */
+            uint32_t nv = c->stage == STAGE_GEOMETRY ? (uint32_t)gs_in_verts(c) : c->stage == STAGE_TESS_CTRL ? (c->key ? c->key->tess_in_vertices : 1u)
+                                                                                                             : (c->key ? c->key->tess_out_vertices : 1u);
+            if (c->stage == STAGE_GEOMETRY) sprintf(t, "((%s + %uu) %% %uu)", R(a), (uint32_t)bits(w, 20, 10), nv ? nv : 1u);
+            else sprintf(t, "(%s + %uu)", R(a), (uint32_t)bits(w, 20, 10));
+            set_reg(c, d, t);
+        } else {
+            /* Rd = a[Ra + imm10 at 20]: the indexed attribute read (AL2P + ALD.PHYS family) in the stage's own input space, so it shares the ALD register-addressed path */
+            c->ald_vertex = RZ;
+            c->ald_patch = false;
+            c->ald_out = false;
+            sp(&c->body, "    { uint ix = %s;\n", R(a));
+            char ib[48];
+            sprintf(ib, "(ix + %uu)", (uint32_t)bits(w, 20, 10));
+            attr_load(c, d, 0, ib);
+            sp(&c->body, "    }\n");
+        }
     } else if (OPM(0xeea0000000000000ull, 0xfff8000000000000ull)) {   // STP: store to the trap-handler parameter area
         // STP writes the state area the trap handler reads back (with RTT/RAM/SAM); with no handler the store has no observer: no-op
     } else if (OPM(0xfbe0000000000000ull, 0xfff8000000000000ull) || OPM(0xf6e0000000000000ull, 0xfff8000000000000ull) ||
@@ -3261,7 +3290,11 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         sp(&s, "struct FIn {\n  float4 pos [[position]];\n");
         for (int i = 0; i < 32; i++) {
             if (!(c->in_attr_mask & (1u << i))) continue;
-            const char *interp = (c->flat_mask & (1u << i)) ? " [[flat]]" : (c->noperspective_mask & (1u << i)) ? " [[center_no_perspective]]" : "";
+            /* per-sample shading interpolates at each sample (as the hardware does with sample shading on) */
+            int ss = c->key && c->key->sample_shading;
+            const char *interp = (c->flat_mask & (1u << i))             ? " [[flat]]"
+                                 : (c->noperspective_mask & (1u << i)) ? (ss ? " [[sample_no_perspective]]" : " [[center_no_perspective]]")
+                                                                        : (ss ? " [[sample_perspective]]" : "");
             sp(&s, "  float4 v%d [[user(locn%d)]]%s;\n", i, i, interp);
         }
         sp(&s, "};\n");

@@ -48,6 +48,28 @@
         CHECK(HAS(g3, "gs_pid * 6u") || HAS(g3, "(sp[2] + gs_pid)"), "adjacency primitive: six vertices; attribute 0x60 is the primitive id");
         CHECK(HAS(g3, "r2 = inv;") && HAS(g3, "gs_pid = gid / gs_ninv"), "SR_INVOCATION_ID is the geometry instance (gid % sp[3])");
         maxwell_free(g3);
+        /* GLSLC's input vertex handles (Super Mario Odyssey's alThunderShader): SR_INVOCATION_INFO = vertex count << 16 | invocation, ISBERD maps the handle
+         * to the ALD vertex operand, and a vertex operand past the primitive reads 0 (the 0x80000000 "no vertex" handle read stage_in out of bounds) */
+        {
+            ShaderKey g2k = gk;
+            g2k.gs_in_vertices = 2;
+            XL_OK(gh, STAGE_GEOMETRY, g2k, 0, "GS vertex handles", ST_S2R(8, 0x1d), (0xefd0000000000000ull | 1 | (6ull << 8) | (3ull << 20) | PT_BITS),
+                  ST_ALD(4, 255, 0x70, 4, 1, 0, 0), ins_exit());
+            CHECK(HAS(gh, "r8 = ((2u << 16) | (inv & 0xffu));"), "GS SR_INVOCATION_INFO: input vertices << 16 | invocation");
+            CHECK(HAS(gh, "r1 = ((r6 + 3u) % 2u);"), "GS ISBERD: the handle (+ imm) maps back to a vertex index");
+            CHECK(HAS(gh, "(vx < 2u ? as_type<uint>(stage_in[(sp[1] + gs_pid * 2u + vx) * 34u + 1u][0u]) : 0u)"), "GS ALD: a vertex past the primitive reads 0");
+            maxwell_free(gh);
+            g2k.gs_in_vertices = 1; /* points: the handle of instance i is i, which maps back to vertex 0 */
+            XL_OK(gp, STAGE_GEOMETRY, g2k, 0, "GS point handles", (0xefd0000000000000ull | 1 | (6ull << 8) | PT_BITS), ins_exit());
+            CHECK(HAS(gp, "r1 = ((r6 + 0u) % 1u);"), "GS ISBERD with point input: every instance's handle is vertex 0");
+            maxwell_free(gp);
+            ShaderKey tk = z;
+            tk.tess_in_vertices = 4;
+            tk.tess_out_vertices = 4;
+            XL_OK(th, STAGE_TESS_CTRL, tk, 0, "TCS invocation info", ST_S2R(8, 0x1d), (0xefd0000000000000ull | 1 | (8ull << 8) | PT_BITS), ins_exit());
+            CHECK(HAS(th, "r8 = (4u << 16);") && HAS(th, "r1 = (r8 + 0u);"), "TCS SR_INVOCATION_INFO = patch vertices << 16; ISBERD copies the handle");
+            maxwell_free(th);
+        }
         XL_OK(g4, STAGE_GEOMETRY, gk, 0, "GS indexed read", ST_ALD(4, 20, 0x80, 1, 8, 0, 0), ins_exit());
         CHECK(HAS(g4, "stage_in[(sp[1] + gs_pid * 3u + vx) * 34u + min("), "an indexed ALD computes the slot at run time");
         maxwell_free(g4);
