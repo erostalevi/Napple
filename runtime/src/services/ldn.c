@@ -7,6 +7,7 @@
 #include "hz_result.h"
 #include "online_provider.h"
 #include <stdlib.h>
+#include "sys_default.h"
 
 /* The provider's LDN table when it can carry local wireless (ONLINE_CAP_LDN), else NULL: the NullProvider answers apply. */
 static const OnlineProvider *ldn_provider(void) {
@@ -272,12 +273,22 @@ static const IpcCmd local_cmds[] = {
     {400, "Initialize", l_initialize, IPC_IMPL},
     {401, "Finalize", l_finalize, IPC_IMPL},
     {402, "InitializeSystem2", l_initialize, IPC_IMPL},
+    {105, "SetWirelessAudioPolicy", sysd_ok, IPC_STUB},
+    {106, "SetProtocol", sysd_ok, IPC_STUB},
+    {403, "SetOperationMode", sysd_ok, IPC_STUB},
+    {500, "EnableActionFrame", sysd_ok, IPC_STUB},
+    {501, "DisableActionFrame", sysd_ok, IPC_STUB},
+    {502, "SendActionFrame", sysd_err_ldn, IPC_STUB},
+    {503, "RecvActionFrame", sysd_err_ldn, IPC_STUB},
+    {505, "SetHomeChannel", sysd_ok, IPC_STUB},
+    {600, "SetTxPower", sysd_ok, IPC_STUB},
+    {601, "ResetTxPower", sysd_ok, IPC_STUB},
 };
 static void ldn_create_local(IpcObject *s, IpcCall *c) {
     (void)s;
     Ldn *l = calloc(1, sizeof *l);
     ipc_out_object(c, IPC_OBJECT("IUserLocalCommunicationService", local_cmds, l, NULL));
 }
-static const IpcCmd ldn_cmds[] = {{0, "CreateUserLocalCommunicationService", ldn_create_local, IPC_IMPL}};
+static const IpcCmd ldn_cmds[] = {{0, "CreateUserLocalCommunicationService", ldn_create_local, IPC_IMPL}, {1, "CreateClientProcessMonitor", sysd_err_ldn, IPC_STUB}};
 static IpcObject *ldn_open(void) { return IPC_OBJECT("ldn:u", ldn_cmds, NULL, NULL); }
 void service_register_ldn(void) { ipc_register_service("ldn:u", ldn_open); }

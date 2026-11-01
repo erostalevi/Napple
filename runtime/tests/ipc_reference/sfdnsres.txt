@@ -1,0 +1,24 @@
+# interface sfdnsres (nn::socket::resolver::IResolver; switchbrew 'Sockets services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	SetDnsAddressesPrivateRequest	1.0.0	y
+1	GetDnsAddressPrivateRequest	1.0.0	y
+2	GetHostByNameRequest	1.0.0	y
+3	GetHostByAddrRequest	1.0.0	y
+4	GetHostStringErrorRequest	1.0.0	y
+5	GetGaiStringErrorRequest	1.0.0	y
+6	GetAddrInfoRequest	1.0.0	y
+7	GetNameInfoRequest	1.0.0	y
+8	GetCancelHandleRequest	1.0.0	y
+9	CancelRequest	1.0.0	y
+10	GetHostByNameRequestWithOptions	5.0.0	y
+11	GetHostByAddrRequestWithOptions	5.0.0	y
+12	GetAddrInfoRequestWithOptions	5.0.0	y
+13	GetNameInfoRequestWithOptions	5.0.0	y
+14	ResolverSetOptionRequest	5.0.0	y
+15	ResolverGetOptionRequest	5.0.0	y
+16	ReportTelemetry	23.0.0	n
+100	QueryAddrInfoRequestWithOptions	23.0.0	y
+101	QueryNameInfoRequestWithOptions	23.0.0	y
+102	FetchAddrInfoRequestWithOptions	23.0.0	y
+103	FetchNameInfoRequestWithOptions	23.0.0	y
+104	CancelQuery	23.0.0	y

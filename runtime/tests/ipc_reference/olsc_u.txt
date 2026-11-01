@@ -1,0 +1,14 @@
+# interface olsc:u (nn::olsc::srv::IOlscServiceForApplication; switchbrew 'OLSC services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	Initialize	1.0.0	y
+10	VerifySaveDataBackupLicenseAsync	1.0.0	y
+13	GetSaveDataBackupSetting	1.0.0	y
+14	SetSaveDataBackupSettingEnabled	1.0.0	y
+15	SetCustomData	1.0.0	y
+16	DeleteSaveDataBackupSetting	1.0.0	y
+18	GetSaveDataBackupInfoCache	1.0.0	y
+19	UpdateSaveDataBackupInfoCacheAsync	1.0.0	y
+22	DeleteSaveDataBackupAsync	1.0.0	y
+25	ListDownloadableSaveDataBackupInfoAsync	1.0.0	y
+26	DownloadSaveDataBackupAsync	1.0.0	y
+27	UploadSaveDataBackupAsync	11.0.0	y

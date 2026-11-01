@@ -10,6 +10,7 @@
 #include "host_info.h"
 #include <stdlib.h>
 #include <time.h>
+#include "sys_default.h"
 
 static CapsState caps;
 
@@ -131,6 +132,11 @@ static IpcObject *su_open(void) { return IPC_OBJECT("caps:su", su_cmds, NULL, NU
 static const IpcCmd session_cmds[] = {
     {1, "GetAlbumFileList", list_album, IPC_IMPL}, {2, "LoadAlbumFile", load_file, IPC_IMPL},           {3, "GetAlbumFileSize", file_size, IPC_IMPL},
     {4, "DeleteAlbumFile", delete_file, IPC_IMPL}, {5, "LoadAlbumFileThumbnail", load_thumb, IPC_IMPL},
+    {2001, "OpenAlbumMovieReadStream", sysd_err_generic, IPC_STUB},
+    {2002, "CloseAlbumMovieReadStream", sysd_ok, IPC_STUB},
+    {2003, "GetAlbumMovieReadStreamMovieDataSize", sysd_z8, IPC_STUB},
+    {2004, "ReadMovieDataFromAlbumMovieReadStream", sysd_err_generic, IPC_STUB},
+    {2005, "GetAlbumMovieReadStreamBrokenReason", sysd_ok, IPC_STUB},
 };
 static void caps_open_session(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -150,6 +156,10 @@ static const IpcCmd u_cmds[] = {
     {142, "GetAlbumFileList3AaeAruid", list_album, IPC_IMPL},
     {143, "GetAlbumFileList4AaeUidAruid", list_album, IPC_IMPL},
     {60002, "OpenAccessorSessionForApplication", caps_open_session, IPC_IMPL},
+    {144, "GetAllAlbumFileList3AaeAruidDeprecated", sysd_err_generic, IPC_STUB},
+    {145, "GetAlbumFileList5AaeAruid", sysd_err_generic, IPC_STUB},
+    {146, "GetAlbumFileList6AaeUidAruid", sysd_err_generic, IPC_STUB},
+    {147, "GetAllAlbumFileList5AaeAruid", sysd_err_generic, IPC_STUB},
 };
 static IpcObject *u_open(void) { return IPC_OBJECT("caps:u", u_cmds, NULL, NULL); }
 void service_register_caps(void) {

@@ -1,0 +1,5 @@
+# interface bcat:u (nn::bcat::ipc::IServiceCreator; switchbrew 'BCAT services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	CreateBcatService	1.0.0	y
+1	CreateDeliveryCacheStorageService	1.0.0	y
+2	CreateDeliveryCacheStorageServiceWithApplicationId	1.0.0	y

@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include "sys_default.h"
 
 static uint32_t vsync_events[8];
 static unsigned nvsync;
@@ -335,6 +336,11 @@ static const IpcCmd display_cmds[] = {
     {2031, "DestroyStrayLayer", noop, IPC_IMPL},
     {2101, "SetLayerScalingMode", ds_set_scaling, IPC_IMPL},
     {5202, "GetDisplayVsyncEvent", ds_vsync_event, IPC_IMPL},
+    {103, "GetIndirectDisplayTransactionService", sysd_err_generic, IPC_STUB},
+    {2102, "ConvertScalingMode", sysd_ok, IPC_STUB},
+    {2450, "GetIndirectLayerImageMap", sysd_err_generic, IPC_STUB},
+    {2451, "GetIndirectLayerImageCropMap", sysd_err_generic, IPC_STUB},
+    {2460, "GetIndirectLayerImageRequiredMemoryInfo", sysd_err_generic, IPC_STUB},
 };
 static void vi_get_display_service(IpcObject *s, IpcCall *c) {
     (void)s;

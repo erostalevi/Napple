@@ -1,0 +1,23 @@
+# interface time:u (nn::timesrv::detail::service::IStaticService; switchbrew 'Glue services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	GetStandardUserSystemClock	1.0.0	y
+1	GetStandardNetworkSystemClock	1.0.0	y
+2	GetStandardSteadyClock	1.0.0	y
+3	GetTimeZoneService	1.0.0	y
+4	GetStandardLocalSystemClock	1.0.0	y
+5	GetEphemeralNetworkSystemClock	4.0.0	y
+20	GetSharedMemoryNativeHandle	6.0.0	y
+50	SetStandardSteadyClockInternalOffset	4.0.0	n
+51	GetStandardSteadyClockRtcValue	9.0.0	n
+100	IsStandardUserSystemClockAutomaticCorrectionEnabled	1.0.0	y
+101	SetStandardUserSystemClockAutomaticCorrectionEnabled	1.0.0	n
+102	GetStandardUserSystemClockInitialYear	5.0.0	y
+200	IsStandardNetworkSystemClockAccuracySufficient	3.0.0	y
+201	GetStandardUserSystemClockAutomaticCorrectionUpdatedTime	6.0.0	y
+300	CalculateMonotonicSystemClockBaseTimePoint	4.0.0	y
+400	GetClockSnapshot	4.0.0	y
+401	GetClockSnapshotFromSystemClockContext	4.0.0	y
+500	CalculateStandardUserSystemClockDifferenceByUser	4.0.0	y
+501	CalculateSpanBetween	4.0.0	y
+600	GetInitialLaunchEndTime	19.0.0	n
+601	NotifyInitialLaunchSettingsDone	22.0.0	n

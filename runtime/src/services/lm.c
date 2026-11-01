@@ -3,6 +3,7 @@
 #include "../ipc.h"
 #include <stdio.h>
 #include <string.h>
+#include "sys_default.h"
 
 static void logger_log(IpcObject *self, IpcCall *c) {
     (void)self;
@@ -33,7 +34,8 @@ static void logger_set_destination(IpcObject *self, IpcCall *c) {
     (void)self;
     (void)c;
 }
-static const IpcCmd logger_cmds[] = {{0, "Log", logger_log, IPC_IMPL}, {1, "SetDestination", logger_set_destination, IPC_IMPL}};
+static const IpcCmd logger_cmds[] = {{0, "Log", logger_log, IPC_IMPL}, {1, "SetDestination", logger_set_destination, IPC_IMPL},
+                                      {2, "TransmitHashedLog", sysd_ok, IPC_STUB}, {3, "DevNotify", sysd_ok, IPC_STUB}, {11, "OpenSharedMemoryAccessorForHashedLog", sysd_err_generic, IPC_STUB}};
 
 static void lm_open_logger(IpcObject *self, IpcCall *c) {
     (void)self;

@@ -8,6 +8,7 @@
 #include "hz_result.h"
 #include "bsd_core.h"
 #include <stdio.h>
+#include "sys_default.h"
 
 static void out_string(IpcCall *c, const char *s) {
     const IpcBuf *b = ipc_out_buf(c, 0);
@@ -202,6 +203,13 @@ static const IpcCmd res_cmds[] = {
     {11, "GetHostByAddrRequestWithOptions", res_host_by_addr, IPC_IMPL},
     {12, "GetAddrInfoRequestWithOptions", res_addr_info, IPC_IMPL},
     {13, "GetNameInfoRequestWithOptions", res_name_info, IPC_IMPL},
+    {14, "ResolverSetOptionRequest", sysd_ok, IPC_STUB},
+    {15, "ResolverGetOptionRequest", sysd_z8, IPC_STUB},
+    {100, "QueryAddrInfoRequestWithOptions", sysd_err_generic, IPC_STUB},
+    {101, "QueryNameInfoRequestWithOptions", sysd_err_generic, IPC_STUB},
+    {102, "FetchAddrInfoRequestWithOptions", sysd_err_generic, IPC_STUB},
+    {103, "FetchNameInfoRequestWithOptions", sysd_err_generic, IPC_STUB},
+    {104, "CancelQuery", sysd_ok, IPC_STUB},
 };
 static IpcObject *res_open(void) { return IPC_OBJECT("sfdnsres", res_cmds, NULL, NULL); }
 void service_register_sfdnsres(void) { ipc_register_service("sfdnsres", res_open); }

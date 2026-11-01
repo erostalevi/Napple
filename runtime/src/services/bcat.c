@@ -8,6 +8,7 @@
 #include "hz_result.h"
 #include <stdlib.h>
 #include <string.h>
+#include "sys_default.h"
 
 static void ret_s32_0(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -213,6 +214,19 @@ static const IpcCmd bcat_service_cmds[] = {
     {30203, "UnblockDeliveryTask", svc_noop, IPC_IMPL},
     {90100, "EnumerateBackgroundDeliveryTask", ret_s32_0, IPC_IMPL},
     {90201, "ClearDeliveryCacheStorage", svc_noop, IPC_IMPL}, /* nothing of ours to clear: a provider folder is the user's, never deleted */
+    {20101, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName", sysd_ok, IPC_STUB},
+    {20300, "GetDeliveryCacheStorageUpdateNotifier", sysd_err_net, IPC_STUB},
+    {20301, "RequestSuspendDeliveryTask", sysd_err_net, IPC_STUB},
+    {20400, "RegisterSystemApplicationDeliveryTask", sysd_ok, IPC_STUB},
+    {20401, "UnregisterSystemApplicationDeliveryTask", sysd_ok, IPC_STUB},
+    {20410, "SetSystemApplicationDeliveryTaskTimer", sysd_ok, IPC_STUB},
+    {20500, "StopBackgroundService", sysd_ok, IPC_STUB},
+    {30210, "SetDeliveryTaskTimer", sysd_ok, IPC_STUB},
+    {30300, "RegisterSystemApplicationDeliveryTasks", sysd_ok, IPC_STUB},
+    {90200, "GetDeliveryList", sysd_err_net, IPC_STUB},
+    {90202, "ClearDeliveryTaskSubscriptionStatus", sysd_ok, IPC_STUB},
+    {90300, "GetPushNotificationLog", sysd_err_net, IPC_STUB},
+    {90301, "GetDeliveryCacheStorageUsage", sysd_err_net, IPC_STUB},
 };
 static void make_bcat_service(IpcObject *s, IpcCall *c) {
     (void)s;

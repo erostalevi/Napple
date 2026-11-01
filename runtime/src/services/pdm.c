@@ -3,6 +3,7 @@
  * (unverified). */
 #include "svc_common.h"
 #include "pdm_core.h"
+#include "sys_default.h"
 
 static uint64_t start_ticks;
 static int started;
@@ -47,6 +48,11 @@ static const IpcCmd pdm_cmds[] = {
     {8, "QueryAccountEvent", q_count_0, IPC_IMPL},
     {9, "QueryAccountPlayEvent", q_count_0, IPC_IMPL},
     {10, "GetAvailableAccountPlayEventRange", q_range_0, IPC_IMPL},
+    {4, "QueryPlayStatisticsByApplicationId", sysd_err_generic, IPC_STUB},
+    {5, "QueryPlayStatisticsByApplicationIdAndUserAccountId", sysd_err_generic, IPC_STUB},
+    {11, "QueryAccountPlayEvent", sysd_err_generic, IPC_STUB},
+    {12, "GetAvailableAccountPlayEventRange", sysd_err_generic, IPC_STUB},
+    {17, "QueryLastPlayTime", sysd_err_generic, IPC_STUB},
 };
 static IpcObject *pdm_open(void) { return IPC_OBJECT("pdm:qry", pdm_cmds, NULL, NULL); }
 void service_register_pdm(void) { ipc_register_service("pdm:qry", pdm_open); }

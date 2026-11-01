@@ -1,0 +1,19 @@
+# interface miiimg (nn::mii::detail::IImageDatabaseService; switchbrew 'Shared Database services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	Initialize	1.0.0	n
+10	Reload	1.0.0	n
+11	GetCount	1.0.0	n
+12	IsEmpty	1.0.0	n
+13	IsFull	1.0.0	n
+14	GetAttribute	1.0.0	n
+15	LoadImage	1.0.0	n
+16	AddOrUpdateImage	1.0.0	n
+17	DeleteImages	1.0.0	n
+18	AddImageForMigration	19.0.0	n
+19	ClearHeaderForMigration	20.0.0	n
+20	SaveHeaderForMigration	20.0.0	n
+100	DeleteFile	1.0.0	n
+101	DestroyFile	1.0.0	n
+102	ImportFile	1.0.0	n
+103	ExportFile	1.0.0	n
+104	ForceInitialize	1.0.0	n
