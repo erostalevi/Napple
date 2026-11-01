@@ -851,6 +851,12 @@ static void libapplet_run_swkbd(LibApplet *a) {
         for (unsigned i = 0x3AC; i < 0x3E0 && n < 190; i++) n += snprintf(hx + n, sizeof hx - (size_t)n, "%02x%s", k[i], (i & 3) == 3 ? " " : "");
         LOGV("applet", "swkbd config +0x3ac: %s; +0x4b0: %02x%02x%02x%02x %02x%02x%02x%02x", hx, k[0x4b0], k[0x4b1], k[0x4b2], k[0x4b3], k[0x4b4], k[0x4b5],
              k[0x4b6], k[0x4b7]);
+        static const unsigned at[] = {0x0, 0x20, 0x24, 0xA6, 0x1A8}; /* ok text, flags, header, sub, guide: the raw words behind the texts above */
+        for (unsigned j = 0; j < sizeof at / sizeof *at; j++) {
+            n = 0;
+            for (unsigned i = at[j]; i < at[j] + 0x20 && n < 190; i++) n += snprintf(hx + n, sizeof hx - (size_t)n, "%02x%s", k[i], (i & 3) == 3 ? " " : "");
+            LOGV("applet", "swkbd config +%#x: %s", at[j], hx);
+        }
     }
     AppletSwkbdConfig sc;
     applet_swkbd_parse(cfg ? cfg->data : NULL, cfg ? cfg->size : 0, &sc);

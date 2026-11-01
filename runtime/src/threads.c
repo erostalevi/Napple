@@ -73,6 +73,16 @@ static uint64_t g_next_id = 0x51, g_seq;
 static int g_cores_on = -1;
 
 static Thread *self_or_null(void) { return g_key_ready ? pthread_getspecific(g_key) : NULL; }
+/* NAPPLE_THREAD_STATS=1 (debug aid): per guest thread, how often it lost its core to the timer / at an svc-exit checkpoint and how often it asked
+ * GetCurrentProcessorNumber; logged with the thread dump at quit (thread_dump_all). Indexed by thread id - 0x51. */
+#define TSTAT_N 1024
+static struct {
+    _Atomic uint64_t getcore, checkpoint;
+} g_tstat[TSTAT_N];
+static int g_tstats = -1;
+static void tstat_getcore(const Thread *t) {
+    if (t->id >= 0x51 && t->id - 0x51 < TSTAT_N) atomic_fetch_add_explicit(&g_tstat[t->id - 0x51].getcore, 1, memory_order_relaxed);
+}
 static Thread *self(void) {
     Thread *t = self_or_null();
     if (!t) runtime_fail("thread svc from a host thread");
@@ -230,6 +240,7 @@ static void core_checkpoint(void) {
         *tlr_word(t, TLR_INTERRUPT_FLAG) = 1;
         return;
     } /* pinned: the switch waits for SynchronizePreemptionState */
+    if (t->id >= 0x51 && t->id - 0x51 < TSTAT_N) atomic_fetch_add_explicit(&g_tstat[t->id - 0x51].checkpoint, 1, memory_order_relaxed);
     pthread_mutex_lock(&G);
     t->preempt = 0;
     core_put(t);
@@ -334,8 +345,26 @@ static void *slice_main(void *arg) {
     }
     return NULL;
 }
+static void tstat_report(void) {
+    int locked = 0;
+    for (int i = 0; i < 100 && !(locked = pthread_mutex_trylock(&G) == 0); i++) usleep(1000); /* at exit: never wait for good on a lock a dying thread holds */
+    if (!locked) return;
+    LOG("threads", "stats: id prio ideal mask timer-switches svc-exit-switches GetCurrentProcessorNumber (threads with any)");
+    for (Thread *t = g_all; t; t = t->all) {
+        if (t->id < 0x51 || t->id - 0x51 >= TSTAT_N) continue;
+        uint64_t gc = atomic_load(&g_tstat[t->id - 0x51].getcore), cp = atomic_load(&g_tstat[t->id - 0x51].checkpoint);
+        if (!t->nslice && !gc && !cp) continue;
+        LOG("threads", "stats: %#llx prio %d ideal %d mask %#llx timer %llu svc-exit %llu getcore %llu%s", (unsigned long long)t->id, t->prio, t->core,
+            (unsigned long long)t->mask, (unsigned long long)t->nslice, (unsigned long long)cp, (unsigned long long)gc, t->exited ? " (exited)" : "");
+    }
+    pthread_mutex_unlock(&G);
+}
 /* Starts the slice thread (once; the main thread registers first). */
 void threads_preempt_start(void) {
+    if (g_tstats < 0) {
+        const char *st = getenv("NAPPLE_THREAD_STATS");
+        g_tstats = st && *st && *st != '0';
+    }
     if (g_slice_started || !cores_enabled()) return;
     const char *e = getenv("NAPPLE_SLICE_MS");
     if (e && *e) g_slice_ns = (int64_t)atoi(e) * 1000000ll;
@@ -628,6 +657,7 @@ static void *pcprof_main(void *arg) {
 }
 static int sync_state(uint32_t h);
 void thread_dump_all(void) {
+    if (g_tstats > 0) tstat_report();
     pthread_mutex_lock(&G);
     for (int i = 0; i < NCORE; i++)
         LOG("threads", "core %d owner %#llx reserved for %#llx", i, g_core_owner[i] ? (unsigned long long)g_core_owner[i]->id : 0ull, g_core_resv[i] ? (unsigned long long)g_core_resv[i]->id : 0ull);
@@ -909,6 +939,7 @@ static void svc_set_thread_core_mask(uint64_t *r) {
 }
 static void svc_get_processor_number(uint64_t *r) {
     Thread *t = self();
+    if (g_tstats > 0) tstat_getcore(t);
     r[0] = (uint32_t)(t->cur_core >= 0 ? t->cur_core : t->core);
 }
 static void svc_get_thread_id(uint64_t *r) {
