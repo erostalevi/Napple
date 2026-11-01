@@ -14,8 +14,9 @@
                                                            (NAPPLE_SHADER_CORPUS). Code is paired with its control section through
                                                            the BNSH program record (u64 control offset, u64 code offset, relative
                                                            to the BNSH header; length = the section's +0x704 code length), or the
-                                                           .code file next to a NAPPLE_GFX_CTL_DUMP .ctl. Game data: keep the corpus
-                                                           outside the repository.
+                                                           .code file next to a NAPPLE_GFX_CTL_DUMP .ctl; agl BAHS archives have no
+                                                           readable record: each code area is written alone (stage from its SPH, no
+                                                           .ctl). Game data: keep the corpus outside the repository.
 
 Layout offsets are read from gfx/src/shader/control.h / control.c (see parse_offsets); nothing is duplicated silently:
 if the header no longer defines an offset the tool falls back to the value below and says so on stderr.
@@ -208,6 +209,52 @@ def pair_code(data, got, stats):
     values are indexed once and each section's offset relative to the BNSH header is looked up; the record starts with u64 control offset, u64 code
     offset (the size words after them differ between BNSH versions: bfsha u32 code size + u32 control size, VFXB effects others), the code must
     start with CODE_MAGIC (compute code has no header: instructions from its first word) and is the section's code_len (+0x704) bytes long. Sections without a record keep no code."""
+    pair_bnsh(data, got, stats)
+    if data[:4] == b"BAHS" and any("code" not in d for d in got):
+        areas = code_areas(data, max(d["offset"] for d in got))
+        stats["bahs_code_areas"] = stats.get("bahs_code_areas", 0) + len(areas)
+        for d in got:
+            if "code" not in d and d["stage"] != "cs":
+                d["by_area"] = True  # its code is among the areas written below
+        got_areas = areas
+    else:
+        got_areas = []
+    for d in got_areas:
+        d["area"] = True
+        got.append(d)
+    for d in got:
+        if d.get("area"):
+            continue
+        if "code" in d:
+            stats["paired"] = stats.get("paired", 0) + 1
+        elif d.get("by_area"):
+            stats["covered_by_code_areas"] = stats.get("covered_by_code_areas", 0) + 1
+        else:
+            stats["unpaired"] = stats.get("unpaired", 0) + 1
+
+
+SPH_STAGE = {1: "vs", 2: "tcs", 3: "tes", 4: "gs", 5: "fs"}  # SPH word 0 bits 10..13 (ShaderType)
+
+
+def code_areas(data, after):
+    """agl BAHS archives (Odyssey's ShaderData / AglResource) store code areas after the control sections with no record this tool can read (they are
+    shared between programs, not in section order): every CODE_MAGIC area on a 0x100 boundary after `after`, up to the next one, as a program of its own
+    (stage from its SPH; no control section: the corpus mode then translates the whole area, constants included). Compute code has no header: not found."""
+    out, cur = [], data.find(CODE_MAGIC, after)
+    while cur >= 0:
+        nxt = data.find(CODE_MAGIC, cur + 4)
+        while nxt >= 0 and nxt % 0x100:
+            nxt = data.find(CODE_MAGIC, nxt + 4)
+        end = nxt if nxt >= 0 else len(data)
+        if cur % 0x100 == 0 and cur + 0x80 <= end:
+            st = SPH_STAGE.get((u32(data, cur + 0x30) >> 10) & 0xf)
+            if st:
+                out.append({"stage": st, "code": bytes(data[cur:end]), "ctl": b"", "offset": cur})
+        cur = nxt
+    return out
+
+
+def pair_bnsh(data, got, stats):
     bnsh = []
     i = data.find(BNSH_MAGIC)
     while i >= 0:
@@ -215,7 +262,6 @@ def pair_code(data, got, stats):
             bnsh.append(i)
         i = data.find(BNSH_MAGIC, i + 1)
     if not bnsh:
-        stats["sections_without_bnsh"] = stats.get("sections_without_bnsh", 0) + len(got)
         return
     bounds = bnsh[1:] + [len(data)]
     for bo, end in zip(bnsh, bounds):
@@ -238,11 +284,6 @@ def pair_code(data, got, stats):
                 d["code"] = bytes(data[c:c + code_size])
                 d["ctl"] = bytes(data[d["offset"]:d["offset"] + d["length"]])
         mv.release()
-    for d in got:
-        if "code" in d:
-            stats["paired"] = stats.get("paired", 0) + 1
-        else:
-            stats["unpaired"] = stats.get("unpaired", 0) + 1
 
 
 class Corpus:
@@ -255,15 +296,18 @@ class Corpus:
     def add(self, d):
         if "code" not in d:
             return
-        h = hashlib.sha1(d["ctl"] + d["code"]).hexdigest()[:16]
+        c_off = u32(d["ctl"], 0x700) if len(d["ctl"]) >= 0x704 else 0
+        code = d["code"][:c_off] if 0 < c_off <= len(d["code"]) else d["code"]  # the instructions: a CTL_DUMP .code ends at the constants, archives at code_len
+        h = hashlib.sha1(d["ctl"] + code).hexdigest()[:16]
         if h in self.seen:
             return
         self.seen.add(h)
         base = os.path.join(self.out, "%s_%s_%s" % (self.tag, h, CORPUS_STAGE[d["stage"]]))
         with open(base + ".bin", "wb") as f:
             f.write(d["code"])
-        with open(base + ".ctl", "wb") as f:
-            f.write(d["ctl"])
+        if d["ctl"]:
+            with open(base + ".ctl", "wb") as f:
+                f.write(d["ctl"])
         self.written[d["stage"]] = self.written.get(d["stage"], 0) + 1
         del d["code"], d["ctl"]
 
@@ -289,7 +333,13 @@ def scan_blob(data, name, progs, stats, inflate_all, depth=0, corpus=None):
             pair_code(data, got, stats)
     for d in got:
         d["file"] = name
+        if d.get("area"):  # a code area without a section (BAHS): corpus only
+            corpus.add(d)
+            continue
         if corpus is not None:
+            if "code" not in d and not d.get("by_area"):
+                u = stats.setdefault("unpaired_by_file", {})
+                u[name] = u.get(name, 0) + 1
             corpus.add(d)
         progs.append(d)
 
@@ -389,7 +439,10 @@ def scan_paths(paths, inflate_all=True, corpus=None):
         elif is_romfs(p):
             pp, st = scan_romfs(p, inflate_all, None, corpus)
             for k, v in st.items():
-                stats[k] = stats.get(k, 0) + v
+                if isinstance(v, dict):
+                    stats.setdefault(k, {}).update(v)
+                else:
+                    stats[k] = stats.get(k, 0) + v
         else:
             pp = []
             with open(p, "rb") as fh:
@@ -483,7 +536,7 @@ def main(argv=None):
         print(json.dumps(stats, indent=2, sort_keys=True))
         sys.stderr.write("%s: %d sections, %d distinct programs written to %s (%s); %d sections without code\n" % (
             a.tag, len(progs), len(corpus.seen), a.out, ", ".join("%s=%d" % kv for kv in sorted(corpus.written.items())),
-            stats.get("unpaired", 0) + stats.get("sections_without_bnsh", 0)))
+            stats.get("unpaired", 0)))
         return 0
     res = cover([json.load(open(p)) for p in a.scans])
     print(json.dumps(res, indent=2))
