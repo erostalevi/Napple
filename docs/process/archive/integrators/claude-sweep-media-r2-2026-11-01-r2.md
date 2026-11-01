@@ -6,7 +6,7 @@ head: d8b1493
 env: mac
 date: 2026-11-01
 areas: [runtime/movie, runtime/services (movie_audio_core), runtime/main, input, tools/golden, docs]
-status: ready
+status: integrated
 ---
 
 # claude/sweep-media-r2-2026-11-01-r2: movie AAC / VP8 / ARGB, clean guest exit, npad device types, LAS golden route, doc rows
@@ -116,3 +116,12 @@ Docs: `docs/archive/changes/2026-11-01-claude-sweep-media-r2-2026-11-01-r2.md` (
 - `runtime/src/services/audio.c`: the OpenAudioIn comment still says the microphone is opt-in.
 - `runtime/src/gfx_glue.c`: log when the 20-screenshot cap is hit.
 - `runtime/src/input_script.c`: a frame-based time option would make walking routes independent of the frame rate (and of Metal validation).
+
+## Integration result
+- Date: 2026-11-01. Merged into main as c46e37b (integ/sweep-media-r2 a858a65, branch head bd3a3ab), after ipc-depth-hid and ipc-depth-sys. Outcome: **Clean** (merge had no conflicts; `docs/architecture/runtime-services.md` auto-merged with ipc-depth-hid's appended section).
+- `integrate:` fixes: none. Native ports: none needed (AAC already on AudioToolbox, VP8 on libvpx, both macOS-native or portable; the non-Apple AAC stubs left as C).
+- Build (scratch worktree): gfx lib adapter, audio, input, frontend, runtime: rc 0.
+- Tests: `make -C runtime test` + `test-services` rc 0, every suite `"failed":0`: `svc_movie_host` 1015, `svc_movie_audio` 54, `svc_guest_exit` 5, `ipc_reference` 99 fixtures / 0 missing. `make -C input test` rc 0 (styles 51), `make -C audio test` rc 0.
+- Four-title boots (runtime binary, 60 s headless, private copied `--save-root`, under `.run.lock`): SMO, MK8D, LAS, ACNH rc 0, `notify-running`, `missing_ipc []`, no crashes; LAS opening movie still decodes on the host VP9 path after the audio refactor.
+- Not re-run here: the LAS `boot-to-village` golden route (205 s, over the batch's 120 s per-run limit set by the user); the author's two verified runs stand, marked unverified by the integrator.
+- Corrections to this file's instructions: none.

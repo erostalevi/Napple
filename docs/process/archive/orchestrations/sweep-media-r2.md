@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r2
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_936fd989-d4c6-4f34-ab50-b47f38dba7ca (reused media-live r1 session, opus)
 launched_at: 2026-11-01
@@ -39,3 +39,5 @@ ipc-depth-sys / ipc-depth-hid service files, `nvdrv*.c`, `jpeg_core.c`, `ipc.c`,
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-01: Clean, merged into main as c46e37b (branch head bd3a3ab). Unit tests (movie host 1015, guest exit 5, input styles 51) and four-title 60 s boots green. The 205 s LAS golden route was not re-run by the integrator (120 s run limit); author-verified only.
+Integrator file: `docs/process/archive/integrators/claude-sweep-media-r2-2026-11-01-r2.md`.
