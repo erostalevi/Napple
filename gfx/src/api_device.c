@@ -117,6 +117,16 @@ NVN(nvnDeviceSetAutomaticCheckpointsSamplingInterval, void, NVNdevice *d, int v)
 NVN(nvnDeviceSetAutomaticCheckpointsByDebugGroup, void, NVNdevice *d, uint32_t e) { (void)d; (void)e; }
 NVN(nvnDeviceSetCheckpointCallStacksEnable, void, NVNdevice *d, uint32_t e) { (void)d; (void)e; }
 NVN(nvnDeviceSetCheckpointMaxCallStacksDepth, void, NVNdevice *d, int v) { (void)d; (void)v; }
+NVN(nvnDeviceSetAutomaticCheckpointsMask, void, NVNdevice *d, uint32_t mask) { (void)d; (void)mask; }
+/* GPU error reporting: Metal command buffer errors are logged by the replay's completion handlers; nothing is ever reported to the guest, so the wait returns
+ * "no error" at once. Called in a loop by a watchdog thread this would spin: calls are counted and reported once to show whether a title does that. */
+static _Atomic uint64_t g_wait_for_error_calls;
+uint64_t gfx_device_wait_for_error_calls(void) { return atomic_load(&g_wait_for_error_calls); }
+NVN(nvnDeviceWaitForError, uint32_t, NVNdevice *d, uint64_t timeout_ns) {
+    (void)d;
+    if (atomic_fetch_add(&g_wait_for_error_calls, 1) == 0) LOGI("nvnDeviceWaitForError called (timeout %llu ns): returns no error", (unsigned long long)timeout_ns);
+    return 0;
+}
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Queue

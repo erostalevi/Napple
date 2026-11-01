@@ -213,16 +213,17 @@ NVN(nvnTextureViewGetSwizzle, NVNboolean, const NVNtextureView *v, NVNtextureSwi
 NVN(nvnTextureViewGetDepthStencilMode, NVNboolean, const NVNtextureView *v, NVNtextureDepthStencilMode *m) { *m = (NVNtextureDepthStencilMode)CVW(v)->ds_mode; return CVW(v)->set_ds; }
 NVN(nvnTextureViewGetTarget, NVNboolean, const NVNtextureView *v, NVNtextureTarget *t) { *t = (NVNtextureTarget)CVW(v)->target; return CVW(v)->set_target; }
 NVN(nvnTextureViewCompare, NVNboolean, const NVNtextureView *a, const NVNtextureView *b) { return !memcmp(a, b, sizeof(view_t)); }
-NVN(nvnTextureGetViewOffset, ptrdiff_t, const NVNtexture *t, const NVNtextureView *v) {
-    const tex_t *o = CTX(t);
-    const view_t *w = CVW(v);
+/* Byte offset of a view's first level / layer inside the storage described by `d` */
+static ptrdiff_t view_offset(const napple_texdesc *d, const view_t *w) {
     if (!w) return 0;
     napple_texlayout L;
-    napple_tex_layout(&o->s.d, &L);
-    uint64_t off = w->set_levels ? napple_tex_level_offset(&o->s.d, (unsigned)w->base_level) : 0;
+    napple_tex_layout(d, &L);
+    uint64_t off = w->set_levels ? napple_tex_level_offset(d, (unsigned)w->base_level) : 0;
     if (w->set_layers) off += (uint64_t)w->min_layer * L.layer_size;
     return (ptrdiff_t)off;
 }
+NVN(nvnTextureGetViewOffset, ptrdiff_t, const NVNtexture *t, const NVNtextureView *v) { return view_offset(&CTX(t)->s.d, CVW(v)); }
+NVN(nvnTextureBuilderGetViewOffset, ptrdiff_t, const NVNtextureBuilder *b, const NVNtextureView *v) { return view_offset(&CTB(b)->d, CVW(v)); }
 
 /* ---------------------------------------------------------------------------------------------------------------
  * CPU texel access (storage is block-linear: convert)
