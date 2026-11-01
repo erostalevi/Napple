@@ -202,15 +202,19 @@ int gfx_tess_get_params(uint64_t h, gfx_tess_params *out) {
     pthread_mutex_unlock(&g_sp_mu);
     return r;
 }
+int gfx_program_hashes(const NVNprogram *p, uint64_t out[6]); /* api_program.c: host copy of the stage hashes */
 int gfx_program_set_xfb_layout(const void *prog, const gfx_xfb_layout *l) { /* keyed by the stage that feeds the rasterizer: geometry, else tess eval, else vertex */
-    const prog_t *p = (const prog_t *)prog;
-    uint64_t h = !p ? 0 : p->hash[2] ? p->hash[2] : p->hash[4] ? p->hash[4] : p->hash[0];
+    uint64_t ph[6];
+    gfx_program_hashes((const NVNprogram *)prog, ph);
+    uint64_t h = ph[2] ? ph[2] : ph[4] ? ph[4] : ph[0];
     if (!h) return 0;
     gfx_xfb_set_layout(h, l);
     return 1;
 }
 int gfx_program_set_tess_params(const void *prog, const gfx_tess_params *p) {
-    uint64_t h = prog ? ((const prog_t *)prog)->hash[4] : 0;
+    uint64_t ph[6];
+    gfx_program_hashes((const NVNprogram *)prog, ph);
+    uint64_t h = ph[4];
     if (!h) return 0;
     gfx_tess_set_params(h, p);
     return 1;
