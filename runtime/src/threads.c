@@ -286,7 +286,7 @@ static void core_checkpoint(void) {
 #define SLICE_TICK_NS 2000000
 #define SLICE_PRIO 59 /* the preemption priority of the application cores 0..2 */
 static int64_t g_slice_ns = SLICE_DEFAULT_MS * 1000000ll;
-static int g_slice_started, g_preempt_any_pc, g_slice_all;
+static int g_slice_started, g_preempt_any_pc, g_slice_all, g_preempt_signal = 1; /* NAPPLE_PREEMPT_SIGNAL=0: switch at the next svc only, never by signal */
 /* Do equal-priority threads of priority `prio` rotate on an application core? */
 static int slice_rotates(int prio) { return g_slice_all || prio == SLICE_PRIO; }
 /* Host unit tests run "guest" code in plain C: every pc counts as preemptible there. */
@@ -334,7 +334,7 @@ static int slice_scan(int64_t now, Thread **signals) {
             need = w->prio < o->prio || (w->prio == o->prio && slice_rotates(o->prio) && now - (int64_t)o->core_since >= g_slice_ns);
         }
         if (!need) continue;
-        if (__atomic_load_n(&o->svc_regs, __ATOMIC_ACQUIRE)) o->preempt = 1; /* inside an svc: its exit checkpoint does the switch */
+        if (__atomic_load_n(&o->svc_regs, __ATOMIC_ACQUIRE) || !g_preempt_signal) o->preempt = 1; /* inside an svc: its exit checkpoint does the switch */
         else {
             o->slice_req = 1;
             signals[n++] = o;
@@ -387,6 +387,8 @@ void threads_preempt_start(void) {
     if (g_slice_started || !cores_enabled()) return;
     const char *e = getenv("NAPPLE_SLICE_MS");
     if (e && *e) g_slice_ns = (int64_t)atoi(e) * 1000000ll;
+    e = getenv("NAPPLE_PREEMPT_SIGNAL");
+    if (e && *e == '0') g_preempt_signal = 0;
     e = getenv("NAPPLE_SLICE_ALL");
     g_slice_all = e && *e && *e != '0';
     if (g_slice_ns <= 0) return;
