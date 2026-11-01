@@ -283,40 +283,63 @@ static void need(int cond, const char *msg) {
 static uint32_t effect_out_bytes(const AudioRenderer *r) { return revision_number(r->revision) >= 9 ? 0x90u : 0x10u; }
 
 /* Performance metrics. The renderer does no real timing, so the numbers are modelled: a fixed cost per started voice, per mix and per sink,
- * laid out back to back from start time 0. The 0x10 block in the update output carries the byte count of the frame written to the
- * performance buffer (0 when the title supplied no buffer). The buffer holds one frame: a header, then 0x10-byte entries
- * {u32 node id, u32 start time (us), u32 processing time (us), u32 type (1 voice, 2 submix, 3 final mix, 4 sink)}. No detail entries are
- * produced unless the title names a target node (see below). Header, from the author's memory of the public description of
- * the performance frame (unverified; the two sizes and field order are the part to compare first if a title reads it back):
- *   format 1 (REV1..REV4), 0x10 bytes: u32 entry_count, u32 detail_count, u32 next_offset (bytes from the frame start to the next frame =
- *     the frame size), u32 total_processing_time.
- *   format 2 (REV5+), 0x20 bytes: u32 magic 'PERF', u32 entry_count, u32 detail_count, u32 next_offset, u32 total_processing_time,
- *     u32 voices_dropped, u32 start_time (0), u32 frame_index (renderer frames elapsed, low 32 bits).
+ * laid out back to back from start time 0. The 0x10 block in the update output carries the byte count of the frames written to the
+ * performance buffer (0 when the title supplied no buffer). Layouts are the nn::audio ones, in two formats chosen by the user revision
+ * (format 2 from REV5, PerformanceMetricsDataFormatVersion2 in the public audio_core ports):
+ *   format 1 (REV1..REV4): header 0x18 {u32 magic 'PERF', entry_count, detail_count, next_offset, total_processing_time, frame_index},
+ *     entry 0x10 {u32 node id, start time (us), processing time (us), u8 entry type (1 voice, 2 submix, 3 final mix, 4 sink), 3 pad},
+ *     detail 0x10 {u32 node id, start, processing, u8 detail type, u8 parent entry type, 2 pad}.
+ *   format 2 (REV5 and later, including REV11+): header 0x30 {the format 1 fields up to total_processing_time, u32 voices_dropped,
+ *     u64 start_time, u32 frame_index, u8 render_time_exceeded, 11 pad}, entry 0x18 (the format 1 entry + 11 bytes), detail 0x18
+ *     (the format 1 detail + u32 + 4 pad).
+ * A frame holds the entries, then the detail entries (at most PERF_MAX_DETAILS), and next_offset is the frame's byte size, so a reader walks frames
+ * back to back; the byte after the last frame is zeroed when it fits (a null header ends the chain).
  * Node ids: the id the title put in the voice / mix / sink parameters (nn::audio NodeId: type in bits 28..31, 1 voice, 2 sub mix, 3 final mix,
- * 4 sink; yuzu NodeIdHelper, Ryujinx PerformanceEntryAddresses); the array index when the title left it 0.
- * Detail entries: the update input's performance section is {s32 target_node_id, 12 bytes padding} (yuzu PerformanceInParameter). With a target
- * that names a started voice, the frame carries, after its entries, 0x10-byte detail entries {u32 node id, u32 start time, u32 processing time,
- * u8 detail type, u8 parent entry type, 2 bytes padding} for what the voice's DSP commands cost: the data source (PcmInt16 / Adpcm / PcmFloat),
- * the volume ramp and the mix. A target naming a sub mix gets one Mix detail. The detail type numbers follow the order of yuzu's
- * PerformanceDetailType (Ryujinx PerformanceDetailType). All recalled without network access: unverified. */
-enum { PERF_DETAIL_ENTRY = 0x10, PERF_DETAIL_US = 8 };
-enum { PERF_D_PCM16 = 1, PERF_D_ADPCM = 2, PERF_D_RAMP = 3, PERF_D_BIQUAD = 4, PERF_D_MIX = 5, PERF_D_PCMF32 = 10 };
+ * 4 sink); the array index when the title left it 0.
+ * Detail entries: the update input's performance section is {s32 target_node_id, 12 bytes padding}. With a target that names a started voice,
+ * the frame carries, after its entries, details for what the voice's DSP commands cost: the data source (detail type = PerformanceSysDetailType
+ * PcmInt16 15 / PcmFloat 16 / Adpcm 17), the volume ramp (CommandId 8) and the mix (CommandId 10). A target naming a sub mix gets one Mix detail.
+ * The layouts match the public audio_core ports (skyline-emu/audio-core, read for this note); the detail type numbers for ramp/mix are the
+ * CommandId numbers of the same source and are the least certain part. Timings are modelled. */
+enum { PERF_MAX_DETAILS = 100, PERF_DETAIL_US = 8 };
+enum { PERF_D_MIX = 10, PERF_D_RAMP = 8, PERF_D_PCM16 = 15, PERF_D_PCMF32 = 16, PERF_D_ADPCM = 17 };
 enum { PERF_VOICE = 1, PERF_SUBMIX = 2, PERF_FINAL_MIX = 3, PERF_SINK = 4 };
-enum { PERF_VOICE_US = 24, PERF_MIX_US = 40, PERF_SINK_US = 16, PERF_HEADER_V1 = 0x10, PERF_HEADER_V2 = 0x20, PERF_ENTRY = 0x10, PERF_MAGIC = 0x46524550 };
+enum { PERF_VOICE_US = 24, PERF_MIX_US = 40, PERF_SINK_US = 16, PERF_MAGIC = 0x46524550 };
+typedef struct {
+    uint32_t header, entry; /* frame header and entry/detail sizes in bytes */
+    int v2;
+} PerfGeom;
+static PerfGeom perf_geom(const AudioRenderer *r) {
+    PerfGeom g;
+    g.v2 = revision_number(r->revision) >= 5;
+    g.header = g.v2 ? 0x30 : 0x18;
+    g.entry = g.v2 ? 0x18 : 0x10;
+    return g;
+}
+/* Largest frame the renderer can produce for this configuration (entries for every voice / mix / sink, plus the maximum detail entries). */
+static size_t perf_frame_max(const AudioRenderer *r, PerfGeom g) {
+    return g.header + (size_t)(r->param.voice_count + r->param.submix_count + 1 + r->param.sink_count + r->param.effect_count + PERF_MAX_DETAILS) * g.entry;
+}
+static void perf_put_entry(uint8_t *w, PerfGeom g, uint32_t node, uint32_t start, uint32_t us, uint32_t kind, uint32_t detail_type) {
+    memset(w, 0, g.entry);
+    memcpy(w, &node, 4);
+    memcpy(w + 4, &start, 4);
+    memcpy(w + 8, &us, 4);
+    w[12] = (uint8_t)(detail_type ? detail_type : kind); /* entry: entry type; detail: detail type, then the parent entry type */
+    if (detail_type) w[13] = (uint8_t)kind;
+}
 static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t perf_size, int32_t target) {
-    const int v2 = revision_number(r->revision) >= 5;
-    const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
-    if (!perf || perf_size < header) return 0;
-    const uint32_t max_entries = (uint32_t)((perf_size - header) / PERF_ENTRY);
+    const PerfGeom g = perf_geom(r);
+    if (!perf || perf_size < g.header) return 0;
+    const uint32_t max_entries = (uint32_t)((perf_size - g.header) / g.entry);
     uint32_t n = 0, t = 0, dropped = 0, nd = 0;
-    uint8_t *w = perf + header;
+    uint8_t *w = perf + g.header;
     uint32_t det_start[64], det_node[64], det_count = 0; /* entries a detail target matched, in order */
 #define PERF_ADD(node, us, kind)                                                                                                                               \
     do {                                                                                                                                                       \
         if (n < max_entries) {                                                                                                                                 \
-            uint32_t e[4] = {(uint32_t)(node), t, (us), (kind)};                                                                                               \
-            memcpy(w, e, sizeof e);                                                                                                                            \
-            w += PERF_ENTRY;                                                                                                                                   \
+            perf_put_entry(w, g, (uint32_t)(node), t, (us), (kind), 0);                                                                                        \
+            w += g.entry;                                                                                                                                      \
             n++;                                                                                                                                               \
             t += (us);                                                                                                                                         \
         }                                                                                                                                                      \
@@ -339,7 +362,8 @@ static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t 
     for (int i = 0; i < r->param.sink_count; i++) PERF_ADD(r->sinks[i].node_id ? r->sinks[i].node_id : (uint32_t)i, PERF_SINK_US, PERF_SINK);
 #undef PERF_ADD
     {
-        uint32_t room = (uint32_t)((perf_size - header) / PERF_ENTRY) - n; /* detail entries share the buffer with the entries */
+        uint32_t room = (uint32_t)((perf_size - g.header) / g.entry) - n; /* detail entries share the buffer with the entries */
+        if (room > PERF_MAX_DETAILS) room = PERF_MAX_DETAILS;
         uint8_t *dw = w;
         for (uint32_t k = 0; k < det_count; k++) {
             uint32_t kinds[3], nk = 0;
@@ -356,19 +380,23 @@ static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t 
                 kinds[nk++] = PERF_D_MIX;
             }
             for (uint32_t j = 0; j < nk && nd < room; j++, nd++) {
-                uint32_t e[4] = {id, det_start[k] + j * PERF_DETAIL_US, PERF_DETAIL_US, kinds[j] | (parent << 8)};
-                memcpy(dw, e, sizeof e);
-                dw += PERF_DETAIL_ENTRY;
+                perf_put_entry(dw, g, id, det_start[k] + j * PERF_DETAIL_US, PERF_DETAIL_US, parent, kinds[j]);
+                dw += g.entry;
             }
         }
     }
-    uint32_t bytes = header + (n + nd) * PERF_ENTRY;
-    if (v2) {
-        uint32_t hdr[8] = {PERF_MAGIC, n, nd, bytes, t, dropped, 0, (uint32_t)r->elapsed_frames};
-        memcpy(perf, hdr, sizeof hdr);
+    uint32_t bytes = g.header + (n + nd) * g.entry;
+    memset(perf, 0, g.header);
+    uint32_t common[6] = {PERF_MAGIC, n, nd, bytes, t, (uint32_t)r->elapsed_frames};
+    if (g.v2) {
+        uint32_t idx = (uint32_t)r->elapsed_frames, magic_to_total[5] = {PERF_MAGIC, n, nd, bytes, t};
+        uint64_t start = 0;
+        memcpy(perf, magic_to_total, 20);
+        memcpy(perf + 0x14, &dropped, 4);
+        memcpy(perf + 0x18, &start, 8);
+        memcpy(perf + 0x20, &idx, 4); /* render_time_exceeded (0x24) stays 0: the host never falls behind its own model */
     } else {
-        uint32_t hdr[4] = {n, nd, bytes, t};
-        memcpy(perf, hdr, sizeof hdr);
+        memcpy(perf, common, sizeof common);
     }
     return bytes;
 }
@@ -378,9 +406,7 @@ static uint32_t write_performance(const AudioRenderer *r, uint8_t *perf, size_t 
  * the byte total is reported. A buffer too small for even the oldest frame gets the newest frame with its entries capped (the single-frame behaviour), and
  * the history restarts. Frames chain through next_offset (the frame size), so a reader walks them back to back. */
 static int perf_append_frame(AudioRenderer *r, int32_t target) {
-    const int v2 = revision_number(r->revision) >= 5;
-    const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
-    const size_t full = header + (size_t)(r->param.voice_count * 4 + r->param.submix_count * 2 + 1 + r->param.sink_count) * PERF_ENTRY;
+    const size_t full = perf_frame_max(r, perf_geom(r));
     uint8_t *frame = malloc(full);
     if (!frame) return -1;
     const uint32_t flen = write_performance(r, frame, full, target);
@@ -405,9 +431,7 @@ static int perf_append_frame(AudioRenderer *r, int32_t target) {
     return 0;
 }
 static uint32_t collect_performance(AudioRenderer *r, uint8_t *perf, size_t perf_size, int32_t target) {
-    const int v2 = revision_number(r->revision) >= 5;
-    const uint32_t header = v2 ? PERF_HEADER_V2 : PERF_HEADER_V1;
-    const int have_buffer = perf && perf_size >= header;
+    const int have_buffer = perf && perf_size >= perf_geom(r).header;
     if (!have_buffer && r->param.performance_frame_count <= 0) { /* nobody asked for history and nobody collects */
         r->perf_hist_len = 0;
         r->perf_nframes = 0;
@@ -424,6 +448,7 @@ static uint32_t collect_performance(AudioRenderer *r, uint8_t *perf, size_t perf
         return write_performance(r, perf, perf_size, target);
     }
     memcpy(perf, r->perf_hist, copied);
+    if (perf_size - copied >= perf_geom(r).header) memset((uint8_t *)perf + copied, 0, perf_geom(r).header); /* a null header ends the chain */
     memmove(r->perf_hist, r->perf_hist + copied, r->perf_hist_len - copied);
     r->perf_hist_len -= copied;
     memmove(r->perf_sizes, r->perf_sizes + taken, (r->perf_nframes - taken) * sizeof r->perf_sizes[0]);
@@ -555,6 +580,10 @@ static size_t update_locked(AudioRenderer *r, const uint8_t *input, size_t in_si
     }
     {
         uint32_t pb = collect_performance(r, perf, perf_size, perf_target);
+        if (pb && !r->perf_logged) {
+            r->perf_logged = 1;
+            napple_audio_log(&r->host, "performance buffer written: %u bytes in a %zu byte buffer (format %d)", pb, perf_size, perf_geom(r).v2 ? 2 : 1);
+        }
         memcpy(w, &pb, 4);
     } /* performance: bytes of history in the perf buffer */
     w += 0x10;

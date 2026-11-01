@@ -218,6 +218,7 @@ struct napple_audren {
     _Atomic int running;
     uint32_t state, revision, time_limit, npools_alloc;
     uint64_t behavior_flags, elapsed_frames;
+    int perf_logged;                               /* the first performance frame handed to the guest was logged (audren.c) */
     uint8_t *perf_hist;                            /* performance frames not yet collected by the guest, oldest first (audren.c) */
     size_t perf_hist_len;                          /* bytes used in perf_hist */
     uint32_t perf_sizes[64], perf_nframes;         /* byte size of each held frame, and how many */
