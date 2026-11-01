@@ -1142,6 +1142,8 @@ static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     k->stencil_fmt = P.stencil_fmt;
     k->samples = P.samples;
     k->sample_shading = S.sample_shading && P.samples > 1; /* the fragment function then declares [[sample_id]] and runs per sample */
+    if (k->sample_shading && !g_predict)
+        LOG_ONCE(NAPPLE_LOG_INFO, "sample shading: fragment program %016llx runs per sample in a %u-sample pass", (unsigned long long)S.prog[ST_FS], P.samples);
     k->topo = (uint32_t)topo_class(prim);
     for (int i = 0; i < 8; i++) {
         k->blend[i] = mtl_blend_resolve(S.blend[i]);
@@ -2453,6 +2455,7 @@ static void do_copy_xfer(const p_copy_xfer *c, int to_tex) {
     GfxTex *t = mtl_tex_get(&c->tex.s, to_tex);
     if (!t) return;
     if (to_tex) mtl_tex_written(t);
+    else mtl_tex_prepare_sample(t); /* reading back a texture the CPU filled: upload the guest data first (as a texture-to-texture copy's source is) */
     int bw, bh;
     int bpb = napple_fmt_bpb(t->key.d.format, &bw, &bh);
     if (!bpb || t->expand_rgb) {
@@ -2832,6 +2835,8 @@ static void do_downsample(const p_copy_t2t *c) {
     GfxTex *s = mtl_tex_get(&c->src.s, 1), *d = mtl_tex_get(&c->dst.s, 1);
     if (!s || !d) return;
     mtl_tex_written(d);
+    LOG_ONCE(NAPPLE_LOG_INFO, "Downsample (MSAA resolve) in use (first: %lu samples, format %lu -> %lu)", (unsigned long)s->tex.sampleCount,
+             (unsigned long)s->pf, (unsigned long)d->pf);
     if (s->tex.sampleCount < 2) {
         LOG_ONCE(NAPPLE_LOG_WARN, "Downsample from a single-sampled texture: copied instead");
         p_copy_t2t cc = *c;
@@ -3369,7 +3374,12 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
             break;
         }
         case OP_BARRIER:
+            /* ResolveDepthBuffer: the console expands its compressed depth (plane equations per tile, valid only for the sample locations they were made with)
+             * into explicit per-sample values before the depth is sampled, copied or drawn with other sample locations. A Metal depth attachment always holds
+             * explicit per-sample values at the locations they were rasterized with, so the resolve is the pass ending with its depth stored: the following
+             * sample, copy or Downsample reads every sample, and copy-backed views of the depth are refreshed (its write generation moves at pass close). */
             if (*(const uint32_t *)pl & BARRIER_RESOLVE_DEPTH) {
+                LOG_ONCE(NAPPLE_LOG_INFO, "ResolveDepthBuffer: the open pass is closed with its depth stored (%u samples)", P.samples);
                 flush_clears();
                 end_encoders();
             }

@@ -165,6 +165,8 @@ static GfxTex *tex_create(const texsnap *s, int for_gpu_write) {
     }
     t->views = [NSMutableDictionary dictionary];
     mtl_scale_count(pk.rx != 1 || pk.ry != 1, pk.rx != 1 || pk.ry != 1 ? (uint64_t)pk.w * pk.h * 4 * t->samples : 0);
+    if (t->samples > 1)
+        LOG_ONCE(NAPPLE_LOG_INFO, "multisampled textures in use (first: %ux%u, %u samples, format %#x, target %d)", t->w, t->h, t->samples, d->format, d->target);
     return t;
 }
 
@@ -819,6 +821,10 @@ void mtl_tex_alias_flush(id<MTLCommandBuffer> cb) {
     NSArray<GfxAlias *> *list = [g_alias_q copy];
     [g_alias_q removeAllObjects];
     pthread_mutex_unlock(&g_alias_mu);
+    static uint64_t n;
+    uint64_t prev = n;
+    n += list.count;
+    if (list.count && (!prev || __builtin_clzll(prev) != __builtin_clzll(n))) LOGI("copy-backed texture views: %llu refreshes", (unsigned long long)n); /* each power of two */
     for (GfxAlias *al in list) {
         al->queued = 0;
         al->filled = 1;
