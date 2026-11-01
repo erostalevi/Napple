@@ -1,28 +1,28 @@
 {
  "gpu_fixed/transform feedback": {
   "status": "partial",
-  "note": "gfx/src/mtl_stages.inc + api_cmd.c (8963560, afd9e63): record+replay capture pass, exact-word t_stages; no registered real-title XFB layout (stages.h registry by blob hash only), XFB of GS/TES output not done",
-  "date": "2026-10-27"
+  "note": "mtl_stages.inc capture pass (t_stages 3/4a-4d): no title of the four has an XFB layout (scan_stages over full RomFS + DLC), so the control-section XFB offsets are self-authored and unproven; synthetic tests only check self-consistency",
+  "date": "2026-11-01"
  },
  "gpu_fixed/geometry shaders": {
-  "status": "partial",
-  "note": "mtl_stages.inc GS compute dispatch + strip draw (t_stages point->quad); pass-through/untranslatable GS falls back to no-GS draw; GS+tess together and indirect draws open; no title binds one",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "gfx-stages-live 5b0cf26 + 284e5a7: GLSLC vertex-handle prologue (S2R INVOCATION_INFO + ISBERD + ALD) fixed, real dumped GS programs of SMO (3) and ACNH (2) replay correctly through Metal (t_stages_dumped, MTL_DEBUG_LAYER); MultiDraw*IndirectCount with stages hooked; GS after tess via the software tessellator. Not drawn in game yet (needs a later-game save). Judged impl: real programs, not self-authored layouts",
+  "date": "2026-11-01"
  },
  "gpu_fixed/tessellation": {
   "status": "partial",
-  "note": "mtl_stages.inc TCS dispatch + drawPatches, quad/triangle domains (t_stages); isoline refused, domain defaults to triangle until control section read, TES params registry only; no title reaches it",
-  "date": "2026-10-27"
+  "note": "mtl_stages.inc TCS dispatch + drawPatches, isolines via software tessellator: no tess program exists in any of the four titles (scan_stages), tess parameters from the control section are self-authored layouts; synthetic only",
+  "date": "2026-11-01"
  },
  "gpu_fixed/MSAA / resolve": {
   "status": "partial",
-  "note": "mtl_replay.m resolves colour/depth/stencil/int; ResolveDepthBuffer is a recorded barrier (api_cmd.c:733); nvnProgramSetSampleShading stored (api_program.c:123) but not applied; no MSAA texture-views",
-  "date": "2026-10-27"
+  "note": "gfx-msaa-views 550afc8: sample shading per-sample positions fixed (8e26ad2, t_sample_shading 0 skipped), ResolveDepthBuffer documented complete, 4x depth -> 4x RGBA8 copy views; still refused: mtl_replay.m:2582 copy of MS/depth/3D with different size/format, :2749 Downsample integer between formats / arrays, :2810 Downsample depth<->float. No title uses MSAA",
+  "date": "2026-11-01"
  },
  "gpu_fixed/texture views / sparse": {
   "status": "partial",
-  "note": "gfx/src/mtl_tex.m view_valid: views Metal cannot express fall back to the whole texture (999f703 made it informational); no sparse",
-  "date": "2026-10-27"
+  "note": "mtl_tex.m copy-backed views verified on ACNH (3D LUT as 2D); still falls back: ACNH cube view (type 5) of a type-2 texture -> whole texture + dummy texture warning, multi-channel integer views (translator declares sampled textures float), sparse residency changes after upload unseen (fully-resident fallback, t_sparse)",
+  "date": "2026-11-01"
  },
  "gpu_fixed/indirect draw/dispatch": {
   "status": "impl",
@@ -36,18 +36,18 @@
  },
  "nvdrv//dev/nvhost-nvdec, vic, nvjpg, msenc": {
   "status": "partial",
-  "note": "b8: pitch!=width, VP9 via VideoToolbox, NVJPG+MSENC encode (nvdrv_media_core.c, decoder_vt.c, test_svc_nvdrv_media.c); no title has driven them",
+  "note": "nvdrv_media_core.c (f557b4a): NVDEC + VIC verified on MK8D (0 errors, THI INCR_SYNCPT + VIC 0x1c1 / NVDEC 0x140 now known); NVJPG / MSENC / VP9-on-NVDEC / RGB+block-linear VIC output tested only, no title opens them",
   "date": "2026-11-01"
  },
  "media/JPEG (nvjpg / caps)": {
   "status": "partial",
-  "note": "jpeg_core.c baseline codec used by caps_core.c:62 (album JPEG store/loads) and nvdrv_media_core NVJPG (ec0439c); tested on Linux only, no guest has used it",
-  "date": "2026-10-26"
+  "note": "caps path: test_svc_caps_e2e (f557b4a) round-trips real MK8D/SMO frames through caps:su -> caps:u -> caps:dc and ImageIO (31-47 dB); NVJPG engine register path synthetic only and no title of the four opens caps or nvjpg",
+  "date": "2026-11-01"
  },
  "media/H.264": {
-  "status": "partial",
-  "note": "vt_h264.c movie path + decoder_vt.c NVDEC backend; VP9 refused; preview panel video unverified; movie audio off by default",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "decoder_vt.c + nvdrv_media_core.c (media-live f557b4a): MK8D drives H.264 through nvhost-nvdec + VIC, 300 decodes / 300 VIC frames, 0 errors, clean dumped frames, Grand Prix panel plays; movie-library AVC on VideoToolbox (movie.c)",
+  "date": "2026-11-01"
  },
  "applets/controller applet": {
   "status": "impl",
@@ -75,14 +75,14 @@
   "date": "2026-10-24"
  },
  "audio/audin (microphone)": {
-  "status": "partial",
-  "note": "audio/src/audin_mic.c AUHAL capture now built on macOS and the generated apps carry NSMicrophoneUsageDescription + audio-input entitlement (c38f077); still opt-in (NAPPLE_AUDIN_SOURCE=mic), the mic test skips on macOS, no title verified",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "audio/src/audin_mic.c + audin_source.c (ff449a7): mic is the default source when permitted, denied/undetermined = silence; real AUHAL capture on this Mac (4800 frames, non-zero RMS); test_audin_source 52 checks",
+  "date": "2026-11-01"
  },
  "input/IR camera (irs)": {
   "status": "partial",
-  "note": "runtime/src/services/irs.c: Activate/SetFunctionLevel/ActivateWithFunctionLevel/RunImageTransferEx/RunIrLed rows now implemented (tested); tera plugin and pointing (DPD) remain stubs; layouts unverified on a title",
-  "date": "2026-10-27"
+  "note": "runtime/src/services/irs.c: core rows implemented and tested; tera plugin / pointing (DPD) stubs; processor layouts need a real IR camera (Joy-Con R hardware) trace: unreachable on this Mac",
+  "date": "2026-11-01"
  },
  "fs_runtime/save data extra data / size queries": {
   "status": "impl",
@@ -92,21 +92,6 @@
  "loader/NRO runtime loading (ro:1)": {
   "status": "impl",
   "note": "Napple/runtime/src/ro.c:1-132 ldr:ro + ro:1 registered from main.c:181; maps the AOT image by module id (NRO without AOT image stops the runtime). Scan misses it: it only reads runtime/src/services",
-  "date": "2026-10-24"
- },
- "Maxwell shader ISA/TLD": {
-  "status": "missing",
-  "note": "gfx/src/shader/maxwell_translate.c: only TLDS/TEXS decoded; no LDS/STS shared-memory path (threadgroup only used for barrier, :1499)",
-  "date": "2026-10-24"
- },
- "Maxwell shader ISA/LDS": {
-  "status": "missing",
-  "note": "gfx/src/shader/maxwell_translate.c: only TLDS/TEXS decoded; no LDS/STS shared-memory path (threadgroup only used for barrier, :1499)",
-  "date": "2026-10-24"
- },
- "Maxwell shader ISA/STS": {
-  "status": "missing",
-  "note": "gfx/src/shader/maxwell_translate.c: only TLDS/TEXS decoded; no LDS/STS shared-memory path (threadgroup only used for barrier, :1499)",
   "date": "2026-10-24"
  },
  "loader/NSO segments (LZ4)": {
@@ -370,9 +355,9 @@
   "date": "2026-10-27"
  },
  "input/GameCube / Palma / NES styles": {
-  "status": "partial",
-  "note": "input.c/hid_core style constants (e129cfd), tested on Linux; GC trigger lifo unwritten",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "input/src/hid_shm.c/input.c (ff449a7): GC trigger lifo at 0x4228, Lark/Lucia/Lager type words, retro device-type bits, HidNpadButton bits 28..34 from libnx HidNpadInternalState; test_styles 49 checks",
+  "date": "2026-11-01"
  },
  "input/gesture / debugpad": {
   "status": "impl",
@@ -380,9 +365,9 @@
   "date": "2026-10-26"
  },
  "fs_runtime/bcat storage": {
-  "status": "partial",
-  "note": "runtime/src/services/bcat.c + bcat_core.c: provider hook (bcat_set_provider), folder provider NAPPLE_BCAT_DIR, directory/file/enumerate services with MD5 digests, tested on Linux; layouts from memory",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "runtime/src/services/bcat_core.c (ff449a7): console save-data layout directories.meta/files.meta/files/ (LibHac sizes), auto-detected from NAPPLE_BCAT_DIR, Done status 9; test_svc_bcat 137 checks",
+  "date": "2026-11-01"
  },
  "applets/swkbd (software keyboard)": {
   "status": "partial",
@@ -390,39 +375,39 @@
   "date": "2026-10-27"
  },
  "media/Vorbis/Opus movie audio": {
-  "status": "partial",
-  "note": "runtime/src/movie.c:63-72 Vorbis path via movie_audio_core (stb_vorbis), off unless NAPPLE_MOVIE_VORBIS=1; out-of-band header reading pending; AAC not hooked",
-  "date": "2026-10-26"
+  "status": "impl",
+  "note": "runtime/src/movie.c:63 Vorbis default on (f557b4a): LAS opening movie, out-of-band csd headers, 48 kHz 6 ch, 2000 packets real signal, 0 errors; SMO/ACNH unchanged. Opus is not a movie-library decoder type. AAC (type 4) / VP8 (type 2) stay with the guest library: tracked as a separate descriptive gap, not this item",
+  "date": "2026-11-01"
  },
  "audio/performance metrics": {
-  "status": "partial",
-  "note": "audio/src/audren.c collect_performance: frame history (performance_frame_count frames held until collected, whole frames copied oldest first); header layout and modelled costs still from documentation memory, unverified on a title",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "audio/src/audren.c collect_performance (sweep-small ff449a7): format 1 (REV1-4, header 0x18, entry/detail 0x10) and format 2 (REV5+, 0x30/0x18) with PERF magic, layouts from public reference structs, test_audren 3640 checks REV1..12; no title of the four supplies a buffer (60 s boots clean). Judged impl: layout from an authoritative reference + Mac tests, no refused branch",
+  "date": "2026-11-01"
  },
  "nvdrv//dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)": {
   "status": "partial",
-  "note": "runtime/src/services/nvdrv_nodes_core.c (b8): state-tracked channel/AS/ctrl ioctls, test_svc_nvdrv_nodes.c; header says layouts PROPOSED, not checked against real traces",
+  "note": "runtime/src/services/nvdrv_nodes_core.c: state-tracked ioctls, layouts PROPOSED; verifying them needs real Switch hardware traces or a title that bypasses NVN (none of the four opens these nodes): unreachable on this Mac",
   "date": "2026-11-01"
  },
  "nvdrv//dev/nvdisp-disp0": {
   "status": "partial",
-  "note": "nvdrv_media_core.c:777-830 nvdisp vblank count/wait ioctls, nvdrv.c:658 routed; synthetic tests only",
+  "note": "nvdrv_media_core.c nvdisp vblank ioctls: unit-tested only; media-live open notes show none of the four titles opens nvdisp",
   "date": "2026-11-01"
  },
  "content/NCA2 / NCA0": {
   "status": "partial",
-  "note": "napple-core nca.rs: NCA2 (per-FS-header XTS sector 0) tested synthetically; NCA0 key area via user RSA key nca0_key_area_rsa is a proposal, no retail file seen",
-  "date": "2026-10-27"
+  "note": "napple-core nca.rs: still synthetic only; all 39 NCAs in the material are NCA3 (nca_versions_real); NCA0 key-area RSA path is a proposal (no retail NCA0 seen)",
+  "date": "2026-11-01"
  },
  "content/personalized tickets": {
-  "status": "partial",
-  "note": "napple-core ticket.rs encrypted_title_key: RSA-OAEP-SHA256 with the user eticket_rsa_keypair, tested against an OpenSSL vector; keypair layout and napple-build container.rs wiring pending",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "napple-core ticket.rs (ff449a7): real eticket_rsa_keypair (0x210) confirms D/N/E layout, ticket_real decrypts; container.rs wiring tested by container_real (load_with_keys)",
+  "date": "2026-11-01"
  },
  "content/NSZ / XCZ (zstd)": {
-  "status": "partial",
-  "note": "ncz.rs: tolerates a first section straddling the 0x4000 boundary (nsz writers); still synthetic round trips only, no real dump ingested",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "napple-core ncz.rs (ff449a7): real SMO NSP -> block NSZ (4 NCAs incl. 5.5 GB RomFS) reads back SHA-256 identical; napple build on it gives the NSP build's module hashes (nsz_real). XCZ shares the NCZ path (no real XCZ in the material)",
+  "date": "2026-11-01"
  },
  "content/IVFC hash-tree verification": {
   "status": "impl",
