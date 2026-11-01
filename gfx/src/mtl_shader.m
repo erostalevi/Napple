@@ -13,7 +13,7 @@
 #import "mtl_priv.h"
 #include "cache_trim.h"
 
-#define TRANSLATOR_VERSION 15u /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 16u /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader
 @end
@@ -957,6 +957,8 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     vk.stencil_slots = k.stencil_slots[0];
     vk.image_int_mask = k.img_int[0];
     vk.image_uint_mask = k.img_uint[0];
+    vk.tex_uint_slots = k.tex_uint[0];
+    vk.tex_sint_slots = k.tex_sint[0];
     vk.point_prim = k.topo == MTLPrimitiveTopologyClassPoint;
     vk.flip_y = k.flip_y;
     vk.depth_minus_one = k.depth_mode == 0;
@@ -980,6 +982,8 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     fk.stencil_slots = k.stencil_slots[1];
     fk.image_int_mask = k.img_int[1];
     fk.image_uint_mask = k.img_uint[1];
+    fk.tex_uint_slots = k.tex_uint[1];
+    fk.tex_sint_slots = k.tex_sint[1];
     { /* NAPPLE_SHADER_PROBE=<fragment program hash hex>:<pc hex>:<rA>:<rB>:<rC>[:<scale>][;<next probe>...]: the fragment program draws those registers as its colour
          * (debugging aid; several probes are cycled every 30 frames so one run can capture them all) */
         const char *pr = getenv("NAPPLE_SHADER_PROBE");
@@ -1259,6 +1263,8 @@ static ShaderKey stage_vs_key(const pipe_key *k) {
     vk.stencil_slots = k->stencil_slots[0];
     vk.image_int_mask = k->img_int[0];
     vk.image_uint_mask = k->img_uint[0];
+    vk.tex_uint_slots = k->tex_uint[0];
+    vk.tex_sint_slots = k->tex_sint[0];
     vk.flip_y = k->flip_y;
     vk.depth_minus_one = k->depth_mode == 0;
     return vk;
@@ -1276,6 +1282,8 @@ static GfxShader *stage_fs(const pipe_key *k, uint32_t vs_out_mask) {
     fk.stencil_slots = k->stencil_slots[1];
     fk.image_int_mask = k->img_int[1];
     fk.image_uint_mask = k->img_uint[1];
+    fk.tex_uint_slots = k->tex_uint[1];
+    fk.tex_sint_slots = k->tex_sint[1];
     return shader_variant(k->fs, &fk, 1);
 }
 /* Pass-through vertex function of the geometry output: record r of gs_vtx -> position + the generic slots the program stores (+ point size for points). */
@@ -1446,7 +1454,7 @@ GfxPipe *mtl_stage_pipe_get(const stage_pipe_key *k0, const gfx_xfb_layout *xfb)
         kn.k.depth_fmt = kn.k.stencil_fmt = 0;
         kn.k.samples = 1;
         kn.k.a2c = 0;
-        kn.k.depth_slots[1] = kn.k.stencil_slots[1] = kn.k.img_int[1] = kn.k.img_uint[1] = 0;
+        kn.k.depth_slots[1] = kn.k.stencil_slots[1] = kn.k.img_int[1] = kn.k.img_uint[1] = kn.k.tex_uint[1] = kn.k.tex_sint[1] = 0;
     }
     kn.k.probe = 0;
     NSNumber *key = @(fnv1a(&kn, sizeof kn, FNV_INIT) ^ 0x5354474550495045ull);

@@ -557,6 +557,7 @@ enum {
     VF_NONE,  /* not expressible (another texel size, ASTC, a 24-bit depth format read as bits, an integer format the translator cannot declare): the texture's own
                * format, reported once */
 };
+static int g_int_slots; /* the replay marks integer sampled bindings (it calls mtl_tex_int_kind): integer views can then be copies the shader reads as integers */
 static int view_fmt_class(const texsnap *s, MTLPixelFormat have, MTLPixelFormat want, uint32_t samples) {
     if (want == have || want == MTLPixelFormatInvalid) return VF_SAME;
     if (same_class_srgb(want, have)) return VF_VIEW;
@@ -571,7 +572,9 @@ static int view_fmt_class(const texsnap *s, MTLPixelFormat have, MTLPixelFormat 
         return VF_DEPTH;
     if (ch == 0 && cw == 0) return bh == bw ? VF_VIEW : VF_NONE;
     if (bh != bw || have == MTLPixelFormatStencil8 || want == MTLPixelFormatStencil8 || want == MTLPixelFormatDepth32Float_Stencil8 || d24) return VF_NONE;
-    if (cw == 0 && pf_int_kind(want) && !(pf_uint1(want) && samples == 1)) return VF_NONE; /* the translator samples it as float (texture2d<float>) */
+    /* an integer view is a copy when the shader can declare it as an integer texture: single-channel uint as a stencil slot, any integer format once the replay
+     * fills ShaderKey.tex_uint_slots / tex_sint_slots (g_int_slots); otherwise the translator samples it as float (texture2d<float>) */
+    if (cw == 0 && pf_int_kind(want) && !(pf_uint1(want) && samples == 1) && !(g_int_slots && samples == 1)) return VF_NONE;
     if (samples > 1) return ch == 1 && cw == 0 && ms_alias_dst_ok(have, want) ? VF_ALIAS : VF_NONE;
     return VF_ALIAS;
 }
@@ -590,6 +593,21 @@ int mtl_tex_samples_as_uint(const texsnap *s, const view_t *v, int has_view) {
     mtl_tex_format_info(s, &pf, &dep, &st);
     MTLPixelFormat want = view_pf(v, has_view);
     return view_fmt_class(s, pf, want, s->d.samples > 1 ? (uint32_t)s->d.samples : 1) == VF_ALIAS && pf_uint1(want);
+}
+/* The component type of the Metal texture a sampled binding gets (its own format, a format view or a copy): IMGKIND_UINT / IMGKIND_INT for integer colour
+ * formats (ShaderKey.tex_uint_slots / tex_sint_slots), IMGKIND_FLOAT otherwise. Single-channel uint copies stay on the stencil-slot path
+ * (mtl_tex_samples_as_uint) and depth reads on the depth path. Calling it tells view_fmt_class that integer views may be copies. */
+int mtl_tex_int_kind(const texsnap *s, const view_t *v, int has_view) {
+    g_int_slots = 1;
+    MTLPixelFormat pf;
+    int dep, st;
+    mtl_tex_format_info(s, &pf, &dep, &st);
+    uint32_t samples = s->d.samples > 1 ? (uint32_t)s->d.samples : 1;
+    MTLPixelFormat want = view_pf(v, has_view);
+    int c = view_fmt_class(s, pf, want, samples);
+    if (c == VF_DEPTH || (c == VF_ALIAS && pf_uint1(want) && samples == 1)) return IMGKIND_FLOAT;
+    int k = pf_int_kind(c == VF_VIEW || c == VF_ALIAS ? want : pf);
+    return k == 1 ? IMGKIND_INT : k == 2 ? IMGKIND_UINT : IMGKIND_FLOAT;
 }
 int mtl_tex_samples_as_depth(const texsnap *s, const view_t *v, int has_view) {
     MTLPixelFormat pf;

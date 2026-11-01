@@ -79,6 +79,7 @@ typedef struct {
     bool uses_gs_emit;      // geometry: OUT present
     bool uses_vabsdiff4, uses_isel, uses_idp;   // helper functions to emit
     bool uses_stencil;                          // a texture binding is a stencil view: uint texture + the StencilTex wrapper
+    bool uses_itex;                             // a texture binding is an integer colour texture: texture2d<uint|int> + the IntTex wrapper
     bool has_pexit, uses_ljs, uses_lmb;         // PEXIT in the program / PLONGJMP stack and local memory base to declare
     int ald_vertex;         // register holding the vertex index of the ALD/AST being translated (RZ = none), set by the handler
     bool ald_patch, ald_out, ald_vlatched;   // ald_vlatched: the vertex index was copied to `vx` (the destination registers may overlap it)
@@ -842,6 +843,11 @@ static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
     t->handle_offset = index * 4;
     if (c->key && index * 4 >= 0x20 && index * 4 < 0x120 && ((c->key->depth_slots >> ((index * 4 - 0x20) / 8)) & 1)) t->depth = true;
     if (c->key && index * 4 >= 0x20 && index * 4 < 0x120 && ((c->key->stencil_slots >> ((index * 4 - 0x20) / 8)) & 1)) t->stencil = true, t->depth = false;
+    if (c->key && index * 4 >= 0x20 && index * 4 < 0x120 && !t->stencil) {
+        uint32_t bit = 1u << ((index * 4 - 0x20) / 8);
+        if (c->key->tex_uint_slots & bit) t->int_kind = IMGKIND_UINT, t->depth = false;
+        else if (c->key->tex_sint_slots & bit) t->int_kind = IMGKIND_INT, t->depth = false;
+    }
     t->type = (uint8_t)type;
     t->shadow = shadow;
     t->is_array = array;
@@ -864,8 +870,8 @@ static const char *tex_type_name(int t) {
 
 // Write texture results: component mask selects which of r,g,b,a go to consecutive registers.
 static void write_tex_result(Ctx *c, int slot, const char *call, uint32_t mask, int d0, int d1, bool texs, bool f16) {
-    if (f16 && c->info->tex[slot].stencil) {
-        fail(c, "half-precision (.F16) result from a stencil texture binding (the value is an integer)");
+    if (f16 && (c->info->tex[slot].stencil || c->info->tex[slot].int_kind)) {
+        fail(c, "half-precision (.F16) result from a %s texture binding (the value is an integer)", c->info->tex[slot].stencil ? "stencil" : "integer");
         return;
     }
     if (c->info->tex[slot].depth && !c->info->tex[slot].shadow && !strstr(call, ".gather("))
@@ -3124,7 +3130,13 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         info->shared_mem = sz;
     }
     for (int i = 0; i < info->ntex && !c->fail; i++) {
-        const ShaderTexture *t = &info->tex[i];
+        ShaderTexture *t = &info->tex[i];
+        if (t->int_kind) {
+            /* integer colour textures: 2D / 2D array through the IntTex wrapper; other targets, and depth comparison, keep the float declaration */
+            if ((t->type == TEXTYPE_2D || t->type == TEXTYPE_2D_ARRAY) && !t->shadow) c->uses_itex = true;
+            else t->int_kind = IMGKIND_FLOAT;
+            continue;
+        }
         if (!t->stencil) continue;
         if (t->type != TEXTYPE_2D && t->type != TEXTYPE_2D_ARRAY) fail(c, "stencil sampling of a texture of type %d (only 2D and 2D array stencil views exist)", t->type);
         else if (t->shadow) fail(c, "depth comparison on a stencil texture binding");
@@ -3232,6 +3244,31 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "  template <typename... A> float4 gather(sampler, float2 uv, uint layer, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
            "    return as_type<float4>(uint4(at(b + int2(0, 1), layer), at(b + int2(1, 1), layer), at(b + int2(1, 0), layer), at(b, layer))); } };\n");
     }
+    if (c->uses_itex) {
+        /* Integer colour textures (ShaderKey.tex_uint_slots / tex_sint_slots): Metal cannot filter an integer texture and the registers receive the texel's
+         * integer bits, so, as for stencil views, the shader's texture name is a wrapper with the float-texture member functions: `read` and `sample` (a
+         * nearest read of level 0 at the coordinate) return all four channels as raw bits (sign-extended for int), `gather` the x channel of the 2x2 quad. */
+        sp(&s,
+           "template <typename T> struct IntTex2D { texture2d<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float4 read(uint2 c, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, l))); }\n"
+           "  uint4 at(int2 p) const { return uint4(t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))))); }\n"
+           "  template <typename... A> float4 sample(sampler, float2 uv, A...) const { return as_type<float4>(at(int2(floor(uv * float2(t.get_width(), t.get_height()))))); }\n"
+           "  template <typename... A> float4 gather(sampler, float2 uv, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
+           "    return as_type<float4>(uint4(at(b + int2(0, 1)).x, at(b + int2(1, 1)).x, at(b + int2(1, 0)).x, at(b).x)); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex2DArray { texture2d_array<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float4 read(uint2 c, uint layer, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, layer, l))); }\n"
+           "  uint4 at(int2 p, uint layer) const { return uint4(t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))), layer)); }\n"
+           "  template <typename... A> float4 sample(sampler, float2 uv, uint layer, A...) const { return as_type<float4>(at(int2(floor(uv * float2(t.get_width(), t.get_height()))), layer)); }\n"
+           "  template <typename... A> float4 gather(sampler, float2 uv, uint layer, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
+           "    return as_type<float4>(uint4(at(b + int2(0, 1), layer).x, at(b + int2(1, 1), layer).x, at(b + int2(1, 0), layer).x, at(b, layer).x)); } };\n");
+    }
     if (c->uses_idp)
         sp(&s,
            "static inline uint idp(uint a, uint b, uint c, bool asg, bool bsg, bool two, bool hi) {\n"
@@ -3334,6 +3371,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         const char *tn = tex_type_name(t->type);
         /* Metal allows 16 samplers per function: textures from the 17th on share the first texture's sampler */
         if (t->stencil) sp(&args, ", texture%s<uint> t%d_u [[texture(%d)]]", tn, i, i);
+        else if (t->int_kind) sp(&args, ", texture%s<%s> t%d_i [[texture(%d)]]", tn, t->int_kind == IMGKIND_INT ? "int" : "uint", i, i);
         else if (t->shadow || t->depth) sp(&args, ", depth%s<float> t%d [[texture(%d)]]", tn, i, i);
         else sp(&args, ", texture%s<float> t%d [[texture(%d)]]", tn, i, i);
         if (i < 16) sp(&args, ", sampler s%d [[sampler(%d)]]", i, i);
@@ -3427,6 +3465,8 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (c->uses_lmb) sp(&s, "  uint lmb = 0u;\n");
     for (int i = 0; i < info->ntex; i++)
         if (info->tex[i].stencil) sp(&s, "  const StencilTex%s t%d = {t%d_u};\n", info->tex[i].type == TEXTYPE_2D_ARRAY ? "2DArray" : "2D", i, i);
+        else if (info->tex[i].int_kind)
+            sp(&s, "  const IntTex%s<%s> t%d = {t%d_i};\n", info->tex[i].type == TEXTYPE_2D_ARRAY ? "2DArray" : "2D", info->tex[i].int_kind == IMGKIND_INT ? "int" : "uint", i, i);
     if (any_branch) {
         sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0; uint cal[16]; uint cal_n = 0;\n");
         if (c->uses_ljs) sp(&s, "  uint ljs[16]; uint ljs_n = 0;\n");
