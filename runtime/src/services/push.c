@@ -25,28 +25,44 @@ static IpcObject *open_notif(void) { return open_table("notif:a", 1); }
 static IpcObject *open_mnpp(void) { return open_table("mnpp:app", 2); }
 static IpcObject *open_ngct(void) { return open_table("ngct:u", 3); }
 static IpcObject *open_nim_eca(void) { return open_table("nim:eca", 4); }
-/* The ids past the range, from the switchbrew tables: offline answers (nothing is ever pushed or configured). */
-static void extra(int t, unsigned id, const char *name, void (*fn)(IpcObject *, IpcCall *)) { g_tables[t][g_count[t]++] = (IpcCmd){id, name, fn, IPC_STUB}; }
+/* The rows the switchbrew tables name (ids and names only). Ids inside the range keep the generous-range answer (success with no output, or
+ * the never-firing event for npns 5 / 7) and only gain their name; ids past the range are offline answers (nothing is ever pushed or
+ * configured). service_register_push lays them over the generous range. The fixtures in tests/ipc_reference bind these tables with
+ * `# table` lines, since the runtime tables are only filled at registration. */
+static const IpcCmd npns_rows[] = {
+    {1, "ListenAll", ok, IPC_IMPL}, {2, "ListenTo", ok, IPC_IMPL}, {3, "Receive", ok, IPC_IMPL}, {4, "ReceiveRaw", ok, IPC_IMPL},
+    {5, "GetReceiveEvent", svc_ret_event, IPC_IMPL}, {7, "GetStateChangeEvent", svc_ret_event, IPC_IMPL}, {8, "ListenToByName", ok, IPC_IMPL},
+    {21, "CreateToken", ok, IPC_IMPL}, {23, "DestroyToken", ok, IPC_IMPL}, {25, "QueryIsTokenValid", ok, IPC_IMPL},
+    {26, "ListenToMyApplicationId", ok, IPC_IMPL},
+    {101, "Suspend", sysd_ok, IPC_STUB}, {102, "Resume", sysd_ok, IPC_STUB}, {103, "GetState", sysd_z4, IPC_STUB},
+    {104, "GetStatistics", sysd_err_generic, IPC_STUB}, {111, "GetJid", sysd_err_generic, IPC_STUB},
+    {120, "CreateNotificationReceiver", sysd_err_generic, IPC_STUB}, {151, "GetStateWithHandover", sysd_z4, IPC_STUB},
+    {152, "GetStateChangeEventWithHandover", sysd_event, IPC_STUB}, {153, "GetDropEventWithHandover", sysd_event, IPC_STUB},
+    {154, "CreateTokenAsync", sysd_err_generic, IPC_STUB},
+};
+static const IpcCmd notif_rows[] = {
+    {500, "RegisterAlarmSetting", sysd_ok, IPC_STUB}, {510, "UpdateAlarmSetting", sysd_ok, IPC_STUB}, {520, "ListAlarmSettings", sysd_z4, IPC_STUB},
+    {530, "LoadApplicationParameter", sysd_err_generic, IPC_STUB}, {540, "DeleteAlarmSetting", sysd_ok, IPC_STUB}, {1000, "Initialize", sysd_ok, IPC_STUB},
+};
+static const IpcCmd mnpp_rows[] = {{0, "Initialize", ok, IPC_IMPL}, {1, "SubmitEvent", ok, IPC_IMPL}};
+static const IpcCmd ngct_rows[] = {{0, "Match", ok, IPC_IMPL}, {1, "Filter", ok, IPC_IMPL}};
+static const IpcCmd nim_eca_rows[] = {{0, "CreateServerInterface", ok, IPC_IMPL}, {4, "IsLargeResourceAvailable", ok, IPC_IMPL}, {5, "CreateServerInterface2", ok, IPC_IMPL}};
+static void lay(int t, const IpcCmd *rows, size_t n) {
+    for (size_t i = 0; i < n; i++) {
+        if (rows[i].cmd < PUSH_RANGE) g_tables[t][rows[i].cmd] = rows[i];
+        else g_tables[t][g_count[t]++] = rows[i];
+    }
+}
+#define LAY(t, rows) lay(t, rows, sizeof rows / sizeof *rows)
 void service_register_push(void) {
     fill(g_tables[0], 5, 7);
     for (int i = 1; i < 5; i++) fill(g_tables[i], PUSH_RANGE, PUSH_RANGE);
     for (int i = 0; i < 5; i++) g_count[i] = PUSH_RANGE;
-    extra(0, 101, "Suspend", sysd_ok);
-    extra(0, 102, "Resume", sysd_ok);
-    extra(0, 103, "GetState", sysd_z4);
-    extra(0, 104, "GetStatistics", sysd_err_generic);
-    extra(0, 111, "GetJid", sysd_err_generic);
-    extra(0, 120, "CreateNotificationReceiver", sysd_err_generic);
-    extra(0, 151, "GetStateWithHandover", sysd_z4);
-    extra(0, 152, "GetStateChangeEventWithHandover", sysd_event);
-    extra(0, 153, "GetDropEventWithHandover", sysd_event);
-    extra(0, 154, "CreateTokenAsync", sysd_err_generic);
-    extra(1, 500, "RegisterAlarmSetting", sysd_ok);
-    extra(1, 510, "UpdateAlarmSetting", sysd_ok);
-    extra(1, 520, "ListAlarmSettings", sysd_z4);
-    extra(1, 530, "LoadApplicationParameter", sysd_err_generic);
-    extra(1, 540, "DeleteAlarmSetting", sysd_ok);
-    extra(1, 1000, "Initialize", sysd_ok);
+    LAY(0, npns_rows);
+    LAY(1, notif_rows);
+    LAY(2, mnpp_rows);
+    LAY(3, ngct_rows);
+    LAY(4, nim_eca_rows);
     ipc_register_service("npns:u", open_npns);
     ipc_register_service("notif:a", open_notif);
     ipc_register_service("mnpp:app", open_mnpp);
