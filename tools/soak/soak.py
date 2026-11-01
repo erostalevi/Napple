@@ -48,7 +48,7 @@ def data_dir(target):
     raise SystemExit("no %s version of %s under %s" % (kind, tid, base))
 
 
-MARKERS = re.compile(r"CRASH signal|host abort|guest Break|FAIL:|EndRecording without|\[napple\] (esr|pc|lr)=|lr in |unimplemented svc")
+MARKERS = re.compile(r"CRASH signal|host abort|guest Break|FAIL:|EndRecording without|\[napple\] (esr|pc|lr)=|lr in |unimplemented svc|^\[cbtrace\] \S", re.M)
 
 
 def trim(text, head=200, tail=400):
@@ -184,9 +184,8 @@ def one_run(a, target, outdir, index, seconds, save_root, extra_env):
     # command buffer misuse seen by the gfx recorder: NAPPLE_GFX_CBTRACE=1 anomaly dumps and the recorder's own warnings (counted on every run)
     rec["cb_anomalies"] = len(re.findall(r"^\[cbtrace\] \S", text, re.M))
     rec["rec_warnings"] = len(re.findall(r"\[napple-gfx\] warn: .*Recording", text))
-    if kind == "ok" and (rec["cb_anomalies"] or rec["rec_warnings"]):   # an ok run with recorder anomalies keeps its log too
+    if kind == "ok" and (rec["cb_anomalies"] or rec["rec_warnings"]):   # an ok run with recorder anomalies keeps its whole log (the dumps are the evidence)
         rec["log"] = os.path.basename(log)
-        open(log, "w").write(trim(text))
     elif kind == "ok":
         os.remove(log)
     else:

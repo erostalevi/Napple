@@ -167,7 +167,13 @@ static void core_put(Thread *t) {
     g_core_owner[c] = NULL;
     core_grant(c);
 }
-static void core_take(Thread *t) {
+/* Order of the core wait list within one priority: a thread preempted by a better one goes back to the head of its priority (Horizon leaves it at the
+ * front of its run queue, so it resumes as soon as the better thread blocks); woken, started, yielding and rotated threads go to the back. */
+#define CSEQ_BASE (1ull << 62)
+static uint64_t g_front_seq;
+static void core_take_q(Thread *t, int front);
+static void core_take(Thread *t) { core_take_q(t, 0); }
+static void core_take_q(Thread *t, int front) {
     if (!cores_enabled() || t->cur_core >= 0) return;
     uint64_t mask = t->mask & CORE_MASK_ALL;
     if (!mask) runtime_fail("thread %#x has a core mask (%#llx) without an application core", t->handle, (unsigned long long)t->mask);
@@ -180,7 +186,7 @@ static void core_take(Thread *t) {
         core_assign(t, c);
         return;
     }
-    t->cseq = ++g_seq;
+    t->cseq = front ? CSEQ_BASE - ++g_front_seq : CSEQ_BASE + ++g_seq;
     t->cnext = g_core_wait;
     g_core_wait = t;
     for (int i = 0; i < NCORE; i++)
@@ -195,6 +201,21 @@ static void core_take(Thread *t) {
                 core_grant(i);
             }
     }
+}
+/* Does a better-priority thread wait for t's core (or hold its reservation)? Then t is preempted, not rotated, and keeps its place. G held. */
+static int core_wanted_by_better(const Thread *t) {
+    int c = t->cur_core;
+    if (c < 0) return 0;
+    if (g_core_resv[c] && g_core_resv[c] != t && g_core_resv[c]->prio < t->prio) return 1;
+    for (Thread *w = g_core_wait; w; w = w->cnext)
+        if (core_allowed(w, c) && w->prio < t->prio && (!g_core_resv[c] || g_core_resv[c] == w)) return 1;
+    return 0;
+}
+/* Gives up the core at a preemption point and waits to get one back: at the head of its priority when a better thread takes it. G held. */
+static void core_switch(Thread *t) {
+    int front = core_wanted_by_better(t);
+    core_put(t);
+    core_take_q(t, front);
 }
 /* Same-core handoff (Horizon runs the better thread at once): waking or starting a thread that can only run on the caller's core, with a
  * better priority than the caller, reserves that core for it and flags the caller, which yields the core at its svc exit (core_checkpoint)
@@ -243,8 +264,7 @@ static void core_checkpoint(void) {
     if (t->id >= 0x51 && t->id - 0x51 < TSTAT_N) atomic_fetch_add_explicit(&g_tstat[t->id - 0x51].checkpoint, 1, memory_order_relaxed);
     pthread_mutex_lock(&G);
     t->preempt = 0;
-    core_put(t);
-    core_take(t);
+    core_switch(t);
     pthread_mutex_unlock(&G);
 }
 
@@ -294,8 +314,7 @@ static void preempt_handler(int sig, siginfo_t *si, void *uc) {
             pthread_mutex_lock(&G);
             if (t->cur_core >= 0) {
                 t->nslice++;
-                core_put(t);
-                core_take(t);
+                core_switch(t);
             }
             pthread_mutex_unlock(&G);
         }
@@ -1084,8 +1103,7 @@ static void svc_synchronize_preemption_state(uint64_t *r) {
     pthread_mutex_lock(&G);
     if (t->preempt) {
         t->preempt = 0;
-        core_put(t);
-        core_take(t);
+        core_switch(t);
     }
     pthread_mutex_unlock(&G);
     r[0] = 0;
