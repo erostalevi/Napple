@@ -1,10 +1,11 @@
-# Mac environment notes for batch 2026-11-01-r1 (read by every item of this batch)
+# Mac environment notes for the unattended batches (2026-11-01-r1, -r2, ...; read by every item)
 
 This checkout is **flat**: the git root `/Users/neto/napple` IS the Napple tree (no outer `Documents/Napple`, no `Napple/` prefix). Ignore the skills' "outer folder" gotcha; run git at the root of your worktree.
 
 ## Rules for this batch (set by the user, who is away)
 - **Never ask the user anything.** Decide, note the decision in your integrator file, keep going. If something is truly impossible, hand off with `status: blocked` and the reason.
 - **Local only: do NOT `git push`** (overrides `/ura-napple-parallel` step 4.4). Commit on your branch; the integrator reads local branches.
+- Another batch may still be running in other worktrees: never touch paths outside your file's Owned paths, even if they look stale.
 - Hand-off message: when done, `SendMessage` to the orchestrator session named in your file: `<name> handed off: <branch> <head>`.
 - 16 GB RAM / 10 cores shared by 5 sessions: no clean rebuilds of the whole tree, build only your areas, never leave a game process running.
 
@@ -25,7 +26,7 @@ This checkout is **flat**: the git root `/Users/neto/napple` IS the Napple tree 
   ```
   Re-check inside the lock (another session may have built it meanwhile). `--update-romfs in-place` keeps each title ~250 MB.
 - Headless game runs (memory heavy) go through the run lock, one at a time machine-wide:
-  `lockf -k /Users/neto/NappleWork/.run.lock tools/boot_test.sh <titleid> <seconds> [args]` (or the runtime binary directly with `--headless --seconds N`). Keep runs ≤ 120 s each.
+  `lockf -k /Users/neto/NappleWork/.run.lock tools/boot_test.sh <titleid> <seconds> [args]` (or the runtime binary directly with `--headless --seconds N`). Keep runs ≤ 120 s each. `tools/boot_test.sh` writes saves into the shared `work/saves`: prefer the runtime binary directly with a private copied `--save-root` (e.g. `$TMPDIR/<your-name>/saves`).
 - Builds that need `$TMPDIR` (codesign) use your own subfolder: `$TMPDIR/<your-name>/`.
 
 ## Status words
