@@ -1,0 +1,35 @@
+# interface lbl (switchbrew Backlight_services ILblController; libnx lbl.c)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: lbl is a system service (not in an application's access list)
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+0	SaveCurrentSetting	1.0.0	n
+1	LoadCurrentSetting	1.0.0	n
+2	SetCurrentBrightnessSetting	1.0.0	n
+3	GetCurrentBrightnessSetting	1.0.0	n
+4	ApplyCurrentBrightnessSettingToBacklight	1.0.0	n
+5	GetBrightnessSettingAppliedToBacklight	1.0.0	n
+6	SwitchBacklightOn	1.0.0	n
+7	SwitchBacklightOff	1.0.0	n
+8	GetBacklightSwitchStatus	1.0.0	n
+9	EnableDimming	1.0.0	n
+10	DisableDimming	1.0.0	n
+11	IsDimmingEnabled	1.0.0	n
+12	EnableAutoBrightnessControl	1.0.0	n
+13	DisableAutoBrightnessControl	1.0.0	n
+14	IsAutoBrightnessControlEnabled	1.0.0	n
+15	SetAmbientLightSensorValue	1.0.0	n
+16	GetAmbientLightSensorValue	1.0.0	n
+17	SetBrightnessReflectionDelayLevel	1.0.0	n
+18	GetBrightnessReflectionDelayLevel	1.0.0	n
+19	SetCurrentBrightnessMapping	1.0.0	n
+20	GetCurrentBrightnessMapping	1.0.0	n
+21	SetCurrentAmbientLightSensorMapping	1.0.0	n
+22	GetCurrentAmbientLightSensorMapping	1.0.0	n
+23	IsAmbientLightSensorAvailable	3.0.0	n
+24	SetCurrentBrightnessSettingForVrMode	3.0.0	n
+25	GetCurrentBrightnessSettingForVrMode	3.0.0	n
+26	EnableVrMode	3.0.0	n
+27	DisableVrMode	3.0.0	n
+28	IsVrModeEnabled	3.0.0	n
+29	IsAutoBrightnessControlSupported	7.0.0	n

@@ -176,6 +176,33 @@ static void dev_master_volume(IpcObject *s, IpcCall *c) {
     float v = 1.0f;
     IPC_OUT(c, v);
 }
+/* 13 changed meaning in 13.0.0: GetAudioSystemMasterVolumeSetting (5.0.0-12.1.0: in name buffer, out f32) became GetActiveAudioOutputDeviceName
+ * (out name buffer). The request tells them apart: only the new one carries an output buffer. */
+static void dev_cmd13(IpcObject *s, IpcCall *c) {
+    if (ipc_out_buf(c, 0)) dev_active_name(s, c);
+    else dev_master_volume(s, c);
+}
+static void dev_release_notification(IpcObject *s, IpcCall *c) { /* 16 / 18: the notification event stays valid until the guest closes it */
+    (void)s;
+    (void)c;
+}
+static int dev_auto_tune = 0;
+static void dev_set_auto_tune(IpcObject *s, IpcCall *c) { /* 19(bool) */
+    (void)s;
+    dev_auto_tune = c->in_size >= 1 && IPC_IN(c, uint8_t, 0) != 0;
+}
+static void dev_get_auto_tune(IpcObject *s, IpcCall *c) { /* 20 -> bool */
+    (void)s;
+    uint8_t v = (uint8_t)dev_auto_tune;
+    IPC_OUT(c, v);
+}
+/* 21 -> bool: the active output is the host's default device; the built-in speaker or a wired output is the common case and is low latency (a
+ * Bluetooth headset is not, but the host does not tell libnapple_audio the transport). */
+static void dev_low_latency(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = 1;
+    IPC_OUT(c, v);
+}
 static const IpcCmd dev_cmds[] = {
     {0, "ListAudioDeviceName", dev_list_names, IPC_IMPL},
     {1, "SetAudioDeviceOutputVolume", dev_set_volume, IPC_IMPL},
@@ -189,7 +216,15 @@ static const IpcCmd dev_cmds[] = {
     {10, "GetActiveAudioDeviceNameAuto", dev_active_name, IPC_IMPL},
     {11, "QueryAudioDeviceInputEvent", dev_event, IPC_IMPL},
     {12, "QueryAudioDeviceOutputEvent", dev_event, IPC_IMPL},
-    {13, "GetAudioSystemMasterVolumeSetting", dev_master_volume, IPC_IMPL},
+    {13, "GetActiveAudioOutputDeviceName", dev_cmd13, IPC_IMPL}, /* GetAudioSystemMasterVolumeSetting before 13.0.0 */
+    {14, "ListAudioOutputDeviceName", dev_list_names, IPC_IMPL},
+    {15, "AcquireAudioInputDeviceNotification", dev_event, IPC_IMPL},
+    {16, "ReleaseAudioInputDeviceNotification", dev_release_notification, IPC_IMPL},
+    {17, "AcquireAudioOutputDeviceNotification", dev_event, IPC_IMPL},
+    {18, "ReleaseAudioOutputDeviceNotification", dev_release_notification, IPC_IMPL},
+    {19, "SetAudioDeviceOutputVolumeAutoTuneEnabled", dev_set_auto_tune, IPC_IMPL},
+    {20, "IsAudioDeviceOutputVolumeAutoTuneEnabled", dev_get_auto_tune, IPC_IMPL},
+    {21, "IsActiveOutputDeviceEstimatedLowLatency", dev_low_latency, IPC_IMPL},
 };
 static IpcObject *make_device(void) {
     audio_init_once();
@@ -201,6 +236,7 @@ typedef struct {
     napple_audren *r;
     EventPair *ev;
     int manual; /* OpenAudioRendererForManualExecution: no render thread, the guest calls ExecuteAudioRendererRendering */
+    float voice_drop; /* SetVoiceDropParameter: the share of voices the DSP may drop when over budget; the host renderer never drops a voice */
 } Renderer;
 static void rend_destroy(IpcObject *o) {
     Renderer *r = o->state;
@@ -282,6 +318,15 @@ static void rend_execute(IpcObject *s, IpcCall *c) {
     }
     napple_audren_render_frame(r->r);
 }
+static void rend_set_voice_drop(IpcObject *s, IpcCall *c) { /* 12(f32) */
+    Renderer *r = s->state;
+    if (c->in_size >= 4) r->voice_drop = IPC_IN(c, float, 0);
+}
+static void rend_get_voice_drop(IpcObject *s, IpcCall *c) { /* 13 -> f32 */
+    Renderer *r = s->state;
+    float v = r->voice_drop;
+    IPC_OUT(c, v);
+}
 static const IpcCmd rend_cmds[] = {
     {0, "GetSampleRate", rend_sample_rate, IPC_IMPL},
     {1, "GetSampleCount", rend_sample_count, IPC_IMPL},
@@ -295,6 +340,8 @@ static const IpcCmd rend_cmds[] = {
     {9, "GetRenderingTimeLimit", rend_get_limit, IPC_IMPL},
     {10, "RequestUpdateAuto", rend_update, IPC_IMPL},
     {11, "ExecuteAudioRendererRendering", rend_execute, IPC_IMPL},
+    {12, "SetVoiceDropParameter", rend_set_voice_drop, IPC_IMPL},
+    {13, "GetVoiceDropParameter", rend_get_voice_drop, IPC_IMPL},
 };
 
 /* ---- audren:u ------------------------------------------------------------------------------------------------------------------------ */
@@ -305,6 +352,7 @@ static void mgr_open_impl(IpcCall *c, int manual) {
     r->ev = new_event_pair();
     napple_audio_host h = make_host(r->ev, 1);
     r->manual = manual;
+    r->voice_drop = 1.0f; /* [unverified default] */
     int rc = napple_audren_open(param, NAPPLE_AUDREN_PARAM_SIZE, &h, manual ? NAPPLE_AUDREN_MANUAL : 0, &r->r);
     if (rc) {
         LOG("audio", "OpenAudioRenderer failed (%d)", rc);
@@ -351,6 +399,7 @@ static IpcObject *audren_open(void) { return IPC_OBJECT("audren:u", audren_cmds,
 typedef struct {
     napple_audout *o;
     EventPair *ev;
+    float volume; /* SetAudioOutVolume: kept and read back; libnapple_audio has no per-stream gain, so the mix is not scaled (documented stub) */
 } AudOut;
 static void out_destroy(IpcObject *o) {
     AudOut *a = o->state;
@@ -431,6 +480,15 @@ static void out_flush(IpcObject *s, IpcCall *c) {
     uint8_t v = (uint8_t)napple_audout_flush(a->o);
     IPC_OUT(c, v);
 }
+static void out_set_volume(IpcObject *s, IpcCall *c) { /* 12(f32) */
+    AudOut *a = s->state;
+    if (c->in_size >= 4) a->volume = IPC_IN(c, float, 0);
+}
+static void out_get_volume(IpcObject *s, IpcCall *c) { /* 13 -> f32 */
+    AudOut *a = s->state;
+    float v = a->volume;
+    IPC_OUT(c, v);
+}
 static const IpcCmd out_cmds[] = {
     {0, "GetAudioOutState", out_get_state, IPC_IMPL},
     {1, "StartAudioOut", out_start, IPC_IMPL},
@@ -444,6 +502,8 @@ static const IpcCmd out_cmds[] = {
     {9, "GetAudioOutBufferCount", out_count, IPC_IMPL},
     {10, "GetAudioOutPlayedSampleCount", out_played, IPC_IMPL},
     {11, "FlushAudioOutBuffers", out_flush, IPC_IMPL},
+    {12, "SetAudioOutVolume", out_set_volume, IPC_STUB},
+    {13, "GetAudioOutVolume", out_get_volume, IPC_STUB},
 };
 static void aout_list(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -463,6 +523,7 @@ static void aout_open(IpcObject *s, IpcCall *c) {
     uint32_t rate = IPC_IN(c, uint32_t, 0);
     uint16_t ch = IPC_IN(c, uint16_t, 4);
     AudOut *a = calloc(1, sizeof *a);
+    a->volume = 1.0f;
     a->ev = new_event_pair();
     napple_audio_host h = make_host(a->ev, 0);
     uint32_t grate = 0, gch = 0;
@@ -492,9 +553,11 @@ static const IpcCmd audout_cmds[] = {
 static IpcObject *audout_open(void) { return IPC_OBJECT("audout:u", audout_cmds, NULL, NULL); }
 
 /* ---- IAudioIn / audin:u ----------------------------------------------------------------------------------------------------------------
- * Capture (microphone). The library fills the guest's buffers from the capture source; the first OpenAudioIn installs the one named by
- * env NAPPLE_AUDIN_SOURCE (tone, file or the Mac microphone). With none every buffer is silence, so the device exists and works like a console
- * with no headset: the microphone is opt-in until the app carries the usage description and entitlement. */
+ * Capture (microphone). The library fills the guest's buffers from the capture source, which the first OpenAudioIn installs
+ * (napple_audin_install_default_source). With NAPPLE_AUDIN_SOURCE unset the source is the Mac microphone whenever the process may use it
+ * (microphone access already granted, or an app bundle with NSMicrophoneUsageDescription that has not been asked yet: the OS prompt appears);
+ * otherwise (denied, restricted, a command-line run) every buffer is silence and the device still works like a console with a silent headset.
+ * NAPPLE_AUDIN_SOURCE=silence | tone[:HZ[:AMP]] | file:PATH | mic picks the source explicitly. */
 typedef struct {
     napple_audin *i;
     EventPair *ev;
@@ -583,8 +646,10 @@ static const IpcCmd in_cmds[] = {
     {4, "RegisterBufferEvent", in_event, IPC_IMPL},
     {5, "GetReleasedAudioInBuffer", in_released, IPC_IMPL},
     {6, "ContainsAudioInBuffer", in_contains, IPC_IMPL},
+    {7, "AppendUacInBuffer", in_append, IPC_IMPL}, /* USB-audio-class input: {tag}, a copy handle (the UAC event) and the buffer; same device */
     {8, "AppendAudioInBufferAuto", in_append, IPC_IMPL},
     {9, "GetReleasedAudioInBuffersAuto", in_released, IPC_IMPL},
+    {10, "AppendUacInBufferAuto", in_append, IPC_IMPL},
     {11, "GetAudioInBufferCount", in_count, IPC_IMPL},
     {12, "SetAudioInDeviceGain", in_set_gain, IPC_IMPL},
     {13, "GetAudioInDeviceGain", in_get_gain, IPC_IMPL},
@@ -602,11 +667,21 @@ static void ain_list(IpcObject *s, IpcCall *c) {
     } else if (b) ipc_write_buf(c, b, name_none, 0);
     IPC_OUT(c, n);
 }
+static void ain_open_at(IpcCall *c, uint32_t param_off);
 static void ain_open(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint32_t rate = IPC_IN(c, uint32_t, 0);
-    uint16_t ch = IPC_IN(c, uint16_t, 4);
-    napple_audin_install_default_source(); /* NAPPLE_AUDIN_SOURCE: silence, tone:HZ, file:PATH or mic; unset = silence */
+    ain_open_at(c, 0);
+}
+/* 5 OpenAudioInProtocolSpecified({u64 protocol, AudioInParameter at 8, aruid}, ...) [unverified layout]: the same built-in device whatever the
+ * protocol (the host's capture source is not a USB / Bluetooth headset). */
+static void ain_open_protocol(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ain_open_at(c, c->in_size >= 14 ? 8 : 0);
+}
+static void ain_open_at(IpcCall *c, uint32_t param_off) {
+    uint32_t rate = IPC_IN(c, uint32_t, param_off);
+    uint16_t ch = IPC_IN(c, uint16_t, param_off + 4);
+    napple_audin_install_default_source(); /* NAPPLE_AUDIN_SOURCE: silence, tone:HZ, file:PATH or mic; unset = the microphone when permitted, else silence */
     AudIn *a = calloc(1, sizeof *a);
     a->ev = new_event_pair();
     napple_audio_host h = make_host(a->ev, 0);
@@ -634,6 +709,7 @@ static const IpcCmd audin_cmds[] = {
     {2, "ListAudioInsAuto", ain_list, IPC_IMPL},
     {3, "OpenAudioInAuto", ain_open, IPC_IMPL},
     {4, "ListAudioInsAutoFiltered", ain_list, IPC_IMPL},
+    {5, "OpenAudioInProtocolSpecified", ain_open_protocol, IPC_IMPL},
 };
 static IpcObject *audin_open(void) { return IPC_OBJECT("audin:u", audin_cmds, NULL, NULL); }
 
@@ -693,6 +769,10 @@ static const IpcCmd opus_cmds[] = {
     {5, "DecodeInterleavedForMultiStreamWithPerfOld", opus_dec_perf_old, IPC_IMPL},
     {6, "DecodeInterleaved", opus_dec, IPC_IMPL},
     {7, "DecodeInterleavedForMultiStream", opus_dec, IPC_IMPL},
+    /* 7.0.0+: 6/7 became the "...WithPerfAndResetOld" forms and 8/9 carry the current DecodeInterleaved(ForMultiStream): the same {bool reset} in,
+     * {u32 consumed, u32 samples, u64 time} out [unverified that the new forms differ only in the decoder behind them] */
+    {8, "DecodeInterleaved", opus_dec, IPC_IMPL},
+    {9, "DecodeInterleavedForMultiStream", opus_dec, IPC_IMPL},
 };
 static void opus_work_size(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -762,6 +842,8 @@ static const IpcCmd hwopus_cmds[] = {
     {5, "GetWorkBufferSizeEx", opus_work_size, IPC_IMPL},
     {6, "OpenHardwareOpusDecoderForMultiStreamEx", opus_open_ms, IPC_IMPL},
     {7, "GetWorkBufferSizeForMultiStreamEx", opus_work_size_ms, IPC_IMPL},
+    {8, "GetWorkBufferSizeExEx", opus_work_size, IPC_IMPL},                    /* 16.0.0+: same parameters as 5 [unverified] */
+    {9, "GetWorkBufferSizeForMultiStreamExEx", opus_work_size_ms, IPC_IMPL}, /* 16.0.0+: same parameters as 7 [unverified] */
 };
 static IpcObject *hwopus_open(void) { return IPC_OBJECT("hwopus", hwopus_cmds, NULL, NULL); }
 

@@ -68,11 +68,16 @@ int main(void) {
     ab[0] = 0; ab[1] = 1; call(125, ab, 16, &c); CHECK(c.result == 0 && HC()->dual_of[0] == 2, "MergeSingleJoyAsDualJoy");
     tick(2); CHECK(napple_input_active_style(g_input, 0) == NAPPLE_STYLE_JOY_DUAL, "merged pad reports a Joy-Con pair");
     call(126, NULL, 0, &c); CHECK(HC()->lr_assign_mode == 1, "StartLrAssignmentMode"); call(127, NULL, 0, &c); CHECK(HC()->lr_assign_mode == 0, "StopLrAssignmentMode");
-    uint8_t on = 1; call(133, &on, 1, &c); CHECK(HC()->center_clamp == 1, "center clamp flag");
+    uint8_t on = 1; call(134, &on, 1, &c); CHECK(HC()->center_clamp == 1, "center clamp flag (134)");
     uint8_t cap[24] = {0}; uint32_t style = NAPPLE_STYLE_FULL_KEY; uint64_t btn = 7; memcpy(cap, &style, 4); memcpy(cap + 16, &btn, 8);
-    call(134, cap, 24, &c); CHECK(c.result == 0 && hidc_capture_get(HC(), style) == 7, "SetNpadCaptureButtonAssignment");
-    call(135, cap, 8, &c); CHECK(hidc_capture_get(HC(), style) == -1, "ClearNpadCaptureButtonAssignment");
-    style = 3; memcpy(cap, &style, 4); call(134, cap, 24, &c); CHECK(c.result != 0, "capture assignment needs one style");
+    call(135, cap, 24, &c); CHECK(c.result == 0 && hidc_capture_get(HC(), style) == 7, "SetNpadCaptureButtonAssignment (135)");
+    uint64_t aruid = 0x1000; call(136, &aruid, 8, &c); CHECK(c.result == 0 && hidc_capture_get(HC(), style) == -1, "ClearNpadCaptureButtonAssignment(aruid) (136) clears every style");
+    style = 3; memcpy(cap, &style, 4); call(135, cap, 24, &c); CHECK(c.result != 0, "capture assignment needs one style");
+    { /* 133 SetNpadJoyAssignmentModeSingleWithDestination(npad id, type, aruid) -> {bool, u32 id} */
+        uint32_t in[4] = {0, 0, 0x1000, 0}; call(133, in, 16, &c);
+        CHECK(c.result == 0 && c.out_size == 8 && c.out[0] == 0 && SVC_OUT(&c, uint32_t, 4) == 0, "SingleWithDestination: not reassigned, same npad");
+        in[0] = 77; call(133, in, 16, &c); CHECK(c.result != 0, "SingleWithDestination: unknown npad id refused");
+    }
     uint32_t lock = 1u << 3; call(32, &lock, 4, &c); tick(2);
     CHECK((HC()->kb_locks & 2) && (r32(napple_hid_lifo_latest(shm(), l.keyboard, 0x30) + 8) & (1u << 5)), "caps lock shows in the keyboard modifiers");
 
@@ -96,6 +101,70 @@ int main(void) {
         uint32_t want = NAPPLE_STYLE_GC | NAPPLE_STYLE_PALMA | NAPPLE_STYLE_LARK_NES_LEFT;
         call(100, &want, 4, &c); call(101, NULL, 0, &c);
         CHECK(SVC_OUT(&c, uint32_t, 0) == want, "GetSupportedNpadStyleSet returns the announced set (%#x)", SVC_OUT(&c, uint32_t, 0));
+    }
+    /* ---- ipc-depth-hid (2026-11-01-r2) rows ---- */
+    { /* six-axis parameters per sensor handle */
+        uint8_t in[16] = {0}; uint32_t sh = 0x00010000; memcpy(in, &sh, 4); float g = 0.25f, r = 0.5f; memcpy(in + 4, &g, 4); memcpy(in + 8, &r, 4);
+        call(70, in, 16, &c); call(71, in, 16, &c); CHECK(c.out_size == 8 && SVC_OUT(&c, float, 0) == 0.25f && SVC_OUT(&c, float, 4) == 0.5f, "GetSixAxisSensorFusionParameters reads back 70");
+        float ax = -0.05f, ay = 0.1f; memcpy(in + 4, &ax, 4); memcpy(in + 8, &ay, 4);
+        call(73, in, 16, &c); call(74, in, 16, &c); CHECK(SVC_OUT(&c, float, 0) == -0.05f && SVC_OUT(&c, float, 4) == 0.1f, "accelerometer parameters round trip");
+        call(75, in, 16, &c); call(74, in, 16, &c); CHECK(SVC_OUT(&c, float, 0) == 0.0f, "ResetAccelerometerParameters");
+        uint32_t pm = 1; memcpy(in + 4, &pm, 4); call(76, in, 16, &c); call(77, in, 16, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 1, "accelerometer play mode round trip");
+        call(78, in, 16, &c); call(77, in, 16, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "ResetAccelerometerPlayMode");
+        uint8_t pt[16] = {1}; memcpy(pt + 4, &sh, 4); call(84, pt, 16, &c); call(85, in, 16, &c); CHECK(c.out[0] == 1, "unaltered passthrough flag");
+        call(83, in, 16, &c); CHECK(c.out_size == 1 && c.out[0] == 0, "no six-axis firmware update");
+    }
+    { /* vibration permit session and GC ERM */
+        uint8_t pv = 0; call(204, &pv, 1, &c); CHECK(!hidc_vibration_allowed(HC()), "PermitVibration(false) mutes");
+        call(209, NULL, 0, &c); CHECK(hidc_vibration_allowed(HC()), "BeginPermitVibrationSession allows rumble");
+        call(210, NULL, 0, &c); CHECK(!hidc_vibration_allowed(HC()), "EndPermitVibrationSession");
+        pv = 1; call(204, &pv, 1, &c);
+        uint64_t erm[3] = {0x00030000 | (5u << 8) /* GC style index */, 0x1000, 1}; call(207, erm, 24, &c); CHECK(c.result == 0, "SendVibrationGcErmCommand(Start)");
+        call(208, erm, 16, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 1, "GetActualVibrationGcErmCommand reads back Start");
+        erm[2] = 9; call(207, erm, 24, &c); CHECK(c.result != 0, "unknown ERM command refused");
+        uint8_t vb[16] = {0}; vb[4] = 1; call(212, vb, 16, &c); CHECK(c.result == 0, "SendVibrationValueInBool");
+    }
+    { /* seven six-axis sensor */
+        call(303, NULL, 0, &c); call(304, NULL, 0, &c); CHECK(HC()->seven_active && HC()->seven_started, "seven six-axis activate + start");
+        float st = 2.5f; call(308, &st, 4, &c); call(309, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 2.5f, "seven six-axis fusion strength round trip");
+        uint64_t init[3] = {0x1000, 0x1000, 0x7000}; call(306, init, 24, &c); CHECK(HC()->seven_init && HC()->seven_mem_size[1] == 0x7000, "InitializeSevenSixAxisSensor");
+        call(307, NULL, 0, &c); CHECK(!HC()->seven_init && !HC()->seven_started, "FinalizeSevenSixAxisSensor");
+        call(311, NULL, 0, &c); CHECK(HC()->console_six_active && HC()->console_six_started, "ForceActivateConsoleSixAxisSensor");
+        call(312, NULL, 0, &c); CHECK(!HC()->console_six_active, "ForceDeactivateConsoleSixAxisSensor");
+    }
+    { /* controller properties of player 1 (connected, not handheld) and player 8 (absent) */
+        uint32_t p1[4] = {0}; uint32_t p8[4] = {7};
+        call(403, p1, 16, &c); CHECK(c.out[0] == 1, "HasBattery(player 1)"); call(403, p8, 16, &c); CHECK(c.out[0] == 0, "HasBattery(absent)");
+        call(405, p1, 16, &c); CHECK(c.out[0] == 1, "GetNpadInterfaceType: Bluetooth"); call(405, p8, 16, &c); CHECK(c.out[0] == 0, "no interface for an absent pad");
+        call(402, p1, 16, &c); CHECK(c.out[0] == 0, "no USB full-key controller");
+        uint8_t en = 1; call(401, &en, 1, &c); call(400, NULL, 0, &c); CHECK(c.out[0] == 1, "EnableUsbFullKeyController round trip");
+        uint32_t ids[2] = {7, 0}; IpcCall cc; memset(&cc, 0, sizeof cc); svc_set_in_buf(&cc, ids, sizeof ids);
+        IpcObject o = {"hid", hid_cmds, sizeof hid_cmds / sizeof hid_cmds[0], NULL, NULL, 1}; svc_call_c(&o, 407, &cc);
+        CHECK(SVC_OUT(&cc, uint32_t, 0) == 0, "GetNpadOfHighestBatteryLevel picks the connected pad");
+    }
+    { /* Palma: refused on a pad that is not a Palma; operations on a handle complete and signal */
+        uint32_t p1[4] = {0}; call(500, p1, 16, &c); CHECK(c.result != 0, "GetPalmaConnectionHandle refused without the Palma style");
+        uint64_t h = 0; call(501, &h, 8, &c); CHECK(c.result == 0 && HC()->palma[0].initialized, "InitializePalma");
+        call(502, &h, 8, &c); CHECK(c.nout_copy == 1, "AcquirePalmaOperationCompleteEvent"); uint32_t ev = c.out_copy[0];
+        call(503, &h, 8, &c); CHECK(c.result != 0, "no operation yet");
+        call(506, &h, 8, &c); CHECK(event_is_signaled(ev), "ReadPalmaStep completes and signals");
+        uint8_t data[0x140]; IpcCall cc; memset(&cc, 0, sizeof cc); cc.in = (const uint8_t *)&h; cc.in_size = 8; svc_set_out_buf(&cc, data, sizeof data);
+        IpcObject o = {"hid", hid_cmds, sizeof hid_cmds / sizeof hid_cmds[0], NULL, NULL, 1}; svc_call_c(&o, 503, &cc);
+        CHECK(cc.result == 0 && SVC_OUT(&cc, uint64_t, 0) == HIDC_PALMA_OP_READ_STEP, "GetPalmaOperationInfo: ReadStep");
+        uint8_t blob[4] = {1, 2, 3, 4}; uint64_t wr[3] = {0, 0x10, 4}; memset(&cc, 0, sizeof cc); cc.in = (const uint8_t *)wr; cc.in_size = 24; svc_set_in_buf(&cc, blob, 4);
+        svc_call_c(&o, 510, &cc); CHECK(cc.result == 0, "WritePalmaApplicationSection");
+        call(509, wr, 24, &c); CHECK(c.result == 0 && HC()->palma[0].op_data[2] == 3, "ReadPalmaApplicationSection reads the bytes back");
+        uint64_t dbv[2] = {5, 0}; call(516, dbv, 16, &c); call(517, &h, 8, &c); CHECK(HC()->palma[0].op_data[0] == 5, "database identification version round trip");
+        call(519, &h, 8, &c); CHECK(c.result == 0, "GetPalmaOperationResult: success");
+        call(528, &h, 8, &c); CHECK(c.out_size == 6 && c.out[0] == 0x02, "GetPalmaBluetoothAddress: locally administered");
+        uint64_t bad = 77; call(501, &bad, 8, &c); CHECK(c.result != 0, "unknown connection handle refused");
+    }
+    { /* the rest: state rows */
+        call(58, NULL, 0, &c); CHECK(c.result != 0, "GetJoyXpadLifoHandle: no xpad id exists");
+        call(59, NULL, 0, &c); CHECK(c.out_size == 8 && SVC_OUT(&c, int64_t, 0) == 0, "GetJoyXpadIds: none");
+        uint32_t v = 3; call(3150, &v, 4, &c); CHECK(HC()->mouse_lib_version == 3, "SetMouseLibraryVersion");
+        call(2000, NULL, 0, &c); CHECK(HC()->digitizer_active, "ActivateDigitizer");
+        call(320, NULL, 0, &c); CHECK(HC()->npad_imu == 1, "EnableNpadImu"); call(321, NULL, 0, &c); CHECK(HC()->npad_imu == 0, "DisableNpadImu");
     }
     printf("{\"test\":\"svc_hid\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     char cmd[200]; snprintf(cmd, sizeof cmd, "rm -rf %s", dir); if (system(cmd)) {}

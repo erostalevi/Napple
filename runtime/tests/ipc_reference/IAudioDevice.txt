@@ -1,0 +1,27 @@
+# interface IAudioDevice (switchbrew Audio_services; libnx audout.c/audin.c/audren.c/hwopus.c)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: -
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+0	ListAudioDeviceName	1.0.0	y
+1	SetAudioDeviceOutputVolume	1.0.0	y
+2	GetAudioDeviceOutputVolume	1.0.0	y
+3	GetActiveAudioDeviceName	1.0.0	y
+4	QueryAudioDeviceSystemEvent	1.0.0	y
+5	GetActiveChannelCount	1.0.0	y
+6	ListAudioDeviceNameAuto	3.0.0	y
+7	SetAudioDeviceOutputVolumeAuto	3.0.0	y
+8	GetAudioDeviceOutputVolumeAuto	3.0.0	y
+10	GetActiveAudioDeviceNameAuto	3.0.0	y
+11	QueryAudioDeviceInputEvent	3.0.0	y
+12	QueryAudioDeviceOutputEvent	3.0.0	y
+13	GetAudioSystemMasterVolumeSetting	5.0.0-12.1.0	y
+13	GetActiveAudioOutputDeviceName	13.0.0	y
+14	ListAudioOutputDeviceName	13.0.0	y
+15	AcquireAudioInputDeviceNotification	17.0.0	y
+16	ReleaseAudioInputDeviceNotification	17.0.0	y
+17	AcquireAudioOutputDeviceNotification	17.0.0	y
+18	ReleaseAudioOutputDeviceNotification	17.0.0	y
+19	SetAudioDeviceOutputVolumeAutoTuneEnabled	18.0.0	y
+20	IsAudioDeviceOutputVolumeAutoTuneEnabled	18.0.0	y
+21	IsActiveOutputDeviceEstimatedLowLatency	21.0.0	y

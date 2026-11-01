@@ -1,0 +1,20 @@
+# interface hidbus (switchbrew HID_services IHidbusServer; libnx hidbus.c)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: firmware 23.0.0+ (unnamed)
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+1	GetBusHandle	5.0.0	y
+2	IsExternalDeviceConnected	5.0.0	y
+3	Initialize	5.0.0	y
+4	Finalize	5.0.0	y
+5	EnableExternalDevice	5.0.0	y
+6	GetExternalDeviceId	5.0.0	y
+7	SendCommandAsync	5.0.0	y
+8	GetSendCommandAsynceResult	5.0.0	y
+9	SetEventForSendCommandAsycResult	5.0.0	y
+10	GetSharedMemoryHandle	5.0.0	y
+11	EnableJoyPollingReceiveMode	5.0.0	y
+12	DisableJoyPollingReceiveMode	5.0.0	y
+13	GetPollingData	5.0.0-6.2.0	y
+14	SetStatusManagerType	6.0.0	y
+17	Cmd17	23.0.0	n

@@ -1,0 +1,52 @@
+# interface set:sys (switchbrew Settings_services ISystemSettingsServer (partial: ids 0-30 and the language, region, colour, firmware, debug, quest, nickname, model, serial and time zone rows))
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: set:sys is a system service (not in an application's access list); listed so misnumbered rows show up
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+0	SetLanguageCode	1.0.0	n
+1	SetNetworkSettings	1.0.0	n
+2	GetNetworkSettings	1.0.0	n
+3	GetFirmwareVersion	1.0.0	n
+4	GetFirmwareVersion2	3.0.0	n
+5	GetFirmwareVersionDigest	5.0.0-22.5.0	n
+7	GetLockScreenFlag	1.0.0	n
+8	SetLockScreenFlag	1.0.0	n
+9	GetBacklightSettings	1.0.0	n
+10	SetBacklightSettings	1.0.0	n
+11	SetBluetoothDevicesSettings	1.0.0	n
+12	GetBluetoothDevicesSettings	1.0.0	n
+13	GetExternalSteadyClockSourceId	1.0.0	n
+14	SetExternalSteadyClockSourceId	1.0.0	n
+15	GetUserSystemClockContext	1.0.0	n
+16	SetUserSystemClockContext	1.0.0	n
+17	GetAccountSettings	1.0.0	n
+18	SetAccountSettings	1.0.0	n
+19	GetAudioVolume	1.0.0	n
+20	SetAudioVolume	1.0.0	n
+21	GetEulaVersions	1.0.0	n
+22	SetEulaVersions	1.0.0	n
+23	GetColorSetId	1.0.0	n
+24	SetColorSetId	1.0.0	n
+25	GetConsoleInformationUploadFlag	1.0.0	n
+26	SetConsoleInformationUploadFlag	1.0.0	n
+27	GetAutomaticApplicationDownloadFlag	1.0.0	n
+28	SetAutomaticApplicationDownloadFlag	1.0.0	n
+29	GetNotificationSettings	1.0.0	n
+30	SetNotificationSettings	1.0.0	n
+47	GetQuestFlag	1.0.0	n
+48	SetQuestFlag	1.0.0	n
+53	GetDeviceTimeZoneLocationName	1.0.0	n
+54	SetDeviceTimeZoneLocationName	1.0.0	n
+57	SetRegionCode	1.0.0	n
+62	GetDebugModeFlag	1.0.0	n
+68	GetSerialNumber	1.0.0	n
+77	GetDeviceNickName	1.0.0	n
+78	SetDeviceNickName	1.0.0	n
+79	GetProductModel	1.0.0	n
+90	GetMiiAuthorId	1.0.0	n
+150	GetDeviceTimeZoneLocationUpdatedTime	5.0.0	n
+151	SetDeviceTimeZoneLocationUpdatedTime	5.0.0	n
+183	GetPlatformRegion	9.0.0	n
+184	SetPlatformRegion	9.0.0	n
+282	ConvertToProductModel	20.0.0	n
+283	ConvertToProductModelName	20.0.0	n

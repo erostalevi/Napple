@@ -7,6 +7,7 @@ void hidc_init(HidCore *h) {
     h->comm_mode = 3; /* HidNpadCommunicationMode_Default */
     h->npad_active = 1;
     for (int i = 0; i < 10; i++) h->perm[i] = (uint8_t)i;
+    h->seven_strength = 1.0f; /* [unverified default] */
 }
 void hidc_reset_fusion(HidcSensor *s) {
     s->fusion_enabled = 1;
@@ -24,6 +25,7 @@ HidcSensor *hidc_sensor(HidCore *h, uint32_t handle) {
             s->handle = handle;
             s->zero_drift = HIDC_ZERO_DRIFT_STANDARD;
             hidc_reset_fusion(s);
+            hidc_reset_accelerometer(s);
             return s;
         }
     return 0;
@@ -171,3 +173,54 @@ int hidc_style_supported(const HidCore *h, uint32_t style) {
     return style != 0 && (set & style) == style;
 }
 int hidc_style_is_retro(uint32_t style) { return style && !(style & ~(HIDC_STYLE_LARK | HIDC_STYLE_HANDHELD_LARK | HIDC_STYLE_LUCIA | HIDC_STYLE_LAGON | HIDC_STYLE_LAGER)); }
+
+/* ---- ipc-depth-hid (2026-11-01-r2) ---- */
+int hidc_capture_clear_all(HidCore *h) {
+    for (unsigned i = 0; i < h->ncapture; i++) h->capture[i].button = -1;
+    return 0;
+}
+void hidc_reset_accelerometer(HidcSensor *s) {
+    s->acc_x = 0.0f;
+    s->acc_y = 0.0f;
+    s->acc_play_mode = 0;
+}
+int hidc_vibration_allowed(const HidCore *h) { return h->vibration_permitted || h->vib_session; }
+int hidc_erm_set(HidCore *h, uint32_t handle, uint64_t command) {
+    if (command > 2) return -1;
+    for (unsigned i = 0; i < h->nerm; i++)
+        if (h->erm[i].handle == handle) {
+            h->erm[i].command = command;
+            return 0;
+        }
+    if (h->nerm == sizeof h->erm / sizeof h->erm[0]) return -2;
+    h->erm[h->nerm].handle = handle;
+    h->erm[h->nerm++].command = command;
+    return 0;
+}
+uint64_t hidc_erm_get(const HidCore *h, uint32_t handle) {
+    for (unsigned i = 0; i < h->nerm; i++)
+        if (h->erm[i].handle == handle) return h->erm[i].command;
+    return 0;
+}
+HidcPalma *hidc_palma(HidCore *h, uint64_t connection_handle) {
+    int slot = connection_handle >> 32 ? -1 : hidc_slot_from_id((uint32_t)connection_handle);
+    return slot < 0 ? 0 : &h->palma[slot];
+}
+void hidc_palma_complete(HidcPalma *p, uint64_t type, uint32_t result, const void *data, uint32_t n) {
+    p->has_op = 1;
+    p->op_type = type;
+    p->op_result = result;
+    memset(p->op_data, 0, sizeof p->op_data);
+    if (data && n) memcpy(p->op_data, data, n > sizeof p->op_data ? sizeof p->op_data : n);
+}
+int hidc_palma_app_read(HidcPalma *p, uint64_t addr, uint64_t size) {
+    if (addr > HIDC_PALMA_APP_SIZE || size > HIDC_PALMA_APP_SIZE - addr || size > HIDC_PALMA_DATA) return -1;
+    hidc_palma_complete(p, HIDC_PALMA_OP_READ_APP_SECTION, 0, p->app + addr, (uint32_t)size);
+    return 0;
+}
+int hidc_palma_app_write(HidcPalma *p, uint64_t addr, const void *src, uint64_t size) {
+    if (addr > HIDC_PALMA_APP_SIZE || size > HIDC_PALMA_APP_SIZE - addr) return -1;
+    if (size) memcpy(p->app + addr, src, size);
+    hidc_palma_complete(p, HIDC_PALMA_OP_WRITE_APP_SECTION, 0, 0, 0);
+    return 0;
+}

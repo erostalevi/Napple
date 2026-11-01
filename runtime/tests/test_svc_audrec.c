@@ -32,6 +32,12 @@ int main(void) {
     CHECK(SVC_OUT(&c, uint64_t, 0) == 1 && SVC_OUT(&c, uint64_t, 8) == 12 && rel[0] == 0xBEEF && !event_is_signaled(ev), "released: tag, end time, event cleared");
     uint64_t bad = 5; svc_call(r, 7, &bad, 8, &c); CHECK(c.result != 0, "end time of an unknown tag fails");
     svc_call(r, 2, NULL, 0, &c); svc_call(r, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 1, "Stop");
+    { /* FlushFinalOutputRecorderBuffers: a buffer queued while stopped completes at once */
+        uint64_t t2 = 0xCAFE; uint64_t rb2[5] = {0}; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&t2; c.in_size = 8; svc_set_in_buf(&c, rb2, sizeof rb2); svc_call_c(r, 3, &c);
+        svc_call(r, 10, NULL, 0, &c); CHECK(c.out[0] == 1 && event_is_signaled(ev), "flush releases the queued buffer and signals");
+        svc_call(r, 10, NULL, 0, &c); CHECK(c.out[0] == 0, "second flush has nothing to do");
+        svc_call(r, 11, NULL, 0, &c); CHECK(c.result == 0, "AttachWorkBuffer");
+    }
     printf("{\"test\":\"svc_audrec\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }
