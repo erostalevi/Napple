@@ -67,3 +67,8 @@ status: ready-with-caveats
   returns his gathering. Next: check what MK8D calls after 109/60 (NAPPLE_TRACE_IPC=all, server -v) and whether the friend's presence has to carry more
   than the 0xE0 app-field pairs, or whether the session reply needs the gathering fetched (MatchMaking get-session-by-id).
 - Not done still: new C unit test, change note, guide client section.
+
+## Final pass (gate)
+- main merged again (docs-only change). Runtime service and net-online tests: all pass (svc_online 263/0 etc.); `cargo test --release -p napple-online -p napple-social` all green.
+- Four-title boots without NAPPLE_ONLINE_SERVER, 45 s each, headless, private save roots: SMO 3ca12dfa (2659 frames), MK8D fe941ed5 (2429), LAS ae16f71e (2658): rc 0, no "napple social" lines, no fatal / not-implemented. The fourth title (01006F80...) result: see the hand-off message.
+- Blocking condition for the last acceptance item: MK8D's Friends menu opens and the friend is joinable in friend:u and GetPlayingSession (109/60) returns the room, but the menu list stays "-----". Not diagnosed further; next step is NAPPLE_TRACE_IPC=all + server -v on what MK8D calls after 109/60.
