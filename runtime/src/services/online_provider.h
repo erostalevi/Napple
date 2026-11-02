@@ -4,7 +4,10 @@
  * encode the answer. The default provider (online_null_provider) is a console with no network. An external module (a private build, another
  * user's library) supplies a different table through the C ABI documented in docs/guides/network-providers.md.
  *
- * This repository contains NO online service implementation: no endpoints, tokens, certificates or protocol code. Portable, no macOS dependency.
+ * This repository contains no Nintendo online service implementation and never contacts Nintendo: no Nintendo endpoints, tokens, certificates or
+ * keys. The only online service it knows is Napple's own (runtime/src/net/net_online*.c over NAPPLE_NET=host, server crates/napple-online/): with
+ * NAPPLE_ONLINE_SERVER set, a title's game-server name goes to a community-run Napple server and its account token is issued by that server
+ * (docs/guides/napple-online.md). This header stays portable, no macOS dependency.
  * Numbering of errors is FreeBSD's (hz_result.h): a provider returns -1 and sets *err to an HZ_E* value, exactly what a guest sees from bsd:u. */
 #pragma once
 #include <stddef.h>
@@ -184,6 +187,12 @@ typedef struct OnlineProvider {
     int (*ldn_get_nodes)(void *ctx, OnlineLdnNode *out, uint32_t max, uint32_t *self);
     /* ldn: `cb(arg)` is called (from any thread) whenever the hosted or joined network changes: a station joined or left, the host went away. NULL clears. */
     void (*ldn_set_notify)(void *ctx, void (*cb)(void *arg), void *arg);
+
+    /* ---- additions of napple-online (2026-11-02-r7): struct_size-extensible, ABI version unchanged ---- */
+    /* acc (ONLINE_CAP_ACCOUNT): the ID token of the linked account of `user_id`, as EnsureIdTokenCacheAsync / LoadIdTokenCache hand it to the title (an
+     * opaque printable string; the Napple provider returns a token issued by the configured Napple server). Returns the length written to out (no NUL
+     * needed), 0 = no token (not linked, server unreachable). */
+    size_t (*account_id_token)(void *ctx, const uint8_t user_id[16], char *out, size_t n);
 } OnlineProvider;
 
 /* The active provider; never NULL. The first call loads ONLINE_ENV_PROVIDER once (a failure is logged and falls back to the NullProvider). */
