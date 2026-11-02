@@ -51,6 +51,8 @@ pub struct Client {
     pub cid: u32,
     pub peer: IpAddr,
     pub urls: Vec<StationUrl>,
+    /// The client's peer-to-peer station port, once known (its own URL in RequestProbeInitiationExt / ReplaceURL, or its NAT check).
+    pub station_port: Option<u16>,
     /// RMC messages (server requests) to deliver on this client's secure connection.
     pub tx: Sender<Vec<u8>>,
 }
@@ -116,7 +118,44 @@ pub fn token_from_extra(object: &[u8]) -> Option<String> {
     Some(tok)
 }
 
+impl Client {
+    /// The URLs to hand out for this client's station: once its station port is known it replaces the transport's port 1 in every URL, the
+    /// private one included. A joiner behind the same public address as the host (two consoles on one LAN or one Mac) connects through the
+    /// host's private URL, which must name the real port.
+    pub fn station_urls(&self) -> Vec<StationUrl> {
+        self.urls
+            .iter()
+            .map(|u| {
+                let mut u = u.clone();
+                if let (Some(p), Some("1")) = (self.station_port, u.get("port")) {
+                    u.set("port", p);
+                    // what the station itself would publish after its NAT check (the values MK8D's check reports against this server: the
+                    // mapping does not change between the two NAT check servers, and the filtering tests are answered)
+                    u.set("natm", 1);
+                    u.set("natf", 1);
+                    u.set("type", 3);
+                }
+                u
+            })
+            .collect()
+    }
+}
+
 impl Server {
+    /// A client that never published its station gets the port its NAT check came from (the earliest one from its address that no other
+    /// client claims).
+    fn fill_station(w: &mut World, cid: u32) {
+        let Some(c) = w.clients.get(&cid) else { return };
+        if c.station_port.is_some() {
+            return;
+        }
+        let ip = crate::natcheck::observed_ip(c.peer);
+        let taken: Vec<u16> = w.clients.values().filter(|o| o.cid != cid).filter_map(|o| o.station_port).collect();
+        if let Some(p) = crate::natcheck::station_port(ip, &taken) {
+            w.clients.get_mut(&cid).unwrap().station_port = Some(p);
+        }
+    }
+
     pub fn new(accounts: Accounts, verbose: bool) -> Server {
         let secure_key = kerberos::secure_key(accounts.server_key());
         Server { accounts, secure_key, world: Mutex::new(World { next_cid: 1, next_call: 1, clients: HashMap::new(), sessions: Sessions::new(), common_data: HashMap::new() }), verbose }
@@ -127,7 +166,7 @@ impl Server {
         let mut w = self.world.lock().unwrap();
         let cid = w.next_cid;
         w.next_cid += 1;
-        w.clients.insert(cid, Client { pid, cid, peer, urls: vec![], tx });
+        w.clients.insert(cid, Client { pid, cid, peer, urls: vec![], station_port: None, tx });
         cid
     }
 
@@ -299,6 +338,7 @@ impl Server {
                 // address can use the private one.
                 let mut public = c.urls.first().cloned().unwrap_or_else(|| StationUrl::parse("prudp:/"));
                 public.set("address", crate::natcheck::observed_ip(c.peer));
+                public.set("type", 3); // NAT type flags as the server sees the client: reachable at this public address (2) | behind a NAT (1)
                 if !c.urls.contains(&public) {
                     c.urls.push(public.clone());
                 }
@@ -346,12 +386,18 @@ impl Server {
                     let (old, mut new) = (StationUrl::parse(&old), StationUrl::parse(&new));
                     new.set("RVCID", me.cid);
                     new.set("PID", me.pid);
+                    // the station Pia publishes after its NAT check: the server vouches for it as reachable (2) behind a NAT (1). A joiner only
+                    // starts NAT traversal to a host URL with these flags, and only a published URL carries the host's real Pia port.
+                    if new.get("type").is_none_or(|t| t == "0") {
+                        new.set("type", 3);
+                    }
                     let i = c
                         .urls
                         .iter()
                         .position(|u| u.get("address") == old.get("address") && u.get("port") == old.get("port"))
                         .or_else(|| c.urls.iter().position(|u| u.get("port") == old.get("port")))
                         .or(if c.urls.is_empty() { None } else { Some(0) });
+                    c.station_port = new.get("port").and_then(|p| p.parse().ok()).filter(|p| *p > 1).or(c.station_port);
                     match i {
                         Some(i) => c.urls[i] = new,
                         None => c.urls.push(new),
@@ -608,9 +654,11 @@ impl Server {
         let mut r = Reader::new(&req.body);
         let Ok(gid) = r.u32() else { return Reply::Err(err::CORE_INVALID_ARGUMENT) };
         let mut w = self.world.lock().unwrap();
-        let host_urls = |w: &World, gid: u32| -> Vec<String> {
-            let Some(s) = w.sessions.all.get(&gid) else { return vec![] };
-            w.clients.values().filter(|c| c.pid == s.mm.g.host).flat_map(|c| c.urls.iter().map(|u| u.to_string())).collect()
+        let host_urls = |w: &mut World, gid: u32| -> Vec<String> {
+            let Some(host) = w.sessions.all.get(&gid).map(|s| s.mm.g.host) else { return vec![] };
+            let Some(cid) = w.clients.values().find(|c| c.pid == host).map(|c| c.cid) else { return vec![] };
+            Server::fill_station(w, cid);
+            w.clients[&cid].station_urls().iter().map(|u| u.to_string()).collect()
         };
         match req.method {
             2 | 33 => {
@@ -651,13 +699,13 @@ impl Server {
                 })
             }
             28 => {
-                let urls = host_urls(&w, gid);
+                let urls = host_urls(&mut w, gid);
                 ok(|w| {
                     w.bool(!urls.is_empty()).string(urls.first().map(|s| s.as_str()).unwrap_or(""));
                 })
             }
             41 => {
-                let urls = host_urls(&w, gid);
+                let urls = host_urls(&mut w, gid);
                 ok(|w| {
                     w.list(&urls, |w, u| {
                         w.string(u);
@@ -825,7 +873,14 @@ impl Server {
                 let Ok(targets) = r.list(|r| r.string()) else { return Reply::Err(err::CORE_INVALID_ARGUMENT) };
                 let mut w = self.world.lock().unwrap();
                 let probe = if req.method == 3 {
-                    r.string().unwrap_or_default()
+                    let own = r.string().unwrap_or_default();
+                    // the caller's own station URL: its port is its station port
+                    if let Some(p) = StationUrl::parse(&own).get("port").and_then(|p| p.parse::<u16>().ok()).filter(|p| *p > 1) {
+                        if let Some(c) = w.clients.get_mut(&me.cid) {
+                            c.station_port = Some(p);
+                        }
+                    }
+                    own
                 } else {
                     w.clients.get(&me.cid).and_then(|c| c.urls.first()).map(|u| u.to_string()).unwrap_or_default()
                 };
@@ -963,8 +1018,8 @@ mod tests {
         assert_eq!(r.u32().unwrap(), me.cid);
         let public = StationUrl::parse(&r.string().unwrap());
         assert_eq!(public.get("address"), Some("192.168.1.20"));
-        assert_ne!(crate::natcheck::observed_ip("127.0.0.1".parse().unwrap()).to_string(), "", "a loopback peer is reported at the LAN address when there is one");
         assert_eq!(public.get("port"), Some("49152"));
+        assert_eq!(public.get("type"), Some("3"));
         assert_eq!(public.get("RVCID"), Some(me.cid.to_string().as_str()));
         // ReplaceURL names the public URL (observed address): the registered one is replaced all the same
         let mut rep = Writer::new();
@@ -975,7 +1030,7 @@ mod tests {
             let u = &w.clients[&me.cid].urls;
             assert_eq!(u.len(), 2, "the private URL and the public one");
             assert_eq!(u[0].get("address"), Some("10.0.0.2"), "the private URL stays");
-            assert_eq!((u[1].get("port"), u[1].get("natm"), u[1].get("PID")), (Some("60516"), Some("1"), Some("77")));
+            assert_eq!((u[1].get("port"), u[1].get("natm"), u[1].get("PID"), u[1].get("type")), (Some("60516"), Some("1"), Some("77"), Some("3")));
         }
         // another client finds the URLs by pid
         let (other, _rx2) = attach(&srv, 78);

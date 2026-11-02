@@ -57,6 +57,23 @@ pub fn observed_ip(ip: IpAddr) -> IpAddr {
     .unwrap_or(ip)
 }
 
+/// Where each NAT check came from: (reported address, external port, when). A console's peer-to-peer station is the socket it runs the NAT check
+/// with, so this is its station's public address. The game server uses it for a host that never published its station (SecureConnection
+/// ReplaceURL): Pia skips that when the server already reports it as reachable.
+static SEEN: std::sync::Mutex<Vec<(IpAddr, u16, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+
+pub fn record(ip: IpAddr, port: u16) {
+    let mut v = SEEN.lock().unwrap();
+    v.retain(|(_, _, t)| t.elapsed().as_secs() < 600);
+    if !v.iter().any(|(i, p, _)| *i == ip && *p == port) {
+        v.push((ip, port, std::time::Instant::now()));
+    }
+}
+/// The earliest station port seen from `ip` that is not in `taken` (several consoles behind one address run their checks one after another).
+pub fn station_port(ip: IpAddr, taken: &[u16]) -> Option<u16> {
+    SEEN.lock().unwrap().iter().filter(|(i, p, _)| *i == ip && !taken.contains(p)).min_by_key(|(_, _, t)| *t).map(|(_, p, _)| *p)
+}
+
 /// The reply to `msg` from `from`, sent by a server whose own address is `server_ip`. None for a message too short to be one.
 pub fn reply(msg: &[u8], from: SocketAddr, server_ip: Ipv4Addr) -> Option<(u32, Vec<u8>)> {
     if msg.len() < 16 {
@@ -95,6 +112,9 @@ pub fn start(ip: IpAddr, base: u16, verbose: bool) -> std::io::Result<()> {
                     println!("napple-online: udp {} <- {from}: {}", ports(base)[on], crate::crypto::hex(&buf[..n.min(128)]));
                 }
                 let Some((kind, r)) = reply(&buf[..n], from, server_ip) else { continue };
+                if on == 0 && matches!(kind, 1 | 101) {
+                    record(observed_ip(from.ip()), from.port());
+                }
                 let via = reply_socket(kind, on);
                 if verbose {
                     println!("napple-online: nat check type {kind} from {from} on port {} -> answered from port {}", ports(base)[on], ports(base)[via]);
@@ -125,6 +145,17 @@ mod tests {
         let mut pia = vec![0x32, 0xab, 0x98, 0x64];
         pia.extend_from_slice(&[1; 40]);
         assert!(reply(&pia, "1.2.3.4:5".parse().unwrap(), Ipv4Addr::LOCALHOST).is_none(), "a Pia packet: no answer");
+    }
+
+    #[test]
+    fn station_ports() {
+        let ip: IpAddr = "198.51.100.7".parse().unwrap();
+        record(ip, 50001);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        record(ip, 50002);
+        assert_eq!(station_port(ip, &[]), Some(50001), "the earliest check");
+        assert_eq!(station_port(ip, &[50001]), Some(50002), "the next console behind the same address");
+        assert_eq!(station_port("198.51.100.8".parse().unwrap(), &[]), None);
     }
 
     #[test]
