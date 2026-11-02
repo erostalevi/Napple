@@ -87,8 +87,10 @@ Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=p
    - **OIDC role `napple-deploy` (preferred, no long-lived key).** In IAM > Identity providers, add an OpenID Connect provider
      `https://token.actions.githubusercontent.com` with audience `sts.amazonaws.com`. Create the role `napple-deploy` with the trust policy
      [`infra/aws/github-oidc-trust.json`](../../infra/aws/github-oidc-trust.json) (replace `<ACCOUNT_ID>`). It accepts tokens of `erostalevi/napple`
-     whose subject is `repo:erostalevi/napple:environment:napple-servers` (every AWS job of the workflow) or `repo:erostalevi/napple:ref:refs/heads/main`.
-     Attach [`infra/aws/deploy-policy.json`](../../infra/aws/deploy-policy.json) as an inline policy: it manages only `role/napple-*` and
+     whose subject is `repo:erostalevi/napple:environment:napple-servers` (every AWS job of the workflow) or `repo:erostalevi/napple:ref:refs/heads/main`, each also as `erostalevi/Napple`: the token carries
+     the repository name in its current casing (the repository was renamed `Napple`), and the subject match is case-sensitive.
+     Attach [`infra/aws/deploy-policy.json`](../../infra/aws/deploy-policy.json) as an inline policy (least privilege; the live account uses
+     `PowerUserAccess` plus an inline IAM policy for `role/napple-*` and `instance-profile/napple-*`, which also works, and this file is the hardening step): it manages only `role/napple-*` and
      `instance-profile/napple-*`, never `napple-deploy` itself (explicit deny). Add the role ARN as the **secret** `AWS_DEPLOY_ROLE_ARN`.
    - **Access keys (fallback).** An IAM user with the same policy and an access key; secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
      The workflow uses the role when `AWS_DEPLOY_ROLE_ARN` is set, else the keys.

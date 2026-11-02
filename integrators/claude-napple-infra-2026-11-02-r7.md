@@ -104,6 +104,9 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   `repo:erostalevi/napple:environment:napple-servers` and `repo:erostalevi/napple:ref:refs/heads/main` (`infra/aws/github-oidc-trust.json`).
   (2) `napple-deploy` has only an IAM-only inline policy (`napple-deployPolicy`, role/instance-profile `napple-*`) and no managed policies: no S3,
   EC2, SSM, ECR, Logs, Route 53 or sts. `infra/aws/deploy-policy.json` is the full set (now without DynamoDB).
+- **Update: both blockers fixed by the orchestrator** (re-checked read-only): the trust policy now matches the environment and `main` subjects in both
+  casings (`erostalevi/napple`, `erostalevi/Napple`: the repository was renamed), and `PowerUserAccess` is attached next to the inline IAM policy.
+  `infra/aws/github-oidc-trust.json` lists both casings now; `deploy-policy.json` stays as an optional least-privilege replacement.
 - **Decision: take over the hand-made DNS records.** The zone already holds apex A/AAAA, `www` and `*` with exactly the stack's values, so
   `dns_allow_overwrite` now defaults to `true` (workflow variable fallback `true`); otherwise the first apply would fail with "already exists".
 - **Decision: S3 lock files** instead of DynamoDB (the orchestrator asked for fewer resources; supported by the pinned 1.13.5, see above).

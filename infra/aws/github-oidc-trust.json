@@ -13,7 +13,9 @@
           "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
           "token.actions.githubusercontent.com:sub": [
             "repo:erostalevi/napple:environment:napple-servers",
-            "repo:erostalevi/napple:ref:refs/heads/main"
+            "repo:erostalevi/Napple:environment:napple-servers",
+            "repo:erostalevi/napple:ref:refs/heads/main",
+            "repo:erostalevi/Napple:ref:refs/heads/main"
           ]
         }
       }
