@@ -287,6 +287,25 @@ void online_provider_reset(void) {
     pthread_mutex_unlock(&reg_lock);
 }
 
+const OnlineProvider *(*online_builtin_host)(void);
+/* NAPPLE_NET=host: the built-in host provider when this build links one (unset, "offline" or anything else = the NullProvider). */
+static const OnlineProvider *load_builtin(void) {
+    const char *net = getenv(ONLINE_ENV_NET);
+    if (!net || !*net || !strcmp(net, "offline")) return NULL;
+    if (strcmp(net, "host")) {
+        log_line("online", "NAPPLE_NET=%s is not a known provider (host, offline): using the offline provider", net);
+        return NULL;
+    }
+    const OnlineProvider *p = online_builtin_host ? online_builtin_host() : NULL;
+    int rc = p ? online_provider_check(p) : -1;
+    if (rc) {
+        log_line("online", "NAPPLE_NET=host: %s: using the offline provider", p ? "the host provider failed to start" : "this build has no host provider");
+        return NULL;
+    }
+    log_line("online", "provider '%s' (built in) selected by NAPPLE_NET=host (caps 0x%x)", p->name ? p->name : "?", p->caps);
+    return p;
+}
+
 static pthread_mutex_t load_lock = PTHREAD_MUTEX_INITIALIZER;
 const OnlineProvider *online_provider(void) {
     if (!__atomic_load_n(&env_loaded, __ATOMIC_ACQUIRE)) {
@@ -294,6 +313,7 @@ const OnlineProvider *online_provider(void) {
         if (!__atomic_load_n(&env_loaded, __ATOMIC_ACQUIRE)) {
             const char *path = getenv(ONLINE_ENV_PROVIDER);
             const OnlineProvider *p = path && *path ? load_plugin(path) : NULL;
+            if (!p && !(path && *path)) p = load_builtin(); /* an explicit module path wins, even when it fails to load */
             pthread_mutex_lock(&reg_lock);
             if (p && !active) active = p;
             pthread_mutex_unlock(&reg_lock);
