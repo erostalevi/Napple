@@ -137,5 +137,6 @@ fn init(c: &Connection) -> rusqlite::Result<()> {
     c.pragma_update(None, "synchronous", "NORMAL")?;
     c.pragma_update(None, "foreign_keys", "ON")?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
-    c.execute_batch(SCHEMA)
+    c.execute_batch(SCHEMA)?;
+    crate::profiles::migrate(c)
 }

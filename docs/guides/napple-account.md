@@ -105,11 +105,53 @@ again (same device key, so it keeps its save key).
 | `GET /me` | `{account_id, device_id, email, display_name, created_at, last_seen, key_id, has_recovery, key_state, grants, plan, storage}` |
 | `PATCH /me` | `{display_name}` (1-32 chars, reserved-name rules) |
 | `DELETE /me` | `{confirm_email}` -> `204`. Deletes every save object and every row. Irreversible. |
-| `GET /profiles`, `POST /profiles {nickname, icon_id}`, `GET/PATCH /profiles/{id}`, `DELETE /profiles/{id}[?delete_saves=true]` | up to 8 profiles (the first is created with the account); nicknames follow the reserved-name rules; delete refuses (`409 profile_has_saves`) while the profile has cloud saves unless `delete_saves=true` |
+| `GET /profiles`, `POST /profiles`, `GET/PATCH /profiles/{id}`, `DELETE /profiles/{id}[?delete_saves=true]` | see "Profiles" below |
 | `GET /devices`, `DELETE /devices/{id}` | revoke = sign out everywhere + drop its wrapped key |
 
 `plan` is the static placeholder `{"name": "free", "features": {}}` (no paid plans this round; clients keep the
 field for later). `storage` is `{quota, used, versions_per_title, max_version_bytes}` from server config.
+
+### Profiles
+
+Up to 8 per account (the first is created with the account); the profile is the in-game identity.
+
+| Field | Rule |
+|---|---|
+| `nickname` | 3-20 chars of `[A-Za-z0-9_.-]`, **globally unique ignoring case** (`409 nickname_taken`), reserved-name rules (`422 reserved_name`) |
+| `bio` | <= 160 chars, no control or invisible characters (newline allowed) |
+| `links` | <= 3 of `{kind: discord\|instagram\|x\|web, value}`; `web` must be an `https://` URL (no credentials, ASCII host with a dot), handles are 2-32 of `[A-Za-z0-9_.]` (a leading `@` is dropped) |
+| `icon_id` | built-in icon 0..47 |
+| `photo` | `null` or `{url, updated_at}` (see below) |
+| `tier` | 1..5 visibility tier, default 1 (the table is in `orchestrations/ONLINE-CONTRACT.md`; the rules are the pure function `napple_visibility::can_view`, shared with napple-social) |
+| `friend_code` | `NP-` + 12 digits, last one a Luhn check digit; assigned automatically (also to profiles inserted by other code paths: SQLite trigger), stable, unique |
+
+`POST /profiles {nickname, icon_id?, bio?, links?, tier?}`; `PATCH /profiles/{id}` takes any subset of
+`nickname, bio, links, icon_id, tier` (all or nothing). Tier changes apply immediately.
+
+**Photo.** `POST /profiles/{id}/photo` (multipart; the first part is the photo, its name/file name/content type are
+ignored; 20/hour/account). Limits: <= 5 MiB (`413 photo_too_large`), <= 8192x8192 px (`422 photo_dimensions`),
+JPEG/PNG/WebP decided by magic bytes only (`422 unsupported_type`: SVG, GIF, HEIC, AVIF, BMP, ... never reach a
+decoder), empty file `422 empty_photo`, anything that does not decode fully (truncated, corrupt, JPEG without EOI)
+`422 decode_failed`. The image is decoded completely, EXIF orientation applied, centre-cropped square, resized to
+256x256, composited on white if transparent and **re-encoded as JPEG q85 from pixels**: EXIF/GPS, ICC, XMP, comments,
+PNG text chunks and anything appended after the image end are gone, and the original is never stored. Decodes run on
+the blocking pool, two at a time. `DELETE /profiles/{id}/photo` removes it; deleting the profile or the account
+removes the object too.
+`GET /profiles/{id}/photo` serves `image/jpeg` (`Cache-Control: private`, `nosniff`) to the owner, and to other
+signed-in accounts only when `can_view(.., NicknameAndPhoto)` holds without friend data (tiers 1-2); anything hidden
+answers `404`, indistinguishable from "no photo". Friends (tiers 3-4) are served by napple-social through the internal
+route below.
+
+Storage: `NAPPLE_PHOTO_DIR` (default `<data dir>/photos`, files 0600) or, when `NAPPLE_PHOTO_BUCKET` is set, a
+**private** S3 bucket (`NAPPLE_PHOTO_REGION` or `NAPPLE_ACCOUNT_S3_REGION`, default us-east-1; optional
+`NAPPLE_PHOTO_ENDPOINT` for S3-compatible stores). The server signs its own requests; objects are never presigned to
+clients. Keys are `photos/<account>/<profile>/<random>`. Both backends implement `photos::PhotoStore`.
+
+**Internal lookups for napple-social / napple-online.** Set `NAPPLE_INTERNAL_TOKEN` (>= 16 chars; without it these
+routes answer 404) and send it as `x-napple-internal`: `GET /internal/profiles/{id}` (the full profile plus
+`account_id`), `GET /internal/profiles/by-code/{NP-...}`, `GET /internal/profiles?prefix=ab&limit=20` (nickname
+prefix, case-insensitive), `GET /internal/profiles/{id}/photo` (raw stored JPEG, no tier rules: the caller applies
+`can_view`). Route them only on the loopback/private network, never through the public proxy.
 
 ### End-to-end save key
 
