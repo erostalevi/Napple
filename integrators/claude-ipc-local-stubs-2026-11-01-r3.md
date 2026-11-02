@@ -2,7 +2,7 @@
 branch: claude/ipc-local-stubs-2026-11-01-r3
 orchestration: ipc-local-stubs
 base: 84cb5a6
-head: PENDING
+head: 4da694d
 env: mac
 date: 2026-11-01
 areas: [runtime/services, audio]
