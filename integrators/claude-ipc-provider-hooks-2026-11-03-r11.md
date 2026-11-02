@@ -38,3 +38,8 @@ napple-room build in test-net-host). New tests: 50 + 60 + 36 checks. Four-title 
 - A real title that calls 120 / 150 now gets objects when NAPPLE_ONLINE_SERVER is set and the account is linked; if a title uses other ids on them it
   falls to the unknown-command policy (loud, not silent).
 - `docs/architecture/runtime-services.md` lists of remaining STUB rows were not edited (outside ownership); the change note carries the list.
+
+## Boots
+`runtime/build/napple-runtime <title>/<build> --headless --seconds 60`, private `--save-root`, under `lockf -k /Users/neto/NappleWork/.run.lock`, each of
+0100000000010000, 0100152000022000, 01006BB00C6F0000, 01006F8002326000 without and with `NAPPLE_NET=host`: all 8 runs rc 0, summary status `partial`
+(the 60 s limit), `missing_ipc []`, `unsupported_svcs []`, `crashes []`, no CRASH line in any log.
