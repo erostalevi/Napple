@@ -47,7 +47,7 @@ All five acceptance items are done, including the two (4, 5) the orchestration a
   - 1D array layers in `copy_region_dims`.
 - `gfx/src/mtl_shader.m`: the masks and swizzle copied into the stage `ShaderKey`s (`build_pipe`, `stage_vs_key`, `stage_fs`, tess keys); the swizzle in `gs_passthrough_fn`; capture-key normalisation; `TRANSLATOR_VERSION` 18.
 - `gfx/src/api_cmd.c`: `SetViewportSwizzles` and `SetProvokingVertexMode` record ops (the global `gfx_cmd_provoking_vertex_mode` is kept for `t_nvn_ext`).
-- **Extension:**
+- **Ownership extensions approved by the orchestrator** (4209689; confirmed by message on 2026-11-02):
   - `gfx/src/mtl_priv.h` (+4: `pipe_key.sep_depth/stencil/uint/sint[2]`, `vp_swizzle`, `pad_vp`);
   - `gfx/src/mtl_stages.inc` (+1: `sep_slot_masks` in `stage_key_masks`);
   - `gfx/src/obj.h` (enum: `OP_VP_SWIZZLE`, `OP_PROVOKING` before `OP_COUNT`).
