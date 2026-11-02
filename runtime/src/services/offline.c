@@ -2,6 +2,7 @@
  * (state where a title can observe it, otherwise a documented answer; rows still IPC_STUB are listed in docs/architecture/runtime-services.md): the point is that the SDK's initialisation succeeds and the game falls
  * back to its offline paths. Unknown commands still fail loudly through the generic policy. */
 #include "../ipc.h"
+#include "../napple.h"
 #include "offline_core.h"
 #include "offline_state_core.h"
 #include "hz_result.h"
@@ -443,10 +444,15 @@ static void nifm_get_requirement(IpcObject *s, IpcCall *c) {
     memcpy(v, q->requirement, sizeof q->requirement);
     ipc_out(c, v, sizeof v);
 }
-/* GetAppletInfo(u32 theme color) -> buffer {s32 size, data}* ended by size -1, u32 AppletId, u32 LibraryAppletMode, u32 out_size (switchbrew). A request that failed (an
- * offline console rejects at once) is resolved by the user in the network-connection library applet (netConnect, applet id 0x0f, shown in the foreground, mode 0)
- * with no extra input storage; a request that did not fail has nothing for an applet to fix. */
+/* GetAppletInfo(u32 theme color) -> buffer {s32 size, data}* ended by size -1, u32 AppletId, u32 LibraryAppletMode, u32 bytes of the buffer used (switchbrew). A
+ * request that failed (an offline console rejects at once) is resolved by the user in the network-connection library applet (netConnect, applet id 0x0f, mode 0,
+ * foreground). The SDK (nn::nifm::detail::RequestClient::PrepareLibraryApplet, MK8D update sdk +0x150e84) creates the applet and pushes exactly the storages
+ * listed here, nothing of its own, so the list carries what netConnect reads (its readers in firmware 22.1.0 0100000000001006 +0x245e40 / +0x245f80):
+ * CommonArguments {u32 version 1, u32 size 0x20, u32 la version, u32 theme color, u8 play startup sound, pad, u64 system tick} and its argument
+ * {u32 0, Result of the request, Uuid network profile (zero: none)}, 0x18 bytes, the layout of the SDK's nn::la::NifmToNetConnectArgumentsWriter.
+ * The la version nifm passes is not known ([unverified] 0). A request that did not fail has nothing for an applet to fix. */
 #define NIFM_APPLET_NET_CONNECT 0x0fu
+#define NIFM_NET_CONNECT_ARG_SIZE 0x18u
 static void nifm_get_applet_info(IpcObject *s, IpcCall *c) {
     NifmReq *q = s->state;
     uint32_t res = nifm_request_result(&q->req);
@@ -454,10 +460,27 @@ static void nifm_get_applet_info(IpcObject *s, IpcCall *c) {
         c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
         return;
     }
+    uint32_t theme = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0;
+    uint8_t list[4 + 0x20 + 4 + NIFM_NET_CONNECT_ARG_SIZE + 4] = {0}, *p = list;
+    int32_t sz = 0x20;
+    memcpy(p, &sz, 4);
+    uint32_t common_head[4] = {1, 0x20, 0, theme};
+    memcpy(p + 4, common_head, sizeof common_head);
+    uint64_t tick = runtime_guest_ticks();
+    memcpy(p + 4 + 0x18, &tick, 8);
+    p += 4 + 0x20;
+    sz = NIFM_NET_CONNECT_ARG_SIZE;
+    memcpy(p, &sz, 4);
+    memcpy(p + 8, &res, 4); /* {u32 0, Result, Uuid 0} */
+    p += 4 + NIFM_NET_CONNECT_ARG_SIZE;
+    sz = -1;
+    memcpy(p, &sz, 4);
+    uint32_t used = sizeof list;
     const IpcBuf *b = ipc_out_buf(c, 0);
-    int32_t end = -1;
-    if (b && b->size >= 4) ipc_write_buf(c, b, &end, 4);
-    uint32_t v[3] = {NIFM_APPLET_NET_CONNECT, 0, 4};
+    if (!b || b->size < sizeof list) used = b && b->size >= 4 ? 4 : 0; /* too small for the arguments: only the end marker */
+    if (used == 4) ipc_write_buf(c, b, &sz, 4);
+    else if (used) ipc_write_buf(c, b, list, used);
+    uint32_t v[3] = {NIFM_APPLET_NET_CONNECT, 0, used};
     ipc_out(c, v, 12);
 }
 /* GetAdditionalInfo (undocumented layout): a failed request reports its own failure, a request that did not fail has no additional information. */

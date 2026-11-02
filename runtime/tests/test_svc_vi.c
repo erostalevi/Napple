@@ -47,6 +47,15 @@ int main(void) {
     uint8_t in2101[16] = {0}; uint32_t mode = VI_SCALE_PRESERVE_ASPECT; uint64_t layer = 7; memcpy(in2101, &mode, 4); memcpy(in2101 + 8, &layer, 8);
     svc_call(ds, 2101, in2101, 16, &c); CHECK(c.result == 0 && vi_layer(&vi, 7)->scaling == VI_SCALE_PRESERVE_ASPECT, "SetLayerScalingMode stores the mode for the layer");
     mode = 9; memcpy(in2101, &mode, 4); svc_call(ds, 2101, in2101, 16, &c); CHECK(c.result == VI_R_INVALID_RANGE, "SetLayerScalingMode with a bad mode fails");
+    {
+        const uint32_t want[5] = {VI_SCALE_NONE, VI_SCALE_FREEZE, VI_SCALE_TO_WINDOW, VI_SCALE_AND_CROP, VI_SCALE_PRESERVE_ASPECT};
+        for (uint32_t m = 0; m < 5; m++) {
+            svc_call(ds, 2102, &m, 4, &c);
+            CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, uint64_t, 0) == want[m], "ConvertScalingMode(%u) -> %u", m, want[m]);
+        }
+        uint32_t bad = 5; svc_call(ds, 2102, &bad, 4, &c); CHECK(c.result == VI_R_INVALID_RANGE, "ConvertScalingMode of an unknown mode fails");
+        CHECK(svc_find(ds, 2102)->status == IPC_IMPL, "2102 is real");
+    }
     svc_call(ds, 2030, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == 2, "CreateStrayLayer: first id is 2");
     svc_call(ds, 2030, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 3, "CreateStrayLayer: next id is 3");
     uint64_t gone = 2; svc_call(ds, 2021, &gone, 8, &c); CHECK(c.result == 0 && vi_layer_destroy(&vi, 2) == -1, "CloseLayer removes the layer");

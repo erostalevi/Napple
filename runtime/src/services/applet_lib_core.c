@@ -340,11 +340,11 @@ int applet_controller_ask(AppletControllerAnswer *a) {
 /* ---- network connection (NetConnect) ---- */
 void applet_netconnect_encode(uint32_t result, uint8_t out[APPLET_NETCONNECT_OUT_SIZE]) {
     memset(out, 0, APPLET_NETCONNECT_OUT_SIZE);
-    memcpy(out, &result, 4);
+    memcpy(out + 4, &result, 4);
 }
 int applet_netconnect_handler(LibAppletCall *call) {
     uint8_t out[APPLET_NETCONNECT_OUT_SIZE];
-    applet_netconnect_encode(HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, out);
+    applet_netconnect_encode(APPLET_NETCONNECT_R_NOT_CONNECTED, out);
     libapplet_call_set_out(call, out, sizeof out);
     call->result = 0;
     return 1;
