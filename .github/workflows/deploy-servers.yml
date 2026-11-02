@@ -182,7 +182,10 @@ jobs:
         working-directory: infra/terraform
         run: |
           tofu fmt -check -recursive
-          tofu init -backend=false -input=false && tofu validate && tofu test
+          tofu init -backend=false -input=false && tofu validate
+          # the mocked tests assert the stack's defaults: run them without the job's TF_VAR_* values
+          # shellcheck disable=SC2046  # word splitting is intended: one "-u NAME" per variable
+          env $(env | sed -n 's/^\(TF_VAR_[A-Za-z0-9_]*\)=.*/-u \1/p') tofu test
           rm -rf .terraform
       - id: tofu
         env:
