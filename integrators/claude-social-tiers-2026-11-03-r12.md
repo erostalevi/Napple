@@ -2,7 +2,7 @@
 branch: claude/social-tiers-2026-11-03-r12
 orchestration: social-tiers
 base: ac6692c
-head: pending
+head: f4711e7
 env: mac
 date: 2026-11-03
 areas: [crates/napple-social, docs/guides]
