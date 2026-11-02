@@ -213,3 +213,4 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | Note | Summary |
 |---|---|
 | [2026-11-02-claude-napple-infra-2026-11-02-r7](2026-11-02-claude-napple-infra-2026-11-02-r7.md) | AWS auto-deploy of the game servers to `pretend.napple.lat` (OpenTofu, Docker + Caddy, a workflow that skips without secrets), `napple.lat` DNS to GitHub Pages, the native local test stack. |
+| [2026-11-02-claude-net-rooms-2026-11-02-r7](2026-11-02-claude-net-rooms-2026-11-02-r7.md) | Napple rooms: the `napple-room` relay server (own protocol, std only) and the runtime client (`NAPPLE_ROOM`): virtual LAN and LDN between Napple instances over the internet. |
