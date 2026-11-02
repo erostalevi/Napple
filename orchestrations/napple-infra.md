@@ -6,10 +6,10 @@ base: orchestrate/2026-11-02-r7
 env: mac
 model: claude-opus-5-5
 depends_on: []   # wires to the napple-online / napple-room crates by name; integrate after them
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_53c5ec03-3f03-47b6-80e9-ee3d9cb67e20 (fresh)
+launched_at: 2026-11-02
 ---
 
 # napple-infra: local test stack + AWS auto-deploy of the Napple game servers (pretend.napple.lat) and DNS for napple.lat
