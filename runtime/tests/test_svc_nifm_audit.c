@@ -201,7 +201,7 @@ int main(void) {
     }
     svc_call(pr, 30300, NULL, 0, &c);
     CHECK(SVC_OUT(&c, uint64_t, 0) == 8 * sizeof rep, "all eight report ids are counted in the storage");
-    CHECK(svc_find(pr, 90200) == NULL && svc_find(pr, 90100)->status == IPC_STUB && !strcmp(svc_find(pr, 90100)->name, "ReadAllReportFiles"), "90100 is ReadAllReportFiles (no stored reports); the invented 90200 is gone");
+    CHECK(svc_find(pr, 90200) == NULL && svc_find(pr, 90100)->status == IPC_IMPL && !strcmp(svc_find(pr, 90100)->name, "ReadAllReportFiles"), "90100 is ReadAllReportFiles (kept reports read back); the invented 90200 is gone");
     CHECK(!strcmp(svc_find(pr, 20100)->name, "SaveSystemReportOld") && !strcmp(svc_find(pr, 20102)->name, "SaveSystemReport"), "20100 is the old SaveSystemReport, 20102 the current one");
 
     printf("{\"test\":\"svc_nifm_audit\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
