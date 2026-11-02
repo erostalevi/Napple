@@ -4,21 +4,36 @@
   docs/reference/support-matrix.md    per-title status per platform (macOS now, iOS deferred)
   docs/reference/feature-support.md   feature coverage by domain from the newest coverage snapshot
   docs/reference/support-data.json    the same data for the site (mkdocs copies it to /docs/reference/support-data.json)
+  docs/reference/online-support.md    per-game online support, from compat/online.json (module gen_online.py; its docstring has the schema)
+  README.md                           only the online block between <!-- online:begin --> and <!-- online:end -->
+  site/online.json                    the online data for the landing page (site/app.js renders it)
 
-Inputs: compat/matrix.json (read only), docs/titles/*.md (state, open items, numbers, iOS column of the table in docs/titles/README.md) and
+Inputs: compat/matrix.json (read only), docs/titles/*.md (state, open items, numbers, iOS column of the table in docs/titles/README.md),
+compat/online.json (the online table) and
 tools/support/data/coverage-snapshot.json (a trimmed copy of the newest .claude/skills/percent-analysis/history snapshot; refresh it with --refresh-snapshot).
 Title names and ids only; the matrix holds metadata, never game bytes.
 
 usage: python3 -I tools/support/gen_support.py [--root <Napple dir>] [--check] [--refresh-snapshot [history dir]]
-  (no flag)            write the three files
+  (no flag)            write the files
   --check              write nothing; exit 1 and name the files when one is stale (used by tools/check_docs.py and CI)
   --refresh-snapshot   rebuild tools/support/data/coverage-snapshot.json from the newest snapshot of the percent-analysis history, then write
 """
 import argparse
+import importlib.util
 import json
 import re
 import sys
 from pathlib import Path
+
+
+def _load_gen_online():  # loaded by path: python3 -I does not put this directory on sys.path
+    spec = importlib.util.spec_from_file_location("gen_online", Path(__file__).resolve().parent / "gen_online.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+gen_online = _load_gen_online()
 
 OUTPUTS = ["docs/reference/support-matrix.md", "docs/reference/feature-support.md", "docs/reference/support-data.json"]
 SNAPSHOT = "tools/support/data/coverage-snapshot.json"
@@ -164,8 +179,8 @@ def render_matrix(last_run, titles):
     L += ["", "## iOS (deferred)", "", "| Title | Id | Last recorded iOS Simulator result |", "|---|---|---|"]
     for t in titles:
         L.append(f"| {cell(t['name'])} | `{t['title_id']}` | {cell(t['ios'])} |")
-    L += ["", "See also [COMPATIBILITY.md](../../COMPATIBILITY.md) (the full matrix with stage evidence), the [coverage by feature](feature-support.md) "
-          "and the machine-readable [support-data.json](support-data.json).", ""]
+    L += ["", "See also [COMPATIBILITY.md](../../COMPATIBILITY.md) (the full matrix with stage evidence), the [coverage by feature](feature-support.md), "
+          "the machine-readable [support-data.json](support-data.json) and the [online support](online-support.md) table (generated from `compat/online.json`).", ""]
     return "\n".join(L)
 
 
@@ -221,7 +236,7 @@ def build(root):
                          "missing": [{"domain": k, "item": n, "status": s} for k in sorted(snap["items"]) for n, s in sorted(snap["items"][k].items()) if s != "impl"],
                          "priorities": snap["priorities"]}}
     return {OUTPUTS[0]: render_matrix(last_run, titles), OUTPUTS[1]: render_features(snap),
-            OUTPUTS[2]: json.dumps(data, indent=1, sort_keys=True) + "\n"}
+            OUTPUTS[2]: json.dumps(data, indent=1, sort_keys=True) + "\n", **gen_online.build(root)}
 
 
 def main(argv=None):
@@ -241,6 +256,7 @@ def main(argv=None):
         print("support tables: " + ("OK" if not stale else f"{len(stale)} stale"))
         return 1 if stale else 0
     for p, t in outs.items():
+        (root / p).parent.mkdir(parents=True, exist_ok=True)
         (root / p).write_text(t)
         print("wrote", p)
     return 0
