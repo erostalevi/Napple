@@ -197,10 +197,21 @@ static int64_t dir_read(void *ctx, const char *dir, const char *file, uint64_t o
     fclose(f);
     return got;
 }
+/* <root>/list.msgpack, for both layouts: the delivery list a sync left beside the cache (bcat_core.h read_list). */
+static int64_t root_read_list(void *ctx, void *buf, size_t n) {
+    DirCtx *d = ctx;
+    char path[1024];
+    uint8_t *data;
+    uint64_t size;
+    if (!d || path_join(path, sizeof path, d->root, "list.msgpack", NULL) || read_all(path, &data, &size)) return -1;
+    if (buf && n) memcpy(buf, data, (size_t)(size < n ? size : n));
+    free(data);
+    return (int64_t)size;
+}
 BcatProvider bcat_dir_provider(const char *root) {
     DirCtx *d = calloc(1, sizeof *d); /* lives as long as the provider (the process, or until the test exits) */
     if (d) snprintf(d->root, sizeof d->root, "%s", root ? root : "");
-    return (BcatProvider){d, dir_list_dirs, dir_list_files, dir_read};
+    return (BcatProvider){d, dir_list_dirs, dir_list_files, dir_read, root_read_list};
 }
 
 /* ---- the console's storage layout (bcat_core.h) ---- */
@@ -270,5 +281,36 @@ static int64_t save_read(void *ctx, const char *dir, const char *file, uint64_t 
 BcatProvider bcat_save_provider(const char *root) {
     DirCtx *d = calloc(1, sizeof *d);
     if (d) snprintf(d->root, sizeof d->root, "%s", root ? root : "");
-    return (BcatProvider){d, save_list_dirs, save_list_files, save_read};
+    return (BcatProvider){d, save_list_dirs, save_list_files, save_read, root_read_list};
+}
+
+/* ---- update fingerprint (bcat_core.h) ---- */
+static uint64_t fnv(uint64_t h, const void *p, size_t n) {
+    const uint8_t *b = p;
+    for (size_t i = 0; i < n; i++) h = (h ^ b[i]) * 0x100000001b3ull;
+    return h;
+}
+static int cmp_name(const void *a, const void *b) { return strncmp(a, b, BCAT_NAME_SIZE); }
+uint64_t bcat_storage_fingerprint(const BcatProvider *p) {
+    if (!p || !p->list_dirs) return 0;
+    char names[BCAT_MAX_DIRS][BCAT_NAME_SIZE];
+    BcatFile files[BCAT_MAX_FILES];
+    memset(names, 0, sizeof names);
+    int n = p->list_dirs(p->ctx, names, BCAT_MAX_DIRS);
+    if (n < 0) n = 0;
+    qsort(names, (size_t)n, BCAT_NAME_SIZE, cmp_name);
+    uint64_t h = fnv(0xcbf29ce484222325ull, &n, sizeof n);
+    for (int i = 0; i < n; i++) {
+        h = fnv(h, names[i], BCAT_NAME_SIZE);
+        int m = p->list_files ? p->list_files(p->ctx, names[i], files, BCAT_MAX_FILES) : -1;
+        if (m < 0) m = -1;
+        h = fnv(h, &m, sizeof m);
+        if (m > 0) qsort(files, (size_t)m, sizeof *files, cmp_file);
+        for (int k = 0; k < m; k++) {
+            h = fnv(h, files[k].name, BCAT_NAME_SIZE);
+            h = fnv(h, &files[k].size, sizeof files[k].size);
+            h = fnv(h, files[k].digest, sizeof files[k].digest);
+        }
+    }
+    return h ? h : 1; /* 0 stays "no provider" */
 }
