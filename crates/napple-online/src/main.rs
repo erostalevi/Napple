@@ -13,6 +13,7 @@ const USAGE: &str = "usage: napple-online serve [--listen ADDR:PORT] [--data DIR
                                   (default ~/Library/Application Support/Napple/online-server)
   -v         NAPPLE_ONLINE_VERBOSE=1  log every call and every packet
              NAPPLE_ONLINE_PUBLIC_HOST  the name clients use (reported by /napple/v1/info)
+             NAPPLE_ONLINE_PUBLIC_IP    the address reported for clients on the server's own machine (default: its LAN address)
              NAPPLE_ONLINE_NATCHECK_BASE  first UDP port of the NAT check (default 10025: UDP 10025, 10125, 33334, 33335 and the same + 1000; 0 = off)
 Logs go to stdout. Point Napple at it with NAPPLE_NET=host NAPPLE_ONLINE_SERVER=http://<address>:<port> (https://<name> behind a TLS proxy that
 forwards WebSocket upgrades). Never contacts Nintendo; see docs/guides/napple-online.md.";
@@ -53,7 +54,7 @@ fn main() {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         PathBuf::from(home).join("Library/Application Support/Napple/online-server")
     });
-    for unused in ["NAPPLE_ONLINE_NEX_AUTH", "NAPPLE_ONLINE_NEX_SECURE", "NAPPLE_ONLINE_PUBLIC_IP"] {
+    for unused in ["NAPPLE_ONLINE_NEX_AUTH", "NAPPLE_ONLINE_NEX_SECURE"] {
         if env(unused).is_some() {
             println!("napple-online: {unused} is not used: Switch titles reach NEX through the WebSocket on {listen} (station URLs name the same server)");
         }
