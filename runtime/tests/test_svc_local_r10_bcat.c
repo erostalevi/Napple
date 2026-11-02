@@ -52,7 +52,7 @@ int main(void) {
     IpcObject *bs = bcat_service(); IpcCall c; uint32_t r;
     const unsigned real[] = {20300, 20301, 20400, 20401, 90200}, kept[] = {20410, 20500, 30210, 30300, 90202, 90300, 90301};
     for (unsigned i = 0; i < 5; i++) CHECK(svc_find(bs, real[i]) && svc_find(bs, real[i])->status == IPC_IMPL, "IBcatService %u is real", real[i]);
-    for (unsigned i = 0; i < 7; i++) CHECK(svc_find(bs, kept[i]) && svc_find(bs, kept[i])->status == IPC_STUB, "IBcatService %u stays a documented default", kept[i]);
+    for (unsigned i = 0; i < 7; i++) CHECK(svc_find(bs, kept[i]) && svc_find(bs, kept[i])->status == IPC_IMPL, "IBcatService %u is real (task timers, push log, usage: r11 ipc-bcat-npns-local)", kept[i]);
     CHECK(bcat_storage_fingerprint(NULL) == 0, "no provider: fingerprint 0");
 
     /* ---- offline (no provider) ---- */

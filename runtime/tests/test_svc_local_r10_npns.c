@@ -12,7 +12,7 @@ int main(void) {
         const IpcCmd *e = svc_find(n, real[i]);
         CHECK(e && e->status == IPC_IMPL, "npns:u %u is real", real[i]);
         e = svc_find(n, kept[i]);
-        CHECK(e && e->status == IPC_STUB, "npns:u %u stays a documented default", kept[i]);
+        CHECK(e && e->status == IPC_IMPL, "npns:u %u is real (served from the host-side local state since r11 ipc-bcat-npns-local)", kept[i]);
     }
 
     /* Suspend / Resume and the state-change events */
