@@ -1,5 +1,5 @@
 //! Periodic cleanup (hourly in `serve`; tests call `run_once` with a moved clock): uploads that were never
-//! committed (and their objects), expired email codes, ceremonies and refresh tokens, and the blob deletion queue.
+//! committed (and their objects), expired email codes, stale lockouts, unconfirmed signups and refresh tokens, and the blob deletion queue.
 
 use crate::app::App;
 use crate::saves::{delete_versions, flush_deletions};
@@ -8,6 +8,7 @@ use crate::saves::{delete_versions, flush_deletions};
 pub struct Report {
     pub expired_uploads: usize,
     pub blobs_deleted: usize,
+    pub unverified_removed: usize,
 }
 
 pub async fn run_once(app: &App) -> Result<Report, String> {
@@ -25,13 +26,20 @@ pub async fn run_once(app: &App) -> Result<Report, String> {
         )
         .map_err(e)?;
         rep.expired_uploads = keys.len();
-        db.execute("DELETE FROM email_challenges WHERE expires_at < ?1", [now])
+        db.execute("DELETE FROM auth_codes WHERE expires_at < ?1", [now])
             .map_err(e)?;
         db.execute(
-            "DELETE FROM webauthn_challenges WHERE expires_at < ?1",
-            [now],
+            "DELETE FROM login_failures WHERE locked_until < ?1 AND window_start < ?1 - ?2",
+            rusqlite::params![now, crate::ratelimit::WINDOW],
         )
         .map_err(e)?;
+        // Signups never confirmed within a day (the password hash and pending nickname go with them).
+        rep.unverified_removed = db
+            .execute(
+                "DELETE FROM accounts WHERE verified_at IS NULL AND created_at < ?1",
+                [now - 86_400],
+            )
+            .map_err(e)?;
         db.execute("DELETE FROM refresh_tokens WHERE expires_at < ?1", [now])
             .map_err(e)?;
         keys

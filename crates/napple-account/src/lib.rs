@@ -1,4 +1,4 @@
-//! Napple Account server (`/account/v1` at `https://pretend.napple.lat`): one identity across Mac, iPhone and the
+//! Napple Account server (email + password accounts, `/account/v1` at `https://pretend.napple.lat`): one identity across Mac, iPhone and the
 //! CLI, and end-to-end encrypted cloud saves. The API and security model are in
 //! `docs/guides/napple-account.md`; the shared contract is `orchestrations/ACCOUNT-CONTRACT.md`.
 
@@ -7,6 +7,7 @@ pub mod admin;
 pub mod app;
 pub mod aws;
 pub mod blob;
+pub mod codes;
 pub mod config;
 pub mod db;
 pub mod error;
@@ -17,12 +18,13 @@ pub mod mailer;
 pub mod names;
 pub mod outbound;
 pub mod pages;
-pub mod passkey;
+pub mod ratelimit;
+pub mod password;
 pub mod retention;
 pub mod saves;
 pub mod signin;
+pub mod terms;
 pub mod util;
-pub mod webauthn;
 
 use app::{App, AppState, Clock, RateLimiter, SystemClock};
 use blob::{BlobStore, FsBlobStore, S3BlobStore};
@@ -79,14 +81,23 @@ pub fn from_config(cfg: Config) -> Result<AppState, String> {
     let creds = Arc::new(aws::CredentialProvider::from_env(out.clone()));
     let mailer: Arc<dyn Mailer> = match &cfg.mailer {
         MailerKind::Dev => {
-            log::warn("dev mailer: sign-in codes are printed to stdout and no email is sent");
+            log::warn("dev mailer: codes are printed to stdout and no email is sent");
             Arc::new(DevMailer)
         }
-        MailerKind::Ses { region, from } => Arc::new(SesMailer {
+        MailerKind::Ses {
+            region,
+            from,
+            config_set,
+        } => Arc::new(SesMailer {
             region: region.clone(),
             from: from.clone(),
+            config_set: config_set.clone(),
             creds: creds.clone(),
             out: out.clone(),
+        }),
+        MailerKind::Smtp { url, from } => Arc::new(mailer::SmtpMailer {
+            cfg: mailer::parse_smtp_url(url)?,
+            from: from.clone(),
         }),
     };
     let (blobs, dev_blobs): (Arc<dyn BlobStore>, Option<Arc<FsBlobStore>>) = match &cfg.blobs {
