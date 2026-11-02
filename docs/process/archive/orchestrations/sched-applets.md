@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r1
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_3b3cd256-1668-4a2b-8542-c3387e1fbb05
 launched_at: 2026-11-01
@@ -38,3 +38,5 @@ launched_at: 2026-11-01
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask). The 40-start soak is long: keep each run ≤ 30 s and release the run lock between runs so other sessions can interleave.
 
 ## Result
+Integrated 2026-11-01: Clean, merged into main as 861610d (branch head 465077d). Unit tests (threads_preempt 12, kernel_sched 24, applet suites) and four-title 60 s boots green, no regression. Acceptance 2 not met by design: the ACNH base race is not scheduling; integrator's 8 + 8 base starts show the same CBTRACE anomaly rate before and after (one known-family crash, main+0x1b61a48, in a 3-run sample). Follow-up: the r3 race item.
+Integrator file: `docs/process/archive/integrators/claude-sched-applets-2026-11-01-r1.md`.

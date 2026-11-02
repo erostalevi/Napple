@@ -6,7 +6,7 @@ head: 5713fc3
 env: mac
 date: 2026-11-01
 areas: [runtime/kernel (threads.c), runtime/services/applet*, tools/soak, docs]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/sched-applets-2026-11-01-r1: Horizon scheduling fixes, swkbd + offline web on real titles (ACNH race still open)
@@ -95,3 +95,13 @@ None unbuilt. Everything compiles with zero warnings on this Mac.
   runtime's gfx glue). A deeper CBTRACE backtrace (6 host frames cut off the worker's job chain) would help the next investigator.
 - Next ACNH step (runtime or gfx): find what the guest main thread waits on before it re-records the views of a job group (see Findings). If it waits
   on GPU progress (an NVN sync), that is gfx.
+
+## Integration result
+- Date: 2026-11-01. Merged into main as 861610d (integ/sched-applets 60024b8, branch head 465077d), last of the r2 integration round (scope added by the orchestrator). Outcome: **Clean** (`docs/architecture/runtime-services.md` auto-merged; no conflicts).
+- `integrate:` fixes: none. Native ports: none (scheduler and applet code are portable C / POSIX; left as C on purpose).
+- Build (scratch worktree): gfx lib adapter, audio, input, frontend, runtime rc 0, no new warnings.
+- Tests: `make -C runtime test`, `test-host`, `test-services` rc 0, all suites `"failed":0` (`threads_preempt` 12, `kernel_sched` 24, `svc_applet` 86, `svc_applet_web` 179).
+- Four-title boots (runtime binary, 60 s headless, private copied `--save-root`, under `.run.lock`): SMO, MK8D, LAS, ACNH update rc 0, `notify-running`, no crashes, 0 skipped draws; frame counts equal or higher than main before the merge (SMO 3552 -> 3559, MK8D 3046 -> 3406, LAS 3552 -> 3523, ACNH 1729 -> 1781).
+- ACNH base race (acceptance 2, **not met, as declared**): 30 s base starts with `NAPPLE_GFX_CBTRACE=1`: main before the merge 8 runs, 0 crashes, 5 with CBTRACE EndRecording anomalies; this branch 8 runs, 0 crashes, 5 with anomalies; plus a first 3-run sample on this branch with 1 guest crash at `main+0x1b61a48` (null+0x28, same family as the known `main+0x1b61d3c`). Same anomaly rate both sides: no evidence the scheduler changes make it worse or better. Landed per the orchestrator's instruction; the race stays a follow-up (r3 `acnh-race-atomics` is on it).
+- Not re-run here: the swkbd (118 s) and SMO windowed manual checks; author-verified.
+- Corrections to this file's instructions: `GFX=napple` is not needed (the default runtime build links the gfx adapter).
