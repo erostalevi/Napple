@@ -11,6 +11,36 @@ status: ready-with-caveats
 
 # claude/online-pia-2026-11-02-r7: past SessionKeepFailed to Pia's NAT check; two MK8D instances in one gathering
 
+## Update (after merging mk8d-lan-session e6a4dd9)
+- **Merged** `claude/mk8d-lan-session-2026-11-02-r7` (bsd errno numbering, nifm GetCurrentIpConfigInfo, GetPseudoDeviceId per instance). Conflicts:
+  `Cargo.toml` members and `runtime/Makefile` test blocks, both additive, both kept.
+- **The host no longer fails.** 2618-0006 is gone for the host (mk8d-lan-session's bsd errno fix). Instance A creates the gathering, runs its NAT
+  check, publishes its station (ReplaceURL), calls MatchmakeExtension 34 UpdateProgressScore and waits on the kart screen. No error through
+  95 s (screenshots).
+- **Server fixes from this round (a045e28):**
+  - ReplaceURL never matched the stored URL: the client names the *public* URL we gave it, not the private one it registered. So GetSessionURLs
+    handed the joiner the host's WebSocket URL (port 1). Now Register keeps the private URLs plus the public one, and ReplaceURL replaces the
+    public entry (address+port, else port, else first).
+  - `NAPPLE_ONLINE_NATCHECK_BASE` shifts every NAT check port on both server and runtime. This was needed to test beside the integration
+    session's server, which holds 8737 and UDP 10025….
+- **The joiner still fails with 2618-0502.** B gets the host's private and Pia station URLs (`address=192.168.5.229;port=<A's Pia
+  port>;natf=1;natm=1`), runs NatDetectionJob (three NAT-traversal dummy messages to nncs1:33335), polls ~35 ms, then calls MatchMakingExt 1
+  EndParticipation and errors. It never sends a packet to A.
+- What I tried for the joiner:
+  - echoing the dummies back unchanged: they arrive, no change; dropped again;
+  - B started 0.6 s or 5 s after A: 0.6 s is a race (the host's ReplaceURL comes later), 5 s is clean, same 2618-0502;
+  - nifm GetCurrentIpAddress in network order (local test): no change for this step. It is still host order in `nifm_ip`, unlike
+    GetCurrentIpConfigInfo, so the private URL carries 229.5.168.192. Listed under Needs, not committed (not my row).
+- Next suspects for 2618-0502:
+  - the Switch station URL keys the server may be expected to fill (`Ntrpa`/`Ntrpp` NAT-traversal public address and port, `R`/`Rsa`/`Rsp`/`Ra`/`Rp`
+    relay);
+  - both consoles share one public IP (same Mac), and Pia may need a working private URL then: fix nifm_ip and retest;
+  - NEX NAT traversal (RequestProbeInitiationExt is never called by the joiner).
+- Run used: `NAPPLE_ONLINE_NATCHECK_BASE=12025 napple-online serve --listen 127.0.0.1:8747 -v`. Two runtimes in one job under the run lock, separate
+  saves and state dirs, `NAPPLE_ONLINE_NATCHECK_BASE=12025 NAPPLE_ONLINE_SERVER=http://127.0.0.1:8747`, B 5 s after A,
+  `NAPPLE_INPUT_SCRIPT=15:A,19:DOWN,20.5:DOWN,22:A,32:A,36:A,40:A,44:A,48:A,53:A`.
+
+
 ## Summary
 - **2618-0562 SessionKeepFailed: found and fixed.** After AutoMatchmakeWithParam_Postpone, MK8D waits for a "participant joined" notification
   about itself; after 10 s it unregisters and raises SessionKeepFailed. Its worldwide gathering has flags 0xa10, which include the
@@ -50,7 +80,7 @@ status: ready-with-caveats
 ## Built and tested here
 | Item | Status | Evidence |
 |---|---|---|
-| `cargo test -p napple-online` | tested | 35 passed (natcheck reply fields, reply sockets, live UDP echo; verbose join notifications) |
+| `cargo test -p napple-online` | tested | 35 passed (natcheck reply fields, reply sockets, live UDP echo; verbose join notifications; ReplaceURL keeps the private URL) |
 | `make -C runtime test-net-online` | tested | test_net_online_client 51/0, test_net_online_ssl 42/0 |
 | `make -C runtime test test-services test-ipc-reference` | tested | exit 0 |
 | SessionKeepFailed fixed on MK8D | verified | before: MatchmakeExtension 40, then 10 s of nothing, then MatchMaking 2 and play report `ErrorCode 2618-562 AppError SessionKeepFailed`; after: Pia's NAT check starts 20 ms after the matchmake answer; no SessionKeepFailed |
