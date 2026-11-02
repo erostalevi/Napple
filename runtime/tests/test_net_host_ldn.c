@@ -185,6 +185,12 @@ int main(void) {
     CHECK(st_b == LDN_STATION_OPENED, "station: back to StationOpened once the host is gone");
     svc_call(hb, 3, NULL, 0, &c);
     CHECK(SVC_OUT(&c, uint16_t, 0) == 3, "station GetDisconnectReason = DestroyedByUser");
+
+    online_provider_install(A); /* Finalize while hosting ends the network at the provider, and closing the object stops its notifications */
+    svc_call(ha, 200, NULL, 0, &c), svc_call(ha, 202, create, sizeof create, &c);
+    CHECK(c.result == 0 && A->ldn_get_network(A->ctx, &cur, &reason) == 0, "host creates again");
+    svc_call(ha, 401, NULL, 0, &c);
+    CHECK(A->ldn_get_network(A->ctx, &cur, &reason) != 0 && !((Ldn *)ha->state)->watching, "Finalize while hosting: the provider's network is gone, no notification registered");
     online_provider_install(NULL);
 
     net_host_instance_free(A), net_host_instance_free(B), net_host_instance_free(C);

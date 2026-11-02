@@ -19,6 +19,7 @@ typedef struct {
     LdnState state;
     uint32_t event_w;
     LdnConfig cfg;
+    int watching; /* registered for the provider's change notifications */
 } Ldn;
 static LdnState *st(IpcObject *s) { return &((Ldn *)s->state)->state; }
 static void notify(IpcObject *s) {
@@ -38,9 +39,12 @@ static void provider_changed(void *arg) {
     if (w) event_signal_handle(w);
 }
 static void watch(IpcObject *s, int on) {
+    Ldn *l = s->state;
     const OnlineProvider *p = ldn_provider();
     void (*set)(void *, void (*)(void *), void *) = p ? ONLINE_FN(p, ldn_set_notify) : NULL;
-    if (set) set(p->ctx, on ? provider_changed : NULL, on ? s->state : NULL);
+    if (!on && !l->watching) return; /* never clears another object's registration */
+    if (set) set(p->ctx, on ? provider_changed : NULL, on ? l : NULL);
+    l->watching = on;
 }
 /* A station whose host went away (the provider no longer has the network) is back to StationOpened, as on the console; the reason stays readable. */
 static void sync_state(IpcObject *s) {
@@ -275,7 +279,10 @@ static void l_disconnect(IpcObject *s, IpcCall *c) {
     apply(s, c, LDN_OP_DISCONNECT);
 }
 static void l_initialize(IpcObject *s, IpcCall *c) { apply(s, c, LDN_OP_INITIALIZE); }
-static void l_finalize(IpcObject *s, IpcCall *c) { apply(s, c, LDN_OP_FINALIZE); }
+static void l_finalize(IpcObject *s, IpcCall *c) {
+    drop_network(s); /* Finalize from any state ends a hosted or joined network too */
+    apply(s, c, LDN_OP_FINALIZE);
+}
 
 static const IpcCmd local_cmds[] = {
     {0, "GetState", l_get_state, IPC_IMPL},
@@ -321,6 +328,7 @@ static const IpcCmd local_cmds[] = {
 /* Closing the service object ends a network it still hosts or joined, and stops the provider's notifications to it. */
 static void ldn_local_destroy(IpcObject *o) {
     drop_network(o);
+    watch(o, 0); /* no notification may reach the freed state */
     free(o->state);
 }
 static void ldn_create_local(IpcObject *s, IpcCall *c) {
