@@ -239,6 +239,7 @@ GitHub Actions unless `NAPPLE_DEPLOY_ALLOW_LOCAL=1` is set.
 | `State bucket ... not found` | Run mode `bootstrap` once. |
 | Apply fails with "record already exists" | `NAPPLE_DNS_ALLOW_OVERWRITE` is `false` and a record was made by hand: delete it, or set the variable back to `true`. |
 | The smoke test prints `ok stub online` | The stand-in is deployed: the crate is not on `main` yet ([stand-in servers](#stand-in-servers)). |
+| Roll fails with `/opt/napple or docker compose missing` | First boot failed: the error prints the end of `/var/log/napple-bootstrap.log`. A slow first boot is waited for (cloud-init, up to 10 min). |
 | Roll waits for SSM forever | The instance has no route out (check the route table) or the SSM agent is down: EC2 > the instance > Get system log; `/var/log/napple-bootstrap.log` from a Session Manager shell. |
 | Smoke test fails on a first deploy | DNS not delegated yet (check the registrar's name servers) or the ACME challenge failed: CloudWatch `/napple/servers`, the caddy stream. |
 | `docker compose` errors on the instance | `aws ssm start-session --target <instance id>`, then `cd /opt/napple && sudo docker compose -f compose.yml -f compose.aws.yml logs`. |

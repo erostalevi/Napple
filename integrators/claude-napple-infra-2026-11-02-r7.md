@@ -112,6 +112,11 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   `infra/aws/github-oidc-trust.json` lists both casings now; `deploy-policy.json` stays as an optional least-privilege replacement.
 - `infra/local/run.sh` fix found with the real crates: Homebrew's rustup installs no `cargo`/`rustc` proxies, so `rustup which cargo` alone fails
   with "No such file or directory" (cargo can't find rustc); the script now puts the toolchain dir on PATH.
+- **First real deploy (orchestrator):** bootstrap + apply worked (33 resources, i-06c2df69d85ebaabc, EIP 54.85.44.3, both images pushed), but the roll
+  arrived ~1m45s after launch, while cloud-init was still installing Compose: `cd: /opt/napple: No such file or directory`. Fix (separate commit):
+  the remote command waits `timeout 600 cloud-init status --wait`, checks `/opt/napple` + `docker compose version` (printing the tail of
+  `/var/log/napple-bootstrap.log` if first boot failed), SSM `executionTimeout` 1200 s, poll up to ~21 min, roll job timeout 45 min.
+  The rendered remote script passes shellcheck; not re-run on AWS from here.
 - **Decision: take over the hand-made DNS records.** The zone already holds apex A/AAAA, `www` and `*` with exactly the stack's values, so
   `dns_allow_overwrite` now defaults to `true` (workflow variable fallback `true`); otherwise the first apply would fail with "already exists".
 - **Decision: S3 lock files** instead of DynamoDB (the orchestrator asked for fewer resources; supported by the pinned 1.13.5, see above).
