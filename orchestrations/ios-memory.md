@@ -6,10 +6,10 @@ base: orchestrate/2026-11-02-r8
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_9f9355cb-2ac1-4f06-89c8-bee5ccc3ed38 (fresh)
+launched_at: 2026-11-02
 ---
 
 # ios-memory: Super Mario Odyssey runs out of memory on iPhone after about a minute
