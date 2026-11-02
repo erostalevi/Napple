@@ -2,7 +2,7 @@
 branch: claude/net-host-provider-2026-11-02-r6
 orchestration: net-host-provider
 base: 87938c7
-head: cadd350 (code and docs; the integrator file is the next commit)
+head: 739f8c1 (code and docs; the integrator file is the next commit)
 env: mac
 date: 2026-11-02
 areas: [runtime/net, runtime/services]
@@ -16,7 +16,7 @@ status: ready-with-caveats
 the host resolver (sfdnsres), TLS clients verified against the host trust store plus guest-imported CAs (ssl, SecureTransport), nifm connectivity from the
 Mac's primary IPv4 interface, and LDN emulated over the LAN between Napple instances (UDP discovery + TCP session, real LAN addresses as node addresses).
 Default stays offline; with the variable unset every service answers exactly as before (all existing tests unchanged and green). The provider contains no
-online-service hostname, endpoint, token, certificate or authentication: friends, presence, prepo, nsd, accounts keep their offline answers.
+online-service endpoint, token, certificate or authentication, and refuses to resolve the console vendor's domains (requirement added at hand-off): friends, presence, prepo, nsd, accounts keep their offline answers.
 Service side: ldn.c shows every node, fires the state change event on provider notifications and moves a station whose host left back to StationOpened;
 after nifm-netconnect landed in main (merged here), ssl ImportServerPki keeps the certificate and DoHandshake hands imported CAs and SetVerifyOption to the provider.
 Everything in the assignment is built and verified except one part of acceptance 3 ("ends cleanly"), which fails in the applet area. Titles: the four 60 s boots are clean with and without the variable (no crash, no missing IPC); SMO and ACNH get their nifm requests accepted with the Mac's IP. **Caveat:** MK8D's scripted Online Play with `NAPPLE_NET=host` now gets past nifm, is refused an account ID token (no Nintendo account: expected), shows the error applet, and then the guest calls svcBreak because the runtime's error applet gives no output data (`applet.c`, not this item's area; see Needs). Offline, the same path is unchanged (netConnect applet, rc 0).
@@ -37,13 +37,14 @@ Branch-only changes (`git diff --stat c33eb7f..HEAD`, c33eb7f = the main merged 
 | Item | Status | Evidence (command + result) |
 |---|---|---|
 | Runtime builds with `src/net` (no new warnings) | verified | `make -C runtime` |
-| Acceptance 1: sockets (TCP echo, UDP, non-blocking connect + poll, EAGAIN, SO_RCVTIMEO, Close ends a blocked recv, ECONNREFUSED), DNS (localhost, `example.com`, .invalid, reverse), nifm connected with the Mac's IP, provider selection (unset / offline / bogus / plugin wins) and the bsd + nifm handlers | verified | `runtime/build/tests/test_net_host_sock` → 88 checks, 0 failed (Mac online at 192.168.5.229) |
+| Acceptance 1: sockets (TCP echo, UDP, non-blocking connect + poll, EAGAIN, SO_RCVTIMEO, Close ends a blocked recv, ECONNREFUSED), DNS (localhost, `example.com`, .invalid, reverse), nifm connected with the Mac's IP, provider selection (unset / offline / bogus / plugin wins) and the bsd + nifm handlers | verified | `runtime/build/tests/test_net_host_sock` → 102 checks, 0 failed (Mac online at 192.168.5.229) |
+| Vendor-domain block: 9 names under the 7 domains refused with EAI_NONAME, look-alikes not blocked, the redirect hook resolves a redirected name, refuses a redirect to a blocked name | tested | same binary (part of the 102) |
 | Acceptance 1: TLS handshake to a local `openssl s_server` with a throw-away CA added as guest CA (DER and PEM), refused without it, wrong host name refused, verify options; through the ssl handlers (ImportServerPki → DoHandshake → Write/Read); `example.com:443` against the host trust store | verified | `runtime/build/tests/test_net_host_tls` → 41 checks, 0 failed |
 | Acceptance 1: variable unset → every service as before | verified | `test_svc_online` 263/0, `test_svc_offline` 70/0, `test_svc_ldn` 140/0, `test_svc_sfdnsres` 25/0, `test_svc_nifm_audit`, all of `test-services`; `test_net_host_sock` last check (Connect ENETDOWN again) |
 | Acceptance 2: LDN — two provider instances (plus a third) discover, create, join, exchange a UDP packet both ways at the reported node addresses, advertise update, node limit, version mismatch, Reject (reason 5), Disconnect (1), DestroyNetwork (3); then through `ldn:u` (Scan → Connect → NetworkInfo with 2 nodes, GetIpv4Address, host state-change event, station back to StationOpened, Finalize while hosting) | verified (in one process; not with two runtime processes) | `runtime/build/tests/test_net_host_ldn` → 65 checks, 0 failed |
 | Acceptance 3: four titles 60 s with `NAPPLE_NET=host` | verified (plain boots); **fails on MK8D Online Play** (applet area) | `NAPPLE_NET=host NAPPLE_TRACE_IPC=all runtime/build/napple-runtime <games>/<tid>/<build> --headless --seconds 60 --save-root <private copy> --summary x.json` for SMO 3ca12dfaaf9c82da, LAS ae16f71e002af8cb, MK8D fe941ed5ba14be5d, ACNH ff1d1c05670db602: rc 0 each, `missing_ipc []`, `unsupported_svcs []`, last stage notify-running. MK8D + `NAPPLE_INPUT_SCRIPT=15:A,19:DOWN,20.5:DOWN,22:A,32:A`: rc 70, guest Break after the error applet (trace in the shared notes folder `net-host-provider-evidence/`) |
 | Acceptance 4: four titles 60 s without the variable | verified | same four commands without the variable: rc 0, `missing_ipc []`, `unsupported_svcs []`; no `online:` line; MK8D Online Play script: netConnect applet twice, rc 0 (as nifm-netconnect left it) |
-| Acceptance 5: `make -C runtime test test-services test-ipc-reference` | verified | exit 0 (79 test binaries incl. test_net_host_* 65/88/41 checks, 0 failed; re-run on the final tree after the main merge) |
+| Acceptance 5: `make -C runtime test test-services test-ipc-reference` | verified | exit 0 (79 test binaries incl. test_net_host_* 65/102/41 checks, 0 failed; re-run on the final tree after the main merge) |
 
 ## Unbuilt / untested list (the integrator checks these first)
 - Nothing unbuilt. Untested: LDN between two separate runtime processes and between two Macs (only provider instances in one process); a real title's local
@@ -57,6 +58,12 @@ Branch-only changes (`git diff --stat c33eb7f..HEAD`, c33eb7f = the main merged 
   (`thread_core_away`, weak so tests link without the scheduler).
 - Decision: options the Mac lacks are accepted and ignored on set (logged once), ENOPROTOOPT on get; FreeBSD SO_NOSIGPIPE is implied (SO_NOSIGPIPE always on).
 - Decision: nsd is left NULL (names unchanged), so templated online-service host names never resolve; no online-service behaviour is emulated.
+- Requirement (orchestrator, at hand-off): the provider's DNS path refuses every name under nintendo.net, nintendo.com, nintendo.co.jp, nintendo.eu,
+  nintendowifi.net, nintendo-europe.com, nintendoswitch.com (and subdomains) with EAI_NONAME, like an offline resolver (`nh_dns_blocked`,
+  `net_host_dns.c`). Hook for napple-online (r7): `extern int (*net_host_redirect_lookup)(const char *name, char *out, size_t n)` in `net_host.h`, NULL
+  by default, consulted for every resolved name before the block check (1 = resolve `out` instead); a redirect to a blocked name is refused. Only DNS is
+  covered: a literal IP bypasses it (no title seen doing so). `nh_register` now registers only when `online_builtin_host` is still empty, so napple-online's
+  wrapper (`net_online.c`) wins in either constructor order (agreed with that session).
 - Decision: nifm reports a wired-style connection (kind 2, strength 3, no SSID) with the Mac's real IP/mask/router/DNS; 1 s cache.
 - Decision (LDN): node addresses are real LAN addresses (ldn_mitm-style), so titles' own sockets work unmodified; two nodes on one Mac share an address,
   so titles that bind a fixed port on every node need two Macs. The station's user name and the passphrase are not passed to the provider (ABI has no field);
@@ -82,7 +89,7 @@ Branch-only changes (`git diff --stat c33eb7f..HEAD`, c33eb7f = the main merged 
   needs nothing from it (registration through a constructor-set pointer).
 
 ## How to test
-1. `make -C runtime test-net-host` → three binaries, `88 / 41 / 65 checks, 0 failed`. Needs `/usr/bin/openssl` (stock macOS LibreSSL) for the TLS server; the
+1. `make -C runtime test-net-host` → three binaries, `102 / 41 / 65 checks, 0 failed`. Needs `/usr/bin/openssl` (stock macOS LibreSSL) for the TLS server; the
    public-name checks print `note: ... skipped` when the Mac is offline (still pass).
 2. `make -C runtime test test-services test-ipc-reference` → exit 0.
 3. Headless: `NAPPLE_NET=host NAPPLE_TRACE_IPC=all runtime/build/napple-runtime <games>/0100000000010000/3ca12dfaaf9c82da --headless --seconds 60 --save-root <copy>`
