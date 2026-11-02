@@ -10,8 +10,8 @@ pub enum Error {
     Unauthorized,
     /// 409 on a new save version: `head` is the server's current version.
     Conflict { head: u64 },
-    /// 402 {reason: "plan_limit", upgrade_url}: the plan does not cover cloud saves for this title.
-    PlanLimit { upgrade_url: String },
+    /// 413 {reason: "quota"}: the account's cloud storage (or the per-version size limit) is exceeded.
+    Quota { message: String },
     /// Any other HTTP error status.
     Http { status: u16, body: String },
     /// Could not reach the server (offline, DNS, TLS, timeout).
@@ -41,7 +41,7 @@ impl fmt::Display for Error {
             ),
             Error::Unauthorized => write!(f, "the session expired or the device was revoked: sign in again (napple account login)"),
             Error::Conflict { head } => write!(f, "the cloud has a newer save (version {head})"),
-            Error::PlanLimit { upgrade_url } => write!(f, "not synced (plan limit): your plan covers fewer titles; upgrade at {upgrade_url}"),
+            Error::Quota { message } => write!(f, "not synced (cloud storage full): {message}"),
             Error::Http { status, body } => write!(f, "server error {status}: {body}"),
             Error::Net(e) => write!(f, "offline or server unreachable: {e}"),
             Error::Crypto(e) => write!(f, "crypto: {e}"),

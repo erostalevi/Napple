@@ -10,7 +10,7 @@ Nothing syncs unless you sign in. The client is `crates/napple-cloud` (Rust), us
 ```bash
 napple account login                 # email + 6-digit code; this Mac becomes a device of the account
 napple account status
-napple saves list                    # cloud + local saves, sync status, the plan's synced title
+napple saves list                    # cloud + local saves and their sync status
 ```
 
 - **First device** of an account: makes the account's save key and prints a **24-word recovery code** once. Write it down: it is the only
@@ -20,27 +20,28 @@ napple saves list                    # cloud + local saves, sync status, the pla
 - **Playing**: launch the game as usual. Before the game opens its save, the runtime downloads the newest cloud version (bounded by 8 s; offline
   or slow = the game starts from the local save). After the game commits its save the runtime uploads it in the background (5 s after the
   last commit, never on the game thread), and again on a clean exit (at most 10 s).
+- **Account UI**: the in-game settings panel gets an Account tab in a later round; until then the CLI is the interface. The sync core
+  (`crates/napple-cloud`: `session`, `sync`) has no CLI code in it, so that UI can call it directly (or through a C API added next to `ffi.rs`).
 - **Conflicts** (both devices played from the same version): nothing is lost. The cloud version becomes current, this device's save is
   kept as a **restore point** (`napple saves history <title>`), and the frontend is told (event `conflict`). `napple saves restore <title> <file>`
   brings it back (it then becomes the newest cloud version).
-- **History**: the server keeps the last versions (Free 10, Plus 20). `napple saves restore <title> <version>` makes an old one current.
+- **History**: the server keeps the last versions (20 per title by default). `napple saves restore <title> <version>` makes an old one current.
 - **Per title**: `napple saves disable <title-id>` / `enable` (default on after sign-in).
 - **Offline**: an upload that fails for a network reason is queued (`queue.json`) and retried with backoff while the game runs, at the next
   launch, or with `napple saves push`. A local save is never deleted or overwritten unless the same data is in the cloud or in a restore point.
 - **Sign out**: `napple account logout` removes the tokens and keys; local saves and restore points stay.
 
-### Plans
+### Storage limits
 
-Free: account, devices, profiles, online identity, and cloud saves for **one title** (the first one you sync; switchable once every
-30 days, server side). **Napple Plus** (subscription): every title, 20 versions per title, 5 GiB. A save upload beyond the plan gets
-`402 plan_limit`: the save stays on the device, the title shows **not synced (plan limit)** in `napple saves list` and the runtime log/event,
-and `napple account upgrade` opens the checkout page (`plan.upgrade_url`). Downloads and restores of existing versions always work.
-Apps never take payment themselves.
+No paid plans this round (contract: billing not built; every account gets every feature). The server limits storage by configuration
+(default 10 GiB per account, 20 versions per title, 64 MiB per version). An upload beyond the quota gets `413 {reason: "quota"}`: the save
+stays on the device, the title shows **not synced: cloud storage full** in `napple saves list`, the runtime logs it and sends a `quota`
+event, and the upload is retried at most hourly (or now with `napple saves push`). Downloads and restores always work.
 
 ### Local users and profiles
 
 A Napple Account has up to 8 player profiles. Cloud saves are per (title, profile). Each local user of the runtime (acc:u0 uid; the first one
-is `4e617070706c65557365720000000001`) is linked to a profile: `login` links the first user to the account's first profile (making one if
+is `4e6170706c6555736572000000000001`) is linked to a profile: `login` links the first user to the account's first profile (making one if
 there is none); `napple account link <profile-id> --user N` changes it. Use the same profile on the Mac and the iPhone to share a save.
 
 ## What is synced
@@ -86,10 +87,9 @@ Caches, BCAT, temporary and system saves are not synced. Nothing else ever leave
 - New version: `POST .../versions {base_version, size, sha256_ciphertext}` -> `{version, upload_url}` where **version must be
   `base_version + 1`** (the first version is 1, `base_version` 0): the client derives the blob key from the version before it asks, because
   `sha256_ciphertext` is part of the request. `409 {error, head}` (`head` a number, or `{version}`) when `base_version` is not the head.
-  `402 {reason: "plan_limit", upgrade_url}`. Upload: `PUT upload_url` with the blob (`application/octet-stream`), then
+  `413 {reason: "quota"[, message]}` when the account's storage is full. Upload: `PUT upload_url` with the blob (`application/octet-stream`), then
   `POST .../versions/{v}/commit {}`. Download: `GET .../versions/{v}` -> `{url}` (presigned GET).
-- `GET /me` -> `{account_id, email, display_name, plan: {name: "free"|"plus", status, renews_at, synced_titles_limit (null = unlimited),
-  quota, upgrade_url, synced_titles: [title ids]}}`. `upgrade_url` falls back to `<base>/billing/checkout`.
+- `GET /me` -> `{account_id, email, display_name, plan}`; the client ignores `plan` (a placeholder this round).
 
 ### Save blob, format 1
 

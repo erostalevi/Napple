@@ -5,7 +5,7 @@
 //!   thread that pushes after commits (debounced) and retries queued pushes with backoff.
 //! - `napple_cloud_runtime_commit`: a save was committed (cheap; never blocks the game thread on the network).
 //! - `napple_cloud_runtime_flush`: clean exit; pushes what is pending, waiting at most the timeout.
-//! - `napple_cloud_runtime_status`: JSON for the frontend; `napple_cloud_set_event_callback`: conflict / plan_limit / pulled / pushed events.
+//! - `napple_cloud_runtime_status`: JSON for the frontend; `napple_cloud_set_event_callback`: conflict / quota / pulled / pushed events.
 use crate::session::Session;
 use crate::sync::{self, PullResult, PushResult, Target};
 use crate::Error;
@@ -184,7 +184,7 @@ fn worker(rt: Arc<Rt>) {
                     transient = true;
                 }
                 Ok(PushResult::Conflict { head, .. }) => log(&format!("conflict with cloud version {head}: local save kept as a restore point")),
-                Ok(PushResult::PlanLimit { upgrade_url }) => log(&format!("not synced (plan limit); upgrade: {upgrade_url}")),
+                Ok(PushResult::Quota { message }) => log(&format!("not synced (cloud storage full): {message}; the save stays local")),
                 Ok(_) => {}
                 Err(e) => {
                     log(&format!("push failed: {e}"));
@@ -243,7 +243,7 @@ pub extern "C" fn napple_cloud_runtime_flush(timeout_ms: c_int) -> c_int {
     1
 }
 
-/// JSON: {"active": bool, "title_id", "targets": [{profile_id, status, version, detail, upgrade_url}]}. Valid until the next call.
+/// JSON: {"active": bool, "title_id", "targets": [{profile_id, status, version, detail}]}. Valid until the next call.
 #[unsafe(no_mangle)]
 pub extern "C" fn napple_cloud_runtime_status() -> *const c_char {
     let v = match RT.get() {
@@ -254,7 +254,7 @@ pub extern "C" fn napple_cloud_runtime_status() -> *const c_char {
                 .iter()
                 .map(|t| {
                     let s = rt.session.dir.load_sync(&t.title, &t.profile);
-                    serde_json::json!({"profile_id": t.profile, "status": s.status, "version": s.version, "detail": s.detail, "upgrade_url": s.upgrade_url})
+                    serde_json::json!({"profile_id": t.profile, "status": s.status, "version": s.version, "detail": s.detail})
                 })
                 .collect();
             serde_json::json!({"active": true, "title_id": rt.targets.first().map(|t| t.title.clone()), "targets": ts})

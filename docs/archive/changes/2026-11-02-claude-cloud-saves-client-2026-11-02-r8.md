@@ -12,8 +12,8 @@ Branch `claude/cloud-saves-client-2026-11-02-r8` (orchestration `cloud-saves-cli
   - `tarball` + `blob`: deterministic ustar of the save, zstd, AES-256-GCM under HKDF(account key, `napple-save|title|profile|version`)
     with a synthetic (HMAC) nonce: blob format 1 (`NSAV`).
   - `session`: email sign-in, token refresh with rotation, first-device key creation, device approval, recovery, profiles and links, logout.
-  - `sync`: pull before mount, push after commit, conflict = keep both (remote current, local restore point, event), 402 plan limit
-    (status `plan_limit`, upgrade URL, save stays local), offline queue with retry, history, restore of a version or a restore point.
+  - `sync`: pull before mount, push after commit, conflict = keep both (remote current, local restore point, event), 413 quota
+    (status `quota`, save stays local, retried at most hourly), offline queue with retry, history, restore of a version or a restore point.
   - `ffi` + `include/napple_cloud.h`: the runtime API (start = pull before mount + background thread; commit = debounced push; flush on exit;
     status JSON; event callback).
   - `stub` (feature `stub`, binary `napple-cloud-stub`): an in-memory implementation of the contract for tests and local development.
@@ -22,8 +22,14 @@ Branch `claude/cloud-saves-client-2026-11-02-r8` (orchestration `cloud-saves-cli
   `fs_report_uncommitted` (both clean exits). Weak no-op defaults in `main.c`/`fs.c` keep builds without `runtime/src/cloud` linking
   (`make CLOUD=0`, `tools/build_ios.sh` as it is). `runtime/Makefile` (appended) builds `target/release/libnapple_cloud.a` with cargo and links
   it (+ Security) into the runtime and the applet dylib only (not the unit tests).
-- **CLI**: `napple account login|logout|status|devices|approve|recover|profiles|link|plan|upgrade`, `napple saves list|pull|push|history|restore|enable|disable`.
-- Docs: `docs/guides/cloud-saves.md` (usage, plans, security model, wire details, blob format, environment).
+- **CLI**: `napple account login|logout|status|devices|approve|recover|profiles|link`, `napple saves list|pull|push|history|restore|enable|disable`.
+- Docs: `docs/guides/cloud-saves.md` (usage, storage limits, security model, wire details, blob format, environment).
 
 ## Status
 See the integrator file `integrators/claude-cloud-saves-client-2026-11-02-r8.md` for the verified/tested list and evidence.
+
+## Scope changes during the session (orchestrator, user decisions)
+- Billing/plans removed from this round (contract commit 3295f5c): the 402 plan-limit handling and `napple account plan|upgrade` that were first
+  built were dropped; `413 {reason: "quota"}` is handled instead.
+- The account UI goes in the in-game settings panel in a later round; no overlay C API was built (the orchestrator withdrew that request);
+  the sync core stays free of CLI code so the UI can call it.

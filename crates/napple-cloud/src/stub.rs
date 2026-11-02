@@ -3,8 +3,8 @@
 //!
 //! - Email sign-in: the code is `fixed_code` when set, else random and printed to stdout.
 //! - Presigned URLs: `<base>/_blob/<id>` on the stub itself (PUT/GET, no Authorization header, like S3 presigned URLs).
-//! - Plans: Free = 1 synced title (the first title that gets a version), 10 versions; Plus = unlimited, 20 versions.
-//!   `POST <base>/_stub/plan {email, plan}` switches an account's plan; 402 {reason:"plan_limit", upgrade_url} beyond the limit.
+//! - No plans (contract: billing not built): `GET /me` has the placeholder `plan {name: "free", features: {}}`. Storage limits are
+//!   `quota_bytes` (default 10 GiB per account) and `versions` (default 20 per title); a new version beyond the quota gets 413 {reason: "quota"}.
 //! - Versions: linear per (title, profile); a new version is head + 1 and needs `base_version == head` (else 409 {error, head}).
 use crate::util::{hex, now, random, sha256_hex};
 use serde_json::{json, Value};
@@ -17,8 +17,10 @@ pub struct Options {
     pub fixed_code: Option<String>,
     /// Access token lifetime in seconds (default 900).
     pub access_ttl: Option<u64>,
-    /// "free" (default) or "plus" for new accounts.
-    pub default_plan: Option<String>,
+    /// Per-account storage quota in bytes (default 10 GiB; NAPPLE_SAVE_QUOTA_BYTES on the real server).
+    pub quota_bytes: Option<u64>,
+    /// Versions kept per title (default 20; NAPPLE_SAVE_VERSIONS on the real server).
+    pub versions: Option<usize>,
     pub quiet: bool,
 }
 
@@ -27,11 +29,9 @@ struct Account {
     id: String,
     email: String,
     display_name: String,
-    plan: String,
     devices: Vec<Device>,
     profiles: Vec<Value>,
     recovery: Option<Value>,
-    free_title: Option<String>,
 }
 
 #[derive(Clone)]
@@ -141,13 +141,6 @@ impl Stub {
         self.state.lock().unwrap().log.clone()
     }
 
-    pub fn set_plan(&self, email: &str, plan: &str) {
-        let mut g = self.state.lock().unwrap();
-        if let Some(a) = g.accounts.iter_mut().find(|a| a.email == email) {
-            a.plan = plan.into();
-        }
-    }
-
     /// Expires every access token (the next authenticated call gets 401 and the client refreshes).
     pub fn expire_access_tokens(&self) {
         self.state.lock().unwrap().access.clear();
@@ -173,15 +166,6 @@ impl State {
         self.refresh.insert(r.clone(), (acc, dev.to_string()));
         json!({"access_token": a, "refresh_token": r, "expires_in": ttl, "token_type": "Bearer",
                "account_id": self.accounts[acc].id, "device_id": dev})
-    }
-
-    fn plan_json(&self, a: &Account) -> Value {
-        let plus = a.plan == "plus";
-        json!({"name": if plus {"plus"} else {"free"}, "status": "active", "renews_at": null,
-               "synced_titles_limit": if plus { Value::Null } else { json!(1) },
-               "quota": if plus { 5u64 << 30 } else { 256u64 << 20 },
-               "upgrade_url": format!("{}/billing/checkout", self.base),
-               "synced_titles": a.free_title.iter().collect::<Vec<_>>()})
     }
 
     fn route_raw(&mut self, method: &str, url: &str, body: &[u8]) -> Option<(u16, Vec<u8>)> {
@@ -230,12 +214,10 @@ impl State {
                 let acc = match self.accounts.iter().position(|a| a.email == email) {
                     Some(i) => i,
                     None => {
-                        let plan = self.opts.default_plan.clone().unwrap_or_else(|| "free".into());
                         self.accounts.push(Account {
                             id: format!("acct-{}", hex(&random::<8>())),
                             display_name: email.split('@').next().unwrap_or("").to_string(),
                             email: email.clone(),
-                            plan,
                             ..Default::default()
                         });
                         self.accounts.len() - 1
@@ -261,13 +243,6 @@ impl State {
                 }
                 return (200, self.tokens(acc, &dev));
             }
-            ("POST", ["_stub", "plan"]) => {
-                let email = b["email"].as_str().unwrap_or("").to_lowercase();
-                let Some(a) = self.accounts.iter_mut().find(|a| a.email == email) else { return err(404, "no such account") };
-                a.plan = b["plan"].as_str().unwrap_or("free").into();
-                return (200, json!({"plan": a.plan}));
-            }
-            ("GET", ["billing", "checkout"]) => return (200, json!({"page": "stub checkout"})),
             _ => {}
         }
         // authenticated
@@ -285,7 +260,7 @@ impl State {
             }
             ("GET", ["me"]) => {
                 let a = &self.accounts[acc];
-                (200, json!({"account_id": a.id, "email": a.email, "display_name": a.display_name, "plan": self.plan_json(a)}))
+                (200, json!({"account_id": a.id, "email": a.email, "display_name": a.display_name, "plan": {"name": "free", "features": {}}}))
             }
             ("GET", ["profiles"]) => (200, json!(self.accounts[acc].profiles)),
             ("POST", ["profiles"]) => {
@@ -389,14 +364,10 @@ impl State {
                 if size > 64 << 20 {
                     return err(413, "a version is at most 64 MiB");
                 }
-                let a = &self.accounts[acc];
-                if a.plan != "plus" {
-                    match &a.free_title {
-                        Some(t) if t != title => {
-                            return (402, json!({"reason": "plan_limit", "upgrade_url": format!("{}/billing/checkout", self.base)}));
-                        }
-                        _ => {}
-                    }
+                let used: u64 = self.saves.iter().filter(|((a, _, _), _)| *a == acc).flat_map(|(_, vs)| vs.iter()).filter(|v| v.committed).map(|v| v.size).sum();
+                let quota = self.opts.quota_bytes.unwrap_or(10 << 30);
+                if used + size > quota {
+                    return (413, json!({"reason": "quota", "message": format!("{used} of {quota} bytes used; this version needs {size}")}));
                 }
                 let id = hex(&random::<16>());
                 let v = Version {
@@ -415,7 +386,6 @@ impl State {
             }
             ("POST", ["versions", n, "commit"]) => {
                 let n: u64 = n.parse().unwrap_or(0);
-                let free = self.accounts[acc].plan != "plus";
                 let Some(v) = self.saves.get_mut(&key).and_then(|vs| vs.iter_mut().find(|v| v.version == n && !v.committed)) else {
                     return err(404, "no such pending version");
                 };
@@ -424,7 +394,7 @@ impl State {
                     return err(400, "uploaded data does not match size/sha256_ciphertext");
                 }
                 v.committed = true;
-                let keep = if free { 10 } else { 20 };
+                let keep = self.opts.versions.unwrap_or(20);
                 let vs = self.saves.get_mut(&key).unwrap();
                 while vs.iter().filter(|v| v.committed).count() > keep {
                     let i = vs.iter().position(|v| v.committed).unwrap();
@@ -432,9 +402,6 @@ impl State {
                     if let Some(id) = old.blob {
                         self.blobs.remove(&id);
                     }
-                }
-                if free && self.accounts[acc].free_title.is_none() {
-                    self.accounts[acc].free_title = Some(title.to_string());
                 }
                 (200, json!({"version": n}))
             }

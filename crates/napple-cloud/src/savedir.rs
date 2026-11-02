@@ -115,7 +115,7 @@ mod tests {
     fn local_tar_and_install() {
         let d = std::env::temp_dir().join(format!("napple-cloud-savedir-{}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
-        let uid = "4e617070706c65557365720000000001";
+        let uid = "4e6170706c6555736572000000000001";
         assert!(local_tar(&d, uid).unwrap().is_none());
         // a journaled account save: the committed snapshot counts, not uncommitted live changes
         let acc = account_root(&d, uid);

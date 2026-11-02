@@ -15,7 +15,9 @@ fn status_error(code: u16, body: String) -> Error {
     let v: Value = serde_json::from_str(&body).unwrap_or(Value::Null);
     match code {
         401 => Error::Unauthorized,
-        402 => Error::PlanLimit { upgrade_url: v["upgrade_url"].as_str().unwrap_or("").to_string() },
+        413 => Error::Quota {
+            message: v["message"].as_str().or_else(|| v["error"].as_str()).unwrap_or("the account's cloud save storage is full").to_string(),
+        },
         409 => {
             let h = &v["head"];
             let head = h.as_u64().or_else(|| h["version"].as_u64()).or_else(|| v["head_version"].as_u64()).unwrap_or(0);

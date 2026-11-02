@@ -14,8 +14,8 @@ const USAGE: &str = "usage:
   napple plan   <files...> -k <prod.keys> [--updates all|latest|none|<v,v>] [--dlc all|none|<id,id>] [--json]
   napple clean  [--shader-cache] [--build-cache <dir>] [--engine <dir>] [--dry-run]   (removes rebuildable artifacts)
   napple decomp <files...> -k <prod.keys> [--updates ...] [--dlc ...] [-o <dir>] [--json]
-  napple account login|logout|status|devices|approve|recover|profiles|link|plan|upgrade   (Napple Account)
-  napple saves   list|pull|push|history|restore|enable|disable <title-id>               (end-to-end encrypted cloud saves)
+  napple account login|logout|status|devices|approve|recover|profiles|link   (Napple Account)
+  napple saves   list|pull|push|history|restore|enable|disable <title-id>   (end-to-end encrypted cloud saves)
 files: base game, updates and DLC (XCI/NSP), any order, one or several files.";
 
 struct Args {

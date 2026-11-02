@@ -1,7 +1,7 @@
 //! A signed-in device: tokens and their refresh, the account save key, sign-in/out, device approval, recovery, profiles.
 use crate::api::{list, str_field, Api};
 use crate::keys;
-use crate::state::{AccountConfig, PlanInfo, StateDir};
+use crate::state::{AccountConfig, StateDir};
 use crate::store::{self, SecretStore};
 use crate::util::{b64, now, unb64};
 use crate::{Error, Result};
@@ -172,13 +172,7 @@ impl Session {
     }
 
     pub fn me(&self) -> Result<Value> {
-        let v = self.call("GET", "/me", None)?;
-        if let Ok(p) = serde_json::from_value::<PlanInfo>(v["plan"].clone()) {
-            if v["plan"].is_object() {
-                let _ = self.update_cfg(|c| c.plan = Some(p));
-            }
-        }
-        Ok(v)
+        self.call("GET", "/me", None)
     }
 
     /// The account save key: cached in the secret store, else fetched wrapped for this device (`GET /keys/mine`) and unwrapped.
@@ -317,14 +311,5 @@ impl Session {
         }
         store::wipe(self.store.as_ref())?;
         self.dir.clear_account()
-    }
-
-    /// The checkout page for Napple Plus (`plan.upgrade_url`, else `<server>/billing/checkout`).
-    pub fn upgrade_url(&self) -> String {
-        let me = self.me().ok();
-        me.as_ref()
-            .and_then(|m| m["plan"]["upgrade_url"].as_str().map(str::to_string))
-            .or_else(|| self.cfg().plan.and_then(|p| p.upgrade_url))
-            .unwrap_or_else(|| format!("{}/billing/checkout", self.api.base))
     }
 }

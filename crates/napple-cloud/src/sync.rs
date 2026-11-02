@@ -1,4 +1,4 @@
-//! The sync engine: pull before mount, push after commit, conflicts, plan limit, offline queue, history and restore.
+//! The sync engine: pull before mount, push after commit, conflicts, storage quota, offline queue, history and restore.
 //!
 //! Version bookkeeping per (title, profile) (`state::SyncState`): `version` is the cloud version the local save is based on and
 //! `plain_sha256` the hash of that state. Comparing the current local hash with it tells whether the local save has unsynced changes.
@@ -6,8 +6,8 @@
 //!   this title and has a different save), the local copy is kept as a restore point first and a `conflict` event tells the frontend:
 //!   the remote becomes current, nothing is lost.
 //! - push: new version = `version + 1` with `base_version = version`. 409 (someone else pushed first): the local copy is kept as a
-//!   restore point, status `conflict`; the next launch's pull installs the remote. 402: status `plan_limit` with the upgrade URL, the
-//!   save stays local. Offline/5xx: queued, retried later. Never deletes or overwrites a local save that is not in the cloud or a restore point.
+//!   restore point, status `conflict`; the next launch's pull installs the remote. 413 quota: status `quota`, the save stays local
+//!   (retried at most hourly, or with `napple saves push`). Offline/5xx: queued, retried later. Never deletes or overwrites a local save that is not in the cloud or a restore point.
 use crate::api::{list, str_field};
 use crate::blob;
 use crate::savedir;
@@ -48,7 +48,8 @@ pub enum PushResult {
     Unchanged,
     Pushed { version: u64 },
     Conflict { head: u64, restore_point: PathBuf },
-    PlanLimit { upgrade_url: String },
+    /// 413 {reason: "quota"}: the cloud storage is full; the save stays on this device.
+    Quota { message: String },
     Queued { error: String },
 }
 
@@ -57,7 +58,7 @@ pub fn uid_hex(uid: &[u8; 16]) -> String {
 }
 
 /// The runtime's first local user (runtime/src/services/account.c g_user_id): the user `napple account login` links by default.
-pub const DEFAULT_UID: &str = "4e617070706c65557365720000000001";
+pub const DEFAULT_UID: &str = "4e6170706c6555736572000000000001";
 
 /// The (title, profile) targets for the local users that are linked to a profile.
 pub fn targets(s: &Session, title: &str, save_dir: &Path, uids: &[String]) -> Vec<Target> {
@@ -168,7 +169,7 @@ fn pull_locked(s: &Session, t: &Target, deadline: Option<Instant>) -> Result<Pul
     Ok(PullResult::Pulled { version: head, restore_point })
 }
 
-/// Push the committed local save. `force` retries even right after a plan-limit answer.
+/// Push the committed local save. `force` retries even right after a quota answer.
 pub fn push(s: &Session, t: &Target, force: bool) -> Result<PushResult> {
     if !s.cfg().title_enabled(&t.title) {
         return Ok(PushResult::Disabled);
@@ -185,8 +186,8 @@ fn push_tar(s: &Session, t: &Target, tar: Vec<u8>, local_sha: &str, force: bool)
         s.dir.dequeue(&t.title, &t.profile)?;
         return Ok(PushResult::Unchanged);
     }
-    if !force && st.status == "plan_limit" && st.updated_at + 3600 > now() {
-        return Ok(PushResult::PlanLimit { upgrade_url: st.upgrade_url.clone().unwrap_or_default() });
+    if !force && st.status == "quota" && st.updated_at + 3600 > now() {
+        return Ok(PushResult::Quota { message: st.detail.clone() });
     }
     let key = s.account_key()?;
     let version = st.version + 1;
@@ -228,20 +229,19 @@ fn push_tar(s: &Session, t: &Target, tar: Vec<u8>, local_sha: &str, force: bool)
             s.dir.event(&t.title, &t.profile, "conflict", &st.detail, json!({"version": head, "restore_point": p.display().to_string()}));
             Ok(PushResult::Conflict { head, restore_point: p })
         }
-        Err(Error::PlanLimit { upgrade_url }) => {
-            st.status = "plan_limit".into();
-            st.upgrade_url = Some(upgrade_url.clone());
-            st.detail = "not synced (plan limit)".into();
+        Err(Error::Quota { message }) => {
+            st.status = "quota".into();
+            st.detail = message.clone();
             s.dir.save_sync(&t.title, &t.profile, &st)?;
             s.dir.dequeue(&t.title, &t.profile)?;
             s.dir.event(
                 &t.title,
                 &t.profile,
-                "plan_limit",
-                "not synced (plan limit): the save stays on this device; Napple Plus syncs every title",
-                json!({"upgrade_url": upgrade_url}),
+                "quota",
+                &format!("not synced (cloud storage full: {message}); the save stays on this device"),
+                json!({}),
             );
-            Ok(PushResult::PlanLimit { upgrade_url })
+            Ok(PushResult::Quota { message })
         }
         Err(e) if e.is_transient() => {
             st.status = "pending".into();
@@ -312,4 +312,24 @@ fn restore_tar(s: &Session, t: &Target, tar: Vec<u8>, head: u64, what: &str) -> 
     s.dir.event(&t.title, &t.profile, "restored", &format!("{what} restored"), json!({}));
     let sha = sha256_hex(&tar);
     push_tar(s, t, tar, &sha, true)
+}
+
+#[cfg(test)]
+mod tests {
+    /// DEFAULT_UID must be the runtime's first local user (runtime/src/services/account.c g_user_id), byte for byte.
+    #[test]
+    fn default_uid_matches_the_runtime() {
+        let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../runtime/src/services/account.c");
+        let Ok(src) = std::fs::read_to_string(&p) else { return }; // crate built outside the Napple tree
+        let line = src.lines().find(|l| l.contains("g_user_id[16] =")).expect("g_user_id in account.c");
+        let body = &line[line.find('{').unwrap() + 1..line.find('}').unwrap()];
+        let bytes: Vec<u8> = body
+            .split(',')
+            .map(|t| {
+                let t = t.trim();
+                t.strip_prefix("0x").map_or_else(|| t.parse().unwrap(), |h| u8::from_str_radix(h, 16).unwrap())
+            })
+            .collect();
+        assert_eq!(crate::util::hex(&bytes), super::DEFAULT_UID);
+    }
 }

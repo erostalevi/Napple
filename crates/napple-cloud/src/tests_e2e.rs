@@ -114,20 +114,11 @@ fn two_devices_end_to_end() {
     stub.expire_access_tokens();
     assert_eq!(sync::push(&b, &tb, false).unwrap(), PushResult::Pushed { version: 3 });
 
-    // plan limit: Free covers one title (TITLE got the first version) -> a second title gets 402, stays local
+    // a second title syncs on its own (no plans this round: every title syncs)
     let ta2 = target(&a, TITLE2, &saves_a.parent().unwrap().join("save2"));
     write_save(&ta2.save_dir, "odyssey.bin", b"moons=5");
-    match sync::push(&a, &ta2, false).unwrap() {
-        PushResult::PlanLimit { upgrade_url } => assert!(upgrade_url.ends_with("/billing/checkout")),
-        r => panic!("{r:?}"),
-    }
-    assert_eq!(a.dir.load_sync(TITLE2, &profile).status, "plan_limit");
-    assert!(read_save(&ta2.save_dir, "odyssey.bin").is_some());
-    // throttled without force; after upgrading to Plus it syncs
-    assert!(matches!(sync::push(&a, &ta2, false).unwrap(), PushResult::PlanLimit { .. }));
-    stub.set_plan(EMAIL, "plus");
-    assert_eq!(sync::push(&a, &ta2, true).unwrap(), PushResult::Pushed { version: 1 });
-    assert_eq!(a.me().unwrap()["plan"]["name"], "plus");
+    assert_eq!(sync::push(&a, &ta2, false).unwrap(), PushResult::Pushed { version: 1 });
+    assert_eq!(a.me().unwrap()["plan"]["name"], "free");
 
     // offline: the push is queued, the local save untouched; back online the queue drains
     let good = a.cfg().server;
@@ -239,4 +230,28 @@ fn signed_out_is_a_no_op() {
     assert_eq!(r, 0);
     assert!(!root.join("cloud").exists());
     assert!(!save.exists());
+}
+
+/// 413 {reason: "quota"}: the save stays local, status `quota`, retried at most hourly unless forced.
+#[test]
+fn quota_keeps_the_save_local() {
+    store::force_file_store(true);
+    let stub = Stub::start("127.0.0.1:0", Options { fixed_code: Some("123456".into()), quiet: true, quota_bytes: Some(64), ..Default::default() }).unwrap();
+    let root = tmp().join("quota");
+    let support = root.join("support");
+    let a = sign_in(&stub, &support, "q", "Mac Q");
+    assert!(matches!(a.setup_keys(CHEAP).unwrap(), KeySetup::CreatedFirst { .. }));
+    let profile = a.link(DEFAULT_UID, None).unwrap();
+    let t = target(&a, TITLE, &root.join("save"));
+    write_save(&t.save_dir, "big.bin", &[5u8; 4096]);
+    assert!(matches!(sync::push(&a, &t, false).unwrap(), PushResult::Quota { .. }));
+    let st = a.dir.load_sync(TITLE, &profile);
+    assert_eq!(st.status, "quota");
+    assert!(read_save(&t.save_dir, "big.bin").is_some());
+    let n = stub.log().len();
+    assert!(matches!(sync::push(&a, &t, false).unwrap(), PushResult::Quota { .. }));
+    assert_eq!(stub.log().len(), n, "throttled: no request");
+    assert!(matches!(sync::push(&a, &t, true).unwrap(), PushResult::Quota { .. }));
+    assert!(stub.log().len() > n, "forced: asked again");
+    assert!(fs::read_to_string(a.dir.root.join("events.jsonl")).unwrap().contains("\"quota\""));
 }

@@ -18,9 +18,9 @@ int napple_cloud_runtime_start(const char *support_dir, const char *save_dir, co
 void napple_cloud_runtime_commit(void);
 /* Clean exit: push now, wait at most timeout_ms. 1 = done, 0 = still running (it stays queued for the next launch) or not active. */
 int napple_cloud_runtime_flush(int timeout_ms);
-/* {"active":bool,"title_id":..,"targets":[{"profile_id","status","version","detail","upgrade_url"}]}; valid until the next call. */
+/* {"active":bool,"title_id":..,"targets":[{"profile_id","status","version","detail"}]}; valid until the next call. */
 const char *napple_cloud_runtime_status(void);
-/* Events as JSON {"event": "pulled"|"pushed"|"conflict"|"plan_limit"|"restored", "message", "title_id", "profile_id", ...}; called from
+/* Events as JSON {"event": "pulled"|"pushed"|"conflict"|"quota"|"restored", "message", "title_id", "profile_id", ...}; called from
  * the cloud thread (or the launch thread during the pull). */
 void napple_cloud_set_event_callback(napple_cloud_event_fn fn, void *ctx);
 

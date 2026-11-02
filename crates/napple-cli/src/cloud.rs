@@ -11,14 +11,12 @@ use std::path::PathBuf;
 const ACCOUNT_USAGE: &str = "usage: napple account <command>
   login [--email E] [--code C] [--server URL] [--name DEVICE]   sign in with an emailed code (this Mac becomes a device)
   logout                         sign out (local saves and restore points stay)
-  status                         account, device, plan, key and sync state
+  status                         account, device, key and sync state
   devices [revoke <device-id>]   devices of the account, and devices waiting for approval
   approve [<device-id>]          give waiting devices the cloud save key (end-to-end encryption)
   recover [--phrase \"24 words\"]  unlock this device with the recovery code instead of an approval
   profiles [add <nickname>]      Napple player profiles (up to 8)
   link <profile-id> [--user N|UID]  link a local user (default: the first) to a profile
-  plan                           the plan (Free: 1 synced title; Napple Plus: unlimited)
-  upgrade [--print]              open the Napple Plus checkout page in the browser
 environment: NAPPLE_ACCOUNT_URL (server), NAPPLE_ACCOUNT_NAMESPACE (another sign-in on this machine), NAPPLE_SUPPORT_DIR";
 
 const SAVES_USAGE: &str = "usage: napple saves <command> [--save-root DIR] [--user N|UID]
@@ -97,24 +95,6 @@ fn user(o: &Opts) -> Result<String, String> {
             Ok(format!("{}{:02x}", &DEFAULT_UID[..30], 1 + i))
         }
     }
-}
-
-fn plan_line(p: &Option<state::PlanInfo>) -> String {
-    match p {
-        None => "unknown (offline)".into(),
-        Some(p) => {
-            let lim = p.synced_titles_limit.map_or("unlimited synced titles".to_string(), |n| format!("{n} synced title{}", if n == 1 { "" } else { "s" }));
-            let name = if p.name == "plus" { "Napple Plus".to_string() } else if p.name.is_empty() { "Free".into() } else { capitalize(&p.name) };
-            let quota = p.quota.map(|q| format!(", {} MiB", q >> 20)).unwrap_or_default();
-            let st = if p.status.is_empty() || p.status == "active" { String::new() } else { format!(" ({})", p.status) };
-            format!("{name}{st}: {lim}{quota}")
-        }
-    }
-}
-
-fn capitalize(s: &str) -> String {
-    let mut c = s.chars();
-    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
 }
 
 pub fn account(args: &[String]) -> Result<(), String> {
@@ -203,31 +183,6 @@ pub fn account(args: &[String]) -> Result<(), String> {
             println!("local user {uid} -> profile {pid}");
             Ok(())
         }
-        "plan" => {
-            let s = open()?;
-            let me = s.me().map_err(e)?;
-            println!("plan: {}", plan_line(&s.cfg().plan));
-            let synced: Vec<&str> = me["plan"]["synced_titles"].as_array().map(|a| a.iter().filter_map(|v| v.as_str()).collect()).unwrap_or_default();
-            if !synced.is_empty() {
-                println!("synced title{}: {}", if synced.len() == 1 { "" } else { "s" }, synced.join(", "));
-            }
-            if let Some(r) = me["plan"]["renews_at"].as_str() {
-                println!("renews: {r}");
-            }
-            if s.cfg().plan.is_none_or(|p| p.name != "plus") {
-                println!("Napple Plus syncs every title: napple account upgrade");
-            }
-            Ok(())
-        }
-        "upgrade" => {
-            let s = open()?;
-            let url = s.upgrade_url();
-            println!("{url}");
-            if !o.switches.iter().any(|x| x == "print") && cfg!(target_os = "macos") {
-                std::process::Command::new("open").arg(&url).status().map_err(|e| format!("open: {e}"))?;
-            }
-            Ok(())
-        }
         _ => Err(ACCOUNT_USAGE.into()),
     }
 }
@@ -269,7 +224,6 @@ fn login(o: &Opts) -> Result<(), String> {
         Ok(p) => println!("local user {DEFAULT_UID} -> profile {p}"),
         Err(err) => println!("profile link: {err}"),
     }
-    println!("plan: {}", plan_line(&s.cfg().plan));
     Ok(())
 }
 
@@ -293,7 +247,6 @@ fn status() -> Result<(), String> {
         Err(err) => format!("unknown ({err})"),
     };
     println!("save key: {key}");
-    println!("plan:     {}", plan_line(&c.plan));
     if let Err(err) = me {
         println!("          (server: {err})");
     }
@@ -414,10 +367,7 @@ fn print_push(t: &Target, r: PushResult) {
             t.title,
             t.title
         ),
-        PushResult::PlanLimit { upgrade_url } => println!(
-            "{}: not synced (plan limit). Your plan syncs one title; the save stays on this device. Napple Plus: {upgrade_url} (napple account upgrade)",
-            t.title
-        ),
+        PushResult::Quota { message } => println!("{}: not synced, the account's cloud storage is full ({message}); the save stays on this device", t.title),
         PushResult::Queued { error } => println!("{}: offline, queued for later ({error})", t.title),
         PushResult::Disabled => println!("{}: sync is turned off (napple saves enable {})", t.title, t.title),
     }
@@ -425,17 +375,7 @@ fn print_push(t: &Target, r: PushResult) {
 
 fn list(o: &Opts) -> Result<(), String> {
     let s = open()?;
-    let me = s.me().ok();
     let c = s.cfg();
-    println!("plan: {}", plan_line(&c.plan));
-    let synced: Vec<String> =
-        me.as_ref().and_then(|m| m["plan"]["synced_titles"].as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    if c.plan.as_ref().is_some_and(|p| p.synced_titles_limit.is_some()) {
-        match synced.first() {
-            Some(t) => println!("free synced title: {t} (one title on Free; it can be switched once every 30 days)"),
-            None => println!("free synced title: not chosen yet (the first title you sync)"),
-        }
-    }
     let remote = s.call("GET", "/saves", None).map_err(e)?;
     let mut rows: std::collections::BTreeMap<(String, String), (u64, u64)> = Default::default();
     for r in napple_cloud::api::list(&remote, "saves") {
@@ -466,7 +406,7 @@ fn list(o: &Opts) -> Result<(), String> {
             match st.status.as_str() {
                 "synced" if st.version == v => format!("synced (v{})", st.version),
                 "synced" => format!("cloud is newer (this device v{})", st.version),
-                "plan_limit" => "not synced (plan limit): napple account upgrade".into(),
+                "quota" => "not synced: cloud storage full (the save stays local)".into(),
                 "conflict" => format!("conflict: cloud v{} kept as current, local kept as restore point", st.remote_head),
                 "pending" => "waiting to upload (offline)".into(),
                 "error" => format!("error: {}", st.detail),

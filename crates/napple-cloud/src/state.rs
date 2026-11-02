@@ -1,8 +1,8 @@
 //! Local client state: `<support dir>/cloud/<namespace>/`
 //!
-//! - `account.json`   server, account/device ids, per-title toggles, local user -> profile links, the last plan seen
+//! - `account.json`   server, account/device ids, per-title toggles, local user -> profile links
 //! - `sync/<TITLE>-<profile>.json`  version bookkeeping per (title, profile): the version the local save is based on and the hash of
-//!   that state (a different local hash = unsynced local changes), status (synced/pending/conflict/plan_limit/error)
+//!   that state (a different local hash = unsynced local changes), status (synced/pending/conflict/quota/error)
 //! - `queue.json`     pushes that failed for a transient reason (offline): retried at the next commit, launch or `napple saves push`
 //! - `restore/<TITLE>/<profile>/<time>-<reason>-<sha8>.tar.zst`  local restore points (a local save replaced by a newer cloud save)
 //! - `status/<TITLE>.json` + `events.jsonl`  the last event per title and a log, for the frontend (Studio/iOS UI) and the CLI
@@ -43,24 +43,6 @@ pub struct TitleCfg {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
-pub struct PlanInfo {
-    #[serde(default)]
-    pub name: String,
-    #[serde(default)]
-    pub status: String,
-    #[serde(default)]
-    pub renews_at: Option<String>,
-    #[serde(default)]
-    pub synced_titles_limit: Option<u64>,
-    #[serde(default)]
-    pub quota: Option<u64>,
-    #[serde(default)]
-    pub upgrade_url: Option<String>,
-    #[serde(default)]
-    pub synced_titles: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct AccountConfig {
     pub server: String,
     pub account_id: String,
@@ -77,8 +59,6 @@ pub struct AccountConfig {
     /// Local user id (32 hex digits, the acc:u0 uid) -> Napple profile id.
     #[serde(default)]
     pub links: BTreeMap<String, String>,
-    #[serde(default)]
-    pub plan: Option<PlanInfo>,
     #[serde(default)]
     pub signed_in_at: u64,
 }
@@ -97,13 +77,11 @@ pub struct SyncState {
     pub plain_sha256: String,
     #[serde(default)]
     pub cipher_sha256: String,
-    /// synced | pending | conflict | plan_limit | error
+    /// synced | pending | conflict | quota | error
     #[serde(default)]
     pub status: String,
     #[serde(default)]
     pub detail: String,
-    #[serde(default)]
-    pub upgrade_url: Option<String>,
     #[serde(default)]
     pub remote_head: u64,
     #[serde(default)]
