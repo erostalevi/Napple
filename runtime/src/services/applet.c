@@ -882,7 +882,9 @@ static IpcObject *storage_new(uint64_t size) {
     Storage *st = calloc(1, sizeof *st);
     st->size = size;
     st->data = calloc(1, size ? size : 1);
-    return IPC_OBJECT("IStorage", storage_cmds, st, storage_destroy);
+    /* "IStorage(am)": the am storage (nn::am::service::IStorage) is a different interface from fsp-srv's IStorage; the distinct name keeps
+     * test_ipc_reference from comparing it with the fs fixture and keeps the two apart in logs and run summaries. Name only. */
+    return IPC_OBJECT("IStorage(am)", storage_cmds, st, storage_destroy);
 }
 
 /* ---- ILibraryAppletCreator / ILibraryAppletAccessor: the software keyboard ------------------------------------------------------------
