@@ -207,8 +207,18 @@ static int server_address(NetOnline *o, OnlineAddr *out) {
     return 0;
 }
 
+/* NAPPLE_ONLINE_NATCHECK_BASE: the server's NAT check runs on other ports (all shifted by base - 10025), e.g. beside another server on one Mac. */
+static int natcheck_shift(void) {
+    static int shift = -100000;
+    if (shift == -100000) {
+        const char *e = getenv("NAPPLE_ONLINE_NATCHECK_BASE");
+        int b = e && *e ? atoi(e) : NET_ONLINE_NATCHECK_PORT;
+        shift = b > 0 && b < 65535 ? b - NET_ONLINE_NATCHECK_PORT : 0;
+    }
+    return shift;
+}
 static uint16_t real_port(NetOnline *o, int v, uint16_t port) {
-    if (nat_check_port(port)) return (uint16_t)(port + (v == 2 ? NET_ONLINE_NATCHECK_SECONDARY : 0));
+    if (nat_check_port(port)) return (uint16_t)(port + natcheck_shift() + (v == 2 ? NET_ONLINE_NATCHECK_SECONDARY : 0));
     return o->srv.port;
 }
 
@@ -309,12 +319,12 @@ static int64_t no_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, On
     int64_t r = o->host->sock_recv(o->host->ctx, h, buf, n, flags, from, err);
     OnlineAddr srv;
     if (r >= 0 && from && from->family == BSD_AF_INET && o->server_resolved && server_address(o, &srv) == 0 && !memcmp(from->addr, srv.addr, 4)) {
-        uint16_t p = from->port;
+        uint16_t p = (uint16_t)(from->port - natcheck_shift()), q = from->port;
         if (nat_check_port(p)) set_ip(from, NET_ONLINE_VIRTUAL_IP, p);
         else if (nat_check_port((uint16_t)(p - NET_ONLINE_NATCHECK_SECONDARY))) set_ip(from, NET_ONLINE_VIRTUAL_IP2, (uint16_t)(p - NET_ONLINE_NATCHECK_SECONDARY));
         else return r;
         if (r >= 16) memcpy((uint8_t *)buf + 12, from->addr, 4); /* the reply's "server address" field: the server the title knows */
-        NO_DBG("datagram socket %d from the NAT check (server port %u)", h, p);
+        NO_DBG("datagram socket %d from the NAT check (server port %u)", h, q);
     }
     return r;
 }

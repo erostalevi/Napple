@@ -294,9 +294,14 @@ impl Server {
                     u.set("RVCID", me.cid);
                     u.set("PID", me.pid);
                 }
-                // what the server sees: the same station at the address the connection comes from
+                // what the server sees: the same station at the address the connection comes from. Kept as its own entry after the client's
+                // (private) URLs: ReplaceURL later names exactly this one, and GetSessionURLs hands out both, so two consoles behind one
+                // address can use the private one.
                 let mut public = c.urls.first().cloned().unwrap_or_else(|| StationUrl::parse("prudp:/"));
                 public.set("address", crate::natcheck::observed_ip(c.peer));
+                if !c.urls.contains(&public) {
+                    c.urls.push(public.clone());
+                }
                 let public = public.to_string();
                 let cid = me.cid;
                 ok(|w| {
@@ -334,12 +339,22 @@ impl Server {
                 ok(|_| {})
             }
             7 => {
+                // ReplaceURL(old, new): the client names the public URL it was given (the observed address), not the one it registered, so the
+                // match falls back to the port, then to the first URL. Pia publishes its station (NAT check results) this way; GetSessionURLs
+                // must hand out this one.
                 if let (Ok(old), Ok(new), Some(c)) = (r.string(), r.string(), w.clients.get_mut(&me.cid)) {
-                    let old = StationUrl::parse(&old);
-                    for u in c.urls.iter_mut() {
-                        if u.get("address") == old.get("address") && u.get("port") == old.get("port") {
-                            *u = StationUrl::parse(&new);
-                        }
+                    let (old, mut new) = (StationUrl::parse(&old), StationUrl::parse(&new));
+                    new.set("RVCID", me.cid);
+                    new.set("PID", me.pid);
+                    let i = c
+                        .urls
+                        .iter()
+                        .position(|u| u.get("address") == old.get("address") && u.get("port") == old.get("port"))
+                        .or_else(|| c.urls.iter().position(|u| u.get("port") == old.get("port")))
+                        .or(if c.urls.is_empty() { None } else { Some(0) });
+                    match i {
+                        Some(i) => c.urls[i] = new,
+                        None => c.urls.push(new),
                     }
                 }
                 ok(|_| {})
@@ -951,6 +966,17 @@ mod tests {
         assert_ne!(crate::natcheck::observed_ip("127.0.0.1".parse().unwrap()).to_string(), "", "a loopback peer is reported at the LAN address when there is one");
         assert_eq!(public.get("port"), Some("49152"));
         assert_eq!(public.get("RVCID"), Some(me.cid.to_string().as_str()));
+        // ReplaceURL names the public URL (observed address): the registered one is replaced all the same
+        let mut rep = Writer::new();
+        rep.string(&public.to_string()).string("prudp:/address=192.168.1.20;port=60516;natf=1;natm=1;sid=30");
+        srv.secure_call(me, &req(PROTO_SECURE, 7, rep.buf));
+        {
+            let w = srv.world.lock().unwrap();
+            let u = &w.clients[&me.cid].urls;
+            assert_eq!(u.len(), 2, "the private URL and the public one");
+            assert_eq!(u[0].get("address"), Some("10.0.0.2"), "the private URL stays");
+            assert_eq!((u[1].get("port"), u[1].get("natm"), u[1].get("PID")), (Some("60516"), Some("1"), Some("77")));
+        }
         // another client finds the URLs by pid
         let (other, _rx2) = attach(&srv, 78);
         let mut b = Writer::new();
@@ -958,7 +984,7 @@ mod tests {
         let Reply::Ok(resp) = srv.secure_call(other, &req(PROTO_SECURE, 3, b.buf)) else { panic!() };
         let mut r = Reader::new(&resp);
         assert!(r.bool().unwrap());
-        assert_eq!(r.list(|r| r.string()).unwrap().len(), 1);
+        assert_eq!(r.list(|r| r.string()).unwrap().len(), 2);
     }
 
     fn notification(rx: &Receiver<Vec<u8>>) -> (u64, u32, u64, u64) {
@@ -1010,7 +1036,7 @@ mod tests {
         q.u32(s1.g.id);
         let Reply::Ok(resp) = srv.secure_call(b, &req(PROTO_MATCH_MAKING, 41, q.buf.clone())) else { panic!() };
         let urls = Reader::new(&resp).list(|r| r.string()).unwrap();
-        assert_eq!(urls.len(), 1);
+        assert_eq!(urls.len(), 2, "the host's private and public URLs");
         assert!(urls[0].contains("address=10.0.0.2"));
         // NAT traversal: b asks a to probe it
         let mut nt = Writer::new();

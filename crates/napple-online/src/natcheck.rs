@@ -19,9 +19,12 @@ pub const SECONDARY_OFFSET: u16 = 1000;
 /// The mapping-test ports MK8D's Pia sends to (on the primary server).
 pub const MAPPING_PORTS: [u16; 2] = [33334, 33335];
 
-/// The primary server's ports: `base`, `base + 100` (a pair), and the two mapping ports (a pair); then the same + SECONDARY_OFFSET.
+/// The primary server's ports: `base`, `base + 100` (a pair), and the two mapping ports (a pair); then the same + SECONDARY_OFFSET. A `base` other
+/// than DEFAULT_BASE shifts all of them by the same amount.
 pub fn ports(base: u16) -> [u16; 8] {
-    let p = [base, base + 100, MAPPING_PORTS[0], MAPPING_PORTS[1]];
+    // another base shifts every port by the same amount (the runtime maps the title's ports with NAPPLE_ONLINE_NATCHECK_BASE)
+    let shift = |p: u16| p.wrapping_add(base.wrapping_sub(DEFAULT_BASE));
+    let p = [base, base + 100, shift(MAPPING_PORTS[0]), shift(MAPPING_PORTS[1])];
     [p[0], p[1], p[2], p[3], p[0] + SECONDARY_OFFSET, p[1] + SECONDARY_OFFSET, p[2] + SECONDARY_OFFSET, p[3] + SECONDARY_OFFSET]
 }
 
@@ -146,6 +149,7 @@ mod tests {
     fn live_echo() {
         // the whole loop on localhost with a free base port
         let base = 20000 + (std::process::id() % 2000) as u16 * 4;
+        assert_eq!(ports(base)[2], 33334 + base - DEFAULT_BASE);
         if start("127.0.0.1".parse().unwrap(), base, false).is_err() {
             return; // ports taken on this machine: the pure tests above still cover the logic
         }
