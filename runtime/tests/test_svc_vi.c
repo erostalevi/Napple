@@ -101,7 +101,7 @@ int main(void) {
         transact(bd, 0, 5, VI_PT_DISCONNECT, none, 0, rw); CHECK(rw[0] == 0 && !vi.producer[5].connected && vi.producer[5].slot_state[0] == 0, "disconnect clears the slots");
         transact(bd, 0, 5, 77, none, 0, rw); CHECK((int32_t)rw[0] == VI_ST_BAD_VALUE, "unknown code: bad value");
         transact(bd, 0, 6, VI_PT_CONNECT, conn, 3, rw); CHECK(vi.producer[6].connected && !vi.producer[5].connected, "binders are independent");
-        uint32_t bound[1]; CHECK(transact(bd, 0, 99, VI_PT_QUERY, &what, 1, bound) == 2, "a binder id out of range is answered, not crashed on");
+        uint32_t bound[8]; /* the reply holds two words (value, status): 8 leaves room (ASan found the old 1-word buffer overflowed) */ CHECK(transact(bd, 0, 99, VI_PT_QUERY, &what, 1, bound) == 2, "a binder id out of range is answered, not crashed on");
     }
     { /* ipc-local-stubs: indirect layer rows */
         IpcObject *vroot = vi_open(), *dsx = sub(vroot, 0), *relay = sub(dsx, 100);
