@@ -29,7 +29,7 @@ int main(void) {
     NifmRequest r; nifm_request_init(&r);
     CHECK(r.state == NIFM_STATE_FREE && nifm_request_result(&r) == 0, "new request: free, no result yet");
     nifm_request_submit(&r); CHECK(r.state == NIFM_STATE_FREE && nifm_request_result(&r) == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED && HZ_MODULE(nifm_request_result(&r)) == HZ_MOD_NIFM, "submit is rejected at once");
-    nifm_request_cancel(&r); CHECK(nifm_request_result(&r) == 0 && !r.submitted, "cancel clears the result");
+    nifm_request_cancel(&r); CHECK(nifm_request_result(&r) == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED && r.state == NIFM_STATE_FREE, "cancel keeps a rejected request's result (nifm-netconnect r5)");
     CHECK(HZ_MODULE(friend_pop_notification_result()) == HZ_MOD_FRIENDS && friend_pop_notification_result() != 0, "friend pop result");
 
     /* bsd:u IPC */
@@ -54,7 +54,7 @@ int main(void) {
     svc_call(rq, 4, NULL, 0, &c); CHECK(c.result == 0 && event_is_signaled(ev0), "Submit signals the request event");
     svc_call(rq, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == NIFM_STATE_FREE, "GetRequestState after rejection: Free");
     svc_call(rq, 1, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "GetResult after Submit: communication disabled");
-    svc_call(rq, 3, NULL, 0, &c); svc_call(rq, 1, NULL, 0, &c); CHECK(c.result == 0, "Cancel clears the result");
+    svc_call(rq, 3, NULL, 0, &c); svc_call(rq, 1, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "Cancel keeps the rejected request's result");
     svc_call(gen, 18, NULL, 0, &c); CHECK(c.out_size == 4 && c.out[3] == 0, "internet connection status: disconnected");
     svc_call(gen, 4, NULL, 0, &c); IpcObject *rq2 = c.out_objects[0]; svc_call(rq2, 1, NULL, 0, &c); CHECK(c.result == 0 && rq2->state != rq->state, "requests are independent");
 
