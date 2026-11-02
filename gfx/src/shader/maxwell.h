@@ -114,7 +114,7 @@ typedef struct {
     uint16_t vp_swizzle; /* vertex / tess eval: nvnCommandBufferSetViewportSwizzles of viewport 0, applied to the clip position after the program (and after transform
                           * feedback capture, before the flip / depth conversions): 3 bits per output component x, y, z, w (bits 0, 3, 6, 9), each an
                           * NVN_VIEWPORT_SWIZZLE_* (source component << 1 | negate), stored XOR VP_SWIZZLE_IDENTITY so that 0 is the identity */
-    uint16_t vp_pad;
+    uint16_t vp_swizzle_vp[15]; /* the same for viewports 1-15: a program that writes the viewport index (attribute 0x68) gets the swizzle of the viewport it selects */
 } ShaderKey;
 #define VP_SWIZZLE_IDENTITY (0u | 2u << 3 | 4u << 6 | 6u << 9)
 
@@ -192,3 +192,6 @@ extern uint64_t maxwell_gmem_base, maxwell_gmem_size; /* guest heap window addre
 /* blob: shader binary (graphics stages: 0x30-byte NVN header + 0x50-byte SPH + code; compute: code only). */
 ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, const ShaderKey *key);
 void maxwell_free(ShaderInfo *s);
+/* MSL statement that applies the viewport swizzles (ShaderKey.vp_swizzle / vp_swizzle_vp, 16 values XOR VP_SWIZZLE_IDENTITY) to the float4 lvalue `pos`.
+ * `vindex`: uint expression of the viewport index the program wrote, or NULL (viewport 0). Writes "" when the swizzle is the identity; returns the length. */
+size_t maxwell_vp_swizzle_msl(const uint16_t swz[16], const char *pos, const char *vindex, char *out, size_t cap);

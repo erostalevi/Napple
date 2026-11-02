@@ -78,6 +78,7 @@ typedef struct {
     uint64_t gs_slots;      // geometry / tess control: record slots stored (STAGE_SLOT bits); tess control: patch slots in patch_slots
     uint64_t patch_slots;
     bool uses_vsys;         // vertex: system value outputs (attribute 0x60..0x6F) are kept in a local for stage_out / xfb
+    bool writes_vp_index;   // vertex / tess eval: stores the viewport index (attribute 0x68, vsys[2]): selects the viewport swizzle
     bool uses_gs_emit;      // geometry: OUT present
     bool uses_vabsdiff4, uses_isel, uses_idp;   // helper functions to emit
     bool uses_stencil;                          // a texture binding is a stencil view: uint texture + the StencilTex wrapper
@@ -503,6 +504,7 @@ static void attr_store(Ctx *c, int src, uint32_t addr) {
     }
     if (addr >= 0x60 && addr < 0x6C) {   // primitive id / layer / viewport index: kept for the stage-out record
         c->uses_vsys = true;
+        if (addr == 0x68) c->writes_vp_index = true;
         sp(&c->body, "    vsys[%d] = as_type<float>(%s);\n", (addr >> 2) & 3, v);
     } else if (addr >= 0x70 && addr < 0x80) {
         sp(&c->body, "    out.pos[%d] = as_type<float>(%s);\n", (addr >> 2) & 3, v);
@@ -3210,6 +3212,44 @@ static void xfb_epilogue(Ctx *c, Str *e) {
     sp(e, "  }\n");
 }
 
+// ------------------------------------------------------------------ viewport swizzles
+/* Each clip component from a (negated) component of the program's position. One static swizzle when every viewport the program can select has the same one;
+ * else a table of the 16 swizzles indexed by the viewport index (clamped to 15) and a run-time select. */
+size_t maxwell_vp_swizzle_msl(const uint16_t swz[16], const char *pos, const char *vindex, char *out, size_t cap) {
+    uint32_t sw[16];
+    int same = 1;
+    for (int i = 0; i < 16; i++) {
+        sw[i] = (swz[i] ^ VP_SWIZZLE_IDENTITY) & 0xfffu;
+        if (sw[i] != sw[0]) same = 0;
+    }
+    if (!vindex) same = 1;
+    int n = 0;
+    out[0] = 0;
+    if (same) {
+        if (sw[0] == VP_SWIZZLE_IDENTITY) return 0;
+        static const char cn[4] = {'x', 'y', 'z', 'w'};
+        n = snprintf(out, cap, "  { float4 q = %s; %s = float4(", pos, pos);
+        for (int i = 0; i < 4 && n > 0 && (size_t)n < cap; i++) {
+            uint32_t v = (sw[0] >> (3 * i)) & 7;
+            n += snprintf(out + n, cap - (size_t)n, "%s%sq.%c", i ? ", " : "", v & 1 ? "-" : "", cn[v >> 1]);
+        }
+        if (n > 0 && (size_t)n < cap) n += snprintf(out + n, cap - (size_t)n, "); }\n");
+    } else {
+        n = snprintf(out, cap, "  { const uint vpsw[16] = {");
+        for (int i = 0; i < 16 && n > 0 && (size_t)n < cap; i++) n += snprintf(out + n, cap - (size_t)n, "%s%#xu", i ? ", " : "", sw[i]);
+        if (n > 0 && (size_t)n < cap)
+            n += snprintf(out + n, cap - (size_t)n,
+                          "};\n    uint w = vpsw[min(%s, 15u)]; float4 q = %s; const float sq[8] = {q.x, -q.x, q.y, -q.y, q.z, -q.z, q.w, -q.w};\n"
+                          "    %s = float4(sq[w & 7u], sq[(w >> 3) & 7u], sq[(w >> 6) & 7u], sq[(w >> 9) & 7u]); }\n",
+                          vindex, pos, pos);
+    }
+    if (n < 0 || (size_t)n >= cap) {
+        out[0] = 0;
+        return 0;
+    }
+    return (size_t)n;
+}
+
 // ------------------------------------------------------------------ program assembly
 static bool is_branch_target_op(uint64_t w) { return ((w & 0xfff0000000000020ull) == 0xe240000000000000ull); }
 
@@ -3767,16 +3807,12 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     }
     if (stage == STAGE_VERTEX || stage == STAGE_TESS_EVAL) {
         if (xfb_epi.buf) sp(&s, "%s", xfb_epi.buf);
-        if (key && key->vp_swizzle) {
-            /* viewport swizzle (ShaderKey.vp_swizzle): each clip component from a (negated) component of the program's position */
-            uint32_t sw = key->vp_swizzle ^ VP_SWIZZLE_IDENTITY;
-            static const char cn[4] = {'x', 'y', 'z', 'w'};
-            char e[4][8];
-            for (int i = 0; i < 4; i++) {
-                uint32_t v = (sw >> (3 * i)) & 7;
-                snprintf(e[i], sizeof e[i], "%sq.%c", v & 1 ? "-" : "", cn[v >> 1]);
-            }
-            sp(&s, "  { float4 q = out.pos; out.pos = float4(%s, %s, %s, %s); }\n", e[0], e[1], e[2], e[3]);
+        if (key) { /* viewport swizzle (ShaderKey.vp_swizzle / vp_swizzle_vp), of the viewport the program selects */
+            uint16_t swz[16];
+            swz[0] = key->vp_swizzle;
+            memcpy(swz + 1, key->vp_swizzle_vp, sizeof key->vp_swizzle_vp);
+            char e[512];
+            if (maxwell_vp_swizzle_msl(swz, "out.pos", c->writes_vp_index ? "as_type<uint>(vsys[2])" : NULL, e, sizeof e)) sp(&s, "%s", e);
         }
         if (key && key->flip_y) sp(&s, "  out.pos.y = -out.pos.y;\n");
         if (key && key->depth_minus_one) sp(&s, "  out.pos.z = (out.pos.z + out.pos.w) * 0.5f;\n");
