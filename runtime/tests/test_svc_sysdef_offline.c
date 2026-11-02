@@ -18,7 +18,7 @@ int main(void) {
     svc_call(gen, 20, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 1 && c.out[0] == 0, "IsEthernetCommunicationEnabled: false");
     svc_call(gen, 44, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 1 && c.out[0] == 0, "IsWiredConnectionAvailable: false");
     svc_call(gen, 23, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 0, "PutToSleep: accepted");
-    CHECK(svc_find(gen, 23)->status == IPC_STUB && svc_find(gen, 15)->status == IPC_IMPL, "new rows are STUB, the old ones stay IMPL");
+    CHECK(svc_find(gen, 23)->status == IPC_STUB && svc_find(gen, 18)->status == IPC_IMPL, "new rows are STUB, the old ones stay IMPL");
     svc_call(gen, 4, NULL, 0, &c); IpcObject *rq = c.out_objects[0];
     no_dup(rq);
     svc_call(rq, 20, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 4, "IRequest GetRevision: a zero word");

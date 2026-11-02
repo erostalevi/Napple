@@ -2139,7 +2139,7 @@ static const IpcCmd srv_cmds[] = {
     {69, "ReadSaveDataFileSystemExtraDataBySaveDataAttribute", srv_read_extra_by_attr, IPC_IMPL},
     {70, "WriteSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute", srv_write_extra_mask_by_attr, IPC_IMPL},
     {71, "ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute", srv_read_extra_mask_by_attr, IPC_IMPL},
-    {30, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},
+    {30, "OpenGameCardStorage", sysd_err_generic, IPC_STUB},
     {200, "OpenDataStorageByCurrentProcess", srv_open_data_storage, IPC_IMPL},
     {203, "OpenPatchDataStorageByCurrentProcess", srv_open_patch_storage, IPC_IMPL},
     {202, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},

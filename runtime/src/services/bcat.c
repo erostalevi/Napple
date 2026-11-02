@@ -208,11 +208,11 @@ static const IpcCmd bcat_service_cmds[] = {
     {10200, "CancelSyncDeliveryCacheRequest", svc_noop, IPC_IMPL}, /* the sync already finished: nothing to cancel */
     {20100, "RequestSyncDeliveryCacheWithApplicationId", make_progress, IPC_IMPL},
     {30100, "SetPassphrase", bcat_set_passphrase, IPC_IMPL},
-    {30200, "RegisterBackgroundDeliveryTask", svc_noop, IPC_IMPL},
-    {30201, "UnregisterBackgroundDeliveryTask", svc_noop, IPC_IMPL},
+    {30200, "RegisterDeliveryTask", svc_noop, IPC_IMPL},
+    {30201, "UnregisterDeliveryTask", svc_noop, IPC_IMPL},
     {30202, "BlockDeliveryTask", svc_noop, IPC_IMPL},
     {30203, "UnblockDeliveryTask", svc_noop, IPC_IMPL},
-    {90100, "EnumerateBackgroundDeliveryTask", ret_s32_0, IPC_IMPL},
+    {90100, "GetDeliveryTaskList", ret_s32_0, IPC_IMPL},
     {90201, "ClearDeliveryCacheStorage", svc_noop, IPC_IMPL}, /* nothing of ours to clear: a provider folder is the user's, never deleted */
     {20101, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName", sysd_ok, IPC_STUB},
     {20300, "GetDeliveryCacheStorageUpdateNotifier", sysd_err_net, IPC_STUB},

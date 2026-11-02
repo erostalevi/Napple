@@ -1,4 +1,4 @@
-/* Unit test: fsp-srv command 30 OpenDataStorageByDataId. fs.c is #included (static handlers); misc.o supplies the strong aoc_data_id_romfs, fed by a
+/* Unit test: fsp-srv command 202 OpenDataStorageByDataId. fs.c is #included (static handlers); misc.o supplies the strong aoc_data_id_romfs, fed by a
  * manifest.json written to a temporary data dir. */
 #include "../src/services/fs.c"
 #include "svc_test.h"
@@ -21,7 +21,7 @@ int main(void) {
 
     IpcObject *srv = fsp_open(); IpcCall c; uint8_t in[16];
     uint64_t id = 0x0100000000011001ULL; memset(in, 0, sizeof in); memcpy(in + 8, &id, 8);
-    svc_call(srv, 30, in, sizeof in, &c);
+    svc_call(srv, 202, in, sizeof in, &c);
     CHECK(c.result == 0 && c.nout_objects == 1, "a DLC data id opens a storage (result %#x)", c.result);
     if (c.nout_objects == 1) {
         IpcObject *st = c.out_objects[0];
@@ -29,11 +29,11 @@ int main(void) {
         uint8_t buf[8] = {0}; uint64_t rd[2] = {0, 8}; memset(&c, 0, sizeof c); c.in = (const uint8_t *)rd; c.in_size = 16; svc_set_out_buf(&c, buf, sizeof buf); svc_call_c(st, 0, &c);
         CHECK(c.result == 0 && !memcmp(buf, "DLCROMFS", 8), "Read returns the DLC romfs bytes");
     }
-    id = 0x0100000000011002ULL; memcpy(in + 8, &id, 8); svc_call(srv, 30, in, sizeof in, &c);
+    id = 0x0100000000011002ULL; memcpy(in + 8, &id, 8); svc_call(srv, 202, in, sizeof in, &c);
     CHECK(c.result == R_FS_NOT_FOUND_DATA && c.nout_objects == 0, "a DLC whose romfs is missing fails with NOT_FOUND_DATA");
-    id = 0x0100000000011009ULL; memcpy(in + 8, &id, 8); svc_call(srv, 30, in, sizeof in, &c);
+    id = 0x0100000000011009ULL; memcpy(in + 8, &id, 8); svc_call(srv, 202, in, sizeof in, &c);
     CHECK(c.result == R_FS_NOT_FOUND_DATA && c.nout_objects == 0, "an unknown data id fails with NOT_FOUND_DATA");
-    id = APP; memcpy(in + 8, &id, 8); svc_call(srv, 30, in, sizeof in, &c);
+    id = APP; memcpy(in + 8, &id, 8); svc_call(srv, 202, in, sizeof in, &c);
     CHECK(c.result == R_FS_NOT_FOUND_DATA, "the application's own id is not a DLC");
 
 
