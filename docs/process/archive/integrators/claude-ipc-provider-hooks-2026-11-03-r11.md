@@ -43,3 +43,9 @@ napple-room build in test-net-host). New tests: 50 + 60 + 36 checks. Four-title 
 `runtime/build/napple-runtime <title>/<build> --headless --seconds 60`, private `--save-root`, under `lockf -k /Users/neto/NappleWork/.run.lock`, each of
 0100000000010000, 0100152000022000, 01006BB00C6F0000, 01006F8002326000 without and with `NAPPLE_NET=host`: all 8 runs rc 0, summary status `partial`
 (the 60 s limit), `missing_ipc []`, `unsupported_svcs []`, `crashes []`, no CRASH line in any log.
+
+## Integration result
+- Date: 2026-11-03 (batch r11 integrator run, local main, unpushed)
+- Merged commit: 96841c4
+- Outcome: Clean (landed by cherry-pick)
+- Same published-squash base problem as ipc-fs-mii-ldn-tail: its five commits (8606abd 09de5da 3cac915 35ae81f e9bb417) were cherry-picked onto main without conflicts (no offline.c/account.c/olsc.c clash with the ipc-fs-mii-ldn-tail landing). gfx 0 skipped, runtime test/test-services/test-ipc-reference green (missing 0), test-risk-title 158/0. LAS corpus 5767/5767/5767 was run after the gfx landing; boots at the end.
