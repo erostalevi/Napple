@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r4
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_afc5486b-71f2-45b6-b9f1-22a1a94901ac (reused, sonnet)
 launched_at: 2026-11-02
@@ -33,3 +33,6 @@ applet files (am-stubs-legal), `runtime/tests/test_ipc_reference.c`, `kernel.c`,
 Read `orchestrations/ENV-MAC.md` first (shared title data — rebuilt in r3 with the ordering fix, never overwrite it; locks; local-only; never ask). This is planned as the LAST reachable round (snapshot 2026-11-02-5b9cf3a, 98.3%, ceiling ~98.9-99.0%).
 
 ## Result
+
+Integrated 2026-11-02: **Clean**, merged into main as 67b4dfc (branch head 44bcc51). test / test-services / test-ipc-reference green (missing 0, svc_nifm_audit 122/0); four-title boots rc 0, missing_ipc []. 65 of 67 reference notes resolved; the two applet.c notes went to the am-stubs-legal integration. nifm IRequest GetResult reached by SMO and ACNH at boot (offline answer, both keep running).
+Integrator file: `docs/process/archive/integrators/claude-ipc-reference-audit-2026-11-02-r4.md`.

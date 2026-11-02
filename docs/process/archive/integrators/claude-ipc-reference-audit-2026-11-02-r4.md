@@ -6,7 +6,7 @@ head: c474059
 env: mac
 date: 2026-11-02
 areas: [runtime/services]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/ipc-reference-audit-2026-11-02-r4: misnumbered IPC rows follow switchbrew, nifm answers like an offline console, 17 more stubs real
@@ -50,3 +50,11 @@ Safe: names, result-code choices, the wireless default. Needs a decision: replac
 ## Needs from other areas
 - am-stubs-legal / applet.c: the two items above.
 - `docs/index.md`: link the change note (orphan like the other notes).
+
+## Integration result
+- Date 2026-11-02, merged into main as 67b4dfc (branch head 44bcc51; the file's `head: c474059` is the commit before the one-line head update, no undeclared code). Merged after core-ordering-kernel (no conflict). Outcome: **Clean** (no `integrate:` fixes, no native ports: service tables are pure logic, left as C).
+- Build: gfx lib adapter, frontend, input, audio, `make -C runtime GFX=napple`: rc 0.
+- `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0, every suite `"failed":0`; `svc_nifm_audit` 122/0; ipc_reference fixtures 111, missing 0, errors 0.
+- `test_ipc_reference runtime -v | grep "reference says"`: two notes, both in applet.c, but worded differently from "How to test" step 2: `row 210 is named GetSystemEvent210, the reference says (unnamed)` and `row 0 is named Open, the reference says Read` (am IStorage vs fsp-srv IStorage). Handled at the am-stubs-legal integration.
+- Four-title headless boots, 60 s (ACNH 90 s), shared data, private copied save roots, run lock: SMO / MK8D (update) / LAS / ACNH all rc 0, `last_stage notify-running`, missing_ipc [], unsupported_svcs [], stubbed_ipc only `nvdrv:13`.
+- Correction to the Findings ("the logs only show which services were opened"): the `--summary` JSON's `counters.implemented_ipc` lists commands. Rows this branch touched that titles reached: nifm `IRequest` 0/1/2/4 (SMO, ACNH; ACNH also 11), `IGeneralService` 4 (SMO, ACNH), `olsc:u` 13 (ACNH), `aoc:u` 2/3/5/7/8/11/12/50 (MK8D, ACNH), `prepo:u` 10101 (SMO, MK8D), `bsd:u` 0/1 (SMO). The renumbered pctl 10xx, pdm, ISteadyClock, ISslConnection, miiimg, ectx and fsp-srv 30 rows are still not reached by any of the four titles.
