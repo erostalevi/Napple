@@ -1,0 +1,246 @@
+# Deploys the Napple game servers (napple-online + napple-room behind Caddy) to AWS at pretend.napple.lat, and keeps the napple.lat DNS records.
+# Does nothing until AWS credentials are configured: the `guard` job looks for the secrets and every other job is skipped with a notice.
+# One-time setup (hosted zone, OIDC role or access keys, the bootstrap run): docs/guides/deploy-servers.md
+#   push to main touching the servers or infra/ -> plan + apply, build + push images, roll the instance, smoke-test https://pretend.napple.lat/healthz
+#   workflow_dispatch mode=plan                 -> plan only (no apply, no images, no roll)
+#   workflow_dispatch mode=apply                -> same as a push (image_tag set = roll back to that already-pushed tag, no build)
+#   workflow_dispatch mode=bootstrap            -> create/update the state bucket + lock table (infra/terraform/bootstrap)
+name: deploy-servers
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/napple-online/**"
+      - "crates/napple-room/**"
+      - "infra/**"
+      - "Cargo.lock"
+      - ".github/workflows/deploy-servers.yml"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "plan, apply, or bootstrap (one-time state bucket + lock table)"
+        type: choice
+        options: [plan, apply, bootstrap]
+        default: plan
+      image_tag:
+        description: "apply only: roll to this existing image tag (a commit SHA) instead of building this commit (rollback)"
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+  id-token: write # OIDC token for aws-actions/configure-aws-credentials (unused with access keys)
+
+# Never two deploys at once, and never cancel an apply half-way.
+concurrency:
+  group: deploy-servers
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: ${{ vars.NAPPLE_AWS_REGION || 'us-east-1' }}
+  TOFU_VERSION: "1.13.5"
+  TF_IN_AUTOMATION: "1"
+  # Optional repository variables (Settings > Secrets and variables > Actions > Variables) feeding the servers stack.
+  TF_VAR_github_owner: ${{ github.repository_owner }}
+  TF_VAR_instance_type: ${{ vars.NAPPLE_INSTANCE_TYPE || 't4g.small' }}
+  TF_VAR_architecture: ${{ vars.NAPPLE_ARCHITECTURE || 'arm64' }}
+  TF_VAR_github_pages_verification_txt: ${{ vars.NAPPLE_PAGES_VERIFICATION_TXT || '' }}
+  TF_VAR_dns_allow_overwrite: ${{ vars.NAPPLE_DNS_ALLOW_OVERWRITE || 'false' }}
+
+jobs:
+  guard:
+    name: Check AWS credentials and server crates
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      auth: ${{ steps.check.outputs.auth }}
+      run: ${{ steps.check.outputs.run }}
+      mode: ${{ steps.check.outputs.mode }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        env:
+          ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          EVENT: ${{ github.event_name }}
+          INPUT_MODE: ${{ inputs.mode }}
+          REF: ${{ github.ref }}
+        run: |
+          mode="apply"; [ "$EVENT" = workflow_dispatch ] && mode="$INPUT_MODE"
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          skip() { echo "::notice title=deploy-servers skipped::$1"; echo "### deploy-servers skipped" >> "$GITHUB_STEP_SUMMARY"; echo "$1" >> "$GITHUB_STEP_SUMMARY"; echo "run=false" >> "$GITHUB_OUTPUT"; exit 0; }
+          if [ -n "$ROLE_ARN" ]; then auth=oidc
+          elif [ -n "$KEY_ID" ] && [ -n "$KEY_SECRET" ]; then auth=keys
+          else skip "No AWS credentials: add the secret AWS_DEPLOY_ROLE_ARN (OIDC, preferred) or AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY. See docs/guides/deploy-servers.md."
+          fi
+          echo "auth=$auth" >> "$GITHUB_OUTPUT"
+          if [ "$mode" != plan ] && [ "$REF" != refs/heads/main ]; then skip "mode=$mode only runs on main (this run is on $REF); use mode=plan elsewhere."; fi
+          if [ "$mode" != bootstrap ]; then
+            for c in napple-online napple-room; do
+              [ -f "crates/$c/Cargo.toml" ] || skip "crates/$c is not in this commit yet: nothing to deploy."
+            done
+          fi
+          echo "run=true" >> "$GITHUB_OUTPUT"
+          echo "AWS credentials: $auth; mode: $mode" >> "$GITHUB_STEP_SUMMARY"
+
+  bootstrap:
+    name: Bootstrap state bucket + lock table
+    needs: guard
+    if: needs.guard.outputs.run == 'true' && needs.guard.outputs.mode == 'bootstrap'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: needs.guard.outputs.auth == 'oidc'
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+          role-session-name: napple-bootstrap-${{ github.run_id }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: needs.guard.outputs.auth == 'keys'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - run: infra/scripts/bootstrap.sh apply
+
+  infra:
+    name: OpenTofu ${{ needs.guard.outputs.mode }} (servers + DNS)
+    needs: guard
+    if: needs.guard.outputs.run == 'true' && needs.guard.outputs.mode != 'bootstrap'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      instance_id: ${{ steps.tofu.outputs.instance_id }}
+      public_ip: ${{ steps.tofu.outputs.public_ip }}
+      server_fqdn: ${{ steps.tofu.outputs.server_fqdn }}
+      log_group: ${{ steps.tofu.outputs.log_group }}
+      ecr_online: ${{ steps.tofu.outputs.ecr_online }}
+      ecr_room: ${{ steps.tofu.outputs.ecr_room }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: needs.guard.outputs.auth == 'oidc'
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+          role-session-name: napple-infra-${{ github.run_id }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: needs.guard.outputs.auth == 'keys'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+      - name: Offline checks (fmt, validate, mocked plan tests)
+        working-directory: infra/terraform
+        run: |
+          tofu fmt -check -recursive
+          tofu init -backend=false -input=false && tofu validate && tofu test
+          rm -rf .terraform
+      - id: tofu
+        env:
+          MODE: ${{ needs.guard.outputs.mode }}
+        run: infra/scripts/tofu-servers.sh "$MODE"
+
+  images:
+    name: Build + push ${{ matrix.image }}
+    needs: [guard, infra]
+    if: needs.guard.outputs.mode == 'apply' && !inputs.image_tag
+    # Native runner for the instance's architecture: no QEMU, so a release build of a Rust crate takes minutes, not an hour.
+    runs-on: ${{ (vars.NAPPLE_ARCHITECTURE || 'arm64') == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        image: [napple-online, napple-room]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: needs.guard.outputs.auth == 'oidc'
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+          role-session-name: napple-images-${{ github.run_id }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: needs.guard.outputs.auth == 'keys'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+      - id: exists
+        name: Skip when this commit's image is already in ECR (tags are immutable)
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if aws ecr describe-images --repository-name "$IMAGE" --image-ids "imageTag=$GITHUB_SHA" >/dev/null 2>&1; then
+            echo "found=true" >> "$GITHUB_OUTPUT"; echo "::notice::$IMAGE:$GITHUB_SHA already pushed"
+          else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+      - uses: aws-actions/amazon-ecr-login@v2
+        if: steps.exists.outputs.found == 'false'
+      - uses: docker/setup-buildx-action@v3
+        if: steps.exists.outputs.found == 'false'
+      - uses: docker/build-push-action@v6
+        if: steps.exists.outputs.found == 'false'
+        with:
+          context: .
+          file: infra/docker/${{ matrix.image }}.Dockerfile
+          platforms: linux/${{ vars.NAPPLE_ARCHITECTURE == 'x86_64' && 'amd64' || 'arm64' }}
+          push: true
+          provenance: false
+          tags: ${{ matrix.image == 'napple-online' && needs.infra.outputs.ecr_online || needs.infra.outputs.ecr_room }}:${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+
+  roll:
+    name: Roll the instance + smoke test
+    needs: [guard, infra, images]
+    # images is skipped on a rollback (image_tag set): still roll then.
+    if: always() && needs.guard.outputs.mode == 'apply' && needs.infra.result == 'success' && (needs.images.result == 'success' || needs.images.result == 'skipped')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: needs.guard.outputs.auth == 'oidc'
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+          role-session-name: napple-roll-${{ github.run_id }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: needs.guard.outputs.auth == 'keys'
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+      - name: Roll through SSM
+        env:
+          TAG: ${{ inputs.image_tag || github.sha }}
+          INSTANCE: ${{ needs.infra.outputs.instance_id }}
+          ONLINE: ${{ needs.infra.outputs.ecr_online }}
+          ROOM: ${{ needs.infra.outputs.ecr_room }}
+          PUBLIC_IP: ${{ needs.infra.outputs.public_ip }}
+          FQDN: ${{ needs.infra.outputs.server_fqdn }}
+          LOG_GROUP: ${{ needs.infra.outputs.log_group }}
+        run: infra/scripts/roll.sh "$INSTANCE" "$ONLINE:$TAG" "$ROOM:$TAG" "$PUBLIC_IP" "$FQDN" "$LOG_GROUP"
+      - name: Smoke test
+        env:
+          FQDN: ${{ needs.infra.outputs.server_fqdn }}
+        run: infra/scripts/smoke.sh "https://$FQDN"
