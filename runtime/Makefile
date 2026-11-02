@@ -276,3 +276,10 @@ $(BUILD)/napple-runtime build-lib/libnapple-applet.dylib: $(CLOUD_OBJ) $(CLOUD_L
 $(CLOUD_LIB): $(wildcard $(ROOT)/crates/napple-cloud/src/*.rs $(ROOT)/crates/napple-cloud/src/*/*.rs) $(ROOT)/crates/napple-cloud/Cargo.toml
 	cd $(ROOT) && MACOSX_DEPLOYMENT_TARGET=$${MACOSX_DEPLOYMENT_TARGET:-14.0} cargo build --release -p napple-cloud --lib
 endif
+
+# ipc-risk-mac-checks (r11): the real-title risk checks (execv restart, npdm FS bits, unlinked acc); needs the shared title data, so it is not in `test`.
+$(BUILD)/tests/test_risk_title: tests/test_risk_title.c tests/check.h tests/svc_test.h $(BUILD)/tests/stubs.o $(OBJ)
+	$(CC) $(CFLAGS) tests/test_risk_title.c $(BUILD)/tests/stubs.o $(filter-out $(BUILD)/services/applet.o $(BUILD)/services/account.o $(BUILD)/services/fs.o,$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
+test-risk-title: $(BUILD)/tests/test_risk_title
+	./$<
+.PHONY: test-risk-title
