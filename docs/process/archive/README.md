@@ -85,3 +85,9 @@ They are kept as written: paths, line numbers and statuses are those of the time
 |---|---|---|---|
 | napple-social-cloud | [napple-social-cloud.md](orchestrations/napple-social-cloud.md) | [claude-napple-social-cloud-2026-11-02-r9.md](integrators/claude-napple-social-cloud-2026-11-02-r9.md) | friends, presence and invites service for Napple players (REST + WebSocket) |
 | ipc-depth-cloud | [ipc-depth-cloud.md](orchestrations/ipc-depth-cloud.md) | [claude-ipc-depth-cloud-2026-11-02-r9.md](integrators/claude-ipc-depth-cloud-2026-11-02-r9.md) | 98 IPC rows made real (set:sys, time, vi, aoc, notif, pctl, pdm, lbl, ncm) |
+
+## Round 2026-11-02-r10
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| nvdrv-public-layouts | [nvdrv-public-layouts.md](orchestrations/nvdrv-public-layouts.md) | [claude-nvdrv-public-layouts-2026-11-02-r10.md](integrators/claude-nvdrv-public-layouts-2026-11-02-r10.md) | GPU / nvdisp / host1x media layouts on public sources |

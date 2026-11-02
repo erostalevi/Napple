@@ -1,3 +1,10 @@
+---
+branch: claude/nvdrv-public-layouts-2026-11-02-r10
+orchestration: nvdrv-public-layouts
+env: linux-cloud
+status: integrated
+---
+
 # Integrator: nvdrv-public-layouts (2026-11-02-r10)
 
 Branch: `claude/nvdrv-public-layouts-2026-11-02-r10` (from `main` at `d0d4be9`). Linux cloud session: nothing here was compiled on macOS; every commit
@@ -84,3 +91,16 @@ make -C runtime test-host
 `test_svc_nvdrv_media` prints a "skipped" line in the regular runtime build (its `guest_ptr` rejects host heap memory); `make -C runtime test-host` runs
 it fully, as before. Then boot MK8D to the menu with `NAPPLE_MEDIA_TRACE=1` and check the preview video still plays (NVDEC + VIC: only names and the
 status layout changed on that path) and that the run summary shows no new `nvdrv:ioctl` misses for nvhost-nvdec / nvhost-vic.
+
+## Integration result
+- Date 2026-11-02, merged into main as 52637d5 (head c6f2597, rebased by the orchestrator). No conflicts. Outcome: **Clean** (no macOS fix needed) plus one
+  doc commit: an index row for `reference/nvdrv-layouts.md` in `docs/index.md` and round r10 in the change archive (both were orphans).
+- The `unbuilt:` commit compiled on macOS with no new warnings. `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0 (111 / 1325 /
+  missing 0); test_svc_nvdrv_nodes 216/0, test_svc_nvdrv_media 293/0, test_svc_jpeg 43/0. `make -C runtime GFX=napple test-host`: rc 0, nvdrv 29/0,
+  nvdrv_media 293/0, nvdrv_nodes 216/0.
+- **MK8D NVDEC + VIC still decode** (the media-live check: `NAPPLE_MEDIA_TRACE=1 NAPPLE_VIC_DUMP=…`, `15:A,19:A,…,35:A`, 80 s): 329 NVDEC executes
+  (IDR first), 16 VIC lines, 512x608 output, VIC frame 120 dump is a correct Luigi Circuit preview (Mario's kart at the start line); no nvdec/vic
+  error; `missing_ipc []`, stubbed only `nvdrv:13`.
+- Four-title 45 s boots, offline and `NAPPLE_NET=host`: SMO, LAS, MK8D, ACNH rc 0, notify-running, `missing_ipc []`, `unsupported_svcs []`.
+- No native ports (portable layout / state code). Not done here: the one-line `nvdrv.c` routing change the file asks for (another owner; listed for
+  the next batch), the stale layout text in `docs/architecture/runtime-services.md` (listed), checking the cited public sources (no web access used).
