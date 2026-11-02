@@ -93,19 +93,22 @@ int main(void) {
     g_frame_ok = 1;
     uint8_t mute = 1; svc_call(sc, 130, &mute, 1, &c); CHECK(AS()->record_volume_muted == 1, "SetRecordVolumeMuted kept");
 
-    /* ---- network-connection applet (0x0f): finishes normally, output = the not-connected result ---- */
+    /* ---- network-connection applet (0x0f): the storages nifm's GetAppletInfo lists, finishes normally, output {u32 0; 2110-2900 not connected} ---- */
     applet_netconnect_register();
     IpcObject *la = create_applet(lac, LIBAPPLET_ID_NET_CONNECT);
     CHECK(la != NULL, "CreateLibraryApplet(NetConnect)");
-    uint8_t common[0x20] = {1, 0, 0x20, 0}; push(la, common, sizeof common);
-    uint8_t narg[0x80] = {0}; push(la, narg, sizeof narg);
+    uint8_t common[0x20] = {1, 0, 0, 0, 0x20, 0}; push(la, common, sizeof common);
+    uint32_t narg[6] = {0, HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, 0, 0, 0, 0}; push(la, (const uint8_t *)narg, sizeof narg);
     svc_call(la, 10, NULL, 0, &c); CHECK(c.result == 0, "Start");
     svc_call(la, 1, NULL, 0, &c); CHECK(c.out[0] == 1, "completed at once");
     svc_call(la, 30, NULL, 0, &c); CHECK(c.result == 0, "GetResult: the applet closed normally");
     svc_call(la, 101, NULL, 0, &c);
-    uint32_t r = 0; uint64_t osz = 0;
-    if (c.result == 0 && c.nout_objects) { Storage *s = c.out_objects[0]->state; osz = s->size; memcpy(&r, s->data, 4); }
-    CHECK(osz == APPLET_NETCONNECT_OUT_SIZE && r == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "output: not connected (%#x, %llu bytes; %#x expected)", r, (unsigned long long)osz, HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED);
+    uint32_t ow[2] = {~0u, 0}; uint64_t osz = 0;
+    if (c.result == 0 && c.nout_objects) { Storage *s = c.out_objects[0]->state; osz = s->size; if (osz >= 8) memcpy(ow, s->data, 8); }
+    CHECK(osz == APPLET_NETCONNECT_OUT_SIZE && ow[0] == 0 && ow[1] == APPLET_NETCONNECT_R_NOT_CONNECTED && APPLET_NETCONNECT_R_NOT_CONNECTED == 0x16a86eu,
+          "output {0, 2110-2900}: the user left without a connection (%#x %#x, %llu bytes)", ow[0], ow[1], (unsigned long long)osz);
+    svc_call(la, 101, NULL, 0, &c); CHECK(c.result != 0, "one output storage only");
+    CHECK(APPLET_NETCONNECT_R_CONNECTED == 0x17c6eu, "2110-0190 (ErrorHandlingCompleted) is the code the title would resubmit on");
 
     /* ---- exit requests: ExitRequested message, then the process stops cleanly after the grace period (forked child per command) ---- */
     const unsigned exit_cmds[3] = {70, 71, 310};

@@ -133,6 +133,19 @@ static void ds_set_scaling(IpcObject *s, IpcCall *c) { /* 2101 SetLayerScalingMo
     pthread_mutex_unlock(&vi_lock);
     if (r) c->result = r;
 }
+/* 2102 ConvertScalingMode(u32 nn::vi::ScalingMode) -> u64: the SDK's mode (None 0, Freeze 1, ScaleToWindow 2, ScaleAndCrop 3, PreserveAspectRatio 4) in
+ * the numbering SetLayerScalingMode takes (VI_SCALE_*, Android's NATIVE_WINDOW_SCALING_MODE order: Freeze 0, ScaleToWindow 1, ScaleAndCrop 2, None 3,
+ * PreserveAspectRatio 4); another mode fails like 2101 does. */
+static void ds_convert_scaling(IpcObject *s, IpcCall *c) {
+    (void)s;
+    static const uint64_t conv[] = {VI_SCALE_NONE, VI_SCALE_FREEZE, VI_SCALE_TO_WINDOW, VI_SCALE_AND_CROP, VI_SCALE_PRESERVE_ASPECT};
+    uint32_t mode = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : ~0u;
+    if (mode >= sizeof conv / sizeof conv[0]) {
+        c->result = VI_R_INVALID_RANGE;
+        return;
+    }
+    IPC_OUT(c, conv[mode]);
+}
 static void ds_close_layer(IpcObject *s, IpcCall *c) { /* 2021 CloseLayer(u64 layer) */
     (void)s;
     pthread_mutex_lock(&vi_lock);
@@ -352,7 +365,7 @@ static const IpcCmd display_cmds[] = {
     {2101, "SetLayerScalingMode", ds_set_scaling, IPC_IMPL},
     {5202, "GetDisplayVsyncEvent", ds_vsync_event, IPC_IMPL},
     {103, "GetIndirectDisplayTransactionService", ds_get_indirect_transaction, IPC_IMPL},
-    {2102, "ConvertScalingMode", sysd_ok, IPC_STUB},
+    {2102, "ConvertScalingMode", ds_convert_scaling, IPC_IMPL},
     {2450, "GetIndirectLayerImageMap", sysd_err_generic, IPC_STUB},
     {2451, "GetIndirectLayerImageCropMap", sysd_err_generic, IPC_STUB},
     {2460, "GetIndirectLayerImageRequiredMemoryInfo", ds_indirect_image_memory_info, IPC_IMPL},
