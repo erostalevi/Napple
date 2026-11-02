@@ -242,3 +242,8 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | Note | Summary |
 | --- | --- |
 | [2026-11-03-claude-ipc-domain-reuse-2026-11-03-r11](2026-11-03-claude-ipc-domain-reuse-2026-11-03-r11.md) | IPC domain object ids are reused after close; unlinked-account tests. |
+| [2026-11-03-claude-gfx-xfb-tess-audit-2026-11-03-r11](2026-11-03-claude-gfx-xfb-tess-audit-2026-11-03-r11.md) | Tessellation parameter word decode fixed (output primitives, bits 9:8); XFB/tess layouts pinned against the public Maxwell header; ClearTexture mask 0 clears nothing; the four known gfx test skips closed. |
+| [2026-11-03-claude-ipc-bcat-npns-local-2026-11-03-r11](2026-11-03-claude-ipc-bcat-npns-local-2026-11-03-r11.md) | BCAT and npns:u rows backed by local state (task timers, push log, cache usage, notification queue). |
+| [2026-11-03-claude-ipc-fs-mii-ldn-tail-2026-11-03-r11](2026-11-03-claude-ipc-fs-mii-ldn-tail-2026-11-03-r11.md) | fsp-srv ListAccessibleSaveDataOwnerId, Mii image migration store, LDN RecvActionFrame queue, ncm ContentInfo type offset fix. |
+| [2026-11-03-claude-ipc-provider-hooks-2026-11-03-r11](2026-11-03-claude-ipc-provider-hooks-2026-11-03-r11.md) | Friend images/requests, nifm, account and olsc rows through OnlineProvider hooks (NullProvider answers like an offline console). |
+| [2026-11-03-claude-nvdrv-gpu-routing-2026-11-03-r11](2026-11-03-claude-nvdrv-gpu-routing-2026-11-03-r11.md) | nvdrv typed GPU/AS/CTRL-GPU ioctls routed to the node cores; extra documented ioctls added (layouts to verify). |
