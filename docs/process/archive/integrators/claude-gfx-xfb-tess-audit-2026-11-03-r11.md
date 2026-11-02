@@ -6,7 +6,7 @@ head: 23a6d6a
 env: mac
 date: 2026-11-03
 areas: [gfx]
-status: ready
+status: integrated
 ---
 
 # claude/gfx-xfb-tess-audit-2026-11-03-r11: XFB / tessellation encodings vs public Maxwell header
@@ -46,3 +46,9 @@ Conflicts in mtl_replay.m blit()/do_clear_tex: keep both sides; the pending-clea
 
 ## Needs from other areas
 Nothing.
+
+## Integration result
+- Date: 2026-11-03 (batch r11 integrator run, local main, unpushed)
+- Merged commit: 867aeb3
+- Outcome: Clean
+- No fixes. gfx test: ALL TESTS PASSED, 0 skipped (was 4); runtime suites and test-risk-title green on the merge. Linux/Mac native port: n/a (Metal code).
