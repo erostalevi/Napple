@@ -12,6 +12,7 @@
 #include "net_online.h"
 #include "hz_result.h"
 #include "offline_core.h"
+#include "../sha256.h"
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -183,8 +184,28 @@ static int parse_account(const char *text, NetOnlineAccount *out) {
     return out->pid && out->secret[0] ? 0 : -1;
 }
 
+/* Napple Account identity (a signed-in Mac, src/online/): the server takes the account access token as the game's token and the principal id derives from
+ * the profile (crates/napple-online/src/identity.rs principal_id): no /napple/v1/account, no secret. */
+uint64_t net_online_principal_id(const char *profile_id) {
+    char in[128];
+    uint8_t h[32];
+    int n = snprintf(in, sizeof in, "napple-online/pid/v1:");
+    for (const char *c = profile_id; *c && n < (int)sizeof in - 1; c++) in[n++] = (char)((*c >= 'A' && *c <= 'Z') ? *c + 32 : *c);
+    sha256(in, (size_t)n, h);
+    uint64_t v = 0;
+    for (int i = 0; i < 6; i++) v = v << 8 | h[i];
+    return 0x4e41800000000000ull | (v & 0x7fffffffffffull);
+}
+int net_online_account_is_identity(const NetOnlineAccount *a) { return !strcmp(a->secret, NET_ONLINE_IDENTITY_SECRET); }
+
 int net_online_account(const OnlineProvider *p, const NetOnlineServer *srv, const char *state_dir, const uint8_t uid[16], NetOnlineAccount *out) {
     memset(out, 0, sizeof *out);
+    char tmp[4096], prof[64];
+    if (napple_account_access_token(tmp, sizeof tmp - 1) && napple_account_profile_id(prof, sizeof prof)) {
+        out->pid = net_online_principal_id(prof);
+        snprintf(out->secret, sizeof out->secret, "%s", NET_ONLINE_IDENTITY_SECRET);
+        return 0;
+    }
     char uidhex[33], dir[1100], file[1200];
     hex(uid, 16, uidhex);
     if (state_dir) {
@@ -217,6 +238,11 @@ int net_online_account(const OnlineProvider *p, const NetOnlineServer *srv, cons
 
 size_t net_online_token(const OnlineProvider *p, const NetOnlineServer *srv, const NetOnlineAccount *a, uint64_t title_id, char *out, size_t n) {
     char body[256], resp[8192];
+    if (net_online_account_is_identity(a)) { /* the account's access token is the game's token (src/online/ refreshes it) */
+        size_t t = napple_account_access_token(out, n > 1 ? n - 1 : 0);
+        if (t) out[t] = 0;
+        return t;
+    }
     snprintf(body, sizeof body, "pid=%llu&secret=%s&title=%016llx", (unsigned long long)a->pid, a->secret, (unsigned long long)title_id);
     int st = net_online_http(p, srv, "/napple/v1/token", body, resp, sizeof resp);
     if (st != 200) return 0;
@@ -225,6 +251,7 @@ size_t net_online_token(const OnlineProvider *p, const NetOnlineServer *srv, con
 }
 
 int net_online_report_friends(const OnlineProvider *p, const NetOnlineServer *srv, const NetOnlineAccount *a, const uint64_t *pids, uint32_t n) {
+    if (net_online_account_is_identity(a)) return 0; /* napple-online learns the friends from napple-social */
     size_t cap = 160 + (size_t)n * 21;
     char *body = malloc(cap), resp[256];
     if (!body) return -1;
