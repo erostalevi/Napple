@@ -44,7 +44,8 @@ typedef struct {
     uint32_t controller_restriction;
     uint64_t local_communication_id; /* the title's id: from CreateNetwork's NetworkConfig, or a scan's filter */
 } LdnConfig;
-/* The calls below are only legal while an access point has created its network (state AP_CREATED); otherwise they return the invalid-state result. */
+/* The calls below are legal once an access point is opened, before or after CreateNetwork (states AP_OPENED, AP_CREATED; the console accepts
+ * SetAdvertiseData before CreateNetwork, which then uses it); otherwise they return the invalid-state result. */
 uint32_t ldn_set_advertise(LdnState state, LdnConfig *cfg, const void *data, uint32_t n); /* n > LDN_ADVERTISE_MAX: invalid size */
 uint32_t ldn_set_accept_policy(LdnState state, LdnConfig *cfg, uint32_t policy);
 uint32_t ldn_filter_add(LdnState state, LdnConfig *cfg, const uint8_t mac[6]);
@@ -62,6 +63,9 @@ uint32_t ldn_network_query(LdnState state);
 #define LDN_NETINFO_SIZE 0x480u
 #define LDN_NODE_SIZE 0x40u
 void ldn_net_encode(const OnlineLdnNetwork *n, uint8_t out[LDN_NETINFO_SIZE]);
+/* Replaces the node array of an encoded NetworkInfo with the provider's nodes (n <= 8; node i at slot i, its connected flag kept) and sets the node count
+ * to the connected ones (net-host-provider). */
+void ldn_net_encode_nodes(uint8_t out[LDN_NETINFO_SIZE], const OnlineLdnNode *nodes, unsigned n);
 /* Reads the identifying fields back (what a station passes to Connect). Returns 0, or -1 when the buffer is shorter than a NetworkInfo. */
 int ldn_net_decode(const uint8_t *in, size_t n, OnlineLdnNetwork *out);
 /* CreateNetwork arguments: SecurityConfig (u16 mode, u16 passphrase size, passphrase[0x40]) at 0, UserConfig (user name[0x21]) at 0x44, NetworkConfig

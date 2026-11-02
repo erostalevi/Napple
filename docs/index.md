@@ -67,5 +67,5 @@ See the [guide index](guides/README.md).
 
 ### Process and history
 - [Parallel-session workflow](process/README.md)
-- [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r5) (batch b7, rounds r1-r5)
+- [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r6) (batch b7, rounds r1-r6)
 - [Process archive](process/archive/README.md): orchestration and integrator files of the landed rounds

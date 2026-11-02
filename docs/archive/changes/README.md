@@ -150,7 +150,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 - [2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
 - [2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
 
-## Unattended rounds (2026-10-27-b7 to 2026-11-02-r5)
+## Unattended rounds (2026-10-27-b7 to 2026-11-02-r6)
 Hand-off files of these rounds (orchestrations and integrator files) are in the [process archive](../../process/archive/README.md).
 
 ### Batch 2026-10-27-b7 (notes not listed above)
@@ -201,3 +201,8 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 |---|---|
 | [2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5](2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5.md) | Interpreter `lda` / `stl` seq_cst with the alignment fault, per-viewport swizzles, these archive indexes. |
 | [2026-11-02-claude-nifm-netconnect-2026-11-02-r5](2026-11-02-claude-nifm-netconnect-2026-11-02-r5.md) | nifm Cancel keeps a rejected request's result, GetAppletInfo storages, the real NetConnect output (MK8D Online Play: one applet per attempt), vi ConvertScalingMode. |
+
+### Round 2026-11-02-r6
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-net-host-provider-2026-11-02-r6](2026-11-02-claude-net-host-provider-2026-11-02-r6.md) | Opt-in macOS host network provider (`NAPPLE_NET=host`): BSD sockets, host resolver with the console vendor's domains refused, TLS with the host trust store, nifm from the host, LDN over the LAN. |
