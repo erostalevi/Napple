@@ -326,7 +326,116 @@ static void sd_z_max(IpcObject *s, IpcCall *c) { /* 1202 GetZOrderCountMax(u64 d
     int64_t v = 255;
     IPC_OUT(c, v);
 }
+/* Display settings of the one display (ipc-depth-cloud r9): what ISystemDisplayService / IManagerDisplayService set and get. The host window is not
+ * re-graded by them (nothing reaches the Mac's display); the values only stay set for the caller to read back. Argument layouts are libnx / switchbrew
+ * ones (value first, then the u64 display id); the defaults and the accepted ranges are napple's choice (not documented), unverified on a console. */
+typedef struct {
+    float gamma, contrast, cmu_luma, alpha;
+    uint32_t cmu_mode, rgb_range, content_type, power_state;
+    int32_t mag[4]; /* x, y, width, height; width 0 = the whole logical display */
+} ViDisplaySettings;
+enum { VI_POWER_OFF = 0, VI_POWER_NOT_SCANNING = 1, VI_POWER_ON = 2 };
+static ViDisplaySettings g_disp = {2.2f, 0.5f, 0.f, 1.f, 1, 0, 0, VI_POWER_ON, {0, 0, 0, 0}};
+static void logical_size(int32_t *w, int32_t *h) {
+    uint32_t gw, gh;
+    napple_display_game_size(g_cfg.op_mode_handheld ? 1280 : 1920, g_cfg.op_mode_handheld ? 720 : 1080, &gw, &gh);
+    *w = (int32_t)gw;
+    *h = (int32_t)gh;
+}
+/* 1203 GetDisplayLogicalResolution(u64 display) -> s32 width, s32 height: the resolution the display is composed at (the same size 1102 reports). */
+static void sd_logical_resolution(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int32_t wh[2];
+    logical_size(&wh[0], &wh[1]);
+    ipc_out(c, wh, sizeof wh);
+}
+/* 1204 SetDisplayMagnification(s32 x, s32 y, s32 width, s32 height, u64 display): a rectangle inside the logical display, positive size. */
+static void sd_set_magnification(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int32_t r[4], w, h;
+    memcpy(r, ipc_in(c, 0, 16), 16);
+    logical_size(&w, &h);
+    if (r[0] < 0 || r[1] < 0 || r[2] <= 0 || r[3] <= 0 || r[0] + r[2] > w || r[1] + r[3] > h) {
+        c->result = VI_R_INVALID_RANGE;
+        return;
+    }
+    pthread_mutex_lock(&vi_lock);
+    memcpy(g_disp.mag, r, sizeof r);
+    pthread_mutex_unlock(&vi_lock);
+}
+/* Float settings: 3210 / 3211 contrast ratio (0..1), 3214 / 3215 gamma (1..3), 3216 / 3217 CMU luma (-1..1), and IManagerDisplayService 4201 SetDisplayAlpha
+ * (0..1). u32 settings: 3204 / 3205 content type, 3206 / 3207 RGB range, 3208 / 3209 CMU mode (each 0..3), 4205 SetDisplayPowerState (0 off, 1 not
+ * scanning, 2 on). Getters take {u64 display}; setters {value, pad, u64 display}. */
+static void *disp_field(unsigned cmd, int *is_float, float *lo, float *hi) {
+    *is_float = 1;
+    switch (cmd) {
+    case 3210: case 3211: *lo = 0.f; *hi = 1.f; return &g_disp.contrast;
+    case 3214: case 3215: *lo = 1.f; *hi = 3.f; return &g_disp.gamma;
+    case 3216: case 3217: *lo = -1.f; *hi = 1.f; return &g_disp.cmu_luma;
+    case 4201: *lo = 0.f; *hi = 1.f; return &g_disp.alpha;
+    default: break;
+    }
+    *is_float = 0;
+    *lo = 0.f;
+    *hi = 3.f;
+    switch (cmd) {
+    case 3204: case 3205: return &g_disp.content_type;
+    case 3206: case 3207: return &g_disp.rgb_range;
+    case 3208: case 3209: return &g_disp.cmu_mode;
+    case 4205: *hi = 2.f; return &g_disp.power_state;
+    default: return NULL;
+    }
+}
+static void sd_disp_get(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int f;
+    float lo, hi;
+    void *p = disp_field(c->cmd, &f, &lo, &hi);
+    uint32_t v = 0;
+    pthread_mutex_lock(&vi_lock);
+    if (p) memcpy(&v, p, 4);
+    pthread_mutex_unlock(&vi_lock);
+    IPC_OUT(c, v);
+}
+static void sd_disp_set(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int f;
+    float lo, hi;
+    void *p = disp_field(c->cmd, &f, &lo, &hi);
+    uint32_t raw = IPC_IN(c, uint32_t, 0);
+    float fv;
+    memcpy(&fv, &raw, 4);
+    if (!p || (f && !(fv >= lo && fv <= hi)) || (!f && raw > (uint32_t)hi)) { /* NaN fails the float test */
+        c->result = VI_R_INVALID_RANGE;
+        return;
+    }
+    pthread_mutex_lock(&vi_lock);
+    memcpy(p, &raw, 4);
+    pthread_mutex_unlock(&vi_lock);
+}
+/* 4209 IsDisplayPanelOn(u64 display) -> bool: the panel scans out unless SetDisplayPowerState switched it off or to not-scanning. */
+static void md_is_panel_on(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&vi_lock);
+    uint8_t v = g_disp.power_state == VI_POWER_ON;
+    pthread_mutex_unlock(&vi_lock);
+    IPC_OUT(c, v);
+}
 static const IpcCmd system_display_cmds[] = {
+    {1203, "GetDisplayLogicalResolution", sd_logical_resolution, IPC_IMPL},
+    {1204, "SetDisplayMagnification", sd_set_magnification, IPC_IMPL},
+    {3204, "GetDisplayContentType", sd_disp_get, IPC_IMPL},
+    {3205, "SetDisplayContentType", sd_disp_set, IPC_IMPL},
+    {3206, "GetDisplayRgbRange", sd_disp_get, IPC_IMPL},
+    {3207, "SetDisplayRgbRange", sd_disp_set, IPC_IMPL},
+    {3208, "GetDisplayCmuMode", sd_disp_get, IPC_IMPL},
+    {3209, "SetDisplayCmuMode", sd_disp_set, IPC_IMPL},
+    {3210, "GetDisplayContrastRatio", sd_disp_get, IPC_IMPL},
+    {3211, "SetDisplayContrastRatio", sd_disp_set, IPC_IMPL},
+    {3214, "GetDisplayGamma", sd_disp_get, IPC_IMPL},
+    {3215, "SetDisplayGamma", sd_disp_set, IPC_IMPL},
+    {3216, "GetDisplayCmuLuma", sd_disp_get, IPC_IMPL},
+    {3217, "SetDisplayCmuLuma", sd_disp_set, IPC_IMPL},
     {1200, "GetZOrderCountMin", sd_z_min, IPC_IMPL},
     {1202, "GetZOrderCountMax", sd_z_max, IPC_IMPL},
     {2201, "SetLayerPosition", sd_set_position, IPC_IMPL},
@@ -366,6 +475,9 @@ static const IpcCmd manager_display_cmds[] = {
     {2011, "DestroyManagedLayer", md_destroy_layer, IPC_IMPL},
     {6000, "AddToLayerStack", md_stack, IPC_IMPL},
     {6001, "RemoveFromLayerStack", md_stack, IPC_IMPL},
+    {4201, "SetDisplayAlpha", sd_disp_set, IPC_IMPL},
+    {4205, "SetDisplayPowerState", sd_disp_set, IPC_IMPL},
+    {4209, "IsDisplayPanelOn", md_is_panel_on, IPC_IMPL},
 };
 static void ds_get_system(IpcObject *s, IpcCall *c) {
     (void)s;

@@ -136,6 +136,39 @@ int main(void) {
         CHECK(c.result == VI_R_INVALID_RANGE, "...an empty crop rectangle is refused");
         CHECK(vi_cmd_is_impl(dsx, 2450) && vi_cmd_is_impl(dsx, 2451), "2450 / 2451 are real rows");
     }
+    { /* ipc-depth-cloud r9: display settings (ISystemDisplayService 1203 / 1204 / 32xx, IManagerDisplayService 4201 / 4205 / 4209) */
+        IpcObject *vroot = vi_open(), *dsx = sub(vroot, 0), *sdx = sub(dsx, 101), *mdx = sub(dsx, 102);
+        IpcCall c; uint64_t disp = 0;
+        svc_call(sdx, 1203, &disp, 8, &c); int32_t lw = SVC_OUT(&c, int32_t, 0), lh = SVC_OUT(&c, int32_t, 4);
+        CHECK(c.result == 0 && c.out_size == 8 && lw > 0 && lh > 0, "1203 GetDisplayLogicalResolution: %dx%d", lw, lh);
+        struct { int32_t r[4]; uint64_t d; } mag = {{0, 0, lw / 2, lh / 2}, 0};
+        svc_call(sdx, 1204, &mag, sizeof mag, &c); CHECK(c.result == 0 && g_disp.mag[2] == lw / 2, "1204 SetDisplayMagnification inside the display");
+        mag.r[2] = lw + 1; svc_call(sdx, 1204, &mag, sizeof mag, &c); CHECK(c.result == VI_R_INVALID_RANGE && g_disp.mag[2] == lw / 2, "...a rectangle past the display is refused");
+        svc_call(sdx, 3214, &disp, 8, &c); CHECK(c.result == 0 && c.out_size == 4 && SVC_OUT(&c, float, 0) == 2.2f, "3214 GetDisplayGamma: 2.2 by default");
+        struct { float v; uint32_t pad; uint64_t d; } fset = {1.8f, 0, 0};
+        svc_call(sdx, 3215, &fset, sizeof fset, &c); svc_call(sdx, 3214, &disp, 8, &c); CHECK(SVC_OUT(&c, float, 0) == 1.8f, "3215 SetDisplayGamma, read back");
+        fset.v = 5.f; svc_call(sdx, 3215, &fset, sizeof fset, &c); CHECK(c.result == VI_R_INVALID_RANGE, "...gamma 5 is refused");
+        fset.v = 0.75f; svc_call(sdx, 3211, &fset, sizeof fset, &c); svc_call(sdx, 3210, &disp, 8, &c); CHECK(SVC_OUT(&c, float, 0) == 0.75f, "3211 / 3210 contrast ratio");
+        fset.v = -0.25f; svc_call(sdx, 3217, &fset, sizeof fset, &c); svc_call(sdx, 3216, &disp, 8, &c); CHECK(SVC_OUT(&c, float, 0) == -0.25f, "3217 / 3216 CMU luma");
+        uint32_t nan_bits = 0x7fc00000u; memcpy(&fset.v, &nan_bits, 4); svc_call(sdx, 3217, &fset, sizeof fset, &c); CHECK(c.result == VI_R_INVALID_RANGE, "...NaN is refused");
+        struct { uint32_t v, pad; uint64_t d; } uset = {2, 0, 0};
+        const unsigned pairs[][2] = {{3204, 3205}, {3206, 3207}, {3208, 3209}};
+        for (int i = 0; i < 3; i++) {
+            svc_call(sdx, pairs[i][1], &uset, sizeof uset, &c); CHECK(c.result == 0, "Set %u", pairs[i][1]);
+            svc_call(sdx, pairs[i][0], &disp, 8, &c); CHECK(c.out_size == 4 && SVC_OUT(&c, uint32_t, 0) == 2, "Get %u reads it back", pairs[i][0]);
+        }
+        uset.v = 9; svc_call(sdx, 3209, &uset, sizeof uset, &c); CHECK(c.result == VI_R_INVALID_RANGE, "an out-of-range CMU mode is refused");
+        svc_call(mdx, 4209, &disp, 8, &c); CHECK(c.result == 0 && c.out_size == 1 && c.out[0] == 1, "4209 IsDisplayPanelOn: on");
+        uset.v = VI_POWER_OFF; svc_call(mdx, 4205, &uset, sizeof uset, &c); CHECK(c.result == 0, "4205 SetDisplayPowerState(off)");
+        svc_call(mdx, 4209, &disp, 8, &c); CHECK(c.out[0] == 0, "...the panel is off");
+        uset.v = VI_POWER_ON; svc_call(mdx, 4205, &uset, sizeof uset, &c); svc_call(mdx, 4209, &disp, 8, &c); CHECK(c.out[0] == 1, "...and on again");
+        uset.v = 3; svc_call(mdx, 4205, &uset, sizeof uset, &c); CHECK(c.result == VI_R_INVALID_RANGE, "...power state 3 does not exist");
+        fset.v = 0.5f; svc_call(mdx, 4201, &fset, sizeof fset, &c); CHECK(c.result == 0 && g_disp.alpha == 0.5f, "4201 SetDisplayAlpha");
+        fset.v = 1.5f; svc_call(mdx, 4201, &fset, sizeof fset, &c); CHECK(c.result == VI_R_INVALID_RANGE, "...alpha above 1 is refused");
+        const unsigned rows[] = {1203, 1204, 3204, 3205, 3206, 3207, 3208, 3209, 3210, 3211, 3214, 3215, 3216, 3217};
+        for (unsigned i = 0; i < sizeof rows / sizeof rows[0]; i++) CHECK(vi_cmd_is_impl(sdx, rows[i]), "ISystemDisplayService %u is real", rows[i]);
+        CHECK(vi_cmd_is_impl(mdx, 4201) && vi_cmd_is_impl(mdx, 4205) && vi_cmd_is_impl(mdx, 4209), "IManagerDisplayService 4201 / 4205 / 4209 are real");
+    }
     printf("{\"test\":\"svc_vi\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }
