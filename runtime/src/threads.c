@@ -18,6 +18,7 @@
 #include "kthread.h"
 #include "timescale.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -115,6 +116,12 @@ static Thread *pick(int kind, uint64_t a) {
         if (!b || t->prio < b->prio || (t->prio == b->prio && t->wseq < b->wseq)) b = t;
     }
     return b;
+}
+static int arb_waiters(int kind, uint64_t a) {
+    int n = 0;
+    for (Thread *t = g_wait; t; t = t->next)
+        if (t->wkind == kind && (kind == 2 ? t->wkey : t->waddr) == a) n++;
+    return n > 255 ? 255 : n;
 }
 static void core_handoff_note(Thread *t);
 static void wake(Thread *t, int64_t res) {
@@ -454,6 +461,56 @@ static int64_t block(Thread *t, int kind, int64_t ns) {
 }
 int64_t kthread_block(Thread *t, int kind, int64_t ns) { return block(t, kind, ns); }
 
+/* ---- arbitration trace (debug aid) -------------------------------------------------------------------------------------------
+ * NAPPLE_ARB_TRACE=<file>: a ring of the last ARB_N address-arbitration, mutex and condition-variable svcs (entry and exit) with the thread, the
+ * user word before / after, the waiter count and the threads a signal woke; written to <file> at quit (thread_dump_all) and on a crash
+ * (threads_arb_trace_flush from signals.c). Clock: CLOCK_MONOTONIC_RAW ns, the gfx CBTRACE clock. Format: tools/soak/arbtrace.py. */
+typedef struct {
+    uint64_t t, addr, addr2;
+    uint32_t tid;
+    uint8_t svc, phase; /* phase 0 entry, 1 exit */
+    uint8_t type, nwait;
+    int32_t val, cnt, before, after;
+    uint32_t res;
+    uint16_t woke[2];
+} ArbRec;
+_Static_assert(sizeof(ArbRec) == 56, "ArbRec layout (tools/soak/arbtrace.py)");
+#define ARB_N (1u << 20)
+static ArbRec *g_arb;
+static _Atomic uint64_t g_arb_pos;
+static const char *g_arb_path;
+static int g_arb_on = -1;
+static int arb_on(void) {
+    if (g_arb_on < 0) {
+        g_arb_path = getenv("NAPPLE_ARB_TRACE");
+        g_arb_on = g_arb_path && *g_arb_path && (g_arb = calloc(ARB_N, sizeof *g_arb)) != NULL;
+    }
+    return g_arb_on;
+}
+static int32_t arb_word(uint64_t a) { return a && !(a & 3) && guest_ptr(a, 4) ? (int32_t)__atomic_load_n((uint32_t *)(uintptr_t)a, __ATOMIC_RELAXED) : 0; }
+static int arb_waiters(int kind, uint64_t a); /* G held */
+static void arb_rec(unsigned svc, int phase, uint64_t addr, uint64_t addr2, int type, int32_t val, int32_t cnt, int32_t before, uint32_t res, const uint16_t *woke) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    ArbRec *e = &g_arb[atomic_fetch_add_explicit(&g_arb_pos, 1, memory_order_relaxed) % ARB_N];
+    Thread *me = self_or_null();
+    *e = (ArbRec){(uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec, addr, addr2, me ? (uint32_t)me->id : 0, (uint8_t)svc, (uint8_t)phase, (uint8_t)type,
+                  (uint8_t)arb_waiters(svc == 0x1C || svc == 0x1D ? 2 : svc == 0x1A || svc == 0x1B ? 1 : 3, svc == 0x1C || svc == 0x1D ? addr2 : addr), val, cnt, before,
+                  arb_word(addr), res, {woke ? woke[0] : 0, woke ? woke[1] : 0}};
+}
+void threads_arb_trace_flush(void) { /* also called from the crash handler: write(2) only */
+    if (g_arb_on <= 0) return;
+    int fd = open(g_arb_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    uint64_t end = atomic_load(&g_arb_pos), beg = end > ARB_N ? end - ARB_N : 0;
+    for (uint64_t i = beg; i < end;) {
+        uint64_t k = i % ARB_N, n = ARB_N - k < end - i ? ARB_N - k : end - i;
+        if (write(fd, &g_arb[k], n * sizeof *g_arb) < 0) break;
+        i += n;
+    }
+    close(fd);
+}
+
 /* ---- user-mode words ---------------------------------------------------------------------------------------- */
 static inline uint32_t ld32(uint64_t a) { return __atomic_load_n((uint32_t *)(uintptr_t)a, __ATOMIC_SEQ_CST); }
 static inline void st32(uint64_t a, uint32_t v) { __atomic_store_n((uint32_t *)(uintptr_t)a, v, __ATOMIC_SEQ_CST); }
@@ -679,6 +736,7 @@ static void *pcprof_main(void *arg) {
 static int sync_state(uint32_t h);
 void thread_dump_all(void) {
     if (g_tstats > 0) tstat_report();
+    threads_arb_trace_flush();
     pthread_mutex_lock(&G);
     for (int i = 0; i < NCORE; i++)
         LOG("threads", "core %d owner %#llx reserved for %#llx", i, g_core_owner[i] ? (unsigned long long)g_core_owner[i]->id : 0ull, g_core_resv[i] ? (unsigned long long)g_core_resv[i]->id : 0ull);
@@ -1120,11 +1178,14 @@ static void svc_arbitrate_lock(uint64_t *r) {
     }
     pthread_mutex_lock(&G);
     int64_t res = 0;
+    int32_t before = (int32_t)ld32(addr);
+    if (arb_on()) arb_rec(0x1A, 0, addr, 0, 0, (int32_t)r[0], 0, before, 0, NULL);
     if (ld32(addr) == ((uint32_t)r[0] | WAITERS_BIT)) {
         t->waddr = addr;
         t->wtag = (uint32_t)r[2];
         res = block(t, 1, -1);
     }
+    if (arb_on()) arb_rec(0x1A, 1, addr, 0, 0, (int32_t)r[0], 0, before, (uint32_t)res, NULL);
     pthread_mutex_unlock(&G);
     r[0] = (uint64_t)res;
 }
@@ -1134,6 +1195,11 @@ static void svc_arbitrate_unlock(uint64_t *r) {
         return;
     }
     pthread_mutex_lock(&G);
+    if (arb_on()) {
+        Thread *w = pick(1, r[0]);
+        uint16_t wk[2] = {w ? (uint16_t)w->id : 0, 0};
+        arb_rec(0x1B, 0, r[0], 0, 0, 0, 0, (int32_t)ld32(r[0]), 0, wk);
+    }
     lock_handoff(r[0]);
     pthread_mutex_unlock(&G);
     r[0] = 0;
@@ -1149,12 +1215,14 @@ static void svc_wait_process_wide_key(uint64_t *r) {
         return;
     }
     pthread_mutex_lock(&G);
+    if (arb_on()) arb_rec(0x1C, 0, addr, key, 0, (int32_t)r[2], 0, (int32_t)ld32(addr), 0, NULL);
     st32(key, 1);
     t->wkey = key;
     t->waddr = addr;
     t->wtag = (uint32_t)r[2];
     lock_handoff(addr);
     int64_t res = block(t, 2, (int64_t)r[3]); /* on timeout the lock is not re-taken here: user mode takes it */
+    if (arb_on()) arb_rec(0x1C, 1, addr, key, 0, (int32_t)r[2], 0, 0, (uint32_t)res, NULL);
     pthread_mutex_unlock(&G);
     r[0] = (uint64_t)res;
 }
@@ -1162,7 +1230,13 @@ static void svc_signal_process_wide_key(uint64_t *r) {
     uint64_t key = r[0];
     int cnt = (int)r[1], n = 0;
     pthread_mutex_lock(&G);
-    for (Thread *w; (cnt <= 0 || n < cnt) && (w = pick(2, key)); n++) lock_acquire_for(w, w->waddr, w->wtag);
+    uint16_t wk[2] = {0, 0};
+    int nw0 = arb_on() ? arb_waiters(2, key) : 0;
+    for (Thread *w; (cnt <= 0 || n < cnt) && (w = pick(2, key)); n++) {
+        if (n < 2) wk[n] = (uint16_t)w->id;
+        lock_acquire_for(w, w->waddr, w->wtag);
+    }
+    if (arb_on()) arb_rec(0x1D, 0, key, 0, 0, nw0, cnt, 0, (uint32_t)n, wk);
     int left = 0;
     for (Thread *w = g_wait; w; w = w->next)
         if (w->wkind == 2 && w->wkey == key) {
@@ -1199,10 +1273,13 @@ static void svc_wait_for_address(uint64_t *r) {
                 break;
             }
     }
+    int32_t before = (int32_t)v;
+    if (arb_on()) arb_rec(0x34, 0, addr, 0, type, val, 0, before, ok ? 0 : R_INVALID_STATE, NULL);
     if (!ok) res = R_INVALID_STATE;
     else {
         t->waddr = addr;
         res = block(t, 3, (int64_t)r[3]);
+        if (arb_on()) arb_rec(0x34, 1, addr, 0, type, val, 0, before, (uint32_t)res, NULL);
     }
     pthread_mutex_unlock(&G);
     r[0] = (uint64_t)res;
@@ -1236,10 +1313,15 @@ static void svc_signal_to_address(uint64_t *r) {
         uint32_t e = (uint32_t)val;
         if (!cas32(addr, &e, (uint32_t)nv)) res = R_INVALID_STATE;
     }
+    uint16_t wk[2] = {0, 0};
     if (!res) {
         int n = 0;
-        for (Thread *w; (cnt <= 0 || n < cnt) && (w = pick(3, addr)); n++) wake(w, 0);
+        for (Thread *w; (cnt <= 0 || n < cnt) && (w = pick(3, addr)); n++) {
+            if (n < 2) wk[n] = (uint16_t)w->id;
+            wake(w, 0);
+        }
     }
+    if (arb_on()) arb_rec(0x35, 0, addr, 0, type, val, cnt, nw, (uint32_t)res, wk);
     pthread_mutex_unlock(&G);
     r[0] = (uint64_t)res;
 }

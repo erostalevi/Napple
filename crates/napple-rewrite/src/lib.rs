@@ -6,6 +6,7 @@ pub mod cli;
 pub mod error;
 pub mod image;
 pub mod jumptab;
+pub mod ordering;
 pub mod output;
 pub mod patch;
 pub mod relocs;
