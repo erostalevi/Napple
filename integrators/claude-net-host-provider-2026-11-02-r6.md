@@ -2,7 +2,7 @@
 branch: claude/net-host-provider-2026-11-02-r6
 orchestration: net-host-provider
 base: 87938c7
-head: 739f8c1 (code and docs; the integrator file is the next commit)
+head: e0468f3 (code and docs; the integrator file is the next commit)
 env: mac
 date: 2026-11-02
 areas: [runtime/net, runtime/services]
@@ -71,6 +71,13 @@ Branch-only changes (`git diff --stat c33eb7f..HEAD`, c33eb7f = the main merged 
   from it may miss; a provider mask field would fix it.
 - ldn_core: NetworkInfo did not carry `localCommunicationVersion`, so a station always joined with version 0 — now written to and read from NodeInfo +0x2e.
 - ldn.c: Finalize while hosting did not end the provider's network (pre-existing; now does).
+- ldn (reported by net-rooms r7): MK8D Wireless Play calls SetAdvertiseData after OpenAccessPoint and before CreateNetwork; ldn_core refused it outside
+  AP_CREATED (0x40cb). Now SetAdvertiseData, SetStationAcceptPolicy and the filter calls are accepted from AP_OPENED too, the data is only stored until
+  CreateNetwork, which hands it to the provider. Tested (test_svc_ldn 142/0, test_net_host_ldn 68/0). MK8D Wireless Play (host) now gets past that and
+  hosts the network, opens a UDP broadcast socket on 12345 (all socket calls succeed, `NAPPLE_NET_LOG=1`), then still shows the error applet about
+  60 ms later and Breaks (same applet PopOutData abort as Online Play). Not diagnosed here: likely the game rejects the network description (node
+  addresses are real LAN addresses, not the console's 169.254/16, and GetIpv4Address reports mask 255.255.0.0). Handed to net-rooms (r7), whose item this is.
+- New debug aid: `NAPPLE_NET_LOG=1` logs each socket call and its result (no payloads).
 - `tests/test_svc_online.c:204` has a pre-existing `-Wstring-concatenation` warning (not mine, not touched).
 - What the titles do with the network (host mode, 60 s boots): SMO submits one nifm request at boot (accepted) and registers bsd; ACNH submits two, asks
   IsAnyInternetRequestAccepted, then cancels them (no further traffic in 60 s); MK8D and LAS make no network request while booting. No title opened a socket,
