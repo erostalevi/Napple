@@ -2,7 +2,7 @@
 branch: claude/net-rooms-2026-11-02-r7
 orchestration: net-rooms
 base: c44af844fafe86d87e8468fbc6437e1afaa7c55d
-head: f93a03a (the commit before this line was set)
+head: 0228a86 (the commit before this line was set)
 env: mac
 date: 2026-11-02
 areas: [crates/napple-room, runtime/net]
