@@ -6,7 +6,7 @@ head: fdb92d1 (code and generated docs; the commit on top of it adds the change 
 env: mac
 date: 2026-11-02
 areas: [runtime/a32, gfx, docs]
-status: ready
+status: integrated
 ---
 
 # claude/leftovers-a32-viewport-docs-2026-11-02-r5: interpreter lda/stl ordering + alignment, per-viewport swizzles, docs orphans
@@ -119,3 +119,13 @@ status: ready
   and the capture-only decision is above. It stays tested, not verified: no title calls it.
 - `tools/support/gen_support.py`: default `HISTORY` for the flat layout (Findings).
 - gfx owner: multi-viewport rasterization (Findings).
+
+## Integration result
+- Date 2026-11-02, merged into main as bcaa690 (branch head 107ecc7: work fdb92d1 + the change-note / integrator-file commit), second of batch r5 after nifm-netconnect (c33eb7f); no conflicts (vi.c and runtime-services.md untouched by this branch). Outcome: **Small fix**, two `integrate:` commits, no behaviour change:
+  - 010b360 `tools/support/gen_support.py`: `HISTORY` default is `.claude/skills/percent-analysis/history` (flat checkout). `--refresh-snapshot` without an argument now finds snapshot 2026-11-02-8389280 and regenerates byte-identical tables.
+  - d784553 `docs/architecture/gfx.md` section 13: the author's replacement text for per-viewport swizzles (Needs from other areas); `docs/archive/changes/README.md`: the nifm-netconnect r5 row.
+- Close commit: `docs/process/archive/README.md` gets the "Round 2026-11-02-r5" table (both r5 items), so `check_docs.py` stays OK after the move.
+- No native ports: `a32_exec.c` uses C11 atomics (portable, correct on Apple cores); the translator and Metal replay stay as they are (Metal throughout).
+- Tests on the merged tree (identical to main bcaa690): `make -C runtime GFX=napple test-a32` rc 0 (excltest 47/47; difftest ARM 11587 / Thumb 11743 compared, mismatches 0; 1032723 inline words, 0 forms failed; progtest ok; no AArch32 interpreter in the runtime). `make -C gfx test` ALL TESTS PASSED (`t_vp_swizzle: ok (0 skipped)` with the expected `index 1, vp1 x = -x` and `GS index 1` right-half rows, `t_obj_canary: ok`, the four known-open SKIPs). LAS corpus 5767 / 5767 / 5767. `check_docs.py` OK (246 files, after the close); `gen_support.py --check` OK.
+- Still open (not landed by anyone): multi-viewport rasterization; `verified.json` note for `nvnCommandBufferSetViewportSwizzles` (left to /percent-analysis); stale FL_ACQ comment in `runtime/src/a32/a32_priv.h`.
+- Four-title boots on main: recorded in the r5 results commit.

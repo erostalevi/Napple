@@ -45,3 +45,10 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | core-ordering-kernel | [core-ordering-kernel.md](orchestrations/core-ordering-kernel.md) | [claude-core-ordering-kernel-2026-11-02-r4.md](integrators/claude-core-ordering-kernel-2026-11-02-r4.md) | acquire/release for 32-bit exclusives, svcGetInfo 19/27, clean ExitProcess summary, docs links |
 | gfx-views-raster | [gfx-views-raster.md](orchestrations/gfx-views-raster.md) | [claude-gfx-views-raster-2026-11-02-r4.md](integrators/claude-gfx-views-raster-2026-11-02-r4.md) | stencil cube views, remaining integer views, separate-texture slot masks, viewport swizzles, provoking vertex |
 | ipc-reference-audit | [ipc-reference-audit.md](orchestrations/ipc-reference-audit.md) | [claude-ipc-reference-audit-2026-11-02-r4.md](integrators/claude-ipc-reference-audit-2026-11-02-r4.md) | misnumbered IPC rows follow switchbrew, nifm answers like an offline console, 17 more stubs real |
+
+## Round 2026-11-02-r5
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| leftovers-a32-viewport-docs | [leftovers-a32-viewport-docs.md](orchestrations/leftovers-a32-viewport-docs.md) | [claude-leftovers-a32-viewport-docs-2026-11-02-r5.md](integrators/claude-leftovers-a32-viewport-docs-2026-11-02-r5.md) | interpreter lda/stl seq_cst + alignment fault, per-viewport swizzles, docs orphans |
+| nifm-netconnect | [nifm-netconnect.md](orchestrations/nifm-netconnect.md) | [claude-nifm-netconnect-2026-11-02-r5.md](integrators/claude-nifm-netconnect-2026-11-02-r5.md) | nifm Cancel semantics + the real NetConnect output (MK8D Online Play shows the console's flow) |

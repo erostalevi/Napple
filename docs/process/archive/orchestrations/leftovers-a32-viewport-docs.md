@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r5
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_3b3cd256-1668-4a2b-8542-c3387e1fbb05 (reused)
 launched_at: 2026-11-02
@@ -33,3 +33,5 @@ launched_at: 2026-11-02
 Read `orchestrations/ENV-MAC.md` (shared title data rebuilt after r4 — read-only, use private copies; locks; local-only; never ask). Final planned round (snapshot 2026-11-02-8389280, 98.9%).
 
 ## Result
+Integrated 2026-11-02: **Small fix** (gen_support.py flat HISTORY default; gfx.md section 13 text and a change-archive row from the author's Needs), merged into main as bcaa690 (branch head 107ecc7). test-a32 green (excltest 47/47, 0 mismatches), `make -C gfx test` ALL TESTS PASSED, LAS corpus 5767/5767/5767, check_docs OK. Per-viewport swizzles stay *tested* (no title sets them). Follow-ups: multi-viewport rasterization (gfx), verified.json note, a32_priv.h FL_ACQ comment.
+Integrator file: `docs/process/archive/integrators/claude-leftovers-a32-viewport-docs-2026-11-02-r5.md`.
