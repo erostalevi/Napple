@@ -66,10 +66,22 @@ impl NexSession {
     /// One WebSocket binary message from the client. Returns the messages to send back (each one PRUDP packet).
     pub fn on_message(&mut self, data: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
-        for p in prudp::decode_all(data) {
+        if self.server.verbose {
+            eprintln!("napple-online: {} <- {}", self.peer, crate::crypto::hex(&data[..data.len().min(96)]));
+        }
+        let packets = prudp::decode_all(data);
+        if packets.is_empty() {
+            eprintln!("napple-online: {}: undecodable PRUDP message ({} bytes, first byte 0x{:02x})", self.peer, data.len(), data.first().copied().unwrap_or(0));
+        }
+        for p in packets {
             self.on_packet(&p, now_ms, &mut out);
         }
         out.extend(self.tick(now_ms));
+        if self.server.verbose {
+            for m in &out {
+                eprintln!("napple-online: {} -> {}", self.peer, crate::crypto::hex(&m[..m.len().min(96)]));
+            }
+        }
         out
     }
 

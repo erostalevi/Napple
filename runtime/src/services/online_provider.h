@@ -105,6 +105,8 @@ typedef struct {
 } OnlineLdnNode;
 /* ssl SetVerifyOption bits (nn::ssl::Connection::VerifyOption) as the provider receives them. */
 enum { ONLINE_TLS_VERIFY_PEER_CA = 1u << 0, ONLINE_TLS_VERIFY_HOST_NAME = 1u << 1, ONLINE_TLS_VERIFY_DATE = 1u << 2 };
+/* ssl IoMode values (tls_set_io_mode, napple-online addition). */
+enum { ONLINE_TLS_IO_BLOCKING = 1, ONLINE_TLS_IO_NONBLOCKING = 2 };
 
 /* TLS: the provider owns the whole connection state. sock is a provider socket handle (see sockets) or -1. */
 typedef struct OnlineProvider {
@@ -193,6 +195,9 @@ typedef struct OnlineProvider {
      * opaque printable string; the Napple provider returns a token issued by the configured Napple server). Returns the length written to out (no NUL
      * needed), 0 = no token (not linked, server unreachable). */
     size_t (*account_id_token)(void *ctx, const uint8_t user_id[16], char *out, size_t n);
+    /* ssl: the connection's I/O mode as the guest set it (nn::ssl IoMode: 1 = blocking, the default; 2 = non-blocking). On a non-blocking connection
+     * tls_read (and tls_write) return -1 with *err = HZ_EAGAIN instead of waiting, which the ssl service answers with ResultWouldBlock. 0 = ok. */
+    int (*tls_set_io_mode)(void *ctx, void *conn, uint32_t mode);
 } OnlineProvider;
 
 /* The active provider; never NULL. The first call loads ONLINE_ENV_PROVIDER once (a failure is logged and falls back to the NullProvider). */

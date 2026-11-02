@@ -21,6 +21,7 @@ pub const PROTO_HEALTH: u16 = 18;
 pub const PROTO_MATCH_MAKING: u16 = 21;
 pub const PROTO_MATCH_MAKING_EXT: u16 = 50;
 pub const PROTO_MATCHMAKE_EXT: u16 = 109;
+pub const PROTO_UTILITY: u16 = 110;
 
 /// NEX "success" as a %retval% Result.
 pub const RESULT_SUCCESS: u32 = 0x0001_0001;
@@ -269,6 +270,7 @@ impl Server {
             PROTO_MATCH_MAKING => self.match_making(me, req),
             PROTO_MATCH_MAKING_EXT => self.match_making_ext(me, req),
             PROTO_NAT_TRAVERSAL => self.nat_traversal(me, req),
+            PROTO_UTILITY => self.utility(me, req),
             PROTO_HEALTH => ok(|w| {
                 w.bool(true);
             }),
@@ -711,6 +713,30 @@ impl Server {
         }
     }
 
+    /// Utility: unique ids and the server's settings tables (this server has none: empty maps).
+    fn utility(&self, me: Caller, req: &Request) -> Reply {
+        match req.method {
+            1 | 2 => ok(|w| {
+                w.u64(crate::crypto::random_u32() as u64 | (me.pid & 0xffff_ffff) << 32);
+                if req.method == 2 {
+                    w.u64(crate::crypto::random_u32() as u64);
+                }
+            }),
+            3 | 4 => ok(|_| {}),
+            5 => ok(|w| {
+                w.u64(0).u64(0);
+            }),
+            6 => ok(|w| {
+                w.u32(0);
+            }),
+            // GetIntegerSettings(u32 index) -> Map<u16, i32>; GetStringSettings(u32 index) -> Map<u16, String>
+            7 | 8 => ok(|w| {
+                w.u32(0);
+            }),
+            _ => Reply::Err(err::CORE_NOT_IMPLEMENTED),
+        }
+    }
+
     /// NAT traversal: a client asks the server to have its targets probe it; the server forwards InitiateProbe (method 2) to each target.
     fn nat_traversal(&self, me: Caller, req: &Request) -> Reply {
         let mut r = Reader::new(&req.body);
@@ -938,8 +964,10 @@ mod tests {
         // a disconnects: the session is gone
         srv.detach(a.cid);
         assert!(srv.world.lock().unwrap().sessions.all.is_empty());
-        // unknown protocols answer NotImplemented
+        // unknown protocols answer NotImplemented; Utility settings are empty maps
         assert!(matches!(srv.secure_call(b, &req(112, 1, vec![])), Reply::Err(err::CORE_NOT_IMPLEMENTED)));
+        let Reply::Ok(m) = srv.secure_call(b, &req(PROTO_UTILITY, 7, vec![0, 0, 0, 0])) else { panic!() };
+        assert_eq!(m, vec![0, 0, 0, 0]);
     }
 
     #[test]

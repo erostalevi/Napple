@@ -18,7 +18,7 @@
 #define NET_ONLINE_ENV_STATE "NAPPLE_ONLINE_STATE_DIR" /* where account credentials are kept; default <support dir>/online */
 #define NET_ONLINE_NAME "napple-online over host"
 /* The address redirected names resolve to (100.64.0.0/10, shared address space: never a real peer of a title). Host byte order. */
-#define NET_ONLINE_VIRTUAL_IP 0x647f4e4fu /* 100.127.78.79 */
+#define NET_ONLINE_VIRTUAL_IP 0x644e4e64u /* 100.78.78.100: a palindrome, so it reads the same in either byte order (sfdnsres hostents come out byte-swapped) */
 
 typedef struct {
     int tls;         /* 1 = https */

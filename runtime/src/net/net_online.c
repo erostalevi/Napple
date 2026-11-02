@@ -110,6 +110,19 @@ typedef struct {
     unsigned nlogged;
 } NetOnline;
 
+/* NAPPLE_ONLINE_DEBUG=1: every lookup, connection and TLS step of the wrapper is logged (diagnosing a title's online path). */
+static int no_debug = -1;
+#define NO_DBG(...)                                                                                                                            \
+    do {                                                                                                                                       \
+        if (no_debug < 0) no_debug = getenv("NAPPLE_ONLINE_DEBUG") && *getenv("NAPPLE_ONLINE_DEBUG") == '1';                                  \
+        if (no_debug) log_line("online", "napple debug: " __VA_ARGS__);                                                                        \
+    } while (0)
+static const char *addr_str(const OnlineAddr *a, char *buf, size_t n) {
+    if (a->family == BSD_AF_INET) snprintf(buf, n, "%u.%u.%u.%u:%u", a->addr[0], a->addr[1], a->addr[2], a->addr[3], a->port);
+    else snprintf(buf, n, "family %u port %u", a->family, a->port);
+    return buf;
+}
+
 static pthread_mutex_t reg_mu = PTHREAD_MUTEX_INITIALIZER;
 static NetOnline *reg[8];
 static NetOnline *no_of(void *ctx) {
@@ -175,6 +188,7 @@ static int server_address(NetOnline *o, OnlineAddr *out) {
 
 static int no_dns_resolve(void *ctx, const char *host, const char *service, int family, OnlineResolved *out) {
     NetOnline *o = no_of(ctx);
+    NO_DBG("resolve '%s' service '%s' family %d -> policy %d", host ? host : "", service ? service : "", family, net_online_name_policy(host));
     switch (net_online_name_policy(host)) {
         case NET_ONLINE_NAME_BLOCK:
             log_once(o, "blocked name", host);
@@ -214,6 +228,8 @@ static int no_nsd_resolve(void *ctx, const char *in, char *out, size_t n) {
 
 static int no_sock_connect(void *ctx, int h, const OnlineAddr *a, int *err) {
     NetOnline *o = no_of(ctx);
+    char ab[64];
+    NO_DBG("connect socket %d to %s%s", h, addr_str(a, ab, sizeof ab), is_virtual(a) ? " (the Napple server)" : "");
     if (!is_virtual(a)) return o->host->sock_connect(o->host->ctx, h, a, err);
     OnlineAddr real;
     if (server_address(o, &real)) {
@@ -232,7 +248,9 @@ static int no_sock_connect(void *ctx, int h, const OnlineAddr *a, int *err) {
     char where[300];
     snprintf(where, sizeof where, "%s:%u (%s)", o->srv.host, o->srv.port, o->srv.tls ? "https" : "http");
     log_once(o, what, where);
-    return o->host->sock_connect(o->host->ctx, h, &real, err);
+    int rc = o->host->sock_connect(o->host->ctx, h, &real, err);
+    NO_DBG("connect socket %d to the server: rc %d errno %d", h, rc, rc ? *err : 0);
+    return rc;
 }
 static int64_t no_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, const OnlineAddr *to, int *err) {
     NetOnline *o = no_of(ctx);
@@ -260,6 +278,11 @@ static int no_sock_getpeername(void *ctx, int h, OnlineAddr *out, int *err) {
     }
     return rc;
 }
+static int no_sock_set_nonblock(void *ctx, int h, int on, int *err) {
+    NetOnline *o = no_of(ctx);
+    NO_DBG("socket %d non-blocking %d", h, on);
+    return o->host->sock_set_nonblock(o->host->ctx, h, on, err);
+}
 static int no_sock_close(void *ctx, int h, int *err) {
     NetOnline *o = no_of(ctx);
     pthread_mutex_lock(&o->mu);
@@ -277,8 +300,17 @@ typedef struct {
     int ours;   /* over a redirected socket */
     int plain;  /* ours, http:// server: no TLS at all */
     int sock;
+    int nonblocking; /* ours: the guest's IoMode is non-blocking */
     void *inner; /* the host provider's connection (not ours, or ours over https) */
 } NoTls;
+
+/* Ours, non-blocking: is there anything to read without waiting (TLS bytes already decrypted, or data on the socket)? */
+static int readable(NetOnline *o, NoTls *t) {
+    if (!t->plain && o->host->tls_pending(o->host->ctx, t->inner) > 0) return 1;
+    OnlinePollFd pf = {t->sock, ONLINE_POLLIN, 0};
+    int err = 0;
+    return o->host->sock_poll(o->host->ctx, &pf, 1, 0, &err) > 0;
+}
 
 static void *no_tls_new(void *ctx, int sock) {
     NetOnline *o = no_of(ctx);
@@ -288,6 +320,7 @@ static void *no_tls_new(void *ctx, int sock) {
     t->sock = sock;
     t->ours = sock >= 0 && is_redirected(o, sock, NULL);
     t->plain = t->ours && !o->srv.tls;
+    NO_DBG("tls_new over socket %d: %s", sock, t->plain ? "ours, plain" : t->ours ? "ours, TLS to the server" : "not ours");
     if (!t->plain) {
         t->inner = o->host->tls_new(o->host->ctx, sock);
         if (!t->inner) {
@@ -315,6 +348,7 @@ static int no_tls_set_host(void *ctx, void *conn, const char *host) {
 static int no_tls_handshake(void *ctx, void *conn, uint32_t *result) {
     NetOnline *o = no_of(ctx);
     NoTls *t = conn;
+    NO_DBG("tls handshake over socket %d", t->sock);
     if (t->plain) return 0;
     if (t->ours) o->host->tls_set_host(o->host->ctx, t->inner, o->srv.host); /* also when the title never named the server */
     return o->host->tls_handshake(o->host->ctx, t->inner, result);
@@ -322,19 +356,36 @@ static int no_tls_handshake(void *ctx, void *conn, uint32_t *result) {
 static int64_t no_tls_read(void *ctx, void *conn, void *buf, size_t n, int *err) {
     NetOnline *o = no_of(ctx);
     NoTls *t = conn;
-    if (t->plain) return o->host->sock_recv(o->host->ctx, t->sock, buf, n, 0, NULL, err);
-    return o->host->tls_read(o->host->ctx, t->inner, buf, n, err);
+    if (t->nonblocking && !readable(o, t)) {
+        *err = HZ_EAGAIN;
+        return -1;
+    }
+    int64_t r = t->plain ? o->host->sock_recv(o->host->ctx, t->sock, buf, n, 0, NULL, err) : o->host->tls_read(o->host->ctx, t->inner, buf, n, err);
+    if (t->ours) NO_DBG("tls read socket %d: %lld of %zu (errno %d)", t->sock, (long long)r, n, r < 0 ? *err : 0);
+    return r;
 }
 static int64_t no_tls_write(void *ctx, void *conn, const void *buf, size_t n, int *err) {
     NetOnline *o = no_of(ctx);
     NoTls *t = conn;
-    if (t->plain) return o->host->sock_send(o->host->ctx, t->sock, buf, n, 0, NULL, err);
-    return o->host->tls_write(o->host->ctx, t->inner, buf, n, err);
+    int64_t r = t->plain ? o->host->sock_send(o->host->ctx, t->sock, buf, n, 0, NULL, err) : o->host->tls_write(o->host->ctx, t->inner, buf, n, err);
+    if (t->ours) NO_DBG("tls write socket %d: %lld of %zu (errno %d)", t->sock, (long long)r, n, r < 0 ? *err : 0);
+    return r;
 }
 static int64_t no_tls_pending(void *ctx, void *conn) {
     NetOnline *o = no_of(ctx);
     NoTls *t = conn;
     return t->plain ? 0 : o->host->tls_pending(o->host->ctx, t->inner);
+}
+static int no_tls_set_io_mode(void *ctx, void *conn, uint32_t mode) {
+    NetOnline *o = no_of(ctx);
+    NoTls *t = conn;
+    if (!t->ours) {
+        int (*f)(void *, void *, uint32_t) = ONLINE_FN(o->host, tls_set_io_mode);
+        return f ? f(o->host->ctx, t->inner, mode) : 0;
+    }
+    t->nonblocking = mode == ONLINE_TLS_IO_NONBLOCKING;
+    NO_DBG("tls io mode of socket %d: %s", t->sock, t->nonblocking ? "non-blocking" : "blocking");
+    return 0;
 }
 static int no_tls_add_ca(void *ctx, void *conn, const void *cert, size_t n) {
     NetOnline *o = no_of(ctx);
@@ -435,6 +486,7 @@ OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer
     t->sock_send = no_sock_send;
     t->sock_getpeername = no_sock_getpeername;
     t->sock_close = no_sock_close;
+    t->sock_set_nonblock = no_sock_set_nonblock;
     t->tls_new = no_tls_new;
     t->tls_free = no_tls_free;
     t->tls_set_host = no_tls_set_host;
@@ -446,6 +498,7 @@ OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer
     t->tls_set_verify = no_tls_set_verify;
     t->account_info = no_account_info;
     t->account_id_token = no_account_id_token;
+    t->tls_set_io_mode = no_tls_set_io_mode;
     pthread_mutex_lock(&reg_mu);
     unsigned i = 0;
     while (i < 8 && reg[i]) i++;
