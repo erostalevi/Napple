@@ -576,7 +576,11 @@ impl Server {
                 })
             }
             31 | 60 => {
-                let Ok(pids) = r.list(|r| r.pid()) else { return bad };
+                let Ok(mut pids) = r.list(|r| r.pid()) else { return bad };
+                if pids.is_empty() {
+                    // An empty list asks for the caller's friends (MK8D's Friends mode): the ones its client reported from napple-social.
+                    pids = self.accounts.friends(me.pid);
+                }
                 let w = self.world.lock().unwrap();
                 let mut found = vec![];
                 for p in pids {
@@ -777,7 +781,8 @@ impl Server {
                 })
             }
             1 | 2 | 3 | 7 | 8 => ok(|_| {}),
-            9 | 12 | 13 | 14 => ok(empty_result),
+            // 18: MK8D's Friends mode asks it before looking up its friends' sessions; NotImplemented ends the mode with "a communication error"
+            9 | 12 | 13 | 14 | 18 => ok(empty_result),
             10 => ok(|w| {
                 w.u32(0);
             }),

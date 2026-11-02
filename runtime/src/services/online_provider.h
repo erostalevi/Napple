@@ -108,6 +108,7 @@ enum { ONLINE_TLS_VERIFY_PEER_CA = 1u << 0, ONLINE_TLS_VERIFY_HOST_NAME = 1u << 
 /* ssl IoMode values (tls_set_io_mode, napple-online addition). */
 enum { ONLINE_TLS_IO_BLOCKING = 1, ONLINE_TLS_IO_NONBLOCKING = 2 };
 
+struct OnlineFriendInfo; /* friend details (online-friends), defined after the table */
 /* TLS: the provider owns the whole connection state. sock is a provider socket handle (see sockets) or -1. */
 typedef struct OnlineProvider {
     uint32_t abi_version;        /* must be ONLINE_ABI_VERSION */
@@ -198,7 +199,40 @@ typedef struct OnlineProvider {
     /* ssl: the connection's I/O mode as the guest set it (nn::ssl IoMode: 1 = blocking, the default; 2 = non-blocking). On a non-blocking connection
      * tls_read (and tls_write) return -1 with *err = HZ_EAGAIN instead of waiting, which the ssl service answers with ResultWouldBlock. 0 = ok. */
     int (*tls_set_io_mode)(void *ctx, void *conn, uint32_t mode);
+
+    /* ---- additions of online-friends (2026-11-02-r10): struct_size-extensible, ABI version unchanged (ONLINE_CAP_FRIENDS) ---- */
+    /* The friend list with presence (online first): the count written to out (<= max), starting at `offset`. */
+    uint32_t (*friend_list_info)(void *ctx, uint32_t offset, struct OnlineFriendInfo *out, uint32_t max);
+    /* One friend by id: 0 and *out filled, nonzero = not a friend. */
+    int (*friend_find)(void *ctx, uint64_t id, struct OnlineFriendInfo *out);
+    /* Friend requests received and still pending. */
+    uint32_t (*friend_request_count)(void *ctx);
+    /* The next queued friend notification (ONLINE_FRIEND_NOTE_*): 0 and *type / *id filled, nonzero = queue empty. */
+    int (*friend_pop_note)(void *ctx, uint32_t *type, uint64_t *id);
+    /* `cb(arg)` is called (from any thread) when a friend notification is queued. NULL clears. */
+    void (*friend_set_notify)(void *ctx, void (*cb)(void *arg), void *arg);
+    /* The local user declared (1) or closed (0) an online-play session (DeclareOpenOnlinePlaySession / DeclareCloseOnlinePlaySession). */
+    void (*friend_online_play)(void *ctx, int open);
 } OnlineProvider;
+
+/* friend (online-friends): what friend_list_info / friend_find return. The app field is the friend's own UpdateUserPresence app data, visible only
+ * to a title of the same presence group (same_app); status follows nn::friends PresenceStatus (0 offline, 1 online, 2 online play). */
+#define ONLINE_FRIEND_APP_FIELD 0xC0u
+typedef struct OnlineFriendInfo {
+    uint64_t id;          /* as OnlineFriend.id */
+    char name[33];        /* UTF-8 nickname */
+    uint8_t status;       /* 0 offline, 1 online, 2 online play */
+    uint8_t same_app;     /* playing the running title */
+    uint8_t is_new;       /* became a friend during this run */
+    uint8_t has_app_field;
+    uint8_t pad[3];
+    uint64_t last_online_s; /* unix seconds, 0 = unknown */
+    uint64_t title_id;      /* the title the friend plays, 0 = none */
+    char icon_id[32];       /* provider-defined picture id, empty = none */
+    uint8_t app_field[ONLINE_FRIEND_APP_FIELD];
+} OnlineFriendInfo;
+/* friend_pop_note types (nn::friends NotificationType). */
+enum { ONLINE_FRIEND_NOTE_LIST_UPDATED = 0x1, ONLINE_FRIEND_NOTE_NEW_REQUEST = 0x65 };
 
 /* The active provider; never NULL. The first call loads ONLINE_ENV_PROVIDER once (a failure is logged and falls back to the NullProvider). */
 const OnlineProvider *online_provider(void);

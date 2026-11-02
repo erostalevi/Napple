@@ -119,6 +119,7 @@ typedef struct {
     int64_t token_ms;
     char logged[16][128]; /* names already logged once */
     unsigned nlogged;
+    NetSocial *social; /* friends and presence (net_online_social.c), NULL without a Napple Account token */
 } NetOnline;
 
 /* NAPPLE_ONLINE_DEBUG=1: every lookup, connection and TLS step of the wrapper is logged (diagnosing a title's online path). */
@@ -486,6 +487,7 @@ static int ensure_account(NetOnline *o, const uint8_t uid[16]) {
     } else o->account_failed = 1;
     pthread_mutex_unlock(&o->mu);
     if (rc == 0) log_line("online", "napple: local user linked to Napple account %llu on %s:%u", (unsigned long long)a.pid, o->srv.host, o->srv.port);
+    if (rc == 0 && o->social) net_social_set_self_id(o->social, a.pid); /* friends find this user's game sessions by it */
     else log_line("online", "napple: no Napple account (server %s:%u unreachable or refused): the user stays unlinked", o->srv.host, o->srv.port);
     return rc;
 }
@@ -542,6 +544,45 @@ static void no_report(void *ctx, const void *record, size_t n) {
     if (ipc_trace_guest) ipc_trace_guest(32); /* who reported it: an error report names the title's code path */
 }
 
+/* ---- friend: napple-social (net_online_social.c) ---- */
+
+static uint32_t no_friend_count(void *ctx) { return net_social_count(no_of(ctx)->social); }
+static uint32_t no_friend_list(void *ctx, uint32_t off, OnlineFriend *out, uint32_t max) {
+    OnlineFriendInfo f[16];
+    uint32_t n = 0;
+    while (n < max) {
+        uint32_t want = max - n < 16 ? max - n : 16, got = net_social_list(no_of(ctx)->social, off + n, f, want);
+        for (uint32_t i = 0; i < got; i++) {
+            memset(&out[n + i], 0, sizeof out[0]);
+            out[n + i].id = f[i].id;
+            memcpy(out[n + i].name, f[i].name, sizeof out[0].name);
+            out[n + i].presence = f[i].status;
+        }
+        n += got;
+        if (got < want) break;
+    }
+    return n;
+}
+/* The social client learned which friends play on this server: the server hears it (only once this user has its account here). */
+static int no_report_friend_pids(void *arg, const uint64_t *pids, uint32_t n) {
+    NetOnline *o = arg;
+    pthread_mutex_lock(&o->mu);
+    int have = o->have_account;
+    NetOnlineAccount a = o->account;
+    pthread_mutex_unlock(&o->mu);
+    if (!have) return -1;
+    int rc = net_online_report_friends(o->host, &o->srv, &a, pids, n);
+    log_line("online", "napple: %u friends on %s:%u reported to the game server%s", n, o->srv.host, o->srv.port, rc ? " (refused)" : "");
+    return rc;
+}
+static void no_presence_update(void *ctx, const void *record, size_t n) { net_social_presence(no_of(ctx)->social, record, n); }
+static uint32_t no_friend_list_info(void *ctx, uint32_t off, OnlineFriendInfo *out, uint32_t max) { return net_social_list(no_of(ctx)->social, off, out, max); }
+static int no_friend_find(void *ctx, uint64_t id, OnlineFriendInfo *out) { return net_social_find(no_of(ctx)->social, id, out); }
+static uint32_t no_friend_request_count(void *ctx) { return net_social_request_count(no_of(ctx)->social); }
+static int no_friend_pop_note(void *ctx, uint32_t *type, uint64_t *id) { return net_social_pop_note(no_of(ctx)->social, type, id); }
+static void no_friend_set_notify(void *ctx, void (*cb)(void *), void *arg) { net_social_set_notify(no_of(ctx)->social, cb, arg); }
+static void no_friend_online_play(void *ctx, int open) { net_social_online_play(no_of(ctx)->social, open); }
+
 /* ---- construction ---- */
 
 OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer *server, const char *state_dir) {
@@ -580,12 +621,28 @@ OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer
     t->account_id_token = no_account_id_token;
     t->tls_set_io_mode = no_tls_set_io_mode;
     t->report = no_report;
+    NetSocialConfig sc;
+    if (net_social_config(server, &sc) == 0 && (o->social = net_social_start(host, &sc, 1))) {
+        t->caps |= ONLINE_CAP_FRIENDS;
+        t->friend_count = no_friend_count;
+        t->friend_list = no_friend_list;
+        t->presence_update = no_presence_update;
+        t->friend_list_info = no_friend_list_info;
+        t->friend_find = no_friend_find;
+        t->friend_request_count = no_friend_request_count;
+        t->friend_pop_note = no_friend_pop_note;
+        t->friend_set_notify = no_friend_set_notify;
+        t->friend_online_play = no_friend_online_play;
+        net_social_set_pid_listener(o->social, no_report_friend_pids, o);
+        log_line("online", "napple social: friends and presence from %s:%u (account %s:%u)", sc.social.host, sc.social.port, sc.account.host, sc.account.port);
+    }
     pthread_mutex_lock(&reg_mu);
     unsigned i = 0;
     while (i < 8 && reg[i]) i++;
     if (i < 8) reg[i] = o;
     pthread_mutex_unlock(&reg_mu);
     if (i == 8) {
+        net_social_stop(o->social);
         free(o);
         return NULL;
     }
@@ -598,12 +655,18 @@ void net_online_free(OnlineProvider *p) {
     for (unsigned i = 0; i < 8; i++)
         if (reg[i] == o) reg[i] = NULL;
     pthread_mutex_unlock(&reg_mu);
+    net_social_stop(o->social);
     pthread_mutex_destroy(&o->mu);
     free(o);
 }
 
 static const OnlineProvider *builtin;
 static pthread_once_t builtin_once = PTHREAD_ONCE_INIT;
+/* A normal exit signs the presence out (friends see "offline" at once instead of after three missed heartbeats). */
+static void builtin_exit(void) {
+    NetOnline *o = builtin && builtin != net_host_provider() ? (NetOnline *)builtin : NULL;
+    if (o && o->social) net_social_quit(o->social); /* the cache stays readable for threads still running */
+}
 static void builtin_build(void) {
     builtin = net_host_provider();
     const char *url = getenv(NET_ONLINE_ENV_SERVER);
@@ -622,6 +685,7 @@ static void builtin_build(void) {
     OnlineProvider *p = net_online_new(builtin, &srv, dir[0] ? dir : NULL);
     if (!p) return;
     builtin = p;
+    atexit(builtin_exit);
     log_line("online", "napple: online service %s://%s:%u (game-server names redirected there, other Nintendo names blocked)", srv.tls ? "https" : "http",
              srv.host, srv.port);
 }

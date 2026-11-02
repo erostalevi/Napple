@@ -186,8 +186,8 @@ int main(void) {
       svc_call(fs, 20100, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 2, "friend count from the provider");
       uint64_t ids[4] = {0}; uint32_t off = 0; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, ids, sizeof ids); svc_call_c(fs, 10100, &c);
       CHECK(SVC_OUT(&c, uint32_t, 0) == 2 && ids[0] == 0x1000 && ids[1] == 0x1001, "GetFriendListIds");
-      static uint8_t recs[2 * 0x300]; off = 1; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, recs, sizeof recs); svc_call_c(fs, 10101, &c);
-      CHECK(SVC_OUT(&c, uint32_t, 0) == 1 && !strcmp((char *)recs + 0x40, "friend1"), "GetFriendList honours the offset");
+      static uint8_t recs[2 * 0x200]; off = 1; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, recs, sizeof recs); svc_call_c(fs, 10101, &c);
+      CHECK(SVC_OUT(&c, uint32_t, 0) == 1 && !strcmp((char *)recs + 0x18, "friend1") && recs[0x128] == 1, "GetFriendList honours the offset (FriendImpl: nickname at 0x18, valid)");
       char pres[] = "presence"; memset(&c, 0, sizeof c); svc_set_in_buf(&c, pres, sizeof pres); svc_call_c(fs, 10610, &c); CHECK(lb.presence_updates == 1, "UpdateUserPresence reaches the provider");
       IpcObject *nd = nsd_open(); char in[] = "x.example", out[64] = {0}; memset(&c, 0, sizeof c); svc_set_in_buf(&c, in, sizeof in); svc_set_out_buf(&c, out, sizeof out); svc_call_c(nd, 21, &c);
       CHECK(!strcmp(out, "mapped.x.example"), "nsd Resolve goes through the provider");
