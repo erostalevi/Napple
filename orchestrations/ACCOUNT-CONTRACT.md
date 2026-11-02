@@ -34,3 +34,16 @@ uploaded — never game content, keys or firmware.
 SQLite (WAL) in the instance data volume for accounts/devices/tokens/profiles/save metadata; S3 bucket `napple-saves-<account-id>` (SSE-S3,
 block public access, lifecycle: abort incomplete uploads after 1 day, delete noncurrent objects after 7 days). Email via Amazon SES (domain `napple.lat`,
 DKIM in Route 53, sender `no-reply@napple.lat`).
+
+## Plans and billing (user decision 2026-11-02)
+- **Free**: account, passkeys, devices, profiles and the online identity are free. Cloud saves for **1 title** per account (the first title the user
+  enables; the user may switch which title once every 30 days), up to 10 most recent versions, 256 MiB quota.
+- **Napple Plus** (paid subscription, monthly and yearly prices configurable): cloud saves for unlimited titles, 20 versions per title, 5 GiB quota.
+- Entitlement source: **Stripe** (Checkout + Customer Portal on a small web page served by napple-account at `/account/v1/billing/*`, webhook with signature
+  verification, idempotent event handling). Apps never take payment in-app: they open the web checkout. Plans/prices/quota limits come from server config
+  (env), not code. Price IDs and Stripe keys are secrets supplied at deploy time (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_MONTHLY`,
+  `STRIPE_PRICE_YEARLY`); without them the server runs with every account on Free and billing endpoints return 503.
+- `GET /me` returns `plan {name, status, renews_at, synced_titles_limit, quota}`. Save upload for a title beyond the plan returns **402** with
+  `{reason: "plan_limit", upgrade_url}`; clients show an upgrade prompt and keep saving locally.
+- Never hold data hostage: downloads and restores of existing versions always work; on downgrade/expiry, saves of titles beyond the limit stay
+  downloadable for 90 days (read-only), then are deleted after an email warning. Account deletion cancels the subscription and deletes all data.

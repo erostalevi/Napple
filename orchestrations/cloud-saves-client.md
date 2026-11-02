@@ -23,6 +23,8 @@ Client side of `orchestrations/ACCOUNT-CONTRACT.md`, shared by the macOS runtime
 - Runtime hooks: on title launch pull the newest version for (title, linked profile) BEFORE the game mounts its save; push after the game commits
   its save filesystem (debounced, background, never blocking the game thread) and on clean exit; offline-first: queue and retry, never lose a local save.
 - CLI: `napple account login|logout|status|devices|profiles|link`, `napple saves list|pull|push|history|restore`.
+- Plans: handle `402 plan_limit` by keeping the save local, marking the title "not synced (plan limit)" and exposing the upgrade URL to the frontend/CLI
+  (`napple account plan`, `napple account upgrade` opens the checkout URL); the free title choice is shown in `napple saves list`.
 - Opt-in: nothing syncs unless signed in and the title is enabled (default on after sign-in, per-title toggle).
 
 ## Owned paths

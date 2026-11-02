@@ -12,7 +12,7 @@ session: none
 launched_at: none
 ---
 
-# napple-account: the Napple Account server (email magic link + passkeys, devices, E2E key exchange, cloud-save metadata)
+# napple-account: the Napple Account server (email magic link + passkeys, devices, E2E key exchange, cloud-save metadata, plans + Stripe billing)
 
 ## Goal
 Implement `orchestrations/ACCOUNT-CONTRACT.md` server side as a new Rust crate/binary `crates/napple-account` (axum or hyper; sqlite via rusqlite/sqlx;
@@ -29,7 +29,8 @@ data retention/deletion — include account deletion that removes all saves), ow
 ## Acceptance
 1. `cargo test -p napple-account`: email start/finish (dev mailer), passkey register/login with webauthn-rs test authenticator, refresh rotation and reuse
    detection, device revoke, key request/grant flow, recovery blob, profiles, save version create/conflict(409)/commit/list/prune-to-20, quota, presign
-   against a mock S3 endpoint, account deletion.
+   against a mock S3 endpoint, account deletion; plans: Free = 1 title (switch once per 30 days), Plus = unlimited; 402 on the limit; Stripe webhook signature
+   verification + idempotency with recorded test events (no network); downgrade keeps read-only access 90 days; billing endpoints 503 without Stripe config.
 2. Local run: binary starts with sqlite in a temp dir and a local S3-compatible mock (or a filesystem backend behind a trait for dev), curl walkthrough in the guide.
 3. Security: rate limits on auth endpoints, constant-time compares, codes single-use, refresh tokens stored hashed, CORS limited to napple.lat origins,
    no secrets in logs. Never stores or accepts game content, keys or firmware (enforce max sizes and content-type on save uploads only).
