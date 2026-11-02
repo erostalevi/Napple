@@ -1,6 +1,6 @@
 # online-friends (2026-11-02-r10): friend:u backed by napple-social
 
-Branch `claude/online-friends-2026-11-02-r10`, Mac session. Integrator file: `integrators/claude-online-friends-2026-11-02-r10.md` (archived at
+Branch `claude/online-friends-2026-11-02-r10`, Mac session. Integrator file: `docs/process/archive/integrators/claude-online-friends-2026-11-02-r10.md` (archived at
 integration). Written by the integration session from the integrator file (the branch had no change note). Guide: [napple-online](../../guides/napple-online.md#friends-napple-social).
 
 ## What changed

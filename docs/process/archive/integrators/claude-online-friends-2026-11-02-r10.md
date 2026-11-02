@@ -6,7 +6,7 @@ head: see git log (commit after 8957222)
 env: mac
 date: 2026-11-02
 areas: [runtime/net, runtime/services (friend rows only), crates/napple-online]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/online-friends-2026-11-02-r10: friend:u backed by napple-social
@@ -72,3 +72,25 @@ status: ready-with-caveats
 - main merged again (docs-only change). Runtime service and net-online tests: all pass (svc_online 263/0 etc.); `cargo test --release -p napple-online -p napple-social` all green.
 - Four-title boots without NAPPLE_ONLINE_SERVER, 45 s each, headless, private save roots: SMO 3ca12dfa (2659 frames), MK8D fe941ed5 (2429), LAS ae16f71e (2658): rc 0, no "napple social" lines, no fatal / not-implemented. ACNH ff1d1c05 (1280 frames): rc 0, no social lines, no fatal. All four boot unchanged.
 - Blocking condition for the last acceptance item: MK8D's Friends menu opens and the friend is joinable in friend:u and GetPlayingSession (109/60) returns the room, but the menu list stays "-----". Not diagnosed further; next step is NAPPLE_TRACE_IPC=all + server -v on what MK8D calls after 109/60.
+
+## Integration result
+- Date 2026-11-02, merged into main as 7036c84 (head d525548), last item, after ipc-depth-95. Outcome: **Small fix** (merge resolution) plus doc commits.
+- **Conflict with ipc-depth-95 in `offline.c` friend rows (semantic).** Resolved by the rule both sides stated ("online-friends' provider calls win,
+  keep ipc-depth-95's other rows"): rows where this branch is IPC_IMPL take this branch's handler; rows this branch left as "unavailable" stubs keep
+  ipc-depth-95's friend_core implementations. For the five rows both implemented (10102 UpdateFriendInfo, 10120 / 10121 availability, 20600 / 20601
+  GetUserPresenceView) a small dispatcher answers from this branch's handler when the provider serves `friend_list_info`, else from ipc-depth-95's
+  cache handler, so both branches' tests pass (test_svc_friend_r10 207/0; test_svc_online 263/0). This branch's `friend_presence_view` is renamed
+  `friend_presence_view_provider`; its now-unused FRIEND_UNAVAILABLE stubs were dropped (they warned). **A human may want to review** that, with a
+  friends provider, rows such as GetFriendDetailedInfo / GetProfileList now answer from ipc-depth-95's friend_core cache instead of "unavailable".
+- Docs (missing on the branch): change note `docs/archive/changes/2026-11-02-claude-online-friends-2026-11-02-r10.md`, a "Friends (napple-social)"
+  section in `docs/guides/napple-online.md` (env variables, status), r10 change-archive row.
+- `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0 (missing 0); test-net-online 51/0, 42/0; `cargo test -p napple-online
+  -p napple-social --locked` green; `cargo build --workspace --locked` ok. No new warnings.
+- **MK8D e2e on the merged tree** (the author's friends_servers.sh / run_pair.sh, adapted: local napple-account + napple-social + napple-online, alice
+  and bob made friends via the social API, one job under the run lock, 75 s): each instance sees the other (`friend … 'bob' now online play, same
+  title, joinable` / `'alice' online`), no error applet; alice's Friends / Create Room menu opens; its Friends list shows "-----" (open, as handed off).
+- Four-title 45 s boots without a server, offline and `NAPPLE_NET=host`: all rc 0 and `missing_ipc []` except **one ACNH offline run that crashed with
+  SIGBUS** (rc 138, fault 0x7014659a00 in the guest stack range, pc sdk+0x508334, ~3 s, right after `olsc:u` opened); two reruns of the same binary
+  were rc 0, and about 20 other ACNH boots today were clean. Intermittent; listed for follow-up (olsc rows changed in ipc-depth-95).
+- Not done (as declared): a C unit test for the provider friend rows (not mechanical: needs a fake friends provider), friend requests from a game,
+  profile images.

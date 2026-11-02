@@ -6,7 +6,7 @@ base: claude/online-pia-2026-11-02-r7 + merge of claude/napple-social-cloud-2026
 env: mac
 model: claude-opus-5-5
 depends_on: [online-pia, napple-social-cloud, napple-account]
-status: launched
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_b78f9b91-eea8-4eb8-9fed-7afbb16c9902 (fresh)
 launched_at: 2026-11-02
@@ -37,3 +37,6 @@ gfx/, applet*.c (except nothing), fs.c, account*.c token paths (read only), napp
 
 ## Env notes
 Read orchestrations/ENV-MAC.md (shared data read-only, locks, local-only, never ask, never push). Two instances = one job under the run lock.
+Integrated 2026-11-02 into main as 7036c84 (head d525548), outcome **Small fix** (friend-row merge with ipc-depth-95). Acceptance 2 partial, verified here:
+friends see each other online / joinable in MK8D and the Friends menu opens, but its list stays empty. Acceptance 1 (unit test) not done.
+Details: [integrator file](../integrators/claude-online-friends-2026-11-02-r10.md).
