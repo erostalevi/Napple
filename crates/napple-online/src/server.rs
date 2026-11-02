@@ -607,7 +607,8 @@ impl Server {
                 let (Ok(gid), Ok(score)) = (r.u32(), r.u8()) else { return bad };
                 self.with_session(gid, |s| s.progress_score = score)
             }
-            41 => match r.u32().ok().and_then(|g| self.session_of(g)) {
+            // 49 (u32 gathering id): MK8D asks for the session again when the vote ends and the race starts; answered like 41
+            41 | 49 => match r.u32().ok().and_then(|g| self.session_of(g)) {
                 Some(s) => Reply::Ok(s.to_bytes()),
                 None => Reply::Err(err::RV_SESSION_VOID),
             },
@@ -1120,6 +1121,9 @@ mod tests {
         let urls = Reader::new(&resp).list(|r| r.string()).unwrap();
         assert_eq!(urls.len(), 2, "the host's private and public URLs");
         assert!(urls[0].contains("address=10.0.0.2"));
+        // MatchmakeExtension 49 (the race start): the session again, like 41
+        let Reply::Ok(again) = srv.secure_call(b, &req(PROTO_MATCHMAKE_EXT, 49, q.buf.clone())) else { panic!("method 49") };
+        assert_eq!(MatchmakeSession::decode(&mut Reader::new(&again)).unwrap().g.id, s1.g.id);
         // NAT traversal: b asks a to probe it
         let mut nt = Writer::new();
         nt.list(&[urls[0].clone()], |w, s| {

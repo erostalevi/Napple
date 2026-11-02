@@ -16,6 +16,7 @@ status: ready-with-caveats
   connect over Pia, and reach character select, kart selection and the course vote (screens in the notes folder `mk8d-online-race-r12/`).
 - Cause 1: the joiner never heard of the host (no 3001 for existing participants). Cause 2: Pia identifies stations by IPv4 address only, and both
   instances shared the Mac's address, so the host refused the joiner (response result 1). Fix: distinct public addresses (room virtual addresses) end to end.
+- **Update:** MatchmakeExtension 49 answered; with frame-timed vote presses both vote, the course is selected and the race countdown starts (verified, ~215 s run).
 - **Not done:** (2) the 2618-0201 flake was not studied (never reproduced in about 25 pair runs today with the room; without a room runs were the same
   "2618-0502 / now refusal" outcome every time; the earlier flake could be load: three of my runs at 40 s ended before matchmaking because the game was slow
   under other sessions' load); (3) Friends list still empty; (4) Wireless Play station crash not diagnosed; the race itself not reached (120 s limit).
@@ -32,7 +33,7 @@ status: ready-with-caveats
 | `make -C runtime test-net-online` | tested | 55 checks / 0 failed; test_net_online_ssl 42 / 0 |
 | Joiner reaches the connection request and Pia connects | verified | pair runs with `ROOM=1`: ~1700 692-byte datagrams each way between 10.13.0.2 and 10.13.0.3 |
 | Both instances reach character, kart, course vote | verified | frame montages in the notes folder |
-| Race started | not reached | 120 s run limit: the vote screen appears at ~108 s on a loaded Mac |
+| Race started | verified | 225 s run: vote, "The course has been selected", Rosalina's Ice World, both players listed, countdown 3 (montage `race-starts-host-vote-to-countdown.png`) |
 | Acceptance 5 (compat/online.json updated truthfully) | done | online_race_or_match partial |
 
 ## Findings
