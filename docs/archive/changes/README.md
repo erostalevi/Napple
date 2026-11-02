@@ -200,3 +200,4 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | Note | Summary |
 |---|---|
 | [2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5](2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5.md) | Interpreter `lda` / `stl` seq_cst with the alignment fault, per-viewport swizzles, these archive indexes. |
+| [2026-11-02-claude-nifm-netconnect-2026-11-02-r5](2026-11-02-claude-nifm-netconnect-2026-11-02-r5.md) | nifm Cancel keeps a rejected request's result, GetAppletInfo storages, the real NetConnect output (MK8D Online Play: one applet per attempt), vi ConvertScalingMode. |
