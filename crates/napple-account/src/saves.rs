@@ -5,7 +5,6 @@
 use crate::app::{App, AppState, Authed};
 use crate::blob::SAVE_CONTENT_TYPE;
 use crate::error::{ApiError, ApiResult};
-use crate::plans::{delete_after, enable_title, is_plus, plan_limit_error, titles_json, usage};
 use crate::util::{is_uuid, new_id, normalize_title_id};
 use axum::Json;
 use axum::body::Bytes;
@@ -56,7 +55,7 @@ fn head(
 fn version_json(r: &rusqlite::Row) -> rusqlite::Result<Value> {
     Ok(json!({
         "version": r.get::<_, i64>(0)?, "size": r.get::<_, i64>(1)?, "sha256_ciphertext": r.get::<_, String>(2)?,
-        "committed_at": r.get::<_, Option<i64>>(3)?, "device_id": r.get::<_, String>(4)?, "device_name": r.get::<_, String>(5)?,
+        "committed_at": r.get::<_, Option<i64>>(3)?, "created_at": r.get::<_, Option<i64>>(3)?, "device_id": r.get::<_, String>(4)?, "device_name": r.get::<_, String>(5)?,
     }))
 }
 
@@ -106,54 +105,34 @@ pub fn delete_versions(
     Ok(keys)
 }
 
+/// Storage used by an account: committed versions plus uploads still in flight.
+pub fn usage(app: &App, db: &Connection, account_id: &str, now: i64) -> rusqlite::Result<u64> {
+    db.query_row(
+        "SELECT COALESCE(SUM(size), 0) FROM save_versions WHERE account_id = ?1 AND (state = 'committed' OR created_at > ?2)",
+        params![account_id, now - app.cfg.pending_upload_ttl],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|v| v as u64)
+}
+
 pub async fn list(State(app): State<AppState>, a: Authed) -> ApiResult<Json<Value>> {
     let db = app.db();
     let mut st = db.prepare(
-        "SELECT s.title_id, s.profile_id, s.version, s.size, s.committed_at, s.device_id, s.device_name, t.state, t.readonly_since, t.warned_at
-         FROM save_versions s LEFT JOIN titles t ON t.account_id = s.account_id AND t.title_id = s.title_id
+        "SELECT s.title_id, s.profile_id, s.version, s.size, s.committed_at, s.device_id, s.device_name
+         FROM save_versions s
          WHERE s.account_id = ?1 AND s.state = 'committed' AND s.version = (
             SELECT MAX(version) FROM save_versions x WHERE x.account_id = s.account_id AND x.title_id = s.title_id AND x.profile_id = s.profile_id AND x.state = 'committed')
          ORDER BY s.committed_at DESC",
     )?;
     let saves: Vec<Value> = st
         .query_map([&a.account_id], |r| {
-            let ro: Option<i64> = r.get(8)?;
-            let state: Option<String> = r.get(7)?;
             Ok(json!({
                 "title_id": r.get::<_, String>(0)?, "profile_id": r.get::<_, String>(1)?, "latest_version": r.get::<_, i64>(2)?,
                 "size": r.get::<_, i64>(3)?, "updated_at": r.get::<_, i64>(4)?, "device_id": r.get::<_, String>(5)?, "device_name": r.get::<_, String>(6)?,
-                "read_only": state.as_deref() != Some("active"), "delete_after": delete_after(&app, ro, r.get(9)?),
             }))
         })?
         .collect::<Result<_, _>>()?;
     Ok(Json(json!({"saves": saves})))
-}
-
-pub async fn titles(State(app): State<AppState>, a: Authed) -> ApiResult<Json<Value>> {
-    Ok(Json(titles_json(
-        &app,
-        &app.db(),
-        &a.account_id,
-        app.now(),
-    )?))
-}
-
-#[derive(Deserialize)]
-pub struct EnableTitle {
-    title_id: String,
-}
-
-/// Enable (Plus) or switch to (Free) a synced title.
-pub async fn enable_title_route(
-    State(app): State<AppState>,
-    a: Authed,
-    Json(b): Json<EnableTitle>,
-) -> ApiResult<Json<Value>> {
-    let t = title_of(&b.title_id)?;
-    let now = app.now();
-    let db = app.db();
-    enable_title(&app, &db, &a.account_id, &t, now, true)?;
-    Ok(Json(titles_json(&app, &db, &a.account_id, now)?))
 }
 
 pub async fn delete_title(
@@ -163,20 +142,12 @@ pub async fn delete_title(
 ) -> ApiResult<StatusCode> {
     let t = title_of(&title)?;
     let now = app.now();
-    let keys = {
-        let db = app.db();
-        let keys = delete_versions(
-            &db,
-            "account_id = ?1 AND title_id = ?2",
-            &[&a.account_id, &t],
-            now,
-        )?;
-        db.execute(
-            "DELETE FROM titles WHERE account_id = ?1 AND title_id = ?2",
-            params![a.account_id, t],
-        )?;
-        keys
-    };
+    let keys = delete_versions(
+        &app.db(),
+        "account_id = ?1 AND title_id = ?2",
+        &[&a.account_id, &t],
+        now,
+    )?;
     flush_deletions(&app, keys).await;
     Ok(StatusCode::NO_CONTENT)
 }
@@ -196,15 +167,8 @@ pub async fn versions(
     let v: Vec<Value> = st
         .query_map(params![a.account_id, t, profile], version_json)?
         .collect::<Result<_, _>>()?;
-    let ts: Option<String> = db
-        .query_row(
-            "SELECT state FROM titles WHERE account_id = ?1 AND title_id = ?2",
-            params![a.account_id, t],
-            |r| r.get(0),
-        )
-        .optional()?;
     Ok(Json(
-        json!({"title_id": t, "profile_id": profile, "read_only": ts.as_deref() != Some("active"), "versions": v}),
+        json!({"title_id": t, "profile_id": profile, "versions": v}),
     ))
 }
 
@@ -227,7 +191,10 @@ pub async fn create_version(
     if sha.len() != 64 || !sha.bytes().all(|c| c.is_ascii_hexdigit()) {
         return Err(ApiError::bad_request("sha256_ciphertext: 64 hex digits"));
     }
-    if b.size == 0 || b.size > app.cfg.max_version_bytes {
+    if b.size == 0 {
+        return Err(ApiError::bad_request("size: at least 1 byte"));
+    }
+    if b.size > app.cfg.max_version_bytes {
         return Err(ApiError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "too_large",
@@ -236,13 +203,13 @@ pub async fn create_version(
                 app.cfg.max_version_bytes
             ),
         )
+        .with("reason", "too_large")
         .with("max_version_bytes", app.cfg.max_version_bytes));
     }
     let now = app.now();
     let (id, version, key, stale) = {
         let db = app.db();
         own_profile(&db, &a.account_id, &profile)?;
-        enable_title(&app, &db, &a.account_id, &t, now, false)?;
         let current = head(&db, &a.account_id, &t, &profile)?;
         let head_v = current
             .as_ref()
@@ -261,21 +228,17 @@ pub async fn create_version(
             &[&a.account_id, &t, &profile, &a.device_id],
             now,
         )?;
-        let plus = is_plus(&db, &a.account_id)?;
-        let quota = app.cfg.limits(plus).quota_bytes;
+        let quota = app.cfg.save_quota_bytes;
         let used = usage(&app, &db, &a.account_id, now)?;
         if used + b.size > quota {
-            let e = if plus {
-                ApiError::new(
-                    StatusCode::INSUFFICIENT_STORAGE,
-                    "quota_exceeded",
-                    "cloud save storage is full",
-                )
-                .with("reason", "quota")
-            } else {
-                plan_limit_error(&app, "quota", "the Free plan's cloud save storage is full")
-            };
-            return Err(e.with("quota", quota).with("used", used));
+            return Err(ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "quota_exceeded",
+                "cloud save storage for this account is full",
+            )
+            .with("reason", "quota")
+            .with("quota", quota)
+            .with("used", used));
         }
         let device_name: String = db.query_row(
             "SELECT name FROM devices WHERE id = ?1",
@@ -386,10 +349,7 @@ pub async fn commit_version(
             params![now, id],
         )
         .map_err(|_| ApiError::conflict("version_conflict", "another device committed first"))?;
-        let keep = app
-            .cfg
-            .limits(is_plus(&db, &a.account_id)?)
-            .versions_per_title as i64;
+        let keep = app.cfg.save_versions as i64;
         delete_versions(
             &db,
             "account_id = ?1 AND title_id = ?2 AND profile_id = ?3 AND state = 'committed' AND version <= ?4",
@@ -427,6 +387,7 @@ pub async fn get_version(
         .presign_get(&key, now, app.cfg.upload_url_ttl)
         .await
         .map_err(ApiError::internal)?;
+    info["url"] = json!(dl.url);
     info["download_url"] = json!(dl.url);
     info["expires_at"] = json!(dl.expires_at);
     Ok(Json(info))
@@ -462,7 +423,7 @@ pub async fn dev_blob_put(
     {
         return (
             StatusCode::BAD_REQUEST,
-            "content-type must be application/vnd.napple.save",
+            "content-type must be application/octet-stream",
         )
             .into_response();
     }

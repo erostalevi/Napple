@@ -2,17 +2,40 @@
 
 use crate::app::{AppState, Authed};
 use crate::error::{ApiError, ApiResult};
-use crate::plans::plan_json;
+use crate::names::{NameError, check_name};
 use crate::saves::{delete_versions, flush_deletions};
 use crate::signin::end_device_sessions;
-use crate::util::{clean_name, is_uuid, new_id, normalize_email};
+use crate::util::{is_uuid, new_id, normalize_email};
 use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
+use rusqlite::Connection;
 use rusqlite::{OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::HashMap;
+
+/// A name other players see (display name, profile nickname): reserved-name rules for this account's grants.
+pub fn public_name(
+    db: &Connection,
+    account_id: &str,
+    name: &str,
+    field: &str,
+) -> ApiResult<String> {
+    let grants = crate::admin::grants_of(db, account_id)?;
+    check_name(name, 32, &grants).map_err(|e| match e {
+        NameError::ReservedWord | NameError::ReservedPrefix => ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "reserved_name",
+            e.message(),
+        )
+        .with("reason", "reserved_name")
+        .with("field", field),
+        NameError::Invalid | NameError::Invisible => {
+            ApiError::bad_request(format!("{field}: {}", e.message())).with("field", field)
+        }
+    })
+}
 
 pub async fn me(State(app): State<AppState>, a: Authed) -> ApiResult<Json<Value>> {
     let now = app.now();
@@ -26,7 +49,11 @@ pub async fn me(State(app): State<AppState>, a: Authed) -> ApiResult<Json<Value>
         "account_id": a.account_id, "device_id": a.device_id, "email": email, "display_name": display,
         "created_at": created, "last_seen": last_seen, "key_id": key_id, "has_recovery": has_recovery,
         "key_state": crate::signin::key_state(&db, &a.account_id, &a.device_id)?,
-        "plan": plan_json(&app, &db, &a.account_id, now)?,
+        "grants": crate::admin::grants_of(&db, &a.account_id)?,
+        // Placeholder until paid plans exist (contract: no plans this round); limits are server config.
+        "plan": {"name": "free", "features": {}},
+        "storage": {"quota": app.cfg.save_quota_bytes, "used": crate::saves::usage(&app, &db, &a.account_id, now)?,
+                    "versions_per_title": app.cfg.save_versions, "max_version_bytes": app.cfg.max_version_bytes},
     })))
 }
 
@@ -40,9 +67,9 @@ pub async fn patch_me(
     a: Authed,
     Json(b): Json<PatchMe>,
 ) -> ApiResult<Json<Value>> {
-    let name = clean_name(&b.display_name, 32)
-        .ok_or_else(|| ApiError::bad_request("display_name: 1-32 characters"))?;
-    app.db().execute(
+    let db = app.db();
+    let name = public_name(&db, &a.account_id, &b.display_name, "display_name")?;
+    db.execute(
         "UPDATE accounts SET display_name = ?1 WHERE id = ?2",
         params![name, a.account_id],
     )?;
@@ -55,26 +82,23 @@ pub struct DeleteMe {
     confirm_email: String,
 }
 
-/// Deletes the account and everything in it: the Stripe customer (which cancels the subscription), every save
-/// object, profiles, devices, passkeys, tokens. Irreversible.
+/// Deletes the account and everything in it: every save object, profiles, devices, passkeys, tokens, grants.
+/// Irreversible.
 pub async fn delete_me(
     State(app): State<AppState>,
     a: Authed,
     Json(b): Json<DeleteMe>,
 ) -> ApiResult<StatusCode> {
-    let (email, customer, sub): (String, Option<String>, Option<String>) = app.db().query_row(
-        "SELECT email, stripe_customer_id, sub_id FROM accounts WHERE id = ?1",
+    let email: String = app.db().query_row(
+        "SELECT email FROM accounts WHERE id = ?1",
         [&a.account_id],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        |r| r.get(0),
     )?;
     if normalize_email(&b.confirm_email).as_deref() != Some(email.as_str()) {
         return Err(
             ApiError::bad_request("confirm_email does not match this account")
                 .with("error_code", "confirm_mismatch"),
         );
-    }
-    if customer.is_some() || sub.is_some() {
-        crate::billing::cancel_everything(&app, customer.as_deref(), sub.as_deref()).await?;
     }
     let now = app.now();
     let keys = {
@@ -134,11 +158,10 @@ pub async fn create_profile(
     a: Authed,
     Json(b): Json<NewProfile>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
-    let nick = clean_name(&b.nickname, 32)
-        .ok_or_else(|| ApiError::bad_request("nickname: 1-32 characters"))?;
     let icon = check_icon(b.icon_id)?;
     let now = app.now();
     let db = app.db();
+    let nick = public_name(&db, &a.account_id, &b.nickname, "nickname")?;
     let n: i64 = db.query_row(
         "SELECT COUNT(*) FROM profiles WHERE account_id = ?1",
         [&a.account_id],
@@ -204,8 +227,7 @@ pub async fn patch_profile(
         return Err(ApiError::not_found("no such profile"));
     }
     if let Some(n) = &b.nickname {
-        let nick =
-            clean_name(n, 32).ok_or_else(|| ApiError::bad_request("nickname: 1-32 characters"))?;
+        let nick = public_name(&db, &a.account_id, n, "nickname")?;
         db.execute(
             "UPDATE profiles SET nickname = ?1, updated_at = ?2 WHERE id = ?3",
             params![nick, now, id],

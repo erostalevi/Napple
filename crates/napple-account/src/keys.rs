@@ -1,8 +1,8 @@
 //! End-to-end save-key exchange. The account save key (random 256-bit) never reaches the server in the clear:
 //! devices exchange it HPKE-wrapped (X25519 + HKDF-SHA256 + AES-256-GCM) to each device's X25519 public key, and the
 //! recovery blob is the key wrapped under an Argon2id-derived key from a 24-word code the server never sees.
-//! The server stores opaque blobs, checks who may write them, and pins the key fingerprint (`key_id`) so two devices
-//! bootstrapping at the same time cannot end up with different account keys.
+//! The server stores opaque blobs, checks who may write them, and, when clients send a key fingerprint (`key_id`), pins it so two
+//! devices bootstrapping at the same time cannot end up with different account keys.
 
 use crate::app::{AppState, Authed};
 use crate::error::{ApiError, ApiResult};
@@ -56,7 +56,9 @@ pub async fn requests(State(app): State<AppState>, a: Authed) -> ApiResult<Json<
 pub struct Grant {
     device_id: String,
     wrapped_account_key: String,
-    key_id: String,
+    /// Optional fingerprint of the account key; once one grant carried it, later grants must match.
+    #[serde(default)]
+    key_id: Option<String>,
 }
 
 /// Stores the account key wrapped to `device_id`'s public key. Granting another device requires the caller to hold
@@ -66,7 +68,9 @@ pub async fn grant(
     a: Authed,
     Json(b): Json<Grant>,
 ) -> ApiResult<Json<Value>> {
-    check_key_id(&b.key_id)?;
+    if let Some(k) = &b.key_id {
+        check_key_id(k)?;
+    }
     let wrapped = blob(&b.wrapped_account_key, MAX_WRAPPED, "wrapped_account_key")?;
     let now = app.now();
     let db = app.db();
@@ -98,21 +102,22 @@ pub async fn grant(
         [&a.account_id],
         |r| r.get(0),
     )?;
-    match current {
-        None => {
+    match (current, &b.key_id) {
+        (_, None) => {}
+        (None, Some(new)) => {
             db.execute(
                 "UPDATE accounts SET key_id = ?1 WHERE id = ?2 AND key_id IS NULL",
-                params![b.key_id, a.account_id],
+                params![new, a.account_id],
             )?;
         }
-        Some(k) if k != b.key_id => {
+        (Some(k), Some(new)) if &k != new => {
             return Err(ApiError::conflict(
                 "key_mismatch",
                 "this account already has a different save key",
             )
             .with("key_id", k));
         }
-        Some(_) => {}
+        (Some(_), Some(_)) => {}
     }
     db.execute(
         "UPDATE devices SET wrapped_key = ?1, key_granted_by = ?2, key_granted_at = ?3 WHERE id = ?4",
@@ -147,49 +152,45 @@ pub async fn mine(State(app): State<AppState>, a: Authed) -> ApiResult<Json<Valu
     }
 }
 
-#[derive(Deserialize)]
-pub struct Recovery {
-    recovery_blob: String,
-    /// Client KDF parameters, e.g. `{"alg":"argon2id","salt":"…","m":65536,"t":3,"p":1}` (opaque to the server).
-    #[serde(default)]
-    kdf: Value,
-    key_id: String,
-}
-
+/// The recovery record is the client's own JSON object (e.g. `{kdf: "argon2id", m_kib, t, p, salt, wrapped}`), stored and
+/// returned verbatim (≤ 4 KiB). Only a device holding the key may set it; an optional `key_id` must match the account's.
 pub async fn put_recovery(
     State(app): State<AppState>,
     a: Authed,
-    Json(b): Json<Recovery>,
+    Json(b): Json<Value>,
 ) -> ApiResult<Json<Value>> {
-    check_key_id(&b.key_id)?;
-    let blob = blob(&b.recovery_blob, MAX_RECOVERY, "recovery_blob")?;
-    if !(b.kdf.is_object() || b.kdf.is_null()) || b.kdf.to_string().len() > 1024 {
-        return Err(ApiError::bad_request("kdf: a small JSON object"));
+    if !b.is_object() || b.to_string().len() > MAX_RECOVERY {
+        return Err(ApiError::bad_request(format!(
+            "recovery record: a JSON object of at most {MAX_RECOVERY} bytes"
+        )));
     }
     let now = app.now();
     let db = app.db();
-    let (key_id, holds): (Option<String>, Option<String>) =
-        db.query_row("SELECT a.key_id, d.wrapped_key FROM devices d JOIN accounts a ON a.id = d.account_id WHERE d.id = ?1", [&a.device_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let (key_id, holds): (Option<String>, Option<String>) = db.query_row(
+        "SELECT a.key_id, d.wrapped_key FROM devices d JOIN accounts a ON a.id = d.account_id WHERE d.id = ?1",
+        [&a.device_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
     if holds.is_none() {
         return Err(ApiError::forbidden(
-            "only a device that holds the save key can set the recovery blob",
+            "only a device that holds the save key can set the recovery record",
         )
         .with("error_code", "not_key_holder"));
     }
-    if key_id.as_deref() != Some(b.key_id.as_str()) {
+    if let (Some(k), Some(given)) = (&key_id, b["key_id"].as_str())
+        && k != given
+    {
         return Err(ApiError::conflict(
             "key_mismatch",
-            "recovery blob is for a different save key",
+            "recovery record is for a different save key",
         )
-        .with("key_id", key_id));
+        .with("key_id", k.clone()));
     }
-    let stored =
-        json!({"recovery_blob": blob, "kdf": b.kdf, "key_id": b.key_id, "updated_at": now});
     db.execute(
         "UPDATE accounts SET recovery_blob = ?1, recovery_updated_at = ?2 WHERE id = ?3",
-        params![stored.to_string(), now, a.account_id],
+        params![b.to_string(), now, a.account_id],
     )?;
-    Ok(Json(stored))
+    Ok(Json(b))
 }
 
 pub async fn get_recovery(State(app): State<AppState>, a: Authed) -> ApiResult<Json<Value>> {
@@ -200,6 +201,6 @@ pub async fn get_recovery(State(app): State<AppState>, a: Authed) -> ApiResult<J
     )?;
     match r.and_then(|s| serde_json::from_str::<Value>(&s).ok()) {
         Some(v) => Ok(Json(v)),
-        None => Err(ApiError::not_found("no recovery blob set")),
+        None => Err(ApiError::not_found("no recovery record set")),
     }
 }

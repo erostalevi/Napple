@@ -192,7 +192,7 @@ pub fn limit(app: &App, bucket: &str, key: &str, limit: u32, window: i64) -> Api
 }
 
 pub fn router(app: AppState) -> Router {
-    use crate::{account, billing, keys, pages, passkey, saves, signin};
+    use crate::{account, admin, keys, pages, passkey, saves, signin};
     let api = Router::new()
         .route("/healthz", get(pages::healthz))
         .route("/.well-known/jwks.json", get(pages::jwks))
@@ -240,8 +240,8 @@ pub fn router(app: AppState) -> Router {
         )
         .route("/saves", get(saves::list))
         .route(
-            "/saves/titles",
-            get(saves::titles).post(saves::enable_title_route),
+            "/admin/grants",
+            get(admin::list).post(admin::add).delete(admin::remove),
         )
         .route("/saves/{title}", delete(saves::delete_title))
         .route(
@@ -255,15 +255,6 @@ pub fn router(app: AppState) -> Router {
         .route(
             "/saves/{title}/{profile}/versions/{v}/commit",
             post(saves::commit_version),
-        )
-        .route("/billing", get(pages::billing_page))
-        .route("/billing/success", get(pages::billing_done))
-        .route("/billing/cancel", get(pages::billing_done))
-        .route("/billing/checkout", post(billing::checkout))
-        .route("/billing/portal", post(billing::portal))
-        .route(
-            "/billing/webhook",
-            post(billing::webhook).layer(DefaultBodyLimit::max(1024 * 1024)),
         )
         .layer(DefaultBodyLimit::max(64 * 1024));
 

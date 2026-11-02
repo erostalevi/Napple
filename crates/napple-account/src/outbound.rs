@@ -1,4 +1,4 @@
-//! Outbound HTTP (Stripe, SES, S3 HEAD/DELETE, EC2 instance metadata) behind a trait so tests run with no network.
+//! Outbound HTTP (SES, S3 HEAD/DELETE, EC2 instance metadata) behind a trait so tests run with no network.
 
 use std::future::Future;
 use std::pin::Pin;

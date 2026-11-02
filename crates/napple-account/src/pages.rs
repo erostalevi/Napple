@@ -1,9 +1,9 @@
-//! Health, JWKS, and the few small HTML pages (magic link landing, plans, after-checkout).
+//! Health, JWKS, and the few small HTML pages (the magic link landing page).
 
 use crate::app::AppState;
 use axum::Json;
 use axum::extract::State;
-use axum::http::{StatusCode, header};
+use axum::http::header;
 use axum::response::{Html, IntoResponse, Response};
 use serde_json::Value;
 
@@ -43,52 +43,4 @@ pub async fn email_link() -> Response {
         page("Sign in to Napple", body),
     )
         .into_response()
-}
-
-pub async fn billing_page(State(app): State<AppState>) -> Response {
-    if app.cfg.stripe.is_none() {
-        return (StatusCode::SERVICE_UNAVAILABLE, page("Napple Plus", "<h1>Napple Plus</h1><p>Billing is not available on this server. Every account is on Free.</p>")).into_response();
-    }
-    let gib = |b: u64| {
-        format!(
-            "{:.0} {}",
-            if b >= 1 << 30 {
-                b as f64 / (1u64 << 30) as f64
-            } else {
-                b as f64 / (1u64 << 20) as f64
-            },
-            if b >= 1 << 30 { "GiB" } else { "MiB" }
-        )
-    };
-    let f = &app.cfg.free;
-    let p = &app.cfg.plus;
-    let titles = |n: u32| {
-        if n == 0 {
-            "unlimited titles".to_string()
-        } else if n == 1 {
-            "1 title".into()
-        } else {
-            format!("{n} titles")
-        }
-    };
-    let body = format!(
-        "<h1>Napple Plus</h1>\
-         <p><b>Free</b>: cloud saves for {}, {} versions each, {}. Accounts, passkeys, devices, profiles and online play are always free.</p>\
-         <p><b>Napple Plus</b>: cloud saves for {}, {} versions each, {}.</p>\
-         <p>To upgrade, open <b>Napple &rsaquo; Account &rsaquo; Upgrade</b> on your Mac or iPhone; it opens a secure Stripe checkout.</p>\
-         <p><a class=button href='napple://account/upgrade'>Open Napple</a></p>\
-         <p>Your saves always stay downloadable: if a subscription ends, titles beyond the Free plan stay read-only for {} days.</p>",
-        titles(f.synced_titles),
-        f.versions_per_title,
-        gib(f.quota_bytes),
-        titles(p.synced_titles),
-        p.versions_per_title,
-        gib(p.quota_bytes),
-        app.cfg.readonly_days
-    );
-    page("Napple Plus", &body).into_response()
-}
-
-pub async fn billing_done() -> Response {
-    page("Napple", "<h1>All set</h1><p>You can close this page and return to Napple. Your plan updates within a minute.</p>").into_response()
 }

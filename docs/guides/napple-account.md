@@ -2,8 +2,9 @@
 
 `crates/napple-account` (binary `napple-account`) is Napple's own account service at
 `https://pretend.napple.lat/account/v1`: one identity across Mac, iPhone and the CLI, the end-to-end
-encrypted save-key exchange, cloud-save version metadata with presigned S3 URLs, and the Free / Napple Plus
-plans billed through Stripe. It never involves Nintendo accounts or servers, and it only ever stores **save
+encrypted save-key exchange, cloud-save version metadata with presigned S3 URLs, player profiles with
+reserved-name rules, and admin grants. There are no paid plans this round (contract decision 2026-11-02):
+every account gets every feature, storage limits are plain config. It never involves Nintendo accounts or servers, and it only ever stores **save
 ciphertext**: never game content, keys or firmware. The shared contract is `orchestrations/ACCOUNT-CONTRACT.md`.
 This guide is the API reference, the security and threat model, the data-retention rules and a local walkthrough.
 
@@ -17,14 +18,14 @@ cargo build --release -p napple-account --bin napple-account
 NAPPLE_ACCOUNT_DATA=$(mktemp -d) NAPPLE_ACCOUNT_PUBLIC_BASE=http://127.0.0.1:8082/account/v1 target/release/napple-account
 ```
 
-With no AWS or Stripe settings it runs fully offline: SQLite in the data dir, save blobs in `<data>/blobs` served
+With no AWS settings it runs fully offline: SQLite in the data dir, save blobs in `<data>/blobs` served
 by the server itself under `/account/v1/dev-blobs/` (HMAC-signed, 15-minute URLs, same headers as S3), the **dev
-mailer** (prints the sign-in email, code included, to stdout), and billing off (every account on Free,
-`/billing/*` returns 503). A complete curl walkthrough (sign in, upload, commit, conflict, 402, download,
-delete) is at the end of this guide.
+mailer** (prints the sign-in email, code included, to stdout). A complete curl walkthrough (sign in, upload,
+commit, conflict, reserved name, download, delete) is at the end of this guide.
 
 Other commands: `napple-account rotate-jwt-key` (adds a signing key; restart to sign with it, the old keys stay
-in the JWKS), `napple-account retention` (one cleanup pass).
+in the JWKS), `napple-account retention` (one cleanup pass), `napple-account admin grant|revoke <email> <grant>` and
+`napple-account admin list <email>` (edit grants directly in the database; the account must have signed in once).
 
 ## Configuration (environment only)
 
@@ -47,11 +48,9 @@ in the JWKS), `napple-account retention` (one cleanup pass).
 | `NAPPLE_ACCOUNT_S3_REGION` | `AWS_REGION` or `us-east-1` | |
 | `NAPPLE_ACCOUNT_S3_ENDPOINT` | (AWS) | S3-compatible endpoint, path-style (MinIO, tests) |
 | `AWS_ACCESS_KEY_ID` / `_SECRET_ACCESS_KEY` / `_SESSION_TOKEN` | (IMDSv2) | otherwise the EC2 instance role via IMDSv2 (in Docker set the instance's `HttpPutResponseHopLimit` to 2) |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_MONTHLY`, `STRIPE_PRICE_YEARLY` | (unset) | all four or none; none = billing off |
-| `STRIPE_API_BASE` | `https://api.stripe.com` | for mocks |
-| `NAPPLE_PLAN_FREE_TITLES` / `_VERSIONS` / `_QUOTA` | `1` / `10` / `256MiB` | Free plan |
-| `NAPPLE_PLAN_PLUS_TITLES` / `_VERSIONS` / `_QUOTA` | `0` (unlimited) / `20` / `5GiB` | Napple Plus |
-| `NAPPLE_PLAN_TITLE_SWITCH_DAYS` / `_READONLY_DAYS` / `_DELETION_WARNING_DAYS` | `30` / `90` / `7` | |
+| `NAPPLE_SAVE_QUOTA_BYTES` | `10GiB` | storage per account (all titles and profiles, uploads in flight included) |
+| `NAPPLE_SAVE_VERSIONS` | `20` | committed versions kept per (title, profile) |
+| `NAPPLE_ADMIN_EMAILS` | (none) | comma-separated bootstrap admin emails (see "Reserved names and grants") |
 | `NAPPLE_ACCOUNT_MAX_VERSION_BYTES` | `64MiB` | per save version |
 | `NAPPLE_ACCOUNT_ACCESS_TTL` / `_REFRESH_TTL` / `_EMAIL_CODE_TTL` | `900` / `2592000` / `600` s | |
 | `NAPPLE_ACCOUNT_AUTH_IP_PER_MIN` / `_EMAIL_PER_15MIN` | `30` / `5` | rate limits |
@@ -62,9 +61,9 @@ stdout/stderr; SIGTERM shuts down gracefully.
 ## API
 
 JSON over HTTPS, prefix `/account/v1`. Every endpoint except the auth start/finish ones, `healthz`, the JWKS,
-the HTML pages and the Stripe webhook needs `Authorization: Bearer <access token>`. Binary fields are base64url
+and the HTML page needs `Authorization: Bearer <access token>`. Binary fields are base64url
 without padding (standard base64 and padding are accepted on input). Times are unix seconds. Errors are
-`{"error": "<code>", "message": "...", ...}`; some add `error_code`, `reason`, `head`, `upgrade_url`.
+`{"error": "<code>", "message": "...", ...}`; some add `error_code`, `reason`, `field`, `head`.
 
 ### Sign-in and tokens
 
@@ -103,30 +102,32 @@ again (same device key, so it keeps its save key).
 
 | Endpoint | |
 |---|---|
-| `GET /me` | `{account_id, device_id, email, display_name, created_at, last_seen, key_id, has_recovery, key_state, plan}` |
-| `PATCH /me` | `{display_name}` (1-32 chars) |
-| `DELETE /me` | `{confirm_email}` -> `204`. Deletes the Stripe customer (cancels the subscription), every save object and every row. Irreversible. |
-| `GET /profiles`, `POST /profiles {nickname, icon_id}`, `GET/PATCH /profiles/{id}`, `DELETE /profiles/{id}[?delete_saves=true]` | up to 8 profiles; delete refuses (`409 profile_has_saves`) while the profile has cloud saves unless `delete_saves=true` |
+| `GET /me` | `{account_id, device_id, email, display_name, created_at, last_seen, key_id, has_recovery, key_state, grants, plan, storage}` |
+| `PATCH /me` | `{display_name}` (1-32 chars, reserved-name rules) |
+| `DELETE /me` | `{confirm_email}` -> `204`. Deletes every save object and every row. Irreversible. |
+| `GET /profiles`, `POST /profiles {nickname, icon_id}`, `GET/PATCH /profiles/{id}`, `DELETE /profiles/{id}[?delete_saves=true]` | up to 8 profiles (the first is created with the account); nicknames follow the reserved-name rules; delete refuses (`409 profile_has_saves`) while the profile has cloud saves unless `delete_saves=true` |
 | `GET /devices`, `DELETE /devices/{id}` | revoke = sign out everywhere + drop its wrapped key |
 
-`plan` is `{name: "free" | "plus", display_name, status, interval, renews_at, cancel_at_period_end, synced_titles_limit (null = unlimited), versions_per_title, quota, used, billing_available, upgrade_url}`.
+`plan` is the static placeholder `{"name": "free", "features": {}}` (no paid plans this round; clients keep the
+field for later). `storage` is `{quota, used, versions_per_title, max_version_bytes}` from server config.
 
 ### End-to-end save key
 
 | Endpoint | |
 |---|---|
 | `GET /keys/requests` | devices of this account still waiting for the key: `{device_id, name, platform, pubkey, created_at}` |
-| `POST /keys/grant` | `{device_id, wrapped_account_key, key_id}`. Granting another device requires the caller to hold the key; any device may store its own copy (first-device bootstrap, or after recovery). The first grant pins the account's `key_id`; a different one is `409 key_mismatch`. |
+| `POST /keys/grant` | `{device_id, wrapped_account_key, key_id?}`. Granting another device requires the caller to hold the key; any device may store its own copy (first-device bootstrap, or after recovery). `key_id` is optional; once a grant carried one, a different one is `409 key_mismatch`. |
 | `GET /keys/mine` | `{key_id, wrapped_account_key, granted_by, granted_at}` or `404 {error_code: "key_pending", key_state}` |
-| `POST /keys/recovery` | `{recovery_blob, kdf, key_id}` (key holders only) |
-| `GET /keys/recovery` | the stored `{recovery_blob, kdf, key_id, updated_at}` |
+| `POST /keys/recovery` | the client's recovery record, any JSON object ≤ 4 KiB (key holders only; an optional `key_id` must match) |
+| `GET /keys/recovery` | the stored record, verbatim, or `404` |
 
-Recommended formats (the server treats them as opaque bytes, ≤ 1 KiB wrapped key, ≤ 4 KiB recovery blob):
+Recommended formats (the server treats them as opaque, ≤ 1 KiB wrapped key, ≤ 4 KiB recovery record):
 `wrapped_account_key` = HPKE base mode (RFC 9180) with X25519-HKDF-SHA256 / HKDF-SHA256 / AES-256-GCM to the
 device's X25519 key, `info = "napple-account-key|<account_id>|<device_id>"`, empty AAD, encoded as
 `enc (32 bytes) || ciphertext (48 bytes)` (`tests/keys.rs` does exactly this with the `hpke` crate).
 `key_id` = a fingerprint of the account key the clients agree on (for example base64url of the first 16 bytes
-of `HKDF-SHA256(key, info="napple-key-id")`). `kdf` = `{"alg":"argon2id","salt":…,"m":…,"t":…,"p":…}`.
+of `HKDF-SHA256(key, info="napple-key-id")`). The cloud-saves client's recovery record is
+`{kdf: "argon2id", m_kib, t, p, salt, wrapped}`.
 
 ### Cloud saves
 
@@ -134,47 +135,53 @@ Per (title, profile) a linear history of versions, numbered from 1.
 
 | Endpoint | |
 |---|---|
-| `GET /saves` | latest version per (title, profile): `{title_id, profile_id, latest_version, size, updated_at, device_id, device_name, read_only, delete_after}` |
-| `GET /saves/titles` | `{synced_titles_limit, next_switch_at, titles: [{title_id, state: "active" \| "readonly", enabled_at, readonly_since, delete_after}]}` |
-| `POST /saves/titles` | `{title_id}`: enable a title (Plus) or switch the Free title (the old one becomes read-only) |
-| `DELETE /saves/{title}` | deletes the title's cloud saves (all profiles); does not reset the Free switch cooldown |
-| `GET /saves/{title}/{profile}/versions` | history, newest first: `{version, size, sha256_ciphertext, committed_at, device_id, device_name}` |
+| `GET /saves` | latest version per (title, profile): `{title_id, profile_id, latest_version, size, updated_at, device_id, device_name}` |
+| `DELETE /saves/{title}` | deletes the title's cloud saves (all profiles) |
+| `GET /saves/{title}/{profile}/versions` | history, newest first: `{version, size, sha256_ciphertext, committed_at, created_at, device_id, device_name}` |
 | `POST /saves/{title}/{profile}/versions` | `{base_version, size, sha256_ciphertext (hex)}` -> `201 {version, upload_id, upload_url, upload_method: "PUT", upload_headers, expires_at}` |
 | `POST /saves/{title}/{profile}/versions/{v}/commit` | optional `{upload_id}` -> the new head |
-| `GET /saves/{title}/{profile}/versions/{v}` | the version + `download_url` (presigned GET, 15 min) |
+| `GET /saves/{title}/{profile}/versions/{v}` | the version + `url` (= `download_url`, presigned GET, 15 min) |
 
-Upload: `PUT upload_url` with exactly the `upload_headers` (`content-type: application/vnd.napple.save`,
-`x-amz-checksum-sha256`, and the `content-length` the HTTP client sets from the body). The URL signs
+Upload: `PUT upload_url` with exactly the `upload_headers` (`content-type: application/octet-stream`,
+`x-amz-checksum-sha256`, and the `content-length` the HTTP client sets from the body). All three are signed: a
+PUT without the checksum header is refused by S3. The URL signs
 Content-Length, Content-Type and the SHA-256 checksum, so S3 itself rejects any other body. Commit then checks
 the object exists with the declared size.
 
-Status codes: `409 version_conflict` with `head` when `base_version` is not the current head (at create or at
-commit, whichever loses the race); `402 plan_limit` with `reason` (`plan_limit`, `switch_cooldown`, `quota`)
-and `upgrade_url`; `507 quota_exceeded` on Plus; `413 too_large` above 64 MiB; `410 upload_expired` for a
-pending upload older than a day; `400 upload_missing` / `upload_mismatch` at commit. Committing prunes the
-oldest versions beyond the plan's count (10 Free, 20 Plus). A device's new upload for the same save replaces
-its own unfinished one.
+Status codes: `409 version_conflict` with `head` (the head version object, `head.version` its number) when
+`base_version` is not the current head (at create or at commit, whichever loses the race); `413` with
+`reason: "quota"` when the account's storage is full and `reason: "too_large"` above 64 MiB; `410 upload_expired`
+for a pending upload older than a day; `400 upload_missing` / `upload_mismatch` at commit. A new version is
+always `base_version + 1`. Committing prunes the oldest versions beyond `NAPPLE_SAVE_VERSIONS`. A device's new
+upload for the same save replaces its own unfinished one. Any number of titles can sync.
 
-### Plans and billing
+### Reserved names and grants
 
-- **Free**: 1 synced title (the first title uploaded; `POST /saves/titles` switches once every 30 days), 10 versions, 256 MiB.
-- **Napple Plus**: unlimited titles, 20 versions, 5 GiB. Prices are Stripe Price ids in config.
-- Accounts, passkeys, devices, profiles and the online identity are free on both.
+Every name other players see (account `display_name`, profile `nickname`; later handles and room names, through
+`names::check_name`) is checked:
+- **"napple" anywhere is refused** (`Napple`, `xNAPPLEx`, `n4pple`, `nappIe`, `na pple`, `nаpple` with a Cyrillic
+  а, fullwidth or math-styled letters, accents), except the exact name `napple` (any case) on an account with
+  the `owner_napple` grant.
+- **The `nap-` prefix is reserved**: names starting with `nap-`, `nap_`, `nap `, `nap.` (and look-alikes such as
+  `n4p-`, `nap–` with an en dash) need the `reserved_prefix` grant.
+- Normalisation: NFKD, combining marks dropped, a confusables table (Cyrillic, Greek and Latin look-alikes,
+  dash and dot variants), leetspeak (0→o, 1/l/|/I→l, 4/@→a, 3→e, 5/$→s, 7→t, 9→g), lower-case; the "contains"
+  check then ignores everything that is not a letter or digit. Invisible characters (zero-width spaces, bidi
+  controls, soft hyphen) are refused outright (400); ZWJ stays allowed for emoji.
+- A rejected name is `422 {error: "reserved_name", reason: "reserved_name", field, message}`. A new account
+  whose email local part is reserved starts as `Player`. Removing a grant keeps names already chosen; the next
+  rename is checked again.
 
-| Endpoint | |
+Grants (`owner_napple`, `reserved_prefix`, `admin`) are per account and only admins set them. Admins are the
+accounts whose (verified) email is in `NAPPLE_ADMIN_EMAILS`, plus accounts holding `admin`.
+
+| Endpoint (admin token) | |
 |---|---|
-| `GET /billing` | HTML plans page (`upgrade_url` points here); it sends the user to the app |
-| `POST /billing/checkout` (auth) | `{interval: "monthly" \| "yearly"}` -> `{url}`: a Stripe Checkout session; the app opens it in the browser |
-| `POST /billing/portal` (auth) | -> `{url}`: the Stripe Customer Portal (cancel, change card, switch interval) |
-| `POST /billing/webhook` | Stripe events (configure the endpoint for `checkout.session.completed`, `customer.subscription.created/updated/deleted`, `customer.deleted`) |
-| `GET /billing/success`, `/billing/cancel` | "return to Napple" pages |
+| `POST /admin/grants` | `{account_id \| email, grant}` -> `{account_id, grants}` |
+| `DELETE /admin/grants` | same body, removes the grant |
+| `GET /admin/grants?email=…` or `?account_id=…` | `{account_id, grants}` |
 
-Without the four Stripe variables every `/billing/*` answers 503 and every account is on Free. Statuses
-`active`, `trialing` and `past_due` grant Plus (past_due while Stripe retries the card); anything else is Free.
-Webhook deliveries are verified (`Stripe-Signature`, HMAC-SHA256 over `"<t>.<body>"`, 5-minute tolerance,
-constant-time compare, several `v1` accepted for secret rotation) and idempotent (event ids are recorded in
-the same SQLite transaction as their effect; a redelivery answers `{duplicate: true}`). Events older than the
-last applied one for the same subscription are ignored (Stripe does not order deliveries).
+From the server host: `napple-account admin grant owner@napple.lat owner_napple`.
 
 ## Security model
 
@@ -186,7 +193,9 @@ last applied one for the same subscription are ignored (Stripe does not order de
 - **End-to-end saves.** The server never sees the account save key, the recovery code, or save plaintext. It
   stores public keys, wrapped keys, the recovery blob, and ciphertext with its size and hash.
 - **Abuse limits.** Per-IP limit on every auth endpoint (30/min), per-email limits on start (5/15 min) and finish;
-  64 KiB JSON bodies, 64 MiB per save version, plan quotas (256 MiB / 5 GiB), only `application/vnd.napple.save` uploads.
+  64 KiB JSON bodies, 64 MiB per save version, a per-account quota (10 GiB default), uploads pinned to
+  `application/octet-stream` with their length and SHA-256.
+- **Names.** Reserved-name rules against impersonating Napple; admin-only grants for the exceptions.
 - **Web.** CORS limited to the napple.lat origins; HTML pages set `no-referrer`; the link token lives in the URL
   fragment. Constant-time compares for codes, tokens, signatures and challenges.
 - **Logs.** No tokens, codes, keys, signatures, presigned query strings or email addresses (account ids only).
@@ -207,28 +216,22 @@ last applied one for the same subscription are ignored (Stripe does not order de
 | Malicious server pushes a bad key | `key_id` is pinned and clients should verify `key_id` against the key they unwrap | a server could hide versions or serve old ones (rollback); clients keep local copies and compare version numbers |
 | Brute force | per-code attempts, per-email and per-IP limits | distributed brute force of 6-digit codes is bounded by 20 guesses/hour/address (~0.05%/day) |
 | Two first devices race to create the account key | the first `POST /keys/grant` pins `key_id`; the second gets `409 key_mismatch` and must fetch the granted key instead | |
-| Stripe webhook forgery or replay | HMAC signature with timestamp tolerance; event-id idempotency; out-of-order guard | a leaked webhook secret lets an attacker grant Plus to accounts (billing only, no data access) |
+| Impersonating Napple staff by name | reserved-name rules with look-alike normalisation; grants only from admins | a look-alike missing from the confusables table; names other players see should still carry the account's grants as a badge in the UI |
+| Admin account takeover | admins are few, named by email in config; grants only change names | a stolen admin email inbox can mint grants: admins should use passkeys |
 | Using the bucket as free file hosting | per-version max size, quotas, content type pinned in the signed URL, short URL lifetimes | ciphertext cannot be inspected, by design |
 
 ## Data retention and deletion
 
-- **Account deletion** (`DELETE /me` with the email typed as confirmation): deletes the Stripe customer (which
-  cancels the subscription), queues every save object for deletion and deletes it right away, then removes the
-  account and, through foreign keys, all devices, tokens, passkeys, profiles, titles and save metadata. Signing
-  up again with the same email creates a new account. Objects that S3 could not delete at that moment stay in
-  the deletion queue (object keys only, no personal data) and are retried every hour.
-- **Downgrade or expiry** (subscription canceled or unpaid): the most recently saved titles up to the Free limit
-  stay synced; the others become **read-only** (always downloadable, never uploadable) for 90 days. Seven days
-  before the end an email warning goes out; the saves are deleted only after that warning was sent (at
-  `max(read-only + 90 days, warning + 7 days)`). Upgrading again within the window makes them active again.
-  The same applies to the title the Free plan switched away from.
+- **Account deletion** (`DELETE /me` with the email typed as confirmation): queues every save object for
+  deletion and deletes it right away, then removes the account and, through foreign keys, all devices, tokens,
+  passkeys, profiles, grants and save metadata. Signing up again with the same email creates a new account.
+  Objects that S3 could not delete at that moment stay in the deletion queue (object keys only, no personal
+  data) and are retried every hour.
 - **Hourly retention job**: pending uploads older than a day (and their objects), expired codes, ceremonies and
-  refresh tokens, Stripe event ids older than 90 days, read-only titles past their window, the deletion queue.
-- **Versions**: the plan's newest N per (title, profile); older ones are deleted on the next commit.
+  refresh tokens, the deletion queue.
+- **Versions**: the newest `NAPPLE_SAVE_VERSIONS` per (title, profile); older ones are deleted on the next commit.
 - **S3 bucket** (napple-infra): SSE-S3, block public access, versioning with "delete noncurrent versions after 7
   days" and "abort incomplete multipart uploads after 1 day". Deleted saves are therefore gone from S3 within 7 days.
-- **Stripe** keeps its own billing records as required by law; the account server keeps only the customer and
-  subscription ids, status, interval and renewal date.
 - **Logs** contain account and device ids, never emails or secrets.
 
 ## Deployment notes (for napple-infra)
@@ -238,10 +241,9 @@ last applied one for the same subscription are ignored (Stripe does not order de
 - Caddy: `handle /account/* { reverse_proxy account:8082 }` **without** stripping the prefix, ahead of the catch-all
   that goes to napple-online; set `NAPPLE_ACCOUNT_TRUST_PROXY=1`.
 - Env: `NAPPLE_ACCOUNT_ENV=production`, `NAPPLE_ACCOUNT_MAILER=ses`, `NAPPLE_ACCOUNT_S3_BUCKET=napple-saves-<aws-account-id>`,
-  `AWS_REGION`, and the four Stripe secrets from the secret store. Instance role: `s3:PutObject`, `s3:GetObject` (also
+  `AWS_REGION`, `NAPPLE_ADMIN_EMAILS`. Instance role: `s3:PutObject`, `s3:GetObject` (also
   authorizes HEAD) and `s3:DeleteObject` on `arn:aws:s3:::napple-saves-*/saves/*` and `ses:SendEmail` from `no-reply@napple.lat`.
   IMDSv2 hop limit 2 for containers.
-- Stripe webhook endpoint `https://pretend.napple.lat/account/v1/billing/webhook`.
 - Back up `account.sqlite3` and `jwt-keys.json` (losing the key file signs everybody out; nothing else).
 
 ## Walkthrough (curl, local)
@@ -266,6 +268,6 @@ curl -s -X POST $API/saves/01006BB00C6F0000/$P/versions/1/commit -H "authorizati
 curl -s $API/saves -H "authorization: Bearer $AT"
 ```
 
-The scripted version is `crates/napple-account/scripts/walkthrough.sh` (all of the above plus the 409/402/503
-cases, the download check and account deletion; `BIN=<path to napple-account>`, runs on port 18082 in a temp
+The scripted version is `crates/napple-account/scripts/walkthrough.sh` (all of the above plus the 409 and 422
+cases, a second title, the download check and account deletion; `BIN=<path to napple-account>`, runs on port 18082 in a temp
 dir and cleans up). Its 2026-11-02 output is in `docs/archive/changes/2026-11-02-claude-napple-account-2026-11-02-r8.md`.

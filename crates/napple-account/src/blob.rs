@@ -13,8 +13,8 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// The only content type a save upload may carry.
-pub const SAVE_CONTENT_TYPE: &str = "application/vnd.napple.save";
+/// The only content type a save upload may carry (signed into the URL; what the cloud-saves client sends).
+pub const SAVE_CONTENT_TYPE: &str = "application/octet-stream";
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Presigned {

@@ -202,3 +202,45 @@ async fn recovery_blob_round_trip() {
         .await;
     assert_eq!(s, StatusCode::BAD_REQUEST);
 }
+
+/// What the cloud-saves client sends: no `key_id`, and its own flat recovery record (stored and returned verbatim).
+#[tokio::test]
+async fn client_wire_shapes_without_key_id() {
+    let t = T::new();
+    let da = device();
+    let a = t
+        .sign_in_with("wire@napple.test", "Mac", "macos", &da.pk)
+        .await;
+    let key: [u8; 32] = random_bytes();
+    let (s, v) = t.req("POST", "/keys/grant", Some(&a.access), Some(json!({"device_id": a.device_id, "wrapped_account_key": wrap(&key, &da.pk, &a.account_id, &a.device_id)}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, mine) = t.req("GET", "/keys/mine", Some(&a.access), None).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        unwrap(
+            &da,
+            mine["wrapped_account_key"].as_str().unwrap(),
+            &a.account_id,
+            &a.device_id
+        ),
+        key
+    );
+    let (s, _) = t.req("GET", "/keys/recovery", Some(&a.access), None).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let rec = json!({"kdf": "argon2id", "m_kib": 65536, "t": 3, "p": 1, "salt": b64url(&[1u8; 16]), "wrapped": b64url(&[2u8; 60])});
+    let (s, _) = t
+        .req("POST", "/keys/recovery", Some(&a.access), Some(rec.clone()))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, got) = t.req("GET", "/keys/recovery", Some(&a.access), None).await;
+    assert_eq!((s, got), (StatusCode::OK, rec));
+    let (s, _) = t
+        .req(
+            "POST",
+            "/keys/recovery",
+            Some(&a.access),
+            Some(json!(["not", "an", "object"])),
+        )
+        .await;
+    assert_ne!(s, StatusCode::OK);
+}

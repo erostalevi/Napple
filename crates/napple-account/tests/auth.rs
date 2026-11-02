@@ -110,9 +110,7 @@ async fn email_code_is_single_use_and_creates_the_account_once() {
         .await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(me["email"], "player@example.com");
-    assert_eq!(me["plan"]["name"], "free");
-    assert_eq!(me["plan"]["synced_titles_limit"], 1);
-    assert_eq!(me["plan"]["billing_available"], false);
+    assert_eq!(me["plan"], json!({"name": "free", "features": {}}));
 }
 
 #[tokio::test]

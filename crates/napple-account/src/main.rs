@@ -1,6 +1,8 @@
 //! `napple-account [serve]` runs the server; `napple-account rotate-jwt-key` adds a new signing key to the data dir
 //! (restart to start signing with it; the previous keys stay in the JWKS); `napple-account retention` runs one
-//! cleanup pass and exits. All configuration comes from the environment (see `docs/guides/napple-account.md`).
+//! cleanup pass and exits; `napple-account admin grant|revoke|list <email> [grant]` edits account grants
+//! (`owner_napple`, `reserved_prefix`, `admin`) directly in the database. All configuration comes from the
+//! environment (see `docs/guides/napple-account.md`).
 
 use napple_account::app::{self, Clock};
 use napple_account::{config::Config, from_config, log, retention};
@@ -42,16 +44,42 @@ async fn main() {
                 }
             }
         }
-        "-h" | "--help" | "help" => {
-            println!("usage: napple-account [serve | rotate-jwt-key | retention]")
+        "admin" => {
+            let args: Vec<String> = std::env::args().skip(2).collect();
+            if let Err(e) = admin_cli(cfg, &args) {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
         }
+        "-h" | "--help" | "help" => println!("{USAGE}"),
         other => {
-            eprintln!(
-                "unknown command {other}; usage: napple-account [serve | rotate-jwt-key | retention]"
-            );
+            eprintln!("unknown command {other}\n{USAGE}");
             std::process::exit(2);
         }
     }
+}
+
+const USAGE: &str = "usage: napple-account [serve | rotate-jwt-key | retention | admin grant|revoke <email> <grant> | admin list <email>]";
+
+fn admin_cli(cfg: Config, args: &[String]) -> Result<(), String> {
+    use napple_account::admin::{grants_of, resolve, set_grant};
+    let (op, email) = match args {
+        [op, email, ..] => (op.as_str(), email.as_str()),
+        _ => return Err(USAGE.into()),
+    };
+    let app = from_config(cfg)?;
+    let db = app.db();
+    let id = resolve(&db, None, Some(email))
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("no account for {email}: it has to sign in once first"))?;
+    let grants = match (op, args.get(2)) {
+        ("grant", Some(g)) => set_grant(&db, &id, g, true, None, app.now())?,
+        ("revoke", Some(g)) => set_grant(&db, &id, g, false, None, app.now())?,
+        ("list", None) => grants_of(&db, &id).map_err(|e| e.to_string())?,
+        _ => return Err(USAGE.into()),
+    };
+    println!("{id}: [{}]", grants.join(", "));
+    Ok(())
 }
 
 async fn serve(cfg: Config) {
@@ -78,13 +106,8 @@ async fn serve(cfg: Config) {
             std::process::exit(1)
         });
     log::info(&format!(
-        "listening on {listen} (public base {}, billing {}, blobs {})",
+        "listening on {listen} (public base {}, blobs {})",
         app.cfg.public_base,
-        if app.cfg.stripe.is_some() {
-            "on"
-        } else {
-            "off"
-        },
         if app.dev_blobs.is_some() {
             "filesystem (dev)"
         } else {

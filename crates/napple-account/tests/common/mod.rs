@@ -1,5 +1,5 @@
 //! Test harness: the real router over in-memory SQLite, a settable clock, a capturing mailer, the filesystem blob
-//! store in a temp dir (or any other store), and a mock for outbound HTTP (Stripe). No network.
+//! store in a temp dir (or any other store), and a mock for outbound HTTP. No network.
 #![allow(dead_code)]
 
 use axum::Router;
@@ -9,7 +9,7 @@ use napple_account::app::{AppState, TestClock, router};
 use napple_account::blob::{BlobStore, FsBlobStore};
 use napple_account::config::Config;
 use napple_account::mailer::CaptureMailer;
-use napple_account::outbound::{MockOutbound, OutRequest, OutResponse, json_response};
+use napple_account::outbound::{MockOutbound, json_response};
 use napple_account::util::{b64url, random_bytes};
 use napple_account::{Deps, build_app, db, jwt::JwtKeys};
 use serde_json::{Value, json};
@@ -20,7 +20,6 @@ use tower::ServiceExt;
 
 pub const T0: i64 = 1_793_577_600; // 2026-11-02
 pub const ORIGIN: &str = "https://pretend.napple.lat";
-pub const WEBHOOK_SECRET: &str = "whsec_test_napple_account_fixture";
 
 pub struct T {
     pub app: AppState,
@@ -49,46 +48,9 @@ pub fn temp_dir(tag: &str) -> PathBuf {
     d
 }
 
-pub fn stripe_vars() -> Vec<(&'static str, &'static str)> {
-    vec![
-        ("STRIPE_SECRET_KEY", "sk_test_fixture_not_a_real_key"),
-        ("STRIPE_WEBHOOK_SECRET", WEBHOOK_SECRET),
-        ("STRIPE_PRICE_MONTHLY", "price_test_monthly"),
-        ("STRIPE_PRICE_YEARLY", "price_test_yearly"),
-        ("STRIPE_API_BASE", "https://stripe.mock"),
-    ]
-}
-
-/// Default Stripe mock: answers Checkout, Portal and deletions like the API does.
-pub fn stripe_mock(req: &OutRequest) -> OutResponse {
-    let path = req.url.trim_start_matches("https://stripe.mock");
-    match (req.method.as_str(), path) {
-        ("POST", "/v1/checkout/sessions") => json_response(
-            200,
-            json!({"id": "cs_test_1", "object": "checkout.session", "url": "https://checkout.stripe.com/c/pay/cs_test_1"}),
-        ),
-        ("POST", "/v1/billing_portal/sessions") => json_response(
-            200,
-            json!({"id": "bps_test_1", "url": "https://billing.stripe.com/p/session/test_1"}),
-        ),
-        ("DELETE", p) if p.starts_with("/v1/customers/") => {
-            json_response(200, json!({"id": p.rsplit('/').next(), "deleted": true}))
-        }
-        ("DELETE", p) if p.starts_with("/v1/subscriptions/") => json_response(
-            200,
-            json!({"id": p.rsplit('/').next(), "status": "canceled"}),
-        ),
-        _ => json_response(404, json!({"error": {"type": "invalid_request_error"}})),
-    }
-}
-
 impl T {
     pub fn new() -> T {
         T::with(&[], None)
-    }
-
-    pub fn with_stripe() -> T {
-        T::with(&stripe_vars(), None)
     }
 
     pub fn with(vars: &[(&str, &str)], blobs: Option<Arc<dyn BlobStore>>) -> T {
@@ -101,7 +63,7 @@ impl T {
         let cfg = Config::from_vars(v).unwrap();
         let clock = Arc::new(TestClock::new(T0));
         let mail = Arc::new(CaptureMailer::default());
-        let out = Arc::new(MockOutbound::new(stripe_mock));
+        let out = Arc::new(MockOutbound::new(|_| json_response(404, json!({}))));
         let (blobs, dev) = match blobs {
             Some(b) => (b, None),
             None => {
@@ -282,38 +244,6 @@ impl T {
         )
         .await
     }
-
-    /// A Stripe-signed webhook delivery.
-    pub async fn webhook(&self, event: &Value) -> (StatusCode, Value) {
-        let body = event.to_string();
-        let sig = napple_account::billing::sign_payload(
-            WEBHOOK_SECRET,
-            body.as_bytes(),
-            self.clock.0.load(std::sync::atomic::Ordering::SeqCst),
-        );
-        let req = Request::builder()
-            .method("POST")
-            .uri("/account/v1/billing/webhook")
-            .header("stripe-signature", sig)
-            .header("content-type", "application/json")
-            .body(Body::from(body))
-            .unwrap();
-        let (s, _, b) = self.raw(req).await;
-        (s, serde_json::from_slice(&b).unwrap_or(Value::Null))
-    }
-}
-
-/// Loads a Stripe event fixture with `{{ACCOUNT_ID}}` / `{{NOW}}` / `{{PERIOD_END}}` filled in.
-pub fn fixture(name: &str, account_id: &str, created: i64) -> Value {
-    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures/stripe")
-        .join(name);
-    let s = std::fs::read_to_string(&p).unwrap();
-    let s = s
-        .replace("{{ACCOUNT_ID}}", account_id)
-        .replace("\"{{NOW}}\"", &created.to_string())
-        .replace("\"{{PERIOD_END}}\"", &(created + 30 * 86_400).to_string());
-    serde_json::from_str(&s).unwrap()
 }
 
 pub const LAS: &str = "01006BB00C6F0000";

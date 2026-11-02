@@ -19,7 +19,7 @@ TOK=$(curl -fsS -X POST "$API/auth/email/finish" -H 'content-type: application/j
 echo "$TOK" | python3 -c 'import json,sys; v=json.load(sys.stdin); print({k: v[k] for k in ("account_id","device_id","key_state","new_account","expires_in")})'
 AT=$(echo "$TOK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
 H="authorization: Bearer $AT"
-echo "== me";        curl -fsS "$API/me" -H "$H" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["email"], v["plan"]["name"], v["plan"]["synced_titles_limit"], v["plan"]["quota"])'
+echo "== me";        curl -fsS "$API/me" -H "$H" | python3 -c 'import json,sys; v=json.load(sys.stdin); print(v["email"], v["plan"], v["storage"]["quota"], v["storage"]["versions_per_title"])'
 PROFILE=$(curl -fsS "$API/profiles" -H "$H" | python3 -c 'import json,sys; print(json.load(sys.stdin)["profiles"][0]["profile_id"])')
 echo "== save version 1 (title LAS, profile $PROFILE)"
 printf 'NAPPLESV\001 pretend ciphertext' > "$DATA/blob"
@@ -27,14 +27,14 @@ SIZE=$(wc -c < "$DATA/blob" | tr -d ' '); SHA=$(shasum -a 256 "$DATA/blob" | awk
 C=$(curl -fsS -X POST "$API/saves/01006BB00C6F0000/$PROFILE/versions" -H "$H" -H 'content-type: application/json' -d "{\"base_version\":0,\"size\":$SIZE,\"sha256_ciphertext\":\"$SHA\"}")
 URL=$(echo "$C" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_url"])')
 CK=$(echo "$C" | python3 -c 'import json,sys; print(json.load(sys.stdin)["upload_headers"]["x-amz-checksum-sha256"])')
-curl -fsS -X PUT "$URL" -H 'content-type: application/vnd.napple.save' -H "x-amz-checksum-sha256: $CK" --data-binary @"$DATA/blob" -o /dev/null -w "upload HTTP %{http_code}\n"
+curl -fsS -X PUT "$URL" -H 'content-type: application/octet-stream' -H "x-amz-checksum-sha256: $CK" --data-binary @"$DATA/blob" -o /dev/null -w "upload HTTP %{http_code}\n"
 echo "== commit";    curl -fsS -X POST "$API/saves/01006BB00C6F0000/$PROFILE/versions/1/commit" -H "$H"; echo
 echo "== stale base -> 409"; curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$API/saves/01006BB00C6F0000/$PROFILE/versions" -H "$H" -H 'content-type: application/json' -d "{\"base_version\":0,\"size\":1,\"sha256_ciphertext\":\"$SHA\"}"
-echo "== second title on Free -> 402"; curl -sS -X POST "$API/saves/0100000000010000/$PROFILE/versions" -H "$H" -H 'content-type: application/json' -d "{\"base_version\":0,\"size\":1,\"sha256_ciphertext\":\"$SHA\"}"; echo
+echo "== second title syncs too (no plans) -> 201"; curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$API/saves/0100000000010000/$PROFILE/versions" -H "$H" -H 'content-type: application/json' -d "{\"base_version\":0,\"size\":1,\"sha256_ciphertext\":\"$SHA\"}"
+echo "== reserved name -> 422"; curl -sS -X PATCH "$API/me" -H "$H" -H 'content-type: application/json' -d '{"display_name":"N4PPLE fan"}'; echo
 echo "== list";      curl -fsS "$API/saves" -H "$H"; echo
 DL=$(curl -fsS "$API/saves/01006BB00C6F0000/$PROFILE/versions/1" -H "$H" | python3 -c 'import json,sys; print(json.load(sys.stdin)["download_url"])')
 echo "== download matches upload: $(curl -fsS "$DL" | shasum -a 256 | awk '{print $1}' | grep -c "$SHA")"
-echo "== billing without Stripe -> 503"; curl -sS -o /dev/null -w "%{http_code}\n" -X POST "$API/billing/checkout" -H "$H"
 echo "== delete account"; curl -sS -o /dev/null -w "%{http_code}\n" -X DELETE "$API/me" -H "$H" -H 'content-type: application/json' -d '{"confirm_email":"walk@napple.test"}'
 echo "== blobs left: $(find "$DATA/blobs" -type f | wc -l | tr -d ' ')"
 echo "== server log (codes printed by the dev mailer only)"; grep -v -e '^To:' -e 'sign-in code' -e '^Or open' -e '^http' -e '^The code' -e '^If you' -e '^-' -e '^Subject' -e '^$' "$DATA/server.log"

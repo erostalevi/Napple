@@ -1,27 +1,10 @@
-//! Env-only configuration. Every knob has a default that works for a local dev run; production sets the AWS/Stripe ones.
+//! Env-only configuration. Every knob has a default that works for a local dev run; production sets the AWS ones.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 const MIB: u64 = 1024 * 1024;
 const GIB: u64 = 1024 * MIB;
-
-#[derive(Clone, Debug)]
-pub struct PlanLimits {
-    /// 0 = unlimited.
-    pub synced_titles: u32,
-    pub versions_per_title: u32,
-    pub quota_bytes: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct StripeConfig {
-    pub secret_key: String,
-    pub webhook_secret: String,
-    pub price_monthly: String,
-    pub price_yearly: String,
-    pub api_base: String,
-}
 
 #[derive(Clone, Debug)]
 pub enum BlobBackend {
@@ -69,13 +52,13 @@ pub struct Config {
     pub max_version_bytes: u64,
     pub upload_url_ttl: i64,
     pub pending_upload_ttl: i64,
-    pub free: PlanLimits,
-    pub plus: PlanLimits,
-    pub title_switch_days: i64,
-    pub readonly_days: i64,
-    pub deletion_warning_days: i64,
+    /// Storage per account (all titles and profiles, pending uploads included).
+    pub save_quota_bytes: u64,
+    /// Committed versions kept per (title, profile).
+    pub save_versions: u32,
     pub max_profiles: u32,
-    pub stripe: Option<StripeConfig>,
+    /// Bootstrap admins (lower-cased verified emails); `admin` grants add more.
+    pub admin_emails: Vec<String>,
     pub blobs: BlobBackend,
     pub mailer: MailerKind,
     /// Optional base64 32-byte Ed25519 seed; otherwise a key file in `data_dir` is created on first start.
@@ -114,18 +97,6 @@ impl Config {
             .unwrap_or_else(|| "https://pretend.napple.lat/account/v1".into())
             .trim_end_matches('/')
             .to_string();
-
-        let stripe = match (get("STRIPE_SECRET_KEY"), get("STRIPE_WEBHOOK_SECRET"), get("STRIPE_PRICE_MONTHLY"), get("STRIPE_PRICE_YEARLY")) {
-            (Some(secret_key), Some(webhook_secret), Some(price_monthly), Some(price_yearly)) => Some(StripeConfig {
-                secret_key,
-                webhook_secret,
-                price_monthly,
-                price_yearly,
-                api_base: get("STRIPE_API_BASE").unwrap_or_else(|| "https://api.stripe.com".into()).trim_end_matches('/').to_string(),
-            }),
-            (None, None, None, None) => None,
-            _ => return Err("Stripe needs all of STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_MONTHLY, STRIPE_PRICE_YEARLY (or none)".into()),
-        };
 
         let data_dir = PathBuf::from(
             get("NAPPLE_ACCOUNT_DATA").unwrap_or_else(|| "./napple-account-data".into()),
@@ -195,31 +166,19 @@ impl Config {
             max_version_bytes: num("NAPPLE_ACCOUNT_MAX_VERSION_BYTES", 64 * MIB)?,
             upload_url_ttl: num("NAPPLE_ACCOUNT_UPLOAD_URL_TTL", 15 * 60)? as i64,
             pending_upload_ttl: num("NAPPLE_ACCOUNT_PENDING_UPLOAD_TTL", 86_400)? as i64,
-            free: PlanLimits {
-                synced_titles: num("NAPPLE_PLAN_FREE_TITLES", 1)? as u32,
-                versions_per_title: num("NAPPLE_PLAN_FREE_VERSIONS", 10)? as u32,
-                quota_bytes: num("NAPPLE_PLAN_FREE_QUOTA", 256 * MIB)?,
-            },
-            plus: PlanLimits {
-                synced_titles: num("NAPPLE_PLAN_PLUS_TITLES", 0)? as u32,
-                versions_per_title: num("NAPPLE_PLAN_PLUS_VERSIONS", 20)? as u32,
-                quota_bytes: num("NAPPLE_PLAN_PLUS_QUOTA", 5 * GIB)?,
-            },
-            title_switch_days: num("NAPPLE_PLAN_TITLE_SWITCH_DAYS", 30)? as i64,
-            readonly_days: num("NAPPLE_PLAN_READONLY_DAYS", 90)? as i64,
-            deletion_warning_days: num("NAPPLE_PLAN_DELETION_WARNING_DAYS", 7)? as i64,
+            save_quota_bytes: num("NAPPLE_SAVE_QUOTA_BYTES", 10 * GIB)?,
+            save_versions: num("NAPPLE_SAVE_VERSIONS", 20)?.max(1) as u32,
             max_profiles: num("NAPPLE_ACCOUNT_MAX_PROFILES", 8)? as u32,
-            stripe,
+            admin_emails: list("NAPPLE_ADMIN_EMAILS", "")
+                .into_iter()
+                .map(|e| e.to_ascii_lowercase())
+                .collect(),
             blobs,
             mailer,
             jwt_seed: get("NAPPLE_ACCOUNT_JWT_SEED"),
             auth_ip_per_min: num("NAPPLE_ACCOUNT_AUTH_IP_PER_MIN", 30)? as u32,
             email_per_window: num("NAPPLE_ACCOUNT_EMAIL_PER_15MIN", 5)? as u32,
         })
-    }
-
-    pub fn limits(&self, plus: bool) -> &PlanLimits {
-        if plus { &self.plus } else { &self.free }
     }
 
     /// The public origin (scheme://host[:port]) of `public_base`.
@@ -263,15 +222,22 @@ mod tests {
     }
 
     #[test]
-    fn defaults_and_stripe_all_or_nothing() {
+    fn defaults() {
         let c = Config::from_vars(HashMap::new()).unwrap();
-        assert!(c.stripe.is_none());
-        assert_eq!(c.free.synced_titles, 1);
-        assert_eq!(c.plus.versions_per_title, 20);
+        assert_eq!(c.save_quota_bytes, 10 * GIB);
+        assert_eq!(c.save_versions, 20);
+        assert_eq!(c.max_version_bytes, 64 * MIB);
+        assert!(c.admin_emails.is_empty());
         assert_eq!(c.public_origin(), "https://pretend.napple.lat");
         let mut v = HashMap::new();
-        v.insert("STRIPE_SECRET_KEY".to_string(), "sk_test_x".to_string());
-        assert!(Config::from_vars(v).is_err());
+        v.insert(
+            "NAPPLE_ADMIN_EMAILS".to_string(),
+            " Owner@Napple.lat , ops@napple.lat".to_string(),
+        );
+        assert_eq!(
+            Config::from_vars(v).unwrap().admin_emails,
+            vec!["owner@napple.lat", "ops@napple.lat"]
+        );
         let mut p = HashMap::new();
         p.insert("NAPPLE_ACCOUNT_ENV".to_string(), "production".to_string());
         assert!(

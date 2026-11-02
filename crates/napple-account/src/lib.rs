@@ -1,11 +1,11 @@
 //! Napple Account server (`/account/v1` at `https://pretend.napple.lat`): one identity across Mac, iPhone and the
-//! CLI, end-to-end encrypted cloud saves, and the Free / Napple Plus plans. The API and security model are in
+//! CLI, and end-to-end encrypted cloud saves. The API and security model are in
 //! `docs/guides/napple-account.md`; the shared contract is `orchestrations/ACCOUNT-CONTRACT.md`.
 
 pub mod account;
+pub mod admin;
 pub mod app;
 pub mod aws;
-pub mod billing;
 pub mod blob;
 pub mod config;
 pub mod db;
@@ -14,10 +14,10 @@ pub mod jwt;
 pub mod keys;
 pub mod log;
 pub mod mailer;
+pub mod names;
 pub mod outbound;
 pub mod pages;
 pub mod passkey;
-pub mod plans;
 pub mod retention;
 pub mod saves;
 pub mod signin;

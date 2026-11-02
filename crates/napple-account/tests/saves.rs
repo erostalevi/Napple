@@ -256,7 +256,7 @@ async fn version_create_conflict_commit_list_download() {
             e["device_name"].as_str(),
             e["read_only"].as_bool()
         ),
-        (Some(LAS), Some(3), Some("iPhone"), Some(false))
+        (Some(LAS), Some(3), Some("iPhone"), None)
     );
     let (_, h) = t
         .req(
@@ -320,7 +320,7 @@ async fn version_create_conflict_commit_list_download() {
 
 #[tokio::test]
 async fn prune_keeps_the_plan_version_count() {
-    let t = T::with(&[("NAPPLE_PLAN_FREE_VERSIONS", "3")], None);
+    let t = T::with(&[("NAPPLE_SAVE_VERSIONS", "3")], None);
     let a = t.sign_in("prune@napple.test", "Mac").await;
     let p = t.first_profile(&a).await;
     for v in 0..6 {
@@ -349,54 +349,8 @@ async fn prune_keeps_the_plan_version_count() {
 }
 
 #[tokio::test]
-async fn default_prune_is_twenty_on_plus() {
-    let t = T::with_stripe();
-    let a = t.sign_in("prune20@napple.test", "Mac").await;
-    let (s, _) = t
-        .webhook(&fixture("subscription_created.json", &a.account_id, T0))
-        .await;
-    assert_eq!(s, StatusCode::OK);
-    let p = t.first_profile(&a).await;
-    for v in 0..22 {
-        assert_eq!(
-            t.push(&a, SMO, &p, v, format!("v{}", v + 1).as_bytes())
-                .await
-                .0,
-            StatusCode::OK
-        );
-    }
-    let (_, h) = t
-        .req(
-            "GET",
-            &format!("/saves/{SMO}/{p}/versions"),
-            Some(&a.access),
-            None,
-        )
-        .await;
-    let vs = h["versions"].as_array().unwrap();
-    assert_eq!(vs.len(), 20);
-    assert_eq!(vs.last().unwrap()["version"], 3);
-}
-
-fn walk(d: &std::path::Path) -> usize {
-    std::fs::read_dir(d)
-        .map(|it| {
-            it.flatten()
-                .map(|e| {
-                    if e.path().is_dir() {
-                        walk(&e.path())
-                    } else {
-                        1
-                    }
-                })
-                .sum()
-        })
-        .unwrap_or(0)
-}
-
-#[tokio::test]
-async fn quota_returns_402_on_free() {
-    let t = T::with(&[("NAPPLE_PLAN_FREE_QUOTA", "100")], None);
+async fn quota_returns_413() {
+    let t = T::with(&[("NAPPLE_SAVE_QUOTA_BYTES", "100")], None);
     let a = t.sign_in("quota@napple.test", "Mac").await;
     let p = t.first_profile(&a).await;
     assert_eq!(t.push(&a, LAS, &p, 0, &[1u8; 60]).await.0, StatusCode::OK);
@@ -410,149 +364,13 @@ async fn quota_returns_402_on_free() {
             ),
         )
         .await;
-    assert_eq!(s, StatusCode::PAYMENT_REQUIRED);
+    assert_eq!(s, StatusCode::PAYLOAD_TOO_LARGE);
     assert_eq!(v["reason"], "quota");
     assert_eq!(v["used"], 60);
     let (_, me) = t.req("GET", "/me", Some(&a.access), None).await;
-    assert_eq!(me["plan"]["quota"], 100);
-    assert_eq!(me["plan"]["used"], 60);
-}
-
-#[tokio::test]
-async fn free_plan_one_title_switch_every_30_days() {
-    let t = T::new();
-    let a = t.sign_in("free@napple.test", "Mac").await;
-    let p = t.first_profile(&a).await;
-    assert_eq!(t.push(&a, LAS, &p, 0, b"las v1").await.0, StatusCode::OK);
-
-    // A second title: 402 plan_limit with the upgrade URL; nothing is created.
-    let (s, v) = t
-        .req(
-            "POST",
-            &format!("/saves/{SMO}/{p}/versions"),
-            Some(&a.access),
-            Some(json!({"base_version": 0, "size": 6, "sha256_ciphertext": sha256_hex(b"smo v1")})),
-        )
-        .await;
-    assert_eq!(s, StatusCode::PAYMENT_REQUIRED, "{v}");
-    assert_eq!(v["reason"], "plan_limit");
-    assert_eq!(
-        v["upgrade_url"],
-        "https://pretend.napple.lat/account/v1/billing"
-    );
-
-    // The user switches the synced title to SMO: LAS becomes read-only, still downloadable.
-    let (s, v) = t
-        .req(
-            "POST",
-            "/saves/titles",
-            Some(&a.access),
-            Some(json!({"title_id": SMO})),
-        )
-        .await;
-    assert_eq!(s, StatusCode::OK, "{v}");
-    let states: Vec<(String, String)> = v["titles"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|x| {
-            (
-                x["title_id"].as_str().unwrap().into(),
-                x["state"].as_str().unwrap().into(),
-            )
-        })
-        .collect();
-    assert!(
-        states.contains(&(LAS.into(), "readonly".into()))
-            && states.contains(&(SMO.into(), "active".into()))
-    );
-    assert_eq!(v["next_switch_at"], T0 + 30 * DAY);
-    assert_eq!(t.push(&a, SMO, &p, 0, b"smo v1").await.0, StatusCode::OK);
-    let (s, g) = t
-        .req(
-            "GET",
-            &format!("/saves/{LAS}/{p}/versions/1"),
-            Some(&a.access),
-            None,
-        )
-        .await;
-    assert_eq!(s, StatusCode::OK, "read-only saves stay downloadable");
-    assert_eq!(
-        t.dev_get(g["download_url"].as_str().unwrap()).await.1,
-        b"las v1"
-    );
-    let (s, v) = t
-        .req(
-            "POST",
-            &format!("/saves/{LAS}/{p}/versions"),
-            Some(&a.access),
-            Some(json!({"base_version": 1, "size": 6, "sha256_ciphertext": sha256_hex(b"las v2")})),
-        )
-        .await;
-    assert_eq!(s, StatusCode::PAYMENT_REQUIRED);
-    assert_eq!(v["reason"], "plan_limit");
-    let (_, l) = t.req("GET", "/saves", Some(&a.access), None).await;
-    let las = l["saves"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|x| x["title_id"] == LAS)
-        .unwrap()
-        .clone();
-    assert_eq!(las["read_only"], true);
-    assert_eq!(las["delete_after"], T0 + 90 * DAY);
-
-    // Switching back within 30 days: refused.
-    let (s, v) = t
-        .req(
-            "POST",
-            "/saves/titles",
-            Some(&a.access),
-            Some(json!({"title_id": LAS})),
-        )
-        .await;
-    assert_eq!(s, StatusCode::PAYMENT_REQUIRED);
-    assert_eq!(v["reason"], "switch_cooldown");
-    // Deleting the active title does not reset the cooldown either.
-    let (s, _) = t
-        .req("DELETE", &format!("/saves/{SMO}"), Some(&a.access), None)
-        .await;
-    assert_eq!(s, StatusCode::NO_CONTENT);
-    let (s, v) = t
-        .req(
-            "POST",
-            &format!("/saves/{MK8D}/{p}/versions"),
-            Some(&a.access),
-            Some(json!({"base_version": 0, "size": 1, "sha256_ciphertext": sha256_hex(b"m")})),
-        )
-        .await;
-    assert_eq!(
-        (s, v["reason"].as_str()),
-        (StatusCode::PAYMENT_REQUIRED, Some("switch_cooldown"))
-    );
-
-    // 31 days later the switch back works and LAS history is intact.
-    t.clock.advance(31 * DAY);
-    let tok = t.sign_in("free@napple.test", "Mac").await.access; // the 30-day refresh token ran out too
-    let (s, v) = t
-        .req(
-            "POST",
-            "/saves/titles",
-            Some(&tok),
-            Some(json!({"title_id": LAS})),
-        )
-        .await;
-    assert_eq!(s, StatusCode::OK, "{v}");
-    let (_, h) = t
-        .req(
-            "GET",
-            &format!("/saves/{LAS}/{p}/versions"),
-            Some(&tok),
-            None,
-        )
-        .await;
-    assert_eq!(h["read_only"], false);
-    assert_eq!(h["versions"].as_array().unwrap().len(), 1);
+    assert_eq!(me["storage"]["quota"], 100);
+    assert_eq!(me["storage"]["used"], 60);
+    assert_eq!(me["plan"], json!({"name": "free", "features": {}}));
 }
 
 #[tokio::test]
@@ -602,7 +420,7 @@ async fn account_deletion_removes_everything() {
             "profiles",
             "save_versions",
             "refresh_tokens",
-            "titles",
+            "grants",
             "blob_deletions",
         ] {
             let n: i64 = db
@@ -640,4 +458,20 @@ async fn expired_pending_uploads_are_collected() {
     let rep = napple_account::retention::run_once(&t.app).await.unwrap();
     assert_eq!(rep.expired_uploads, 1);
     assert_eq!(walk(&t.dir.join("blobs")), 0);
+}
+
+fn walk(d: &std::path::Path) -> usize {
+    std::fs::read_dir(d)
+        .map(|it| {
+            it.flatten()
+                .map(|e| {
+                    if e.path().is_dir() {
+                        walk(&e.path())
+                    } else {
+                        1
+                    }
+                })
+                .sum()
+        })
+        .unwrap_or(0)
 }

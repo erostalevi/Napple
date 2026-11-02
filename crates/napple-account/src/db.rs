@@ -14,19 +14,7 @@ CREATE TABLE IF NOT EXISTS accounts (
     -- end-to-end save key: the server only knows a client-chosen fingerprint and opaque wrapped blobs
     key_id TEXT,
     recovery_blob TEXT,
-    recovery_updated_at INTEGER,
-    -- billing (Stripe is the source of truth; these mirror the latest webhook)
-    plan TEXT NOT NULL DEFAULT 'free',
-    stripe_customer_id TEXT UNIQUE,
-    sub_id TEXT,
-    sub_status TEXT,
-    sub_interval TEXT,
-    renews_at INTEGER,
-    cancel_at_period_end INTEGER NOT NULL DEFAULT 0,
-    sub_event_at INTEGER,
-    -- Free plan title choice
-    titles_ever_enabled INTEGER NOT NULL DEFAULT 0,
-    last_title_switch_at INTEGER
+    recovery_updated_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS devices (
@@ -96,14 +84,13 @@ CREATE TABLE IF NOT EXISTS profiles (
 );
 CREATE INDEX IF NOT EXISTS profiles_account ON profiles(account_id);
 
-CREATE TABLE IF NOT EXISTS titles (
+-- Admin-set permissions (reserved names, admin): 'owner_napple' | 'reserved_prefix' | 'admin'.
+CREATE TABLE IF NOT EXISTS grants (
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    title_id TEXT NOT NULL,
-    state TEXT NOT NULL,            -- 'active' | 'readonly'
-    enabled_at INTEGER NOT NULL,
-    readonly_since INTEGER,
-    warned_at INTEGER,
-    PRIMARY KEY (account_id, title_id)
+    name TEXT NOT NULL,
+    granted_by TEXT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (account_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS save_versions (
@@ -131,11 +118,6 @@ CREATE TABLE IF NOT EXISTS blob_deletions (
     queued_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS stripe_events (
-    id TEXT PRIMARY KEY,
-    type TEXT NOT NULL,
-    received_at INTEGER NOT NULL
-);
 "#;
 
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {

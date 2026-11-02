@@ -283,13 +283,21 @@ pub async fn email_finish(
         Some(id) => (id, false),
         None => {
             let id = new_id();
-            let local = email.split('@').next().unwrap_or("Player");
-            let display: String = local.chars().filter(|c| !c.is_control()).take(32).collect();
+            // Default name = the email's local part, unless it breaks the reserved-name rules (then "Player").
+            let local: String = email
+                .split('@')
+                .next()
+                .unwrap_or("")
+                .chars()
+                .take(32)
+                .collect();
+            let display =
+                crate::names::check_name(&local, 32, &[]).unwrap_or_else(|_| "Player".into());
             db.execute("INSERT INTO accounts (id, email, display_name, created_at, last_seen) VALUES (?1, ?2, ?3, ?4, ?4)", params![id, email, display, now])?;
             // Every account starts with one player profile so the online identity exists from the first sign-in.
             db.execute(
                 "INSERT INTO profiles (id, account_id, nickname, icon_id, created_at, updated_at) VALUES (?1, ?2, ?3, 0, ?4, ?4)",
-                params![new_id(), id, display.chars().take(32).collect::<String>(), now],
+                params![new_id(), id, display, now],
             )?;
             crate::log::info(&format!("account created {id}"));
             (id, true)
