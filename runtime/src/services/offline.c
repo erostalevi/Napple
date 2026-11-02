@@ -1614,6 +1614,26 @@ static void nsd_is_change_env_disabled(IpcObject *s, IpcCall *c) {
     uint8_t v = nsd_change_env_disabled;
     IPC_OUT(c, v);
 }
+/* 100 GetApplicationServerEnvironmentType -> u8 ServerEnvironmentType / 101 Set(u8) / 102 Delete (switchbrew): the type Set configured, else the one the
+ * environment identifier names: "lp1" is lp, 1 (nn::oe::ServerEnvironmentType: 0 dd, 1 lp, 2 sd, 3 sp, 4 dp). Delete forgets the configured type. */
+#define NSD_SERVER_ENV_LP 1u
+static uint8_t nsd_app_env_type, nsd_app_env_set;
+static void nsd_get_app_env(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = nsd_app_env_set ? nsd_app_env_type : NSD_SERVER_ENV_LP;
+    IPC_OUT(c, v);
+}
+static void nsd_set_app_env(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 1) return;
+    nsd_app_env_type = IPC_IN(c, uint8_t, 0);
+    nsd_app_env_set = 1;
+}
+static void nsd_delete_app_env(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    nsd_app_env_set = 0;
+}
 static const IpcCmd nsd_cmds[] = {
     {10, "GetSettingName", nsd_env_name, IPC_IMPL},
     {11, "GetEnvironmentIdentifier", nsd_env_name, IPC_IMPL},
@@ -1629,13 +1649,13 @@ static const IpcCmd nsd_cmds[] = {
     {42, "GetNasApiFqdn", nsd_resolve, IPC_IMPL},
     {43, "GetNasApiFqdnEx", nsd_resolve, IPC_IMPL},
     {50, "GetCurrentSetting", nsd_zero_struct, IPC_IMPL},
-    {5, "GetSettingUrl", sysd_err_generic, IPC_STUB},
+    {5, "GetSettingUrl", sysd_err_generic, IPC_STUB}, /* success with the 0x100-byte Url of the settings: its content is not public */
     {15, "SetChangeEnvironmentIdentifierDisabled", nsd_set_change_env_disabled, IPC_IMPL},
     {63, "IsChangeEnvironmentIdentifierDisabled", nsd_is_change_env_disabled, IPC_IMPL},
-    {64, "SetWithoutDomainExchangeFqdns", sysd_ok, IPC_STUB},
-    {100, "GetApplicationServerEnvironmentType", sysd_z4, IPC_STUB},
-    {101, "SetApplicationServerEnvironmentType", sysd_ok, IPC_STUB},
-    {102, "DeleteApplicationServerEnvironmentType", sysd_ok, IPC_STUB},
+    {64, "SetWithoutDomainExchangeFqdns", sysd_ok, IPC_STUB}, /* needs nsd!test_mode = 1; the retail refusal result is not public */
+    {100, "GetApplicationServerEnvironmentType", nsd_get_app_env, IPC_IMPL},
+    {101, "SetApplicationServerEnvironmentType", nsd_set_app_env, IPC_IMPL},
+    {102, "DeleteApplicationServerEnvironmentType", nsd_delete_app_env, IPC_IMPL},
 };
 static IpcObject *nsd_open(void) { return IPC_OBJECT("nsd:u", nsd_cmds, NULL, NULL); }
 
@@ -2217,7 +2237,7 @@ static const IpcCmd prepo_cmds[] = {
     {30300, "GetStorageUsage", prepo_storage_usage, IPC_IMPL},
     {40100, "IsUserAgreementCheckEnabled", prepo_get_agreement, IPC_IMPL},
     {40101, "SetUserAgreementCheckEnabled", prepo_set_agreement, IPC_IMPL},
-    {50100, "ReadAllApplicationReportFiles", sysd_err_generic, IPC_STUB},
+    {50100, "ReadAllApplicationReportFiles", sysd_err_generic, IPC_STUB}, /* no public layout; reports are not kept to read back */
     {90100, "ReadAllReportFiles", sysd_err_generic, IPC_STUB}, /* reports are not kept, so there is nothing to read back */
 };
 static IpcObject *prepo_open(void) { return IPC_OBJECT("prepo:u", prepo_cmds, NULL, NULL); }

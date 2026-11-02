@@ -606,9 +606,33 @@ static void test_bsd(void) {
     bsdg_reset(bsd_g());
 }
 
+/* ---- nsd application server environment type, prepo rows kept as defaults */
+static void test_nsd_prepo(void) {
+    IpcCall c;
+    IpcObject *n = nsd_open();
+    svc_call(n, 100, NULL, 0, &c);
+    CHECK(c.result == 0 && c.out_size == 1 && c.out[0] == 1, "nsd 100 GetApplicationServerEnvironmentType: lp (1), from the environment identifier lp1");
+    uint8_t sd = 2;
+    svc_call(n, 101, &sd, 1, &c);
+    CHECK(c.result == 0 && c.out_size == 0, "nsd 101 SetApplicationServerEnvironmentType(sd): no output");
+    svc_call(n, 100, NULL, 0, &c);
+    CHECK(c.out[0] == 2, "...100 reads back the configured type");
+    IpcObject *n2 = nsd_open();
+    svc_call(n2, 100, NULL, 0, &c);
+    CHECK(c.out[0] == 2, "...the setting belongs to the service, not the session");
+    svc_call(n, 102, NULL, 0, &c);
+    svc_call(n, 100, NULL, 0, &c);
+    CHECK(c.result == 0 && c.out[0] == 1, "nsd 102 DeleteApplicationServerEnvironmentType: back to the identifier's type");
+    for (unsigned id = 100; id <= 102; id++) CHECK(svc_find(n, id)->status == IPC_IMPL, "nsd %u is real", id);
+    CHECK(svc_find(n, 5)->status == IPC_STUB && svc_find(n, 64)->status == IPC_STUB, "nsd 5 and 64 stay documented defaults");
+    IpcObject *pr = prepo_open();
+    CHECK(svc_find(pr, 50100)->status == IPC_STUB && svc_find(pr, 90100)->status == IPC_STUB, "prepo 50100 / 90100 stay documented defaults");
+}
+
 int main(void) {
     IpcCall c;
     test_bsd();
+    test_nsd_prepo();
     IpcObject *nf = nifm_open();
     svc_call(nf, 5, NULL, 0, &c);
     IpcObject *gen = c.out_objects[0];
