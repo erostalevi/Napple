@@ -24,7 +24,7 @@ void gfx_api_link_memory(void) {}
 #define CPB(b) ((const pool_builder_t *)(b))
 
 NVN(nvnMemoryPoolBuilderSetDevice, void, NVNmemoryPoolBuilder *b, NVNdevice *d) { PB(b)->dev = d; }
-NVN(nvnMemoryPoolBuilderSetDefaults, void, NVNmemoryPoolBuilder *b) {
+NVN(nvnMemoryPoolBuilderSetDefaults, void, NVNmemoryPoolBuilder *b) { OBJTRACE(OT_POOL_B, b, 1);
     NVNdevice *d = PB(b)->dev;
     memset(b, 0, sizeof(pool_builder_t));
     PB(b)->dev = d;
@@ -119,7 +119,7 @@ void gfx_pool_describe(uint64_t addr, char *out, size_t n) {
     pthread_mutex_unlock(&g_cp_mu);
 }
 static uint64_t g_last_phys_mis;      /* start address of the most recent physical pool (its misalignment is copied by virtual pools) */
-NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) {
+NVN(nvnMemoryPoolInitialize, NVNboolean, NVNmemoryPool *p, const NVNmemoryPoolBuilder *b) { OBJTRACE(OT_POOL, p, 1);
     const pool_builder_t *s = CPB(b);
     pool_t *o = (pool_t *)p;
     memset(o, 0, sizeof *o);
@@ -231,7 +231,7 @@ NVN(nvnMemoryPoolMapVirtual, NVNboolean, NVNmemoryPool *p, int n, const NVNmappi
     return 1;
 }
 
-NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) {
+NVN(nvnMemoryPoolFinalize, void, NVNmemoryPool *p) { OBJTRACE(OT_POOL, p, 0);
     pool_t *o = (pool_t *)p;
     if (o->magic != POOL_MAGIC) return;
     if (o->flags & 0x40) cp_remove(o);
@@ -269,14 +269,14 @@ NVN(nvnMemoryPoolGetFlags, NVNmemoryPoolFlags, const NVNmemoryPool *p) { if (get
  * --------------------------------------------------------------------------------------------------------------- */
 #define BB(b) ((buf_builder_t *)(b))
 NVN(nvnBufferBuilderSetDevice, void, NVNbufferBuilder *b, NVNdevice *d) { BB(b)->dev = d; }
-NVN(nvnBufferBuilderSetDefaults, void, NVNbufferBuilder *b) { NVNdevice *d = BB(b)->dev; memset(b, 0, sizeof(buf_builder_t)); BB(b)->dev = d; }
+NVN(nvnBufferBuilderSetDefaults, void, NVNbufferBuilder *b) { OBJTRACE(OT_BUFFER_B, b, 1); NVNdevice *d = BB(b)->dev; memset(b, 0, sizeof(buf_builder_t)); BB(b)->dev = d; }
 NVN(nvnBufferBuilderSetStorage, void, NVNbufferBuilder *b, NVNmemoryPool *p, ptrdiff_t off, size_t size) { BB(b)->pool = (pool_t *)p; BB(b)->off = off; BB(b)->size = size; }
 NVN(nvnBufferBuilderGetDevice, const NVNdevice *, const NVNbufferBuilder *b) { return BB(b)->dev; }
 NVN(nvnBufferBuilderGetMemoryPool, NVNmemoryPool *, const NVNbufferBuilder *b) { return (NVNmemoryPool *)BB(b)->pool; }
 NVN(nvnBufferBuilderGetMemoryOffset, ptrdiff_t, const NVNbufferBuilder *b) { return (ptrdiff_t)BB(b)->off; }
 NVN(nvnBufferBuilderGetSize, size_t, const NVNbufferBuilder *b) { return (size_t)BB(b)->size; }
 
-NVN(nvnBufferInitialize, NVNboolean, NVNbuffer *b, const NVNbufferBuilder *builder) {
+NVN(nvnBufferInitialize, NVNboolean, NVNbuffer *b, const NVNbufferBuilder *builder) { OBJTRACE(OT_BUFFER, b, 1);
     const buf_builder_t *v = (const buf_builder_t *)builder;
     if (!v->pool || v->pool->magic != POOL_MAGIC || v->off < 0 || (uint64_t)v->off > v->pool->size || v->size > v->pool->size - (uint64_t)v->off) {
         LOGE("BufferInitialize: invalid storage (pool %p off %lld size %llu)", (void *)v->pool, (long long)v->off, (unsigned long long)v->size);
@@ -286,7 +286,7 @@ NVN(nvnBufferInitialize, NVNboolean, NVNbuffer *b, const NVNbufferBuilder *build
     return 1;
 }
 NVN(nvnBufferSetDebugLabel, void, NVNbuffer *b, const char *l) { (void)b; (void)l; }
-NVN(nvnBufferFinalize, void, NVNbuffer *b) { memset(b, 0, sizeof(buf_t)); }
+NVN(nvnBufferFinalize, void, NVNbuffer *b) { OBJTRACE(OT_BUFFER, b, 0); memset(b, 0, sizeof(buf_t)); }
 NVN(nvnBufferMap, void *, const NVNbuffer *b) {
     const buf_t *v = (const buf_t *)b;
     if (v->magic != BUF_MAGIC || (v->pool->flags & NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS)) return NULL;

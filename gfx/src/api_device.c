@@ -14,11 +14,11 @@ void gfx_api_link_device(void) {}
  * --------------------------------------------------------------------------------------------------------------- */
 #define DEV_MAGIC MAGIC('D', 'E', 'V', '0')
 
-NVN(nvnDeviceBuilderSetDefaults, void, NVNdeviceBuilder *b) { memset(b, 0, sizeof(dev_builder_t)); }
+NVN(nvnDeviceBuilderSetDefaults, void, NVNdeviceBuilder *b) { OBJTRACE(OT_DEVICE_B, b, 1); memset(b, 0, sizeof(dev_builder_t)); }
 NVN(nvnDeviceBuilderSetFlags, void, NVNdeviceBuilder *b, int f) { ((dev_builder_t *)b)->flags = (uint32_t)f; }
 NVN(nvnDeviceBuilderGetFlags, int, const NVNdeviceBuilder *b) { return (int)((const dev_builder_t *)b)->flags; }
 
-NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) {
+NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) { OBJTRACE(OT_DEVICE, d, 1);
     dev_t_ *o = (dev_t_ *)d;
     memset(o, 0, sizeof *o);
     o->magic = DEV_MAGIC;
@@ -29,7 +29,7 @@ NVN(nvnDeviceInitialize, NVNboolean, NVNdevice *d, const NVNdeviceBuilder *b) {
     return 1;
 }
 void napple_gfx_set_nvn_version(uint32_t major, uint32_t minor) { g_gfx.cfg.nvn_major = major; g_gfx.cfg.nvn_minor = minor; }
-NVN(nvnDeviceFinalize, void, NVNdevice *d) { ((dev_t_ *)d)->magic = 0; }
+NVN(nvnDeviceFinalize, void, NVNdevice *d) { OBJTRACE(OT_DEVICE, d, 0); ((dev_t_ *)d)->magic = 0; }
 NVN(nvnDeviceSetDebugLabel, void, NVNdevice *d, const char *s) { (void)d; (void)s; }
 NVN(nvnDeviceGetProcAddress, PFNNVNGENERICFUNCPTRPROC, const NVNdevice *d, const char *name) {
     (void)d;
@@ -135,7 +135,7 @@ NVN(nvnDeviceWaitForError, uint32_t, NVNdevice *d, uint64_t timeout_ns) {
 #define QB(b) ((queue_builder_t *)(b))
 #define CQB(b) ((const queue_builder_t *)(b))
 NVN(nvnQueueBuilderSetDevice, void, NVNqueueBuilder *b, NVNdevice *d) { QB(b)->dev = d; }
-NVN(nvnQueueBuilderSetDefaults, void, NVNqueueBuilder *b) {
+NVN(nvnQueueBuilderSetDefaults, void, NVNqueueBuilder *b) { OBJTRACE(OT_QUEUE_B, b, 1);
     NVNdevice *d = QB(b)->dev;
     memset(b, 0, sizeof(queue_builder_t));
     QB(b)->dev = d;
@@ -161,14 +161,14 @@ NVN(nvnQueueBuilderGetCommandFlushThreshold, size_t, const NVNqueueBuilder *b) {
 NVN(nvnQueueBuilderGetMemorySize, size_t, const NVNqueueBuilder *b) { return (size_t)CQB(b)->mem_size; }
 NVN(nvnQueueBuilderGetMemory, void *, const NVNqueueBuilder *b) { return CQB(b)->mem; }
 
-NVN(nvnQueueInitialize, NVNboolean, NVNqueue *q, const NVNqueueBuilder *b) {
+NVN(nvnQueueInitialize, NVNboolean, NVNqueue *q, const NVNqueueBuilder *b) { OBJTRACE(OT_QUEUE, q, 1);
     queue_t *o = (queue_t *)q;
     memset(o, 0, sizeof *o);
     o->magic = QUEUE_MAGIC;
     o->dev = CQB(b)->dev;
     return 1;
 }
-NVN(nvnQueueFinalize, void, NVNqueue *q) {
+NVN(nvnQueueFinalize, void, NVNqueue *q) { OBJTRACE(OT_QUEUE, q, 0);
     queue_t *o = (queue_t *)q;
     if (o->magic == QUEUE_MAGIC) { GFX_BLOCKING(); gfx_mtl_finish(); }
     o->magic = 0;
@@ -214,14 +214,14 @@ NVN(nvnQueueFinish, void, NVNqueue *q) { (void)q; GFX_BLOCKING(); gfx_mtl_finish
  * Sync
  * --------------------------------------------------------------------------------------------------------------- */
 #define SYNC_MAGIC MAGIC('S', 'Y', 'N', 'C')
-NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) {
+NVN(nvnSyncInitialize, NVNboolean, NVNsync *s, NVNdevice *d) { OBJTRACE(OT_SYNC, s, 1);
     (void)d;
     sync_t *o = (sync_t *)s;
     memset(o, 0, sizeof *o);
     o->magic = SYNC_MAGIC;
     return 1;
 }
-NVN(nvnSyncFinalize, void, NVNsync *s) { ((sync_t *)s)->magic = 0; }
+NVN(nvnSyncFinalize, void, NVNsync *s) { OBJTRACE(OT_SYNC, s, 0); ((sync_t *)s)->magic = 0; }
 NVN(nvnSyncSetDebugLabel, void, NVNsync *s, const char *l) { (void)s; (void)l; }
 NVN(nvnQueueFenceSync, void, NVNqueue *q, NVNsync *s, NVNsyncCondition c, int flags) {
     (void)q; (void)c;
@@ -260,12 +260,12 @@ NVN(nvnQueueWaitSync, NVNboolean, NVNqueue *q, const NVNsync *s) {
  * Events: a 32-bit value in pool memory that the GPU writes after previous work completed.
  * --------------------------------------------------------------------------------------------------------------- */
 #define EVENT_MAGIC MAGIC('E', 'V', 'N', 'T')
-NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { memset(b, 0, sizeof(ev_builder_t)); }
+NVN(nvnEventBuilderSetDefaults, void, NVNeventBuilder *b) { OBJTRACE(OT_EVENT_B, b, 1); memset(b, 0, sizeof(ev_builder_t)); }
 NVN(nvnEventBuilderSetStorage, void, NVNeventBuilder *b, const NVNmemoryPool *p, int64_t off) { ((ev_builder_t *)b)->pool = p; ((ev_builder_t *)b)->off = off; }
 NVN(nvnEventBuilderGetStorage, void, const NVNeventBuilder *b, const NVNmemoryPool **p, int64_t *off) { *p = ((const ev_builder_t *)b)->pool; *off = ((const ev_builder_t *)b)->off; }
 NVN(nvnEventBuilderGetMemoryPool, const NVNmemoryPool *, const NVNeventBuilder *b) { return ((const ev_builder_t *)b)->pool; }
 NVN(nvnEventBuilderGetMemoryOffset, int64_t, const NVNeventBuilder *b) { return ((const ev_builder_t *)b)->off; }
-NVN(nvnEventInitialize, NVNboolean, NVNevent *e, const NVNeventBuilder *b) {
+NVN(nvnEventInitialize, NVNboolean, NVNevent *e, const NVNeventBuilder *b) { OBJTRACE(OT_EVENT, e, 1);
     const ev_builder_t *eb = (const ev_builder_t *)b;
     const pool_t *p = (const pool_t *)eb->pool;
     if (!p || p->magic != MAGIC('P', 'O', 'O', 'L') || eb->off < 0 || (uint64_t)eb->off + 4 > p->size) return 0;
@@ -276,7 +276,7 @@ NVN(nvnEventInitialize, NVNboolean, NVNevent *e, const NVNeventBuilder *b) {
     o->val = (volatile uint32_t *)(p->mem + eb->off);
     return 1;
 }
-NVN(nvnEventFinalize, void, NVNevent *e) { ((ev_t *)e)->magic = 0; }
+NVN(nvnEventFinalize, void, NVNevent *e) { OBJTRACE(OT_EVENT, e, 0); ((ev_t *)e)->magic = 0; }
 NVN(nvnEventGetValue, uint32_t, const NVNevent *e) { return *((const ev_t *)e)->val; }
 NVN(nvnEventSignal, void, NVNevent *e, NVNeventSignalMode m, uint32_t v) {
     volatile uint32_t *p = ((ev_t *)e)->val;
