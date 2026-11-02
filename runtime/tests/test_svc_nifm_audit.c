@@ -183,7 +183,9 @@ int main(void) {
     CHECK(!strcmp(svc_find(bs, 28)->name, "GetResourceStatistics") && svc_find(bs, 28)->status == IPC_IMPL, "bsd 28 GetResourceStatistics");
     CHECK(!strcmp(svc_find(bs, 29)->name, "RecvMMsg") && !strcmp(svc_find(bs, 30)->name, "SendMMsg") && !strcmp(svc_find(bs, 31)->name, "EventFd"), "bsd 29 RecvMMsg, 30 SendMMsg, 31 EventFd");
     svc_call(bs, 31, NULL, 0, &c);
-    CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, int32_t, 0) == -1 && SVC_OUT(&c, int32_t, 4) == 95, "bsd 31 EventFd: {-1, EOPNOTSUPP (95, the guest's Linux numbering)}");
+    /* ipc-depth-95 r10: EventFd became a real event descriptor (test_svc_net_r10.c covers it); with no arguments it is EventFd(0, 0) */
+    CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, int32_t, 0) >= 0 && SVC_OUT(&c, int32_t, 4) == 0, "bsd 31 EventFd: {a descriptor, 0}");
+    bsdg_reset(bsd_g());
 
     /* ---- prepo renumbering */
     IpcObject *pr = prepo_open();
@@ -199,7 +201,7 @@ int main(void) {
     }
     svc_call(pr, 30300, NULL, 0, &c);
     CHECK(SVC_OUT(&c, uint64_t, 0) == 8 * sizeof rep, "all eight report ids are counted in the storage");
-    CHECK(svc_find(pr, 90200) == NULL && svc_find(pr, 90100)->status == IPC_STUB && !strcmp(svc_find(pr, 90100)->name, "ReadAllReportFiles"), "90100 is ReadAllReportFiles (no stored reports); the invented 90200 is gone");
+    CHECK(svc_find(pr, 90200) == NULL && svc_find(pr, 90100)->status == IPC_IMPL && !strcmp(svc_find(pr, 90100)->name, "ReadAllReportFiles"), "90100 is ReadAllReportFiles (kept reports read back); the invented 90200 is gone");
     CHECK(!strcmp(svc_find(pr, 20100)->name, "SaveSystemReportOld") && !strcmp(svc_find(pr, 20102)->name, "SaveSystemReport"), "20100 is the old SaveSystemReport, 20102 the current one");
 
     printf("{\"test\":\"svc_nifm_audit\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);

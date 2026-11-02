@@ -203,3 +203,37 @@ uint32_t ldn_connect_done(LdnState *s, uint32_t r) {
     return 0;
 }
 int ldn_state_has_network(LdnState s) { return s == LDN_AP_CREATED || s == LDN_STATION_CONNECTED; }
+
+/* ---- configuration rows (ldn_core.h) ---- */
+unsigned ldn_state_mask(const int *states) {
+    unsigned m = 0;
+    for (; *states >= 0; states++) m |= 1u << (unsigned)*states;
+    return m;
+}
+uint32_t ldn_check_protocol(LdnState state, uint32_t protocol) {
+    if (protocol == 0 || protocol >= 32 || !(LDN_PROTOCOL_NX_PERMISSION >> protocol & 1u))
+        return R_INVALID_ARG; /* the console returns a separate (undocumented) result for an unpermitted value */
+    if (state != LDN_INITIALIZED) return R_INVALID_STATE;
+    return 0;
+}
+uint32_t ldn_check_action_frame_settings(const uint8_t *in, size_t n) {
+    if (!in || n < LDN_ACTION_FRAME_SETTINGS_SIZE) return R_INVALID_ARG;
+    uint16_t mode, size;
+    memcpy(&mode, in + 0x3c, 2);
+    memcpy(&size, in + 0x3e, 2);
+    return mode >= 1 && mode <= 2 && size >= 0x10 && size <= 0x40 ? 0 : R_INVALID_ARG;
+}
+int ldn_decode_channel(const uint8_t *in, size_t n, uint16_t *band_mhz, uint16_t *channel) {
+    uint16_t a = 0, b = 0;
+    if (n >= 2) memcpy(&a, in, 2);
+    if (n >= 4) memcpy(&b, in + 2, 2);
+    if (a == 24 || a == 50) { /* before 20.0.0: s16 Band, s16 ChannelNumber */
+        *band_mhz = a == 24 ? 2400 : 5000;
+        *channel = b;
+    } else { /* 20.0.0+: u16 band index << 10 | ChannelNumber */
+        unsigned idx = a >> 10;
+        *band_mhz = idx == 2 ? 2400 : idx == 5 ? 5000 : 0;
+        *channel = a & 0x3ffu;
+    }
+    return *band_mhz && *channel ? 0 : -1;
+}

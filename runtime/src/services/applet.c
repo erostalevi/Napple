@@ -17,6 +17,15 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <errno.h>
+#include <limits.h>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include <crt_externs.h>
+#include <mach-o/dyld.h>
+#endif
+#endif
 
 enum { MSG_EXIT_REQUESTED = 4, MSG_FOCUS_CHANGED = 15, MSG_RESUME = 16, MSG_OPERATION_MODE_CHANGED = 30, MSG_PERFORMANCE_MODE_CHANGED = 31 };
 #define R_NO_MESSAGES APPLET_R_NO_MESSAGES /* applet module 128 desc 3 (applet_core.h) */
@@ -75,7 +84,7 @@ static uint32_t new_message_event(void) {
     return readable;
 }
 /* Events the guest holds that the host signals later: one list per kind (the writable ends), so a state change can wake every holder. */
-enum { EV_SLEEP_LOCK, EV_RESOLUTION, EV_SUSPENDED_TICK, EV_GPU_ERROR, EV_FRIEND_INVITE, EV_AF_210, EV_QUIET, EV_KINDS }; /* EV_QUIET: events nothing here signals */
+enum { EV_SLEEP_LOCK, EV_RESOLUTION, EV_SUSPENDED_TICK, EV_GPU_ERROR, EV_FRIEND_INVITE, EV_AF_210, EV_HDCP, EV_QUIET, EV_KINDS }; /* EV_QUIET: events nothing here signals */
 #define EV_MAX 8
 static uint32_t tracked_ev[EV_KINDS][EV_MAX];
 static unsigned ntracked_ev[EV_KINDS];
@@ -100,7 +109,11 @@ static void clear_tracked(unsigned kind) {
 }
 /* Raise the system events the SDK polls but that nothing in an offline run triggers by itself (the GPU error event, a friend invitation); hooks for the
  * frontend/tests, and the way the rows stay honest: the event is real and signals when its cause happens. */
-void applet_signal_gpu_error(void) { signal_tracked(EV_GPU_ERROR); }
+static void gpu_error_abort_schedule(void); /* IApplicationFunctions::SetDelayTimeToAbortOnGpuError */
+void applet_signal_gpu_error(void) {
+    signal_tracked(EV_GPU_ERROR);
+    gpu_error_abort_schedule();
+}
 void applet_signal_friend_invitation(void) { signal_tracked(EV_FRIEND_INVITE); }
 /* The display resolution changed (docked/handheld switch): wakes GetDefaultDisplayResolutionChangeEvent. */
 void applet_display_resolution_changed(void) { signal_tracked(EV_RESOLUTION); }
@@ -205,11 +218,64 @@ static void csg_end_vr_mode(IpcObject *s, IpcCall *c) {
     (void)c;
     AS()->vr_mode = 0;
 }
-/* HdcpAuthenticationState: 0 unauthenticated, 1 processing, 2 authenticated. The host display path has no HDCP; protected playback is allowed. */
+/* GetHdcpAuthenticationState (62) -> s32 HdcpAuthenticationState [values unverified]: 0 unauthenticated, 1 processing, 2 authenticated. HDCP runs only once
+ * the application activated it (IApplicationFunctions::SetHdcpAuthenticationActivated, 170); the host's display path has no HDCP link to negotiate, so an
+ * activation is authenticated at once and a deactivation drops back to unauthenticated. Each change signals GetHdcpAuthenticationStateChangeEvent (63). */
 static void csg_hdcp_state(IpcObject *s, IpcCall *c) {
     (void)s;
-    int32_t v = 2;
+    int32_t v = AS()->hdcp_activated ? 2 : 0;
     IPC_OUT(c, v);
+}
+static void csg_hdcp_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_copy_handle(c, tracked_event(EV_HDCP, 0));
+}
+/* PerformSystemButtonPressingIfInFocus (80, u32 SystemButtonType) [6.0.0+]: the application presses a system button itself. switchbrew: it does nothing (and
+ * succeeds) unless the caller is in focus; types 3-5 (power button, shutdown) are only for PerformSystemButtonPressing, so they are refused here [result
+ * unverified: am InvalidParameters]. What a press does is what the button does on this host:
+ *   1 Home short / 2 Home long: an application that blocks the button (BeginBlockingHomeButton*, or SetHandlingHomeButtonShortPressedEnabled for the short
+ *     press) receives DetectShortPressingHomeButton (20) / DetectLongPressingHomeButton (21) instead [unverified]; otherwise the press would open the
+ *     Home menu / quick settings, which this host does not have, so nothing changes;
+ *   6 Capture short: DetectShortPressingCaptureButton (90) when the application asked for it (SetRequiresCaptureButtonShortPressedMessage), else a
+ *     screenshot into the album (the same path as SaveCurrentScreenshot; nothing is saved when screenshots are disabled);
+ *   7 Capture long: a game play recording, which is not supported here (IsGamePlayRecordingSupported answers false): nothing. */
+enum { SYSBTN_HOME_SHORT = 1, SYSBTN_HOME_LONG = 2, SYSBTN_SHUTDOWN = 5, SYSBTN_CAPTURE_SHORT = 6, SYSBTN_CAPTURE_LONG = 7 };
+enum { MSG_DETECT_SHORT_HOME = 20, MSG_DETECT_LONG_HOME = 21, MSG_DETECT_SHORT_CAPTURE = 90 };
+static uint32_t am_save_current_screenshot(uint8_t entry[CAPS_ENTRY_SIZE], uint32_t option);
+static void csg_perform_system_button(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    uint32_t b = IPC_IN(c, uint32_t, 0);
+    if (b < SYSBTN_HOME_SHORT || b > SYSBTN_CAPTURE_LONG || (b > SYSBTN_HOME_LONG && b <= SYSBTN_SHUTDOWN)) {
+        c->result = HZ_R_AM_INVALID_PARAMETERS;
+        return;
+    }
+    pthread_mutex_lock(&lock);
+    int in_focus = focus_state == 1;
+    pthread_mutex_unlock(&lock);
+    if (!in_focus) return;
+    AppletState *a = AS();
+    uint8_t e[CAPS_ENTRY_SIZE];
+    switch (b) {
+    case SYSBTN_HOME_SHORT:
+        if (a->home_button_block || a->home_button_short_long_block || a->handling_home_short_press) applet_push_message(MSG_DETECT_SHORT_HOME);
+        else LOG("applet", "PerformSystemButtonPressingIfInFocus: Home pressed (no Home menu on this host)");
+        break;
+    case SYSBTN_HOME_LONG:
+        if (a->home_button_short_long_block) applet_push_message(MSG_DETECT_LONG_HOME);
+        else LOG("applet", "PerformSystemButtonPressingIfInFocus: Home held (no quick settings on this host)");
+        break;
+    case SYSBTN_CAPTURE_SHORT:
+        if (a->capture_short_press_message) applet_push_message(MSG_DETECT_SHORT_CAPTURE);
+        else LOG("applet", "PerformSystemButtonPressingIfInFocus: capture -> %#x", am_save_current_screenshot(e, 0));
+        break;
+    default: LOG("applet", "PerformSystemButtonPressingIfInFocus: capture held (no game play recording)"); break;
+    }
+}
+/* SetHandlingHomeButtonShortPressedEnabled (100, bool): the application handles the Home short press itself (it gets message 20, see above). */
+static void csg_set_handling_home_short(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) AS()->handling_home_short_press = IPC_IN(c, uint8_t, 0) != 0;
 }
 /* 1003-1005 (Labo VR goggle viewport, panel size and resolution for specific titles): the handheld panel, 1280 x 720, 137 x 77 mm. */
 static void csg_vr_goggle_viewport(IpcObject *s, IpcCall *c) {
@@ -311,6 +377,13 @@ static void csg_set_vr_mode(IpcObject *s, IpcCall *c) {
     (void)s;
     if (IN_OK(c, 0, uint8_t)) AS()->vr_mode = IPC_IN(c, uint8_t, 0) != 0;
 }
+/* 52 SetLcdBacklighOffEnabled(bool): switches the LCD backlight off (true) or on again (false) through lbl, whose GetBacklightSwitchStatus then reads it
+ * (the Mac's own display is never darkened: lbl's state is self-consistent only, see lbl_core.h). */
+void lbl_app_backlight_off(int off);
+static void csg_set_lcd_backlight_off(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) lbl_app_backlight_off(IPC_IN(c, uint8_t, 0) != 0);
+}
 static void csg_set_cpu_boost(IpcObject *s, IpcCall *c) {
     (void)s;
     if (IN_OK(c, 0, uint32_t)) {
@@ -361,19 +434,19 @@ static const IpcCmd csg_cmds[] = {
     {13, "GetAcquiredSleepLockEvent", csg_get_sleep_lock_event, IPC_IMPL},
     {50, "IsVrModeEnabled", csg_is_vr_mode, IPC_IMPL},
     {51, "SetVrModeEnabled", csg_set_vr_mode, IPC_IMPL},
-    {52, "SetLcdBacklighOffEnabled", csg_noop, IPC_STUB},
+    {52, "SetLcdBacklighOffEnabled", csg_set_lcd_backlight_off, IPC_IMPL},
     {53, "BeginVrModeEx", csg_begin_vr_mode, IPC_IMPL},
     {54, "EndVrModeEx", csg_end_vr_mode, IPC_IMPL},
     {55, "IsInControllerFirmwareUpdateSection", am_out_false, IPC_IMPL},
-    {62, "GetHdcpAuthenticationState", csg_hdcp_state, IPC_STUB},
-    {63, "GetHdcpAuthenticationStateChangeEvent", am_quiet_event, IPC_IMPL},
-    {80, "PerformSystemButtonPressingIfInFocus", csg_noop, IPC_STUB},
-    {100, "SetHandlingHomeButtonShortPressedEnabled", csg_noop, IPC_STUB},
-    {130, "EnableStartupLogoDisappearedMessage", csg_noop, IPC_STUB},
+    {62, "GetHdcpAuthenticationState", csg_hdcp_state, IPC_IMPL},
+    {63, "GetHdcpAuthenticationStateChangeEvent", csg_hdcp_event, IPC_IMPL},
+    {80, "PerformSystemButtonPressingIfInFocus", csg_perform_system_button, IPC_IMPL},
+    {100, "SetHandlingHomeButtonShortPressedEnabled", csg_set_handling_home_short, IPC_IMPL},
+    {130, "EnableStartupLogoDisappearedMessage", csg_noop, IPC_STUB}, /* kept: no public layout, nor the id of the message it enables */
     {1000, "BeginVrMode3d", csg_begin_vr_mode, IPC_IMPL},
     {1001, "EndVrMode3d", csg_end_vr_mode, IPC_IMPL},
     {1002, "IsVrModeEnabled3d", csg_is_vr_mode, IPC_IMPL},
-    {1003, "GetVrLaboGoggleViewport", csg_vr_goggle_viewport, IPC_STUB},
+    {1003, "GetVrLaboGoggleViewport", csg_vr_goggle_viewport, IPC_STUB}, /* kept: [21.0.0+] no public layout; the handheld panel viewport is a guess */
     {1004, "GetPanelPhysicalSizeForSpecificTitle", csg_panel_physical_size, IPC_IMPL}, /* the built-in panel's real values */
     {1005, "GetPanelResolutionForSpecificTitle", csg_panel_resolution, IPC_IMPL},
     {60, "GetDefaultDisplayResolution", csg_get_resolution, IPC_IMPL},
@@ -824,7 +897,7 @@ static const IpcCmd dc_cmds[] = {
     {9, "CopyBetweenCaptureBuffers", dc_copy_between, IPC_IMPL},
     {10, "AcquireLastApplicationCaptureBuffer", dc_acquire_app_buffer, IPC_IMPL},
     {11, "ReleaseLastApplicationCaptureBuffer", dc_release_app_buffer, IPC_IMPL},
-    {21, "ClearAppletTransitionBuffer", csg_noop, IPC_STUB},
+    {21, "ClearAppletTransitionBuffer", csg_noop, IPC_STUB}, /* kept: the host shows no applet transition buffer (gfx draws the applet UI directly) */
     {28, "TakeScreenShotOfOwnLayerEx", dc_take_own_layer, IPC_IMPL}, /* the Ex form's extra flags change nothing here: same capture */
 };
 
@@ -1717,9 +1790,9 @@ static const IpcCmd la_cmds[] = {
     {20, "RequestExit", la_request_exit, IPC_IMPL},
     {25, "Terminate", la_terminate, IPC_IMPL},
     {30, "GetResult", la_get_result, IPC_IMPL},
-    {50, "SetOutOfFocusApplicationSuspendingEnabled", csg_noop, IPC_STUB},
+    {50, "SetOutOfFocusApplicationSuspendingEnabled", csg_noop, IPC_STUB}, /* kept: the host never suspends the application's threads */
     {60, "PresetLibraryAppletGpuTimeSliceZero", la_preset_gpu_zero, IPC_IMPL}, /* was listed as 50 before 2026-11-01 */
-    {80, "RequestForLibraryAppletToGetForeground", csg_noop, IPC_STUB},
+    {80, "RequestForLibraryAppletToGetForeground", la_request_foreground, IPC_IMPL}, /* [19.0.0+; no-argument layout unverified] like 150 */
     {81, "GetCurrentChildLibraryApplet", am_unavailable, IPC_STUB}, /* applets here start no child applets */
     {100, "PushInData", la_push_in, IPC_IMPL},
     {101, "PopOutData", la_pop_out, IPC_IMPL},
@@ -1819,9 +1892,119 @@ static const IpcCmd lac_cmds[] = {
 /* ---- IApplicationFunctions ------------------------------------------------------------------------------------------------------ */
 extern const uint8_t g_user_id[16];
 static int preselected_popped;
-/* PopLaunchParameter(kind): kind 2 is the preselected account (magic 0xC79497CA, selected flag, user id); anything else: no data. */
+/* The UserChannel (LaunchParameterKind 1, switchbrew 'AM services'): the application-specific launch parameter. UnpopToUserChannel puts a storage at its
+ * front, ClearUserChannel empties it, PopLaunchParameter(1) takes from the front. It is what the next start of the program receives: the restarts
+ * ExecuteProgram and CreateApplication(AndPush)AndRequestToStart perform hand it to the new process in a file named by NAPPLE_USER_CHANNEL (read and
+ * removed on the first use). A user process's storage is at most 0x1000 bytes (switchbrew); a larger one is refused [result unverified]. */
+#define UC_MAX 8
+#define UC_STORAGE_MAX 0x1000u
+#define ENV_USER_CHANNEL "NAPPLE_USER_CHANNEL"
+#define ENV_PREVIOUS_PROGRAM_INDEX "NAPPLE_PREVIOUS_PROGRAM_INDEX"
+typedef struct {
+    uint8_t *data;
+    uint64_t size;
+} UcEntry;
+static UcEntry user_channel[UC_MAX];
+static unsigned user_channel_n;
+static int user_channel_loaded;
+static void uc_add(int front, const uint8_t *p, uint64_t n) { /* caller holds lock */
+    if (user_channel_n >= UC_MAX) {
+        free(user_channel[--user_channel_n].data); /* full: the oldest (back) entry gives way */
+    }
+    UcEntry e = {malloc(n ? n : 1), n};
+    if (n) memcpy(e.data, p, n);
+    if (front) {
+        memmove(user_channel + 1, user_channel, user_channel_n * sizeof *user_channel);
+        user_channel[0] = e;
+    } else user_channel[user_channel_n] = e;
+    user_channel_n++;
+}
+static void uc_clear_locked(void) {
+    for (unsigned i = 0; i < user_channel_n; i++) free(user_channel[i].data);
+    user_channel_n = 0;
+}
+static void uc_load_locked(void) {
+    if (user_channel_loaded) return;
+    user_channel_loaded = 1;
+    const char *path = getenv(ENV_USER_CHANNEL);
+    if (!path || !*path) return;
+    FILE *f = fopen(path, "rb");
+    if (f) {
+        uint64_t n;
+        uint8_t *buf = malloc(UC_STORAGE_MAX);
+        while (buf && user_channel_n < UC_MAX && fread(&n, 8, 1, f) == 1 && n <= UC_STORAGE_MAX && fread(buf, 1, (size_t)n, f) == n) uc_add(0, buf, n);
+        free(buf);
+        fclose(f);
+        LOG("applet", "user channel: %u storage(s) from the previous start", user_channel_n);
+    }
+    unlink(path);
+    unsetenv(ENV_USER_CHANNEL);
+}
+/* Writes `entries` (the storages the next start receives, front first) to a new file; *path is "" when there are none. 0 = ok. */
+static int uc_write(const UcEntry *entries, unsigned n, char *path, size_t cap) {
+    path[0] = 0;
+    if (!n) return 0;
+    const char *tmp = getenv("TMPDIR");
+    snprintf(path, cap, "%s/napple-user-channel-XXXXXX", tmp && *tmp ? tmp : "/tmp");
+    int fd = mkstemp(path);
+    FILE *f = fd >= 0 ? fdopen(fd, "wb") : NULL;
+    int ok = f != NULL;
+    for (unsigned i = 0; ok && i < n; i++) ok = fwrite(&entries[i].size, 8, 1, f) == 1 && (!entries[i].size || fwrite(entries[i].data, 1, (size_t)entries[i].size, f) == entries[i].size);
+    if (f && fclose(f)) ok = 0;
+    if (!f && fd >= 0) close(fd);
+    if (!ok) {
+        if (fd >= 0) unlink(path);
+        path[0] = 0;
+        return -1;
+    }
+    return 0;
+}
+static void af_clear_user_channel(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&lock);
+    uc_load_locked();
+    uc_clear_locked();
+    pthread_mutex_unlock(&lock);
+}
+static void af_unpop_to_user_channel(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const Storage *st = c->nin_objects && c->in_objects[0] && c->in_objects[0]->cmds == storage_cmds ? c->in_objects[0]->state : NULL;
+    if (!st) {
+        c->result = HZ_R_AM_INVALID_PARAMETERS;
+        return;
+    }
+    if (st->size > UC_STORAGE_MAX) {
+        c->result = HZ_R_AM_INVALID_PARAMETERS;
+        return;
+    }
+    pthread_mutex_lock(&lock);
+    uc_load_locked();
+    uc_add(1, storage_bytes(st), st->size);
+    pthread_mutex_unlock(&lock);
+}
+/* PopLaunchParameter(kind): kind 1 the user channel (above); kind 2 the preselected account (magic 0xC79497CA, selected flag, user id); else no data. */
 static void af_pop_launch_parameter(IpcObject *s, IpcCall *c) {
     (void)s;
+    if (IN_OK(c, 0, uint32_t) && IPC_IN(c, uint32_t, 0) == 1) {
+        pthread_mutex_lock(&lock);
+        uc_load_locked();
+        UcEntry e = {NULL, 0};
+        if (user_channel_n) {
+            e = user_channel[0];
+            memmove(user_channel, user_channel + 1, --user_channel_n * sizeof *user_channel);
+        }
+        pthread_mutex_unlock(&lock);
+        if (!e.data) {
+            c->result = APPLET_R_NO_DATA_IN_CHANNEL;
+            return;
+        }
+        IpcObject *o = storage_new(e.size);
+        memcpy(((Storage *)o->state)->data, e.data, e.size);
+        free(e.data);
+        ipc_out_object(c, o);
+        return;
+    }
     if (IPC_IN(c, uint32_t, 0) == 2 && !preselected_popped) {
         preselected_popped = 1;
         IpcObject *st = storage_new(0x88);
@@ -1938,10 +2121,12 @@ static void af_event_210(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_copy_handle(c, tracked_event(EV_AF_210, 0));
 }
-/* GetPreviousProgramIndex: -1 = this program was not started by another program of the same application (the console's answer for a single-program title). */
+/* GetPreviousProgramIndex: the program index that started this one with ExecuteProgram (the restart leaves it in NAPPLE_PREVIOUS_PROGRAM_INDEX), else -1 =
+ * this program was not started by another program of the same application. */
 static void af_get_previous_program_index(IpcObject *s, IpcCall *c) {
     (void)s;
-    int32_t v = -1;
+    const char *e = getenv(ENV_PREVIOUS_PROGRAM_INDEX);
+    int32_t v = e && *e ? (int32_t)atoi(e) : -1;
     IPC_OUT(c, v);
 }
 static void af_begin_block_home_sl(IpcObject *s, IpcCall *c) {
@@ -2131,10 +2316,154 @@ static void af_query_play_statistics(IpcObject *s, IpcCall *c) {
     int32_t cnt = (int32_t)n;
     IPC_OUT(c, cnt);
 }
+/* ---- ipc-depth-95 r10: restarting the application, the GPU-error abort delay, HDCP, PrepareForJit ------------------------------------------------ */
+/* ExecuteProgram and CreateApplication(AndPush)AndRequestToStart with the running application's id end this process and start the program again (official
+ * software sleeps forever after the call). The host does the same: execv of its own executable with its own arguments (macOS; the library build inside
+ * another process and the other hosts cannot, and answer the am "unavailable" result instead). The new process finds the user channel and the previous
+ * program index in its environment (see the user channel above). The hook is replaced by the tests; the real one does not return when it succeeds. */
+static int host_relaunch(void) {
+#if defined(__APPLE__) && TARGET_OS_OSX && !defined(NAPPLE_LIB)
+    char exe[PATH_MAX];
+    uint32_t n = sizeof exe;
+    if (_NSGetExecutablePath(exe, &n)) return -1;
+    summary_write("partial", "the guest restarted the application (the host started it again)");
+    filelog_drain();
+    execv(exe, *_NSGetArgv());
+    LOG("applet", "restart: execv %s failed (%s)", exe, strerror(errno));
+#endif
+    return -1;
+}
+static int (*applet_relaunch)(void) = host_relaunch;
+static const UcEntry user_channel_none[1]; /* an empty user channel for the new start */
+/* prev_index: the program index GetPreviousProgramIndex reports after the restart (-1: none). channel: the storages the new start receives (NULL: the
+ * current user channel). */
+static uint32_t am_restart(const char *what, int prev_index, const UcEntry *channel, unsigned nchannel) {
+    char path[1100];
+    pthread_mutex_lock(&lock);
+    uc_load_locked();
+    int r = channel ? uc_write(channel, nchannel, path, sizeof path) : uc_write(user_channel, user_channel_n, path, sizeof path);
+    unsigned n = channel ? nchannel : user_channel_n;
+    pthread_mutex_unlock(&lock);
+    if (r) {
+        LOG("applet", "%s: cannot keep the user channel for the restart", what);
+        return 0x1480;
+    }
+    if (path[0]) setenv(ENV_USER_CHANNEL, path, 1);
+    else unsetenv(ENV_USER_CHANNEL);
+    char idx[16];
+    snprintf(idx, sizeof idx, "%d", prev_index);
+    if (prev_index >= 0) setenv(ENV_PREVIOUS_PROGRAM_INDEX, idx, 1);
+    else unsetenv(ENV_PREVIOUS_PROGRAM_INDEX);
+    LOG("applet", "IApplicationFunctions::%s: restarting the application (%u user channel storage(s))", what, n);
+    summary_note("guest called %s", what);
+    if (applet_relaunch() == 0) return 0;
+    LOG("applet", "IApplicationFunctions::%s: this host cannot start the application again", what);
+    if (path[0]) unlink(path);
+    unsetenv(ENV_USER_CHANNEL);
+    unsetenv(ENV_PREVIOUS_PROGRAM_INDEX);
+    return 0x1480;
+}
+/* ExecuteProgram(u32 ProgramSpecifyKind, u64 value) [5.0.0+]: kind 0 = start program index `value` (u8) of this application, 1 =
+ * JumpToSubApplicationProgramForDevelopment (only with DebugMode: refused, "DebugMode not enabled"), 2 = RestartProgram. Only the running program was built
+ * for this host: its own index (or a restart) starts it again; another index is not here [result unverified: am "Title-ID not found"]. */
+enum { PSK_EXECUTE_PROGRAM = 0, PSK_JUMP_TO_SUB_APPLICATION = 1, PSK_RESTART_PROGRAM = 2 };
+static int current_program_index(void) { return (int)(g_program_id & 0xff); } /* the program id is the application id plus the index */
+static void af_execute_program(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 8, uint64_t)) {
+        c->result = 0x1480;
+        return;
+    }
+    uint32_t kind = IPC_IN(c, uint32_t, 0);
+    uint64_t value = IPC_IN(c, uint64_t, 8);
+    int cur = current_program_index();
+    if (kind == PSK_JUMP_TO_SUB_APPLICATION) c->result = HZ_R_AM_DEBUG_MODE_NOT_ENABLED;
+    else if (kind > PSK_RESTART_PROGRAM) c->result = HZ_R_AM_INVALID_PARAMETERS;
+    else if (kind == PSK_EXECUTE_PROGRAM && (int)(value & 0xff) != cur) {
+        LOG("applet", "ExecuteProgram: program index %u of this application was not built for this host (running index %d)", (unsigned)(value & 0xff), cur);
+        c->result = HZ_R_AM_TITLE_NOT_FOUND;
+    } else c->result = am_restart(kind == PSK_RESTART_PROGRAM ? "ExecuteProgram(RestartProgram)" : "ExecuteProgram", cur, NULL, 0);
+}
+/* CreateApplicationAndPushAndRequestToStart (10: ApplicationId + IStorage) / CreateApplicationAndRequestToStart (12: ApplicationId) [4.0.0+]: start an
+ * application, ending this one; "ApplicationId=0 can be used to relaunch the current application" (switchbrew). The running application is the only one
+ * on this host: 0 or its own id restarts it with the pushed storage as its user channel (none for 12); another id is not installed here [result unverified:
+ * am "Title-ID not found"]. */
+static void af_create_application(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t id = IN_OK(c, 0, uint64_t) ? IPC_IN(c, uint64_t, 0) : 0, self = g_program_id & ~0xffull;
+    if (id && id != self) {
+        LOG("applet", "CreateApplication*AndRequestToStart: application %016llx is not on this host", (unsigned long long)id);
+        c->result = HZ_R_AM_TITLE_NOT_FOUND;
+        return;
+    }
+    if (c->cmd == 12) {
+        c->result = am_restart("CreateApplicationAndRequestToStart", -1, user_channel_none, 0);
+        return;
+    }
+    const Storage *st = c->nin_objects && c->in_objects[0] && c->in_objects[0]->cmds == storage_cmds ? c->in_objects[0]->state : NULL;
+    if (!st || st->size > UC_STORAGE_MAX) {
+        c->result = HZ_R_AM_INVALID_PARAMETERS;
+        return;
+    }
+    UcEntry e = {(uint8_t *)storage_bytes(st), st->size};
+    c->result = am_restart("CreateApplicationAndPushAndRequestToStart", -1, &e, 1);
+}
+/* SetDelayTimeToAbortOnGpuError (131, s64 nn::TimeSpan in ns) [11.0.0+]: once a GPU error is detected (GetGpuErrorDetectedSystemEvent signals), the
+ * system aborts the application after this delay, the time the application has to report the error. The host raises the event through
+ * applet_signal_gpu_error; the abort follows when the guest set a delay (the system's own default is not documented, so without one only the event
+ * fires, as before). A negative delay counts as 0. The abort is the process stopping with a failure summary. */
+static int64_t gpu_abort_delay_ns = -1;
+static void *gpu_abort_thread(void *arg) {
+    (void)arg;
+    int64_t ns = __atomic_load_n(&gpu_abort_delay_ns, __ATOMIC_ACQUIRE);
+    struct timespec ts = {(time_t)(ns / 1000000000), (long)(ns % 1000000000)};
+    while (nanosleep(&ts, &ts) && errno == EINTR) {
+    }
+    LOG("applet", "GPU error: the abort delay (%lld ns) is over, stopping the application", (long long)ns);
+    summary_note("GPU error: the application was aborted after its SetDelayTimeToAbortOnGpuError delay");
+    frontend_quit(1);
+    return NULL;
+}
+static void gpu_error_abort_schedule(void) {
+    static int scheduled;
+    if (__atomic_load_n(&gpu_abort_delay_ns, __ATOMIC_ACQUIRE) < 0 || __atomic_exchange_n(&scheduled, 1, __ATOMIC_ACQ_REL)) return;
+    pthread_t t;
+    if (!pthread_create(&t, NULL, gpu_abort_thread, NULL)) pthread_detach(t);
+}
+static void af_set_gpu_abort_delay(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, int64_t)) return;
+    int64_t v = IPC_IN(c, int64_t, 0);
+    __atomic_store_n(&gpu_abort_delay_ns, v < 0 ? 0 : v, __ATOMIC_RELEASE);
+}
+/* SetHdcpAuthenticationActivated (170, bool) [9.0.0+]: starts or stops HDCP authentication; the state and its change event are ICommonStateGetter 62 / 63. */
+static void af_set_hdcp_activated(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, uint8_t)) return;
+    int on = IPC_IN(c, uint8_t, 0) != 0;
+    if (on == AS()->hdcp_activated) return;
+    AS()->hdcp_activated = on;
+    signal_tracked(EV_HDCP);
+}
+/* PrepareForJit (1001) [5.0.0+]: launches the jit sysmodule for the application. It works when the system has it, here when a jit:u service is
+ * registered; otherwise the answer switchbrew quotes for a system without the sysmodule, 0x408. */
+static void af_prepare_for_jit(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char names[128][12];
+    unsigned n = 0;
+    ipc_service_names(names, 128, &n);
+    for (unsigned i = 0; i < n; i++)
+        if (!strncmp(names[i], "jit:u", 12)) {
+            AS()->jit_prepared = 1;
+            return;
+        }
+    LOG("applet", "PrepareForJit: no jit sysmodule (jit:u) on this host");
+    c->result = HZ_R_LR_PROGRAM_NOT_FOUND;
+}
 static const IpcCmd af_cmds[] = {
     {1, "PopLaunchParameter", af_pop_launch_parameter, IPC_IMPL},
-    {10, "CreateApplicationAndPushAndRequestToStart", am_unavailable, IPC_STUB}, /* one application per runtime */
-    {12, "CreateApplicationAndRequestToStart", am_unavailable, IPC_STUB},
+    {10, "CreateApplicationAndPushAndRequestToStart", af_create_application, IPC_IMPL}, /* the running application only: restarted */
+    {12, "CreateApplicationAndRequestToStart", af_create_application, IPC_IMPL},
     {25, "ExtendSaveData", af_extend_save_data, IPC_IMPL},
     {27, "CreateCacheStorage", af_create_cache_storage, IPC_IMPL},
     {28, "GetSaveDataSizeMax", af_get_save_data_size_max, IPC_IMPL},
@@ -2145,7 +2474,7 @@ static const IpcCmd af_cmds[] = {
     {37, "GetLimitedApplicationLicenseUpgradableEvent", am_quiet_event, IPC_IMPL},
     {70, "RequestToShutdown", af_request_shutdown, IPC_IMPL},
     {71, "RequestToReboot", af_request_reboot, IPC_IMPL},
-    {72, "RequestToSleep", csg_noop, IPC_STUB},
+    {72, "RequestToSleep", csg_noop, IPC_STUB}, /* kept: the host does not sleep on the guest's request; the application's sleep sequence is not documented */
     {80, "ExitAndRequestToShowThanksMessage", af_exit_with_thanks, IPC_IMPL},
     {20, "EnsureSaveData", af_ensure_save_data, IPC_IMPL},
     {21, "GetDesiredLanguage", af_get_desired_language, IPC_IMPL},
@@ -2170,28 +2499,28 @@ static const IpcCmd af_cmds[] = {
     {102, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
     {110, "QueryApplicationPlayStatistics", af_query_play_statistics, IPC_IMPL},
     {111, "QueryApplicationPlayStatisticsByUid", af_query_play_statistics, IPC_IMPL},
-    {120, "ExecuteProgram", am_unavailable, IPC_STUB}, /* other programs of a multi-program title are not built */
-    {121, "ClearUserChannel", csg_noop, IPC_STUB},
-    {122, "UnpopToUserChannel", csg_noop, IPC_STUB},
+    {120, "ExecuteProgram", af_execute_program, IPC_IMPL}, /* its own index / RestartProgram: restarted; other programs of the title are not built */
+    {121, "ClearUserChannel", af_clear_user_channel, IPC_IMPL},
+    {122, "UnpopToUserChannel", af_unpop_to_user_channel, IPC_IMPL},
     {123, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_IMPL},
-    {124, "EnableApplicationAllThreadDumpOnCrash", csg_noop, IPC_STUB},
+    {124, "EnableApplicationAllThreadDumpOnCrash", csg_noop, IPC_STUB}, /* kept: no guest-visible effect; crash dumps are the host's (signals.c) */
     {130, "GetGpuErrorDetectedSystemEvent", af_gpu_error_event, IPC_IMPL},
-    {131, "SetDelayTimeToAbortOnGpuError", csg_noop, IPC_STUB},
+    {131, "SetDelayTimeToAbortOnGpuError", af_set_gpu_abort_delay, IPC_IMPL},
     {140, "GetFriendInvitationStorageChannelEvent", af_friend_invite_event, IPC_IMPL},
     {141, "TryPopFromFriendInvitationStorageChannel", am_channel_empty, IPC_IMPL},
     {150, "GetNotificationStorageChannelEvent", am_quiet_event, IPC_IMPL},
     {151, "TryPopFromNotificationStorageChannel", am_channel_empty, IPC_IMPL},
     {160, "GetHealthWarningDisappearedSystemEvent", am_quiet_event, IPC_IMPL},
-    {170, "SetHdcpAuthenticationActivated", csg_noop, IPC_STUB},
+    {170, "SetHdcpAuthenticationActivated", af_set_hdcp_activated, IPC_IMPL},
     {180, "GetLaunchRequiredVersion", af_get_launch_required_version, IPC_IMPL},
     {181, "UpgradeLaunchRequiredVersion", af_upgrade_launch_required_version, IPC_IMPL},
-    {190, "SendServerMaintenanceOverlayNotification", csg_noop, IPC_STUB},
-    {200, "GetLastApplicationExitReason", am_out_u32_zero, IPC_STUB},
-    {220, "SetAudioOutputPolicy", csg_noop, IPC_STUB},
+    {190, "SendServerMaintenanceOverlayNotification", csg_noop, IPC_STUB}, /* kept: the host has no overlay to show it on */
+    {200, "GetLastApplicationExitReason", am_out_u32_zero, IPC_STUB},          /* kept: no public list of the exit reason values */
+    {220, "SetAudioOutputPolicy", csg_noop, IPC_STUB},                         /* kept: [20.0.0+] the policy's meaning is not documented */
     {310, "RequestExitApplicationAndTryPopMessage", af_request_exit_and_pop, IPC_IMPL},
     {330, "IsLanguageSelectionLimited", am_out_false, IPC_IMPL},
-    {1000, "CreateMovieMaker", am_unavailable, IPC_STUB},
-    {1001, "PrepareForJit", csg_noop, IPC_STUB},
+    {1000, "CreateMovieMaker", am_unavailable, IPC_STUB}, /* kept: no movie encoder (grc) on the host */
+    {1001, "PrepareForJit", af_prepare_for_jit, IPC_IMPL},
     {210, "(unnamed)", af_event_210, IPC_IMPL}, /* switchbrew leaves 210 unnamed; a system event (see af_event_210) */
 };
 
