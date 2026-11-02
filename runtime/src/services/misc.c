@@ -10,6 +10,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "sys_default.h"
+#include "online_provider.h"
+#include <string.h>
 
 static void noop(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -258,6 +260,73 @@ static void aoc_create_purchase_mgr(IpcObject *s, IpcCall *c) {
     m->permanent = c->cmd == 101;
     ipc_out_object(c, IPC_OBJECT("IPurchaseEventManager", purchase_cmds, m, purchase_destroy));
 }
+/* 110 CreateContentsServiceManager [12.0.0+] -> nn::ec::IContentsServiceManager (switchbrew 'NS services', layout facts only):
+ *   0 RequestContentsAuthorizationTokenDeprecated [16.0.0+] (RequestContentsAuthorizationToken in 12.0.0-15.0.1)
+ *   1 RequestContentsAuthorizationToken [16.0.0+]: 0x50 bytes of input, a PID, a type-5 buffer -> IAsyncData and a copy handle (its completion event)
+ *   IAsyncData: 0 GetSize, 1 Get, 2 Cancel.
+ * The token comes from Nintendo's ec server for the user's Nintendo account. A request completes at once (its event is signalled) with the reason there
+ * is no token: no network through the active provider (the NullProvider: an offline console), else no Nintendo account linked to the user
+ * (ONLINE_CAP_ACCOUNT). With both, the token would need an ec-server hook the OnlineProvider does not have; it is then answered like an unreachable
+ * server (the network result). GetSize / Get report that result. The 0x50-byte input and the token's layout are not public and are not read. */
+extern const uint8_t g_user_id[16];
+typedef struct {
+    uint32_t result;
+    int cancelled;
+} EcAsyncData;
+static void ec_async_get_size(IpcObject *s, IpcCall *c) {
+    EcAsyncData *a = s->state;
+    if (a->result) {
+        c->result = a->result;
+        return;
+    }
+    uint64_t v = 0;
+    IPC_OUT(c, v);
+}
+static void ec_async_get(IpcObject *s, IpcCall *c) { c->result = ((EcAsyncData *)s->state)->result; }
+static void ec_async_cancel(IpcObject *s, IpcCall *c) {
+    (void)c;
+    ((EcAsyncData *)s->state)->cancelled = 1;
+}
+static const IpcCmd ec_async_data_cmds[] = {
+    {0, "GetSize", ec_async_get_size, IPC_STUB}, /* output layout not public: a u64 [unverified] */
+    {1, "Get", ec_async_get, IPC_STUB},
+    {2, "Cancel", ec_async_cancel, IPC_STUB},
+};
+static void ec_state_destroy(IpcObject *o) { free(o->state); }
+static uint32_t aoc_contents_token_result(void) {
+    const OnlineProvider *p = online_provider();
+    int (*info)(void *, OnlineNetInfo *) = online_has(p, ONLINE_CAP_NETWORK) ? ONLINE_FN(p, net_info) : NULL;
+    OnlineNetInfo ni;
+    memset(&ni, 0, sizeof ni);
+    if (!info || info(p->ctx, &ni) || !ni.connected) return HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    int (*acc)(void *, const uint8_t[16], OnlineAccountInfo *) = online_has(p, ONLINE_CAP_ACCOUNT) ? ONLINE_FN(p, account_info) : NULL;
+    OnlineAccountInfo ai;
+    memset(&ai, 0, sizeof ai);
+    if (!acc || acc(p->ctx, g_user_id, &ai) || !ai.linked) return HZ_R_EC_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE;
+    return HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED; /* online and linked: needs an ec-server provider hook */
+}
+static void contents_request_token(IpcObject *s, IpcCall *c) {
+    (void)s;
+    EcAsyncData *a = calloc(1, sizeof *a);
+    if (!a) {
+        c->result = IPC_R_UNKNOWN_COMMAND;
+        return;
+    }
+    a->result = aoc_contents_token_result();
+    LOGV("aoc", "RequestContentsAuthorizationToken: no token (%#x)", a->result);
+    uint32_t r = 0, w = event_create(&r);
+    event_signal_handle(w); /* complete at once */
+    ipc_out_object(c, IPC_OBJECT("IAsyncData", ec_async_data_cmds, a, ec_state_destroy));
+    ipc_out_copy_handle(c, r);
+}
+static const IpcCmd contents_cmds[] = {
+    {0, "RequestContentsAuthorizationTokenDeprecated", contents_request_token, IPC_IMPL},
+    {1, "RequestContentsAuthorizationToken", contents_request_token, IPC_IMPL},
+};
+static void aoc_create_contents_mgr(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_object(c, IPC_OBJECT("IContentsServiceManager", contents_cmds, NULL, NULL));
+}
 static const IpcCmd aoc_cmds[] = {
     {0, "CountAddOnContentByApplicationId", aoc_count_app, IPC_IMPL},
     {1, "ListAddOnContentByApplicationId", aoc_list_app, IPC_IMPL},
@@ -277,10 +346,10 @@ static const IpcCmd aoc_cmds[] = {
         {50, "CheckAddOnContentMountStatus", noop, IPC_IMPL},
     {100, "CreateEcPurchasedEventManager", aoc_create_purchase_mgr, IPC_IMPL},
     {101, "CreatePermanentEcPurchasedEventManager", aoc_create_purchase_mgr, IPC_IMPL},
-    {110, "CreateContentsServiceManager", sysd_err_generic, IPC_STUB},
+    {110, "CreateContentsServiceManager", aoc_create_contents_mgr, IPC_IMPL},
     {200, "SetRequiredAddOnContentsOnContentsAvailabilityTransition", aoc_set_required, IPC_IMPL},
-    {300, "SetupHostAddOnContent", sysd_ok, IPC_STUB},
-    {301, "GetRegisteredAddOnContentPath", sysd_err_generic, IPC_STUB},
+    {300, "SetupHostAddOnContent", sysd_ok, IPC_STUB},                /* kept: [16.0.0+] no public layout (development host add-on content) */
+    {301, "GetRegisteredAddOnContentPath", sysd_err_generic, IPC_STUB}, /* kept: the same */
     {302, "UpdateCachedList", aoc_update_cached_list, IPC_IMPL},
 };
 static IpcObject *aoc_open(void) { return IPC_OBJECT("aoc:u", aoc_cmds, NULL, NULL); }

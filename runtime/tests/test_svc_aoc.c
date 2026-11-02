@@ -98,7 +98,7 @@ int main(void) {
         memset(&c, 0, sizeof c); svc_set_in_buf(&c, ids, 8); svc_call_c(o, 200, &c);
         CHECK(g_aoc_required_n == 1, "...a later call replaces the list");
         svc_call(o, 200, NULL, 0, &c); CHECK(c.result == 0 && g_aoc_required_n == 0, "...an empty request clears it");
-        CHECK(svc_find(o, 200)->status == IPC_IMPL && svc_find(o, 302)->status == IPC_IMPL && svc_find(o, 300)->status == IPC_STUB && svc_find(o, 110)->status == IPC_STUB, "200 and 302 are real; the contents-service and host setup rows stay documented defaults (100 / 101 real since r9)");
+        CHECK(svc_find(o, 200)->status == IPC_IMPL && svc_find(o, 302)->status == IPC_IMPL && svc_find(o, 300)->status == IPC_STUB && svc_find(o, 110)->status == IPC_IMPL, "200 and 302 are real; the host setup rows stay documented defaults (100 / 101 real since r9, 110 since r10)");
         unlink(mp); rmdir(dd); g_cfg.data_dir = NULL;
     }
     { /* ipc-depth-cloud r9: 100 / 101 IPurchaseEventManager */
