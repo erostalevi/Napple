@@ -138,3 +138,7 @@ make -C runtime GFX=napple test test-services test-ipc-reference
 - **Test fixes:**
   - `test_svc_vi.c` line 104 had a one-word reply buffer that the binder reply (two words) overflowed. ASan found it; the fix is test-only.
   - `test_svc_pctl.c` expected aoc 100 / 101 to be stubs; it is updated.
+
+## Commit note
+`b992833` repeats the subject of `c1c93cf` (vi 2450 / 2451). Its only change is the one-line `test_svc_vi.c` buffer fix that ASan found. It was left
+as is rather than rewriting the already pushed branch; squash it into `c1c93cf` when integrating if you like.
