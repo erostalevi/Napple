@@ -57,3 +57,13 @@ status: ready-with-caveats
 - infra: Caddy `handle /social/* { reverse_proxy social:8794 }`.
 - napple-social / napple-account: an NSA-id (napple-online pid) -> profile link so SendFriendRequestForApplication can be resolved; ideally napple-online verifies friendships server-to-server instead of trusting the client's report.
 - prepo: pass both buffers (error codes) — needed to diagnose the remaining MK8D error.
+
+## Update (second pass, same day)
+- main and claude/online-race-2026-11-02-r7 merged in (Cargo.toml members: all of room, online, account, cloud, social).
+- **The communication error is fixed.** Cause (found by dumping the second prepo buffer, which carries the error report): MK8D's Friends screen
+  calls Ranking 112/18 ("DownloadCompePopular") and MatchmakeExtension 109/65 ("GetCompeFavorite"), both NotImplemented in napple-online and fatal
+  to the screen. Both now answer an empty list (server.rs). MK8D's Friends/Create Room menu now opens (screenshots pair4/alice/shot-3600.png in notes folder).
+- **Still open:** the "Friends" list on that menu stays "-----" even though bob is online play / joinable in the friend list and GetPlayingSession (109/60)
+  returns his gathering. Next: check what MK8D calls after 109/60 (NAPPLE_TRACE_IPC=all, server -v) and whether the friend's presence has to carry more
+  than the 0xE0 app-field pairs, or whether the session reply needs the gathering fetched (MatchMaking get-session-by-id).
+- Not done still: new C unit test, change note, guide client section.
