@@ -34,6 +34,8 @@
  *   0x04 ZBC_QUERY_TABLE{u32 ds[4],l2[4],depth,ref_cnt,format,type,index_size}(0x34)                                                 [libnx][nvgpu]
  *   0x05 GET_CHARACTERISTICS{u64 buf_size,u64 buf_addr,characteristics(0xA0)}(0xB0)  0x06 GET_TPC_MASKS{u32 size,u32,u64 addr,u64 mask}(0x18) [libnx]
  *   0x07 FLUSH_L2{u32 flush,u32 invalidate}(8)  0x14 ZBC_GET_ACTIVE_SLOT_MASK{u32 slot,u32 mask}(8)  0x1C GET_GPU_TIME{u64 ns,u64 reserved}(0x10) [libnx]
+ *   branch r11 additions [unverified, proposed from memory by the cloud session]: nvhost-gpu 0x1D EVENT_ID_CTRL{u32 cmd 0 disable|1 enable|2 clear,u32 event_id 0..2,s32 fd,u32}(0x10)
+ *   (shares the enable mask of 0x12; clear keeps the mask)  nvhost-ctrl-gpu 0x0C GET_TPC_EXCEPTION_EN_STATUS{u64 mask out}(8)  0x0D NUM_VSMS{u32 num_vsms out,u32}(8)
  * Anything else: NVG_NOT_IMPLEMENTED (nvdrv.c logs it in the compat summary). A short buffer is NVG_BAD_PARAMETER. Calls arrive under the nvdrv lock. */
 #ifndef NVDRV_NODES_CORE_H
 #define NVDRV_NODES_CORE_H
@@ -65,7 +67,7 @@ enum { NVG_AS_BIND_CHANNEL = 0x01, NVG_AS_ALLOC_SPACE = 0x02, NVG_AS_FREE_SPACE 
        NVG_AS_GET_VA_REGIONS = 0x08, NVG_AS_INITIALIZE_EX = 0x09 };
 /* ctrl-gpu ioctl numbers (type 'G') */
 enum { NVG_CTRL_ZCULL_GET_CTX_SIZE = 0x01, NVG_CTRL_ZCULL_GET_INFO = 0x02, NVG_CTRL_ZBC_SET_TABLE = 0x03, NVG_CTRL_ZBC_QUERY_TABLE = 0x04,
-       NVG_CTRL_GET_CHARACTERISTICS = 0x05, NVG_CTRL_GET_TPC_MASKS = 0x06, NVG_CTRL_FLUSH_L2 = 0x07, NVG_CTRL_ZBC_GET_ACTIVE_SLOT_MASK = 0x14,
+       NVG_CTRL_GET_CHARACTERISTICS = 0x05, NVG_CTRL_GET_TPC_MASKS = 0x06, NVG_CTRL_FLUSH_L2 = 0x07, NVG_CTRL_GET_TPC_EXCEPTION_EN_STATUS = 0x0c, NVG_CTRL_NUM_VSMS = 0x0d, NVG_CTRL_ZBC_GET_ACTIVE_SLOT_MASK = 0x14,
        NVG_CTRL_GET_GPU_TIME = 0x1c };
 /* Flag bits [nvgpu]/[libnx] */
 enum { NVG_SUBMIT_FENCE_WAIT = 1, NVG_SUBMIT_FENCE_GET = 2, NVG_SUBMIT_HW_FORMAT = 4 };

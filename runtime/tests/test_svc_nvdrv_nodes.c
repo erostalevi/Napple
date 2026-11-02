@@ -422,6 +422,33 @@ int main(void) {
       CHECK(gio(ctrl, G, NVG_CTRL_ZBC_QUERY_TABLE, &q, sizeof q) == 0 && q.color_ds[0] == 0x3f800000 && q.ref_cnt == 1 && q.format == 7 && q.size == NVG_ZBC_MAX, "ZBC_QUERY_TABLE round trip through the libnx struct"); }
     { MGetTpcMasks m = {.bufsize = 8};
       CHECK(gio(ctrl, G, NVG_CTRL_GET_TPC_MASKS, &m, sizeof m) == 0 && m.out[0] == 3, "GET_TPC_MASKS round trip: mask 3 at +16"); }
+    /* ---- round 11: GET_ERROR_NOTIFICATION, EVENT_ID_CTRL, NUM_VSMS, TPC_EXCEPTION_EN_STATUS ---- */
+    uint32_t gpu3 = open_("/dev/nvhost-gpu"), ctrl3 = open_("/dev/nvhost-ctrl-gpu");
+    uint8_t n[0x40];
+    memset(n, 0xaa, sizeof n);
+    CHECK(gio(gpu3, H, 0x17, n, 8) == NV_BAD_PARAMETER, "GET_ERROR_NOTIFICATION short buffer");
+    CHECK(gio(gpu3, H, 0x17, n, 16) == 0 && get64(n, 0) == 0 && get32(n, 8) == 0 && get32(n, 12) == 0, "GET_ERROR_NOTIFICATION on a healthy channel: zero timestamp, info and status");
+    memset(n, 0, sizeof n); put32(n, 0, 1); put32(n, 4, 0); put32(n, 8, 99);
+    CHECK(gio(gpu3, H, 0x1d, n, 16) == 0 && fds[gpu3].gchan.events == 1, "EVENT_ID_CTRL enable id 0");
+    memset(n, 0, sizeof n); put32(n, 0, 1); put32(n, 4, 2); put32(n, 8, 99);
+    CHECK(gio(gpu3, H, 0x1d, n, 16) == 0 && fds[gpu3].gchan.events == 5, "EVENT_ID_CTRL enable id 2 keeps id 0");
+    memset(n, 0, sizeof n); put32(n, 0, 0); put32(n, 4, 0);
+    CHECK(gio(gpu3, H, 0x1d, n, 16) == 0 && fds[gpu3].gchan.events == 4, "EVENT_ID_CTRL disable id 0");
+    memset(n, 0, sizeof n); put32(n, 0, 2); put32(n, 4, 2);
+    CHECK(gio(gpu3, H, 0x1d, n, 16) == 0 && fds[gpu3].gchan.events == 4, "EVENT_ID_CTRL clear leaves the mask alone");
+    memset(n, 0, sizeof n); put32(n, 0, 1); put32(n, 4, 3);
+    CHECK(gio(gpu3, H, 0x1d, n, 16) == NV_BAD_PARAMETER && fds[gpu3].gchan.events == 4, "EVENT_ID_CTRL with an unknown event id is refused");
+    memset(n, 0, sizeof n); put32(n, 0, 7);
+    CHECK(gio(gpu3, H, 0x1d, n, 16) == NV_BAD_PARAMETER, "EVENT_ID_CTRL with an unknown command is refused");
+    CHECK(gio(gpu3, H, 0x1d, n, 8) == NV_BAD_PARAMETER, "EVENT_ID_CTRL short buffer");
+    CHECK(gio(ctrl3, H, 0x17, n, 16) == NV_NOT_IMPLEMENTED && gio(ctrl3, G, 0x1d, n, 16) == NV_NOT_IMPLEMENTED, "the new channel ioctls are not answered by ctrl-gpu");
+    memset(n, 0xaa, sizeof n);
+    CHECK(gio(ctrl3, G, 0xd, n, 4) == NV_BAD_PARAMETER, "NUM_VSMS short buffer");
+    CHECK(gio(ctrl3, G, 0xd, n, 8) == 0 && get32(n, 0) == 2 && get32(n, 4) == 0, "NUM_VSMS: two SMs (one per TPC), reserved word cleared");
+    memset(n, 0xaa, sizeof n);
+    CHECK(gio(ctrl3, G, 0xc, n, 4) == NV_BAD_PARAMETER, "GET_TPC_EXCEPTION_EN_STATUS short buffer");
+    CHECK(gio(ctrl3, G, 0xc, n, 8) == 0 && get64(n, 0) == 0, "GET_TPC_EXCEPTION_EN_STATUS: no exception enabled");
+    CHECK(gio(gpu3, G, 0xd, n, 8) == NV_NOT_IMPLEMENTED, "NUM_VSMS is not answered by the channel node");
 
     /* ---- unknown ioctls and other nodes keep the existing error path ---- */
     uint32_t junk[64] = {0}; /* 0xb0 bytes are passed below */

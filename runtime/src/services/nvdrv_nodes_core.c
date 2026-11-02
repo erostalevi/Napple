@@ -119,6 +119,14 @@ int nvgpu_chan_ioctl(NvGpuChan *c, const NvGpuEnv *env, unsigned nr, uint8_t *d,
             if (size < NVG_SZ_GET_ERROR_NOTIFICATION) return NVG_BAD_PARAMETER;
             memset(d, 0, NVG_SZ_GET_ERROR_NOTIFICATION);
             return NVG_OK;
+        case 0x1d: { /* EVENT_ID_CTRL, r11 branch form {cmd, event_id, fd, pad}(0x10) [unverified]: same enable mask as 0x12; clear (2) leaves it alone, the fd is not kept */
+            if (size < 0x10) return NVG_BAD_PARAMETER;
+            uint32_t cmd = rd32(d), id = rd32(d + 4);
+            if (cmd > 2 || id > 2) return NVG_BAD_PARAMETER;
+            if (cmd == 1) c->events |= 1u << id;
+            else if (cmd == 0) c->events &= ~(1u << id);
+            return NVG_OK;
+        }
         case NVG_CH_ALLOC_GPFIFO_EX: /* [nvgpu] {num_entries, num_inflight_jobs, flags, reserved[5]}: no fence is returned by this variant */
             if (size < NVG_SZ_ALLOC_GPFIFO_EX) return NVG_BAD_PARAMETER;
             {
@@ -456,6 +464,15 @@ int nvgpu_ctrl_ioctl(NvGpuCtrl *c, unsigned nr, uint8_t *d, unsigned size, uint6
         case NVG_CTRL_FLUSH_L2: /* {u32 flush, u32 invalidate} */
             if (size < NVG_SZ_FLUSH_L2) return NVG_BAD_PARAMETER;
             c->l2_flushes++;
+            return NVG_OK;
+        case NVG_CTRL_GET_TPC_EXCEPTION_EN_STATUS: /* {u64 mask}: no SM exception is enabled (no debugger attaches) [unverified, r11] */
+            if (size < 8) return NVG_BAD_PARAMETER;
+            wr64(d, 0);
+            return NVG_OK;
+        case NVG_CTRL_NUM_VSMS: /* {u32 num_vsms, u32 reserved}: one SM per TPC, two TPCs (see GET_TPC_MASKS) [unverified, r11] */
+            if (size < 8) return NVG_BAD_PARAMETER;
+            wr32(d, 2);
+            wr32(d + 4, 0);
             return NVG_OK;
         case NVG_CTRL_ZBC_GET_ACTIVE_SLOT_MASK: { /* {u32 slot, u32 mask}: slot 7 as libnx reads on hardware; mask = the colour slots in use */
             if (size < NVG_SZ_ZBC_GET_ACTIVE_SLOT_MASK) return NVG_BAD_PARAMETER;
