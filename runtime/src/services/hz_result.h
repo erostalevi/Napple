@@ -92,3 +92,7 @@ enum {
 /* getaddrinfo / netdb error numbers (FreeBSD numbering) */
 enum { HZ_EAI_AGAIN = 2, HZ_EAI_FAIL = 4, HZ_EAI_NONAME = 8 };
 enum { HZ_NETDB_HOST_NOT_FOUND = 1, HZ_NETDB_TRY_AGAIN = 2, HZ_NETDB_NO_RECOVERY = 3, HZ_NETDB_NO_DATA = 4 };
+/* ipc-depth-95 r10 (nifm network profiles). No public value is known for these two: they are placed in the nifm module so a title sees a nifm failure;
+ * the descriptions are [unverified] placeholders. */
+#define HZ_R_NIFM_NETWORK_PROFILE_NOT_FOUND HZ_RESULT(HZ_MOD_NIFM, 3400) /* [unverified] GetNetworkProfile / RemoveNetworkProfile of an unknown uuid */
+#define HZ_R_NIFM_NETWORK_PROFILE_FULL HZ_RESULT(HZ_MOD_NIFM, 3401)      /* [unverified] SetNetworkProfile with every profile slot taken */
