@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r3
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_3b3cd256-1668-4a2b-8542-c3387e1fbb05 (reused, opus)
 launched_at: 2026-11-01
@@ -37,3 +37,5 @@ Other service files (ipc-local-stubs), existing fixtures and `test_ipc_reference
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask). Shared title data in `/Users/neto/NappleWork/games/` predates the rewriter ordering fix (acnh-race-atomics, being integrated); rebuilt data for it is in `/Users/neto/NappleWork/games-r3/` — use either; never overwrite either.
 
 ## Result
+Integrated 2026-11-02: Clean, merged into main as d8e8d57 (branch head 5d21caa). Two mechanical append conflicts resolved by keeping both sides (`runtime/Makefile` host-test rules next to acnh-race-atomics' `test_light_event`; `docs/architecture/runtime-services.md` sections next to ipc-local-stubs'). Tests green after ipc-local-stubs landed: `test_ipc_reference` 111 fixtures / missing 0, applet suites, `input_script` 16/16. MK8D controller-support scripted check reproduced here (base and update: `CreateLibraryApplet id 0xc`, confirmed with 2 players). Four-title 60 s boots ok. Not re-run: SMO windowed web document page, LAS 118 s frame-script swkbd (author-verified). Follow-ups: napple-build LegalInformation extraction; nifm offline error UI for MK8D Online Play.
+Integrator file: `docs/process/archive/integrators/claude-am-depth-applets-2026-11-01-r3.md`.

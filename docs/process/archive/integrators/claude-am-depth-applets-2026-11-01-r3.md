@@ -6,7 +6,7 @@ head: aa39557
 env: mac
 date: 2026-11-01
 areas: [runtime/services/applet*, runtime/input_script, runtime/tests/ipc_reference (new am files), docs]
-status: ready
+status: integrated
 ---
 
 # claude/am-depth-applets-2026-11-01-r3: am IPC reference + rows, offline web kinds, applets on titles, frame-based input scripts
@@ -81,3 +81,13 @@ CreateHandleStorage (unit test only), CreateLibraryApplet id 3.
   information pages of titles resolve (the runtime side is ready).
 - nifm (ipc-local-stubs / nifm owner): `IRequest` result / applet info for the offline case, so Online Play in MK8D raises the network error UI as on a console.
 - `test_ipc_reference.c` runner (not changed, per the assignment): none needed.
+
+## Integration result
+- Date: 2026-11-02. Merged into main as d8e8d57 (integ/am-depth-applets, branch head 5d21caa; file `head: aa39557` + the commit adding this file). Outcome: **Clean**; landed after acnh-race-atomics and ipc-local-stubs.
+- Merge conflicts (mechanical, both sides kept, in the merge commit 87cd216): `runtime/Makefile` (this branch's `test_input_script` rule after acnh-race-atomics' `test_light_event` rule), `docs/architecture/runtime-services.md` (this branch's am section after ipc-local-stubs' section).
+- `integrate:` fixes: none. Native ports: none (applet / input_script code is portable C, left alone on purpose).
+- Build (scratch worktree): gfx lib adapter, audio, input, frontend, runtime (GFX=napple) rc 0.
+- Tests: `make -C runtime test`, `test-services`, `test-host`, `make -C audio test` rc 0, all suites `"failed":0` (`svc_applet` 116, `svc_applet_host` 539, `svc_applet_web` 219, `svc_applet_libs` 263, `svc_applet_album` 63, `svc_applet_ae` 52, `input_script` 16); `test-ipc-reference` `{"fixtures":111,"app_reachable":1325,"missing":0,"errors":0}` with ipc-local-stubs already on main (the "rerun after both land" note is satisfied).
+- Controller support (How to test 2): MK8D base and update, 60 s headless, the frame script given: `applet: CreateLibraryApplet id 0xc mode 0` at ~35 s and `controller support: confirmed with 2 player(s) of 1 connected (game asked 2..2 ...)`; rc 0.
+- Boots (merged runtime, rebuilt title data `/Users/neto/NappleWork/games-integ/`, `soak.py --lockf`, 60 s): LAS ok 3566 frames, SMO ok 3547, MK8D update ok 3328, ACNH update ok 1780. The author's lower MK8D count (2828) was machine load; idle here it is in the usual range.
+- Not re-run here: the SMO windowed web document page (How to test 3, needs a window) and the LAS 118 s frame-timed swkbd (How to test 4); author-verified.
