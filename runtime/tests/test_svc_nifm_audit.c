@@ -4,6 +4,16 @@
 #include "../src/services/offline.c"
 #include "svc_test.h"
 
+static int g_released;
+static uint32_t fake_connect(void *ctx) {
+    (void)ctx;
+    return 0;
+}
+static void fake_release(void *ctx) {
+    (void)ctx;
+    g_released++;
+}
+
 int main(void) {
     IpcCall c;
     IpcObject *nf = nifm_open();
@@ -27,7 +37,7 @@ int main(void) {
     {
         uint8_t buf[0x1000];
         memset(buf, 0xcc, sizeof buf);
-        uint32_t theme = 0;
+        uint32_t theme = 0x10;
         memset(&c, 0, sizeof c);
         c.in = (const uint8_t *)&theme;
         c.in_size = 4;
@@ -35,18 +45,58 @@ int main(void) {
         svc_call_c(rq, 21, &c);
         CHECK(c.result == 0 && c.out_size == 12, "21 GetAppletInfo after the rejection: three words");
         CHECK(SVC_OUT(&c, uint32_t, 0) == NIFM_APPLET_NET_CONNECT && NIFM_APPLET_NET_CONNECT == 0x0f, "...AppletId is netConnect (0x0f)");
-        CHECK(SVC_OUT(&c, uint32_t, 4) == 0 && SVC_OUT(&c, uint32_t, 8) == 4, "...LibraryAppletMode 0 (all foreground), 4 bytes of arguments");
+        CHECK(SVC_OUT(&c, uint32_t, 4) == 0 && SVC_OUT(&c, uint32_t, 8) == 0x44, "...LibraryAppletMode 0 (all foreground), 0x44 bytes of storages");
+        int32_t w[17];
+        memcpy(w, buf, sizeof w);
+        CHECK(w[0] == 0x20 && w[1] == 1 && w[2] == 0x20 && w[4] == 0x10, "...storage 1: CommonArguments (version 1, 0x20 bytes, the theme color given)");
+        uint64_t tick;
+        memcpy(&tick, buf + 4 + 0x18, 8);
+        CHECK(tick != 0, "...with the system tick");
+        CHECK(w[9] == 0x18 && w[10] == 0 && (uint32_t)w[11] == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED && !w[12] && !w[15], "...storage 2: netConnect's argument {0, the request's result, no profile uuid}");
+        CHECK(w[16] == -1 && buf[0x44] == 0xcc, "...then the -1 terminator and nothing else");
+        uint8_t small[8];
+        memset(small, 0xcc, sizeof small);
+        memset(&c, 0, sizeof c);
+        svc_set_out_buf(&c, small, sizeof small);
+        svc_call_c(rq, 21, &c);
         int32_t first;
-        memcpy(&first, buf, 4);
-        CHECK(first == -1 && buf[4] == 0xcc, "...the argument array is empty: the -1 terminator and nothing else");
+        memcpy(&first, small, 4);
+        CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 8) == 4 && first == -1 && small[4] == 0xcc, "...a buffer too small for the arguments gets only the terminator");
     }
     svc_call(rq, 22, NULL, 0, &c);
     CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "22 GetAdditionalInfo reports the failure");
     svc_call(rq, 3, NULL, 0, &c);
     svc_call(rq, 1, NULL, 0, &c);
-    CHECK(c.result == 0, "Cancel clears the result");
+    CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "3 Cancel on a rejected request keeps its result (the SDK cancels before HandleNetworkRequestResult)");
     svc_call(rq, 21, NULL, 0, &c);
-    CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "...and GetAppletInfo has nothing to offer again");
+    CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == NIFM_APPLET_NET_CONNECT, "...and GetAppletInfo still names netConnect");
+    svc_call(rq, 0, NULL, 0, &c);
+    CHECK(SVC_OUT(&c, uint32_t, 0) == NIFM_STATE_FREE, "...the request stays free");
+
+    /* ---- Cancel on an accepted request (a provider that connects): the connection is released and the request starts over */
+    {
+        OnlineProvider fake = *online_null_provider();
+        fake.net_connect = fake_connect;
+        fake.net_release = fake_release;
+        const OnlineProvider *prev = online_provider_install(&fake);
+        svc_call(rq, 4, NULL, 0, &c);
+        svc_call(rq, 0, NULL, 0, &c);
+        CHECK(SVC_OUT(&c, uint32_t, 0) == NIFM_STATE_ACCEPTED, "Submit with a network: accepted");
+        svc_call(gen, 21, NULL, 0, &c);
+        CHECK(c.out_size >= 1 && c.out[0] == 1, "...IsAnyInternetRequestAccepted");
+        svc_call(rq, 3, NULL, 0, &c);
+        svc_call(rq, 0, NULL, 0, &c);
+        uint32_t st = SVC_OUT(&c, uint32_t, 0);
+        svc_call(rq, 1, NULL, 0, &c);
+        CHECK(g_released == 1 && st == NIFM_STATE_FREE && c.result == 0, "3 Cancel on an accepted request releases the connection and resets it (released %d)", g_released);
+        svc_call(gen, 21, NULL, 0, &c);
+        CHECK(c.out[0] == 0, "...no request accepted any more");
+        svc_call(rq, 21, NULL, 0, &c);
+        CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "...and GetAppletInfo has nothing to offer");
+        svc_call(rq, 3, NULL, 0, &c);
+        CHECK(g_released == 1, "...a second Cancel releases nothing");
+        online_provider_install(prev == online_null_provider() ? NULL : prev);
+    }
 
     /* ---- requirement, revision, flags */
     uint8_t req[0x10];

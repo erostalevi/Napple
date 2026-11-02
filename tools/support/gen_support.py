@@ -22,7 +22,7 @@ from pathlib import Path
 
 OUTPUTS = ["docs/reference/support-matrix.md", "docs/reference/feature-support.md", "docs/reference/support-data.json"]
 SNAPSHOT = "tools/support/data/coverage-snapshot.json"
-HISTORY = "../.claude/skills/percent-analysis/history"
+HISTORY = ".claude/skills/percent-analysis/history"  # flat checkout: the skills live at the repo root
 MATRIX = "compat/matrix.json"
 ID_RE = re.compile(r"^[0-9A-F]{16}$")
 # matrix stage -> table column

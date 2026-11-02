@@ -150,15 +150,21 @@ int applet_swkbd_inline_request(AppletSwkbdInline *k, const uint8_t *req, size_t
 int applet_swkbd_inline_reply(LibAppletCall *call, uint32_t type, const char *text);
 
 /* ---- network connection (NetConnect, 0x0f) -------------------------------------------------------------------------------------------------- */
-/* A title launches it when nifm hands back a failed network request (IRequest::GetAppletInfo gives the applet id, mode and the argument the title pushes
- * after CommonArguments): on a console it tries to connect, shows the error and closes. This host has no network connection to offer, so the applet
- * closes at once the way it does on a console that cannot connect: it finishes normally (GetResult success) and its output storage carries the
- * "not connected" result, the one nifm's GetResult reports here offline (HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, 2110-1111) so the title's
- * HandleNetworkRequestResult keeps the request failed and the game stays offline. Output { u32 result; u32 pad } (8 bytes). The output layout and
- * the code are [unverified] against a console. */
+/* A title launches it when nifm hands back a failed network request: IRequest::GetAppletInfo gives the applet id, the mode and the storages the title
+ * pushes (CommonArguments, then {u32 0, Result, Uuid}). On a console it tries to connect, shows the error, and closes when the user leaves.
+ * Output (firmware 22.1.0 netConnect +0x245d80 / +0x245da0, written at its exit +0x314cec): one 8-byte storage {u32 0; Result}, where the Result
+ * is ErrorHandlingCompleted (2110-0190) when a connection was made and 2110-2900 when the user left without one. The SDK reads it with
+ * nn::la::AppletToNifmArgumentsReader (Result at offset 4). Its NetworkConnection::HandleNetworkRequestResult turns a 0 Result into 0190, and
+ * a title resubmits on 0190, so 0 means "connected, try again".
+ * This host has no network to offer, so the applet closes at once, as it does when the user backs out on a console that cannot connect: it
+ * finishes normally (GetResult success) with 2110-2900, the title's HandleNetworkRequestResult fails, and the game shows its own offline error.
+ * (Firmware applets also push a 4-byte {s32 exit code} storage first when the caller's la version is 5 or more. The SDK maps it to the same
+ * two Results; it is not pushed here.) */
 enum { LIBAPPLET_ID_NET_CONNECT = 0x0f };
 #define APPLET_NETCONNECT_OUT_SIZE 8u
-void applet_netconnect_encode(uint32_t result, uint8_t out[APPLET_NETCONNECT_OUT_SIZE]);
+#define APPLET_NETCONNECT_R_CONNECTED HZ_RESULT(HZ_MOD_NIFM, 190)      /* nn::nifm ErrorHandlingCompleted */
+#define APPLET_NETCONNECT_R_NOT_CONNECTED HZ_RESULT(HZ_MOD_NIFM, 2900) /* the user left netConnect without a connection */
+void applet_netconnect_encode(uint32_t result, uint8_t out[APPLET_NETCONNECT_OUT_SIZE]); /* {u32 0; Result} */
 int applet_netconnect_handler(LibAppletCall *call); /* always answers (1) */
 int applet_netconnect_register(void);               /* 0 ok, -1 table full */
 

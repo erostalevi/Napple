@@ -49,7 +49,7 @@ typedef struct {
 } NifmRequest;
 void nifm_request_init(NifmRequest *r);
 void nifm_request_submit(NifmRequest *r); /* no network: the request finishes at once, rejected */
-void nifm_request_cancel(NifmRequest *r); /* back to the unsubmitted state with a clean result */
+void nifm_request_cancel(NifmRequest *r); /* an accepted request: released, back to the unsubmitted state; a rejected one keeps its result */
 uint32_t nifm_request_result(const NifmRequest *r);
 
 /* ---- friends -------------------------------------------------------------------------------------------------------------- */

@@ -1172,25 +1172,32 @@ static void sep_slot_masks(int stage, uint32_t *depth, uint32_t *stencil, uint32
         else if (ik == IMGKIND_INT) *smask |= 1u << k;
     }
 }
-/* ShaderKey.vp_swizzle of viewport 0 (a program that writes the viewport index gets viewport 0's swizzle for every viewport: reported once) */
-static uint16_t vp_swizzle_key(void) {
-    uint32_t v = 0;
-    for (int i = 0; i < 4; i++) v |= (uint32_t)(S.vp_swz[0][i] & 7) << (3 * i);
-    v ^= VP_SWIZZLE_IDENTITY;
-    if (v) {
-        static int other;
-        for (int i = 1; i < 16 && !other; i++) other = memcmp(S.vp_swz[i], S.vp_swz[0], 4) != 0;
-        LOG_ONCE(NAPPLE_LOG_INFO, "viewport swizzles in use (first: viewport 0 %u %u %u %u%s)", S.vp_swz[0][0], S.vp_swz[0][1], S.vp_swz[0][2], S.vp_swz[0][3],
-                 other ? "; viewports 1-15 have other swizzles: a program that selects them gets viewport 0's" : "");
+/* ShaderKey.vp_swizzle / vp_swizzle_vp: the SetViewportSwizzles of the 16 viewports, XOR VP_SWIZZLE_IDENTITY (0 = identity). A program that writes the
+ * viewport index selects its viewport's swizzle; the others take viewport 0's. */
+static void vp_swizzle_key(pipe_key *k) {
+    uint16_t v[16];
+    int any = 0;
+    for (int n = 0; n < 16; n++) {
+        uint32_t w = 0;
+        for (int i = 0; i < 4; i++) w |= (uint32_t)(S.vp_swz[n][i] & 7) << (3 * i);
+        v[n] = (uint16_t)(w ^ VP_SWIZZLE_IDENTITY);
+        any |= v[n] != 0;
     }
-    return (uint16_t)v;
+    if (any) {
+        int other = 0;
+        for (int i = 1; i < 16 && !other; i++) other = v[i] != v[0];
+        LOG_ONCE(NAPPLE_LOG_INFO, "viewport swizzles in use (first: viewport 0 %u %u %u %u%s)", S.vp_swz[0][0], S.vp_swz[0][1], S.vp_swz[0][2], S.vp_swz[0][3],
+                 other ? "; viewports 1-15 have their own: selected by the viewport index the program writes" : "");
+    }
+    k->vp_swizzle = v[0];
+    memcpy(k->vp_swizzle_vp, v + 1, sizeof k->vp_swizzle_vp);
 }
 
 static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     memset(k, 0, sizeof *k);
     sep_slot_masks(ST_VS, &k->sep_depth[0], &k->sep_stencil[0], &k->sep_uint[0], &k->sep_sint[0]);
     sep_slot_masks(ST_FS, &k->sep_depth[1], &k->sep_stencil[1], &k->sep_uint[1], &k->sep_sint[1]);
-    k->vp_swizzle = vp_swizzle_key();
+    vp_swizzle_key(k);
     int_slot_masks(ST_VS, &k->tex_uint[0], &k->tex_sint[0]);
     int_slot_masks(ST_FS, &k->tex_uint[1], &k->tex_sint[1]);
     ds_slot_masks(ST_VS, &k->depth_slots[0], &k->stencil_slots[0]);
