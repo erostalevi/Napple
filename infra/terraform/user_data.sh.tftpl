@@ -1,0 +1,48 @@
+#!/bin/bash
+# First boot of the Napple servers instance (Amazon Linux 2023): Docker, the Compose plugin, the persistent data volume at /var/lib/napple.
+# Rendered by compute.tf. The containers themselves are started by each deploy (infra/scripts/roll.sh via SSM), not here.
+set -euo pipefail
+exec > >(tee -a /var/log/napple-bootstrap.log) 2>&1
+echo "napple bootstrap: start $(date -u +%FT%TZ)"
+
+dnf install -y docker
+systemctl enable --now docker
+
+# Docker Compose v2 plugin, pinned, checked against the release's own checksum file.
+arch="$(uname -m)"
+url="https://github.com/docker/compose/releases/download/v${compose_version}/docker-compose-linux-$arch"
+tmp="$(mktemp -d)"
+curl -fsSL --retry 5 -o "$tmp/docker-compose" "$url"
+curl -fsSL --retry 5 -o "$tmp/docker-compose.sha256" "$url.sha256"
+echo "$(cut -d' ' -f1 "$tmp/docker-compose.sha256")  $tmp/docker-compose" | sha256sum -c -
+install -D -m 0755 "$tmp/docker-compose" /usr/local/lib/docker/cli-plugins/docker-compose
+rm -rf "$tmp"
+docker compose version
+
+# Persistent data volume (EBS, NVMe on Nitro: found by its volume id). Formatted only when blank, so a replaced instance keeps the data.
+dev="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${data_volume_id}"
+for _ in $(seq 1 60); do [ -e "$dev" ] && break; sleep 5; done
+mkdir -p /var/lib/napple
+if [ -e "$dev" ]; then
+  blkid "$dev" >/dev/null || mkfs.xfs -L napple-data "$dev"
+  grep -q 'LABEL=napple-data' /etc/fstab || echo 'LABEL=napple-data /var/lib/napple xfs defaults,nofail 0 2' >> /etc/fstab
+  mount -a
+else
+  echo "napple bootstrap: WARNING data volume $dev not attached; state stays on the root volume"
+fi
+install -d -o 10001 -g 10001 -m 0750 /var/lib/napple/online /var/lib/napple/room
+install -d -m 0700 /var/lib/napple/caddy/data /var/lib/napple/caddy/config
+install -d -m 0750 /opt/napple
+
+# Small instance: a swap file keeps a Rust/Caddy memory spike from killing a container.
+if [ ! -f /swapfile ]; then
+  dd if=/dev/zero of=/swapfile bs=1M count=1024 status=none && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+  echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+fi
+
+# Unattended security updates of the OS packages.
+dnf install -y dnf-automatic
+sed -i 's/^upgrade_type.*/upgrade_type = security/; s/^apply_updates.*/apply_updates = yes/' /etc/dnf/automatic.conf
+systemctl enable --now dnf-automatic.timer
+
+echo "napple bootstrap: done $(date -u +%FT%TZ)"
