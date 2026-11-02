@@ -6,7 +6,7 @@ head: c2089e94f3f09b98e7c8a92919074034b0a81d17
 env: mac
 date: 2026-11-03
 areas: [crates/napple-cloud, runtime/src/online, runtime/src/net]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/client-core-2026-11-03-r12: Napple Online client core
@@ -53,3 +53,9 @@ Endpoint/shape mismatches are small edits in client.rs (act / build_state).
 ## Needs from other areas
 - runtime main / frontend host (not mine): call napple_online_runtime_start(NULL,NULL,NULL,<active uid hex>) after the frontend exists, pass the result to napple_frontend_set_online_ui, and call napple_online_ui_pump() once per frame on the main thread (declared in runtime/src/online/online_ui.h).
 - cloud saves: let crates/napple-cloud Session use <NAPPLE_HOME>/online/credentials.json.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at e3b69e7. Outcome: Small fix + mechanical conflict (changes index).
+- integrate: fixes: docs/guides/README.md links napple-online-client.md (check_docs orphan). Not done by the author and still open at close: runtime main does not yet call napple_online_runtime_start (see the follow-up wiring commit in this batch)
+- Tests: cargo test -p napple-cloud 25 passed; make -C runtime GFX=napple test test-services test-ipc-reference test-online: 0 failed (test-online 27 checks); make -C frontend test settings 77/0 window 13/0; four-title boots plain and NAPPLE_NET=host: rc 0, missing_ipc [], unsupported_svcs [], notify-running, no online dir created; check_docs only archive orphans; gen_support OK
+- Corrections to instructions: make -C gfx adapter is needed before make -C runtime GFX=napple in a fresh worktree; cargo needs PATH=/opt/homebrew/opt/rustup/bin

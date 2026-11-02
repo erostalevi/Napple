@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: launched
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_942fcff3-c0f6-4332-83d4-d6c57f50976c
 launched_at: 2026-11-03
@@ -34,3 +34,4 @@ Everything else: other r12 items edit the other paths in parallel (account auth/
 Shared title data read-only; game runs under `lockf -k /Users/neto/NappleWork/.run.lock` (<=120 s, private --save-root); local only, never push; never ask the user; never commit credentials or Nintendo material. Test-first, small commits.
 
 ## Result
+Outcome: Small fix + mechanical conflict (changes index). Merged at e3b69e7. Details: [integrator result](../integrators/claude-client-core-2026-11-03-r12.md).
