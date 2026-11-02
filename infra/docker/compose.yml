@@ -1,0 +1,74 @@
+# Napple game servers behind Caddy: https://${NAPPLE_DOMAIN} -> napple-online's HTTP API (and /room/* -> napple-room's status API).
+# The NEX/PRUDP UDP ports and the room port are published directly (Caddy only terminates TLS for HTTP).
+#   AWS instance: docker compose -f compose.yml -f compose.aws.yml up -d   (images from ECR, .env written by infra/scripts/roll.sh)
+#   Local Docker: NAPPLE_DOMAIN=localhost docker compose -f compose.yml -f compose.build.yml up --build
+# The env/port contract the two binaries follow: docs/guides/deploy-servers.md#server-contract
+name: napple
+
+x-hardening: &hardening
+  read_only: true
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  tmpfs: ["/tmp"]
+  restart: unless-stopped
+  init: true
+
+services:
+  online:
+    <<: *hardening
+    image: ${NAPPLE_ONLINE_IMAGE:-napple-online:local}
+    environment:
+      NAPPLE_ONLINE_HTTP: 0.0.0.0:8080
+      NAPPLE_ONLINE_NEX_AUTH: 0.0.0.0:60000
+      NAPPLE_ONLINE_NEX_SECURE: 0.0.0.0:60001
+      NAPPLE_ONLINE_PUBLIC_HOST: ${NAPPLE_DOMAIN:-pretend.napple.lat}
+      NAPPLE_ONLINE_PUBLIC_IP: ${NAPPLE_PUBLIC_IP:-127.0.0.1}
+      NAPPLE_ONLINE_DATA: /var/lib/napple/online
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "60000-60001:60000-60001/udp"
+    volumes:
+      - online-data:/var/lib/napple/online
+    expose: ["8080"]
+
+  room:
+    <<: *hardening
+    image: ${NAPPLE_ROOM_IMAGE:-napple-room:local}
+    environment:
+      NAPPLE_ROOM_LISTEN: 0.0.0.0:31415
+      NAPPLE_ROOM_HTTP: 0.0.0.0:8081
+      NAPPLE_ROOM_DATA: /var/lib/napple/room
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "31415:31415/tcp"
+      - "31415:31415/udp"
+    volumes:
+      - room-data:/var/lib/napple/room
+    expose: ["8081"]
+
+  caddy:
+    <<: *hardening
+    image: ${CADDY_IMAGE:-caddy:2.10-alpine}
+    cap_add: [NET_BIND_SERVICE]
+    environment:
+      NAPPLE_DOMAIN: ${NAPPLE_DOMAIN:-pretend.napple.lat}
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [online, room]
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  online-data:
+  room-data:
+  caddy-data:
+  caddy-config:

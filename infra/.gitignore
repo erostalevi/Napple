@@ -1,0 +1,8 @@
+# OpenTofu working files (the .terraform.lock.hcl provider locks ARE committed)
+.terraform/
+*.tfstate
+*.tfstate.*
+tfplan
+outputs.json
+backend_override.tf
+crash.log

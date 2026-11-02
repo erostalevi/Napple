@@ -1,0 +1,25 @@
+# AWS overlay: state on the instance's persistent EBS volume (/var/lib/napple, survives instance replacement) and logs to CloudWatch.
+# Values come from /opt/napple/.env, written by infra/scripts/roll.sh on every deploy.
+x-awslogs: &awslogs
+  driver: awslogs
+  options:
+    awslogs-region: ${AWS_REGION}
+    awslogs-group: ${NAPPLE_LOG_GROUP}
+    awslogs-create-group: "false"
+    tag: "{{.Name}}"
+
+services:
+  online:
+    logging: *awslogs
+    volumes: !override
+      - /var/lib/napple/online:/var/lib/napple/online
+  room:
+    logging: *awslogs
+    volumes: !override
+      - /var/lib/napple/room:/var/lib/napple/room
+  caddy:
+    logging: *awslogs
+    volumes: !override
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /var/lib/napple/caddy/data:/data
+      - /var/lib/napple/caddy/config:/config
