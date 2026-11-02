@@ -74,6 +74,7 @@ Every error is `{"error": {"code": "...", "message": "..."}}`. 401s carry `WWW-A
 | 404 | `not_found`, `profile_not_found`, `code_not_found`, `request_not_found`, `not_friends` (remove), `not_blocked`, `invite_not_found` |
 | 409 | `request_exists`, `already_friends`, `blocked_by_you`, `friend_limit`, `target_friend_limit`, `too_many_pending`, `target_inbox_full`, `block_limit`, `presence_expired`, `not_joinable`, `too_many_invites` |
 | 410 | `invite_expired` |
+| 422 | `reserved_name`: presence `title_name` / `mode` break the reserved-name rules of `orchestrations/ACCOUNT-CONTRACT.md` ("napple" anywhere, look-alikes included; the `nap-` prefix; invisible characters), or an invite `message` contains "napple" or invisible characters (`src/names.rs`, a copy of napple-account's) |
 | 429 | `rate_limited` |
 | 503 | `account_unavailable` |
 
