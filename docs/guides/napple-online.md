@@ -46,7 +46,7 @@ NAPPLE_NET=host NAPPLE_ONLINE_SERVER=http://<server address>:8737 runtime/build/
 | `NAPPLE_NET=host` | the host network provider (real sockets, DNS, TLS, nifm); required |
 | `NAPPLE_ONLINE_SERVER` | `http://host[:port]` (plain, LAN / same Mac), `https://host[:port]` (a public server behind a TLS proxy), or `default` = `https://pretend.napple.lat`, the community server. Unset = no Napple online (r6 behaviour); it is always opt-in |
 | `NAPPLE_ONLINE_STATE_DIR` | where account credentials are kept; default `<support dir>/online/<host_port>/<uid>.txt` (mode 0600) |
-| `NAPPLE_ONLINE_DEBUG=1` | logs every lookup, connection, TLS step and (dropped) play report of the glue |
+| `NAPPLE_ONLINE_DEBUG=1` | logs every lookup, connection, bind, NAT-check datagram, TLS step and (dropped) play report of the glue, with the guest call stack for reports |
 
 Server configuration (flags win over environment variables; a container needs only `napple-online serve`):
 
@@ -56,7 +56,9 @@ Server configuration (flags win over environment variables; a container needs on
 | `--data DIR` | `NAPPLE_ONLINE_DATA` | `accounts.json` and `server.key`, the only state the server keeps. Default `~/Library/Application Support/Napple/online-server` |
 | `-v` | `NAPPLE_ONLINE_VERBOSE=1` | every call and every packet in hex |
 | | `NAPPLE_ONLINE_PUBLIC_HOST` | the name clients use (reported by `/napple/v1/info`) |
-| | `NAPPLE_ONLINE_NEX_AUTH`, `NAPPLE_ONLINE_NEX_SECURE`, `NAPPLE_ONLINE_PUBLIC_IP` | accepted and ignored (logged): Switch titles reach NEX through the WebSocket on the HTTP listener and the station URLs name "the same server", so no UDP ports or public IP are needed |
+| | `NAPPLE_ONLINE_NATCHECK_BASE` | the NAT check titles run before matchmaking: UDP 10025, 10125, 33334, 33335 (primary server) and the same + 1000 (secondary). Default 10025, `0` = off |
+| | `NAPPLE_ONLINE_PUBLIC_IP` | the address reported for clients on the server's own machine (else the machine's LAN address) |
+| | `NAPPLE_ONLINE_NEX_AUTH`, `NAPPLE_ONLINE_NEX_SECURE` | accepted and ignored (logged): Switch titles reach NEX through the WebSocket on the HTTP listener |
 
 Logs go to stdout. Behind a reverse proxy the client address is taken from the first `X-Forwarded-For` entry. The crate needs only std,
 `serde`/`serde_json` and `sha2`: no TLS library, nothing macOS-specific.
@@ -91,7 +93,10 @@ input `15:A,19:DOWN,20.5:DOWN,22:A` (Online Play, 1 player) and a save past the 
 | | SecureConnection 1 Register(station URL), DISCONNECT of port 1, Utility 7 GetIntegerSettings(0), (1), Ranking 4 UploadCommonData | public URL with the observed address and RVCID; settings: empty maps; common data kept |
 | online menu | | **"Worldwide / Regional / Friends / Tournaments" is shown** |
 | Worldwide | character and kart selection, then MatchmakeExtension 40 AutoMatchmakeWithParam_Postpone(AutoMatchmakeParam) | find-or-create: a gathering (game mode 1, 12 places) owned and hosted by the caller |
-| | after ~10 s MatchMaking 2 UnregisterGathering, then DISCONNECT | (see status: the title shows "A communication error has occurred.") |
+| | Notification 1: 3001 "participant joined" about itself (verbose gathering) | without it MK8D waits 10 s, unregisters and shows SessionKeepFailed |
+| NAT check | `sfdnsres` GetAddrInfoRequest(`nncs1-%.n.n.srv.nintendo.net`), (`nncs2-%…`); `bsd` Socket(UDP), Bind; five zero packets to nncs1:33334, then types 101 / 102 to nncs1:10025, 103 to nncs2:10025 | names filled and redirected; the server answers on UDP 10025 / 10125 (nncs1) and 11025 / 11125 (nncs2) |
+| | SecureConnection 7 ReplaceURL (station URL with `natm=1;natf=1`) | |
+| | NatDetectionJob: Pia packets (`NATTestId_Dummy`) to nncs1:33335 from a fresh socket, closed at once | dropped; then 2618-0006 (open) |
 
 Names MK8D carries (from its own binary, not committed): the NEX game server `g%08x-%%.s.n.srv.nintendo.net` and `g%08x-%%.p.srv.nintendo.net`,
 Pia's NAT check servers `nncs1-%.n.n.srv.nintendo.net` / `nncs2-%...` (blocked), and `api-%%.znc.srv.nintendo.net` (blocked). NEX for_NX 4.3.1.
@@ -123,7 +128,7 @@ two clients matched into one room over PRUDP, in process.
 | 2. Server unit tests | tested (`cargo test -p napple-online`) |
 | 3. Client: Napple tokens, game-server name redirected | verified on MK8D (run log) |
 | 4. MK8D connects, logs in, reaches the online menu | verified on MK8D (needs the ssl IoMode / ResultWouldBlock change of this branch and the bsd Poll timeout fix of net-host-provider) |
-| 4. Worldwide matchmaking / two instances in one room | not reached: after AutoMatchmakeWithParam_Postpone the title shows "A communication error has occurred." (play report: error 2618-0562, `SessionKeepFailed`, a Pia error) before Pia opens any socket |
+| 4. Worldwide matchmaking | SessionKeepFailed (2618-0562) fixed: verbose gatherings (flags 0x200 / 0x800) announce every join, the joiner's own included. Pia's NAT check passes (natm=1, natf=1). Two instances are matched into one gathering and the joiner gets the host's station URL. Still open: 2618-0006 right after Pia's NatDetectionJob, before any peer-to-peer packet (online-pia integrator file) |
 | 5. Without `NAPPLE_ONLINE_SERVER`: unchanged | tested (unit test; runtime tests) |
 
 Not implemented: DataStore (115), the MK8D tournament ("Competition") and SimpleSearchObject methods, real rankings, friends / presence through

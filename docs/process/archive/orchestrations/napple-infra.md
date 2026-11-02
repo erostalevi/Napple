@@ -46,3 +46,4 @@ Read `orchestrations/ENV-MAC.md` (local-only, never ask, never push). Never writ
 
 ## Result
 Integrated 2026-11-02 into main as 14ad75c (head 9986727), outcome **Clean** (changes README rounds merged). Checked here: check_docs, bash -n, shellcheck, actionlint, tofu fmt, `infra/local/run.sh --stub` smoke. Not checked here: tofu test, Docker builds, AWS (no AWS call made). Acceptance 3's "a runtime reaches the real servers" waits for the server crates. Details: [integrator file](../integrators/claude-napple-infra-2026-11-02-r7.md).
+Second landing 2026-11-02 as 29ed0b0 (head 0b6b8e8: infra follows the landed crates, roll waits for first boot, Pia NAT-check UDP ports), **Clean**; `run.sh` against the real crates healthy, tofu fmt / actionlint / shellcheck clean.

@@ -15,7 +15,7 @@ ENV NAPPLE_STUB_ROLE=${ROLE} \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 USER 10001:10001
-EXPOSE 8080/tcp 8081/tcp 60000/udp 60001/udp 31415/tcp
+EXPOSE 8080/tcp 8081/tcp 31415/tcp
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python3 -c "import os,urllib.request; p = '8080' if os.environ['NAPPLE_STUB_ROLE'] == 'online' else '8081'; urllib.request.urlopen('http://127.0.0.1:' + p + '/healthz', timeout=4)"
 STOPSIGNAL SIGTERM

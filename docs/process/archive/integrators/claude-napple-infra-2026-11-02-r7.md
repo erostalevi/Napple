@@ -31,9 +31,10 @@ Everything needed to deploy `napple-online` and `napple-room` to AWS once the us
   1 GB data volume (`data_volume_gb = 0` drops it), standard CPU credits, no NAT/LB/detailed monitoring/Spot, ECR keeps 3 images, logs 3 days,
   no DynamoDB; about $11/month at list price, the instance hours under the free tier (estimate in the guide).
 - `site/CNAME` = `www.napple.lat`; guide `docs/guides/deploy-servers.md` (one-time setup, OIDC trust policy, costs, rollback/destroy, security).
-NOT done: acceptance 3's "a Napple runtime pointed at it reaches them". Neither `crates/napple-online` nor `crates/napple-room` was committed on its
-branch at hand-off (napple-room had only `src/proto.rs` uncommitted, napple-online had no crate), so the stack was tested against the stand-in server
-only. `app.napple.lat` is deliberately not built.
+- Aligned with the crates as they landed: `napple-online` (f7c5b68) runs everything over `NAPPLE_ONLINE_HTTP`/TCP (NEX is PRUDP Lite in a WebSocket),
+  so the NEX UDP ports are gone from compose, the Dockerfile and the security group; both images run `<binary> serve`.
+NOT done: acceptance 3's "a Napple runtime pointed at it reaches them" (an MK8D run against the local stack needs the napple-online client side in
+the runtime: the napple-online session's acceptance). `app.napple.lat` is deliberately not built.
 
 ## Files
 `git diff --stat 91c5b2e..HEAD`: all new except the link lines.
@@ -50,8 +51,9 @@ only. `app.napple.lat` is deliberately not built.
 | Acceptance 1: `tofu fmt -check`, `validate`, plan against a mock provider, both stacks | tested | `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` gives 8 passed (defaults incl. `napple-*` IAM names, cost_defaults, no_data_volume, pages_off_and_verification, zone_by_id, zone_by_name, x86_64, bad_architecture); `cd bootstrap && …` gives 2 passed. OpenTofu 1.13.5, hashicorp/aws 6.71.0. `mock_provider "aws"`, so no AWS call. |
 | Acceptance 1: actionlint on the workflow | tested | `actionlint .github/workflows/deploy-servers.yml`: no findings (actionlint 1.7.12, includes shellcheck of the run blocks). |
 | Acceptance 2: skips cleanly without secrets | tested | Guard script extracted and run: no secrets → `run=false` + notice; only the key id → skip; role with the crates missing (this tree) → `run=true` (stand-ins); dispatch apply off main → skip; plan off main → `run=true`; bootstrap with keys on main → `run=true`; destroy without `confirm` → skip; destroy confirmed → `run=true`. The images job's source step: no crate → `stub.Dockerfile`, context `infra/local`, `ROLE=online`/`room`; crate present → the real Dockerfile, context `.`. Every later job requires `run == 'true'` (`roll` also requires `infra` success). `act` not installed, not used. |
-| Acceptance 3: `infra/local/run.sh` starts both servers | verified (stand-in only) | Under `/bin/bash` 3.2: `run.sh start --stub` brings both up healthy; curl `/healthz` OK; UDP echo on 60000/60001; TCP echo on 31415; second start refused (exit 1); `stop` leaves no process; `--bin-dir` + custom ports; `KEEP_DATA=1`; a crashing binary makes start fail and clean up; without the crates it exits with "crates/napple-online is not in this checkout". |
-| Acceptance 3: a Napple runtime reaches them | not done | The crates and the client side were not committed on their branches (see Summary). |
+| Acceptance 3: `infra/local/run.sh` starts both servers | verified (stand-in only) | Under `/bin/bash` 3.2: `run.sh start --stub` brings both up healthy; curl `/healthz` OK; UDP echo on 60000/60001 (that stand-in UDP path was removed with the NEX ports); TCP echo on 31415; second start refused (exit 1); `stop` leaves no process; `--bin-dir` + custom ports; `KEEP_DATA=1`; a crashing binary makes start fail and clean up; without the crates it exits with "crates/napple-online is not in this checkout". |
+| Acceptance 3: `infra/local/run.sh` starts the real servers | verified | Scratch worktree = this branch + `claude/napple-online-2026-11-02-r7` f7c5b68 + `claude/net-rooms-2026-11-02-r7` 93da095 (conflicts only in `Cargo.toml` members and `runtime/Makefile`, resolved by hand in the scratch copy). Then `env -i PATH=/usr/bin:/bin:/opt/homebrew/bin /bin/bash infra/local/run.sh` (no cargo on PATH: found via rustup) builds both, and both report healthy. `/healthz` gives `HTTP/1.1 200 OK`, `ok` (online) and `ok` (room); `/rooms` gives `{"version":1,"clients":0,"rooms":[]}`; 31415 accepts TCP. The logs show `napple-online: listening on 127.0.0.1:18080` and `[napple-room] listening on 127.0.0.1:31415`. `stop` ends both. Evidence: `napple-infra-evidence/local-stack-real-evidence.txt`. |
+| Acceptance 3: a Napple runtime reaches them | not done | Needs the napple-online runtime client and an MK8D run; left to that session (out of my area). |
 | Acceptance 4: no AWS call from this Mac | verified | No AWS CLI calls, no apply; `tofu test` runs with a mocked provider. The deploy scripts refuse to run outside Actions (`require_ci`). No credentials written anywhere. |
 | Stand-in image contents | tested (without Docker) | The container's entrypoint (`sh -c 'exec python3 stub-server.py "$NAPPLE_STUB_ROLE"'`) with the compose env (0.0.0.0 binds) and its HEALTHCHECK command run natively: both health checks pass, `/healthz` → `ok stub online`, `/healthz` on 8081 → `ok stub room`, SIGTERM stops both. The image itself was never built. |
 | `use_lockfile` with the pinned OpenTofu | tested | `tofu init` (1.13.5) of an `s3` backend with `-backend-config=use_lockfile=true` and the endpoints pointed at 127.0.0.1:9: the option is accepted (fails only on the unreachable endpoint); a bogus option is rejected as "not expected". No AWS call. |
@@ -77,7 +79,8 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   (napple-online, net-rooms) plus the shared note `napple-infra-server-contract.md`. `NAPPLE_ONLINE_HTTP` :8080 with `/healthz`,
   `NAPPLE_ONLINE_NEX_AUTH` :60000/udp, `NAPPLE_ONLINE_NEX_SECURE` :60001/udp, `NAPPLE_ONLINE_PUBLIC_HOST/IP`, `NAPPLE_ONLINE_DATA`;
   `NAPPLE_ROOM_LISTEN` :31415 (tcp, net-rooms' `proto::DEFAULT_PORT`), `NAPPLE_ROOM_HTTP` :8081 with `/healthz`, `NAPPLE_ROOM_DATA`. Full table in
-  `docs/guides/deploy-servers.md#server-contract`. If the crates chose differently, see "How to integrate".
+  `docs/guides/deploy-servers.md#server-contract`. Outcome: napple-room matched it exactly; napple-online replaced the NEX UDP servers with a
+  WebSocket on its HTTP port (told to me by its session), so this branch dropped the UDP range and the unused env vars and runs both as `serve`.
 - **Decision: the wildcard.** Kept `*.napple.lat` CNAME to `<owner>.github.io` as the user planned, but GitHub (a) serves only the configured custom domain,
   so `app.napple.lat` gets GitHub's "site not found" rather than the landing page, and (b) warns that a wildcard to github.io allows subdomain
   takeover unless the domain is verified in the account. The guide makes verification step 2; variable `wildcard_to_pages` turns it off; repo var
@@ -107,6 +110,20 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 - **Update: both blockers fixed by the orchestrator** (re-checked read-only): the trust policy now matches the environment and `main` subjects in both
   casings (`erostalevi/napple`, `erostalevi/Napple`: the repository was renamed), and `PowerUserAccess` is attached next to the inline IAM policy.
   `infra/aws/github-oidc-trust.json` lists both casings now; `deploy-policy.json` stays as an optional least-privilege replacement.
+- `infra/local/run.sh` fix found with the real crates: Homebrew's rustup installs no `cargo`/`rustc` proxies, so `rustup which cargo` alone fails
+  with "No such file or directory" (cargo can't find rustc); the script now puts the toolchain dir on PATH.
+- **First real deploy (orchestrator):** bootstrap + apply worked (33 resources, i-06c2df69d85ebaabc, EIP 54.85.44.3, both images pushed), but the roll
+  arrived ~1m45s after launch, while cloud-init was still installing Compose: `cd: /opt/napple: No such file or directory`. Fix (separate commit):
+  the remote command waits `timeout 600 cloud-init status --wait`, checks `/opt/napple` + `docker compose version` (printing the tail of
+  `/var/log/napple-bootstrap.log` if first boot failed), SSM `executionTimeout` 1200 s, poll up to ~21 min, roll job timeout 45 min.
+  The rendered remote script passes shellcheck; not re-run on AWS from here.
+- **Pia NAT check (orchestrator follow-up, from `claude/online-pia-2026-11-02-r7` 7633f0f `natcheck.rs`/`main.rs`):** napple-online binds UDP
+  10025, 10125, 33334, 33335 and the same +1000 on its HTTP listener's address (`NAPPLE_ONLINE_NATCHECK_BASE`, default 10025; `0` = off) and
+  reads `NAPPLE_ONLINE_PUBLIC_IP` for clients on its own machine. Added: `natcheck_udp_ports` + 16 security-group rules (8 ports x IPv4/IPv6),
+  the 8 UDP mappings and both env vars in compose (public IP = the EIP from `.env`), `EXPOSE`/`ENV` in the image. **Decision:** explicit
+  port mappings (bridge network, Caddy unchanged) rather than `network_mode: host`: Docker's DNAT preserves the client address/port, and a
+  reply from a different published port is masqueraded with that same port, which the check needs. If the NAT check misbehaves live, host
+  networking for `online` is the fallback (Caddy then proxies to the host gateway). Tested only offline (tofu test, compose config).
 - **Decision: take over the hand-made DNS records.** The zone already holds apex A/AAAA, `www` and `*` with exactly the stack's values, so
   `dns_allow_overwrite` now defaults to `true` (workflow variable fallback `true`); otherwise the first apply would fail with "already exists".
 - **Decision: S3 lock files** instead of DynamoDB (the orchestrator asked for fewer resources; supported by the pinned 1.13.5, see above).
@@ -125,13 +142,13 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   It has no code dependency, so it can land first: the workflow simply skips while the crates are missing.
 - Conflict hotspots: `docs/archive/changes/README.md` (the other r7 branches will add the same `### Round 2026-11-02-r7` heading: keep one heading and all rows),
   `docs/guides/README.md` (others may add rows: keep all), `docs/index.md`.
-- **Contract check after the server branches land** (the main integration step):
+- **Contract check after the server branches land** (already done against f7c5b68 / 93da095; repeat only if either crate changed its env or ports later):
   `grep -rn 'env::var\|NAPPLE_' crates/napple-online/src crates/napple-room/src`, and compare with the table in `docs/guides/deploy-servers.md#server-contract`.
   Where they differ, change the env names/ports in `infra/docker/compose.yml`, the two Dockerfiles (`ENV`, `EXPOSE`, `HEALTHCHECK`), `infra/docker/Caddyfile`
-  (upstream ports), `infra/local/run.sh` (the two launch lines), `infra/terraform/variables.tf` (`nex_udp_*`, `room_port`) and the guide's table. If a crate
+  (upstream ports), `infra/local/run.sh` (the two launch lines), `infra/terraform/variables.tf` (`room_port`) and the guide's table. If a crate
   has no `/healthz`, ask its owner rather than dropping the health checks. If the binary name differs, update `--bin` in the Dockerfile.
 - Build/check commands, in order:
-  1. `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` → 6 passed; same in `infra/terraform/bootstrap` → 2 passed.
+  1. `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` → 8 passed; same in `infra/terraform/bootstrap` → 2 passed.
   2. `actionlint .github/workflows/deploy-servers.yml` → silent.
   3. `infra/local/run.sh` (with the crates merged) → "online healthy", "room healthy" and the env block; `infra/local/run.sh stop`.
   4. `python3 tools/check_docs.py` → OK.
@@ -139,7 +156,7 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   is written for macOS `/bin/bash` 3.2.
 
 ## How to test
-1. Offline IaC tests: commands 1-2 above. Passing looks like `Success! 6 passed, 0 failed.`; failing names the assert.
+1. Offline IaC tests: commands 1-2 above. Passing looks like `Success! 8 passed, 0 failed.`; failing names the assert.
 2. Local stack with the real servers: `infra/local/run.sh`, then
    `NAPPLE_NET=host NAPPLE_ONLINE_SERVER=http://127.0.0.1:18080 NAPPLE_ROOM=127.0.0.1:31415` on a headless MK8D run under the run lock (≤120 s). Passing:
    the server logs (`infra/local/run.sh logs`) show the runtime's token request and/or room HELLO. Failing: no request lines, so check the
@@ -162,9 +179,8 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 ## Needs from other areas
 - **site/** (landing page owner): set `<meta name="napple-repo" content="erostalevi/napple">` in `site/index.html` (the custom domain breaks the
   github.io-based derivation in `site/app.js`) and change `og:image` to `https://www.napple.lat/assets/social.png`.
-- **napple-online** (crate): follow or document the contract above; plain-HTTP API + `/healthz`; build on Linux without OpenSSL; take the public
-  IP for NEX station URLs from `NAPPLE_ONLINE_PUBLIC_IP`.
-- **net-rooms** (crate): an HTTP `/healthz` listener (`NAPPLE_ROOM_HTTP`) next to the TCP room port, and env-driven listen address.
+- **napple-online / net-rooms** (crates): nothing left; both match the deployment. Neither was compiled on Linux by its session; the
+  Docker build on the arm64 runner is the first Linux build, so a Linux-only compile error would show up in the `images` job.
 - **docs-site/mkdocs.yml** (optional): a nav line for `guides/deploy-servers.md` (several guides are already absent from the nav, so this is cosmetic).
 
 ## Integration result
@@ -172,3 +188,17 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 - Checks run here: `python3 tools/check_docs.py` OK (257 files); `bash -n` on `infra/scripts/*.sh` and `infra/local/run.sh` clean; `shellcheck -x` clean; `actionlint .github/workflows/deploy-servers.yml` clean; `tofu fmt -check -recursive infra/terraform` clean; `infra/local/run.sh start --stub` (private state dir, ports 28080 / 28081 / 32415 to stay clear of the r7 sessions): both healthy, `/healthz` answered `ok stub online` / `ok stub room`, `stop` left no process, `start` without the crates refused with the expected message.
 - Not run here (no change from the author's evidence): `tofu init/validate/test` (needs the provider download; the author ran it with a mocked provider), Docker image builds (no Docker), anything against AWS. **No AWS command was run and nothing was deployed.**
 - Note for whoever publishes main: the workflow runs on pushes to `main` touching `infra/**`; with the `napple-servers` environment secrets in place (the author reports the OIDC role was fixed), publishing this merge will start a real deploy with the stand-in images while the server crates are not on main.
+
+### Second landing (9986727..0b6b8e8)
+- Date 2026-11-02, merged into main as 29ed0b0 after napple-online and online-pia (0b6b8e8 reads online-pia's `NAPPLE_ONLINE_NATCHECK_BASE` /
+  `NAPPLE_ONLINE_PUBLIC_IP`). Commits 8c05bfc (NEX over WebSocket on 443 behind Caddy, the UDP 60000-60010 rule and NEX env removed, both images run
+  `serve`, `run.sh` puts the rustup toolchain dir on PATH), 4277dc8 (the SSM roll waits for cloud-init, /opt/napple and docker compose; SSM 1200 s,
+  roll job 45 min), 0b6b8e8 (Pia NAT-check UDP 10025 / 10125 / 33334 / 33335 and +1000, IPv4 and IPv6, in the security group and compose).
+  No conflicts: main's `TOFU_VERSION: "1.13.2"` and its mocked `tofu test` step (9dda272, ddbce78) are kept; this file's own updates were carried
+  into the archived copy by git's rename detection. Outcome: **Clean**.
+- Checks: `infra/local/run.sh start` with the real crates (private `NAPPLE_LOCAL_STACK_DIR`, ports 18180 / 31515 / 18181, NAT check base 16025):
+  builds napple-online + napple-room, `online healthy` and `room healthy`; `/healthz` = `ok` on both, `/rooms` = `{"version":1,"clients":0,"rooms":[]}`;
+  `stop` clean. `tofu fmt -check -recursive infra/terraform` rc 0; `actionlint .github/workflows/deploy-servers.yml` rc 0 (repo-wide actionlint only
+  reports the pre-existing SC2046 in `release.yml`); `shellcheck -x infra/local/run.sh infra/scripts/*.sh` rc 0; `tools/check_docs.py` OK.
+- Not checked here: `tofu validate` / `tofu test` (need `tofu init`, which downloads providers), Docker builds (no Docker on this Mac), anything on AWS.
+

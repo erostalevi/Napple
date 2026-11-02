@@ -72,6 +72,11 @@ static void fake_start(void) {
     pthread_detach(t);
 }
 
+static void set_ip(OnlineAddr *a, uint32_t ip, uint16_t port) {
+    memset(a, 0, sizeof *a);
+    a->family = 2, a->port = port;
+    a->addr[0] = ip >> 24, a->addr[1] = ip >> 16 & 255, a->addr[2] = ip >> 8 & 255, a->addr[3] = ip & 255;
+}
 static int ip_is(const OnlineAddr *a, uint32_t ip) {
     return a->family == 2 && a->addr[0] == (ip >> 24) && a->addr[1] == (ip >> 16 & 255) && a->addr[2] == (ip >> 8 & 255) && a->addr[3] == (ip & 255);
 }
@@ -92,7 +97,11 @@ int main(void) {
     /* ---- name policy and nsd ---- */
     CHECK(net_online_name_policy("g2b309e01-lp1.s.n.srv.nintendo.net") == NET_ONLINE_NAME_REDIRECT, "a NEX game server is redirected");
     CHECK(net_online_name_policy("G2B309E01-lp1.p.srv.nintendo.net.") == NET_ONLINE_NAME_REDIRECT, "its sibling, case-insensitive, fully qualified");
-    const char *blocked[] = {"nncs1-lp1.n.n.srv.nintendo.net", "accounts.nintendo.com", "dauth-lp1.ndas.srv.nintendo.net", "conntest.nintendowifi.net",
+    CHECK(net_online_name_policy("nncs1-lp1.n.n.srv.nintendo.net") == NET_ONLINE_NAME_REDIRECT && net_online_name_policy("nncs2-lp1.n.n.srv.nintendo.net") == NET_ONLINE_NAME_REDIRECT &&
+          net_online_name_policy("nncs2.p01.lp1.n.n.srv.nintendo.net") == NET_ONLINE_NAME_REDIRECT, "the NAT check servers are redirected");
+    CHECK(net_online_redirect_ip("nncs2-lp1.n.n.srv.nintendo.net") == NET_ONLINE_VIRTUAL_IP2 && net_online_redirect_ip("nncs1-lp1.n.n.srv.nintendo.net") == NET_ONLINE_VIRTUAL_IP &&
+          net_online_redirect_ip("g2b309e01-lp1.s.n.srv.nintendo.net") == NET_ONLINE_VIRTUAL_IP, "the secondary NAT check server has its own virtual address");
+    const char *blocked[] = {"nncs3-lp1.n.n.srv.nintendo.net", "accounts.nintendo.com", "dauth-lp1.ndas.srv.nintendo.net", "conntest.nintendowifi.net",
                              "g2b309e01-%.s.n.srv.nintendo.net", "nintendo.net", "api-lp1.znc.srv.nintendo.net", "gxyz-lp1.s.n.srv.nintendo.net", "x%y.example"};
     int all = 1;
     for (unsigned i = 0; i < sizeof blocked / sizeof blocked[0]; i++) all &= net_online_name_policy(blocked[i]) == NET_ONLINE_NAME_BLOCK;
@@ -117,7 +126,7 @@ int main(void) {
     OnlineProvider *p = net_online_new(net_host_provider(), &s, dir);
     CHECK(p && !strcmp(p->name, NET_ONLINE_NAME) && online_has(p, ONLINE_CAP_ACCOUNT) && online_has(p, ONLINE_CAP_NSD) && online_has(p, ONLINE_CAP_SOCKETS) &&
           p->ctx == net_host_provider()->ctx, "the wrapper: accounts and nsd on top of the host's capabilities, sharing its ctx");
-    CHECK(p->ldn_scan == net_host_provider()->ldn_scan && p->sock_recv == net_host_provider()->sock_recv, "entry points it does not override are the host's own");
+    CHECK(p->ldn_scan == net_host_provider()->ldn_scan && p->sock_listen == net_host_provider()->sock_listen, "entry points it does not override are the host's own");
     void *ctx = p->ctx;
     OnlineAccountInfo ai;
     CHECK(p->account_info(ctx, g_user_id, &ai) == 0 && ai.linked && ai.id == 777 && fake_accounts == 1, "first use creates the Napple account on the server");
@@ -166,7 +175,33 @@ int main(void) {
     CHECK(p->dns_resolve(ctx, "g2b309e01-lp1.s.n.srv.nintendo.net", "443", 2, &r) == 0 && r.count == 1 && ip_is(&r.addrs[0], NET_ONLINE_VIRTUAL_IP) &&
           r.addrs[0].port == 443, "the game server resolves to the virtual address");
     CHECK(p->dns_resolve(ctx, "g2b309e01-lp1.s.n.srv.nintendo.net", NULL, 28, &r) == HZ_EAI_NONAME, "no IPv6 answer for it");
-    CHECK(p->dns_resolve(ctx, "nncs1-lp1.n.n.srv.nintendo.net", NULL, 0, &r) == HZ_EAI_NONAME && r.count == 0, "another Nintendo name: EAI_NONAME");
+    CHECK(p->dns_resolve(ctx, "accounts.nintendo.com", NULL, 0, &r) == HZ_EAI_NONAME && r.count == 0, "another Nintendo name: EAI_NONAME");
+    CHECK(p->dns_resolve(ctx, "nncs2-%.n.n.srv.nintendo.net", NULL, 2, &r) == 0 && ip_is(&r.addrs[0], NET_ONLINE_VIRTUAL_IP2), "a template is filled, like the console's resolver does");
+
+    /* the NAT check: datagrams to the virtual servers reach the server's NAT check ports and come back from the virtual servers */
+    {
+        int nerr = 0, us = socket(AF_INET, SOCK_DGRAM, 0);
+        struct sockaddr_in a = {.sin_len = sizeof a, .sin_family = AF_INET, .sin_addr.s_addr = htonl(INADDR_LOOPBACK), .sin_port = htons(NET_ONLINE_NATCHECK_PORT + NET_ONLINE_NATCHECK_SECONDARY)};
+        int ok_bind = bind(us, (struct sockaddr *)&a, sizeof a) == 0;
+        int g = p->sock_open(ctx, 2, 2, 0, &nerr);
+        OnlineAddr to;
+        set_ip(&to, NET_ONLINE_VIRTUAL_IP2, NET_ONLINE_NATCHECK_PORT);
+        if (ok_bind && g >= 0) {
+            CHECK(p->sock_send(ctx, g, "natcheck", 8, 0, &to, &nerr) == 8, "a datagram to the secondary NAT check server");
+            char b[16];
+            struct sockaddr_in from;
+            socklen_t fl = sizeof from;
+            ssize_t got = recvfrom(us, b, sizeof b, 0, (struct sockaddr *)&from, &fl);
+            CHECK(got == 8, "arrives on the server's NAT check port + 1000");
+            sendto(us, "reply", 5, 0, (struct sockaddr *)&from, fl);
+            OnlineAddr src;
+            usleep(50000);
+            CHECK(p->sock_recv(ctx, g, b, sizeof b, 0, &src, &nerr) == 5 && ip_is(&src, NET_ONLINE_VIRTUAL_IP2) && src.port == NET_ONLINE_NATCHECK_PORT,
+                  "the reply comes from the secondary server's virtual address and port");
+        } else CHECK(1, "NAT check port taken on this Mac: skipped");
+        if (g >= 0) p->sock_close(ctx, g, &nerr);
+        close(us);
+    }
     CHECK(p->dns_resolve(ctx, "localhost", NULL, 2, &r) == 0 && r.count >= 1 && ip_is(&r.addrs[0], 0x7f000001), "other names: the host resolver");
     char outn[128];
     CHECK(p->nsd_resolve(ctx, "g2b309e01-%.s.n.srv.nintendo.net", outn, sizeof outn) == 0 && !strcmp(outn, "g2b309e01-lp1.s.n.srv.nintendo.net"), "nsd through the provider");

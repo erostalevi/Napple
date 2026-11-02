@@ -158,6 +158,7 @@ static void run_fini(const Module *m) {
     }
 }
 void fs_report_uncommitted(void);
+__attribute__((weak)) void cloud_runtime_start(void) {} /* runtime/src/cloud/cloud.c when built with cloud saves */
 void napple_audio_pcm_report(void);
 void audio_report(void);
 /* nnMain returned and nn::init hands over its finalizer callback (SDK 15 form of Start): the guest is quitting on its own, as a console title does
@@ -318,6 +319,11 @@ int main(int argc, char **argv) {
     load_game_config(g_cfg.data_dir);
     summary_set_title(g_cfg.title_id, g_cfg.build_id);
     LOG("main", "title %s build %s data %s", g_cfg.title_id, g_cfg.build_id, g_cfg.data_dir);
+    {
+        /* cloud saves (runtime/src/cloud): pull the newest save before any service can open one; a weak no-op without runtime/src/cloud */
+        extern void cloud_runtime_start(void);
+        cloud_runtime_start();
+    }
 
     char path[4096];
     snprintf(path, sizeof path, "%s/main.npdm", g_cfg.data_dir);
