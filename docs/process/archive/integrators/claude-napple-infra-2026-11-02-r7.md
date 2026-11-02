@@ -188,3 +188,17 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 - Checks run here: `python3 tools/check_docs.py` OK (257 files); `bash -n` on `infra/scripts/*.sh` and `infra/local/run.sh` clean; `shellcheck -x` clean; `actionlint .github/workflows/deploy-servers.yml` clean; `tofu fmt -check -recursive infra/terraform` clean; `infra/local/run.sh start --stub` (private state dir, ports 28080 / 28081 / 32415 to stay clear of the r7 sessions): both healthy, `/healthz` answered `ok stub online` / `ok stub room`, `stop` left no process, `start` without the crates refused with the expected message.
 - Not run here (no change from the author's evidence): `tofu init/validate/test` (needs the provider download; the author ran it with a mocked provider), Docker image builds (no Docker), anything against AWS. **No AWS command was run and nothing was deployed.**
 - Note for whoever publishes main: the workflow runs on pushes to `main` touching `infra/**`; with the `napple-servers` environment secrets in place (the author reports the OIDC role was fixed), publishing this merge will start a real deploy with the stand-in images while the server crates are not on main.
+
+### Second landing (9986727..0b6b8e8)
+- Date 2026-11-02, merged into main as 29ed0b0 after napple-online and online-pia (0b6b8e8 reads online-pia's `NAPPLE_ONLINE_NATCHECK_BASE` /
+  `NAPPLE_ONLINE_PUBLIC_IP`). Commits 8c05bfc (NEX over WebSocket on 443 behind Caddy, the UDP 60000-60010 rule and NEX env removed, both images run
+  `serve`, `run.sh` puts the rustup toolchain dir on PATH), 4277dc8 (the SSM roll waits for cloud-init, /opt/napple and docker compose; SSM 1200 s,
+  roll job 45 min), 0b6b8e8 (Pia NAT-check UDP 10025 / 10125 / 33334 / 33335 and +1000, IPv4 and IPv6, in the security group and compose).
+  No conflicts: main's `TOFU_VERSION: "1.13.2"` and its mocked `tofu test` step (9dda272, ddbce78) are kept; this file's own updates were carried
+  into the archived copy by git's rename detection. Outcome: **Clean**.
+- Checks: `infra/local/run.sh start` with the real crates (private `NAPPLE_LOCAL_STACK_DIR`, ports 18180 / 31515 / 18181, NAT check base 16025):
+  builds napple-online + napple-room, `online healthy` and `room healthy`; `/healthz` = `ok` on both, `/rooms` = `{"version":1,"clients":0,"rooms":[]}`;
+  `stop` clean. `tofu fmt -check -recursive infra/terraform` rc 0; `actionlint .github/workflows/deploy-servers.yml` rc 0 (repo-wide actionlint only
+  reports the pre-existing SC2046 in `release.yml`); `shellcheck -x infra/local/run.sh infra/scripts/*.sh` rc 0; `tools/check_docs.py` OK.
+- Not checked here: `tofu validate` / `tofu test` (need `tofu init`, which downloads providers), Docker builds (no Docker on this Mac), anything on AWS.
+
