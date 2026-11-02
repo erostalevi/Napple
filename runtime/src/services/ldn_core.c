@@ -99,10 +99,16 @@ static uint64_t get64(const uint8_t *p) {
     memcpy(&v, p, 8);
     return v;
 }
+/* NetworkId.sessionId (NetworkInfo +0x10, SecurityParameter +0x10): random per network on a console. The provider ABI has no field for it, so it is
+ * derived from the network's random bssid and security data: every node of a network computes the same id. */
+void ldn_session_id(const OnlineLdnNetwork *n, uint8_t out[16]) {
+    for (unsigned i = 0; i < 16; i++) out[i] = (uint8_t)(n->security_param[15 - i] ^ n->bssid[i % 6] ^ (0x5a + i));
+}
 void ldn_net_encode(const OnlineLdnNetwork *n, uint8_t out[LDN_NETINFO_SIZE]) {
     memset(out, 0, LDN_NETINFO_SIZE);
     put64(out, n->local_communication_id);
     put16(out + 0x0a, n->scene_id);
+    ldn_session_id(n, out + 0x10);
     memcpy(out + 0x20, n->bssid, 6);
     size_t sl = strnlen(n->ssid, sizeof n->ssid - 1);
     out[0x26] = (uint8_t)sl;

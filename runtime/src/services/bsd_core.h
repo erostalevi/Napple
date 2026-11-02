@@ -17,6 +17,10 @@ typedef struct {
 void bsdg_reset(BsdGuest *g); /* closes every socket through the provider and empties the table */
 BsdGuest *bsdg_global(void);
 int bsdg_handle(BsdGuest *g, int fd); /* provider handle of a guest descriptor, or -1 */
+/* The errno the bsd service hands the guest. Inside the runtime (bsd_core, providers, hz_result.h) errors use FreeBSD's numbering; the console's bsd
+ * sysmodule answers with Linux's (EAGAIN 11, EINPROGRESS 115, ECONNREFUSED 111, ...), and titles compare nn::socket::GetLastErrno() against those
+ * (MK8D's Pia: 11 = would block, 100 = network down, 9 = bad descriptor). 1..34 are the same in both; unknown values pass through. */
+int bsd_errno_to_guest(int freebsd_errno);
 
 /* Each returns the result of the call (descriptor, count or 0) or -1 with *err set to a BSD errno. */
 int bsdg_socket(BsdGuest *g, int domain, int type, int protocol, int *err);

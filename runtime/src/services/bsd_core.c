@@ -322,3 +322,49 @@ size_t bsd_sockaddr_encode(const OnlineAddr *a, uint8_t *out, size_t cap) {
     memcpy(out, tmp, cap < len ? cap : len);
     return len;
 }
+
+int bsd_errno_to_guest(int e) {
+    static const struct {
+        uint8_t bsd, linux_;
+    } map[] = {
+        {35, 11},  /* EAGAIN / EWOULDBLOCK */
+        {36, 115}, /* EINPROGRESS */
+        {37, 114}, /* EALREADY */
+        {38, 88},  /* ENOTSOCK */
+        {39, 89},  /* EDESTADDRREQ */
+        {40, 90},  /* EMSGSIZE */
+        {41, 91},  /* EPROTOTYPE */
+        {42, 92},  /* ENOPROTOOPT */
+        {43, 93},  /* EPROTONOSUPPORT */
+        {44, 94},  /* ESOCKTNOSUPPORT */
+        {45, 95},  /* EOPNOTSUPP */
+        {46, 96},  /* EPFNOSUPPORT */
+        {47, 97},  /* EAFNOSUPPORT */
+        {48, 98},  /* EADDRINUSE */
+        {49, 99},  /* EADDRNOTAVAIL */
+        {50, 100}, /* ENETDOWN */
+        {51, 101}, /* ENETUNREACH */
+        {52, 102}, /* ENETRESET */
+        {53, 103}, /* ECONNABORTED */
+        {54, 104}, /* ECONNRESET */
+        {55, 105}, /* ENOBUFS */
+        {56, 106}, /* EISCONN */
+        {57, 107}, /* ENOTCONN */
+        {58, 108}, /* ESHUTDOWN */
+        {59, 109}, /* ETOOMANYREFS */
+        {60, 110}, /* ETIMEDOUT */
+        {61, 111}, /* ECONNREFUSED */
+        {62, 40},  /* ELOOP */
+        {63, 36},  /* ENAMETOOLONG */
+        {64, 112}, /* EHOSTDOWN */
+        {65, 113}, /* EHOSTUNREACH */
+        {66, 39},  /* ENOTEMPTY */
+        {78, 38},  /* ENOSYS */
+        {84, 75},  /* EOVERFLOW */
+        {85, 125}, /* ECANCELED */
+        {92, 71},  /* EPROTO */
+    };
+    for (unsigned i = 0; i < sizeof map / sizeof map[0]; i++)
+        if (map[i].bsd == e) return map[i].linux_;
+    return e;
+}

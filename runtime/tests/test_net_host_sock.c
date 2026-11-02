@@ -136,10 +136,10 @@ int main(void) {
     uint8_t pres[8] = {0}; { static Call k; memset(&k, 0, sizeof k); k.in[0] = 1; k.in[1] = 500; k.c.in = (const uint8_t *)k.in; k.c.in_size = 8;
         svc_set_in_buf(&k.c, pfd, 8); svc_set_out_buf(&k.c, pres, 8); svc_call_c(b0, 6, &k.c); int16_t re; memcpy(&re, pres + 6, 2);
         CHECK(ri(&k.c, 0) == 1 && (re & ONLINE_POLLOUT), "bsd Poll: the connected socket is writable"); }
-    r = bs(b0, 20, afd, 4, 4, NULL, 0, NULL, 0, NULL, 0); r = bs(b0, 8, afd, 0, 0, NULL, 0, rb, sizeof rb, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_EAGAIN, "bsd Fcntl(O_NONBLOCK) then Recv: EAGAIN");
+    r = bs(b0, 20, afd, 4, 4, NULL, 0, NULL, 0, NULL, 0); r = bs(b0, 8, afd, 0, 0, NULL, 0, rb, sizeof rb, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == bsd_errno_to_guest(HZ_EAGAIN), "bsd Fcntl(O_NONBLOCK) then Recv: EAGAIN");
     r = bs(b0, 26, cfd, 0, 0, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 0) == 0, "bsd Close");
     r = bs(b0, 23, 0, 0, 0, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 0) == 0, "bsd ShutdownAllSockets");
-    r = bs(b0, 26, lfd, 0, 0, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 1) == HZ_EBADF, "every descriptor is gone afterwards");
+    r = bs(b0, 26, lfd, 0, 0, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 1) == bsd_errno_to_guest(HZ_EBADF), "every descriptor is gone afterwards");
 
     /* ---- DNS ---- */
     OnlineResolved res; CHECK(p->dns_resolve(c0, "localhost", NULL, 2, &res) == 0 && res.count >= 1 && res.addrs[0].family == 2 && res.addrs[0].addr[0] == 127, "resolve localhost (IPv4)");
@@ -179,7 +179,7 @@ int main(void) {
 
     /* ---- back to offline: the previous answers ---- */
     unsetenv("NAPPLE_NET"); online_provider_reset(); bsdg_reset(bsd_g()); online_null_reset();
-    r = bs(b0, 2, 2, 1, 0, NULL, 0, NULL, 0, NULL, 0); r = bs(b0, 14, 0, 0, 0, sa, 16, NULL, 0, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_ENETDOWN, "variable unset again: Connect is ENETDOWN as before");
+    r = bs(b0, 2, 2, 1, 0, NULL, 0, NULL, 0, NULL, 0); r = bs(b0, 14, 0, 0, 0, sa, 16, NULL, 0, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == bsd_errno_to_guest(HZ_ENETDOWN), "variable unset again: Connect is ENETDOWN as before");
     { OnlinePollFd neg = {-1, 1, 0}; int64_t t1 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 0, 200, &err) == 0 && nh_now_ms() - t1 < 50, "offline: Poll of nothing still answers at once"); }
     printf("%d checks, %d failed\n", g_checked, g_failed);
     return g_failed != 0;
