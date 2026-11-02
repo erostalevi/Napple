@@ -1,3 +1,10 @@
+---
+branch: claude/ipc-depth-cloud-2026-11-02-r9
+orchestration: ipc-depth-cloud
+env: linux-cloud
+status: integrated
+---
+
 # Integrator notes: claude/ipc-depth-cloud-2026-11-02-r9
 
 Cloud worker on Linux. Base: `main` = `57431a7`. The change note is `docs/archive/changes/2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9.md`. Every code commit
@@ -142,3 +149,16 @@ make -C runtime GFX=napple test test-services test-ipc-reference
 ## Commit note
 `b992833` repeats the subject of `c1c93cf` (vi 2450 / 2451). Its only change is the one-line `test_svc_vi.c` buffer fix that ASan found. It was left
 as is rather than rewriting the already pushed branch; squash it into `c1c93cf` when integrating if you like.
+
+## Integration result
+- Date 2026-11-02, merged into main as fc04ba1 (head 3b5e0b7, rebased by the orchestrator onto local main 21e785e). No conflicts. Outcome: **Clean**
+  (no macOS fix was needed), plus one doc commit (the change note's row in the r9 change archive, which the file asked for).
+- Every `unbuilt:` commit compiled on macOS for the first time here: `make -C runtime GFX=napple` rc 0, no new warnings (only the three pre-existing ones).
+- `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0 on the branch tree and again on main after the merge (with online-race's
+  offline.c change): ipc_reference 111 fixtures / app_reachable 1325 / missing 0 / errors 0. Touched suites on macOS: settings 194, time 153, vi 201,
+  aoc 87, pctl 215, push 58, bcat 148, pdm 51 (Linux run: 58; all pass, the macOS build of the test checks fewer), lbl 90, ncm 146: 0 failed each.
+  test_svc_time / test_svc_vi link with the real objects (the Linux link gap does not exist here).
+- Four-title 45 s boots, offline and `NAPPLE_NET=host`: SMO, LAS, MK8D, ACNH rc 0, notify-running, `missing_ipc []`, `unsupported_svcs []`, stubbed only `nvdrv:13`.
+- No native ports: pure service logic and state stores; left as C on purpose. The duplicate vi commit subject (4e9e48b / 840ae0a) was left as is.
+- Open (from Risks): layouts never checked on a console (notif AlarmSetting size, pctl PIN buffer, ISystemDisplayService 32xx argument order,
+  PurchasedProductInfo); napple-chosen result values; `ncm_core.c` reads the ContentInfo type at 0x17 (libnx: 0x16) — worth a separate check.

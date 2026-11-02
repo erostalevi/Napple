@@ -84,3 +84,4 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | Item | Orchestration | Integrator file | Goal |
 |---|---|---|---|
 | napple-social-cloud | [napple-social-cloud.md](orchestrations/napple-social-cloud.md) | [claude-napple-social-cloud-2026-11-02-r9.md](integrators/claude-napple-social-cloud-2026-11-02-r9.md) | friends, presence and invites service for Napple players (REST + WebSocket) |
+| ipc-depth-cloud | [ipc-depth-cloud.md](orchestrations/ipc-depth-cloud.md) | [claude-ipc-depth-cloud-2026-11-02-r9.md](integrators/claude-ipc-depth-cloud-2026-11-02-r9.md) | 98 IPC rows made real (set:sys, time, vi, aoc, notif, pctl, pdm, lbl, ncm) |
