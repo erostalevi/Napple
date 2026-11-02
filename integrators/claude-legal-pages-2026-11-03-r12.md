@@ -2,7 +2,7 @@
 branch: claude/legal-pages-2026-11-03-r12
 orchestration: legal-pages
 base: ac6692cb300be6fc6e90eb894de0268c3732e948
-head: HEAD
+head: f5e81ef
 env: mac
 date: 2026-11-03
 areas: [site, docs/legal]
