@@ -222,3 +222,8 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 |---|---|
 | [2026-11-02-claude-napple-account-2026-11-02-r8](2026-11-02-claude-napple-account-2026-11-02-r8.md) | napple-account: the Napple Account server (email magic link + passkeys, devices, Ed25519 JWT + JWKS, E2E save-key exchange, profiles with reserved names and admin grants, cloud-save metadata with presigned S3 URLs); no billing. |
 | [2026-11-02-claude-cloud-saves-client-2026-11-02-r8](2026-11-02-claude-cloud-saves-client-2026-11-02-r8.md) | cloud-saves-client: end-to-end encrypted cloud saves (crates/napple-cloud: Keychain store, HPKE key wrap, 24-word recovery, deterministic AES-256-GCM blobs, sync engine, runtime FFI), runtime pull-before-mount / push-after-commit hooks, `napple account` / `napple saves` CLI. |
+
+### Round 2026-11-02-r10
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-online-support-table-2026-11-02-r10](2026-11-02-claude-online-support-table-2026-11-02-r10.md) | Per-game online support table generated from `compat/online.json`: `docs/reference/online-support.md`, a block in the README Status section, `site/online.json` and an "Online play" section on the landing page. |
