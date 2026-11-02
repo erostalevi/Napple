@@ -384,6 +384,58 @@ static void bcat_set_passphrase(IpcObject *s, IpcCall *c) {
     const IpcBuf *b = ipc_in_buf(c, 0);
     if (!b || !bcat_valid_passphrase_size(b->size)) bad_name(c);
 }
+/* Local delivery-task state (bcat_core.h): timers, subscription flags, the stop latch, the push log and the cache usage are host state, no network.
+ * In layouts [unverified]: the timer commands take u64 application id at +0 and u32 interval seconds at +8 (0 removes the timer); the table holds
+ * BCAT_MAX_TIMERS, a full table answers the invalid-argument result. */
+static void set_timer_common(IpcCall *c, int system) {
+    uint64_t key = IPC_IN(c, uint64_t, 0);
+    uint32_t seconds = IPC_IN(c, uint32_t, 8);
+    if (bcat_timer_set(key, system, seconds)) bad_name(c);
+}
+static void bcat_set_timer(IpcObject *s, IpcCall *c) { (void)s; set_timer_common(c, 0); }
+static void bcat_set_sys_timer(IpcObject *s, IpcCall *c) { (void)s; set_timer_common(c, 1); }
+static void bcat_stop_background(IpcObject *s, IpcCall *c) { (void)s; (void)c; bcat_background_stop(); }
+/* RegisterSystemApplicationDeliveryTasks: with an input array of u64 ids those system tasks are registered, without one the single system task 0. */
+static void bcat_register_sys_tasks(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    uint64_t ids[BCAT_MAX_TIMERS], zero = 0;
+    int n = 0;
+    if (b && b->size >= 8) {
+        n = (int)(b->size / 8 < BCAT_MAX_TIMERS ? b->size / 8 : BCAT_MAX_TIMERS);
+        const uint8_t *src = ipc_buf_ptr(b);
+        for (int i = 0; i < n; i++) memcpy(&ids[i], src + 8 * i, 8);
+    } else {
+        ids[0] = zero;
+        n = 1;
+    }
+    if (bcat_register_system_tasks(ids, n) != n) bad_name(c);
+}
+static void bcat_clear_subscription(IpcObject *s, IpcCall *c) { (void)s; bcat_subscription_clear(IPC_IN(c, uint64_t, 0)); }
+static void bcat_get_push_log(IpcObject *s, IpcCall *c) { /* out array of BCAT_PUSH_LOG_ENTRY_SIZE records; result s32 count written */
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    int32_t got = 0;
+    if (b) {
+        uint8_t ents[BCAT_MAX_PUSH_LOG * BCAT_PUSH_LOG_ENTRY_SIZE];
+        BcatPushLogEntry e;
+        while (bcat_push_log_get(got, &e) && (uint64_t)(got + 1) * BCAT_PUSH_LOG_ENTRY_SIZE <= b->size) {
+            bcat_pack_push_log(&e, ents + (size_t)got * BCAT_PUSH_LOG_ENTRY_SIZE);
+            got++;
+        }
+        if (got) ipc_write_buf(c, b, ents, (uint64_t)got * BCAT_PUSH_LOG_ENTRY_SIZE);
+    }
+    IPC_OUT(c, got);
+}
+static void bcat_get_usage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t bytes;
+    int32_t dirs, files;
+    uint8_t rec[BCAT_USAGE_SIZE];
+    bcat_storage_usage(&bytes, &dirs, &files);
+    bcat_pack_usage(bytes, dirs, files, rec);
+    IPC_OUT(c, rec);
+}
 /* Background delivery tasks: nothing is ever scheduled (no network), so register/unregister/block/unblock have no effect to record, and the
  * task list is empty. Documented no-ops: the console with delivery disabled answers success to the same calls. */
 static const IpcCmd bcat_service_cmds[] = {
@@ -397,6 +449,13 @@ static const IpcCmd bcat_service_cmds[] = {
     {30202, "BlockDeliveryTask", svc_noop, IPC_IMPL},
     {30203, "UnblockDeliveryTask", svc_noop, IPC_IMPL},
     {90100, "GetDeliveryTaskList", ret_s32_0, IPC_IMPL},
+    {20410, "SetSystemApplicationDeliveryTaskTimer", bcat_set_sys_timer, IPC_IMPL},
+    {20500, "StopBackgroundService", bcat_stop_background, IPC_IMPL},
+    {30210, "SetDeliveryTaskTimer", bcat_set_timer, IPC_IMPL},
+    {30300, "RegisterSystemApplicationDeliveryTasks", bcat_register_sys_tasks, IPC_IMPL},
+    {90202, "ClearDeliveryTaskSubscriptionStatus", bcat_clear_subscription, IPC_IMPL},
+    {90300, "GetPushNotificationLog", bcat_get_push_log, IPC_IMPL},
+    {90301, "GetDeliveryCacheStorageUsage", bcat_get_usage, IPC_IMPL},
     {90201, "ClearDeliveryCacheStorage", svc_noop, IPC_IMPL}, /* nothing of ours to clear: a provider folder is the user's, never deleted */
     /* 20101 (u64 application id, DirectoryName): the same sync as 10101, from the provider; the console's system variant names the application explicitly */
     {20101, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName", request_sync, IPC_IMPL},
@@ -404,15 +463,7 @@ static const IpcCmd bcat_service_cmds[] = {
     {20301, "RequestSuspendDeliveryTask", bcat_request_suspend, IPC_IMPL},
     {20400, "RegisterSystemApplicationDeliveryTask", bcat_register_sysapp_task, IPC_IMPL},
     {20401, "UnregisterSystemApplicationDeliveryTask", bcat_unregister_sysapp_task, IPC_IMPL},
-    /* No public layout (switchbrew lists names only) for 20410, 20500, 30210, 30300, 90202, 90300 and 90301: documented defaults. */
-    {20410, "SetSystemApplicationDeliveryTaskTimer", sysd_ok, IPC_STUB},
-    {20500, "StopBackgroundService", sysd_ok, IPC_STUB},
-    {30210, "SetDeliveryTaskTimer", sysd_ok, IPC_STUB},
-    {30300, "RegisterSystemApplicationDeliveryTasks", sysd_ok, IPC_STUB},
     {90200, "GetDeliveryList", bcat_get_delivery_list, IPC_IMPL},
-    {90202, "ClearDeliveryTaskSubscriptionStatus", sysd_ok, IPC_STUB},
-    {90300, "GetPushNotificationLog", sysd_err_net, IPC_STUB},
-    {90301, "GetDeliveryCacheStorageUsage", sysd_err_net, IPC_STUB},
 };
 static void make_bcat_service(IpcObject *s, IpcCall *c) {
     (void)s;
