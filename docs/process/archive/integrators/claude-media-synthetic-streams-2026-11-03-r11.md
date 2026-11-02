@@ -6,7 +6,7 @@ head: 57a98e9
 env: mac
 date: 2026-11-03
 areas: [runtime/media]
-status: ready
+status: integrated
 ---
 
 # media-synthetic-streams: AAC / VP8 / ARGB on generated streams
@@ -50,3 +50,9 @@ Nothing to fix.
 
 ## Needs from other areas
 None.
+
+## Integration result
+- Date: 2026-11-03 (batch r11 integrator run, local main, unpushed)
+- Merged commit: b2645fa
+- Outcome: Clean
+- Docs-only hand-off (assignment already implemented before the round, no source change); nothing to fix, no native port.

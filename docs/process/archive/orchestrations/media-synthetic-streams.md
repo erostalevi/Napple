@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r11
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: pending
 launched_at: 2026-11-03
@@ -29,3 +29,6 @@ Everything else (other sessions edit runtime/src/services, runtime/src/net, gfx 
 Read `orchestrations/ENV-MAC.md` first (shared title data read-only, lockf run lock, local-only, never ask, never push). Model: Sonnet 5.5, medium effort: work test-first in small steps, commit each.
 
 ## Result
+
+Outcome: Clean. Merged commit b2645fa. Docs-only hand-off (assignment already implemented before the round, no source change); nothing to fix, no native port.
+Integrator record: docs/process/archive/integrators/claude-media-synthetic-streams-2026-11-03-r11.md
