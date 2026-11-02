@@ -9,7 +9,8 @@
  * (0, 0) (1, 1) (2, 1): layer 0 has viewport 0's square, layer 1 the other two;  4. the same into a one-layer view of layer 1: the layer is ignored, all
  * three land in layer 1;  5. a geometry program that forwards the triangle with viewport index 2 and layer 1 (the pass-through routes them);
  * 6. a quad patch whose tess eval program places its vertices at control point 0 + (u, v) (the lower-left quarter of clip space) with viewport index 1
- * and layer 1: the quarter of viewport 1 inside scissor 1 (8 x 8), in layer 1.
+ * and layer 1: the quarter of viewport 1 inside scissor 1 (8 x 8), in layer 1;  7. into mip level 1 of a 32 x 32 texture (a 16 x 16 pass, smaller than the
+ * guest size: every scissor, set or not, must lie inside it or Metal's validation aborts): viewport 0 covers the level.
  * Headless Metal (MTL_DEBUG_LAYER=1 in make test), no game data. */
 #include "nvn_harness.h"
 #include <math.h>
@@ -26,6 +27,7 @@ static uint64_t fadd(int d, int a, int b) { return 0x5c58000000000000ull | (uint
 static H h;
 static NVNprogram *prog_route, *prog_plain, *prog_gs, *prog_tes;
 static int g_patch; /* draw one 4-vertex patch (tess levels 4) instead of triangles */
+static int g_rbw = W; /* readback width / height (a mip level is smaller) */
 static NVNtexture *rt2d, *arr;
 
 /* one vertex: clip position (x, y, 0.5, 1), then viewport index and layer as an RGBA32UI attribute */
@@ -49,7 +51,8 @@ static void draw(NVNprogram *p, NVNtexture *t, const NVNtextureView *v, int ntri
         if (t == arr) L(nvnTextureViewSetLayers)(&lv, l, 1);
         const NVNtexture *rts[1] = {t};
         const NVNtextureView *lvs[1] = {&lv};
-        L(nvnCommandBufferSetRenderTargets)(cb, 1, rts, t == arr ? lvs : NULL, NULL, NULL);
+        const NVNtextureView *cvs[1] = {v};
+        L(nvnCommandBufferSetRenderTargets)(cb, 1, rts, t == arr ? lvs : v ? cvs : NULL, NULL, NULL);
         L(nvnCommandBufferSetScissor)(cb, 0, 0, W, W);
         L(nvnCommandBufferClearColor)(cb, 0, zero, NVN_CLEAR_COLOR_MASK_RGBA);
     }
@@ -86,8 +89,8 @@ static void draw(NVNprogram *p, NVNtexture *t, const NVNtextureView *v, int ntri
     } else L(nvnCommandBufferDrawArrays)(cb, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3 * ntri);
     memset(h.mem + OFF_RB, 0xcd, (size_t)W * W * 4 * nlayers);
     for (int l = 0; l < nlayers; l++) {
-        NVNcopyRegion r = {0, 0, l, W, W, 1};
-        L(nvnCommandBufferCopyTextureToBuffer)(cb, t, NULL, &r, (NVNbufferAddress)(uintptr_t)(h.mem + OFF_RB + (size_t)W * W * 4 * l), 0);
+        NVNcopyRegion r = {0, 0, l, g_rbw, g_rbw, 1};
+        L(nvnCommandBufferCopyTextureToBuffer)(cb, t, g_rbw != W ? v : NULL, &r, (NVNbufferAddress)(uintptr_t)(h.mem + OFF_RB + (size_t)W * W * 4 * l), 0);
     }
     h_submit(&h);
 }
@@ -233,5 +236,26 @@ int main(void) {
     box q = find(1, 0.3f);
     CHECK(nonzero(0) == 0, "tess eval: layer 0 untouched");
     CHECK(is_rect(q, 16, 8, 8) && nonzero(1) == 8 * 8, "tess eval: a quarter of viewport 1 (8 x 8 inside scissor 1) in layer 1");
+    /* 7. mip level 1: a 16 x 16 pass */
+    NVNtexture *mip;
+    {
+        NVNtextureBuilder tb; L(nvnTextureBuilderSetDevice)(&tb, h.dev); L(nvnTextureBuilderSetDefaults)(&tb);
+        L(nvnTextureBuilderSetTarget)(&tb, NVN_TEXTURE_TARGET_2D); L(nvnTextureBuilderSetFormat)(&tb, NVN_FORMAT_R32F);
+        L(nvnTextureBuilderSetSize2D)(&tb, W, W); L(nvnTextureBuilderSetLevels)(&tb, 2);
+        L(nvnTextureBuilderSetStorage)(&tb, h.pool, OFF_ARR + 0x10000);
+        mip = calloc(1, sizeof(NVNtexture));
+        CHECK(L(nvnTextureInitialize)(mip, &tb), "mipmapped texture init");
+    }
+    NVNtextureView lv1; L(nvnTextureViewSetDefaults)(&lv1); L(nvnTextureViewSetLevels)(&lv1, 1, 1);
+    g_rbw = 16;
+    draw(prog_route, mip, &lv1, 3, 1);
+    g_rbw = W;
+    {
+        const float *px = (const float *)(h.mem + OFF_RB);
+        int n5 = 0, other = 0;
+        for (int i = 0; i < 16 * 16; i++) n5 += fabsf(px[i] - 0.5f) < 1e-4f, other += px[i] != 0 && fabsf(px[i] - 0.5f) >= 1e-4f;
+        printf("mip level 1: %d of 256 pixels at 0.5, %d other non-zero\n", n5, other);
+        CHECK(n5 == 256, "mip level 1 (16 x 16 pass): viewport 0 covers the level; scissors clamped to the pass");
+    }
     return h_finish("t_multi_viewport", &h);
 }

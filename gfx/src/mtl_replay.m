@@ -114,6 +114,7 @@ typedef struct {
     uint8_t sl_n, sl_pos[8]; /* programmable sample positions the pass was begun with (sl_n 0 = the default positions) */
     uint32_t layers;         /* array layers every attachment has from its slice (1: a single image) */
     uint8_t layered;         /* the pass was begun with renderTargetArrayLength = layers (a draw's program writes the layer) */
+    uint32_t pw, ph;         /* Metal's render pass size: the smallest attachment at its level (scissor rectangles must lie inside it) */
 } passinfo;
 static passinfo P;
 static int g_want_layered; /* the next pass_begin makes a layered pass (pass_layered) */
@@ -499,13 +500,15 @@ static int pass_begin(void) {
         }
     }
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
-    uint32_t layers = ~0u;
+    uint32_t layers = ~0u, pw = ~0u, ph = ~0u;
     for (uint32_t i = 0; i < S.rt.n && i < 8; i++) {
         GfxTex *t = mtl_tex_get(&S.rt.color[i].s, 1);
         if (!t) continue;
         uint32_t lv, sl;
         id<MTLTexture> mt = mtl_tex_attach_view(t, &S.rt.color[i].view, S.rt.color[i].has_view, &lv, &sl);
         layers = MIN(layers, att_layers(mt, sl, &S.rt.color[i].view, S.rt.color[i].has_view));
+        pw = MIN(pw, (uint32_t)MAX(1, mt.width >> lv));
+        ph = MIN(ph, (uint32_t)MAX(1, mt.height >> lv));
         MTLRenderPassColorAttachmentDescriptor *a = rp.colorAttachments[i];
         a.texture = mt;
         a.level = lv;
@@ -530,6 +533,8 @@ static int pass_begin(void) {
             uint32_t lv, sl;
             id<MTLTexture> mt = mtl_tex_attach_view(d, &S.rt.depth.view, S.rt.depth.has_view, &lv, &sl);
             layers = MIN(layers, att_layers(mt, sl, &S.rt.depth.view, S.rt.depth.has_view));
+            pw = MIN(pw, (uint32_t)MAX(1, mt.width >> lv));
+            ph = MIN(ph, (uint32_t)MAX(1, mt.height >> lv));
             if (d->pf != MTLPixelFormatStencil8) {
                 rp.depthAttachment.texture = mt;
                 rp.depthAttachment.level = lv;
@@ -601,6 +606,8 @@ static int pass_begin(void) {
         }
     }
     P.layers = layers == ~0u || !layers ? 1 : layers;
+    P.pw = pw == ~0u ? (uint32_t)lroundf((float)P.w * P.sx) : pw;
+    P.ph = ph == ~0u ? (uint32_t)lroundf((float)P.h * P.sy) : ph;
     P.layered = g_want_layered && P.layers > 1;
     g_want_layered = 0;
     if (P.layered) rp.renderTargetArrayLength = P.layers; /* the layer a program writes selects the image (as the slice offset; layer 0 = the attachment's slice) */
@@ -839,9 +846,10 @@ static void pass_end(void) {
 
 /* Clears folded into the next pass must still happen when no draw follows. */
 /* The active scissor in Metal's top-left convention (clamped to the pass); NVN counts y from the bottom in the default lower-left window origin mode. */
+static MTLScissorRect scissor_rect_clamp(MTLScissorRect sr);
 static MTLScissorRect scissor_rect_of(int i) {
     MTLScissorRect sr = {0, 0, (NSUInteger)lroundf((float)P.w * P.sx), (NSUInteger)lroundf((float)P.h * P.sy)};
-    if (!(S.sc_set & (1u << i))) return sr;
+    if (!(S.sc_set & (1u << i))) return scissor_rect_clamp(sr);
     int32_t x = S.sc[i][0] < 0 ? 0 : S.sc[i][0], y = S.sc[i][1], w = S.sc[i][2], h = S.sc[i][3];
     if (w < 0) w = 0;
     if (h < 0) h = 0;
@@ -867,7 +875,17 @@ static MTLScissorRect scissor_rect_of(int i) {
         if (w < 0) w = 0;
         if (h < 0) h = 0;
     }
-    return (MTLScissorRect){(NSUInteger)x, (NSUInteger)y, (NSUInteger)w, (NSUInteger)h};
+    return scissor_rect_clamp((MTLScissorRect){(NSUInteger)x, (NSUInteger)y, (NSUInteger)w, (NSUInteger)h});
+}
+/* Metal requires the rectangle inside the render pass, which is smaller than the guest size when an attachment is a lower mip level or smaller than the
+ * others (P.pw / P.ph; 0 before a pass begins: no clamp) */
+static MTLScissorRect scissor_rect_clamp(MTLScissorRect sr) {
+    if (!P.pw || !P.ph) return sr;
+    if (sr.x > P.pw) sr.x = P.pw;
+    if (sr.y > P.ph) sr.y = P.ph;
+    if (sr.width > P.pw - sr.x) sr.width = P.pw - sr.x;
+    if (sr.height > P.ph - sr.y) sr.height = P.ph - sr.y;
+    return sr;
 }
 static MTLScissorRect scissor_rect(void) { return scissor_rect_of(0); }
 static void flush_clears(void) {
