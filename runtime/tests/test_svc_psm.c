@@ -56,6 +56,7 @@ int main(void) {
     svc_call(o, 6, NULL, 0, &c); CHECK(c.result != 0, "release without acquire");
     svc_call(o, 5, NULL, 0, &c); svc_call(o, 6, NULL, 0, &c); CHECK(c.result == 0, "acquire then release");
     svc_call(o, 15, NULL, 0, &c); CHECK(SVC_OUT(&c, double, 0) == 100.0, "battery age 100");
+    { IpcObject *p18 = psm_open(); svc_call(p18, 18, NULL, 0, &c); CHECK(c.nout_copy == 1 && !event_is_signaled(c.out_copy[0]), "GetBatteryChargeCalibratedEvent: never fires"); }
     printf("{\"test\":\"svc_psm\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

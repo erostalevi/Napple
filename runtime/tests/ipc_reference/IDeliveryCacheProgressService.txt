@@ -1,0 +1,4 @@
+# interface IDeliveryCacheProgressService (nn::bcat::ipc::IDeliveryCacheProgressService; switchbrew 'BCAT services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	GetEvent	1.0.0	y
+1	GetImpl	1.0.0	y

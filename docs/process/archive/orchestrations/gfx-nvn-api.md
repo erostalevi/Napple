@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r2
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_c89e1641-2d09-4870-9b87-c73343780cea (reused gfx-msaa-views r1 session)
 launched_at: 2026-11-01
@@ -44,3 +44,5 @@ SetProvokingVertexMode may need a translator key bit (translator owned by gfx-sh
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-01: Clean, merged into main as f0a7b07 (branch head 946e770). gfx tests all pass (t_nvn_ext, t_nvn_ext_prog, t_msaa_copy under the Metal debug layer); four-title 60 s boots: 0 skipped draws, NVN unknown-name / program-hash lines gone (ACNH 27 -> 0, MK8D 4 -> 0).
+Integrator file: `docs/process/archive/integrators/claude-gfx-nvn-api-2026-11-01-r2.md`.

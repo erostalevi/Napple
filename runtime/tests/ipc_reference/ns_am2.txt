@@ -1,0 +1,13 @@
+# interface ns:am2 (nn::ns::detail::IServiceGetterInterface; switchbrew 'NS services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+7988	GetDynamicRightsInterface	6.0.0	n
+7989	GetReadOnlyApplicationControlDataInterface	5.1.0	n
+7991	GetReadOnlyApplicationRecordInterface	5.0.0	n
+7992	GetECommerceInterface	4.0.0	n
+7993	GetApplicationVersionInterface	4.0.0	n
+7994	GetFactoryResetInterface	1.0.0	n
+7995	GetAccountProxyInterface	1.0.0	n
+7996	GetApplicationManagerInterface	1.0.0	n
+7997	GetDownloadTaskInterface	1.0.0	n
+7998	GetContentManagementInterface	1.0.0	n
+7999	GetDocumentInterface	1.0.0	n

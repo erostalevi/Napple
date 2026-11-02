@@ -31,6 +31,7 @@ static int clonefile(const char *src, const char *dst, int flags) {
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "sys_default.h"
 
 #define FS_RESULT(desc) (2u | ((desc) << 9))
 #define R_FS_PATH_NOT_FOUND FS_RESULT(1)
@@ -207,6 +208,8 @@ static void file_get_size(IpcObject *self, IpcCall *c) {
 static const IpcCmd file_cmds[] = {
     {0, "Read", file_read, IPC_IMPL},        {1, "Write", file_write, IPC_IMPL},      {2, "Flush", file_flush, IPC_IMPL},
     {3, "SetSize", file_set_size, IPC_IMPL}, {4, "GetSize", file_get_size, IPC_IMPL},
+    {5, "OperateRange", sysd_z16, IPC_STUB},
+    {6, "OperateRangeWithBuffer", sysd_z16, IPC_STUB},
 };
 
 /* ---- IDirectory ---------------------------------------------------------------------------------------------- */
@@ -790,6 +793,8 @@ static const IpcCmd fs_cmds[] = {
     {12, "GetTotalSpaceSize", fs_total_space, IPC_IMPL},
     {13, "CleanDirectoryRecursively", fs_clean_directory, IPC_IMPL},
     {14, "GetFileTimeStampRaw", fs_get_timestamp, IPC_IMPL},
+    {15, "QueryEntry", sysd_ok, IPC_STUB},
+    {16, "GetFileSystemAttribute", sysd_z32, IPC_STUB},
 };
 static IpcObject *open_host_fs(const char *root, int read_only, int journaled, int64_t quota) {
     HostFs *fs = calloc(1, sizeof *fs);
@@ -922,6 +927,7 @@ static const IpcCmd storage_cmds[] = {
     {0, "Read", storage_read, IPC_IMPL},        {1, "Write", storage_write_denied, IPC_IMPL},
     {2, "Flush", storage_flush, IPC_IMPL},      {3, "SetSize", storage_write_denied, IPC_IMPL},
     {4, "GetSize", storage_get_size, IPC_IMPL},
+    {5, "OperateRange", sysd_z16, IPC_STUB},
 };
 static IpcObject *open_romfs_storage_path(IpcCall *c, const char *path, const char *what) {
     int fd = open(path, O_RDONLY);
@@ -1497,6 +1503,47 @@ static const IpcCmd srv_cmds[] = {
     {1003, "DisableAutoSaveDataCreation", srv_noop, IPC_IMPL},
     {1005, "GetGlobalAccessLogMode", srv_get_log_mode, IPC_IMPL},
     {1006, "OutputAccessLogToSdCard", srv_noop, IPC_IMPL},
+    {0, "OpenFileSystem", sysd_err_generic, IPC_STUB},
+    {2, "OpenDataFileSystemByCurrentProcess", sysd_ok, IPC_STUB},
+    {7, "OpenFileSystemWithPatch", sysd_err_generic, IPC_STUB},
+    {9, "OpenDataFileSystemByProgramId", sysd_ok, IPC_STUB},
+    {10, "OpenFileSystemWithId", sysd_err_generic, IPC_STUB},
+    {27, "IsExFatSupported", sysd_z1, IPC_STUB},
+    {31, "OpenGameCardFileSystem", sysd_err_generic, IPC_STUB},
+    {37, "CreateSaveDataFileSystemWithCreationInfo2", sysd_err_generic, IPC_STUB},
+    {64, "OpenSaveDataInternalStorageFileSystem", sysd_ok, IPC_STUB},
+    {67, "FindSaveDataWithFilter", sysd_err_generic, IPC_STUB},
+    {68, "OpenSaveDataInfoReaderWithFilter", sysd_err_generic, IPC_STUB},
+    {80, "OpenSaveDataMetaFile", sysd_ok, IPC_STUB},
+    {81, "OpenSaveDataTransferManager", sysd_err_generic, IPC_STUB},
+    {82, "OpenSaveDataTransferManagerVersion2", sysd_err_generic, IPC_STUB},
+    {83, "OpenSaveDataTransferProhibiter", sysd_err_generic, IPC_STUB},
+    {84, "ListAccessibleSaveDataOwnerId", sysd_err_generic, IPC_STUB},
+    {85, "OpenSaveDataTransferManagerForSaveDataRepair", sysd_err_generic, IPC_STUB},
+    {86, "OpenSaveDataMover", sysd_err_generic, IPC_STUB},
+    {87, "OpenSaveDataTransferManagerForRepair", sysd_err_generic, IPC_STUB},
+    {88, "OpenSaveDataTransferManagerForSaveDataRepairWithPolicy", sysd_ok, IPC_STUB},
+    {100, "OpenImageDirectoryFileSystem", sysd_ok, IPC_STUB},
+    {110, "OpenContentStorageFileSystem", sysd_err_generic, IPC_STUB},
+    {130, "OpenCustomStorageFileSystem", sysd_err_generic, IPC_STUB},
+    {201, "OpenDataStorageByProgramId", sysd_ok, IPC_STUB},
+    {205, "OpenDataStorageWithProgramIndex", sysd_err_generic, IPC_STUB},
+    {510, "OpenSystemDataUpdateEventNotifier", sysd_ok, IPC_STUB},
+    {511, "NotifySystemDataUpdateEvent", sysd_ok, IPC_STUB},
+    {606, "GetRightsId", sysd_err_generic, IPC_STUB},
+    {610, "GetRightsIdAndKeyGenerationByPath", sysd_err_generic, IPC_STUB},
+    {612, "GetFreeSpaceSizeForSaveData", sysd_z8, IPC_STUB},
+    {616, "GetSaveDataCommitId", sysd_z8, IPC_STUB},
+    {618, "GetProgramId", sysd_err_generic, IPC_STUB},
+    {620, "SetSdCardEncryptionSeed", sysd_ok, IPC_STUB},
+    {630, "SetSdCardAccessibility", sysd_ok, IPC_STUB},
+    {631, "IsSdCardAccessible", sysd_z1, IPC_STUB},
+    {800, "GetAndClearErrorInfo", sysd_err_generic, IPC_STUB},
+    {1001, "SetSaveDataSize", sysd_ok, IPC_STUB},
+    {1004, "SetGlobalAccessLogMode", sysd_ok, IPC_STUB},
+    {1011, "GetProgramIndexForAccessLog", sysd_err_generic, IPC_STUB},
+    {1012, "GetFsStackUsage", sysd_z8, IPC_STUB},
+    {1016, "FlushAccessLogOnSdCard", sysd_ok, IPC_STUB},
 };
 static IpcObject *fsp_open(void) { return IPC_OBJECT("fsp-srv", srv_cmds, NULL, NULL); }
 void service_register_fs(void) { ipc_register_service("fsp-srv", fsp_open); }

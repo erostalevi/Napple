@@ -1,0 +1,37 @@
+# interface IBtmUserCore (switchbrew BTM_services; libnx btm.c)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: -
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+0	AcquireBleScanEvent	5.0.0	y
+1	GetBleScanFilterParameter	5.0.0	y
+2	GetBleScanFilterParameter2	5.0.0	y
+3	StartBleScanForGeneral	5.0.0	y
+4	StopBleScanForGeneral	5.0.0	y
+5	GetBleScanResultsForGeneral	5.0.0	y
+6	StartBleScanForPaired	5.0.0	y
+7	StopBleScanForPaired	5.0.0	y
+8	StartBleScanForSmartDevice	5.0.0	y
+9	StopBleScanForSmartDevice	5.0.0	y
+10	GetBleScanResultsForSmartDevice	5.0.0	y
+17	AcquireBleConnectionEvent	5.0.0	y
+18	BleConnect	5.0.0	y
+19	BleDisconnect	5.0.0	y
+20	BleGetConnectionState	5.0.0	y
+21	AcquireBlePairingEvent	5.0.0	y
+22	BlePairDevice	5.0.0	y
+23	BleUnPairDevice	5.0.0	y
+24	BleUnPairDevice2	5.0.0	y
+25	BleGetPairedDevices	5.0.0	y
+26	AcquireBleServiceDiscoveryEvent	5.0.0	y
+27	GetGattServices	5.0.0	y
+28	GetGattService	5.0.0	y
+29	GetGattIncludedServices	5.0.0	y
+30	GetBelongingGattService	5.0.0	y
+31	GetGattCharacteristics	5.0.0	y
+32	GetGattDescriptors	5.0.0	y
+33	AcquireBleMtuConfigEvent	5.0.0	y
+34	ConfigureBleMtu	5.0.0	y
+35	GetBleMtu	5.0.0	y
+36	RegisterBleGattDataPath	5.0.0	y
+37	UnregisterBleGattDataPath	5.0.0	y

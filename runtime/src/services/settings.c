@@ -76,6 +76,17 @@ static void set_key_code_map(IpcObject *s, IpcCall *c) {
         ipc_write_buf(c, b, map, n);
     }
 }
+/* GetDeviceNickName (set 11 since 10.1.0, set:sys 77): the console's name, a 0x80-byte NUL-terminated string. The host is a Napple runtime, so that
+ * is its name unless NAPPLE_DEVICE_NICKNAME gives another one. */
+static void set_get_device_nickname(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char n[0x80] = {0};
+    const char *e = getenv("NAPPLE_DEVICE_NICKNAME");
+    snprintf(n, sizeof n, "%s", e && *e ? e : "Napple");
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b) ipc_write_buf(c, b, n, b->size < sizeof n ? b->size : sizeof n);
+}
+
 static const IpcCmd set_cmds[] = {
     {0, "GetLanguageCode", set_get_language_code, IPC_IMPL},
     {1, "GetAvailableLanguageCodes", set_get_available, IPC_IMPL},
@@ -86,11 +97,11 @@ static const IpcCmd set_cmds[] = {
     {6, "GetAvailableLanguageCodeCount2", set_count18, IPC_IMPL},
     {7, "GetKeyCodeMap", set_key_code_map, IPC_IMPL},
     {9, "GetKeyCodeMap2", set_key_code_map, IPC_IMPL},
-    {11, "GetKeyCodeMap3", set_key_code_map, IPC_IMPL},
+    {11, "GetDeviceNickName", set_get_device_nickname, IPC_IMPL}, /* was answered as "GetKeyCodeMap3" before 2026-11-01: 11 is the nickname (10.1.0+) */
+    {12, "GetKeyCodeMapByPort", set_key_code_map, IPC_IMPL},     /* 18.0.0+: {u32 port} in; one layout for every port */
     {8, "GetQuestFlag", set_get_quest_flag, IPC_IMPL}, /* a retail console is never a quest unit */
 };
 static IpcObject *set_open(void) { return IPC_OBJECT("set", set_cmds, NULL, NULL); }
-
 /* set:sys */
 static void sys_get_firmware_version(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -122,6 +133,16 @@ static void sys_get_device_timezone(IpcObject *s, IpcCall *c) {
     settings_timezone_name(getenv("NAPPLE_TIMEZONE"), n);
     ipc_out(c, n, sizeof n);
 }
+static void sys_get_debug_mode(IpcObject *s, IpcCall *c) { /* 62 GetDebugModeFlag: a retail console */
+    (void)s;
+    uint8_t v = 0;
+    IPC_OUT(c, v);
+}
+static void sys_get_product_model(IpcObject *s, IpcCall *c) { /* 79 GetProductModel: 1 = Nx (the original console model) */
+    (void)s;
+    uint32_t v = 1;
+    IPC_OUT(c, v);
+}
 /* GetMiiAuthorId (90): the 16-byte id the Mii library mixes into StoreData checksums (mii_core.c). */
 __attribute__((weak)) void mii_device_id(uint8_t out[16]) { memset(out, 0, 16); }
 static void sys_get_mii_author_id(IpcObject *s, IpcCall *c) {
@@ -135,7 +156,11 @@ static const IpcCmd sys_cmds[] = {
     {3, "GetFirmwareVersion", sys_get_firmware_version, IPC_IMPL},
     {4, "GetFirmwareVersion2", sys_get_firmware_version, IPC_IMPL},
     {23, "GetColorSetId", sys_get_color_set_id, IPC_IMPL},
-    {62, "GetDeviceTimeZoneLocationName", sys_get_device_timezone, IPC_IMPL},
+    /* 53 was registered as 62 before 2026-11-01; 62 is GetDebugModeFlag (switchbrew ISystemSettingsServer) */
+    {53, "GetDeviceTimeZoneLocationName", sys_get_device_timezone, IPC_IMPL},
+    {62, "GetDebugModeFlag", sys_get_debug_mode, IPC_IMPL},
+    {77, "GetDeviceNickName", set_get_device_nickname, IPC_IMPL},
+    {79, "GetProductModel", sys_get_product_model, IPC_IMPL},
 };
 static IpcObject *sys_open(void) { return IPC_OBJECT("set:sys", sys_cmds, NULL, NULL); }
 void service_register_settings(void) {

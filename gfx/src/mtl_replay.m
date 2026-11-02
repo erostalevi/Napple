@@ -1129,8 +1129,25 @@ static void ds_slot_masks(int stage, uint32_t *depth, uint32_t *stencil) {
     }
 }
 
+/* Sampled bindings of a stage whose bound texture / view is an integer colour format (ShaderKey.tex_uint_slots / tex_sint_slots: declared texture2d<uint|int>). */
+static void int_slot_masks(int stage, uint32_t *umask, uint32_t *smask) {
+    *umask = *smask = 0;
+    gdpool *tp = (gdpool *)htab_get(S.texpool);
+    if (!tp) return;
+    for (int slot = 0; slot < 32; slot++) {
+        uint64_t h = S.tex[stage][slot];
+        uint32_t tic = (uint32_t)(h & 0xfffff);
+        if (!h || tic >= (uint32_t)tp->n || !tp->tex[tic].s.valid) continue;
+        int k = mtl_tex_int_kind(&tp->tex[tic].s, &tp->tex[tic].view, 1);
+        if (k == IMGKIND_UINT) *umask |= 1u << slot;
+        else if (k == IMGKIND_INT) *smask |= 1u << slot;
+    }
+}
+
 static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     memset(k, 0, sizeof *k);
+    int_slot_masks(ST_VS, &k->tex_uint[0], &k->tex_sint[0]);
+    int_slot_masks(ST_FS, &k->tex_uint[1], &k->tex_sint[1]);
     ds_slot_masks(ST_VS, &k->depth_slots[0], &k->stencil_slots[0]);
     ds_slot_masks(ST_FS, &k->depth_slots[1], &k->stencil_slots[1]);
     image_masks(ST_VS, &k->img_int[0], &k->img_uint[0]);
@@ -2511,7 +2528,7 @@ static void do_copy_xfer(const p_copy_xfer *c, int to_tex) {
     }
 }
 /* Scaled and/or format-converting texture-to-texture copy (the console's 2D engine does both): a draw sampling the source region into the destination
- * region. Depth/stencil, multisampled and 3D textures are not handled (reported once). */
+ * region. Depth <-> colour, multisampled, 3D and integer <-> float pairs go through the generic copy pass (xcopy_draw). */
 static NSString *const kXferMSL =
     @"#include <metal_stdlib>\nusing namespace metal;\n"
      "struct V { float4 pos [[position]]; float2 uv; };\n"
@@ -2574,13 +2591,137 @@ static id<MTLRenderPipelineState> xfer_depth_pso(MTLPixelFormat pf) {
     pso[@(pf)] = p;
     return p;
 }
+/* Generic copy pass: the copies and resolves the paths above refuse (a depth texture to colour or the other way, multisampled sources or destinations of
+ * another size or format, 3D textures with a format or size change, integer <-> float). The fragment function reads the source with read() at the scaled
+ * pixel (nearest: depth and integer texels are not filtered), from a 2D / 2D array / 3D / multisampled (array) texture or its depth counterpart, and writes the
+ * destination colour or depth ([[depth(any)]]). Multisampled sources: a float colour Downsample averages the samples; anything else takes sample 0, as the
+ * console's 2D engine does; a multisampled destination is written per sample (sample i reads source sample i modulo the source's count). Kinds convert by
+ * value between float and integer colour, and by bits between depth and integer colour (an integer view of float depth holds its bits, see mtl_tex.m). */
+enum { XK_FLOAT, XK_SINT, XK_UINT, XK_DEPTH };
+enum { XT_2D, XT_2DARRAY, XT_3D, XT_MS, XT_MSARRAY };
+static int xk_of(GfxTex *t) { return t->is_depth ? XK_DEPTH : pf_is_int((uint32_t)t->pf) ? (pf_is_sint(t->pf) ? XK_SINT : XK_UINT) : XK_FLOAT; }
+static id<MTLRenderPipelineState> xcopy_pso(int sk, int st, int dk, MTLPixelFormat dpf, uint32_t dsamples, int average) {
+    static NSMutableDictionary<NSNumber *, id> *cache;
+    if (!cache) cache = [NSMutableDictionary new];
+    NSNumber *key = @((uint64_t)dpf | (uint64_t)sk << 32 | (uint64_t)st << 36 | (uint64_t)dk << 40 | (uint64_t)dsamples << 44 | (uint64_t)average << 52);
+    id p = cache[key];
+    if (p) return p;
+    static const char *const vt[] = {"float4", "int4", "uint4", "float4"}, *const et[] = {"float", "int", "uint", "float"};
+    const char *tex;
+    char decl[96];
+    if (sk == XK_DEPTH) tex = st == XT_2D ? "depth2d" : st == XT_2DARRAY ? "depth2d_array" : st == XT_MS ? "depth2d_ms" : "depth2d_ms_array";
+    else tex = st == XT_2D ? "texture2d" : st == XT_2DARRAY ? "texture2d_array" : st == XT_3D ? "texture3d" : st == XT_MS ? "texture2d_ms" : "texture2d_ms_array";
+    snprintf(decl, sizeof decl, sk == XK_DEPTH ? "%s<float>" : "%s<%s>", tex, et[sk]);
+    /* read of sample / level `X` */
+    const char *rd = st == XT_2D ? "t.read(c, p.lod)" : st == XT_2DARRAY ? "t.read(c, p.slice, p.lod)" : st == XT_3D ? "t.read(uint3(c, p.slice), p.lod)"
+                     : st == XT_MS ? "t.read(c, X)" : "t.read(c, p.slice, X)";
+    int ms = st == XT_MS || st == XT_MSARRAY;
+    NSMutableString *body = [NSMutableString string];
+    NSString *R = [NSString stringWithUTF8String:rd];
+    NSString *(^read)(NSString *) = ^NSString *(NSString *s) {
+        NSString *r = [R stringByReplacingOccurrencesOfString:@"X" withString:s];
+        return sk == XK_DEPTH ? [NSString stringWithFormat:@"float4(%@, 0, 0, 1)", r] : r;
+    };
+    if (ms && dsamples > 1) [body appendFormat:@"  %s v = %@;\n", vt[sk], read(@"(sid % p.ns)")];
+    else if (ms && average && sk == XK_FLOAT) [body appendFormat:@"  float4 v = 0; for (uint i = 0; i < p.ns; i++) v += %@; v /= float(p.ns);\n", read(@"i")];
+    else [body appendFormat:@"  %s v = %@;\n", vt[sk], read(@"0")];
+    NSString *out;
+    if (dk == XK_DEPTH) out = sk == XK_FLOAT || sk == XK_DEPTH ? @"v.x" : @"as_type<float>(v.x)";
+    else if (sk == XK_DEPTH) out = dk == XK_FLOAT ? @"v" : dk == XK_UINT ? @"uint4(as_type<uint>(v.x), 0, 0, 1)" : @"int4(as_type<int>(v.x), 0, 0, 1)";
+    else if (sk == dk) out = @"v";
+    else if (dk == XK_FLOAT) out = @"float4(v)";
+    else if (sk == XK_FLOAT) out = dk == XK_UINT ? @"uint4(max(v, 0.0))" : @"int4(v)";
+    else out = dk == XK_UINT ? @"as_type<uint4>(v)" : @"as_type<int4>(v)";
+    NSString *src = [NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\n"
+                                                "struct CP { float4 m; uint slice, ns, lod, pad; };\n%@"
+                                                "vertex float4 cv(uint vid [[vertex_id]]) { float2 q = float2((vid << 1) & 2, vid & 2); return float4(q * 2.0 - 1.0, 0, 1); }\n"
+                                                "fragment %s cf(float4 pos [[position]], %s t [[texture(0)]], constant CP &p [[buffer(0)]]%s) {\n"
+                                                "  uint2 c = uint2(p.m.xy + pos.xy * p.m.zw);\n%@  %s;\n}\n",
+                                               dk == XK_DEPTH ? @"struct DO { float d [[depth(any)]]; };\n" : @"", dk == XK_DEPTH ? "DO" : vt[dk], decl,
+                                               dsamples > 1 ? ", uint sid [[sample_id]]" : "", body,
+                                               [(dk == XK_DEPTH ? [NSString stringWithFormat:@"DO o; o.d = %@; return o", out] : [NSString stringWithFormat:@"return %@", out]) UTF8String]];
+    NSError *err = nil;
+    id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:src options:nil error:&err];
+    if (!lib) {
+        LOGE("generic copy shader: %s", err.localizedDescription.UTF8String);
+        return nil;
+    }
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    pd.vertexFunction = [lib newFunctionWithName:@"cv"];
+    pd.fragmentFunction = [lib newFunctionWithName:@"cf"];
+    if (dk == XK_DEPTH) pd.depthAttachmentPixelFormat = dpf;
+    else pd.colorAttachments[0].pixelFormat = dpf;
+    pd.rasterSampleCount = dsamples;
+    p = [g_mtl.dev newRenderPipelineStateWithDescriptor:pd error:&err];
+    if (!p) {
+        LOGE("generic copy pipeline (format %lu): %s", (unsigned long)dpf, err.localizedDescription.UTF8String);
+        return nil;
+    }
+    cache[key] = p;
+    return p;
+}
+/* Source region (sx, sy, sw, sh) of level slv / slice-or-depth ssl -> destination region of level dlv / slice-or-depth-plane dsl. 0 when the pair is not
+ * handled (stencil-only textures, a 3D or cube source as depth). */
+static int xcopy_draw(GfxTex *s, GfxTex *d, uint32_t slv, uint32_t ssl, uint32_t dlv, uint32_t dsl, uint32_t sx, uint32_t sy, uint32_t sw, uint32_t sh, uint32_t dx,
+                      uint32_t dy, uint32_t dw, uint32_t dh, int average) {
+    if (s->pf == MTLPixelFormatStencil8 || d->pf == MTLPixelFormatStencil8 || !sw || !sh || !dw || !dh) return 0;
+    int sk = xk_of(s), dk = xk_of(d);
+    id<MTLTexture> src = s->tex;
+    MTLTextureType ty = src.textureType;
+    if (ty == MTLTextureTypeCube || ty == MTLTextureTypeCubeArray) { /* faces as array layers */
+        src = [src newTextureViewWithPixelFormat:src.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0, src.mipmapLevelCount)
+                                          slices:NSMakeRange(0, ty == MTLTextureTypeCube ? 6 : src.arrayLength * 6)];
+        ty = MTLTextureType2DArray;
+    }
+    int st = ty == MTLTextureType2DArray ? XT_2DARRAY : ty == MTLTextureType3D ? XT_3D : ty == MTLTextureType2DMultisample ? XT_MS
+             : ty == MTLTextureType2DMultisampleArray ? XT_MSARRAY : ty == MTLTextureType2D ? XT_2D : -1;
+    if (st < 0 || (sk == XK_DEPTH && st == XT_3D)) return 0;
+    uint32_t dsamples = (uint32_t)d->tex.sampleCount;
+    id<MTLRenderPipelineState> ps = xcopy_pso(sk, st, dk, d->pf, dsamples, average);
+    if (!ps) return 0;
+    LOG_ONCE(NAPPLE_LOG_INFO, "texture copy / resolve through the generic pass (format %lu type %lu x%lu -> format %lu type %lu x%lu)", (unsigned long)s->pf,
+             (unsigned long)s->tex.textureType, (unsigned long)s->tex.sampleCount, (unsigned long)d->pf, (unsigned long)d->tex.textureType, (unsigned long)dsamples);
+    flush_clears();
+    end_encoders();
+    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    MTLRenderPassAttachmentDescriptor *a = dk == XK_DEPTH ? (MTLRenderPassAttachmentDescriptor *)rp.depthAttachment : rp.colorAttachments[0];
+    a.texture = d->tex;
+    a.level = dlv;
+    if (d->tex.textureType == MTLTextureType3D) a.depthPlane = dsl;
+    else a.slice = dsl;
+    a.loadAction = MTLLoadActionLoad;
+    a.storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:rp];
+    [e setRenderPipelineState:ps];
+    if (dk == XK_DEPTH) {
+        static id<MTLDepthStencilState> dsw;
+        if (!dsw) {
+            MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
+            dd.depthCompareFunction = MTLCompareFunctionAlways;
+            dd.depthWriteEnabled = YES;
+            dsw = [g_mtl.dev newDepthStencilStateWithDescriptor:dd];
+        }
+        [e setDepthStencilState:dsw];
+    }
+    float kx = (float)sw / (float)dw, ky = (float)sh / (float)dh;
+    struct { float m[4]; uint32_t slice, ns, lod, pad; } cp = {{(float)sx - (float)dx * kx, (float)sy - (float)dy * ky, kx, ky}, ssl, (uint32_t)s->tex.sampleCount,
+                                                               st == XT_MS || st == XT_MSARRAY ? 0 : slv, 0};
+    [e setViewport:(MTLViewport){(double)dx, (double)dy, (double)dw, (double)dh, 0, 1}];
+    [e setScissorRect:(MTLScissorRect){dx, dy, dw, dh}];
+    [e setFragmentTexture:src atIndex:0];
+    [e setFragmentBytes:&cp length:sizeof cp atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [e endEncoding];
+    return 1;
+}
 static void copy_t2t_draw(GfxTex *s, GfxTex *d, uint32_t slv, uint32_t dlv, uint32_t ssl, uint32_t dsl, uint32_t sx, uint32_t sy, uint32_t sw, uint32_t sh,
                           uint32_t dx, uint32_t dy, uint32_t dw, uint32_t dh) {
     int depth_copy = s->is_depth && d->is_depth && s->pf != MTLPixelFormatStencil8 && d->pf != MTLPixelFormatStencil8;
     if ((s->is_depth != d->is_depth) || (s->is_depth && !depth_copy) || s->tex.sampleCount > 1 || d->tex.sampleCount > 1 ||
-        s->tex.textureType == MTLTextureType3D || d->tex.textureType == MTLTextureType3D) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "texture copy with a depth/multisampled/3D texture and a different size or format is not implemented (format %lu -> %lu)",
-                 (unsigned long)s->pf, (unsigned long)d->pf);
+        s->tex.textureType == MTLTextureType3D || d->tex.textureType == MTLTextureType3D || pf_is_int((uint32_t)s->pf) != pf_is_int((uint32_t)d->pf)) {
+        if (!xcopy_draw(s, d, slv, ssl, dlv, dsl, sx, sy, sw, sh, dx, dy, dw, dh, 0))
+            LOG_ONCE(NAPPLE_LOG_WARN, "texture copy between formats %lu -> %lu (types %lu -> %lu) is not implemented", (unsigned long)s->pf, (unsigned long)d->pf,
+                     (unsigned long)s->tex.textureType, (unsigned long)d->tex.textureType);
         return;
     }
     { /* Metal aborts on a view outside the texture: refuse such a copy instead */
@@ -2676,13 +2817,13 @@ static void do_copy_t2t(const p_copy_t2t *c) {
                 dw = asw;
                 dh = ash;
             } else {
-                copy_t2t_draw(s, d, slv, dlv, ssl + sz, dsl + dz, asx, asy, asw, ash, adx, ady, adw, adh);
+                for (uint32_t k = 0; k < sd && k < dd; k++) copy_t2t_draw(s, d, slv, dlv, ssl + sz + k, dsl + dz + k, asx, asy, asw, ash, adx, ady, adw, adh);
                 return;
             }
         }
     }
-    if (sw != dw || sh != dh || s->pf != d->pf) {
-        copy_t2t_draw(s, d, slv, dlv, ssl + sz, dsl + dz, sx, sy, sw, sh, dx, dy, dw, dh);
+    if (sw != dw || sh != dh || s->pf != d->pf || s->tex.sampleCount != d->tex.sampleCount) { /* one draw per layer / depth slice of the region */
+        for (uint32_t k = 0; k < sd && k < dd; k++) copy_t2t_draw(s, d, slv, dlv, ssl + sz + k, dsl + dz + k, sx, sy, sw, sh, dx, dy, dw, dh);
         return;
     }
     int s3 = s->tex.textureType == MTLTextureType3D, d3 = d->tex.textureType == MTLTextureType3D;
@@ -2698,7 +2839,8 @@ static void do_copy_t2t(const p_copy_t2t *c) {
 }
 /* Downsample (MSAA resolve): a pass that loads the multisampled source and resolves it into the destination's level / layer (texture views).
  * The source keeps its samples (StoreAndMultisampleResolve): games resolve mid-frame and go on drawing into the multisampled target. Depth
- * resolves take sample 0, as the console's 2D engine does; integer formats cannot be resolved by Metal and are skipped (reported once). */
+ * resolves take sample 0, as the console's 2D engine does; integer formats (no averaging) and depth / integer / float pairs go through resolve_int,
+ * resolve_generic or the generic copy pass. */
 /* Integer formats cannot be resolved by Metal's fixed-function resolve (averaging has no meaning). The hardware's downsample of an integer target copies sample 0:
  * a draw reads that sample of every pixel and writes it to the single-sampled destination. */
 static int pf_is_sint(MTLPixelFormat pf) {
@@ -2745,9 +2887,10 @@ static id<MTLRenderPipelineState> resolve_int_pso(MTLPixelFormat pf) {
     return p;
 }
 static void resolve_int(GfxTex *s, GfxTex *d, uint32_t ssl, uint32_t dlv, uint32_t dsl) {
-    if (s->pf != d->pf || s->tex.textureType != MTLTextureType2DMultisample || ssl) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "Downsample of an integer format (%lu) between different formats or of an array texture is not implemented",
-                 (unsigned long)s->pf);
+    if (s->pf != d->pf || s->tex.textureType != MTLTextureType2DMultisample || ssl) { /* another format or an array layer: sample 0 through the generic pass */
+        if (!xcopy_draw(s, d, 0, ssl, dlv, dsl, 0, 0, (uint32_t)s->tex.width, (uint32_t)s->tex.height, 0, 0, (uint32_t)MAX(1, d->tex.width >> dlv),
+                        (uint32_t)MAX(1, d->tex.height >> dlv), 0))
+            LOG_ONCE(NAPPLE_LOG_WARN, "Downsample of an integer format (%lu -> %lu) is not implemented", (unsigned long)s->pf, (unsigned long)d->pf);
         return;
     }
     id<MTLRenderPipelineState> ps = resolve_int_pso(s->pf);
@@ -2806,8 +2949,10 @@ static id<MTLRenderPipelineState> resolve_generic_pso(MTLPixelFormat dst, int ki
 static void resolve_generic(GfxTex *s, GfxTex *d, uint32_t ssl, uint32_t dlv, uint32_t dsl) {
     int kind = pf_is_int((uint32_t)s->pf) ? (pf_is_sint(s->pf) ? 1 : 2) : 0;
     int array = s->tex.textureType == MTLTextureType2DMultisampleArray;
-    if (s->is_depth || d->is_depth || (kind != 0) != (pf_is_int((uint32_t)d->pf) != 0)) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "Downsample between depth or integer / float formats (%lu -> %lu) is not implemented", (unsigned long)s->pf, (unsigned long)d->pf);
+    if (s->is_depth || d->is_depth || (kind != 0) != (pf_is_int((uint32_t)d->pf) != 0)) { /* depth or integer <-> float: the generic copy pass */
+        if (!xcopy_draw(s, d, 0, ssl, dlv, dsl, 0, 0, (uint32_t)s->tex.width, (uint32_t)s->tex.height, 0, 0, (uint32_t)MAX(1, d->tex.width >> dlv),
+                        (uint32_t)MAX(1, d->tex.height >> dlv), 1))
+            LOG_ONCE(NAPPLE_LOG_WARN, "Downsample between formats %lu -> %lu is not implemented", (unsigned long)s->pf, (unsigned long)d->pf);
         return;
     }
     id<MTLRenderPipelineState> ps = resolve_generic_pso(d->pf, kind, array);

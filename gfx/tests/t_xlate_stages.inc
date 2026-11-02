@@ -288,7 +288,7 @@
     /* ---- TXA: read like TXQ (index [36,49), selector [22,28), mask [31,35)) */
     {
         XL_OK(a1, STAGE_FRAGMENT, z, 0xf, "TXA", ins_tex2d_lz(0, 8, 9, 0), 0xdf40000000000000ull | (uint64_t)4 | (2ull << 8) | (1ull << 22) | (3ull << 31) | PT_BITS, ins_exit());
-        CHECK(HAS(a1, "get_width(lv)") && HAS(a1, "r4 = q[0];") && HAS(a1, "r5 = q[1];"), "TXA dimension query");
+        CHECK(HAS(a1, "txq_w(t0, lv)") && HAS(a1, "r4 = q[0];") && HAS(a1, "r5 = q[1];"), "TXA dimension query");
         maxwell_free(a1);
         XL_REFUSE(a2, STAGE_FRAGMENT, z, 0xf, "txa type 3", "TXA other selector", ins_tex2d_lz(0, 8, 9, 0),
                   0xdf40000000000000ull | (uint64_t)4 | (2ull << 8) | (3ull << 22) | (3ull << 31) | PT_BITS, ins_exit());

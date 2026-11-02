@@ -459,6 +459,7 @@ static void stage_ran(int kind, uint64_t h, const char *detail) {
 static void stage_key_masks(int stage, ShaderKey *sk) {
     ds_slot_masks(stage, &sk->depth_slots, &sk->stencil_slots);
     image_masks(stage, &sk->image_int_mask, &sk->image_uint_mask);
+    int_slot_masks(stage, &sk->tex_uint_slots, &sk->tex_sint_slots);
 }
 
 /* The capture layout of the program that feeds the rasterizer: `h` (geometry, else vertex). 0 with one warning per program when none is registered. */

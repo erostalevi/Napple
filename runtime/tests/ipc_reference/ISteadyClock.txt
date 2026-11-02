@@ -1,0 +1,9 @@
+# interface ISteadyClock (nn::timesrv::detail::service::ISteadyClock; switchbrew 'Glue services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	GetCurrentTimePoint	1.0.0	y
+2	GetTestOffset	1.0.0	n
+3	SetTestOffset	1.0.0	n
+100	GetRtcValue	2.0.0	n
+101	IsRtcResetDetected	2.0.0	n
+102	GetSetupResultValue	2.0.0	n
+200	GetInternalOffset	3.0.0	n

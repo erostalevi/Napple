@@ -3,6 +3,7 @@
  * the public documentation (unverified). */
 #include "svc_common.h"
 #include "ngc_core.h"
+#include "sys_default.h"
 
 static NgcWords words;
 static int words_loaded;
@@ -55,6 +56,8 @@ static const IpcCmd ngc_cmds[] = {
     {1, "Check", ngc_check_call, IPC_IMPL},
     {2, "Mask", ngc_mask_call, IPC_IMPL},
     {3, "Reload", ngc_reload, IPC_IMPL},
+    {4, "Check2", sysd_err_generic, IPC_STUB},
+    {5, "Mask2", sysd_err_generic, IPC_STUB},
 };
 static IpcObject *ngc_open(void) { return IPC_OBJECT("ngc:u", ngc_cmds, NULL, NULL); }
 void service_register_ngc(void) { ipc_register_service("ngc:u", ngc_open); }

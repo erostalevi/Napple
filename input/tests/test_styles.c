@@ -110,7 +110,16 @@ int main(void) {
         style_with(in, NAPPLE_STYLE_LARK, 0);
         CHECK(r32(shm + l.npad_base + l.npad_device_type) == NAPPLE_DEVTYPE_LARK_NES_LEFT, "NES left device type bit 9, matching NpadLarkType NL");
         style_with(in, standard, 0);
-        CHECK(r32(shm + l.npad_base + l.npad_device_type) == 0, "standard styles keep device type 0");
+        CHECK(r32(shm + l.npad_base + l.npad_device_type) == NAPPLE_DEVTYPE_FULL_KEY, "Pro Controller (auto among the standard styles): FullKey bit 0");
+        CHECK(napple_hid_device_type_for(NAPPLE_STYLE_HANDHELD) == 0xc && napple_hid_device_type_for(NAPPLE_STYLE_JOY_DUAL) == 0x30 &&
+                  napple_hid_device_type_for(NAPPLE_STYLE_JOY_LEFT) == 0x10 && napple_hid_device_type_for(NAPPLE_STYLE_JOY_RIGHT) == 0x20,
+              "standard styles report libnx device types: handheld HandheldLeft|Right, pair JoyLeft|Right, single Joy-Con its side");
+        setenv("NAPPLE_NPAD_DEVICE_TYPES", "0", 1);
+        style_with(in, standard, 0);
+        CHECK(r32(shm + l.npad_base + l.npad_device_type) == 0 && napple_hid_device_type_for(NAPPLE_STYLE_HANDHELD) == 0 &&
+                  napple_hid_device_type_for(NAPPLE_STYLE_GC) == NAPPLE_DEVTYPE_FULL_KEY,
+              "NAPPLE_NPAD_DEVICE_TYPES=0: standard styles back to 0, the retro ones keep their bits");
+        unsetenv("NAPPLE_NPAD_DEVICE_TYPES");
     }
     CHECK(NAPPLE_BTN_PALMA == 28 && NAPPLE_BTN_VERIFICATION == 29 && NAPPLE_BTN_HANDHELD_LEFT_B == 30 && NAPPLE_BTN_LAGON_C_LEFT == 31 &&
               NAPPLE_BTN_LAGON_C_UP == 32 && NAPPLE_BTN_LAGON_C_RIGHT == 33 && NAPPLE_BTN_LAGON_C_DOWN == 34 && NAPPLE_BTN_ZL == 8 && NAPPLE_BTN_ZR == 9 && NAPPLE_BTN_RIGHT_SR == 27,

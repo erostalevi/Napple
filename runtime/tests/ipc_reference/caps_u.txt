@@ -1,0 +1,20 @@
+# interface caps:u (nn::capsrv::sf::IAlbumApplicationService; switchbrew 'Capture services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+32	SetShimLibraryVersion	7.0.0	y
+102	GetAlbumFileList0AafeAruidDeprecated	1.0.0	y
+103	DeleteAlbumFileByAruid	1.0.0	y
+104	GetAlbumFileSizeByAruid	1.0.0	y
+105	DeleteAlbumFileByAruidForDebug	1.0.0	n
+110	LoadAlbumScreenShotImageByAruid	1.0.0	y
+120	LoadAlbumScreenShotThumbnailImageByAruid	1.0.0	y
+130	PrecheckToCreateContentsByAruid	1.0.0	y
+140	GetAlbumFileList1AafeAruidDeprecated	6.0.0	y
+141	GetAlbumFileList2AafeUidAruidDeprecated	6.0.0	y
+142	GetAlbumFileList3AaeAruidDeprecated	7.0.0	y
+143	GetAlbumFileList4AaeUidAruidDeprecated	7.0.0	y
+144	GetAllAlbumFileList3AaeAruidDeprecated	11.0.0	y
+145	GetAlbumFileList5AaeAruid	17.0.0	y
+146	GetAlbumFileList6AaeUidAruid	17.0.0	y
+147	GetAllAlbumFileList5AaeAruid	17.0.0	y
+148	Unknown	18.0.0	n
+60002	OpenAccessorSessionForApplication	1.0.0	y

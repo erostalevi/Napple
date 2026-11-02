@@ -13,7 +13,32 @@ typedef struct {
     int used, fusion_enabled;
     float gain, reduction;
     uint32_t zero_drift;
+    float acc_x, acc_y;     /* SetAccelerometerParameters (73) */
+    uint32_t acc_play_mode; /* SetAccelerometerPlayMode (76) */
+    int passthrough;        /* EnableSixAxisSensorUnalteredPassthrough (84) */
 } HidcSensor;
+
+/* Palma (Poke Ball Plus). Operations complete at once: each records {type, result, data} for GetPalmaOperationInfo / GetPalmaOperationResult
+ * and the caller signals the operation-complete event. The connection handle is the npad id of the pad that reports the Palma style. */
+#define HIDC_PALMA_DATA 0x140    /* operation data block GetPalmaOperationInfo returns [unverified size] */
+#define HIDC_PALMA_APP_SIZE 0x1000 /* application section bytes kept per device [unverified size] */
+enum {
+    HIDC_PALMA_OP_PLAY_ACTIVITY, HIDC_PALMA_OP_SET_FR_MODE, HIDC_PALMA_OP_READ_STEP, HIDC_PALMA_OP_ENABLE_STEP, HIDC_PALMA_OP_RESET_STEP,
+    HIDC_PALMA_OP_READ_APP_SECTION, HIDC_PALMA_OP_WRITE_APP_SECTION, HIDC_PALMA_OP_READ_UNIQUE_CODE, HIDC_PALMA_OP_SET_UNIQUE_CODE_INVALID,
+    HIDC_PALMA_OP_WRITE_ACTIVITY_ENTRY, HIDC_PALMA_OP_WRITE_RGB_LED_ENTRY, HIDC_PALMA_OP_WRITE_WAVE_ENTRY, HIDC_PALMA_OP_READ_DB_VERSION,
+    HIDC_PALMA_OP_WRITE_DB_VERSION
+}; /* HidPalmaOperationType order (libnx / switchbrew) */
+typedef struct {
+    int initialized, has_op, step_enabled, unique_code_invalid, feature_suspended;
+    uint64_t op_type;
+    uint32_t op_result;
+    uint8_t op_data[HIDC_PALMA_DATA];
+    uint64_t fr_mode;
+    uint32_t steps;
+    int32_t db_version;
+    uint32_t event; /* writable end of the operation-complete event (0 until acquired) */
+    uint8_t app[HIDC_PALMA_APP_SIZE];
+} HidcPalma;
 typedef struct {
     HidcSensor sensors[HIDC_MAX_SENSORS];
     uint32_t styles;
@@ -43,6 +68,25 @@ typedef struct {
     int gesture_active, debug_pad_active;
     uint32_t vib_active[HIDC_MAX_VIB_ACTIVE];
     unsigned nvib_active;
+    /* ipc-depth-hid (2026-11-01-r2) */
+    int vib_session;       /* BeginPermitVibrationSession .. End: vibration allowed even when not permitted */
+    struct {
+        uint32_t handle;
+        uint64_t command; /* GC ERM: 0 Stop, 1 Start, 2 StopHard */
+    } erm[8];
+    unsigned nerm;
+    int seven_active, seven_started, seven_init; /* seven six-axis sensor (console, 7 samples per frame) */
+    float seven_strength;
+    uint64_t seven_mem_size[2];
+    int usb_full_key;          /* EnableUsbFullKeyController */
+    int gc_8bit_raw;           /* SetNpadGcAnalogStick8bitRawValue */
+    int touch_emulation_enter; /* EnableNxTouchScreenEmulationForTouchEnter */
+    int gesture_ranges_set;    /* SetGestureOutputRanges */
+    float gesture_ranges[4];
+    int digitizer_active, debug_mouse_active, joy_xpad_active, npad_imu;
+    uint32_t mouse_lib_version; /* SetMouseLibraryVersion */
+    int palma_all_connectable, palma_paired_connectable, palma_boost;
+    HidcPalma palma[10]; /* per npad slot */
 } HidCore;
 
 /* HidNpadStyleTag bits (libnx / switchbrew; the same bits as input/napple_input.h NAPPLE_STYLE_*, repeated here to keep this core free of the input library). Lark is the
@@ -91,3 +135,14 @@ int hidc_set_touch_resolution(HidCore *h, uint32_t w, uint32_t hgt); /* 0, or -1
 int hidc_vib_handle_decode(uint32_t handle, uint32_t *npad_id, uint32_t *side); /* 0 valid, -1 invalid; handheld handles map to npad id 0x20 */
 int hidc_vib_activate(HidCore *h, uint32_t handle);                             /* 0, -1 invalid handle, -2 list full; re-activating is fine */
 int hidc_vib_is_active(const HidCore *h, uint32_t handle);
+
+/* ---- ipc-depth-hid (2026-11-01-r2) ---- */
+int hidc_capture_clear_all(HidCore *h);                                   /* ClearNpadCaptureButtonAssignment(aruid): every style */
+void hidc_reset_accelerometer(HidcSensor *s);                             /* parameters {0, 0}, play mode 0 [unverified defaults] */
+int hidc_vibration_allowed(const HidCore *h);                             /* permitted, or inside a permit session */
+int hidc_erm_set(HidCore *h, uint32_t handle, uint64_t command);         /* 0, -1 invalid handle or command > 2 (StopHard), -2 table full */
+uint64_t hidc_erm_get(const HidCore *h, uint32_t handle);                /* last command, 0 (Stop) when none was sent */
+HidcPalma *hidc_palma(HidCore *h, uint64_t connection_handle);           /* NULL for a handle that is not an npad id */
+void hidc_palma_complete(HidcPalma *p, uint64_t type, uint32_t result, const void *data, uint32_t n); /* records an operation */
+int hidc_palma_app_read(HidcPalma *p, uint64_t addr, uint64_t size);     /* READ_APP_SECTION op; -1 out of range */
+int hidc_palma_app_write(HidcPalma *p, uint64_t addr, const void *src, uint64_t size); /* WRITE_APP_SECTION op; -1 out of range */

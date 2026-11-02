@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include "sys_default.h"
 
 static void noop(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -203,6 +204,56 @@ static const IpcCmd friend_service_cmds[] = {
     {10610, "UpdateUserPresence", friend_presence, IPC_IMPL},
     {10600, "DeclareOpenOnlinePlaySession", friend_declare_open, IPC_IMPL},
     {10601, "DeclareCloseOnlinePlaySession", friend_declare_close, IPC_IMPL},
+    {10102, "UpdateFriendInfo", sysd_ok, IPC_STUB},
+    {10110, "GetFriendProfileImage", sysd_err_friend, IPC_STUB},
+    {10111, "GetFriendProfileImageWithImageSize", sysd_err_friend, IPC_STUB},
+    {10120, "CheckFriendListAvailability", sysd_err_friend, IPC_STUB},
+    {10121, "EnsureFriendListAvailable", sysd_err_friend, IPC_STUB},
+    {10200, "SendFriendRequestForApplication", sysd_err_friend, IPC_STUB},
+    {10211, "AddFacedFriendRequestForApplication", sysd_ok, IPC_STUB},
+    {10420, "CheckBlockedUserListAvailability", sysd_err_friend, IPC_STUB},
+    {10421, "EnsureBlockedUserListAvailable", sysd_err_friend, IPC_STUB},
+    {10500, "GetProfileListLegacyV1", sysd_err_friend, IPC_STUB},
+    {10501, "GetProfileListLegacyV2", sysd_err_friend, IPC_STUB},
+    {10502, "GetProfileListV1", sysd_err_friend, IPC_STUB},
+    {10503, "GetProfileListV2", sysd_err_friend, IPC_STUB},
+    {10700, "GetPlayHistoryRegistrationKey", sysd_err_friend, IPC_STUB},
+    {10701, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId", sysd_err_friend, IPC_STUB},
+    {10702, "AddPlayHistory", sysd_ok, IPC_STUB},
+    {11000, "GetProfileImageUrl", sysd_err_friend, IPC_STUB},
+    {11001, "GetProfileImageUrlV2", sysd_err_friend, IPC_STUB},
+    {20102, "GetFriendDetailedInfo", sysd_err_friend, IPC_STUB},
+    {20103, "SyncFriendList", sysd_ok, IPC_STUB},
+    {20104, "RequestSyncFriendList", sysd_ok, IPC_STUB},
+    {20107, "GetFriendDetailedInfoV2", sysd_err_friend, IPC_STUB},
+    {20110, "LoadFriendSettingV1", sysd_err_friend, IPC_STUB},
+    {20111, "LoadFriendSettingV2", sysd_err_friend, IPC_STUB},
+    {20201, "GetFriendRequestListV1", sysd_err_friend, IPC_STUB},
+    {20202, "GetFriendRequestListV2", sysd_err_friend, IPC_STUB},
+    {20203, "GetFriendRequestReceivedNotificationCount", sysd_z4, IPC_STUB},
+    {20300, "GetFriendCandidateList", sysd_err_friend, IPC_STUB},
+    {20301, "GetNintendoNetworkIdInfo", sysd_err_friend, IPC_STUB},
+    {20400, "GetBlockedUserListV1", sysd_err_friend, IPC_STUB},
+    {20401, "SyncBlockedUserList", sysd_ok, IPC_STUB},
+    {20402, "GetBlockedUserListV2", sysd_err_friend, IPC_STUB},
+    {20500, "GetProfileExtraListV1", sysd_err_friend, IPC_STUB},
+    {20501, "GetRelationship", sysd_err_friend, IPC_STUB},
+    {20502, "GetProfileExtraListV2", sysd_err_friend, IPC_STUB},
+    {20600, "GetUserPresenceViewV1", sysd_err_friend, IPC_STUB},
+    {20601, "GetUserPresenceViewV2", sysd_err_friend, IPC_STUB},
+    {20700, "GetPlayHistoryListV1", sysd_err_friend, IPC_STUB},
+    {20701, "GetPlayHistoryStatistics", sysd_err_friend, IPC_STUB},
+    {20702, "GetPlayHistoryListV2", sysd_err_friend, IPC_STUB},
+    {20800, "LoadUserSettingV1", sysd_err_friend, IPC_STUB},
+    {20801, "SyncUserSetting", sysd_ok, IPC_STUB},
+    {20802, "LoadUserSettingV2", sysd_err_friend, IPC_STUB},
+    {20900, "RequestListSummaryOverlayNotification", sysd_ok, IPC_STUB},
+    {21000, "GetExternalApplicationCatalog", sysd_err_friend, IPC_STUB},
+    {22000, "GetReceivedFriendInvitationListV1", sysd_err_friend, IPC_STUB},
+    {22001, "GetReceivedFriendInvitationDetailedInfoV1", sysd_err_friend, IPC_STUB},
+    {22002, "GetReceivedFriendInvitationListV2", sysd_err_friend, IPC_STUB},
+    {22003, "GetReceivedFriendInvitationDetailedInfoV2", sysd_err_friend, IPC_STUB},
+    {22010, "GetReceivedFriendInvitationCountCache", sysd_err_friend, IPC_STUB},
 };
 static void friend_service_destroy(IpcObject *o) { free(o->state); }
 static void friend_create_service(IpcObject *s, IpcCall *c) {
@@ -352,6 +403,17 @@ static const IpcCmd nifm_request_cmds[] = {
     {13, "SetInstant", nifm_set_instant, IPC_IMPL},
     {14, "SetSustainable", nifm_set_sustainable, IPC_IMPL},
     {15, "SetRawPriority", nifm_set_raw_priority, IPC_IMPL},
+    {16, "SetGreedy", sysd_ok, IPC_STUB},
+    {17, "SetSharable", sysd_ok, IPC_STUB},
+    {18, "SetRequirementByRevision", sysd_ok, IPC_STUB},
+    {19, "GetRequirement", sysd_err_net, IPC_STUB},
+    {20, "GetRevision", sysd_z4, IPC_STUB},
+    {21, "GetAppletInfo", sysd_err_net, IPC_STUB},
+    {22, "GetAdditionalInfo", sysd_err_net, IPC_STUB},
+    {23, "SetKeptInSleep", sysd_ok, IPC_STUB},
+    {24, "RegisterSocketDescriptor", sysd_ok, IPC_STUB},
+    {25, "UnregisterSocketDescriptor", sysd_ok, IPC_STUB},
+    {26, "GetNetworkAccessStatus", sysd_z4, IPC_STUB},
 };
 static void nifm_create_request(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -394,6 +456,36 @@ static const IpcCmd nifm_general_cmds[] = {
     {22, "IsAnyForegroundRequestAccepted", nifm_any_accepted, IPC_IMPL},
     {26, "SetExclusiveClient", nifm_set_exclusive, IPC_IMPL},
     {27, "GetDefaultIpSetting", nifm_default_ip, IPC_IMPL},
+    {2, "CreateScanRequest", sysd_err_net, IPC_STUB},
+    {5, "GetCurrentNetworkProfile", sysd_err_net, IPC_STUB},
+    {6, "EnumerateNetworkInterfaces", sysd_z4, IPC_STUB},
+    {7, "EnumerateNetworkProfiles", sysd_err_net, IPC_STUB},
+    {8, "GetNetworkProfile", sysd_err_net, IPC_STUB},
+    {9, "SetNetworkProfile", sysd_err_net, IPC_STUB},
+    {10, "RemoveNetworkProfile", sysd_ok, IPC_STUB},
+    {14, "CreateTemporaryNetworkProfile", sysd_err_net, IPC_STUB},
+    {18, "GetInternetConnectionStatus", sysd_z4, IPC_STUB},
+    {19, "SetEthernetCommunicationEnabled", sysd_ok, IPC_STUB},
+    {20, "IsEthernetCommunicationEnabled", sysd_z1, IPC_STUB},
+    {23, "PutToSleep", sysd_ok, IPC_STUB},
+    {24, "WakeUp", sysd_ok, IPC_STUB},
+    {25, "GetSsidListVersion", sysd_z4, IPC_STUB},
+    {28, "SetDefaultIpSetting", sysd_ok, IPC_STUB},
+    {31, "GetTelemetorySystemEventReadableHandle", sysd_err_net, IPC_STUB},
+    {33, "ConfirmSystemAvailability", sysd_ok, IPC_STUB},
+    {34, "SetBackgroundRequestEnabled", sysd_ok, IPC_STUB},
+    {35, "GetScanData", sysd_err_net, IPC_STUB},
+    {36, "GetCurrentAccessPoint", sysd_err_net, IPC_STUB},
+    {37, "Shutdown", sysd_ok, IPC_STUB},
+    {38, "GetAllowedChannels", sysd_err_net, IPC_STUB},
+    {39, "NotifyApplicationSuspended", sysd_ok, IPC_STUB},
+    {40, "SetAcceptableNetworkTypeFlag", sysd_ok, IPC_STUB},
+    {41, "GetAcceptableNetworkTypeFlag", sysd_z4, IPC_STUB},
+    {42, "NotifyConnectionStateChanged", sysd_ok, IPC_STUB},
+    {43, "SetWowlDelayedWakeTime", sysd_ok, IPC_STUB},
+    {44, "IsWiredConnectionAvailable", sysd_z1, IPC_STUB},
+    {47, "GetScanData", sysd_err_net, IPC_STUB},
+    {57, "SetWowlTcpKeepAliveTimeout", sysd_ok, IPC_STUB},
 };
 static void nifm_gen_destroy(IpcObject *o) { free(o->state); }
 static void nifm_create_general(IpcObject *s, IpcCall *c) {
@@ -815,6 +907,18 @@ static const IpcCmd bsd_cmds[] = {
     {29, "GetResourceStatistics", bsd_resource_stats, IPC_IMPL},
     {30, "RecvMMsg", bsd_recvmmsg, IPC_IMPL},
     {31, "SendMMsg", bsd_sendmmsg, IPC_IMPL},
+    {28, "GetResourceStatistics", sysd_err_generic, IPC_STUB},
+    {32, "RegisterResourceStatisticsName", sysd_ok, IPC_STUB},
+    {33, "RegisterClientShared", sysd_ok, IPC_STUB},
+    {34, "GetSocketStatistics", sysd_err_generic, IPC_STUB},
+    {35, "NifIoctl", sysd_err_generic, IPC_STUB},
+    {37, "SetSocketBufferAttribute", sysd_ok, IPC_STUB},
+    {39, "NoSfEventFd", sysd_err_generic, IPC_STUB},
+    {40, "ShutdownAllSockets", sysd_ok, IPC_STUB},
+    {42, "SendMMsgNoMem", sysd_err_generic, IPC_STUB},
+    {43, "RecvMMsgNoMem", sysd_err_generic, IPC_STUB},
+    {200, "SetThreadCoreMask", sysd_ok, IPC_STUB},
+    {201, "GetThreadCoreMask", sysd_z8, IPC_STUB},
 };
 static IpcObject *bsd_open(void) { return IPC_OBJECT("bsd:u", bsd_cmds, NULL, NULL); }
 
@@ -895,6 +999,13 @@ static const IpcCmd nsd_cmds[] = {
     {42, "GetNasApiFqdn", nsd_resolve, IPC_IMPL},
     {43, "GetNasApiFqdnEx", nsd_resolve, IPC_IMPL},
     {50, "GetCurrentSetting", nsd_zero_struct, IPC_IMPL},
+    {5, "GetSettingUrl", sysd_err_generic, IPC_STUB},
+    {15, "SetChangeEnvironmentIdentifierDisabled", sysd_ok, IPC_STUB},
+    {63, "IsChangeEnvironmentIdentifierDisabled", sysd_z4, IPC_STUB},
+    {64, "SetWithoutDomainExchangeFqdns", sysd_ok, IPC_STUB},
+    {100, "GetApplicationServerEnvironmentType", sysd_z4, IPC_STUB},
+    {101, "SetApplicationServerEnvironmentType", sysd_ok, IPC_STUB},
+    {102, "DeleteApplicationServerEnvironmentType", sysd_ok, IPC_STUB},
 };
 static IpcObject *nsd_open(void) { return IPC_OBJECT("nsd:u", nsd_cmds, NULL, NULL); }
 
@@ -1461,6 +1572,10 @@ static const IpcCmd prepo_cmds[] = {
     {40101, "SetUserAgreementCheckEnabled", prepo_set_agreement, IPC_IMPL},
     {90100, "ClearStorage", prepo_clear_storage, IPC_IMPL},
     {90200, "GetStorageUsage", prepo_storage_usage, IPC_IMPL},
+    {20102, "SaveSystemReport", sysd_err_generic, IPC_STUB},
+    {20200, "SetOperationMode", sysd_ok, IPC_STUB},
+    {30100, "ClearStorage", sysd_ok, IPC_STUB},
+    {50100, "ReadAllApplicationReportFiles", sysd_err_generic, IPC_STUB},
 };
 static IpcObject *prepo_open(void) { return IPC_OBJECT("prepo:u", prepo_cmds, NULL, NULL); }
 
@@ -1634,6 +1749,29 @@ static const IpcCmd ssl_connection_cmds[] = {
     {19, "SetSessionCacheMode", ssl_set_cache, IPC_IMPL},
     {20, "GetSessionCacheMode", ssl_get_cache, IPC_IMPL},
     {21, "FlushSessionCache", ssl_flush_cache, IPC_IMPL},
+    {9, "DoHandshakeGetServerCert", sysd_err_ssl, IPC_STUB},
+    {13, "Peek", sysd_err_ssl, IPC_STUB},
+    {14, "Poll", sysd_event, IPC_STUB},
+    {15, "GetVerifyCertError", sysd_z4, IPC_STUB},
+    {16, "GetNeededServerCertBufferSize", sysd_z4, IPC_STUB},
+    {17, "SetSessionCacheMode", sysd_ok, IPC_STUB},
+    {18, "GetSessionCacheMode", sysd_err_ssl, IPC_STUB},
+    {22, "SetOption", sysd_ok, IPC_STUB},
+    {23, "GetOption", sysd_z4, IPC_STUB},
+    {24, "GetVerifyCertErrors", sysd_err_ssl, IPC_STUB},
+    {25, "GetCipherInfo", sysd_err_ssl, IPC_STUB},
+    {26, "SetNextAlpnProto", sysd_ok, IPC_STUB},
+    {27, "GetNextAlpnProto", sysd_err_ssl, IPC_STUB},
+    {28, "SetDtlsSocketDescriptor", sysd_z4, IPC_STUB},
+    {29, "GetDtlsHandshakeTimeout", sysd_err_ssl, IPC_STUB},
+    {30, "SetPrivateOption", sysd_ok, IPC_STUB},
+    {31, "SetSrtpCiphers", sysd_ok, IPC_STUB},
+    {32, "GetSrtpCipher", sysd_z4, IPC_STUB},
+    {33, "ExportKeyingMaterial", sysd_err_ssl, IPC_STUB},
+    {34, "SetIoTimeout", sysd_ok, IPC_STUB},
+    {35, "GetIoTimeout", sysd_z4, IPC_STUB},
+    {36, "GetSessionTicket", sysd_err_ssl, IPC_STUB},
+    {37, "SetSessionTicket", sysd_ok, IPC_STUB},
 };
 static void ssl_create_connection(IpcObject *s, IpcCall *c) {
     SslConn *k = calloc(1, sizeof *k);
@@ -1686,6 +1824,13 @@ static const IpcCmd ssl_context_cmds[] = {
     {4, "ImportServerPki", ssl_import_pki, IPC_IMPL},
     {5, "ImportClientPki", ssl_import_pki, IPC_IMPL},
     {6, "RemovePki", ssl_remove_pki, IPC_IMPL},
+    {7, "RemoveClientPki", sysd_ok, IPC_STUB},
+    {8, "RegisterInternalPki", sysd_z8, IPC_STUB},
+    {9, "AddPolicyOid", sysd_ok, IPC_STUB},
+    {10, "ImportCrl", sysd_z8, IPC_STUB},
+    {11, "RemoveCrl", sysd_ok, IPC_STUB},
+    {12, "ImportClientCertKeyPki", sysd_z8, IPC_STUB},
+    {13, "GeneratePrivateKeyAndCert", sysd_err_ssl, IPC_STUB},
 };
 static void ssl_create_context(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -1707,6 +1852,12 @@ static const IpcCmd ssl_cmds[] = {
     {0, "CreateContext", ssl_create_context, IPC_IMPL},
     {1, "GetContextCount", ssl_context_count, IPC_IMPL},
     {5, "SetInterfaceVersion", ssl_set_interface_version, IPC_IMPL},
+    {2, "GetCertificates", sysd_err_ssl, IPC_STUB},
+    {3, "GetCertificateBufSize", sysd_z4, IPC_STUB},
+    {6, "FlushSessionCache", sysd_z4, IPC_STUB},
+    {9, "ClearTls12FallbackFlag", sysd_ok, IPC_STUB},
+    {10, "GetCertificateByIndex", sysd_err_ssl, IPC_STUB},
+    {11, "GetTrustedCertificateCount", sysd_z4, IPC_STUB},
 };
 static IpcObject *ssl_open(void) { return IPC_OBJECT("ssl", ssl_cmds, NULL, NULL); }
 
