@@ -2237,7 +2237,7 @@ static const IpcCmd prepo_cmds[] = {
     {30300, "GetStorageUsage", prepo_storage_usage, IPC_IMPL},
     {40100, "IsUserAgreementCheckEnabled", prepo_get_agreement, IPC_IMPL},
     {40101, "SetUserAgreementCheckEnabled", prepo_set_agreement, IPC_IMPL},
-    {50100, "ReadAllApplicationReportFiles", sysd_err_generic, IPC_STUB}, /* no public layout; reports are not kept to read back */
+    {50100, "ReadAllApplicationReportFiles", sysd_err_generic, IPC_STUB},
     {90100, "ReadAllReportFiles", sysd_err_generic, IPC_STUB}, /* reports are not kept, so there is nothing to read back */
 };
 static IpcObject *prepo_open(void) { return IPC_OBJECT("prepo:u", prepo_cmds, NULL, NULL); }
