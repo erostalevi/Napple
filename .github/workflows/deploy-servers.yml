@@ -2,11 +2,13 @@
 # Does nothing until AWS credentials are configured: the `guard` job looks for the secrets and every other job is skipped with a notice.
 # One-time setup (hosted zone, OIDC role napple-deploy or access keys, environment napple-servers, the bootstrap run): docs/guides/deploy-servers.md
 #   push to main touching the servers or infra/ -> plan + apply, build + push images, roll the instance, smoke-test https://pretend.<domain>/healthz
-#   workflow_dispatch mode=bootstrap            -> create/update the state bucket + lock table (infra/terraform/bootstrap)
+#   workflow_dispatch mode=bootstrap            -> create/update the state bucket (infra/terraform/bootstrap; locking = S3 lock files)
 #   workflow_dispatch mode=plan                 -> plan only (no apply, no images, no roll)
 #   workflow_dispatch mode=apply                -> same as a push (image_tag set = roll back to that already-pushed tag, no build)
 #   workflow_dispatch mode=destroy              -> remove the servers stack (needs confirm=destroy); keeps the hosted zone and the GitHub Pages records
 # Every job that touches AWS runs in the GitHub environment napple-servers (its secrets and variables apply; the OIDC trust policy names it).
+# While crates/napple-online or crates/napple-room is not in the commit, a stand-in image (infra/docker/stub.Dockerfile) is deployed in its place;
+# the first push that brings the crate builds and rolls the real image.
 name: deploy-servers
 
 on:
@@ -21,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "bootstrap (one-time state bucket + lock table), plan, apply, or destroy (keeps the hosted zone)"
+        description: "bootstrap (one-time state bucket), plan, apply, or destroy (keeps the hosted zone)"
         type: choice
         options: [bootstrap, plan, apply, destroy]
         default: plan
@@ -49,7 +51,7 @@ env:
 
 jobs:
   guard:
-    name: Check AWS credentials and server crates
+    name: Check AWS credentials
     runs-on: ubuntu-latest
     environment: napple-servers # so environment-scoped secrets and variables are visible here too
     timeout-minutes: 5
@@ -72,10 +74,10 @@ jobs:
           REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
           DOMAIN: ${{ vars.NAPPLE_DOMAIN || 'napple.lat' }}
           ZONE_ID: ${{ vars.NAPPLE_ZONE_ID || '' }}
-          INSTANCE_TYPE: ${{ vars.NAPPLE_INSTANCE_TYPE || 't4g.small' }}
+          INSTANCE_TYPE: ${{ vars.NAPPLE_INSTANCE_TYPE || 't4g.micro' }}
           ARCHITECTURE: ${{ vars.NAPPLE_ARCHITECTURE || 'arm64' }}
           PAGES_TXT: ${{ vars.NAPPLE_PAGES_VERIFICATION_TXT || '' }}
-          DNS_OVERWRITE: ${{ vars.NAPPLE_DNS_ALLOW_OVERWRITE || 'false' }}
+          DNS_OVERWRITE: ${{ vars.NAPPLE_DNS_ALLOW_OVERWRITE || 'true' }}
         run: |
           {
             echo "region=$REGION"; echo "domain=$DOMAIN"; echo "zone_id=$ZONE_ID"; echo "instance_type=$INSTANCE_TYPE"
@@ -101,16 +103,11 @@ jobs:
           echo "auth=$auth" >> "$GITHUB_OUTPUT"
           if [ "$mode" != plan ] && [ "$REF" != refs/heads/main ]; then skip "mode=$mode only runs on main (this run is on $REF); use mode=plan elsewhere."; fi
           if [ "$mode" = destroy ] && [ "$CONFIRM" != destroy ]; then skip "mode=destroy needs the input confirm=destroy."; fi
-          if [ "$mode" = plan ] || [ "$mode" = apply ]; then
-            for c in napple-online napple-room; do
-              [ -f "crates/$c/Cargo.toml" ] || skip "crates/$c is not in this commit yet: nothing to deploy."
-            done
-          fi
           echo "run=true" >> "$GITHUB_OUTPUT"
           echo "AWS credentials: $auth; mode: $mode" >> "$GITHUB_STEP_SUMMARY"
 
   bootstrap:
-    name: Bootstrap state bucket + lock table
+    name: Bootstrap the state bucket
     needs: guard
     if: needs.guard.outputs.run == 'true' && needs.guard.outputs.mode == 'bootstrap'
     runs-on: ubuntu-latest
@@ -229,6 +226,18 @@ jobs:
           if aws ecr describe-images --repository-name "$IMAGE" --image-ids "imageTag=$GITHUB_SHA" >/dev/null 2>&1; then
             echo "found=true" >> "$GITHUB_OUTPUT"; echo "::notice::$IMAGE:$GITHUB_SHA already pushed"
           else echo "found=false" >> "$GITHUB_OUTPUT"; fi
+      - id: src
+        name: Real server, or the stand-in while the crate is not in this commit
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if [ -f "crates/$IMAGE/Cargo.toml" ]; then
+            { echo "file=infra/docker/$IMAGE.Dockerfile"; echo "context=."; echo "role="; } >> "$GITHUB_OUTPUT"
+          else
+            { echo "file=infra/docker/stub.Dockerfile"; echo "context=infra/local"; echo "role=${IMAGE#napple-}"; } >> "$GITHUB_OUTPUT"
+            echo "::notice title=$IMAGE stand-in::crates/$IMAGE is not in this commit: deploying the stand-in (infra/docker/stub.Dockerfile) as $IMAGE."
+            echo "$IMAGE: **stand-in** (crate not in this commit)" >> "$GITHUB_STEP_SUMMARY"
+          fi
       - uses: aws-actions/amazon-ecr-login@v2
         if: steps.exists.outputs.found == 'false'
       - uses: docker/setup-buildx-action@v3
@@ -236,8 +245,9 @@ jobs:
       - uses: docker/build-push-action@v6
         if: steps.exists.outputs.found == 'false'
         with:
-          context: .
-          file: infra/docker/${{ matrix.image }}.Dockerfile
+          context: ${{ steps.src.outputs.context }}
+          file: ${{ steps.src.outputs.file }}
+          build-args: ${{ steps.src.outputs.role && format('ROLE={0}', steps.src.outputs.role) || '' }}
           platforms: linux/${{ needs.guard.outputs.architecture == 'x86_64' && 'amd64' || 'arm64' }}
           push: true
           provenance: false

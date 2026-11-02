@@ -57,11 +57,11 @@ run "defaults" {
     error_message = "no verification TXT without a value"
   }
   assert {
-    condition     = aws_instance.servers.instance_type == "t4g.small" && aws_instance.servers.metadata_options[0].http_tokens == "required"
+    condition     = aws_instance.servers.instance_type == "t4g.micro" && aws_instance.servers.metadata_options[0].http_tokens == "required"
     error_message = "instance type or IMDSv2 wrong"
   }
   assert {
-    condition     = strcontains(aws_instance.servers.user_data, "nvme-Amazon_Elastic_Block_Store_vol0123456789abcdef0")
+    condition     = strcontains(aws_instance.servers.user_data, "vol=\"vol0123456789abcdef0\"")
     error_message = "user data does not find the data volume by id"
   }
   assert {
@@ -79,6 +79,45 @@ run "defaults" {
   assert {
     condition     = aws_ecr_repository.image["napple-online"].image_tag_mutability == "IMMUTABLE"
     error_message = "image tags must be immutable"
+  }
+}
+
+run "cost_defaults" {
+  command = plan
+  assert {
+    condition     = aws_instance.servers.root_block_device[0].volume_size == 8 && aws_ebs_volume.data[0].size == 1 && !aws_instance.servers.monitoring
+    error_message = "volumes must stay at the minimum sizes and detailed monitoring off"
+  }
+  assert {
+    condition     = aws_instance.servers.credit_specification[0].cpu_credits == "standard"
+    error_message = "unlimited credits can bill surplus CPU"
+  }
+  assert {
+    condition     = jsondecode(aws_ecr_lifecycle_policy.image["napple-room"].policy).rules[0].selection.countNumber == 3
+    error_message = "ECR keeps the last 3 images"
+  }
+  assert {
+    condition     = aws_cloudwatch_log_group.servers.retention_in_days == 3
+    error_message = "log retention must be 3 days"
+  }
+  assert {
+    condition     = aws_route53_record.www[0].allow_overwrite
+    error_message = "the stack takes over the hand-made Pages records by default"
+  }
+}
+
+run "no_data_volume" {
+  command = plan
+  variables {
+    data_volume_gb = 0
+  }
+  assert {
+    condition     = length(aws_ebs_volume.data) == 0 && length(aws_volume_attachment.data) == 0
+    error_message = "data_volume_gb = 0 must not create a volume"
+  }
+  assert {
+    condition     = strcontains(aws_instance.servers.user_data, "vol=\"\"") && strcontains(aws_instance.servers.user_data, "no data volume configured")
+    error_message = "user data must skip the volume"
   }
 }
 

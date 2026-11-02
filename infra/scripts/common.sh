@@ -1,5 +1,5 @@
 # shellcheck shell=bash
-# Shared by the deploy scripts (sourced, not run). Names of the state bucket and lock table, derived the same way as the bootstrap stack.
+# Shared by the deploy scripts (sourced, not run). Name of the state bucket, derived the same way as the bootstrap stack; locking is S3 lock files.
 # Needs AWS credentials in the environment (the workflow's configure-aws-credentials step); never run from a laptop by accident: see require_ci.
 set -euo pipefail
 
@@ -21,14 +21,13 @@ account_id() { aws sts get-caller-identity --query Account --output text; }
 state_names() {
   ACCOUNT_ID="$(account_id)"
   TF_STATE_BUCKET="${TF_STATE_BUCKET:-napple-tfstate-$ACCOUNT_ID-$AWS_REGION}"
-  TF_LOCK_TABLE="${TF_LOCK_TABLE:-napple-tflock}"
-  export ACCOUNT_ID TF_STATE_BUCKET TF_LOCK_TABLE
+  export ACCOUNT_ID TF_STATE_BUCKET
 }
 
 # backend_args <key>: the -backend-config flags of the partial S3 backend.
 backend_args() {
   printf '%s\n' "-backend-config=bucket=$TF_STATE_BUCKET" "-backend-config=key=$1" "-backend-config=region=$AWS_REGION" \
-    "-backend-config=dynamodb_table=$TF_LOCK_TABLE" "-backend-config=encrypt=true"
+    "-backend-config=use_lockfile=true" "-backend-config=encrypt=true"
 }
 
 # gh_output <name> <value>: a step output when running in Actions, a line on stdout otherwise.

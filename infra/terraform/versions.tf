@@ -7,7 +7,7 @@ terraform {
     }
   }
 
-  # Partial configuration: bucket, key, region and dynamodb_table are passed by infra/scripts/tofu-servers.sh
+  # Partial configuration: bucket, key, region and use_lockfile = true are passed by infra/scripts/tofu-servers.sh
   # (-backend-config=...), from the bootstrap stack's names. Offline checks use `tofu init -backend=false`.
   backend "s3" {}
 }

@@ -53,9 +53,9 @@ variable "github_pages_verification_txt" {
 }
 
 variable "dns_allow_overwrite" {
-  description = "Let the stack take over records with the same name and type that already exist in the zone (made by hand in the console)."
+  description = "Let the stack take over records with the same name and type that already exist in the zone (made by hand in the console). On by default: the napple.lat zone already holds the Pages records with exactly these values."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "dns_ttl" {
@@ -65,9 +65,9 @@ variable "dns_ttl" {
 }
 
 variable "instance_type" {
-  description = "EC2 instance type. Graviton (t4g/m7g/c7g) needs architecture = arm64."
+  description = "EC2 instance type. Graviton (t4g/m7g/c7g) needs architecture = arm64. t4g.micro (2 vCPU burstable, 1 GB) is free-tier eligible; t4g.small if memory runs short."
   type        = string
-  default     = "t4g.small"
+  default     = "t4g.micro"
 }
 
 variable "architecture" {
@@ -81,15 +81,15 @@ variable "architecture" {
 }
 
 variable "root_volume_gb" {
-  description = "Root volume size (OS, Docker images)."
+  description = "Root volume size in GB (OS, Docker images, a 1 GB swap file). 8 is the minimum: the size of the AL2023 AMI's snapshot."
   type        = number
-  default     = 16
+  default     = 8
 }
 
 variable "data_volume_gb" {
-  description = "Persistent volume mounted at /var/lib/napple (accounts, room state, TLS certificates). It survives instance replacement."
+  description = "Persistent volume in GB mounted at /var/lib/napple (accounts, room state, TLS certificates); it survives instance replacement. 0 = none (the state stays on the root volume and is lost if the instance is replaced)."
   type        = number
-  default     = 10
+  default     = 1
 }
 
 variable "nex_udp_from" {
@@ -117,15 +117,15 @@ variable "compose_version" {
 }
 
 variable "log_retention_days" {
-  description = "CloudWatch retention of the container logs."
+  description = "CloudWatch retention of the container logs, in days (one of the values CloudWatch accepts: 1, 3, 5, 7, 14, 30, ...)."
   type        = number
-  default     = 30
+  default     = 3
 }
 
 variable "ecr_keep_images" {
   description = "Images kept per ECR repository (older ones expire; the rollback window)."
   type        = number
-  default     = 30
+  default     = 3
 }
 
 variable "ecr_force_delete" {

@@ -20,7 +20,7 @@ Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.gi
    napple.lat  A/AAAA ─┐  www  CNAME ─┐  *  CNAME ─┐                    pretend  A ──> Elastic IP
                        └──────────────┴────────────┴─> <owner>.github.io (site/ + /docs/)      │
                                                                                                v
-   EC2 t4g.small, Amazon Linux 2023, Docker Compose  (/opt/napple, state on an EBS volume at /var/lib/napple)
+   EC2 t4g.micro, Amazon Linux 2023, Docker Compose  (/opt/napple, state on a 1 GB EBS volume at /var/lib/napple)
      caddy  :80/:443 tcp, :443 udp ── TLS (automatic certificate for pretend.napple.lat)
         ├─ /room/*  -> room:8081    (napple-room status API, prefix stripped)
         └─ /*       -> online:8080  (napple-online account/token API, /healthz)
@@ -41,8 +41,9 @@ Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.gi
 | `_github-pages-challenge-<owner>.napple.lat` | TXT | from GitHub | only when the repository variable `NAPPLE_PAGES_VERIFICATION_TXT` is set |
 
 The hosted zone itself is never created or destroyed by the stack: it is looked up (`data "aws_route53_zone"`) by id when the variable
-`NAPPLE_ZONE_ID` is set, else by the name in `NAPPLE_DOMAIN`. Record names follow `NAPPLE_DOMAIN` (`pretend.<domain>`, `www.<domain>`, ...). Existing records with the
-same name and type make the apply fail rather than being taken over, unless the repository variable `NAPPLE_DNS_ALLOW_OVERWRITE` is `true`.
+`NAPPLE_ZONE_ID` is set, else by the name in `NAPPLE_DOMAIN`. Record names follow `NAPPLE_DOMAIN` (`pretend.<domain>`, `www.<domain>`, ...). Records that already
+exist with the same name and type are taken over (`allow_overwrite`): the `napple.lat` zone was set up by hand with exactly these Pages records.
+Set the variable `NAPPLE_DNS_ALLOW_OVERWRITE` to `false` to make such a clash fail the apply instead.
 
 **The wildcard and GitHub Pages.** GitHub only serves the one custom domain set in the repository (`www.napple.lat`); a request for
 `app.napple.lat` reaching GitHub gets GitHub's "site not found" page, not the landing page. Worse, a wildcard pointing at `github.io` lets *any*
@@ -107,22 +108,29 @@ Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=p
    | `AWS_REGION` | `us-east-1` | region of the state, the servers and ECR |
    | `NAPPLE_DOMAIN` | `napple.lat` | the domain whose zone holds the records |
    | `NAPPLE_ZONE_ID` | empty | Route 53 hosted zone id; set = the zone is looked up by id, empty = by `NAPPLE_DOMAIN` |
-   | `NAPPLE_INSTANCE_TYPE` | `t4g.small` | optional |
+   | `NAPPLE_INSTANCE_TYPE` | `t4g.micro` | optional; `t4g.small` (2 GB) if memory runs short |
    | `NAPPLE_ARCHITECTURE` | `arm64` | optional; `x86_64` for t3/m6i types |
    | `NAPPLE_PAGES_VERIFICATION_TXT` | empty | optional; the GitHub Pages domain verification value (step 2) |
-   | `NAPPLE_DNS_ALLOW_OVERWRITE` | `false` | optional; `true` = take over records made by hand |
+   | `NAPPLE_DNS_ALLOW_OVERWRITE` | `true` | optional; `false` = fail instead of taking over records made by hand |
 6. **Bootstrap the state**: Actions > deploy-servers > *Run workflow* on `main`, mode `bootstrap`. This creates the S3 state bucket
-   `napple-tfstate-<account>-<region>` (versioned, encrypted, private, TLS only) and the DynamoDB lock table `napple-tflock`, then moves its own
+   `napple-tfstate-<account>-<region>` (versioned, encrypted, private, TLS only; locking uses S3 lock files, so there is no DynamoDB table), then moves its own
    state into the bucket. Running it again is safe.
 7. **First deploy**: *Run workflow* with mode `plan` to read the plan, then mode `apply` (or push to `main`). The first apply takes about 10 minutes:
    the instance boots, the images are built on an arm64 runner, Caddy gets its certificate once `pretend.napple.lat` resolves, and the smoke test
-   retries for up to 5 minutes.
+   retries for up to 5 minutes. This works before the server crates exist: see [stand-in servers](#stand-in-servers).
+
+### Stand-in servers
+While `crates/napple-online` or `crates/napple-room` is not in the deployed commit, the `images` job builds `infra/docker/stub.Dockerfile`
+(`infra/local/stub-server.py` on `python:3.13-alpine`, about 25 MB) into that repository instead, with a notice in the run summary. The stand-in
+listens on the same ports and env vars as the real server, answers `/healthz` (`ok stub online`, `ok stub room`) and echoes UDP/TCP, so DNS,
+TLS, the SSM roll and the smoke test are proven end to end. It holds no state and speaks no game protocol. The first push to `main` that brings
+a crate (the workflow triggers on `crates/napple-online/**` and `crates/napple-room/**`) builds the real image and rolls it in its place.
 
 ## What a deploy does
 
 | Job | What |
 |---|---|
-| guard | Resolves the variables, looks for `AWS_DEPLOY_ROLE_ARN` or both access-key secrets, and (for `plan`/`apply`) for `crates/napple-online` + `crates/napple-room` in the commit. Missing: a notice in the run summary and every other job is skipped (the run is green). `bootstrap`, `apply` and `destroy` only run on `main`; `destroy` also needs the input `confirm` = `destroy`. |
+| guard | Resolves the variables, looks for `AWS_DEPLOY_ROLE_ARN` or both access-key secrets, Missing credentials: a notice in the run summary and every other job is skipped (the run is green). `bootstrap`, `apply` and `destroy` only run on `main`; `destroy` also needs the input `confirm` = `destroy`. |
 | bootstrap | mode `bootstrap` only: `infra/scripts/bootstrap.sh apply`. |
 | infra | `tofu fmt -check`, `validate`, the offline mocked plan tests, then `infra/scripts/tofu-servers.sh plan|apply|destroy` against the S3 state. |
 | images | One native build per image (`ubuntu-24.04-arm` for arm64), pushed to ECR as `<repo>:<commit sha>` (immutable tags; a commit already pushed is skipped). |
@@ -132,8 +140,8 @@ Every job runs in the environment `napple-servers`. The workflow has one concurr
 
 ## Rollback and destroy
 
-- **Roll back the servers**: *Run workflow*, mode `apply`, `image_tag` = the commit SHA of a good deploy (ECR keeps the newest 30 images per
-  repository). No build happens; the instance is rolled to those images.
+- **Roll back the servers**: *Run workflow*, mode `apply`, `image_tag` = the commit SHA of a good deploy (ECR keeps the newest 3 images per
+  repository, so the rollback window is the last 3 deploys). No build happens; the instance is rolled to those images.
 - **Roll back infrastructure**: revert the commit on `main`; the push re-applies the previous configuration. The state bucket keeps 90 days of state
   versions in case a state itself has to be restored.
 - **Replace the instance** (new AMI, broken host): from a machine with the deploy credentials, run
@@ -146,19 +154,30 @@ Every job runs in the environment `napple-servers`. The workflow has one concurr
   not touched; it has `prevent_destroy`: remove those lines and destroy it by hand to delete it on purpose.
 - Disable deploys without deleting anything: remove the AWS secrets (the workflow goes back to skipping).
 
-## Costs (us-east-1, on-demand, rough)
+## Costs (us-east-1)
 
-| Item | Per month |
+Cost choices: one on-demand `t4g.micro` (no Spot: stability), gp3 volumes at the minimum sizes (8 GB root = the AMI's snapshot size, 1 GB
+data), standard CPU credits (a busy burstable instance slows down instead of billing surplus credits), no NAT gateway, no load balancer, no
+detailed monitoring, one Elastic IP, ECR keeps 3 images per repository, logs kept 3 days, no DynamoDB (S3 lock files).
+
+| Item | List price per month |
 |---|---|
-| t4g.small (2 vCPU, 2 GB) | about $12.3 |
-| EBS gp3, 16 GB root + 10 GB data | about $2.1 |
-| Public IPv4 address (the Elastic IP) | about $3.7 |
-| Route 53 hosted zone (+ queries) | $0.50 + cents |
-| ECR (a few hundred MB of images), CloudWatch logs (14-30 days), S3 state, DynamoDB lock | under $1 at low traffic |
+| t4g.micro (2 vCPU burstable, 1 GB), $0.0084/h | about $6.13 |
+| EBS gp3, 8 GB root + 1 GB data, $0.08/GB | about $0.72 |
+| Public IPv4 address (the Elastic IP), $0.005/h | about $3.65 |
+| Route 53 hosted zone (+ $0.40 per million queries) | $0.50 |
+| ECR (2 repositories x 3 images, well under 1 GB), CloudWatch logs (3 days), S3 state | a few cents |
 | Data transfer out | first 100 GB/month free, then about $0.09/GB |
-| **Total** | **about $19/month** for a quiet server; traffic is the variable part |
+| **Total at list price** | **about $11/month** for a quiet server; traffic is the variable part |
 
-`t4g.micro` (1 GB) halves the instance price but leaves little room for Caddy plus two servers; raise the type before raising anything else.
+**With the free tier.** `aws ec2 describe-instance-types --filters Name=free-tier-eligible,Values=true` lists `t4g.micro` (and `t4g.small`) for
+this account, so the instance hours fall under the account's free tier: on the current free plan they are paid from the free credits, and on the
+legacy 12-month free tier 750 instance hours, 750 hours of public IPv4, 30 GB of EBS, 500 MB of ECR storage and 5 GB of log ingestion are free
+each month. In both cases the only charge that is certain is the hosted zone, $0.50/month. Which program applies is in Billing > Free Tier.
+Leaving it running after the free period costs the list price above.
+
+`t4g.micro` has 1 GB of memory (plus the 1 GB swap file the user data adds): enough for Caddy, the stand-ins and two small Rust servers. If the
+real servers need more, set `NAPPLE_INSTANCE_TYPE=t4g.small` (about $12.3/month at list price, also free-tier eligible here).
 
 ## Security notes
 
@@ -217,7 +236,8 @@ GitHub Actions unless `NAPPLE_DEPLOY_ALLOW_LOCAL=1` is set.
 | A `plan` from another branch fails before the guard | The environment `napple-servers` only allows `main`: run it on `main`, or allow the branch in the environment. |
 | `Not authorized to perform sts:AssumeRoleWithWebIdentity` | The trust policy's subjects: the jobs present `repo:erostalevi/napple:environment:napple-servers`. |
 | `State bucket ... not found` | Run mode `bootstrap` once. |
-| Apply fails with "record already exists" | A record was made by hand: delete it, or set `NAPPLE_DNS_ALLOW_OVERWRITE=true`. |
+| Apply fails with "record already exists" | `NAPPLE_DNS_ALLOW_OVERWRITE` is `false` and a record was made by hand: delete it, or set the variable back to `true`. |
+| The smoke test prints `ok stub online` | The stand-in is deployed: the crate is not on `main` yet ([stand-in servers](#stand-in-servers)). |
 | Roll waits for SSM forever | The instance has no route out (check the route table) or the SSM agent is down: EC2 > the instance > Get system log; `/var/log/napple-bootstrap.log` from a Session Manager shell. |
 | Smoke test fails on a first deploy | DNS not delegated yet (check the registrar's name servers) or the ACME challenge failed: CloudWatch `/napple/servers`, the caddy stream. |
 | `docker compose` errors on the instance | `aws ssm start-session --target <instance id>`, then `cd /opt/napple && sudo docker compose -f compose.yml -f compose.aws.yml logs`. |

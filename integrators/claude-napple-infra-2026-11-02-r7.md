@@ -14,18 +14,22 @@ status: ready-with-caveats
 ## Summary
 Everything needed to deploy `napple-online` and `napple-room` to AWS once the user adds credentials, plus the `napple.lat` DNS:
 - Dockerfiles (multi-stage Rust, non-root, arm64/amd64, `/healthz` checks) and a compose stack with Caddy terminating TLS for `pretend.napple.lat`.
-- OpenTofu: a `bootstrap/` stack (S3 state + DynamoDB lock) and the servers stack (own VPC, SG without SSH, t4g.small AL2023 with Docker + Compose,
-  EIP, a persistent encrypted data volume, instance role for SSM/ECR/logs, ECR repositories, log group, Route 53 records in the existing zone,
-  looked up by name: `pretend` A, apex A/AAAA to Pages, `www` + `*` CNAME to `erostalevi.github.io`, optional Pages verification TXT).
+- OpenTofu: a `bootstrap/` stack (S3 state bucket; locking with S3 lock files, no DynamoDB) and the servers stack (own VPC, SG without SSH,
+  t4g.micro AL2023 with Docker + Compose, EIP, an 8 GB root + 1 GB persistent encrypted data volume, instance role for SSM/ECR/logs, ECR repositories, log group, Route 53 records in the existing zone,
+  looked up by id or name: `pretend` A, apex A/AAAA to Pages, `www` + `*` CNAME to `erostalevi.github.io`, optional Pages verification TXT).
 - Names follow the orchestrator's contract (the user set AWS/GitHub up with these): secret `AWS_DEPLOY_ROLE_ARN` (OIDC role `napple-deploy`) with the
   `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` fallback; variables `AWS_REGION`, `NAPPLE_DOMAIN`, `NAPPLE_ZONE_ID` (zone by id when set, else by name);
   every AWS job runs in environment `napple-servers`; dispatch modes `bootstrap`, `plan`, `apply`, `destroy`; IAM resources `napple-*`
   (instance role/profile `napple-servers-instance`).
 - `.github/workflows/deploy-servers.yml`: a guard job skips cleanly (green run, notice in the summary) without `AWS_DEPLOY_ROLE_ARN` or both
-  access-key secrets, or while either crate is missing. After that come bootstrap (dispatch), plan/apply, native arm64 image builds to ECR, the SSM roll
+  access-key secrets. It no longer waits for the crates: while `crates/<name>` is missing, a stand-in image (`infra/docker/stub.Dockerfile`,
+  the stand-in server answering `/healthz`) is built and deployed in its place, and the first push that brings the crate replaces it. After that come bootstrap (dispatch), plan/apply, native arm64 image builds to ECR, the SSM roll
   and the smoke test of `/healthz` + `/room/healthz`. Rollback is a dispatch with `image_tag`; `destroy` (with `confirm=destroy`) removes the servers
   and keeps the hosted zone and the GitHub Pages records.
 - `infra/local/run.sh`: native local stack (no Docker), with `--stub` / `--bin-dir` for testing before the crates exist.
+- Go-live cost pass (orchestrator, for the user): t4g.micro (free-tier eligible on account 785060334352), 8 GB gp3 root (the AMI snapshot size),
+  1 GB data volume (`data_volume_gb = 0` drops it), standard CPU credits, no NAT/LB/detailed monitoring/Spot, ECR keeps 3 images, logs 3 days,
+  no DynamoDB; about $11/month at list price, the instance hours under the free tier (estimate in the guide).
 - `site/CNAME` = `www.napple.lat`; guide `docs/guides/deploy-servers.md` (one-time setup, OIDC trust policy, costs, rollback/destroy, security).
 NOT done: acceptance 3's "a Napple runtime pointed at it reaches them". Neither `crates/napple-online` nor `crates/napple-room` was committed on its
 branch at hand-off (napple-room had only `src/proto.rs` uncommitted, napple-online had no crate), so the stack was tested against the stand-in server
@@ -43,12 +47,15 @@ only. `app.napple.lat` is deliberately not built.
 ## Built and tested here
 | Item | Status | Evidence (command + result) |
 |---|---|---|
-| Acceptance 1: `tofu fmt -check`, `validate`, plan against a mock provider, both stacks | tested | `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` gives 6 passed (defaults incl. `napple-*` IAM names, pages_off_and_verification, zone_by_id, zone_by_name, x86_64, bad_architecture); `cd bootstrap && …` gives 2 passed. OpenTofu 1.13.5, hashicorp/aws 6.71.0. `mock_provider "aws"`, so no AWS call. |
+| Acceptance 1: `tofu fmt -check`, `validate`, plan against a mock provider, both stacks | tested | `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` gives 8 passed (defaults incl. `napple-*` IAM names, cost_defaults, no_data_volume, pages_off_and_verification, zone_by_id, zone_by_name, x86_64, bad_architecture); `cd bootstrap && …` gives 2 passed. OpenTofu 1.13.5, hashicorp/aws 6.71.0. `mock_provider "aws"`, so no AWS call. |
 | Acceptance 1: actionlint on the workflow | tested | `actionlint .github/workflows/deploy-servers.yml`: no findings (actionlint 1.7.12, includes shellcheck of the run blocks). |
-| Acceptance 2: skips cleanly without secrets | tested | Guard script extracted and run: no secrets → `run=false` + notice; only the key id → skip; role but crates missing (this tree) → skip; dispatch apply off main → skip; bootstrap with keys on main → `run=true`; destroy without `confirm` → skip; destroy confirmed → `run=true` (crates not required). Every later job requires `run == 'true'` (`roll` also requires `infra` success). `act` not installed, not used. |
+| Acceptance 2: skips cleanly without secrets | tested | Guard script extracted and run: no secrets → `run=false` + notice; only the key id → skip; role with the crates missing (this tree) → `run=true` (stand-ins); dispatch apply off main → skip; plan off main → `run=true`; bootstrap with keys on main → `run=true`; destroy without `confirm` → skip; destroy confirmed → `run=true`. The images job's source step: no crate → `stub.Dockerfile`, context `infra/local`, `ROLE=online`/`room`; crate present → the real Dockerfile, context `.`. Every later job requires `run == 'true'` (`roll` also requires `infra` success). `act` not installed, not used. |
 | Acceptance 3: `infra/local/run.sh` starts both servers | verified (stand-in only) | Under `/bin/bash` 3.2: `run.sh start --stub` brings both up healthy; curl `/healthz` OK; UDP echo on 60000/60001; TCP echo on 31415; second start refused (exit 1); `stop` leaves no process; `--bin-dir` + custom ports; `KEEP_DATA=1`; a crashing binary makes start fail and clean up; without the crates it exits with "crates/napple-online is not in this checkout". |
 | Acceptance 3: a Napple runtime reaches them | not done | The crates and the client side were not committed on their branches (see Summary). |
 | Acceptance 4: no AWS call from this Mac | verified | No AWS CLI calls, no apply; `tofu test` runs with a mocked provider. The deploy scripts refuse to run outside Actions (`require_ci`). No credentials written anywhere. |
+| Stand-in image contents | tested (without Docker) | The container's entrypoint (`sh -c 'exec python3 stub-server.py "$NAPPLE_STUB_ROLE"'`) with the compose env (0.0.0.0 binds) and its HEALTHCHECK command run natively: both health checks pass, `/healthz` → `ok stub online`, `/healthz` on 8081 → `ok stub room`, SIGTERM stops both. The image itself was never built. |
+| `use_lockfile` with the pinned OpenTofu | tested | `tofu init` (1.13.5) of an `s3` backend with `-backend-config=use_lockfile=true` and the endpoints pointed at 127.0.0.1:9: the option is accepted (fails only on the unreachable endpoint); a bogus option is rejected as "not expected". No AWS call. |
+| Read-only AWS checks (allowed by the orchestrator, `AWS_PROFILE=napple`) | verified | `sts get-caller-identity` → account 785060334352, user napple-claude; free-tier-eligible types include t4g.micro and t4g.small; zone Z01748463IB00LNMM64RG `napple.lat.` public with 4 NS; existing records apex A (4 Pages IPs), AAAA (4), `www` and `*` CNAME `erostalevi.github.io`, all TTL 300 = the stack's values; AL2023 arm64 AMI snapshot = 8 GB; role `napple-deploy` exists (see Findings); no `napple*` bucket yet, no EIP; only the default VPC. Nothing created or changed. |
 | Compose files | tested | `docker-compose config -q` (Compose 5.6.1 CLI only, no Docker engine) for `compose.yml`, `+compose.build.yml`, `+compose.aws.yml`: valid; `!override` volumes merge as intended. |
 | Deploy scripts + rendered user data | tested (lint) | `shellcheck -x infra/scripts/*.sh infra/local/run.sh` clean; `user_data.sh.tftpl` rendered with sed then shellchecked clean. |
 | Docker image builds | untested | No Docker on this Mac (the assignment says don't install it). |
@@ -61,6 +68,7 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 - `infra/scripts/bootstrap.sh`, `tofu-servers.sh`, `roll.sh`, `smoke.sh`: lint-clean, never run against AWS. Commit a3e4ebb.
 - `infra/terraform/user_data.sh.tftpl`: never booted on an instance. Commit 1924402.
 - The `images` and `roll` jobs of the workflow: never run.
+- `infra/docker/stub.Dockerfile`: never built (no Docker).
 - The `destroy` path of `infra/scripts/tofu-servers.sh` (targeted apply of `ecr_force_delete`, then `tofu destroy -exclude=<Pages records>`): never run;
   `-exclude` exists in the pinned OpenTofu 1.13.5 (`tofu destroy -help`).
 
@@ -91,8 +99,18 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 - **Decision: Compose plugin 5.6.1** (current; the assets `docker-compose-linux-{aarch64,x86_64}` + `.sha256` checked on GitHub), verified at boot against the release
   checksum file (integrity in transit only, not a signature).
 - `configure-aws-credentials` gets `mask-aws-account-id: false`: masked values (the ECR URLs contain the account id) can't pass as job outputs.
-- The S3 backend's `dynamodb_table` may print a deprecation warning in newer OpenTofu (native `use_lockfile` exists). Kept DynamoDB as the
-  assignment asked; switching is one `-backend-config=use_lockfile=true` flag.
+- **Go-live blockers on the AWS side, reported to the orchestrator (not mine to fix; I made no AWS change):**
+  (1) the `napple-deploy` trust policy's subject is `StringLike ["repo:napple-deploy/*", ...]`, which never matches GitHub's token; it must be
+  `repo:erostalevi/napple:environment:napple-servers` and `repo:erostalevi/napple:ref:refs/heads/main` (`infra/aws/github-oidc-trust.json`).
+  (2) `napple-deploy` has only an IAM-only inline policy (`napple-deployPolicy`, role/instance-profile `napple-*`) and no managed policies: no S3,
+  EC2, SSM, ECR, Logs, Route 53 or sts. `infra/aws/deploy-policy.json` is the full set (now without DynamoDB).
+- **Decision: take over the hand-made DNS records.** The zone already holds apex A/AAAA, `www` and `*` with exactly the stack's values, so
+  `dns_allow_overwrite` now defaults to `true` (workflow variable fallback `true`); otherwise the first apply would fail with "already exists".
+- **Decision: S3 lock files** instead of DynamoDB (the orchestrator asked for fewer resources; supported by the pinned 1.13.5, see above).
+- **Decision: the stand-in.** One small image (`python:3.13-alpine` + `stub-server.py`), built per role into the real repositories with the
+  commit's tag, so the deploy path is identical to the real one; it stores nothing and speaks no game protocol.
+- **Decision: 1 GB data volume kept** (the orchestrator allowed "or make it 1 GB"): accounts and certificates survive an instance replacement for
+  about $0.08/month (inside the free tier's 30 GB).
 - Outside my area, not fixed: `.github/workflows/release.yml:70` has an actionlint/shellcheck SC2046 warning (unquoted `$(...)`).
 - Outside my area, not fixed: with Pages on `www.napple.lat`, `site/app.js` can no longer derive owner/repo from a `*.github.io` host
   (`site/index.html` has `<meta name="napple-repo" content="">`), so the landing page's release/download lookups will fail. `og:image` still points at
@@ -127,14 +145,15 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 4. With Docker (optional, any machine): `cd infra/docker && NAPPLE_DOMAIN=localhost docker compose -f compose.yml -f compose.build.yml up --build`, then
    `curl -k https://localhost/healthz` and `curl -k https://localhost/room/healthz`.
 5. Needs a human (the user): the one-time setup in `docs/guides/deploy-servers.md` (zone, Pages domain verification + custom domain, OIDC role or keys),
-   then Actions > deploy-servers > mode `bootstrap`, `plan`, `apply`. Passing: the smoke step prints both `/healthz` bodies.
+   then Actions > deploy-servers > mode `bootstrap`, `plan`, `apply`. Passing before the crates land: the summary shows the two stand-in notices and the
+   smoke step prints `ok stub online` and `ok stub room` from `https://pretend.napple.lat`.
 6. Regression guard: nothing outside `infra/` and the new workflow changes behaviour; `tests.yml`/`pages.yml` untouched. Pages keeps working: `site/CNAME` is only copied into the artifact.
 
 ## Fix policy hints
 - Safe to fix directly: env var/port names to match the crates (see the contract check), typos, a Rust image tag that does not exist (`RUST_IMAGE` ARG),
   the Compose version, the OpenTofu version in the workflow.
 - Needs a decision: dropping the wildcard (security vs the user's plan; it's a variable); serving `app.napple.lat`/the wildcard from Caddy as a
-  redirect instead of GitHub Pages (needs on-demand TLS); moving locking to `use_lockfile`; an amd64 instance (set repo variables `NAPPLE_ARCHITECTURE=x86_64` and
+  redirect instead of GitHub Pages (needs on-demand TLS); an amd64 instance (set repo variables `NAPPLE_ARCHITECTURE=x86_64` and
   `NAPPLE_INSTANCE_TYPE=t3.small`; nothing else changes).
 
 ## Needs from other areas

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time (idempotent) creation of the OpenTofu state bucket and lock table: infra/terraform/bootstrap.
+# One-time (idempotent) creation of the OpenTofu state bucket: infra/terraform/bootstrap (locking = S3 lock files, no DynamoDB).
 #   bootstrap.sh plan|apply
 # First run: the stack is applied with a local state, then the state is migrated into the bucket it created (key bootstrap/terraform.tfstate).
 # Later runs: the state is read from the bucket and the stack is planned/applied like any other.
@@ -11,7 +11,7 @@ case "$mode" in plan|apply) ;; *) echo "usage: $0 plan|apply" >&2; exit 2 ;; esa
 
 state_names
 cd "$INFRA_DIR/terraform/bootstrap"
-export TF_VAR_region="$AWS_REGION" TF_VAR_state_bucket_name="$TF_STATE_BUCKET" TF_VAR_lock_table_name="$TF_LOCK_TABLE"
+export TF_VAR_region="$AWS_REGION" TF_VAR_state_bucket_name="$TF_STATE_BUCKET"
 
 write_backend_override() {
   cat > backend_override.tf <<HCL
@@ -20,7 +20,7 @@ terraform {
     bucket         = "$TF_STATE_BUCKET"
     key            = "bootstrap/terraform.tfstate"
     region         = "$AWS_REGION"
-    dynamodb_table = "$TF_LOCK_TABLE"
+    use_lockfile   = true
     encrypt        = true
   }
 }
@@ -40,5 +40,5 @@ else
   write_backend_override
   "$TF" init -input=false -migrate-state -force-copy
   rm -f terraform.tfstate terraform.tfstate.backup
-  summary "Bootstrapped: bucket \`$TF_STATE_BUCKET\`, lock table \`$TF_LOCK_TABLE\` ($AWS_REGION); state migrated into the bucket."
+  summary "Bootstrapped: bucket \`$TF_STATE_BUCKET\` ($AWS_REGION, S3 lock files); state migrated into the bucket."
 fi

@@ -1,4 +1,5 @@
-# One instance (Amazon Linux 2023, Docker + Compose from the user data), an Elastic IP, and a separate data volume for /var/lib/napple.
+# One instance (Amazon Linux 2023, Docker + Compose from the user data), an Elastic IP, and a small separate data volume for /var/lib/napple.
+# Cost choices: no NAT gateway, no load balancer, no detailed monitoring, on-demand (no Spot: stability), gp3 at the minimum sizes.
 # The containers are not started here: every deploy (infra/scripts/roll.sh, through SSM send-command) writes the compose files and .env and runs
 # `docker compose pull && up -d`, so a replaced instance comes back on the next workflow run.
 data "aws_ssm_parameter" "al2023" {
@@ -6,6 +7,7 @@ data "aws_ssm_parameter" "al2023" {
 }
 
 resource "aws_ebs_volume" "data" {
+  count             = var.data_volume_gb > 0 ? 1 : 0
   availability_zone = local.az
   size              = var.data_volume_gb
   type              = "gp3"
@@ -23,7 +25,7 @@ resource "aws_instance" "servers" {
 
   user_data = templatefile("${path.module}/user_data.sh.tftpl", {
     compose_version = var.compose_version
-    data_volume_id  = replace(aws_ebs_volume.data.id, "-", "")
+    data_volume_id  = var.data_volume_gb > 0 ? replace(aws_ebs_volume.data[0].id, "-", "") : ""
   })
 
   metadata_options {
@@ -38,8 +40,9 @@ resource "aws_instance" "servers" {
     encrypted   = true
   }
 
+  # standard: a burstable instance that runs out of CPU credits slows down instead of billing surplus credits.
   credit_specification {
-    cpu_credits = "unlimited"
+    cpu_credits = "standard"
   }
 
   tags = { Name = local.name }
@@ -51,8 +54,9 @@ resource "aws_instance" "servers" {
 }
 
 resource "aws_volume_attachment" "data" {
+  count       = var.data_volume_gb > 0 ? 1 : 0
   device_name = "/dev/sdf"
-  volume_id   = aws_ebs_volume.data.id
+  volume_id   = aws_ebs_volume.data[0].id
   instance_id = aws_instance.servers.id
 }
 

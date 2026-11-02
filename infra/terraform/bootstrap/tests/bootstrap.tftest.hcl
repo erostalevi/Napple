@@ -21,8 +21,8 @@ run "default_names" {
     error_message = "state bucket name is not derived from the account id and region"
   }
   assert {
-    condition     = aws_dynamodb_table.lock.hash_key == "LockID"
-    error_message = "the S3 backend needs a LockID hash key"
+    condition     = aws_s3_bucket_versioning.state.versioning_configuration[0].status == "Enabled"
+    error_message = "state versions are the rollback window and the lock files' safety net"
   }
   assert {
     condition     = aws_s3_bucket_public_access_block.state.restrict_public_buckets

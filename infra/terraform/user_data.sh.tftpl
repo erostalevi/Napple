@@ -20,15 +20,17 @@ rm -rf "$tmp"
 docker compose version
 
 # Persistent data volume (EBS, NVMe on Nitro: found by its volume id). Formatted only when blank, so a replaced instance keeps the data.
-dev="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${data_volume_id}"
-for _ in $(seq 1 60); do [ -e "$dev" ] && break; sleep 5; done
+# No volume id (data_volume_gb = 0): the state stays on the root volume.
+vol="${data_volume_id}"
+dev="/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$vol"
 mkdir -p /var/lib/napple
-if [ -e "$dev" ]; then
+if [ -n "$vol" ]; then for _ in $(seq 1 60); do [ -e "$dev" ] && break; sleep 5; done; fi
+if [ -n "$vol" ] && [ -e "$dev" ]; then
   blkid "$dev" >/dev/null || mkfs.xfs -L napple-data "$dev"
   grep -q 'LABEL=napple-data' /etc/fstab || echo 'LABEL=napple-data /var/lib/napple xfs defaults,nofail 0 2' >> /etc/fstab
   mount -a
 else
-  echo "napple bootstrap: WARNING data volume $dev not attached; state stays on the root volume"
+  echo "napple bootstrap: no data volume${data_volume_id == "" ? " configured" : " attached ($dev)"}; state stays on the root volume"
 fi
 install -d -o 10001 -g 10001 -m 0750 /var/lib/napple/online /var/lib/napple/room
 install -d -m 0700 /var/lib/napple/caddy/data /var/lib/napple/caddy/config
