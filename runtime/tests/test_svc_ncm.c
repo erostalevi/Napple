@@ -86,8 +86,8 @@ int main(void) {
         uint8_t blob[8 + 4 + 2 * 0x18 + 0x10] = {0}, kp[16] = {0}, id1[16], id2[16];
         blob[0] = 4; blob[2] = 2; blob[4] = 1; blob[6] = 1; /* ext size, content count, meta count, attributes = 1 */
         for (int i = 0; i < 16; i++) { id1[i] = (uint8_t)(0x10 + i); id2[i] = (uint8_t)(0x40 + i); }
-        memcpy(blob + 12, id1, 16); blob[12 + 23] = 1; /* type program */
-        memcpy(blob + 12 + 0x18, id2, 16); blob[12 + 0x18 + 23] = 3; /* type control */
+        memcpy(blob + 12, id1, 16); blob[12 + 0x16] = 1; blob[12 + 0x17] = 5; /* type program at 0x16; 0x17 is the id offset, never the type */
+        memcpy(blob + 12 + 0x18, id2, 16); blob[12 + 0x18 + 0x16] = 3; /* type control */
         blob[12 + 0x30] = 0x77; /* meta info id byte 0 */
         uint64_t pid = 0x0100000000002000ull; memcpy(kp, &pid, 8); kp[12] = NCM_TYPE_APPLICATION;
         s = (IpcCall){0}; s.in = kp; s.in_size = 16; svc_set_in_buf(&s, blob, sizeof blob); svc_call_c(db, 0, &s); CHECK(s.result == 0, "Set(parsed meta)");
