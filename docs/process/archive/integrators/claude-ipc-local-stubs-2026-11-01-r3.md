@@ -6,7 +6,7 @@ head: 4da694d
 env: mac
 date: 2026-11-01
 areas: [runtime/services, audio]
-status: ready
+status: integrated
 ---
 
 # claude/ipc-local-stubs-2026-11-01-r3: 66 local documented-default IPC stubs become real behaviour; per-stream audio gain
@@ -68,3 +68,12 @@ Safe to fix directly: result-code choices, the `HOST_FS` source list, sizes of z
 ## Needs from other areas
 - `runtime/Makefile`: add `src/services/romfs_read.c` to `HOST_FS` (Linux host tests of fs.c).
 - `docs/index.md`: link the change note (the docs checker lists it as an orphan, like the other batch notes).
+
+## Integration result
+- Date: 2026-11-02. Merged into main as 3ed04f6 (integ/ipc-local-stubs, branch head 05b0fab; file `head: 4da694d` + one commit that only updates this file). Outcome: **Small fix** (no conflicts; landed after acnh-race-atomics).
+- `integrate:` fixes: 9a86f2d `runtime/Makefile`: `HOST_FS` gains `src/services/romfs_read.c` (this file's "Needs from other areas" / "Safe to fix"); `test_fs_savedata` 34 and `test_fs_journal` 17 rebuilt and green with the real RomFS reader linked. Native ports: none (portable C; `statvfs`/`symlink`/`realpath` are POSIX, left alone on purpose).
+- Build (scratch worktree): gfx lib adapter, audio, input, frontend, runtime (GFX=napple) rc 0.
+- Tests: `make -C audio test` rc 0 (`audout` 527 incl. `t_volume`); `make -C runtime test` / `test-services` rc 0, every suite `"failed":0` (`svc_fs_local` 255, `svc_lm` 17, `svc_local_offline` 49, `svc_ngc` 39 with the real firmware NgWord archive, `svc_audio` 22); `test-ipc-reference` `{"fixtures":99,"app_reachable":1116,"missing":0,"errors":0}`; `test-host` rc 0.
+- Boots (runtime of the merged tree, rebuilt title data `/Users/neto/NappleWork/games-integ/` with the rewriter ordering fix, `soak.py --lockf .run.lock`, 60 s headless, private save roots): LAS ok 3531 frames, SMO ok 3548, MK8D update ok 3397, ACNH update ok 1781; cb=0 on all.
+- Not covered here: the converted rows in a title (none called them), the mod overlay / BKTR regression guard (How to test 3).
+- Still open: `docs/index.md` link for the change note (docs owner).

@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r3
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_afc5486b-71f2-45b6-b9f1-22a1a94901ac (reused, sonnet)
 launched_at: 2026-11-01
@@ -36,3 +36,5 @@ Round 2 gave every app-reachable command a row, ~100 of them documented-default 
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask). Shared title data in `/Users/neto/NappleWork/games/` predates the rewriter ordering fix (acnh-race-atomics, being integrated); rebuilt data for it is in `/Users/neto/NappleWork/games-r3/` — use either; never overwrite either.
 
 ## Result
+Integrated 2026-11-02: Small fix, merged into main as 3ed04f6 (branch head 05b0fab). One `integrate:` fix (9a86f2d: `runtime/Makefile` HOST_FS links `romfs_read.c`, the author's own "Needs"). Tests green (`test`, `test-services` incl. svc_fs_local 255 / svc_lm 17 / svc_local_offline 49, `test-ipc-reference` missing 0, `test-host`, `audio test` audout 527); four-title 60 s boots ok on the rebuilt data. The 66 converted rows are unit-tested only (no title called them in 60 s). Follow-up: `docs/index.md` link for the change note.
+Integrator file: `docs/process/archive/integrators/claude-ipc-local-stubs-2026-11-01-r3.md`.
