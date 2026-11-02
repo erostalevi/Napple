@@ -60,7 +60,7 @@ fn serve() -> (String, Log) {
                 ("PATCH", p) if p.starts_with("/account/v1/profiles/") => (200, json!({"tier": v["tier"]})),
                 ("GET", "/social/v1/blocks") | ("GET", "/social/v1/recent") => (200, json!({"blocks": [], "recent": []})),
                 ("GET", p) if p.starts_with("/social/v1/profiles/") => (200, json!({"stats": [{"title_id": "0100152000022000", "key": "wins", "value": 4}]})),
-                ("GET", "/social/v1/me") => (200, json!({"friend_code": "NP-123456789012"})),
+                ("GET", "/social/v1/me") => (200, json!({"friend_code": "NP-1234-5678-9012"})),
                 _ => (404, json!({"error": "nope"})),
             };
             let _ = req.respond(tiny_http::Response::from_string(out.to_string()).with_status_code(code).with_header("Content-Type: application/json".parse::<tiny_http::Header>().unwrap()));
@@ -97,6 +97,8 @@ fn signup_verify_state_and_friend_actions() {
     assert_eq!(s["email"], "a@b.c");
     assert_eq!(s["current"]["id"], "p-1"); // first profile, picked automatically
     assert_eq!(s["current"]["tier"], 2);
+    // the shareable code is the one napple-social accepts (its own NP-dddd-dddd-dddd), not the account profile's
+    assert_eq!(s["current"]["friend_code"], "NP-1234-5678-9012");
     assert_eq!(s["current"]["links"][0]["value"], "https://x.y");
     assert_eq!(s["profiles"].as_array().unwrap().len(), 2);
     assert_eq!(s["devices"][0]["current"], true);
