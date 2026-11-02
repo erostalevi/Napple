@@ -35,15 +35,33 @@ SQLite (WAL) in the instance data volume for accounts/devices/tokens/profiles/sa
 block public access, lifecycle: abort incomplete uploads after 1 day, delete noncurrent objects after 7 days). Email via Amazon SES (domain `napple.lat`,
 DKIM in Route 53, sender `no-reply@napple.lat`).
 
-## Plans and billing (user decision 2026-11-02)
-- **Free**: account, passkeys, devices, profiles and the online identity are free. Cloud saves for **1 title** per account (the first title the user
-  enables; the user may switch which title once every 30 days), up to 10 most recent versions, 256 MiB quota.
-- **Napple Plus** (paid subscription, monthly and yearly prices configurable): cloud saves for unlimited titles, 20 versions per title, 5 GiB quota.
-- Entitlement source: **Stripe** (Checkout + Customer Portal on a small web page served by napple-account at `/account/v1/billing/*`, webhook with signature
-  verification, idempotent event handling). Apps never take payment in-app: they open the web checkout. Plans/prices/quota limits come from server config
-  (env), not code. Price IDs and Stripe keys are secrets supplied at deploy time (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_MONTHLY`,
-  `STRIPE_PRICE_YEARLY`); without them the server runs with every account on Free and billing endpoints return 503.
-- `GET /me` returns `plan {name, status, renews_at, synced_titles_limit, quota}`. Save upload for a title beyond the plan returns **402** with
-  `{reason: "plan_limit", upgrade_url}`; clients show an upgrade prompt and keep saving locally.
-- Never hold data hostage: downloads and restores of existing versions always work; on downgrade/expiry, saves of titles beyond the limit stay
-  downloadable for 90 days (read-only), then are deleted after an email warning. Account deletion cancels the subscription and deletes all data.
+## Plans and billing (user decision 2026-11-02, revised: free tier has no limits on online play)
+Principles: online play and everything social are free and unlimited; Plus sells storage, history, sync and convenience — never access, never
+gameplay advantage, never data hostage. All limits and feature flags come from server config (env/JSON), not code.
+
+| Feature | Free | Napple Plus |
+|---|---|---|
+| Napple Account, passkeys, devices (up to 10), 8 profiles, shared online identity | yes | yes |
+| Online play on napple-online (all modes), matchmaking, rankings | unlimited | unlimited |
+| LDN / LAN Play rooms (public + password rooms) | unlimited | unlimited |
+| Napple friends, presence, invites, room browser | yes | yes |
+| Cloud saves (E2E) | 1 title, 5 versions, 256 MiB | unlimited titles, 30-day version history (min 20 versions/title), 10 GiB |
+| Automatic session restore points (pre-launch snapshot, keep 3/title) | 1 title | all titles |
+| Settings sync: per-game settings, controller maps, mod/cheat selections, Studio library metadata (no game files) | no | yes |
+| Album sync: screenshots + short clips (E2E) | no | 5 GiB |
+| Persistent private rooms (reserved name, invite list, stays up when empty) | no | 3 rooms |
+| Beta update channel for Napple builds | no | yes |
+| Supporter badge on the online profile (cosmetic only) | no | yes |
+| Family: up to 4 accounts share one Plus | no | Family plan |
+
+Prices (Stripe, configurable): **Plus 2.99 USD/month or 24.99 USD/year; Family 4.99 USD/month or 39.99 USD/year** (up to 4 accounts, each with
+its own storage). Optional regional prices via Stripe price IDs. 14-day free trial of Plus once per account (no card needed; reverts to Free).
+- Entitlements API: `GET /me` returns `plan {name, status, renews_at, trial_ends_at, features: {...flag: true|limit}}`. Every limited endpoint returns
+  **402** `{reason: "plan_limit", feature, upgrade_url}`; clients keep data locally and show an upgrade prompt.
+- Billing: Stripe Checkout + Customer Portal on a small web page at `/account/v1/billing/*`, signed webhooks, idempotent events; apps open the web
+  page (no in-app payment). Family: owner invites up to 3 accounts by email; members see Plus while the owner's subscription is active.
+- Free title switch: the free synced title can be changed once every 30 days.
+- Never hold data hostage: downloads and restores always work; after a downgrade, data beyond Free limits stays read-only for 90 days, then is
+  deleted after two email warnings. Account deletion cancels billing and deletes all data.
+- Secrets at deploy time: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PLUS_MONTHLY`, `STRIPE_PRICE_PLUS_YEARLY`,
+  `STRIPE_PRICE_FAMILY_MONTHLY`, `STRIPE_PRICE_FAMILY_YEARLY`; without them everyone is Free (trial still works) and billing endpoints return 503.
