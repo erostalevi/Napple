@@ -168,7 +168,7 @@ int main(void) {
     if (ni.connected) {
         CHECK(ni.ip != 0 && ni.kind == 2 && ni.mask != 0, "nifm: connected, wired-style, with an address and mask (%u.%u.%u.%u)", ni.ip >> 24, ni.ip >> 16 & 255, ni.ip >> 8 & 255, ni.ip & 255);
         CHECK(p->net_connect(c0) == 0, "net_connect accepted");
-        IpcCall nc; memset(&nc, 0, sizeof nc); nifm_ip(NULL, &nc); CHECK(SVC_OUT(&nc, uint32_t, 0) == ni.ip, "nifm GetCurrentIpAddress = the host's address");
+        IpcCall nc; memset(&nc, 0, sizeof nc); nifm_ip(NULL, &nc); CHECK(SVC_OUT(&nc, uint32_t, 0) == htonl(ni.ip), "nifm GetCurrentIpAddress = the host's address (an in_addr, network order)");
         memset(&nc, 0, sizeof nc); ret_conn_status(NULL, &nc); CHECK(nc.out[0] == 2 && nc.out[2] == 4, "nifm connection status: wired, connected");
         NifmRequest rq; nifm_request_init(&rq); nifm_request_submit(&rq); CHECK(rq.state == NIFM_STATE_ACCEPTED && nifm_request_result(&rq) == 0, "a nifm request is accepted");
         nifm_request_cancel(&rq);
