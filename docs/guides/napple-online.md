@@ -137,6 +137,20 @@ friends' pids to napple-online (`POST /napple/v1/friends`), which answers GetPla
 token `np1:<server key>:<pid>:<app data>`. MK8D status: a friend shows as online / joinable and the Friends menu opens, but its friend list stays
 empty (open). Not done: friend requests sent from a game, profile images.
 
+## MK8D: two instances into the race lobby (r12)
+
+Two MK8D instances on one Mac reach the race lobby (character, kart, course vote with both players) through a local napple-online **and a local
+napple-room**. What it took, each found with `NAPPLE_DEBUG_LOG` breakpoints on the Pia connect job and `NAPPLE_NET_LOG=2` datagram dumps:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| the joiner ends with 2618-0502 ~150 ms after NAT traversal, no connection request | Pia's connect step (`ConnectStationJob`, main+0x99de0c; its check main+0x9330e8 -> main+0x94bd88) refuses a station it has not heard of: the join notification (3001) of the host never reached the joiner | napple-online tells a joiner about every participant already in a verbose gathering, before its own join |
+| the host answers the connection request with a refusal (result 1) | Pia looks a requesting station up by its IPv4 address only (main+0x9ae624): two consoles at one address (two instances on one Mac) look like one station | a client on the server's own machine gets its console address (nifm; a room gives each instance its own virtual address) as its public address: the runtime puts it in the NAT check message's "local IPv4" field and replaces the reply's external port by the socket's virtual port; the server trusts both only for loopback clients and uses the Register URL's own address |
+
+Run it: `napple-room serve --listen 127.0.0.1:31498`, and per instance `NAPPLE_NET=host NAPPLE_ROOM=127.0.0.1:31498/mk8d NAPPLE_ONLINE_SERVER=...`
+(`NAPPLE_ONLINE_NATCHECK_LOCALIP` 1 / 0 forces it; unset it follows the room). Without a room two instances still share the Mac's address and the host
+refuses the first joiner: that case needs two Macs.
+
 ## Status (2026-11-02, r7)
 
 | Phase | Status |
