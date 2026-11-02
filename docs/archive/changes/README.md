@@ -149,3 +149,54 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 - [2026-10-28-claude-gfx-stages-complete-2026-10-28-b8.md](2026-10-28-claude-gfx-stages-complete-2026-10-28-b8.md): software tessellator (isolines, TES XFB, GS after tess), gs_run refactor, control-section length fix
 - [2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
 - [2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
+
+## Unattended rounds (2026-10-27-b7 to 2026-11-02-r5)
+Hand-off files of these rounds (orchestrations and integrator files) are in the [process archive](../../process/archive/README.md).
+
+### Batch 2026-10-27-b7 (notes not listed above)
+| Note | Summary |
+|---|---|
+| [2026-10-27-claude-applets-on-title-2026-10-27-b7](2026-10-27-claude-applets-on-title-2026-10-27-b7.md) | The b6 applet sheets in front of a running title, an e2e step, the sheet input / focus fix. |
+| [2026-10-27-claude-gfx-stages-real-2026-10-27-b7](2026-10-27-claude-gfx-stages-real-2026-10-27-b7.md) | Stage parameters from the GLSLC control section, the rest of the geometry / tessellation / transform feedback replay, MSAA views and resolves. |
+| [2026-10-28-claude-applets-live-2026-10-27-b7](2026-10-28-claude-applets-live-2026-10-27-b7.md) | swkbd header / sub / guide text, per-profile account rows, player select (Linux, tested). |
+| [2026-10-28-claude-content-real-2-2026-10-27-b7](2026-10-28-claude-content-real-2-2026-10-27-b7.md) | Container and content gaps left after b6 (Linux, tested). |
+
+### Round 2026-11-01-r1
+| Note | Summary |
+|---|---|
+| [2026-11-01-claude-sched-applets-2026-11-01-r1](2026-11-01-claude-sched-applets-2026-11-01-r1.md) | Two Horizon scheduler divergences fixed; swkbd and the offline web applet verified on real titles. |
+| [2026-11-01-claude-gfx-msaa-views-2026-11-01-r1](2026-11-01-claude-gfx-msaa-views-2026-11-01-r1.md) | MSAA views, copy-backed texture views, sample shading, depth resolve, sparse. |
+| [2026-11-01-claude-gfx-stages-live-2026-11-01-r1](2026-11-01-claude-gfx-stages-live-2026-11-01-r1.md) | The four titles scanned for stage programs, the GLSLC geometry vertex handle fix, real programs through the replay. |
+| [2026-11-01-claude-media-live-2026-11-01-r1](2026-11-01-claude-media-live-2026-11-01-r1.md) | Video, movie audio and album JPEG verified on real titles. |
+| [2026-11-01-claude-sweep-small-2026-11-01-r1](2026-11-01-claude-sweep-small-2026-11-01-r1.md) | Seven small items: audren performance metrics, audin, npad, content, bcat. |
+
+### Round 2026-11-01-r2
+| Note | Summary |
+|---|---|
+| [2026-11-01-claude-gfx-nvn-api-2026-11-01-r2](2026-11-01-claude-gfx-nvn-api-2026-11-01-r2.md) | The 14 missing NVN entry points, refused MSAA branches, the ACNH program hash. |
+| [2026-11-01-claude-gfx-shader-views-2026-11-01-r2](2026-11-01-claude-gfx-shader-views-2026-11-01-r2.md) | The four titles' shader corpus through the translator and Metal, integer sampled textures, cube and sparse views. |
+| [2026-11-01-claude-ipc-depth-hid-2026-11-01-r2](2026-11-01-claude-ipc-depth-hid-2026-11-01-r2.md) | IPC reference lists and their runner; the missing hid / audio / system-device rows. |
+| [2026-11-01-claude-ipc-depth-sys-2026-11-01-r2](2026-11-01-claude-ipc-depth-sys-2026-11-01-r2.md) | Reference fixtures and a row for every application-reachable command of the system / offline services. |
+| [2026-11-01-claude-sweep-media-r2-2026-11-01-r2](2026-11-01-claude-sweep-media-r2-2026-11-01-r2.md) | Movie AAC / VP8 / ARGB, clean guest exit, npad device types, the LAS golden route. |
+
+### Round 2026-11-01-r3
+| Note | Summary |
+|---|---|
+| [2026-11-01-claude-acnh-race-atomics-2026-11-01-r3](2026-11-01-claude-acnh-race-atomics-2026-11-01-r3.md) | ACNH start crash: guest spinlocks without acquire ordering, fixed in the AOT rewrite (`ordering.rs`). |
+| [2026-11-01-claude-am-depth-applets-2026-11-01-r3](2026-11-01-claude-am-depth-applets-2026-11-01-r3.md) | am reference fixtures and rows, the remaining offline web document kinds, applets on real titles. |
+| [2026-11-01-claude-gfx-replay-gaps-2026-11-01-r3](2026-11-01-claude-gfx-replay-gaps-2026-11-01-r3.md) | D24 / D24S8 readback, separate texture / sampler handles, integer 3D / cube / multisample textures. |
+| [2026-11-01-claude-ipc-local-stubs-2026-11-01-r3](2026-11-01-claude-ipc-local-stubs-2026-11-01-r3.md) | 66 documented-default stubs of local services turned into real behaviour, IAudioOut gain. |
+| [2026-11-01-claude-nvn-object-layouts-2026-11-01-r3](2026-11-01-claude-nvn-object-layouts-2026-11-01-r3.md) | Guest-visible NVN objects kept within the titles' object sizes (`NVN_MIN_*`, `t_obj_canary`). |
+
+### Round 2026-11-02-r4
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-am-stubs-legal-2026-11-02-r4](2026-11-02-claude-am-stubs-legal-2026-11-02-r4.md) | Title legal pages, am stub rows made real, the offline network-connection applet. |
+| [2026-11-02-claude-core-ordering-kernel-2026-11-02-r4](2026-11-02-claude-core-ordering-kernel-2026-11-02-r4.md) | Acquire / release for every lifted AArch32 exclusive, `lda` / `stl` as `ldar` / `stlr`, svcGetInfo 19 / 27, ExitProcess after nnMain. |
+| [2026-11-02-claude-gfx-views-raster-2026-11-02-r4](2026-11-02-claude-gfx-views-raster-2026-11-02-r4.md) | Stencil cube views, the remaining integer views, separate-texture slot masks, viewport swizzles, provoking vertex. |
+| [2026-11-02-claude-ipc-reference-audit-2026-11-02-r4](2026-11-02-claude-ipc-reference-audit-2026-11-02-r4.md) | 65 IPC rows whose name differed from the reference fixture resolved. |
+
+### Round 2026-11-02-r5
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5](2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5.md) | Interpreter `lda` / `stl` seq_cst with the alignment fault, per-viewport swizzles, these archive indexes. |
