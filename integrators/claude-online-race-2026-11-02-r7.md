@@ -2,7 +2,7 @@
 branch: claude/online-race-2026-11-02-r7
 orchestration: online-race (follow-up assignment by message from the orchestrator; no orchestrations/ file)
 base: adf717a (claude/online-pia-2026-11-02-r7 head)
-head: 709b8dd
+head: b183dea
 env: mac
 date: 2026-11-02
 areas: [crates/napple-online, runtime/services (offline.c nifm_ip row only), runtime/tests]
