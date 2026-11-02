@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r4
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_cfe1eb24-e8f8-4de9-9612-8b8e842af693 (reused)
 launched_at: 2026-11-02
@@ -37,3 +37,6 @@ Ownership extension approved by the orchestrator (2026-11-02): appended edits to
 Read `orchestrations/ENV-MAC.md` first (shared title data — rebuilt in r3 with the ordering fix, never overwrite it; locks; local-only; never ask). This is planned as the LAST reachable round (snapshot 2026-11-02-5b9cf3a, 98.3%, ceiling ~98.9-99.0%).
 
 ## Result
+
+Integrated 2026-11-02: **Clean** (ready-with-caveats), merged into main as 99a5e70 (branch head 42a39f8). `make -C gfx test` ALL TESTS PASSED (t_obj_canary ok, obj.h change enum-only); LAS corpus 5767 / 5767 / 5767; four-title boots with the Metal debug layer rc 0, 0 skipped draws, no validation errors. No title exercises the new paths: tested, not verified. Caveats stand: provoking-vertex enum mapping (0 = first) is a hypothesis; viewport swizzle uses viewport 0's for all viewports. verified.json flips proposed by the author are left to /percent-analysis.
+Integrator file: `docs/process/archive/integrators/claude-gfx-views-raster-2026-11-02-r4.md`.

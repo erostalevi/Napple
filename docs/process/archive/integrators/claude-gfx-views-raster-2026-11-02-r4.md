@@ -6,7 +6,7 @@ head: 460edec  # last work commit; the integrator-file commit sits on top
 env: mac
 date: 2026-11-02
 areas: [gfx/shader, gfx/replay, gfx/api, docs]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/gfx-views-raster-2026-11-02-r4: stencil cube views, remaining integer views, separate-texture slot masks, viewport swizzles, provoking vertex
@@ -140,3 +140,11 @@ Boot details (row 6):
 
 ## Needs from other areas
 - None.
+
+## Integration result
+- Date 2026-11-02, merged into main as 99a5e70 (branch head 42a39f8: 460edec work + two integrator-file commits), last of batch r4 after core-ordering-kernel, ipc-reference-audit and am-stubs-legal; no conflicts. Outcome: **Clean** (ready-with-caveats as declared). No `integrate:` fixes, no native ports (Metal throughout; the translator is portable on purpose).
+- Ownership extension checked: `obj.h` diff is the enum tail only (`OP_VP_SWIZZLE`, `OP_PROVOKING` before `OP_COUNT`), `mtl_priv.h` +4, `mtl_stages.inc` +1. `t_obj_canary: ok`.
+- `make -C gfx test`: ALL TESTS PASSED (`t_stencil_sample`, `t_int_tex`, `t_sep_sampler`, `t_vp_swizzle`, `t_provoking`, `t_xlate`, `t_nvn_ext`, `t_obj_canary` ok; the four long-standing known-open SKIPs).
+- LAS corpus: 5767 programs, 5767 translated, 5767 compile with Metal.
+- Combined tree (= main after this merge): `make -C runtime GFX=napple test test-services test-ipc-reference test-a32 test-host` rc 0 (excltest 47/47, ipc_reference missing 0, kernel_exit 19/0).
+- Four-title boots, `MTL_DEBUG_LAYER=1`, 60 s (ACNH 90 s), shared data, private save roots, run lock: all rc 0, skipped draws 0, unimplemented calls 0, 0 warning lines, no validation errors (only the "Validation Enabled" banner); frames SMO 3557, MK8D 3073, LAS 3509, ACNH 2680; missing_ipc []. No log line from the new paths (as the author found): all five features stay *tested*, not verified on a title.
