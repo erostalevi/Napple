@@ -7,6 +7,11 @@
 //! (NintendoClients wiki, Pretendo docs) was used for message layouts only. See docs/guides/napple-online.md.
 
 pub mod accounts;
+pub mod ghost;
+pub mod identity;
+pub mod matchlog;
+pub mod reporting;
+pub mod upstream;
 pub mod crypto;
 pub mod http;
 pub mod kerberos;
