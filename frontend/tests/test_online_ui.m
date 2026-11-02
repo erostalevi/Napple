@@ -66,11 +66,11 @@ static void shot(NSString *name) {
     [png writeToFile:[g_dir stringByAppendingFormat:@"/%@.png", name] atomically:YES];
     CHECK(png.length > 2000, "screenshot %s is %lu bytes", name.UTF8String, (unsigned long)png.length);
 }
-static int made;
-static void *friends_page(const napple_online_ui_api *api) {
-    (void)api;
-    made++;
-    return (__bridge_retained void *)[NSTextField labelWithString:@"friends page"];
+static napple_online_change_fn g_installed_cb;
+static void spy_set_cb(void *ctx, napple_online_change_fn fn, void *user) {
+    (void)ctx;
+    (void)user;
+    g_installed_cb = fn;
 }
 static napple_online_account account(void) {
     napple_online_account a;
@@ -222,20 +222,44 @@ int main(void) {
         spin(0.1);
         CHECK([texts() containsString:@"Verify"], "unverified login opens the code screen");
 
-        /* sub-tab registration (overlay-social) */
-        napple_online_register_subtab("Friends", friends_page);
+        /* the shell registers overlay-social's pages itself (napple_online_social_init): Account + six social sub-tabs, only while signed in */
+        CHECK(fe_online_subtab_count() == 6, "shell registered the six social sub-tabs, got %d", (int)fe_online_subtab_count());
+        fe_online_stub_reset(0);
+        g_host = fe_online_page(nil);
+        int out_segs = 0;
+        for (NSView *v in g_host.subviews)
+            if ([v isKindOfClass:NSSegmentedControl.class]) out_segs++;
+        CHECK(out_segs == 0, "no sub-tab strip while signed out");
         fe_online_stub_reset(1);
         g_host = fe_online_page(nil);
         NSMutableArray *segs = [NSMutableArray new];
         for (NSView *v in g_host.subviews)
             if ([v isKindOfClass:NSSegmentedControl.class]) [segs addObject:v];
-        CHECK(segs.count == 1 && ((NSSegmentedControl *)segs[0]).segmentCount == 2, "sub-tab strip shown with Account + Friends");
+        NSSegmentedControl *sg = segs.count == 1 ? segs[0] : nil;
+        CHECK(sg && sg.segmentCount == 7, "sub-tab strip shown with Account + six social pages");
+        NSArray *want = @[ @"Account", @"Friends", @"Requests", @"Add", @"Recent", @"Blocked", @"Stats" ];
+        for (NSInteger i = 0; sg && i < 7; i++) CHECK([[sg labelForSegment:i] isEqualToString:want[i]], "segment %d is %s", (int)i, [want[i] UTF8String]);
         shot(@"15-subtabs");
-        NSSegmentedControl *sg = segs[0];
-        sg.selectedSegment = 1;
-        [sg sendAction:sg.action to:sg.target];
-        spin(0.05);
-        CHECK(made == 1 && [texts() containsString:@"friends page"], "registered sub-tab page is shown");
+        for (NSInteger i = 1; sg && i < 7; i++) {
+            sg.selectedSegment = i;
+            [sg sendAction:sg.action to:sg.target];
+            spin(0.05);
+            NSMutableArray *again = [NSMutableArray new];
+            for (NSView *v in g_host.subviews)
+                if ([v isKindOfClass:NSSegmentedControl.class]) [again addObject:v];
+            CHECK(again.count == 1 && g_host.subviews.count == 2, "sub-tab %d page built next to the strip", (int)i);
+            if (again.count == 1) sg = again[0];
+        }
+        shot(@"16-social-stats");
+
+        /* installing a runtime table keeps the shell's change callback on it for good (social toasts while the overlay is closed) */
+        napple_online_ui_api spy = *napple_online_ui_stub();
+        spy.set_change_callback = spy_set_cb;
+        napple_frontend_set_online_ui(NULL, &spy);
+        CHECK(g_installed_cb != NULL, "set_online_ui installs the shell change callback");
+        g_installed_cb(NULL); /* rebuilds the page (and feeds the social toasts) without crashing */
+        CHECK(fe_online_api()->ctx == spy.ctx, "installed table is the active one");
+        napple_frontend_set_online_ui(NULL, NULL);
 
         printf("online ui: %d checks, %d failed; screenshots in %s\n", g_checked, g_failed, g_dir.UTF8String);
     }

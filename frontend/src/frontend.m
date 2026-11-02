@@ -18,6 +18,7 @@ struct napple_frontend {
 /* Library applet sheets open at the moment (applet_sheets.m): the game gets no keyboard / pad input while one is up. */
 static int g_sheets;
 static NappleFE *FE(napple_frontend *f) { return (__bridge NappleFE *)f->impl; }
+NappleFE *fe_from_handle(napple_frontend *f) { return f ? FE(f) : nil; }
 #define LOGF(...)                                                                                                                                              \
     do {                                                                                                                                                       \
         fprintf(stderr, "[napple] frontend: ");                                                                                                                \
