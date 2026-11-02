@@ -11,6 +11,7 @@ pub mod crypto;
 pub mod http;
 pub mod kerberos;
 pub mod matchmaking;
+pub mod natcheck;
 pub mod nex;
 pub mod prudp;
 pub mod rmc;
