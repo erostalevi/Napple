@@ -460,7 +460,7 @@ static void cbh_retire(cmdbuf_host *h) {
     pthread_mutex_unlock(&g_cbh_mu);
 }
 
-NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
+NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) { OBJTRACE(OT_CMDBUF, c, 1);
     (void)d;
     cmd_t *o = (cmd_t *)c;
     cmdbuf_host *old = cbh_lock(o);
@@ -486,7 +486,7 @@ NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
     cbtrace(CBEV_INIT, o, LR());
     return 1;
 }
-NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) {
+NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) { OBJTRACE(OT_CMDBUF, c, 0);
     cmd_t *o = (cmd_t *)c;
     cbtrace(CBEV_FIN, o, LR());
     cmdbuf_host *h = o->magic == CB_MAGIC ? cbh_lock(o) : NULL;
@@ -679,7 +679,7 @@ NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *pr
     p_bind_program *p = REC(c, p_bind_program, OP_BIND_PROGRAM);
     const prog_t *pr = (const prog_t *)prog;
     memset(p, 0, sizeof *p);
-    gfx_program_hashes(prog, p->hash); /* host copy: the guest object may be smaller than prog_t (api_program.c) */
+    gfx_program_hashes(prog, p->hash); /* host copy (api_program.c): the guest may have written over the program object */
     p->stage_mask = (uint32_t)stages;
     if (pr && pr->magic == PROG_MAGIC && (stages & NVN_SHADER_STAGE_FRAGMENT_BIT)) {
         float rate = 0;

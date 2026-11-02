@@ -16,7 +16,43 @@ extern "C" {
 #endif
 
 #define MAGIC(a, b, c, d) ((uint32_t)(a) | (uint32_t)(b) << 8 | (uint32_t)(c) << 16 | (uint32_t)(d) << 24)
-#define FITS(T, H) _Static_assert(sizeof(T) <= sizeof(H), #T " exceeds the reserved size of " #H)
+/* Guest object sizes. nvnapi/nvn.h gives each object's reserved size; a title allocates its own SDK's sizeof, which can be smaller (Animal Crossing's
+ * NVNprogram is followed by an NVNbuffer at +0x80), and a host layout written past it corrupts the guest's neighbouring data. NVN_MIN_<type> is the
+ * smallest size the four test titles' SDKs give the object (SMO 3.5.1, MK8D 0.12.16 (32-bit), LAS 8.2.0, ACNH 20.5.4); docs/architecture/gfx.md "Guest
+ * object sizes" has the evidence per title (NAPPLE_GFX_OBJTRACE=1, api_objtrace.c). Every layout the API writes into a guest object fits it (FITS, below),
+ * and tests/t_obj_canary.c runs every entry point of each object against it. State that does not fit is kept host-side, keyed by the guest address
+ * (program stage hashes and sample shading, api_program.c). */
+#define NVN_MIN_NVNdevice             0x3000
+#define NVN_MIN_NVNdeviceBuilder      0x40
+#define NVN_MIN_NVNqueue              0x2000
+#define NVN_MIN_NVNqueueBuilder       0x40
+#define NVN_MIN_NVNsync               0x40
+#define NVN_MIN_NVNevent              0x40
+#define NVN_MIN_NVNeventBuilder       0x20
+#define NVN_MIN_NVNmemoryPool         0x100
+#define NVN_MIN_NVNmemoryPoolBuilder  0x40
+#define NVN_MIN_NVNbuffer             0x30
+#define NVN_MIN_NVNbufferBuilder      0x40
+#define NVN_MIN_NVNtexture            0x80
+#define NVN_MIN_NVNtextureBuilder     0x80
+#define NVN_MIN_NVNtextureView        0x10
+#define NVN_MIN_NVNsampler            0x30
+#define NVN_MIN_NVNsamplerBuilder     0x60
+#define NVN_MIN_NVNtexturePool        0x20
+#define NVN_MIN_NVNsamplerPool        0x20
+#define NVN_MIN_NVNprogram            0x80
+#define NVN_MIN_NVNwindow             0x180
+#define NVN_MIN_NVNwindowBuilder      0x40
+#define NVN_MIN_NVNcommandBuffer      0xA0
+#define NVN_MIN_NVNblendState         0x8
+#define NVN_MIN_NVNcolorState         0x4
+#define NVN_MIN_NVNchannelMaskState   0x4
+#define NVN_MIN_NVNmultisampleState   0x18
+#define NVN_MIN_NVNpolygonState       0x4
+#define NVN_MIN_NVNdepthStencilState  0x8
+#define NVN_MIN_NVNvertexAttribState  0x4
+#define NVN_MIN_NVNvertexStreamState  0x8
+#define FITS(T, H) _Static_assert(sizeof(T) <= NVN_MIN_##H && NVN_MIN_##H <= sizeof(H), #T " exceeds the smallest size of " #H " in the titles (NVN_MIN_" #H ")")
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Handle table: (generation << 32 | id) -> host pointer. Lock-free reads. id 0 is never used, so a handle is never 0.
@@ -24,6 +60,17 @@ extern "C" {
 uint64_t htab_alloc(void *p);
 void    *htab_get(uint64_t h);          /* NULL when the handle is stale or invalid */
 void     htab_free(uint64_t h);
+
+/* NAPPLE_GFX_OBJTRACE=1 (api_objtrace.c): object addresses per type, to measure the sizes titles really allocate. alive 0 = Finalize. */
+enum {
+    OT_DEVICE, OT_QUEUE, OT_SYNC, OT_EVENT, OT_POOL, OT_BUFFER, OT_TEXTURE, OT_SAMPLER, OT_TEXPOOL, OT_SAMPPOOL, OT_PROGRAM, OT_WINDOW, OT_CMDBUF,
+    OT_HEAP_N,   /* above: objects with a lifetime; below: builders, views and state objects */
+    OT_DEVICE_B = OT_HEAP_N, OT_QUEUE_B, OT_POOL_B, OT_BUFFER_B, OT_TEXTURE_B, OT_SAMPLER_B, OT_WINDOW_B, OT_EVENT_B,
+    OT_VIEW, OT_BLEND, OT_COLOR, OT_CHMASK, OT_MS, OT_POLY, OT_DS, OT_VA, OT_VS, OT_N
+};
+extern int g_objtrace_on;
+void gfx_objtrace(int kind, const void *p, int alive);
+#define OBJTRACE(k, p, alive) do { if (__builtin_expect(g_objtrace_on, 0)) gfx_objtrace((k), (p), (alive)); } while (0)
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Device / queue / sync / event
@@ -108,7 +155,10 @@ FITS(dpool_t, NVNsamplerPool);
  * Programs
  * --------------------------------------------------------------------------------------------------------------- */
 #define BARRIER_RESOLVE_DEPTH 0x80000000u   /* OP_BARRIER payload bit: nvnCommandBufferResolveDepthBuffer */
-typedef struct { uint32_t magic, nstage; NVNshaderData sd[6]; uint64_t hash[6]; } prog_t;      FITS(prog_t, NVNprogram);   /* hash[stage]: shader blob identity, 0 = none; a value with the high word 0x504c4348 names a stage whose code is a bare pool offset (see gfx_prog_resolve_hash) */
+/* The guest-visible part of a program; all six stage hashes live host-side by program address (api_program.c gfx_program_hashes), hash[0..3] (vertex, fragment,
+ * geometry, tess control) are mirrored here for program objects the guest copies by value. hash[stage]: shader blob identity, 0 = none; a value with the high
+ * word 0x504c4348 names a stage whose code is a bare pool offset (see gfx_prog_resolve_hash). */
+typedef struct { uint32_t magic, nstage; uint64_t hash[4]; } prog_t;                          FITS(prog_t, NVNprogram);
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Windows

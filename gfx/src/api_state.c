@@ -8,7 +8,7 @@ void gfx_api_link_state(void) {}
 #define CST(T, x) ((const T *)(x))
 
 /* ---- blend ---- */
-NVN(nvnBlendStateSetDefaults, void, NVNblendState *s) {
+NVN(nvnBlendStateSetDefaults, void, NVNblendState *s) { OBJTRACE(OT_BLEND, s, 1);
     *ST(blend_st, s) = (blend_st){ 0, NVN_BLEND_FUNC_ONE, NVN_BLEND_FUNC_ZERO, NVN_BLEND_FUNC_ONE, NVN_BLEND_FUNC_ZERO, NVN_BLEND_EQUATION_ADD, NVN_BLEND_EQUATION_ADD };
 }
 NVN(nvnBlendStateSetBlendTarget, void, NVNblendState *s, int t) { ST(blend_st, s)->target = (uint64_t)t; }
@@ -31,7 +31,7 @@ NVN(nvnBlendStateGetAdvancedPremultipliedSrc, NVNboolean, const NVNblendState *s
 NVN(nvnBlendStateGetAdvancedNormalizedDst, NVNboolean, const NVNblendState *s) { return !CST(blend_st, s)->adv_nonnorm; }
 
 /* ---- color ---- */
-NVN(nvnColorStateSetDefaults, void, NVNcolorState *s) { *ST(color_st, s) = (color_st){ 0, NVN_LOGIC_OP_COPY, NVN_ALPHA_FUNC_ALWAYS }; }
+NVN(nvnColorStateSetDefaults, void, NVNcolorState *s) { OBJTRACE(OT_COLOR, s, 1); *ST(color_st, s) = (color_st){ 0, NVN_LOGIC_OP_COPY, NVN_ALPHA_FUNC_ALWAYS }; }
 NVN(nvnColorStateSetBlendEnable, void, NVNcolorState *s, int i, uint32_t en) {
     color_st *o = ST(color_st, s);
     if (i < 0 || i > 7) return;
@@ -44,7 +44,7 @@ NVN(nvnColorStateGetLogicOp, int, const NVNcolorState *s) { return (int)CST(colo
 NVN(nvnColorStateGetAlphaTest, int, const NVNcolorState *s) { return (int)CST(color_st, s)->alpha_func; }
 
 /* ---- channel mask ---- */
-NVN(nvnChannelMaskStateSetDefaults, void, NVNchannelMaskState *s) { ST(chmask_st, s)->mask = 0xffffffffu; }
+NVN(nvnChannelMaskStateSetDefaults, void, NVNchannelMaskState *s) { OBJTRACE(OT_CHMASK, s, 1); ST(chmask_st, s)->mask = 0xffffffffu; }
 NVN(nvnChannelMaskStateSetChannelMask, void, NVNchannelMaskState *s, int i, uint32_t r, uint32_t g, uint32_t b, uint32_t a) {
     if (i < 0 || i > 7) return;
     uint32_t m = (B(r) ? 1u : 0u) | (B(g) ? 2u : 0u) | (B(b) ? 4u : 0u) | (B(a) ? 8u : 0u);
@@ -57,7 +57,7 @@ NVN(nvnChannelMaskStateGetChannelMask, void, const NVNchannelMaskState *s, int i
 }
 
 /* ---- multisample ---- */
-NVN(nvnMultisampleStateSetDefaults, void, NVNmultisampleState *s) { memset(s, 0, sizeof(ms_st)); ST(ms_st, s)->enable = 1; }
+NVN(nvnMultisampleStateSetDefaults, void, NVNmultisampleState *s) { OBJTRACE(OT_MS, s, 1); memset(s, 0, sizeof(ms_st)); ST(ms_st, s)->enable = 1; }
 NVN(nvnMultisampleStateSetMultisampleEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->enable = B(e) != 0; }
 NVN(nvnMultisampleStateSetSamples, void, NVNmultisampleState *s, int n) { ST(ms_st, s)->samples = (uint8_t)n; }
 NVN(nvnMultisampleStateSetAlphaToCoverageEnable, void, NVNmultisampleState *s, uint32_t e) { ST(ms_st, s)->a2c = B(e) != 0; }
@@ -99,7 +99,7 @@ NVN(nvnMultisampleStateGetSampleLocationsGrid, void, const NVNmultisampleState *
 }
 
 /* ---- polygon ---- */
-NVN(nvnPolygonStateSetDefaults, void, NVNpolygonState *s) { *ST(poly_st, s) = (poly_st){ NVN_FACE_NONE, NVN_FRONT_FACE_CCW, NVN_POLYGON_MODE_FILL, 0 }; }
+NVN(nvnPolygonStateSetDefaults, void, NVNpolygonState *s) { OBJTRACE(OT_POLY, s, 1); *ST(poly_st, s) = (poly_st){ NVN_FACE_NONE, NVN_FRONT_FACE_CCW, NVN_POLYGON_MODE_FILL, 0 }; }
 NVN(nvnPolygonStateSetCullFace, void, NVNpolygonState *s, NVNface f) { ST(poly_st, s)->cull = (uint32_t)f; }
 NVN(nvnPolygonStateSetFrontFace, void, NVNpolygonState *s, NVNfrontFace f) { ST(poly_st, s)->front = (uint32_t)f; }
 NVN(nvnPolygonStateSetPolygonMode, void, NVNpolygonState *s, NVNpolygonMode m) { ST(poly_st, s)->mode = (uint32_t)m; }
@@ -110,7 +110,7 @@ NVN(nvnPolygonStateGetPolygonMode, NVNpolygonMode, const NVNpolygonState *s) { r
 NVN(nvnPolygonStateGetPolygonOffsetEnables, NVNpolygonOffsetEnable, const NVNpolygonState *s) { return (NVNpolygonOffsetEnable)CST(poly_st, s)->offset_en; }
 
 /* ---- depth / stencil ---- */
-NVN(nvnDepthStencilStateSetDefaults, void, NVNdepthStencilState *s) {
+NVN(nvnDepthStencilStateSetDefaults, void, NVNdepthStencilState *s) { OBJTRACE(OT_DS, s, 1);
     *ST(ds_st, s) = (ds_st){ 0, 1, NVN_DEPTH_FUNC_LESS, 0, NVN_STENCIL_FUNC_ALWAYS, NVN_STENCIL_FUNC_ALWAYS,
                              NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP, NVN_STENCIL_OP_KEEP };
 }
@@ -142,7 +142,7 @@ NVN(nvnDepthStencilStateGetStencilOp, void, const NVNdepthStencilState *s, NVNfa
 }
 
 /* ---- vertex attrib / stream ---- */
-NVN(nvnVertexAttribStateSetDefaults, void, NVNvertexAttribState *s) { *ST(va_st, s) = (va_st){ 0, 0, 0 }; }
+NVN(nvnVertexAttribStateSetDefaults, void, NVNvertexAttribState *s) { OBJTRACE(OT_VA, s, 1); *ST(va_st, s) = (va_st){ 0, 0, 0 }; }
 NVN(nvnVertexAttribStateSetFormat, void, NVNvertexAttribState *s, NVNformat f, ptrdiff_t off) {
     if (off < 0 || off >= (1 << 19)) LOG_ONCE(NAPPLE_LOG_WARN, "vertex attribute offset %td exceeds the packed range", off);
     ST(va_st, s)->fmt = (uint32_t)f; ST(va_st, s)->offset = (uint32_t)off;
@@ -150,7 +150,7 @@ NVN(nvnVertexAttribStateSetFormat, void, NVNvertexAttribState *s, NVNformat f, p
 NVN(nvnVertexAttribStateSetStreamIndex, void, NVNvertexAttribState *s, int i) { ST(va_st, s)->stream = (uint32_t)i; }
 NVN(nvnVertexAttribStateGetFormat, void, const NVNvertexAttribState *s, NVNformat *f, ptrdiff_t *off) { *f = (NVNformat)CST(va_st, s)->fmt; *off = (ptrdiff_t)CST(va_st, s)->offset; }
 NVN(nvnVertexAttribStateGetStreamIndex, int, const NVNvertexAttribState *s) { return (int)CST(va_st, s)->stream; }
-NVN(nvnVertexStreamStateSetDefaults, void, NVNvertexStreamState *s) { *ST(vs_st, s) = (vs_st){ 0, 0 }; }
+NVN(nvnVertexStreamStateSetDefaults, void, NVNvertexStreamState *s) { OBJTRACE(OT_VS, s, 1); *ST(vs_st, s) = (vs_st){ 0, 0 }; }
 NVN(nvnVertexStreamStateSetStride, void, NVNvertexStreamState *s, ptrdiff_t st) { ST(vs_st, s)->stride = (uint32_t)st; }
 NVN(nvnVertexStreamStateSetDivisor, void, NVNvertexStreamState *s, int d) { ST(vs_st, s)->divisor = (uint32_t)d; }
 NVN(nvnVertexStreamStateGetStride, ptrdiff_t, const NVNvertexStreamState *s) { return (ptrdiff_t)CST(vs_st, s)->stride; }

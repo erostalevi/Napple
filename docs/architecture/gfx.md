@@ -258,3 +258,51 @@ The replay draws `gs_idx` (indexed, restart enabled, `gs_out_topology`) over `gs
 **Shader corpus, integer textures, cube and sparse views (gfx-shader-views, 2026-11-01-r2).** Every distinct program of the four titles (base + updates + DLC; `tools/gpu/scan_stages.py extract`, guide `docs/guides/gpu-title-scan.md`) runs through `t_xlate`'s corpus mode: LAS 5767, ACNH 8577, MK8D 26544, SMO 31750 programs, all translate and compile with Metal after the fixes they found (`TRANSLATOR_VERSION` 16): `LEA.HI` constant-buffer form (opcode 000110, yuzu's layout; SMO compute), `TEX` AOFFI on 3D textures (`int3`) and none on 1D / cube, `TLDS` texture_info 6 (2D.LZ.MS), `TXQ` / `TXA` through `txq_w` / `txq_h` / `txq_n` overloads (a later TLDS.MS makes the binding multisampled), `TLD4.PTP` as four gathers (texel i = the base texel of the gather at offset i, SPIRV-Cross's lowering). **Integer sampled textures:** `ShaderKey.tex_uint_slots` / `tex_sint_slots` (depth_slots numbering) declare a binding `texture2d<uint|int>` (2D, 2D array) read through `IntTex2D` / `IntTex2DArray` (read / nearest sample return the four channels as raw integer bits, signed formats sign-extended); `mtl_tex_int_kind` gives a binding's kind, and once the replay fills the masks integer views of another class become copies (RG32UI of BC1). The masks are filled by `int_slot_masks` in `mtl_replay.m` / `mtl_stages.inc` (the hook lands with the integration; until then the declaration stays float). **Cube view of a 2D texture:** a CUBEMAP view of a square 2D texture is a copy-backed cube (`AK_CUBE`) with the 2D image on every face (ACNH binds a 15x15 R8 texture of 2.5 KiB as a cube; the console reads unrelated memory for faces 1-5); before, the shader's cube binding got a dummy texture. **Sparse residency:** `nvnMemoryPoolMapVirtual` keeps the textures of the remapped range (`mtl_tex_remap_scope`; they were forgotten and recreated, losing GPU-written tiles), a sparse texture never becomes `gpu_owned`, and a residency change re-uploads only the 64 KiB tiles whose pages changed (`upload_texture_part`; later levels whole). **Binary archive:** `serializeToURL:` writes nothing (and answers YES) when the archive gained nothing since its last serialization; that no longer disables the archive (MK8D "renaming the saved archive into place failed"), and temporary files are per process.
 
 **Rare control/system ops and stencil texture bindings (shader-rare-ops).** `BPT IDE RAM SAM STP R2B` are documented no-ops, `RTT` ends the thread, `B2R` writes 0, `PEXIT` (the next `EXIT` jumps to its target), `PLONGJMP`/`LONGJMP` (a second PBK/BRK-style stack), `GETCRSPTR`/`SETCRSPTR` (the CAL depth `cal_n`), `GETLMEMBASE`/`SETLMEMBASE` (a readable `lmb` variable), `ISBERD` (register-addressed attribute read, the ALD indexed path) and `IDP` (`idp()` helper: 4 byte or 2 half dot product + accumulate) are translated; their field layouts are the translator's reading (`tests/t_xlate_rare.inc`), no application shader emits them. **Stencil sampling:** `ShaderKey.stencil_slots` (same slot numbering as `depth_slots`, wins over it) marks bindings whose bound texture view is in stencil mode. Such a binding is declared `texture2d<uint> tN_u [[texture(N)]]` (`texture2d_array<uint>` for arrays; other targets and depth comparison are refused) and wrapped in a local `StencilTex2D`/`StencilTex2DArray` named `tN`, whose `sample`/`gather`/`read` return `(stencil, 0, 0, 1)` as raw integer bits (level 0, nearest). The Mac replay side must: set the `stencil_slots` bit when `mtl_tex_view` has `ds_mode` stencil for that binding slot (as `depth_slot_mask` does for depth), bind the X32_Stencil8 / Stencil8 view (pixel format uint) at texture index N, copy `stencil_slots` into the per-stage `ShaderKey` in `mtl_shader.m` and include it in the pipeline key (`TRANSLATOR_VERSION` 12).
+
+### 14. Guest object sizes (2026-11-01)
+
+NVN objects live in guest memory, and a title allocates each one with its own SDK's `sizeof`. That size can be smaller than the reserved size in `gfx/src/nvnapi/nvn.h`. A host layout (`gfx/src/obj.h`) that is larger than the title's object writes over whatever the title placed next to it. Animal Crossing's "program hash 0x3" was such a case (30e67b4): its NVNprogram is followed by an NVNbuffer at +0x80.
+
+`NVN_MIN_<type>` in `obj.h` is the smallest size measured across the four test titles: SMO (SDK 3.5.1), MK8D (0.12.16, 32-bit), LAS (8.2.0) and ACNH (20.5.4). `FITS(T, H)` asserts `sizeof(T) <= NVN_MIN_H <= sizeof(H)` for every layout the API writes into a guest object. `gfx/tests/t_obj_canary.c` places a canary right after `NVN_MIN_<type>` bytes of a block, runs SetDefaults or Initialize and every entry point that takes the object as a non-const first parameter (328 calls, Finalize last), and fails on the first call that writes into the canary. Host-only state that does not fit stays in side tables keyed by the guest address: program stage hashes and sample shading (`api_program.c`).
+
+**Evidence.** Running with `NAPPLE_GFX_OBJTRACE=1` (`gfx/src/api_objtrace.c`) records the address of every object at Initialize, Finalize and SetDefaults. For objects with a lifetime, it keeps an address-ordered set of live objects, and the gap from an object to the next live NVN object above it is an upper bound of its size in that title. In arrays, that gap is the exact size.
+
+The tracker leaves objects out of these gaps in three cases:
+- **On the calling stack**: the object lies just above the gfx frame. 64-bit titles run on the guest's stack, so such an object is a temporary that is never finalized.
+- **Set up again without Finalize**.
+- **Freed without Finalize**: the object's first word changed since it was initialized, which means the guest freed and reused its memory.
+
+Builders, texture views and state objects have no lifetime. They are paired with the objects the same thread set up in its last 12 NVN calls, which is weak evidence because two calls can reuse the same stack.
+
+A neighbour inside nvn.h's reserved size is logged once per type and gap as `objtrace close:`. Run `NAPPLE_GFX_OBJTRACE=1` with a 90 s headless boot; the per-type summary goes to stderr at exit and every 20 s.
+
+Rule: `NVN_MIN = min(nvn.h reserved size, smallest credible gap in any title)`.
+
+| Object | nvn.h | ACNH 20.5.4 | MK8D 0.12.16 (a32) | SMO 3.5.1 | LAS 8.2.0 | NVN_MIN | host layout |
+|---|---|---|---|---|---|---|---|
+| NVNdevice | 0x3000 | 0x3078 (texture pool) | 0x3040 (texture pool) | 0x3078 (texture pool) | 0x3020 (queue) | 0x3000 | 0x20 |
+| NVNqueue | 0x2000 | 0x20a0 (pool) | 0x2060 (pool) | 0x20a0 (pool) | 0x2028 (window) | 0x2000 | 0x20 |
+| NVNsync | 0x40 | 0x60 (window) | 0x50 (command buffer) | 0x60 (command buffer) | 0x58 (sync) x5 | 0x40 | 0x18 |
+| NVNevent | 0x40 | not used | not used | not used | not used | 0x40 | 0x20 |
+| NVNmemoryPool | 0x100 | **0x100** (buffer) x17 | **0x100** x12 | **0x100** x28 | 0x120 x2 | 0x100 | 0x40 |
+| NVNbuffer | 0x30 | **0x30** (pool) x24 | **0x30** (buffer) x3 | **0x30** (pool) x24 | 0x48 (buffer) x50 | 0x30 | 0x20 |
+| NVNtexture | 0x80 | 0x88 (pool) x22498 | no credible reading (1) | 0xe0 (texture) x3 | 0xe0 (texture) x619 | 0x80 | 0x58 |
+| NVNsampler | 0x30 | 0x78 (sampler) x8691 | 0x78 x2214 | 0x78 x376 | 0x78 x36 | 0x30 | 0x30 |
+| NVNtexturePool | 0x20 | **0x20** (sampler pool) | **0x20** (sampler pool) | **0x20** (sampler pool) | 0x138 | 0x20 | 0x20 |
+| NVNsamplerPool | 0x20 | **0x20** (sampler) | 0x3140 | **0x20** (sampler) | 0x1430 | 0x20 | 0x20 |
+| NVNprogram | 0xC0 | **0x80** (buffer, program alive) x2 (2) | 0x100 (program) x3661 | 0xc0 (buffer) x1 | 0x100 (program) x133 | **0x80** | 0x28 |
+| NVNwindow | 0x180 | 0x1a0 | 0x190 | 0x1a0 | 0x1a0 | 0x180 | 0xf8 |
+| NVNcommandBuffer | 0xA0 | 0xc0 (pool) | 0xb0 (pool) | 0xc0 (pool) | 0x140 (command buffer) x19 | 0xA0 | 0x30 |
+| NVNvertexAttribState | 0x4 | **0x4** array x370179 | **0x4** x93678 | - | **0x4** x56 | 0x4 | 0x4 |
+| NVNvertexStreamState | 0x8 | **0x8** array x191214 | **0x8** x71962 | - | **0x8** (to attrib) x148 | 0x8 | 0x8 |
+| NVNcolorState / NVNchannelMaskState / NVNpolygonState | 0x4 | **0x4** (next state) | **0x4** | - | **0x4** | 0x4 | 0x4 |
+| NVNblendState / NVNdepthStencilState | 0x8 | weak | weak | weak | weak | 0x8 | 0x8 |
+| NVNmultisampleState | 0x18 | 0x30 | 0x2c | - | 0x2c | 0x18 | 0x13 |
+| NVNtextureView | 0x10 | weak (3) | weak | weak | weak | 0x10 | 0x10 |
+| builders: device / queue / memory pool / buffer / texture / sampler / window / event | 0x40 / 0x40 / 0x40 / 0x40 / 0x80 / 0x60 / 0x40 / 0x20 | weak | weak | weak | weak | as nvn.h | 0x4 / 0x40 / 0x20 / 0x20 / 0x60 / 0x38 / 0x40 / 0x10 |
+
+Gaps are hex bytes, with the neighbour's type and how often each gap was seen. Bold marks a gap equal to the minimum, i.e. the exact size. "-" means no reading for that title. Logs are in `NappleWork/logs/objlay-{acnh,mk8d,las}-trace2` and `objlay-smo-trace3`.
+
+1. MK8D runs as a 32-bit title, so its guest stack is not the host stack and its stack temporaries cannot be recognised. It sets up about 219,000 textures in 90 s, and its smallest texture gaps (0x8, 0x10, 0x40 and so on, 1 to 4 times each) are dead temporaries; the first words logged for most of them are not a texture's.
+2. The ACNH program at 0x7037b845c0 still carried its magic when the game set up an NVNbuffer at +0x80 and a memory pool at +0xb0, which suggests a structure {NVNprogram, 0x80 bytes; NVNbuffer, 0x30; NVNmemoryPool}. The r2 layout still zeroed +0x80..0x88 at Initialize and SetShaders, which is the start of that buffer. The program's guest-visible part is now 0x28 bytes.
+3. Builders, views and most state objects are stack locals, and the "recent objects" pairing mixes frames of different calls. For example, a texture view 8 bytes from another view cannot be a real size, because a view's levels, layers, format, swizzle and target do not fit in 8 bytes. For these objects only array strides count as evidence (vertex attribute and stream states). The other minimums are nvn.h's, and no title contradicts them.
