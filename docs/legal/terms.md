@@ -1,6 +1,6 @@
 # Napple Online Terms of Service
 
-**Version:** v1 · **Effective:** 2026-11-03 · Plain-English summary of the rules for using Napple Online. This is not legal advice, and it is a starting text the project owner should have reviewed before a public launch.
+**Version:** 2026-11-03 · **Effective:** 2026-11-03 · Plain-English summary of the rules for using Napple Online. This is not legal advice, and it is a starting text the project owner should have reviewed before a public launch.
 
 Napple Online is the optional account, friends, cloud-save and matchmaking service run for the Napple app (napple.lat). The Napple app itself is MIT licensed and works without an account. By creating an account you accept these terms and the [Privacy Policy](privacy.md).
 

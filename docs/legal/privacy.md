@@ -1,6 +1,6 @@
 # Napple Online Privacy Policy
 
-**Version:** v1 · **Effective:** 2026-11-03 · Plain-English description of what Napple Online collects. Not legal advice; the project owner should have it reviewed before a public launch.
+**Version:** 2026-11-03 · **Effective:** 2026-11-03 · Plain-English description of what Napple Online collects. Not legal advice; the project owner should have it reviewed before a public launch.
 
 The Napple app works fully offline without an account. This policy covers only the optional Napple Online service (accounts, profiles, friends, cloud saves, matchmaking). Data controller: the Napple project owner; contact `legal@napple.lat` (placeholder, to be confirmed before launch).
 

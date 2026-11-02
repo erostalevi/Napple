@@ -1,6 +1,6 @@
 # Napple Online Report and Takedown Policy
 
-**Version:** v1 · **Effective:** 2026-11-03 · Not legal advice.
+**Version:** 2026-11-03 · **Effective:** 2026-11-03 · Not legal advice.
 
 ## Reporting a player
 

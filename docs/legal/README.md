@@ -1,6 +1,6 @@
 # Legal documents
 
-Napple Online legal texts (versioned; signup stores the accepted terms version, currently **v1**, effective 2026-11-03). The same texts are published as static pages on the landing site (`site/terms.html`, `site/privacy.html`, `site/report.html`).
+Napple Online legal texts (versioned; signup stores the accepted terms version, currently **2026-11-03**, the napple-account `TERMS_VERSION`, effective 2026-11-03; keep the two in step when the texts change). The same texts are published as static pages on the landing site (`site/terms.html`, `site/privacy.html`, `site/report.html`).
 
 - [Terms of Service](terms.md)
 - [Privacy Policy](privacy.md)
