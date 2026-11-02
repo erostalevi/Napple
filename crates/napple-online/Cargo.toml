@@ -1,0 +1,15 @@
+[package]
+name = "napple-online"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The Napple online service: Napple-issued accounts and tokens and a NEX-compatible game server (PRUDP Lite over WebSocket, RMC, Authentication, Secure Connection, Matchmaking) so Napple users play online modes with each other. Never talks to Nintendo."
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.10"
+
+[[bin]]
+name = "napple-online"
+path = "src/main.rs"

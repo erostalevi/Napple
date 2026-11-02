@@ -502,6 +502,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "napple-online"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "napple-rewrite"
 version = "0.0.1"
 dependencies = [
