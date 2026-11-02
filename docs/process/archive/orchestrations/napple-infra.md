@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r7
 env: mac
 model: claude-opus-5-5
 depends_on: []   # wires to the napple-online / napple-room crates by name; integrate after them
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_53c5ec03-3f03-47b6-80e9-ee3d9cb67e20 (fresh)
 launched_at: 2026-11-02
@@ -45,3 +45,4 @@ DNS plan (user's):
 Read `orchestrations/ENV-MAC.md` (local-only, never ask, never push). Never write credentials anywhere.
 
 ## Result
+Integrated 2026-11-02 into main as 14ad75c (head 9986727), outcome **Clean** (changes README rounds merged). Checked here: check_docs, bash -n, shellcheck, actionlint, tofu fmt, `infra/local/run.sh --stub` smoke. Not checked here: tofu test, Docker builds, AWS (no AWS call made). Acceptance 3's "a runtime reaches the real servers" waits for the server crates. Details: [integrator file](../integrators/claude-napple-infra-2026-11-02-r7.md).

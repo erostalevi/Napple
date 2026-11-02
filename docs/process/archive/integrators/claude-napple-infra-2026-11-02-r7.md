@@ -6,7 +6,7 @@ head: see `git log -1 claude/napple-infra-2026-11-02-r7` (this file is in the he
 env: mac
 date: 2026-11-02
 areas: [infra, ci, docs, site]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/napple-infra-2026-11-02-r7: local test stack + AWS auto-deploy of the Napple game servers (pretend.napple.lat) and DNS for napple.lat
@@ -166,3 +166,9 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   IP for NEX station URLs from `NAPPLE_ONLINE_PUBLIC_IP`.
 - **net-rooms** (crate): an HTTP `/healthz` listener (`NAPPLE_ROOM_HTTP`) next to the TCP room port, and env-driven listen address.
 - **docs-site/mkdocs.yml** (optional): a nav line for `guides/deploy-servers.md` (several guides are already absent from the nav, so this is cosmetic).
+
+## Integration result
+- Date 2026-11-02, merged into main as 14ad75c (branch head 9986727, which supersedes the 06cb365 hand-off with a docs / trust-template change), after batch r6 and after `orchestrate/2026-11-02-r7` was merged into main (net-rooms, napple-online, mk8d-lan-session orchestration files left open in `orchestrations/`). Outcome: **Clean**: one mechanical conflict in `docs/archive/changes/README.md` (this branch's `### Round 2026-11-02-r7` next to r6's section: both kept, the section's range and its two anchors moved to r7). No product code touched (only `infra/**`, `.github/workflows/deploy-servers.yml`, `site/CNAME`, docs and link lines), so no runtime rebuild or re-test was needed for it.
+- Checks run here: `python3 tools/check_docs.py` OK (257 files); `bash -n` on `infra/scripts/*.sh` and `infra/local/run.sh` clean; `shellcheck -x` clean; `actionlint .github/workflows/deploy-servers.yml` clean; `tofu fmt -check -recursive infra/terraform` clean; `infra/local/run.sh start --stub` (private state dir, ports 28080 / 28081 / 32415 to stay clear of the r7 sessions): both healthy, `/healthz` answered `ok stub online` / `ok stub room`, `stop` left no process, `start` without the crates refused with the expected message.
+- Not run here (no change from the author's evidence): `tofu init/validate/test` (needs the provider download; the author ran it with a mocked provider), Docker image builds (no Docker), anything against AWS. **No AWS command was run and nothing was deployed.**
+- Note for whoever publishes main: the workflow runs on pushes to `main` touching `infra/**`; with the `napple-servers` environment secrets in place (the author reports the OIDC role was fixed), publishing this merge will start a real deploy with the stand-in images while the server crates are not on main.

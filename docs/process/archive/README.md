@@ -60,3 +60,9 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | net-host-provider | [net-host-provider.md](orchestrations/net-host-provider.md) | [claude-net-host-provider-2026-11-02-r6.md](integrators/claude-net-host-provider-2026-11-02-r6.md) | opt-in macOS host network provider (`NAPPLE_NET=host`): sockets, DNS with the vendor's domains refused, TLS, nifm, LDN over the LAN |
 | error-applet-output | [error-applet-output.md](orchestrations/error-applet-output.md) | [claude-error-applet-output-2026-11-02-r6.md](integrators/claude-error-applet-output-2026-11-02-r6.md) | empty applet channels answer 0x480, error applet modes decoded (MK8D Online Play with a network returns to its menu) |
 | gfx-multi-viewport | [gfx-multi-viewport.md](orchestrations/gfx-multi-viewport.md) | [claude-gfx-multi-viewport-2026-11-02-r6.md](integrators/claude-gfx-multi-viewport-2026-11-02-r6.md) | 16 viewports / scissors / depth ranges on the encoder, viewport index and layer outputs, layered passes on demand |
+
+## Round 2026-11-02-r7
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| napple-infra | [napple-infra.md](orchestrations/napple-infra.md) | [claude-napple-infra-2026-11-02-r7.md](integrators/claude-napple-infra-2026-11-02-r7.md) | local test stack + AWS auto-deploy of the Napple game servers (`pretend.napple.lat`) and the `napple.lat` DNS |
