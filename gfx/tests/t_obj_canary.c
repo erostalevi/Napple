@@ -2,7 +2,7 @@
  * "Guest object sizes"). Each object sits in a block whose bytes from NVN_MIN_<type> on hold a canary; its SetDefaults / Initialize and then every entry
  * point that takes the object as a non-const first parameter (the lists below: nvn_protos.h + nvn_protos_ext.h, Finalize last) run, and the canary must
  * survive each call. A layout that outgrows a title's object (Animal Crossing's NVNprogram ends at +0x88: 30e67b4) fails here with the call that wrote.
- * The lists were generated from the prototypes (first parameter a non-const pointer to the family's object; arguments: 1 / small valid objects / zeroed
+ * The lists come from t_nvn_canary_gen.py (first parameter a non-const pointer to the family's object; arguments: 1 / small valid objects / zeroed
  * scratch): an entry point added to nvn_protos*.h for one of these families belongs in its list. Skipped: nvnQueuePresentTexture, nvnQueueAcquireTexture
  * (need an acquired window image), nvnSyncInitializeFromFencedGLSync (GL interop, refused). Headless Metal, no game data. */
 #include "nvn_harness.h"
