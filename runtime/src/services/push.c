@@ -7,6 +7,8 @@
  * The rows are complete for an offline console (class c): nothing is ever pushed or configured. npns commands 5 and 7 (receive / state change events) hand out an event that never fires. */
 #include "svc_common.h"
 #include "sys_default.h"
+#include "notif_core.h"
+#include <pthread.h>
 
 #define PUSH_RANGE 32
 #define PUSH_EXTRA 12 /* ids above the generous range that the switchbrew tables list (npns:u 101..154, notif:a 500..1000) */
@@ -40,9 +42,92 @@ static const IpcCmd npns_rows[] = {
     {152, "GetStateChangeEventWithHandover", sysd_event, IPC_STUB}, {153, "GetDropEventWithHandover", sysd_event, IPC_STUB},
     {154, "CreateTokenAsync", sysd_err_generic, IPC_STUB},
 };
+/* notif:a INotificationServicesForApplication alarm rows (notif_core.c keeps the alarms; they never fire, there is no HOME menu to raise them):
+ *   500 RegisterAlarmSetting(type-5 AlarmSetting 0x40, type-5 application parameter) -> u16 alarm_setting_id
+ *   510 UpdateAlarmSetting(type-5 AlarmSetting, type-5 parameter)   520 ListAlarmSettings(type-6 AlarmSetting[]) -> s32 count
+ *   530 LoadApplicationParameter(u16 id, type-6 buffer) -> u32 size   540 DeleteAlarmSetting(u16 id)   1000 Initialize(u64 aruid, pid)
+ * The result values for a full store, an unknown id and a malformed setting are not documented: napple uses its own (module NOTIF_MODULE, unverified). */
+#define NOTIF_MODULE 252u                             /* [unverified] napple's choice */
+#define R_NOTIF_INVALID HZ_RESULT(NOTIF_MODULE, 1)   /* [unverified] */
+#define R_NOTIF_FULL HZ_RESULT(NOTIF_MODULE, 2)      /* [unverified] */
+#define R_NOTIF_NOT_FOUND HZ_RESULT(NOTIF_MODULE, 3) /* [unverified] */
+static NotifStore g_notif;
+static int g_notif_initialized;
+static pthread_mutex_t g_notif_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t notif_result(int r) { return r == NOTIF_OK ? 0 : r == NOTIF_ERR_FULL ? R_NOTIF_FULL : r == NOTIF_ERR_NOT_FOUND ? R_NOTIF_NOT_FOUND : R_NOTIF_INVALID; }
+static const void *in_ptr(IpcCall *c, unsigned n, size_t *size) {
+    const IpcBuf *b = ipc_in_buf(c, n);
+    *size = b ? (size_t)b->size : 0;
+    return b && b->size ? ipc_buf_ptr(b) : NULL;
+}
+static void notif_register_alarm(IpcObject *s, IpcCall *c) {
+    (void)s;
+    size_t ns, np;
+    const void *set = in_ptr(c, 0, &ns), *par = in_ptr(c, 1, &np);
+    uint16_t id = 0;
+    pthread_mutex_lock(&g_notif_mu);
+    int r = notif_register(&g_notif, set, ns, par, np, &id);
+    pthread_mutex_unlock(&g_notif_mu);
+    if (r) {
+        c->result = notif_result(r);
+        return;
+    }
+    IPC_OUT(c, id);
+}
+static void notif_update_alarm(IpcObject *s, IpcCall *c) {
+    (void)s;
+    size_t ns, np;
+    const void *set = in_ptr(c, 0, &ns), *par = in_ptr(c, 1, &np);
+    pthread_mutex_lock(&g_notif_mu);
+    int r = notif_update(&g_notif, set, ns, par, np);
+    pthread_mutex_unlock(&g_notif_mu);
+    c->result = notif_result(r);
+}
+static void notif_list_alarms(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint8_t tmp[NOTIF_ALARM_MAX * NOTIF_SETTING_SIZE];
+    pthread_mutex_lock(&g_notif_mu);
+    int32_t n = (int32_t)notif_list(&g_notif, tmp, b ? (b->size < sizeof tmp ? (size_t)b->size : sizeof tmp) : 0);
+    pthread_mutex_unlock(&g_notif_mu);
+    if (b && n) ipc_write_buf(c, b, tmp, (uint64_t)n * NOTIF_SETTING_SIZE);
+    IPC_OUT(c, n);
+}
+static void notif_load_parameter(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint16_t id = IPC_IN(c, uint16_t, 0);
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint8_t tmp[NOTIF_PARAM_MAX];
+    uint32_t size = 0;
+    pthread_mutex_lock(&g_notif_mu);
+    int r = notif_load_param(&g_notif, id, tmp, sizeof tmp, &size);
+    pthread_mutex_unlock(&g_notif_mu);
+    if (r) {
+        c->result = notif_result(r);
+        return;
+    }
+    uint32_t w = b ? (uint32_t)ipc_write_buf(c, b, tmp, size) : 0;
+    IPC_OUT(c, w);
+}
+static void notif_delete_alarm(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint16_t id = IPC_IN(c, uint16_t, 0);
+    pthread_mutex_lock(&g_notif_mu);
+    int r = notif_delete(&g_notif, id);
+    pthread_mutex_unlock(&g_notif_mu);
+    c->result = notif_result(r);
+}
+static void notif_initialize(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&g_notif_mu);
+    g_notif_initialized = 1; /* the alarms belong to this process; a second Initialize keeps them */
+    pthread_mutex_unlock(&g_notif_mu);
+}
 static const IpcCmd notif_rows[] = {
-    {500, "RegisterAlarmSetting", sysd_ok, IPC_STUB}, {510, "UpdateAlarmSetting", sysd_ok, IPC_STUB}, {520, "ListAlarmSettings", sysd_z4, IPC_STUB},
-    {530, "LoadApplicationParameter", sysd_err_generic, IPC_STUB}, {540, "DeleteAlarmSetting", sysd_ok, IPC_STUB}, {1000, "Initialize", sysd_ok, IPC_STUB},
+    {500, "RegisterAlarmSetting", notif_register_alarm, IPC_IMPL}, {510, "UpdateAlarmSetting", notif_update_alarm, IPC_IMPL},
+    {520, "ListAlarmSettings", notif_list_alarms, IPC_IMPL},       {530, "LoadApplicationParameter", notif_load_parameter, IPC_IMPL},
+    {540, "DeleteAlarmSetting", notif_delete_alarm, IPC_IMPL},     {1000, "Initialize", notif_initialize, IPC_IMPL},
 };
 static const IpcCmd mnpp_rows[] = {{0, "Initialize", ok, IPC_IMPL}, {1, "SubmitEvent", ok, IPC_IMPL}};
 static const IpcCmd ngct_rows[] = {{0, "Match", ok, IPC_IMPL}, {1, "Filter", ok, IPC_IMPL}};
