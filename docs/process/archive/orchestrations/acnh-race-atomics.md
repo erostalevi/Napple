@@ -6,7 +6,7 @@ base: claude/sched-applets-2026-11-01-r1 (its scheduler changes and diagnostics;
 env: mac
 model: claude-opus-5-5
 depends_on: [sched-applets]
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_3b3cd256-1668-4a2b-8542-c3387e1fbb05 (reused sched-applets r1 session)
 launched_at: 2026-11-01
@@ -40,3 +40,5 @@ sched-applets' change note `docs/archive/changes/2026-11-01-claude-sched-applets
 Read `orchestrations/ENV-MAC.md` (shared title data, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-02: Clean, merged into main as 3a4bfc4 (branch head 850d49d). Acceptance met on the integrator's own rebuild: title data rebuilt from the merged tree into `/Users/neto/NappleWork/games-integ/` (module hashes byte-identical to the author's `games-r3/`), ACNH base 20 x 30 s 20 ok / 0 crashes / 0 CBTRACE overlaps (was 11/40 with overlaps), ACNH update+DLC 5/5 ok cb=0, LAS / SMO / MK8D 60 s ok; frame counts A/B old vs rebuilt data within noise (SMO 3528/3548 vs 3549/3547, LAS 3541 vs 3519, MK8D base 3394 vs 3364). Litmus reproduced here (ldxr 21218 / 128047 double claims, ldaxr 0). Follow-up: AArch32 lifter `ldrex`/`strex` -> `ldaxr`/`stlxr`.
+Integrator file: `docs/process/archive/integrators/claude-acnh-race-atomics-2026-11-01-r3.md`.

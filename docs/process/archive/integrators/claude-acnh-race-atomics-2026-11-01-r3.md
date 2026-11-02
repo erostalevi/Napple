@@ -6,7 +6,7 @@ head: f407590
 env: mac
 date: 2026-11-01
 areas: [crates/napple-rewrite, runtime/kernel (threads.c, signals.c), tools/soak, docs]
-status: ready
+status: integrated
 ---
 
 # claude/acnh-race-atomics-2026-11-01-r3: ACNH base start crash fixed (guest spinlocks need acquire ordering on Apple cores)
@@ -78,3 +78,15 @@ crash in this session (compiled only).
 
 ## Needs from other areas
 - AArch32 lifter: emit `ldaxr`/`stlxr` for `ldrex`/`strex` (same race class on 32-bit titles).
+
+## Integration result
+- Date: 2026-11-02. Merged into main as 3a4bfc4 (integ/acnh-race-atomics, branch head 850d49d; the file's `head: f407590` differs only by the commit that adds this file). Outcome: **Clean** (`runtime/Makefile` auto-merged; no conflicts). The orchestration plan branch was merged first (02a2ab3, 3fd4c84).
+- `integrate:` fixes: none. Native ports: none (`ordering.rs` is pure Rust; the arbitration trace uses POSIX `open`/`write`/`clock_gettime(CLOCK_MONOTONIC_RAW)`, which matches the gfx CBTRACE clock on macOS, left as C on purpose).
+- Build (scratch worktree): gfx lib adapter, audio, input, frontend, runtime (GFX=napple) rc 0; `cargo build --release --workspace` rc 0.
+- Tests: `cargo test -p napple-rewrite` 21 + 4 + 18 pass (new `ordering::tests` 3/3); `cargo test --workspace --release` 291 passed / 0 failed; `make -C runtime GFX=napple test` rc 0 (`ipc_reference` missing 0); `make -C runtime test-host` rc 0, `light_event` 3/3, `threads_preempt` 12/12, `kernel_sched` 24/24.
+- Litmus (`tools/soak/litmus_excl_claim.c`, Apple silicon): ldxr 21 218 and 128 047 items claimed twice; `-DACQ` 0 and 0.
+- Title data: rebuilt with the merged tree's CLI into `/Users/neto/NappleWork/games-integ/` (ACNH base+3.0.3+3 DLC, LAS, SMO, MK8D base+update+DLC) under `.build.lock`. Every module sha256 equals the author's `games-r3/` (so games-r3 was built from this branch's rewrite); ACNH/LAS `main` and `sdk` differ from the old shared `games/` data, `subsdk*` unchanged.
+- Runs (runtime of the merged tree, headless, `tools/soak/soak.py --lockf .run.lock`, private save roots, `NAPPLE_GFX_CBTRACE=1`): ACNH base 20 x 30 s: **20 ok, 0 crashes, 0 null reads, 0 CBTRACE overlap runs**; ACNH update+DLC 5 x 30 s: 5 ok, cb=0; LAS / SMO / MK8D-update 60 s: ok / ok / ok.
+- Performance (same runtime, old `games/` vs rebuilt data, back to back on a quiet machine, 60 s): SMO 3528, 3548 vs 3549, 3547; LAS 3541 vs 3519; MK8D base 3394 vs 3364. No visible cost (r2 reference: LAS ~3546, SMO ~3561). A first SMO run at 3165 frames was taken while other sessions loaded the Mac; the A/B pair rules out the rewrite.
+- Not re-run here: `NAPPLE_ARB_TRACE` (diagnostic, off by default) and the crash-time flush in `signals.c` (no crash happened).
+- Corrections to this file's instructions: build ACNH and MK8D title data from their folders (`napple build "<folder>"`), not from the base `.nsp`; given the base `.nsp` alone the CLI selects 0 updates and 0 DLC, and `soak.py run acnh-update` then has no update version.
