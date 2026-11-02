@@ -6,10 +6,10 @@ base: orchestrate/2026-11-02-r4
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_cfe1eb24-e8f8-4de9-9612-8b8e842af693 (reused)
+launched_at: 2026-11-02
 ---
 
 # gfx-views-raster: stencil cube sampling, remaining integer views, separate-texture slot masks, viewport swizzles, provoking vertex
