@@ -206,3 +206,4 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | Note | Summary |
 |---|---|
 | [2026-11-02-claude-net-host-provider-2026-11-02-r6](2026-11-02-claude-net-host-provider-2026-11-02-r6.md) | Opt-in macOS host network provider (`NAPPLE_NET=host`): BSD sockets, host resolver with the console vendor's domains refused, TLS with the host trust store, nifm from the host, LDN over the LAN. |
+| [2026-11-02-claude-error-applet-output-2026-11-02-r6](2026-11-02-claude-error-applet-output-2026-11-02-r6.md) | Empty applet storage channels answer NoDataInChannel 0x480 (the SDK aborted on 0x680 after every error applet), unimplemented applets end Canceled 0x2c80, every error applet mode decoded (MK8D Online Play with `NAPPLE_NET=host` returns to its menu). |
