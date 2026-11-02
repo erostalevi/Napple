@@ -400,6 +400,71 @@ uint8_t *napjpeg_decode_rgba(const uint8_t *d, size_t n, int *width, int *height
     return rgba;
 }
 
+uint8_t *napjpeg_decode_raw_rgba(const JpegRawParams *p, const uint8_t *scan, size_t n, int *width, int *height, int *err) {
+    int dummy;
+    if (!err) err = &dummy;
+    *err = JPEGCORE_BAD;
+    if (!p || !width || !height) return NULL;
+    if (p->width < 1 || p->height < 1 || p->width > JPEGCORE_MAX_DIM || p->height > JPEGCORE_MAX_DIM || (p->ncomp != 1 && p->ncomp != 3) || p->restart_interval < 0 ||
+        p->restart_interval > 65535)
+        return NULL;
+    Frame f;
+    Comp c[3];
+    memset(&f, 0, sizeof f);
+    memset(c, 0, sizeof c);
+    f.width = p->width, f.height = p->height, f.ncomp = p->ncomp;
+    for (int i = 0; i < f.ncomp; i++) {
+        if (p->h[i] < 1 || p->h[i] > 2 || p->v[i] < 1 || p->v[i] > 2 || p->tq[i] < 0 || p->tq[i] > 3 || p->dc_t[i] < 0 || p->dc_t[i] > 3 || p->ac_t[i] < 0 || p->ac_t[i] > 3)
+            return NULL;
+        f.id[i] = c[i].id = i; /* the engine has no component ids: scan order is frame order */
+        f.h[i] = p->h[i], f.v[i] = p->v[i], f.tq[i] = p->tq[i];
+        c[i].dc_t = p->dc_t[i], c[i].ac_t = p->ac_t[i];
+    }
+    dct_init();
+    uint16_t q[4][64];
+    for (int t = 0; t < 4; t++)
+        for (int i = 0; i < 64; i++) q[t][zigzag[i]] = p->q[t][i];
+    Huff *hdc = calloc(8, sizeof(Huff)), *hac = hdc + 4;
+    if (!hdc) {
+        *err = JPEGCORE_NOMEM;
+        return NULL;
+    }
+    for (int tc = 0; tc < 2; tc++)
+        for (int t = 0; t < 4; t++) {
+            Huff *h = tc ? &hac[t] : &hdc[t];
+            int total = 0;
+            for (int i = 1; i <= 16; i++) total += h->bits[i] = p->huff[tc][t].bits[i];
+            if (total > 256) goto bad;
+            if (!total) continue; /* absent: a component that selects it fails in decode_frame */
+            memcpy(h->vals, p->huff[tc][t].vals, (size_t)total);
+            h->present = 1;
+            if (huff_build(h)) goto bad;
+        }
+    if (!scan || !n) {
+        free(hdc);
+        *err = JPEGCORE_TRUNCATED;
+        return NULL;
+    }
+    /* The segment is followed by a virtual EOI, as it is in a file, so the bit reader stops at a marker instead of flagging the look-ahead as a truncation:
+     * the two paths then agree on what a short segment decodes to. */
+    uint8_t *buf = malloc(n + 2);
+    if (!buf) {
+        free(hdc);
+        *err = JPEGCORE_NOMEM;
+        return NULL;
+    }
+    memcpy(buf, scan, n);
+    buf[n] = 0xff, buf[n + 1] = 0xd9;
+    *err = JPEGCORE_OK;
+    uint8_t *rgba = decode_frame(&f, q, hdc, hac, c, f.ncomp, p->restart_interval, buf, n + 2, 0, width, height, err);
+    free(buf);
+    free(hdc);
+    return rgba;
+bad:
+    free(hdc);
+    return NULL;
+}
+
 uint8_t *napjpeg_scale_rgba(const uint8_t *rgba, int w, int h, int dw, int dh) {
     if (w <= 0 || h <= 0 || dw <= 0 || dh <= 0) return NULL;
     uint8_t *o = malloc((size_t)dw * dh * 4);
