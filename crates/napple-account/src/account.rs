@@ -82,7 +82,7 @@ pub struct DeleteMe {
     confirm_email: String,
 }
 
-/// Deletes the account and everything in it: every save object, profiles, devices, passkeys, tokens, grants.
+/// Deletes the account and everything in it: every save object, profiles, devices, tokens, grants, pending codes.
 /// Irreversible.
 pub async fn delete_me(
     State(app): State<AppState>,
@@ -101,12 +101,16 @@ pub async fn delete_me(
         );
     }
     let now = app.now();
-    let keys = {
+    let (keys, photo_keys) = {
         let db = app.db();
+        let photo_keys = crate::profiles::photo_keys_of_account(&db, &a.account_id)?;
         let keys = delete_versions(&db, "account_id = ?1", &[&a.account_id], now)?;
         db.execute("DELETE FROM accounts WHERE id = ?1", [&a.account_id])?;
-        keys
+        db.execute("DELETE FROM auth_codes WHERE email = ?1", [&email])?;
+        db.execute("DELETE FROM login_failures WHERE email = ?1", [&email])?;
+        (keys, photo_keys)
     };
+    crate::photos::delete_all(&app, photo_keys).await;
     crate::log::info(&format!(
         "account deleted {} ({} save objects queued)",
         a.account_id,

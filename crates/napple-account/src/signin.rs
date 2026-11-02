@@ -1,17 +1,16 @@
-//! Email magic link / 6-digit code sign-in, device registration at sign-in, token issue, refresh rotation, logout.
+//! Email + password accounts: signup, emailed-code verification, login, password reset, device registration, token
+//! issue, refresh rotation, logout.
 
 use crate::app::{AppState, Authed, ClientIp, limit};
 use crate::error::{ApiError, ApiResult};
 use crate::jwt::{AUDIENCE, Claims};
-use crate::mailer::Mail;
+use crate::codes::{RESET, VERIFY, check_mail_limits, consume, invalid, send_code};
 use crate::util::{
-    b64_decode, b64url, clean_name, ct_eq, hmac_sha256, new_id, normalize_email, random_code,
-    random_token, token_hash,
+    b64_decode, b64url, clean_name, new_id, normalize_email, random_code, random_token, token_hash,
 };
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
-use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -162,60 +161,117 @@ pub fn end_device_sessions(db: &Connection, device_id: &str) -> rusqlite::Result
     Ok(())
 }
 
-fn code_mac(app: &AppState, email: &str, code: &str) -> Vec<u8> {
-    hmac_sha256(&app.code_key, format!("{email}|{code}").as_bytes()).to_vec()
+/// Nicknames: 3-20 characters of `[A-Za-z0-9_.-]`, plus the reserved-name rules. Uniqueness is checked by the caller.
+pub fn check_nickname(n: &str) -> ApiResult<String> {
+    let n = n.trim();
+    let len = n.chars().count();
+    if !(3..=20).contains(&len)
+        || !n.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+    {
+        return Err(ApiError::bad_request("nickname: 3-20 characters, letters, digits, _ . -")
+            .with("error_code", "bad_nickname"));
+    }
+    crate::names::check_name(n, 20, &[]).map_err(|e| {
+        ApiError::bad_request(e.message()).with("error_code", "reserved_nickname")
+    })
+}
+
+fn nickname_taken(db: &Connection, nick: &str, except_account: Option<&str>) -> rusqlite::Result<bool> {
+    let ex = except_account.unwrap_or("");
+    let taken: Option<i64> = db
+        .query_row(
+            "SELECT 1 FROM profiles WHERE lower(nickname) = lower(?1) AND account_id != ?2
+             UNION SELECT 1 FROM accounts WHERE lower(pending_nickname) = lower(?1) AND id != ?2 AND verified_at IS NULL",
+            params![nick, ex],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(taken.is_some())
+}
+
+async fn hash_blocking(password: String, m_kib: u32) -> ApiResult<String> {
+    tokio::task::spawn_blocking(move || crate::password::hash(&password, m_kib))
+        .await
+        .map_err(ApiError::internal)?
+        .map_err(ApiError::internal)
+}
+
+async fn verify_blocking(password: String, phc: String) -> bool {
+    tokio::task::spawn_blocking(move || crate::password::verify(&password, &phc))
+        .await
+        .unwrap_or(false)
 }
 
 #[derive(Deserialize)]
-pub struct EmailStart {
+pub struct Signup {
     email: String,
+    password: String,
+    nickname: String,
+    #[serde(default)]
+    age_ok: bool,
+    #[serde(default)]
+    terms_ok: bool,
+    device: DeviceIn,
 }
 
-pub async fn email_start(
+/// Creates an unverified account and mails a confirmation code. An address that already has a verified account
+/// gets the same 202 and no mail (no enumeration).
+pub async fn signup(
     State(app): State<AppState>,
     ip: ClientIp,
-    Json(b): Json<EmailStart>,
+    Json(b): Json<Signup>,
 ) -> ApiResult<(StatusCode, Json<Value>)> {
     limit(&app, "auth-ip", &ip.0, app.cfg.auth_ip_per_min, 60)?;
     let email = normalize_email(&b.email)
         .ok_or_else(|| ApiError::bad_request("email: not a valid address"))?;
-    limit(&app, "email", &email, app.cfg.email_per_window, 15 * 60)?;
+    crate::terms::require(b.age_ok, b.terms_ok)?;
+    crate::password::check(&b.password, &email).map_err(|e| {
+        ApiError::bad_request(e.message()).with("error_code", "weak_password")
+    })?;
+    let nick = check_nickname(&b.nickname)?;
+    let (dname, dplatform, dpub) = check_device(&b.device)?;
+    check_mail_limits(&app, &email, &ip.0)?;
+    let hash = hash_blocking(b.password, app.cfg.argon_m_kib).await?;
     let now = app.now();
-    let code = random_code();
-    let token = random_token();
-    {
+    let device = json!({"name": dname, "platform": dplatform, "pubkey": dpub}).to_string();
+    let send = {
         let db = app.db();
-        db.execute(
-            "INSERT OR REPLACE INTO email_challenges (email, code_mac, token_hash, created_at, expires_at, attempts) VALUES (?1, ?2, ?3, ?4, ?5, 0)",
-            params![email, code_mac(&app, &email, &code), token_hash(&token), now, now + app.cfg.email_code_ttl],
-        )?;
+        let existing: Option<(String, Option<i64>)> = db
+            .query_row("SELECT id, verified_at FROM accounts WHERE email = ?1", [&email], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?;
+        match existing {
+            Some((_, Some(_))) => false,
+            Some((id, None)) => {
+                if nickname_taken(&db, &nick, Some(&id))? {
+                    return Err(ApiError::conflict("nickname_taken", "that nickname is taken"));
+                }
+                db.execute(
+                    "UPDATE accounts SET password_hash = ?2, pending_nickname = ?3, pending_device = ?4, display_name = ?3 WHERE id = ?1",
+                    params![id, hash, nick, device],
+                )?;
+                crate::terms::record(&db, &id, now)?;
+                true
+            }
+            None => {
+                if nickname_taken(&db, &nick, None)? {
+                    return Err(ApiError::conflict("nickname_taken", "that nickname is taken"));
+                }
+                let id = new_id();
+                db.execute(
+                    "INSERT INTO accounts (id, email, display_name, created_at, last_seen, password_hash, pending_nickname, pending_device) VALUES (?1, ?2, ?3, ?4, ?4, ?5, ?3, ?6)",
+                    params![id, email, nick, now, hash, device],
+                )?;
+                crate::terms::record(&db, &id, now)?;
+                crate::log::info(&format!("account created (unverified) {id}"));
+                true
+            }
+        }
+    };
+    if send {
+        send_code(&app, &email, VERIFY).await?;
     }
-    let enc = |s: &str| utf8_percent_encode(s, NON_ALPHANUMERIC).to_string();
-    let link = format!(
-        "{}#email={}&token={}",
-        app.cfg.link_base,
-        enc(&email),
-        token
-    );
-    let minutes = app.cfg.email_code_ttl / 60;
-    let text = format!(
-        "Your Napple sign-in code is {code}\n\nOr open this link on the device you are signing in on:\n{link}\n\nThe code and link work once and expire in {minutes} minutes.\nIf you did not ask to sign in to Napple, ignore this email.\n"
-    );
-    app.mailer
-        .send(
-            Mail {
-                to: email.clone(),
-                subject: format!("Napple sign-in code: {code}"),
-                text,
-            },
-            now,
-        )
-        .await
-        .map_err(|e| {
-            crate::log::error(&format!("mailer: {e}"));
-            ApiError::unavailable("mail_failed", "could not send the sign-in email, try again")
-        })?;
-    // Same answer whether or not an account exists for this address.
     Ok((
         StatusCode::ACCEPTED,
         Json(json!({"sent": true, "expires_in": app.cfg.email_code_ttl})),
@@ -223,90 +279,200 @@ pub async fn email_start(
 }
 
 #[derive(Deserialize)]
-pub struct EmailFinish {
+pub struct Verify {
     email: String,
-    #[serde(default)]
-    code: Option<String>,
-    /// The token from the magic link (instead of the code).
-    #[serde(default)]
-    token: Option<String>,
+    code: String,
+}
+
+/// Confirms the address with the emailed code: the account becomes usable, gets its first profile (the nickname from
+/// signup) and the signup device signs in.
+pub async fn verify(
+    State(app): State<AppState>,
+    ip: ClientIp,
+    Json(b): Json<Verify>,
+) -> ApiResult<Json<Value>> {
+    limit(&app, "auth-ip", &ip.0, app.cfg.auth_ip_per_min, 60)?;
+    let email = normalize_email(&b.email).ok_or_else(invalid)?;
+    // Across codes too: at most 20 guesses per address per hour.
+    limit(&app, "verify", &email, 20, 3600)?;
+    consume(&app, &email, VERIFY, &b.code)?;
+    let now = app.now();
+    let db = app.db();
+    let row: Option<(String, Option<i64>, Option<String>, Option<String>)> = db
+        .query_row(
+            "SELECT id, verified_at, pending_nickname, pending_device FROM accounts WHERE email = ?1",
+            [&email],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?;
+    let Some((id, None, Some(nick), Some(device))) = row else {
+        return Err(invalid());
+    };
+    let device: DeviceIn = serde_json::from_str::<Value>(&device)
+        .ok()
+        .and_then(|d| {
+            Some(DeviceIn {
+                name: d["name"].as_str()?.into(),
+                platform: d["platform"].as_str()?.into(),
+                pubkey: d["pubkey"].as_str()?.into(),
+            })
+        })
+        .ok_or_else(|| ApiError::internal("pending device unreadable"))?;
+    // The first profile is the online identity. Validate it like any profile nickname (reserved words, charset); if
+    // someone took it meanwhile (or it no longer validates), add digits. All under the one DB lock, then
+    // `profiles::insert` re-checks uniqueness case-insensitively.
+    let mut name = crate::nicknames::validate(&db, &id, &nick).unwrap_or_else(|_| "Player".into());
+    while nickname_taken(&db, &name, Some(&id))? || crate::nicknames::taken(&db, &name, None)? {
+        let suffix = random_code();
+        name = format!("{}{}", &nick[..nick.len().min(14)], &suffix[..4]);
+    }
+    db.execute(
+        "UPDATE accounts SET verified_at = ?2, pending_nickname = NULL, pending_device = NULL WHERE id = ?1",
+        params![id, now],
+    )?;
+    crate::profiles::insert(&db, &id, &name, 0, now)?;
+    db.execute("UPDATE accounts SET display_name = ?2 WHERE id = ?1", params![id, name])?;
+    let device_id = upsert_device(&db, &id, &device, now)?;
+    let mut v = issue_tokens(&app, &db, &id, &device_id, now)?;
+    v["new_account"] = json!(true);
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+pub struct Login {
+    email: String,
+    password: String,
     device: DeviceIn,
 }
 
-pub async fn email_finish(
+fn bad_credentials() -> ApiError {
+    ApiError::new(StatusCode::UNAUTHORIZED, "invalid_credentials", "incorrect email or password")
+}
+
+/// Password sign-in. Unknown address, wrong password and a password-less legacy account all answer the same, and
+/// the same time (a dummy hash is checked). 10 failures in 15 minutes lock the address for 15 minutes.
+pub async fn login(
     State(app): State<AppState>,
     ip: ClientIp,
-    Json(b): Json<EmailFinish>,
+    Json(b): Json<Login>,
 ) -> ApiResult<Json<Value>> {
     limit(&app, "auth-ip", &ip.0, app.cfg.auth_ip_per_min, 60)?;
-    let invalid =
-        || ApiError::bad_request("invalid or expired code").with("error_code", "invalid_code");
-    let email = normalize_email(&b.email).ok_or_else(invalid)?;
-    // Across codes too: at most 20 guesses per address per hour (5 per code, 5 codes per 15 minutes).
-    limit(&app, "email-finish", &email, 20, 3600)?;
+    let email = normalize_email(&b.email).ok_or_else(bad_credentials)?;
     check_device(&b.device)?;
     let now = app.now();
+    let (row, locked) = {
+        let db = app.db();
+        let locked = crate::ratelimit::locked_for(&db, &email, now)?;
+        let row: Option<(String, Option<String>, Option<i64>)> = db
+            .query_row(
+                "SELECT id, password_hash, verified_at FROM accounts WHERE email = ?1",
+                [&email],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        (row, locked)
+    };
+    if let Some(secs) = locked {
+        let mut e = ApiError::too_many(secs);
+        e.code = "locked";
+        e.message = "too many failed sign-ins; try again later".into();
+        return Err(e);
+    }
+    let (phc, known) = match &row {
+        Some((_, Some(h), _)) => (h.clone(), true),
+        _ => (crate::password::dummy_hash(app.cfg.argon_m_kib), false),
+    };
+    let ok = verify_blocking(b.password, phc).await && known;
+    let Some((id, _, verified)) = row.filter(|_| ok) else {
+        crate::ratelimit::fail(&app.db(), &email, app.cfg.login_fail_limit, now)?;
+        return Err(bad_credentials());
+    };
+    crate::ratelimit::clear(&app.db(), &email)?;
+    if verified.is_none() {
+        // Right password, address not confirmed yet: send a fresh code.
+        check_mail_limits(&app, &email, &ip.0)?;
+        send_code(&app, &email, VERIFY).await?;
+        return Err(ApiError::forbidden("confirm your email address: a new code was sent")
+            .with("reason", "unverified"));
+    }
     let db = app.db();
-    let ch: Option<(Vec<u8>, Vec<u8>, i64, u32)> = db
-        .query_row("SELECT code_mac, token_hash, expires_at, attempts FROM email_challenges WHERE email = ?1", [&email], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
-        })
-        .optional()?;
-    let Some((mac, thash, expires_at, attempts)) = ch else {
-        return Err(invalid());
-    };
-    if now > expires_at || attempts >= app.cfg.email_code_attempts {
-        db.execute("DELETE FROM email_challenges WHERE email = ?1", [&email])?;
-        return Err(invalid());
-    }
-    let ok = match (&b.code, &b.token) {
-        (Some(code), _) => ct_eq(&code_mac(&app, &email, code.trim()), &mac),
-        (None, Some(token)) => ct_eq(&token_hash(token.trim()), &thash),
-        (None, None) => false,
-    };
-    if !ok {
-        db.execute(
-            "UPDATE email_challenges SET attempts = attempts + 1 WHERE email = ?1",
-            [&email],
-        )?;
-        return Err(invalid());
-    }
-    // Single use.
-    db.execute("DELETE FROM email_challenges WHERE email = ?1", [&email])?;
-
-    let existing: Option<String> = db
-        .query_row("SELECT id FROM accounts WHERE email = ?1", [&email], |r| {
-            r.get(0)
-        })
-        .optional()?;
-    let (account_id, new_account) = match existing {
-        Some(id) => (id, false),
-        None => {
-            let id = new_id();
-            // Default name = the email's local part, unless it breaks the reserved-name rules (then "Player").
-            let local: String = email
-                .split('@')
-                .next()
-                .unwrap_or("")
-                .chars()
-                .take(32)
-                .collect();
-            let display =
-                crate::names::check_name(&local, 32, &[]).unwrap_or_else(|_| "Player".into());
-            db.execute("INSERT INTO accounts (id, email, display_name, created_at, last_seen) VALUES (?1, ?2, ?3, ?4, ?4)", params![id, email, display, now])?;
-            // Every account starts with one player profile so the online identity exists from the first sign-in.
-            db.execute(
-                "INSERT INTO profiles (id, account_id, nickname, icon_id, created_at, updated_at) VALUES (?1, ?2, ?3, 0, ?4, ?4)",
-                params![new_id(), id, display, now],
-            )?;
-            crate::log::info(&format!("account created {id}"));
-            (id, true)
-        }
-    };
-    let device_id = upsert_device(&db, &account_id, &b.device, now)?;
-    let mut v = issue_tokens(&app, &db, &account_id, &device_id, now)?;
-    v["new_account"] = json!(new_account);
+    let device_id = upsert_device(&db, &id, &b.device, now)?;
+    let mut v = issue_tokens(&app, &db, &id, &device_id, now)?;
+    v["new_account"] = json!(false);
     Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+pub struct ResetStart {
+    email: String,
+}
+
+/// Always 202: nothing here says whether the address has an account.
+pub async fn reset_start(
+    State(app): State<AppState>,
+    ip: ClientIp,
+    Json(b): Json<ResetStart>,
+) -> ApiResult<(StatusCode, Json<Value>)> {
+    limit(&app, "auth-ip", &ip.0, app.cfg.auth_ip_per_min, 60)?;
+    let email = normalize_email(&b.email)
+        .ok_or_else(|| ApiError::bad_request("email: not a valid address"))?;
+    check_mail_limits(&app, &email, &ip.0)?;
+    let exists: bool = app
+        .db()
+        .query_row(
+            "SELECT 1 FROM accounts WHERE email = ?1 AND verified_at IS NOT NULL",
+            [&email],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if exists {
+        send_code(&app, &email, RESET).await?;
+    }
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(json!({"sent": true, "expires_in": app.cfg.email_code_ttl})),
+    ))
+}
+
+#[derive(Deserialize)]
+pub struct ResetFinish {
+    email: String,
+    code: String,
+    new_password: String,
+}
+
+/// Sets a new password with the emailed code, lifts any lockout and ends every session of the account.
+pub async fn reset_finish(
+    State(app): State<AppState>,
+    ip: ClientIp,
+    Json(b): Json<ResetFinish>,
+) -> ApiResult<Json<Value>> {
+    limit(&app, "auth-ip", &ip.0, app.cfg.auth_ip_per_min, 60)?;
+    let email = normalize_email(&b.email).ok_or_else(invalid)?;
+    limit(&app, "reset-finish", &email, 20, 3600)?;
+    crate::password::check(&b.new_password, &email).map_err(|e| {
+        ApiError::bad_request(e.message()).with("error_code", "weak_password")
+    })?;
+    consume(&app, &email, RESET, &b.code)?;
+    let hash = hash_blocking(b.new_password, app.cfg.argon_m_kib).await?;
+    let db = app.db();
+    let id: Option<String> = db
+        .query_row("SELECT id FROM accounts WHERE email = ?1", [&email], |r| r.get(0))
+        .optional()?;
+    let Some(id) = id else {
+        return Err(invalid());
+    };
+    db.execute("UPDATE accounts SET password_hash = ?2 WHERE id = ?1", params![id, hash])?;
+    crate::ratelimit::clear(&db, &email)?;
+    let devices: Vec<String> = db
+        .prepare("SELECT id FROM devices WHERE account_id = ?1")?
+        .query_map([&id], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    for d in devices {
+        end_device_sessions(&db, &d)?;
+    }
+    Ok(Json(json!({"reset": true})))
 }
 
 #[derive(Deserialize)]

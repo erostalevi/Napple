@@ -1,0 +1,8 @@
+[package]
+name = "napple-visibility"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Napple Online visibility tiers: the one pure function (can_view) that napple-account and napple-social share. No I/O."
+
+[dependencies]

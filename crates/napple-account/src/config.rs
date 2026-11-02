@@ -23,10 +23,16 @@ pub struct S3Config {
 
 #[derive(Clone, Debug)]
 pub enum MailerKind {
-    /// Prints the code and link to stdout. Refused when `NAPPLE_ACCOUNT_ENV=production`.
+    /// Prints the code to stdout. Refused when `NAPPLE_ACCOUNT_ENV=production`.
     Dev,
     Ses {
         region: String,
+        from: String,
+        config_set: String,
+    },
+    /// `smtp://[user:pass@]host[:port]` (plain), `smtp+starttls://...` (default port 587) or `smtps://...` (465).
+    Smtp {
+        url: String,
         from: String,
     },
 }
@@ -39,16 +45,17 @@ pub struct Config {
     /// Public origin + prefix, e.g. `https://pretend.napple.lat/account/v1`; used in links, JWT `iss`, presign-dev URLs.
     pub public_base: String,
     pub issuer: String,
-    pub link_base: String,
-    pub rp_id: String,
-    pub rp_name: String,
-    pub webauthn_origins: Vec<String>,
     pub cors_origins: Vec<String>,
     pub trust_proxy: bool,
     pub access_ttl: i64,
     pub refresh_ttl: i64,
     pub email_code_ttl: i64,
     pub email_code_attempts: u32,
+    /// Argon2id memory in KiB (production 65536 = 64 MiB; lowered by tests only).
+    pub argon_m_kib: u32,
+    pub code_mails_per_email_hour: u32,
+    pub code_mails_per_ip_hour: u32,
+    pub login_fail_limit: u32,
     pub max_version_bytes: u64,
     pub upload_url_ttl: i64,
     pub pending_upload_ttl: i64,
@@ -99,7 +106,7 @@ impl Config {
             .to_string();
 
         let data_dir = PathBuf::from(
-            get("NAPPLE_ACCOUNT_DATA").unwrap_or_else(|| "./napple-account-data".into()),
+            get("NAPPLE_ACCOUNT_DATA_DIR").or_else(|| get("NAPPLE_ACCOUNT_DATA")).unwrap_or_else(|| "./napple-account-data".into()),
         );
         let blobs = match get("NAPPLE_ACCOUNT_S3_BUCKET") {
             Some(bucket) => BlobBackend::S3(S3Config {
@@ -116,42 +123,47 @@ impl Config {
                     .unwrap_or_else(|| data_dir.join("blobs")),
             ),
         };
-        let mailer = match get("NAPPLE_ACCOUNT_MAILER").as_deref() {
+        let mail_from = get("NAPPLE_MAIL_FROM")
+            .or_else(|| get("NAPPLE_ACCOUNT_MAIL_FROM"))
+            .unwrap_or_else(|| "no-reply@napple.lat".into());
+        let mailer = match get("NAPPLE_MAIL_PROVIDER")
+            .or_else(|| get("NAPPLE_ACCOUNT_MAILER"))
+            .as_deref()
+        {
             Some("ses") => MailerKind::Ses {
-                region: get("NAPPLE_ACCOUNT_SES_REGION")
+                region: get("NAPPLE_SES_REGION")
+                    .or_else(|| get("NAPPLE_ACCOUNT_SES_REGION"))
                     .or_else(|| get("AWS_REGION"))
                     .unwrap_or_else(|| "us-east-1".into()),
-                from: get("NAPPLE_ACCOUNT_MAIL_FROM")
-                    .unwrap_or_else(|| "Napple <no-reply@napple.lat>".into()),
+                from: mail_from,
+                config_set: get("NAPPLE_SES_CONFIG_SET")
+                    .unwrap_or_else(|| "napple-transactional".into()),
+            },
+            Some("smtp") => MailerKind::Smtp {
+                url: get("NAPPLE_SMTP_URL")
+                    .ok_or("NAPPLE_MAIL_PROVIDER=smtp needs NAPPLE_SMTP_URL")?,
+                from: mail_from,
             },
             Some("dev") | None => MailerKind::Dev,
             Some(other) => {
                 return Err(format!(
-                    "NAPPLE_ACCOUNT_MAILER: unknown mailer {other} (dev|ses)"
+                    "NAPPLE_MAIL_PROVIDER: unknown provider {other} (dev|ses|smtp)"
                 ));
             }
         };
         if production && matches!(mailer, MailerKind::Dev) {
-            return Err("NAPPLE_ACCOUNT_ENV=production needs NAPPLE_ACCOUNT_MAILER=ses (the dev mailer prints sign-in codes)".into());
+            return Err("NAPPLE_ACCOUNT_ENV=production needs NAPPLE_MAIL_PROVIDER=ses or smtp (the dev mailer prints codes)".into());
         }
         if production && matches!(blobs, BlobBackend::Fs(_)) {
             return Err("NAPPLE_ACCOUNT_ENV=production needs NAPPLE_ACCOUNT_S3_BUCKET".into());
         }
 
         Ok(Config {
-            listen: get("NAPPLE_ACCOUNT_HTTP").unwrap_or_else(|| "127.0.0.1:8082".into()),
+            listen: get("NAPPLE_ACCOUNT_BIND").or_else(|| get("NAPPLE_ACCOUNT_HTTP")).unwrap_or_else(|| "127.0.0.1:8082".into()),
             data_dir,
             production,
             issuer: get("NAPPLE_ACCOUNT_ISSUER").unwrap_or_else(|| public_base.clone()),
-            link_base: get("NAPPLE_ACCOUNT_LINK_BASE")
-                .unwrap_or_else(|| format!("{public_base}/auth/email/link")),
             public_base,
-            rp_id: get("NAPPLE_ACCOUNT_RP_ID").unwrap_or_else(|| "napple.lat".into()),
-            rp_name: get("NAPPLE_ACCOUNT_RP_NAME").unwrap_or_else(|| "Napple".into()),
-            webauthn_origins: list(
-                "NAPPLE_ACCOUNT_WEBAUTHN_ORIGINS",
-                "https://pretend.napple.lat,https://napple.lat",
-            ),
             cors_origins: list(
                 "NAPPLE_ACCOUNT_CORS_ORIGINS",
                 "https://napple.lat,https://pretend.napple.lat,https://www.napple.lat",
@@ -163,6 +175,10 @@ impl Config {
             refresh_ttl: num("NAPPLE_ACCOUNT_REFRESH_TTL", 30 * 86_400)? as i64,
             email_code_ttl: num("NAPPLE_ACCOUNT_EMAIL_CODE_TTL", 10 * 60)? as i64,
             email_code_attempts: num("NAPPLE_ACCOUNT_EMAIL_CODE_ATTEMPTS", 5)? as u32,
+            argon_m_kib: num("NAPPLE_ACCOUNT_ARGON_M_KIB", 64 * 1024)? as u32,
+            code_mails_per_email_hour: num("NAPPLE_ACCOUNT_CODE_MAILS_PER_EMAIL_HOUR", 5)? as u32,
+            code_mails_per_ip_hour: num("NAPPLE_ACCOUNT_CODE_MAILS_PER_IP_HOUR", 20)? as u32,
+            login_fail_limit: num("NAPPLE_ACCOUNT_LOGIN_FAIL_LIMIT", 10)? as u32,
             max_version_bytes: num("NAPPLE_ACCOUNT_MAX_VERSION_BYTES", 64 * MIB)?,
             upload_url_ttl: num("NAPPLE_ACCOUNT_UPLOAD_URL_TTL", 15 * 60)? as i64,
             pending_upload_ttl: num("NAPPLE_ACCOUNT_PENDING_UPLOAD_TTL", 86_400)? as i64,

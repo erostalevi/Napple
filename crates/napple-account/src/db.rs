@@ -43,37 +43,6 @@ CREATE TABLE IF NOT EXISTS refresh_tokens (
 );
 CREATE INDEX IF NOT EXISTS refresh_device ON refresh_tokens(device_id);
 
-CREATE TABLE IF NOT EXISTS email_challenges (
-    email TEXT PRIMARY KEY,
-    code_mac BLOB NOT NULL,
-    token_hash BLOB NOT NULL,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    attempts INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE TABLE IF NOT EXISTS passkeys (
-    cred_id TEXT PRIMARY KEY,
-    account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-    cose_key BLOB NOT NULL,
-    alg INTEGER NOT NULL,
-    sign_count INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    aaguid TEXT NOT NULL,
-    backup_eligible INTEGER NOT NULL,
-    created_at INTEGER NOT NULL,
-    last_used INTEGER
-);
-CREATE INDEX IF NOT EXISTS passkeys_account ON passkeys(account_id);
-
-CREATE TABLE IF NOT EXISTS webauthn_challenges (
-    id TEXT PRIMARY KEY,
-    challenge TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    account_id TEXT,
-    expires_at INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS profiles (
     id TEXT PRIMARY KEY,
     account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
@@ -137,5 +106,7 @@ fn init(c: &Connection) -> rusqlite::Result<()> {
     c.pragma_update(None, "synchronous", "NORMAL")?;
     c.pragma_update(None, "foreign_keys", "ON")?;
     c.busy_timeout(std::time::Duration::from_secs(5))?;
-    c.execute_batch(SCHEMA)
+    c.execute_batch(SCHEMA)?;
+    crate::codes::migrate(c)?;
+    crate::profiles::migrate(c)
 }
