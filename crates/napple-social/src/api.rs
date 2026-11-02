@@ -15,6 +15,7 @@ use crate::config::{
 use crate::db::{self, FriendView, InviteRow, PresenceRow, PresenceView, ProfileRow, RequestRow};
 use crate::error::ApiError;
 use crate::hub::Event;
+use crate::names;
 use crate::{AppState, Caller, PresenceChange, codes, presence_pair};
 
 type R<T> = Result<T, ApiError>;
@@ -714,6 +715,23 @@ fn clean_text(v: Option<String>, max: usize, field: &str, code: &'static str) ->
     Ok(Some(v))
 }
 
+/// Reserved-name rules (ACCOUNT-CONTRACT.md "Reserved names") on free text other players see: labels (`title_name`, `mode`)
+/// get the full name rules, an invite `message` only the "napple" word and invisible characters. 422 `reserved_name`.
+fn reserved_check(v: &Option<String>, max: usize, field: &str, label: bool) -> R<()> {
+    let Some(t) = v else { return Ok(()) };
+    let r = if label {
+        names::check_name(t, max, &[]).map(|_| ())
+    } else {
+        names::check_text(t)
+    };
+    r.map_err(|e| {
+        ApiError::unprocessable(
+            "reserved_name",
+            format!("{field}: {}", e.message().replacen("names", "text", 1)),
+        )
+    })
+}
+
 /// `(status, title_id, title_name, mode, join_token)`; None means offline.
 type PresenceFields = (
     String,
@@ -745,6 +763,8 @@ fn validate_presence(b: PresenceBody) -> R<Option<PresenceFields>> {
                 "invalid_presence",
             )?;
             let mode = clean_text(b.mode, MAX_MODE, "mode", "invalid_presence")?;
+            reserved_check(&name, MAX_TITLE_NAME, "title_name", true)?;
+            reserved_check(&mode, MAX_MODE, "mode", true)?;
             let jt = match b.join_token {
                 Some(t) if t.is_empty() => None,
                 Some(t) if t.len() > MAX_JOIN_TOKEN || t.chars().any(char::is_control) => {
@@ -924,6 +944,7 @@ pub async fn send_invite(
         "message",
         "invalid_invite",
     )?;
+    reserved_check(&message, MAX_INVITE_MESSAGE, "message", false)?;
     if body
         .join_token
         .as_ref()

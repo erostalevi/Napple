@@ -37,6 +37,9 @@ impl ApiError {
     pub fn conflict(code: &'static str, message: impl Into<String>) -> Self {
         Self::new(StatusCode::CONFLICT, code, message)
     }
+    pub fn unprocessable(code: &'static str, message: impl Into<String>) -> Self {
+        Self::new(StatusCode::UNPROCESSABLE_ENTITY, code, message)
+    }
     pub fn gone(code: &'static str, message: impl Into<String>) -> Self {
         Self::new(StatusCode::GONE, code, message)
     }

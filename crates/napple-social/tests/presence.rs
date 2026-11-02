@@ -106,6 +106,35 @@ async fn presence_validation() {
         )
         .await;
     assert_eq!((s, code(&v)), (StatusCode::BAD_REQUEST, "invalid_json"));
+    // Reserved names (ACCOUNT-CONTRACT.md) on the labels other players see: "napple" anywhere, look-alikes, the nap- prefix,
+    // invisible characters.
+    for (field, text) in [
+        ("mode", "Napple Cup"),
+        ("mode", "with n4pp1e"),
+        ("mode", "nap-crew"),
+        ("mode", "Online\u{200B} race"),
+        ("title_name", "NAPPLE Kart"),
+    ] {
+        let mut body = json!({"status": "playing", "title_id": "0100152000022000"});
+        body[field] = json!(text);
+        let (s, v) = env.call(&a, "PUT", "/presence", Some(body.clone())).await;
+        assert_eq!(
+            (s, code(&v)),
+            (StatusCode::UNPROCESSABLE_ENTITY, "reserved_name"),
+            "{body}"
+        );
+    }
+    for mode in ["Online race", "Naples tour", "napkin"] {
+        let (s, _) = env
+            .call(
+                &a,
+                "PUT",
+                "/presence",
+                Some(json!({"status": "playing", "title_id": "0100152000022000", "mode": mode})),
+            )
+            .await;
+        assert_eq!(s, StatusCode::OK, "{mode}");
+    }
     // Title ids are normalised to upper case; "online" drops title fields.
     let (_, v) = env
         .call(

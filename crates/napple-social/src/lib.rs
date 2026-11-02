@@ -12,6 +12,7 @@ pub mod config;
 pub mod db;
 pub mod error;
 pub mod hub;
+pub mod names;
 pub mod ratelimit;
 pub mod stream;
 

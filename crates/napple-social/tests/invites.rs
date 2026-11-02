@@ -190,6 +190,12 @@ async fn decline_cancel_replace_and_rules() {
     );
     let (s, v) = env.call(&host, "POST", "/invites", Some(json!({"to_profile_id": guest.profile_id, "join_token": "r", "message": "m".repeat(141)}))).await;
     assert_eq!((s, code(&v)), (StatusCode::BAD_REQUEST, "invalid_invite"));
+    // Reserved names: an invite message may not contain "napple" (look-alikes included); the nap- prefix is only for names.
+    let (s, v) = env.call(&host, "POST", "/invites", Some(json!({"to_profile_id": guest.profile_id, "join_token": "r", "message": "join my Nаpple room"}))).await;
+    assert_eq!(
+        (s, code(&v)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "reserved_name")
+    );
 
     // Removing the friend closes live invites.
     let (_, v) = env
