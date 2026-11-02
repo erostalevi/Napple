@@ -31,4 +31,4 @@ Legend (macOS stages, from the matrix): `OK` pass, `~` partial, `X` fail, `B` bl
 | Link's Awakening | `01006BB00C6F0000` | title screen (2026-10-26 re-run) |
 | Animal Crossing: New Horizons | `01006F8002326000` | abort at ~2 s (48-byte colour attachments) |
 
-See also [COMPATIBILITY.md](../../COMPATIBILITY.md) (the full matrix with stage evidence), the [coverage by feature](feature-support.md) and the machine-readable [support-data.json](support-data.json).
+See also [COMPATIBILITY.md](../../COMPATIBILITY.md) (the full matrix with stage evidence), the [coverage by feature](feature-support.md), the machine-readable [support-data.json](support-data.json) and the [online support](online-support.md) table (generated from `compat/online.json`).

@@ -233,3 +233,4 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | Note | Summary |
 |---|---|
 | [2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10](2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10.md) | nvdrv-public-layouts: GPU nodes, nvdisp (tegra_dc_ext) and NVDEC / VIC / NVJPG / MSENC on layouts checked against public sources (libnx, L4T, open-gpu-doc); mismatches fixed, every struct pinned by tests. |
+| [2026-11-02-claude-online-support-table-2026-11-02-r10](2026-11-02-claude-online-support-table-2026-11-02-r10.md) | Per-game online support table generated from `compat/online.json`: `docs/reference/online-support.md`, a block in the README Status section, `site/online.json` and an "Online play" section on the landing page. |

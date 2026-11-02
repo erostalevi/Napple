@@ -10,7 +10,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 GEN = HERE / "gen_support.py"
-INPUTS = ["compat/matrix.json", "docs/titles", "tools/support/data/coverage-snapshot.json"]
+INPUTS = ["compat/matrix.json", "compat/online.json", "docs/titles", "tools/support/data/coverage-snapshot.json", "README.md"]
 
 
 def run(root, *args):
@@ -47,6 +47,41 @@ class SupportTables(unittest.TestCase):
         note = self.tmp / "docs/titles/01006BB00C6F0000.md"
         note.write_text(note.read_text().replace("**State:** plays", "**State:** crashes", 1))
         self.assertEqual(run(self.tmp, "--check").returncode, 1)
+
+    def test_online_outputs_written_and_checked(self):
+        self.assertEqual(run(self.tmp).returncode, 0)
+        for rel in ["docs/reference/online-support.md", "site/online.json"]:
+            self.assertTrue((self.tmp / rel).exists(), rel)
+        readme = self.tmp / "README.md"
+        readme.write_text(readme.read_text().replace("| works |", "| broken |", 1))
+        r = run(self.tmp, "--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("README.md", r.stdout)
+        self.assertEqual(run(self.tmp).returncode, 0)
+        self.assertEqual(run(self.tmp, "--check").returncode, 0)
+
+    def test_online_data_change_makes_outputs_stale(self):
+        run(self.tmp)
+        data = self.tmp / "compat/online.json"
+        data.write_text(data.read_text().replace('"status": "broken"', '"status": "works"', 1))
+        r = run(self.tmp, "--check")
+        self.assertEqual(r.returncode, 1)
+        for rel in ["online-support.md", "README.md", "site/online.json"]:
+            self.assertIn(rel, r.stdout)
+
+    def test_online_invalid_status_is_rejected(self):
+        data = self.tmp / "compat/online.json"
+        data.write_text(data.read_text().replace('"status": "broken"', '"status": "kinda"', 1))
+        r = run(self.tmp)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("kinda", r.stderr)
+
+    def test_readme_without_markers_is_rejected(self):
+        readme = self.tmp / "README.md"
+        readme.write_text(readme.read_text().replace("<!-- online:begin -->", "", 1))
+        r = run(self.tmp, "--check")
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("online:begin", r.stderr)
 
     def test_committed_tables_are_current(self):
         r = run(ROOT, "--check")
