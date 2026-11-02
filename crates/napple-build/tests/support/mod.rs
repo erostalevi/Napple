@@ -686,6 +686,16 @@ fn make_game_inner(
             ("css/main.css", b"body{}"),
         ]))],
     );
+    // LegalInformation (CNMT content type 5): the title's IP notices
+    let legalnca = build_nca(
+        APP_ID,
+        3,
+        vec![Sec::Rom(romfs_tree(&[
+            ("legalinfo.xml", b"<legalinfo/>"),
+            ("ipnotices.htdocs/index.html", b"<html>notices</html>"),
+            ("ipnotices.htdocs/img/logo.png", &[7, 8, 9]),
+        ]))],
+    );
     let mut recs = vec![
         Rec {
             id: id(1),
@@ -704,6 +714,11 @@ fn make_game_inner(
             size: htmlnca.len() as u64,
             ctype: 4,
         });
+        recs.push(Rec {
+            id: id(4),
+            size: legalnca.len() as u64,
+            ctype: 5,
+        });
     }
     let cn = cnmt(0x80, APP_ID, APP_ID, 0, &recs);
     let meta = meta_nca(APP_ID, &cn);
@@ -714,6 +729,7 @@ fn make_game_inner(
     ];
     if html {
         base_files_v.push((nca_name(&id(3)), htmlnca));
+        base_files_v.push((nca_name(&id(4)), legalnca));
     }
     let base_refs: Vec<(&str, &[u8])> = base_files_v
         .iter()

@@ -2,6 +2,7 @@
 #include "applet_ui.h"
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 static AppletUiShowImage g_show;
 void applet_ui_set_show_image(AppletUiShowImage fn) { g_show = fn; }
@@ -22,6 +23,20 @@ int applet_ui_album_selecting(void) { return g_selecting; }
 
 static const CapsState *g_src;
 void applet_album_set_source(const CapsState *s) { g_src = s; }
+const CapsState *applet_album_source(void) { return g_src; }
+int applet_album_save_rgba(const uint8_t *rgba, uint8_t entry[CAPS_ENTRY_SIZE]) {
+    if (!g_src || !rgba) return -1;
+    CapsState *s = (CapsState *)g_src; /* caps.c registers its own state: writable, only read through the const view elsewhere */
+    time_t t = time(NULL);
+    struct tm tm;
+    gmtime_r(&t, &tm);
+    uint8_t e[CAPS_ENTRY_SIZE];
+    caps_make_entry(s, (uint16_t)(tm.tm_year + 1900), (uint8_t)(tm.tm_mon + 1), (uint8_t)tm.tm_mday, (uint8_t)tm.tm_hour, (uint8_t)tm.tm_min, (uint8_t)tm.tm_sec, e);
+    if (caps_album_set_image(s, e, rgba, CAPS_IMAGE_W, CAPS_IMAGE_H, CAPS_IMAGE_W * 4)) return -2;
+    caps_album_entry(s, e, e); /* the entry now carries the JPEG size and hash */
+    if (entry) memcpy(entry, e, CAPS_ENTRY_SIZE);
+    return 0;
+}
 
 void album_args_parse(const uint8_t *data, size_t size, AlbumArgs *a) {
     a->mode = ALBUM_MODE_VIEW;

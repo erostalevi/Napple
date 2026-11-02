@@ -1,4 +1,5 @@
 #include "applet_lib_core.h"
+#include "hz_result.h"
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -335,3 +336,17 @@ int applet_controller_ask(AppletControllerAnswer *a) {
     }
     return ok != 0;
 }
+
+/* ---- network connection (NetConnect) ---- */
+void applet_netconnect_encode(uint32_t result, uint8_t out[APPLET_NETCONNECT_OUT_SIZE]) {
+    memset(out, 0, APPLET_NETCONNECT_OUT_SIZE);
+    memcpy(out, &result, 4);
+}
+int applet_netconnect_handler(LibAppletCall *call) {
+    uint8_t out[APPLET_NETCONNECT_OUT_SIZE];
+    applet_netconnect_encode(HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, out);
+    libapplet_call_set_out(call, out, sizeof out);
+    call->result = 0;
+    return 1;
+}
+int applet_netconnect_register(void) { return libapplet_register_handler(LIBAPPLET_ID_NET_CONNECT, applet_netconnect_handler); }

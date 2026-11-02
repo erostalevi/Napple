@@ -573,6 +573,20 @@ fn html_document_written_next_to_romfs_map() {
         std::fs::read(base.join("html/css/main.css")).unwrap(),
         b"body{}"
     );
+    // the LegalInformation content (CNMT type 5) goes to legal/, apart from the manual
+    assert_eq!(
+        std::fs::read(base.join("legal/legalinfo.xml")).unwrap(),
+        b"<legalinfo/>"
+    );
+    assert_eq!(
+        std::fs::read(base.join("legal/ipnotices.htdocs/index.html")).unwrap(),
+        b"<html>notices</html>"
+    );
+    assert_eq!(
+        std::fs::read(base.join("legal/ipnotices.htdocs/img/logo.png")).unwrap(),
+        [7, 8, 9]
+    );
+    assert!(!base.join("html/legalinfo.xml").exists());
     // a title without an HtmlDocument gets no html/ directory
     let _t2 = tmp("nohtml");
     let g2 = make_game(&_t2, false);
@@ -590,6 +604,12 @@ fn html_document_written_next_to_romfs_map() {
         !out2
             .join(format!("{APP_ID:016X}"))
             .join("0102030405060708/html")
+            .exists()
+    );
+    assert!(
+        !out2
+            .join(format!("{APP_ID:016X}"))
+            .join("0102030405060708/legal")
             .exists()
     );
 }
