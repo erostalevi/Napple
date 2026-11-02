@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<meta name="supported-color-schemes" content="light dark">
+<title>{{subject}}</title>
+<!--
+  Napple confirmation / reset code email. Placeholders (all HTML-escaped by the sender):
+    {{subject}}   e.g. "Your Napple confirmation code"
+    {{preheader}} the grey preview line some clients show next to the subject
+    {{headline}}  e.g. "Confirm your email" / "Reset your password"
+    {{intro}}     one sentence above the code
+    {{code}}      the 6 digits, no spaces (the template spaces them)
+    {{minutes}}   expiry in minutes (10)
+    {{ignore}}    the "if this wasn't you" sentence
+  No images and no external resources, so it renders the same everywhere and tracks nothing.
+-->
+<style>
+  body { margin:0; padding:0; background:#f3f4f8; }
+  a { color:#4f46e5; }
+  @media (prefers-color-scheme: dark) {
+    body, .bg { background:#0f1117 !important; }
+    .card { background:#181b24 !important; border-color:#2a2f3d !important; }
+    .t-main { color:#f1f3f9 !important; }
+    .t-soft { color:#a3aabd !important; }
+    .codebox { background:#0f1117 !important; border-color:#3a4256 !important; }
+    .code { color:#ffffff !important; }
+    .rule { border-color:#2a2f3d !important; }
+  }
+  @media only screen and (max-width:620px) {
+    .wrap { width:100% !important; }
+    .pad { padding:28px 20px !important; }
+    .code { font-size:32px !important; letter-spacing:6px !important; }
+  }
+</style>
+</head>
+<body style="margin:0;padding:0;background:#f3f4f8;">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{{preheader}}&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;</div>
+<table role="presentation" class="bg" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#f3f4f8;">
+  <tr><td align="center" style="padding:32px 12px;">
+    <table role="presentation" class="wrap" width="560" cellpadding="0" cellspacing="0" border="0" style="width:560px;max-width:560px;">
+
+      <tr><td align="center" style="padding:0 0 18px 0;">
+        <span class="t-main" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:26px;font-weight:800;letter-spacing:-0.5px;color:#1b1f2e;">nap<span style="color:#6d5dfc;">ple</span></span>
+      </td></tr>
+
+      <tr><td class="card" style="background:#ffffff;border:1px solid #e3e6ef;border-radius:16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr><td style="height:6px;border-radius:16px 16px 0 0;background:#6d5dfc;background-image:linear-gradient(90deg,#6d5dfc,#38bdf8);font-size:0;line-height:0;">&nbsp;</td></tr>
+          <tr><td class="pad" style="padding:36px 40px 12px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+            <h1 class="t-main" style="margin:0 0 12px 0;font-size:22px;line-height:1.3;font-weight:700;color:#1b1f2e;">{{headline}}</h1>
+            <p class="t-soft" style="margin:0 0 24px 0;font-size:15px;line-height:1.6;color:#4b5266;">{{intro}}</p>
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr><td align="center" class="codebox" style="background:#f6f7fb;border:1px dashed #c9cfe0;border-radius:12px;padding:22px 12px;">
+                <div class="code" style="font-family:'SF Mono',ui-monospace,Menlo,Consolas,'Courier New',monospace;font-size:38px;line-height:1.1;font-weight:700;letter-spacing:10px;color:#1b1f2e;">{{code}}</div>
+              </td></tr>
+            </table>
+
+            <p class="t-soft" style="margin:20px 0 0 0;font-size:14px;line-height:1.6;color:#4b5266;text-align:center;">
+              This code expires in <strong class="t-main" style="color:#1b1f2e;">{{minutes}} minutes</strong>.
+              Enter it in the Napple window where you asked for it.
+            </p>
+          </td></tr>
+
+          <tr><td class="pad" style="padding:8px 40px 32px 40px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr><td class="rule" style="border-top:1px solid #e9ecf4;padding-top:20px;">
+                <p class="t-soft" style="margin:0 0 8px 0;font-size:13px;line-height:1.6;color:#6a7288;">{{ignore}}</p>
+                <p class="t-soft" style="margin:0;font-size:13px;line-height:1.6;color:#6a7288;">
+                  For your safety: Napple will <strong>never</strong> ask for this code, or your password, by email, chat or in a game. Don't share it with anyone.
+                </p>
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+      </td></tr>
+
+      <tr><td align="center" style="padding:22px 16px 0 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <p class="t-soft" style="margin:0 0 6px 0;font-size:12px;line-height:1.6;color:#8a91a6;">
+          You received this because someone entered this email address in Napple. This is a one-time message; we don't send newsletters or marketing.
+        </p>
+        <p class="t-soft" style="margin:0;font-size:12px;line-height:1.6;color:#8a91a6;">
+          <a href="https://www.napple.lat" style="color:#8a91a6;">napple.lat</a> &middot; Napple is an independent project, not affiliated with or endorsed by Nintendo.
+        </p>
+      </td></tr>
+
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>

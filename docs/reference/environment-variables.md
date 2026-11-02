@@ -257,7 +257,6 @@ The amiibo, key, store, online-provider and Mii-folder variables below can also 
 | Variable | Values / default | Effect | Defined in |
 |---|---|---|---|
 | `REWRITER` | `rust` (default) or `python` | `tools/prepare_game.sh` uses the Rust rewriter, or the reference Python stopgap. | `tools/prepare_game.sh` |
-| `SAVE_ROOT` | directory | `tools/legacy/flaky_boot.sh` passes it as `--save-root`; default the runtime's default save root. | `tools/legacy/flaky_boot.sh` |
 | `SCRIPT` | input script string | `tools/dev/dev_apptest.sh` passes it as `NAPPLE_INPUT_SCRIPT`. | `tools/dev/dev_apptest.sh` |
 | `SHOT_FRAMES` | comma-separated frames; default `2400,3000,3600` | `tools/dev/dev_apptest.sh` passes it as `NAPPLE_SCREENSHOT_FRAMES`. | `tools/dev/dev_apptest.sh` |
 | `OVERLAY_TAB` | integer | `tools/dev/dev_wintest2.sh` passes it as `NAPPLE_FE_OVERLAY`. | `tools/dev/dev_wintest2.sh` |

@@ -100,7 +100,7 @@ The table below is an **estimate of how much of the Switch platform surface the 
 | Loader: NSO / NRO / modules / relocations | 100% |
 | Kernel: svcs + scheduling | 100% |
 | IPC: HLE service coverage | 100% |
-| IPC: command depth (implemented vs. stubbed) | 97% |
+| IPC: command depth (implemented vs. stubbed) | 99% |
 | GPU: Maxwell shader ISA | 100% |
 | GPU: NVN API surface | 99% |
 | GPU: formats + pipeline features | 98% |
@@ -111,7 +111,7 @@ The table below is an **estimate of how much of the Switch platform surface the 
 | Saves + storage | 100% |
 | Library applets | 100% |
 | Video / media decode | 97% |
-| **Overall** | **≈ 99.3%** (2026-11-02, %Analysis; every row at 97% or above) |
+| **Overall** | **≈ 99.4%** (2026-11-02, %Analysis; every row at 97% or above) |
 
 Coverage is not compatibility: a long tail of command depth, shader corner cases and GPU behaviour is exactly what real games trip over first.
 

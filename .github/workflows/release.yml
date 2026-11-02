@@ -76,6 +76,7 @@ jobs:
           security unlock-keychain -p "$KCPW" "$KC"
           security import "$RUNNER_TEMP/cert.p12" -P "$P12_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
           security set-key-partition-list -S apple-tool:,apple: -k "$KCPW" "$KC" >/dev/null
+          # shellcheck disable=SC2046 # intentional splitting of the existing keychain list
           security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
           rm -f "$RUNNER_TEMP/cert.p12"
           echo "identity=$IDENTITY" >> "$GITHUB_OUTPUT"
