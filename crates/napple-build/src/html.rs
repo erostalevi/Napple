@@ -1,5 +1,6 @@
-//! HtmlDocument NCA (content type 4: manual / offline HTML): its RomFS files are written to `<version dir>/html/`
-//! next to `romfs.map`, where the runtime's offline web applet looks for its root.
+//! Document NCAs whose RomFS the runtime's offline web applet serves: HtmlDocument (CNMT content type 4: manual / offline HTML) is
+//! written to `<version dir>/html/`, LegalInformation (content type 5: the title's legal / IP notices, WebDocumentKind
+//! ApplicationLegalInformation) to `<version dir>/legal/`, both next to `romfs.map`.
 use crate::container::Container;
 use crate::error::{BuildError, Result};
 use napple_core::application::package::Pack;
@@ -12,6 +13,8 @@ use std::path::Path;
 
 /// Content type of the HtmlDocument NCA in a CNMT record.
 pub const CTYPE_HTML: u8 = 4;
+/// Content type of the LegalInformation NCA in a CNMT record.
+pub const CTYPE_LEGAL: u8 = 5;
 const MAX_FILE: u64 = 256 << 20;
 const MAX_TOTAL: u64 = 1 << 30;
 const MAX_FILES: usize = 200_000;
@@ -37,7 +40,17 @@ pub type HtmlFiles = Vec<(String, Vec<u8>)>;
 
 /// Reads every file of the pack's HtmlDocument RomFS (`None` when the pack has none or it cannot be decrypted).
 pub fn read_html(cont: &Container, pack: &Pack, keys: &KeySet) -> Result<Option<HtmlFiles>> {
-    let Some(rec) = pack.meta.contents.iter().find(|c| c.ctype == CTYPE_HTML) else {
+    read_document(cont, pack, keys, CTYPE_HTML)
+}
+
+/// Reads every file of the pack's LegalInformation RomFS (`None` when the pack has none or it cannot be decrypted).
+pub fn read_legal(cont: &Container, pack: &Pack, keys: &KeySet) -> Result<Option<HtmlFiles>> {
+    read_document(cont, pack, keys, CTYPE_LEGAL)
+}
+
+/// Every file of the RomFS of the pack's first content of type `ctype` (`None` when there is none or it cannot be decrypted).
+pub fn read_document(cont: &Container, pack: &Pack, keys: &KeySet, ctype: u8) -> Result<Option<HtmlFiles>> {
+    let Some(rec) = pack.meta.contents.iter().find(|c| c.ctype == ctype) else {
         return Ok(None);
     };
     let Some(src) = cont.ncas.get(&rec.nca_name()) else {
@@ -74,12 +87,22 @@ pub fn read_html(cont: &Container, pack: &Pack, keys: &KeySet) -> Result<Option<
 
 /// Writes the files under `dir/html/`.
 pub fn write_html(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<()> {
+    write_document(dir, "html", files)
+}
+
+/// Writes the files under `dir/legal/`.
+pub fn write_legal(dir: &Path, files: &[(String, Vec<u8>)]) -> Result<()> {
+    write_document(dir, "legal", files)
+}
+
+/// Writes the files under `dir/<sub>/` (paths already confined by `safe_rel`).
+pub fn write_document(dir: &Path, sub: &str, files: &[(String, Vec<u8>)]) -> Result<()> {
     for (rel, data) in files {
-        let dst = dir.join("html").join(rel);
+        let dst = dir.join(sub).join(rel);
         if let Some(parent) = dst.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| BuildError::io("create html dir", e))?;
+            std::fs::create_dir_all(parent).map_err(|e| BuildError::io("create document dir", e))?;
         }
-        std::fs::write(&dst, data).map_err(|e| BuildError::io("write html file", e))?;
+        std::fs::write(&dst, data).map_err(|e| BuildError::io("write document file", e))?;
     }
     Ok(())
 }
@@ -108,6 +131,17 @@ mod tests {
         write_html(&dir, &files).unwrap();
         assert_eq!(std::fs::read(dir.join("html/img/ui/a.png")).unwrap(), b"p");
         assert_eq!(std::fs::read(dir.join("html/index.html")).unwrap(), b"i");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn write_legal_goes_under_legal() {
+        let dir = std::env::temp_dir().join(format!("napple-legal-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let files = vec![("ipnotices.htdocs/index.html".to_string(), b"n".to_vec())];
+        write_legal(&dir, &files).unwrap();
+        assert_eq!(std::fs::read(dir.join("legal/ipnotices.htdocs/index.html")).unwrap(), b"n");
+        assert!(!dir.join("html").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

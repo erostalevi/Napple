@@ -664,6 +664,15 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
             break;
         }
     }
+    // legal information (IP notices): newest version that carries a LegalInformation NCA
+    let mut legal_files: Option<Vec<(String, Vec<u8>)>> = None;
+    for &i in upd.iter().rev().chain(std::iter::once(&base_i)) {
+        let c = conts.get(&plan.packs[i].path)?;
+        if let Some(h) = crate::html::read_legal(&c, &plan.packs[i], &keys)? {
+            legal_files = Some(h);
+            break;
+        }
+    }
     let modset =
         ModSet::load(&o.mods, Some(app_id)).map_err(|e| BuildError::new("mods", e.to_string()))?;
     for w in &modset.warnings {
@@ -1259,6 +1268,9 @@ pub fn build(o: &Opts) -> Result<PathBuf> {
         }
         if let Some(h) = &html_files {
             crate::html::write_html(&game.join(&v.dir), h)?;
+        }
+        if let Some(h) = &legal_files {
+            crate::html::write_legal(&game.join(&v.dir), h)?;
         }
         let mut fields: Vec<(&str, String)> = vec![
             ("format", "1".into()),
