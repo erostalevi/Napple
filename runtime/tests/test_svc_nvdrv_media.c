@@ -7,6 +7,8 @@
 #include "../src/services/codec_headers_core.h"
 #include "../src/services/jpeg_core.h"
 #include "check.h"
+#include "jpeg_strip.h"
+#include "jpeg_vectors.h"
 #include "codec_vectors.h"
 #include <math.h>
 
@@ -181,6 +183,28 @@ static void nvjpg_dec_pic(MNvjpgPic *p, uint32_t boff, uint32_t bsize, uint32_t 
     p->bitstream_offset = boff; p->bitstream_size = bsize; p->luma_stride = ls; p->chroma_stride = cs;
     p->dec_frame_param = (smode << 19) | (otype << 23) | (down << 26) | (sub << 28);
     p->dec_output_info = (uint32_t)alpha << 24;
+}
+/* NVJPG header-less decode: the driver's programming of the decoder half (docs/reference/nvdrv-layouts.md) built from a JPEG taken apart by jpeg_strip.h. */
+static void nvjpg_raw_pic(MNvjpgPic *p, const JpegRawParams *rp, uint32_t boff, uint32_t bsize, uint32_t otype, uint32_t down, uint32_t ls, uint32_t cs) {
+    uint32_t smode = rp->ncomp == 1 ? 0 : rp->h[0] == 2 && rp->v[0] == 2 ? 1 : rp->h[0] == 2 ? 2 : rp->v[0] == 2 ? 3 : 4;
+    uint32_t mw = smode == 1 || smode == 2 ? 16 : 8, mh = smode == 1 || smode == 3 ? 16 : 8, mcuw = ((uint32_t)rp->width + mw - 1) / mw, mcuh = ((uint32_t)rp->height + mh - 1) / mh;
+    nvjpg_dec_pic(p, boff, bsize, smode, otype, down, 0, ls, cs, 0);
+    p->dec_frame_size = mcuw | mcuh << 16;
+    p->dec_frame_param |= smode | (uint32_t)rp->restart_interval << 3;
+    p->pdma_pic_info = (mcuw * mw / 8) << 6 | (mcuh * mh / 8) << 18;
+    p->pdma_pic_info1 = (mcuw * mw - (uint32_t)rp->width) << 21 | (mcuh * mh - (uint32_t)rp->height) << 25;
+    for (int c = 0; c < rp->ncomp; c++)
+        p->dec_block_ctl[c] = (uint32_t)rp->ac_t[c] | (uint32_t)rp->dc_t[c] << 2 | (uint32_t)rp->tq[c] << 4 | (uint32_t)rp->h[c] << 8 | (uint32_t)rp->v[c] << 12;
+    for (int t = 0; t < 4; t++) for (int i = 0; i < 64; i++) p->dec_quant[i][t] = (uint8_t)rp->q[t][i];
+    for (int ac = 0; ac < 2; ac++)
+        for (int t = 0; t < 3; t++) {
+            const uint8_t *bits = rp->huff[ac][t].bits, *vals = rp->huff[ac][t].vals; uint32_t code = 0, idx = 0;
+            for (int l = 0; l < 16; l++) {
+                p->dec_huff_mincode[2 * t + ac][l] = (uint32_t)ac | (uint32_t)t << 1 | (uint32_t)l << 3 | idx << 7 | code << 15;
+                idx += bits[l + 1]; code = (code + bits[l + 1]) << 1;
+            }
+            for (uint32_t i = 0; i < idx; i++) p->dec_huff_symbol[t][(ac ? 12 : 0) + i] = (uint32_t)ac | (uint32_t)t << 1 | i << 3 | (uint32_t)vals[i] << 11;
+        }
 }
 static size_t sos_data_offset(const uint8_t *j, size_t n) { /* where the entropy-coded data of the first scan starts */
     for (size_t i = 2; i + 4 < n;) {
@@ -617,6 +641,67 @@ int main(void) {
     { uint32_t old[] = {SETCL(MEDIA_CLASS_NVJPG), IMM(0x101, 1)}; uint64_t u = stats(jpg)->unknown_regs;
       CHECK(submit(jpg, &jcb, old, 2, NULL, 0) == NV_OK && stats(jpg)->unknown_regs == u + 1, "NVJPG 0x101 (the old invented setup word) is not a method"); }
 #undef JDEC
+
+    { /* header-less decode: the same pictures through nvjpg_drv_pic_param_s's decoder tables, no JFIF markers in the buffer, pixel-exact against the headered decode */
+        struct { const char *name; uint8_t *d; size_t n; int w, h, free_it; } imgs[16]; int ni = 0;
+        for (unsigned i = 0; i < sizeof vec / sizeof *vec; i++)
+            if (vec[i].kind != -2) { imgs[ni].name = vec[i].name; imgs[ni].d = (uint8_t *)vec[i].data; imgs[ni].n = vec[i].size; imgs[ni].w = vec[i].w; imgs[ni].h = vec[i].h; imgs[ni++].free_it = 0; }
+        static const struct { int w, h, sub; } gen[] = {{37, 29, 0}, {37, 29, 1}, {17, 3, 1}, {1, 1, 1}};
+        for (unsigned i = 0; i < sizeof gen / sizeof *gen; i++) {
+            uint8_t *px = malloc((size_t)gen[i].w * gen[i].h * 4); for (int k = 0; k < gen[i].w * gen[i].h; k++) { px[k * 4] = (uint8_t)(k * 5); px[k * 4 + 1] = (uint8_t)(k * 3); px[k * 4 + 2] = (uint8_t)(255 - k); px[k * 4 + 3] = 255; }
+            imgs[ni].name = gen[i].sub ? "generated 4:2:0" : "generated 4:4:4"; imgs[ni].d = napjpeg_encode_rgba(px, gen[i].w, gen[i].h, gen[i].w * 4, 85, gen[i].sub, &imgs[ni].n);
+            imgs[ni].w = gen[i].w; imgs[ni].h = gen[i].h; imgs[ni++].free_it = 1; free(px);
+        }
+        uint32_t f0 = stats(jpg)->frames; int good = 0;
+        for (int k = 0; k < ni; k++) {
+            JpegRawParams rp; const uint8_t *scan; size_t sn; int dw, dh, de = -1;
+            uint8_t *ref = napjpeg_decode_rgba(imgs[k].d, imgs[k].n, &dw, &dh, &de);
+            if (strip_jpeg(imgs[k].d, imgs[k].n, &rp, &scan, &sn) || !ref) { CHECK(0, "%s: strip", imgs[k].name); free(ref); continue; }
+            size_t px = (size_t)dw * dh * 4; uint32_t boff = 0x40;
+            memset(jin.mem, 0, 0x8000); memcpy(jin.mem + boff, scan, sn);
+            nvjpg_raw_pic(&jp, &rp, boff, (uint32_t)sn, NVJPG_OUT_RGBA, 0, 0, 0); memcpy(jpic.mem, &jp, sizeof jp); memset(jst.mem, 0xee, 0x20); memset(jout.mem, 0x77, 0x8000);
+            int rc = submit(jpg, &jcb, jprog, sizeof jprog / 4, NULL, 0); memcpy(&js, jst.mem, sizeof js);
+            int ok = rc == NV_OK && js.error_status == 0 && js.w0 == sn && !memcmp(jout.mem, ref, px) && jout.mem[px] == 0x77;
+            CHECK(ok, "NVJPG header-less %s %dx%d (%d comp, restart %d): pixel-exact with the headered decode (err %#x, %u bytes of %zu)", imgs[k].name, dw, dh, rp.ncomp, rp.restart_interval, js.error_status, js.w0, sn);
+            good += ok;
+            if (k == 1 || k == 4) { /* planar YUV: the raw and the headered programming produce the same planes */
+                static uint8_t y1[0x8000], u1[0x4000], v1[0x4000]; uint32_t mcw = js.mcu_x, mch = js.mcu_y;
+                nvjpg_raw_pic(&jp, &rp, boff, (uint32_t)sn, NVJPG_OUT_YUV, 0, 64, 64); memcpy(jpic.mem, &jp, sizeof jp); memset(jout.mem, 0, 0x8000); memset(jchroma.mem, 0, 0x4000); memset(jv.mem, 0, 0x4000);
+                submit(jpg, &jcb, jprog, sizeof jprog / 4, NULL, 0); memcpy(y1, jout.mem, 0x8000); memcpy(u1, jchroma.mem, 0x4000); memcpy(v1, jv.mem, 0x4000);
+                memset(jin.mem, 0, 0x8000); memcpy(jin.mem, imgs[k].d, imgs[k].n);
+                nvjpg_dec_pic(&jp, (uint32_t)(sn ? imgs[k].n - sn : 0), 0, jp.dec_frame_param >> 19 & 7, NVJPG_OUT_YUV, 0, 0, 64, 64, 0);
+                nvjpg_raw_pic(&jp, &rp, 0, 0, NVJPG_OUT_YUV, 0, 64, 64); jp.bitstream_offset = (uint32_t)sos_data_offset(imgs[k].d, imgs[k].n); jp.bitstream_size = (uint32_t)imgs[k].n - jp.bitstream_offset;
+                memcpy(jpic.mem, &jp, sizeof jp); memset(jout.mem, 0, 0x8000); memset(jchroma.mem, 0, 0x4000); memset(jv.mem, 0, 0x4000); submit(jpg, &jcb, jprog, sizeof jprog / 4, NULL, 0);
+                CHECK(!memcmp(y1, jout.mem, 0x8000) && !memcmp(u1, jchroma.mem, 0x4000) && !memcmp(v1, jv.mem, 0x4000) && mcw && mch, "NVJPG header-less %s: planar YUV equals the headered decode", imgs[k].name);
+            }
+            free(ref);
+        }
+        CHECK(good == ni && stats(jpg)->frames >= f0 + (uint32_t)ni, "NVJPG header-less: %d of %d images exact, frames counted", good, ni);
+        /* 1/2 downscale and a restart-interval image with an odd output pitch */
+        { JpegRawParams rp; const uint8_t *scan; size_t sn; int dw, dh, de;
+          strip_jpeg(pilrst_data, sizeof pilrst_data, &rp, &scan, &sn); uint8_t *ref = napjpeg_decode_rgba(pilrst_data, sizeof pilrst_data, &dw, &dh, &de);
+          memset(jin.mem, 0, 0x8000); memcpy(jin.mem + 0x10, scan, sn);
+          nvjpg_raw_pic(&jp, &rp, 0x10, 0, NVJPG_OUT_BGRA, 0, 48 * 4 + 16, 0); memcpy(jpic.mem, &jp, sizeof jp); memset(jout.mem, 0, 0x8000); submit(jpg, &jcb, jprog, sizeof jprog / 4, NULL, 0);
+          int ok = 1; for (int y = 0; y < dh && ok; y++) for (int x = 0; x < dw; x++) { const uint8_t *r = ref + ((size_t)y * dw + x) * 4, *o = jout.mem + (size_t)y * (dw * 4 + 16) + (size_t)x * 4; if (o[0] != r[2] || o[1] != r[1] || o[2] != r[0] || o[3] != 255) ok = 0; }
+          CHECK(ok && rp.restart_interval > 0, "NVJPG header-less with restart interval %d, BGRA, bitstream_size 0 (to the end of the buffer), padded pitch: exact", rp.restart_interval);
+          free(ref); }
+        /* refusals */
+        { JpegRawParams rp; const uint8_t *scan; size_t sn; strip_jpeg(imgs[1].d, imgs[1].n, &rp, &scan, &sn); memset(jin.mem, 0, 0x8000); memcpy(jin.mem + 0x40, scan, sn);
+          nvjpg_raw_pic(&jp, &rp, 0x40, (uint32_t)sn, NVJPG_OUT_RGBA, 0, 0, 0); uint32_t errs = stats(jpg)->errors; MNvjpgPic good_p = jp;
+#define RAWFAIL(what, stmt, code) jp = good_p; stmt; memcpy(jpic.mem, &jp, sizeof jp); memset(jst.mem, 0xee, 0x20); submit(jpg, &jcb, jprog, sizeof jprog / 4, NULL, 0); \
+          CHECK(((MNvjpgStatus *)jst.mem)->error_status == (code), "NVJPG header-less: " what " -> %#x", ((MNvjpgStatus *)jst.mem)->error_status)
+          RAWFAIL("no frame size programmed (and no SOI) is BAD_MAGIC", jp.dec_frame_size = 0, NVJPG_ERR_BAD_MAGIC);
+          RAWFAIL("an MCU grid that does not match the picture size", jp.dec_frame_size += 1, NVJPG_ERR_INVALID_INPUT);
+          RAWFAIL("block sampling that disagrees with the chroma mode", jp.dec_block_ctl[0] = (jp.dec_block_ctl[0] & ~0xff00u) | 0x1100, NVJPG_ERR_INVALID_INPUT);
+          RAWFAIL("a Huffman table slot above 2", jp.dec_block_ctl[1] |= 3 << 2, NVJPG_ERR_INVALID_INPUT);
+          RAWFAIL("a non-canonical mincode", jp.dec_huff_mincode[1][7] += 5 << 15 , NVJPG_ERR_INVALID_INPUT);
+          RAWFAIL("a component's Huffman tables missing everywhere", memset(jp.dec_huff_mincode, 0, sizeof jp.dec_huff_mincode), NVJPG_ERR_INVALID_INPUT);
+          RAWFAIL("chroma mode 6", jp.dec_frame_param = (jp.dec_frame_param & ~(7u << 19)) | 6u << 19, NVJPG_ERR_INVALID_INPUT);
+#undef RAWFAIL
+          CHECK(stats(jpg)->errors >= errs + 7, "NVJPG header-less: refusals are counted as errors");
+        }
+        for (int k = 0; k < ni; k++) if (imgs[k].free_it) free(imgs[k].d);
+    }
     free(src); free(jfile);
 
     /* ---- MSENC ---- */
