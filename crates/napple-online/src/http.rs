@@ -3,6 +3,7 @@
 //!   POST /napple/v1/account  uid=<32 hex>                          -> pid=<u64>\nsecret=<hex>\n
 //!   POST /napple/v1/token    pid=<u64>&secret=<hex>&title=<16 hex>  -> token=<token>\nexpires=<unix seconds>\n
 //!   GET  /napple/v1/info                                            -> service=napple-online\nversion=<v>\n
+//!   GET  /healthz                                                   -> ok
 //!   GET  <any path> with Upgrade: websocket                         -> the NEX game server (PRUDP Lite inside binary messages)
 //!
 //! TLS is left to a reverse proxy in front of a public server (any https:// proxy that forwards WebSocket upgrades); a server on a LAN or on
@@ -114,7 +115,12 @@ pub fn parse_form(body: &[u8]) -> HashMap<String, String> {
 pub fn handle_api(acc: &Accounts, req: &HttpRequest) -> (u16, &'static str, String) {
     let form = parse_form(&req.body);
     match (req.method.as_str(), req.path.split('?').next().unwrap_or("")) {
-        ("GET", "/napple/v1/info") => (200, "OK", format!("service=napple-online\nversion={}\n", env!("CARGO_PKG_VERSION"))),
+        ("GET", "/healthz") => (200, "OK", "ok\n".into()),
+        ("GET", "/napple/v1/info") => (200, "OK", format!(
+            "service=napple-online\nversion={}\npublic_host={}\n",
+            env!("CARGO_PKG_VERSION"),
+            std::env::var("NAPPLE_ONLINE_PUBLIC_HOST").unwrap_or_default()
+        )),
         ("POST", "/napple/v1/account") => match acc.create(form.get("uid").map(|s| s.as_str()).unwrap_or("")) {
             Ok((a, secret)) => (200, "OK", format!("pid={}\nsecret={secret}\n", a.pid)),
             Err(AccountError::BadRequest) => (400, "Bad Request", "error=uid must be 32 hex digits\n".into()),
@@ -272,6 +278,8 @@ mod tests {
         assert_eq!(acc.verify_token(token, now_secs()).unwrap().pid, kv["pid"].parse::<u64>().unwrap());
         let bad = HttpRequest { body: format!("pid={}&secret=00&title=0100152000022000", kv["pid"]).into_bytes(), ..tok_req };
         assert_eq!(handle_api(&acc, &bad).0, 401);
+        let health = HttpRequest { method: "GET".into(), path: "/healthz".into(), headers: HashMap::new(), body: vec![] };
+        assert_eq!(handle_api(&acc, &health).0, 200);
         assert_eq!(parse_form(b"a=1%2B2&b=x+y")["a"], "1+2");
         assert_eq!(parse_form(b"a=1%2B2&b=x+y")["b"], "x y");
     }

@@ -183,7 +183,7 @@ impl Server {
         let claims = self.accounts.verify_token(&token, now_secs()).ok_or(err::RV_ACCOUNT_EXPIRED)?;
         if let Ok(n) = user.trim_end_matches('\0').parse::<u64>() {
             if n != claims.pid {
-                eprintln!("napple-online: login name {n} differs from the token's account {}; the token wins", claims.pid);
+                println!("napple-online: login name {n} differs from the token's account {}; the token wins", claims.pid);
             }
         }
         let source_key = random_bytes(16);
@@ -369,7 +369,7 @@ impl Server {
         };
         if self.verbose {
             let s = &w.sessions.all[&gid];
-            eprintln!("napple-online: pid {} matched into gathering {gid} (mode {}, {} of {} players)", me.pid, s.mm.game_mode, s.players(), s.mm.g.max);
+            println!("napple-online: pid {} matched into gathering {gid} (mode {}, {} of {} players)", me.pid, s.mm.game_mode, s.players(), s.mm.g.max);
         }
         w.sessions.all[&gid].mm.clone()
     }
@@ -1010,7 +1010,7 @@ mod tests {
         srv.detach(a.cid);
         assert!(srv.world.lock().unwrap().sessions.all.is_empty());
         // unknown protocols answer NotImplemented; Utility settings are empty maps
-        assert!(matches!(srv.secure_call(b, &req(112, 1, vec![])), Reply::Err(err::CORE_NOT_IMPLEMENTED)));
+        assert!(matches!(srv.secure_call(b, &req(115, 1, vec![])), Reply::Err(err::CORE_NOT_IMPLEMENTED)));
         let Reply::Ok(m) = srv.secure_call(b, &req(PROTO_UTILITY, 7, vec![0, 0, 0, 0])) else { panic!() };
         assert_eq!(m, vec![0, 0, 0, 0]);
     }

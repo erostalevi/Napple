@@ -67,11 +67,11 @@ impl NexSession {
     pub fn on_message(&mut self, data: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         if self.server.verbose {
-            eprintln!("napple-online: [{:.3}] {} <- {}", now_ms as f64 / 1000.0, self.peer, crate::crypto::hex(&data[..data.len().min(4096)]));
+            println!("napple-online: [{:.3}] {} <- {}", now_ms as f64 / 1000.0, self.peer, crate::crypto::hex(&data[..data.len().min(4096)]));
         }
         let packets = prudp::decode_all(data);
         if packets.is_empty() {
-            eprintln!("napple-online: {}: undecodable PRUDP message ({} bytes, first byte 0x{:02x})", self.peer, data.len(), data.first().copied().unwrap_or(0));
+            println!("napple-online: {}: undecodable PRUDP message ({} bytes, first byte 0x{:02x})", self.peer, data.len(), data.first().copied().unwrap_or(0));
         }
         for p in packets {
             self.on_packet(&p, now_ms, &mut out);
@@ -79,7 +79,7 @@ impl NexSession {
         out.extend(self.tick(now_ms));
         if self.server.verbose {
             for m in &out {
-                eprintln!("napple-online: [{:.3}] {} -> {}", now_ms as f64 / 1000.0, self.peer, crate::crypto::hex(&m[..m.len().min(4096)]));
+                println!("napple-online: [{:.3}] {} -> {}", now_ms as f64 / 1000.0, self.peer, crate::crypto::hex(&m[..m.len().min(4096)]));
             }
         }
         out
@@ -93,7 +93,7 @@ impl NexSession {
                 self.server.detach(c.cid);
             }
             if p.dst_port != PORT_AUTH && p.dst_port != PORT_SECURE {
-                eprintln!("napple-online: {}: SYN for unknown port {}", self.peer, p.dst_port);
+                println!("napple-online: {}: SYN for unknown port {}", self.peer, p.dst_port);
                 return;
             }
             let role = if p.dst_port == PORT_AUTH { Role::Auth(AuthState::default()) } else { Role::Secure(None) };
@@ -114,11 +114,11 @@ impl NexSession {
                 Ok(c) => {
                     let cid = server.attach(c.pid, peer, tx.clone());
                     attached = Some(Caller { pid: c.pid, cid });
-                    eprintln!("napple-online: {peer}: account {} connected to the secure server (connection {cid})", c.pid);
+                    println!("napple-online: {peer}: account {} connected to the secure server (connection {cid})", c.pid);
                     Some(kerberos::secure_connect_response(c.check))
                 }
                 Err(e) => {
-                    eprintln!("napple-online: {peer}: secure CONNECT refused: {e}");
+                    println!("napple-online: {peer}: secure CONNECT refused: {e}");
                     None
                 }
             }
@@ -141,7 +141,7 @@ impl NexSession {
             let (msg, used) = match rmc::decode(&payload[at..]) {
                 Ok(v) => v,
                 Err(e) => {
-                    eprintln!("napple-online: {}: undecodable RMC message: {e}", self.peer);
+                    println!("napple-online: {}: undecodable RMC message: {e}", self.peer);
                     return;
                 }
             };
@@ -158,7 +158,7 @@ impl NexSession {
                 Reply::Err(code) => (rmc::encode_error(req.protocol, req.call_id, code), format!("error 0x{:08x}", code | 0x8000_0000)),
             };
             if self.server.verbose || status != "ok" {
-                eprintln!("napple-online: [{:.3}] {}: {} ({}) method {} -> {status}", now_ms as f64 / 1000.0, self.peer, proto_name(req.protocol), req.protocol, req.method);
+                println!("napple-online: [{:.3}] {}: {} ({}) method {} -> {status}", now_ms as f64 / 1000.0, self.peer, proto_name(req.protocol), req.protocol, req.method);
             }
             for p in slot.conn.send(&bytes, now_ms) {
                 out.push(p.encode());
@@ -169,7 +169,7 @@ impl NexSession {
     fn drop_slot(&mut self, key: (u8, u8)) {
         if let Some(Slot { role: Role::Secure(Some(c)), .. }) = self.slots.remove(&key) {
             self.server.detach(c.cid);
-            eprintln!("napple-online: {}: account {} left (connection {})", self.peer, c.pid, c.cid);
+            println!("napple-online: {}: account {} left (connection {})", self.peer, c.pid, c.cid);
         }
     }
 
@@ -211,15 +211,21 @@ pub fn serve(server: Arc<Server>, mut stream: TcpStream) {
         Ok(v) => v,
         Err(_) => return,
     };
+    // behind a TLS reverse proxy the TCP peer is the proxy: the client's address is the first X-Forwarded-For entry
+    let peer = req
+        .header("x-forwarded-for")
+        .and_then(|v| v.split(',').next())
+        .and_then(|v| v.trim().parse::<IpAddr>().ok())
+        .unwrap_or(peer);
     if !req.is_websocket() {
         let (st, reason, body) = http::handle_api(&server.accounts, &req);
         if server.verbose || st != 200 {
-            eprintln!("napple-online: {peer}: {} {} -> {st}", req.method, req.path);
+            println!("napple-online: {peer}: {} {} -> {st}", req.method, req.path);
         }
         let _ = http::write_response(&mut stream, st, reason, &body);
         return;
     }
-    eprintln!("napple-online: {peer}: game connection (WebSocket, host '{}', path '{}')", req.header("host").unwrap_or(""), req.path);
+    println!("napple-online: {peer}: game connection (WebSocket, host '{}', path '{}')", req.header("host").unwrap_or(""), req.path);
     if stream.write_all(http::websocket_accept(&req).as_bytes()).is_err() {
         return;
     }
@@ -257,7 +263,7 @@ pub fn serve(server: Arc<Server>, mut stream: TcpStream) {
                 }
                 Ok(None) => break,
                 Err(e) => {
-                    eprintln!("napple-online: {peer}: WebSocket error: {e}");
+                    println!("napple-online: {peer}: WebSocket error: {e}");
                     break 'run;
                 }
             }
@@ -268,7 +274,7 @@ pub fn serve(server: Arc<Server>, mut stream: TcpStream) {
             }
         }
         if now() - last_heard > 60_000 {
-            eprintln!("napple-online: {peer}: silent for a minute, closing");
+            println!("napple-online: {peer}: silent for a minute, closing");
             break;
         }
         match stream.read(&mut buf) {
@@ -279,7 +285,7 @@ pub fn serve(server: Arc<Server>, mut stream: TcpStream) {
         }
     }
     session.close();
-    eprintln!("napple-online: {peer}: game connection closed");
+    println!("napple-online: {peer}: game connection closed");
 }
 
 #[cfg(test)]

@@ -14,7 +14,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define NET_ONLINE_ENV_SERVER "NAPPLE_ONLINE_SERVER"   /* http://host[:port] or https://host[:port] */
+#define NET_ONLINE_ENV_SERVER "NAPPLE_ONLINE_SERVER"   /* http://host[:port], https://host[:port], or "default" */
+#define NET_ONLINE_DEFAULT_SERVER "https://pretend.napple.lat" /* what NAPPLE_ONLINE_SERVER=default means: the community-run Napple server */
 #define NET_ONLINE_ENV_STATE "NAPPLE_ONLINE_STATE_DIR" /* where account credentials are kept; default <support dir>/online */
 #define NET_ONLINE_NAME "napple-online over host"
 /* The address redirected names resolve to (100.64.0.0/10, shared address space: never a real peer of a title). Host byte order. */

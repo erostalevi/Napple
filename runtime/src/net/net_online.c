@@ -542,6 +542,7 @@ static void builtin_build(void) {
     const char *url = getenv(NET_ONLINE_ENV_SERVER);
     if (!url || !*url) return;
     NetOnlineServer srv;
+    if (!strcmp(url, "default")) url = NET_ONLINE_DEFAULT_SERVER; /* the community server; still opt-in */
     if (net_online_parse_server(url, &srv)) {
         log_line("online", "napple: %s='%s' is not an http:// or https:// URL: Napple online stays off", NET_ONLINE_ENV_SERVER, url);
         return;

@@ -26,7 +26,7 @@ pub fn run(listener: TcpListener, server: Arc<server::Server>) -> std::io::Resul
         let stream = match stream {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("napple-online: accept failed: {e}");
+                println!("napple-online: accept failed: {e}");
                 continue;
             }
         };
