@@ -11,6 +11,11 @@ mock_provider "aws" {
       value = "ami-0123456789abcdef0"
     }
   }
+  mock_data "aws_caller_identity" {
+    defaults = {
+      account_id = "123456789012"
+    }
+  }
   mock_data "aws_iam_policy_document" {
     defaults = {
       json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}"
@@ -24,6 +29,11 @@ mock_provider "aws" {
   mock_resource "aws_ecr_repository" {
     defaults = {
       arn = "arn:aws:ecr:us-east-1:123456789012:repository/mock"
+    }
+  }
+  mock_resource "aws_s3_bucket" {
+    defaults = {
+      arn = "arn:aws:s3:::mock-bucket"
     }
   }
   mock_resource "aws_cloudwatch_log_group" {
@@ -86,6 +96,32 @@ run "defaults" {
   assert {
     condition     = aws_ecr_repository.image["napple-online"].image_tag_mutability == "IMMUTABLE"
     error_message = "image tags must be immutable"
+  }
+}
+
+run "online_suite" {
+  command = plan
+
+  assert {
+    condition     = toset(keys(aws_ecr_repository.image)) == toset(["napple-online", "napple-room", "napple-account", "napple-social"])
+    error_message = "one ECR repository per server image"
+  }
+  assert {
+    condition     = aws_s3_bucket.data["photos"].bucket == "napple-photos-123456789012-us-east-1" && aws_s3_bucket.data["saves"].bucket == "napple-saves-123456789012-us-east-1"
+    error_message = "photo and save buckets are named napple-<kind>-<account>-<region>"
+  }
+  assert {
+    condition = alltrue([for b in aws_s3_bucket_public_access_block.data :
+    b.block_public_acls && b.block_public_policy && b.ignore_public_acls && b.restrict_public_buckets])
+    error_message = "the data buckets must block all public access"
+  }
+  assert {
+    condition     = local.ses_identity == "arn:aws:ses:us-east-1:123456789012:identity/napple.lat" && local.ses_configset == "arn:aws:ses:us-east-1:123456789012:configuration-set/napple-transactional"
+    error_message = "SES permissions must name the napple.lat identity and the napple-transactional configuration set"
+  }
+  assert {
+    condition     = aws_instance.servers.metadata_options[0].http_tokens == "required" && aws_instance.servers.metadata_options[0].http_put_response_hop_limit == 2
+    error_message = "IMDSv2 only, with hop limit 2 so the account container can read the instance role"
   }
 }
 

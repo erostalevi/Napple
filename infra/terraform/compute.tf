@@ -29,8 +29,10 @@ resource "aws_instance" "servers" {
   })
 
   metadata_options {
-    http_tokens                 = "required"
-    http_put_response_hop_limit = 1
+    http_tokens = "required"
+    # 2: the containers (napple-account: SES v2 mail + S3 photos/saves with the instance role) reach IMDSv2 through the Docker bridge, one hop
+    # more than the host; with 1 the token reply is dropped and the account server has no AWS credentials.
+    http_put_response_hop_limit = 2
     http_endpoint               = "enabled"
   }
 

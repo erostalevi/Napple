@@ -1,0 +1,7 @@
+# BuildKit reads this file for the Dockerfile of the same name (context = repository root). Allowlist: the Rust workspace only.
+*
+!Cargo.toml
+!Cargo.lock
+!rustfmt.toml
+!crates/
+crates/**/target/
