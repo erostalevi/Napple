@@ -1115,11 +1115,6 @@ static void bsd_resource_stats(IpcObject *s, IpcCall *c) {
     bsd_reply(c, 0, 0);
 }
 static void bsd_fail(IpcCall *c, int err) { bsd_reply(c, -1, err); }
-/* EventFd(initval, flags): the guest descriptor table maps to provider sockets only, so an event descriptor cannot be made: {-1, EOPNOTSUPP} (documented default). */
-static void bsd_eventfd(IpcObject *s, IpcCall *c) {
-    (void)s;
-    bsd_fail(c, HZ_EOPNOTSUPP);
-}
 static void bsd_enoent(IpcObject *s, IpcCall *c) {
     (void)s;
     bsd_fail(c, HZ_ENOENT);
@@ -1469,6 +1464,36 @@ static void bsd_select(IpcObject *s, IpcCall *c) {
     }
     bsd_reply(c, r, err);
 }
+/* 31 EventFd(u64 initval, u32 flags) / 39 NoSfEventFd (0x10 bytes in, 8 out per switchbrew; the same two arguments [unverified]) -> {s32 fd, errno}: an
+ * event descriptor with eventfd(2) semantics, kept by the service (bsd_core.c): Read / Write / Recv / Send move the 64-bit counter, Poll / Select see it,
+ * Fcntl / Ioctl(FIONBIO) switch it to non-blocking, Close frees it with its last DuplicateSocket alias. No provider is involved, so it works offline. */
+static void bsd_eventfd(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int err = 0;
+    uint64_t initval = c->in_size >= 8 ? IPC_IN(c, uint64_t, 0) : 0;
+    int fd = bsdg_eventfd(bsd_g(), initval, bsd_in32(c, 8, 0), &err);
+    bsd_reply(c, fd, fd < 0 ? err : 0);
+}
+/* 40 ShutdownAllSockets(s32 how) [20.0.0+; the argument as libnx's bsdShutdownAllSockets(how) gives it for 23]: shutdown(how) on every socket of this
+ * client through the provider; the descriptors stay open (23 keeps its older close-everything answer). */
+static void bsd_shutdown_all_how(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int err = 0;
+    int r = bsdg_shutdown_all(bsd_g(), bsd_in32(c, 0, 0), &err);
+    bsd_reply(c, r, err);
+}
+/* 200 SetThreadCoreMask(u64 mask) / 201 GetThreadCoreMask -> u64: the affinity of the service's worker threads, read back as set [layout unverified].
+ * Before any Set it is core 3's bit, where the system modules run [unverified]. */
+static uint64_t bsd_core_mask = 1u << 3;
+static void bsd_set_core_mask(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size >= 8) __atomic_store_n(&bsd_core_mask, IPC_IN(c, uint64_t, 0), __ATOMIC_SEQ_CST);
+}
+static void bsd_get_core_mask(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t v = __atomic_load_n(&bsd_core_mask, __ATOMIC_SEQ_CST);
+    IPC_OUT(c, v);
+}
 static const IpcCmd bsd_cmds[] = {
     {0, "RegisterClient", bsd_register_client, IPC_IMPL},
     {1, "StartMonitoring", bsd_start_monitoring, IPC_IMPL},
@@ -1501,18 +1526,18 @@ static const IpcCmd bsd_cmds[] = {
     {28, "GetResourceStatistics", bsd_resource_stats, IPC_IMPL},
     {29, "RecvMMsg", bsd_recvmmsg, IPC_IMPL},
     {30, "SendMMsg", bsd_sendmmsg, IPC_IMPL},
-    {31, "EventFd", bsd_eventfd, IPC_STUB},
-    {32, "RegisterResourceStatisticsName", sysd_ok, IPC_STUB},
-    {33, "RegisterClientShared", sysd_ok, IPC_STUB},
-    {34, "GetSocketStatistics", sysd_err_generic, IPC_STUB},
-    {35, "NifIoctl", sysd_err_generic, IPC_STUB},
-    {37, "SetSocketBufferAttribute", sysd_ok, IPC_STUB},
-    {39, "NoSfEventFd", sysd_err_generic, IPC_STUB},
-    {40, "ShutdownAllSockets", sysd_ok, IPC_STUB},
-    {42, "SendMMsgNoMem", sysd_err_generic, IPC_STUB},
-    {43, "RecvMMsgNoMem", sysd_err_generic, IPC_STUB},
-    {200, "SetThreadCoreMask", sysd_ok, IPC_STUB},
-    {201, "GetThreadCoreMask", sysd_z8, IPC_STUB},
+    {31, "EventFd", bsd_eventfd, IPC_IMPL},
+    {32, "RegisterResourceStatisticsName", sysd_ok, IPC_STUB}, /* input layout not public, nothing reads the name back */
+    {33, "RegisterClientShared", bsd_register_client, IPC_IMPL}, /* RegisterClient without the transfer memory handle (switchbrew) */
+    {34, "GetSocketStatistics", sysd_err_generic, IPC_STUB}, /* statistics layout not public */
+    {35, "NifIoctl", sysd_err_generic, IPC_STUB}, /* interface ioctls: no public layout */
+    {37, "SetSocketBufferAttribute", sysd_ok, IPC_STUB}, /* attribute layout not public */
+    {39, "NoSfEventFd", bsd_eventfd, IPC_IMPL},
+    {40, "ShutdownAllSockets", bsd_shutdown_all_how, IPC_IMPL},
+    {42, "SendMMsgNoMem", bsd_sendmmsg, IPC_IMPL}, /* SendMMsg's arguments [unverified] */
+    {43, "RecvMMsgNoMem", bsd_recvmmsg, IPC_IMPL}, /* RecvMMsg's arguments [unverified] */
+    {200, "SetThreadCoreMask", bsd_set_core_mask, IPC_IMPL},
+    {201, "GetThreadCoreMask", bsd_get_core_mask, IPC_IMPL},
 };
 static IpcObject *bsd_open(void) { return IPC_OBJECT("bsd:u", bsd_cmds, NULL, NULL); }
 

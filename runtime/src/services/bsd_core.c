@@ -1,15 +1,24 @@
 #include "bsd_core.h"
 #include "hz_result.h"
 #include <string.h>
+#include <sys/time.h>
+#include <time.h>
 
 static BsdGuest global_guest;
 BsdGuest *bsdg_global(void) { return &global_guest; }
 static void ensure(BsdGuest *g) { /* caller holds nothing; the one-time init is racy only before the first socket call, which is single-threaded in a guest */
     if (!g->init) {
         pthread_mutex_init(&g->lock, NULL);
+        pthread_cond_init(&g->ev_cond, NULL);
         for (int i = 0; i < BSD_MAX_FDS; i++) g->h[i] = -1;
         g->init = 1;
     }
+}
+static int is_ev_handle(int h) { return h >= BSD_EVENTFD_BASE && h < BSD_EVENTFD_BASE + BSD_MAX_FDS; }
+static void ev_free(BsdGuest *g, int h) { /* caller holds g->lock */
+    BsdEventFd *e = &g->ev[h - BSD_EVENTFD_BASE];
+    e->used = 0, e->count = 0, e->gen++;
+    pthread_cond_broadcast(&g->ev_cond);
 }
 int bsdg_handle(BsdGuest *g, int fd) {
     ensure(g);
@@ -26,7 +35,8 @@ void bsdg_reset(BsdGuest *g) {
     for (int i = 0; i < BSD_MAX_FDS; i++)
         if (g->h[i] >= 0) {
             int e, h = g->h[i];
-            if (cl) cl(p->ctx, h, &e);
+            if (is_ev_handle(h)) ev_free(g, h);
+            else if (cl) cl(p->ctx, h, &e);
             for (int j = i; j < BSD_MAX_FDS; j++) /* aliases made by DuplicateSocket share the one provider socket: closed once */
                 if (g->h[j] == h) g->h[j] = -1, g->nb[j] = 0;
         }
@@ -68,6 +78,18 @@ int bsdg_socket(BsdGuest *g, int domain, int type, int protocol, int *err) {
 }
 int bsdg_close(BsdGuest *g, int fd, int *err) {
     ensure(g);
+    pthread_mutex_lock(&g->lock);
+    int eh = fd >= 0 && fd < BSD_MAX_FDS ? g->h[fd] : -1;
+    if (is_ev_handle(eh)) { /* an event descriptor: freed with its last alias, no provider involved */
+        int alias = 0;
+        g->h[fd] = -1, g->nb[fd] = 0;
+        for (int i = 0; i < BSD_MAX_FDS && !alias; i++) alias = g->h[i] == eh;
+        if (!alias) ev_free(g, eh);
+        pthread_mutex_unlock(&g->lock);
+        *err = 0;
+        return 0;
+    }
+    pthread_mutex_unlock(&g->lock);
     PROV(cl, sock_close, err, -1)
     pthread_mutex_lock(&g->lock);
     int h = fd >= 0 && fd < BSD_MAX_FDS ? g->h[fd] : -1;
@@ -114,7 +136,139 @@ int bsdg_dup(BsdGuest *g, int fd, int *err) {
     if (h < 0) {                                                                                                                                               \
         *(err) = HZ_EBADF;                                                                                                                                     \
         return (fail);                                                                                                                                         \
+    }                                                                                                                                                          \
+    if (is_ev_handle(h)) { /* an event descriptor is not a socket */                                                                                          \
+        *(err) = HZ_ENOTSOCK;                                                                                                                                  \
+        return (fail);                                                                                                                                         \
     }
+
+/* ---- event descriptors ---- */
+#define EV_MAX 0xfffffffffffffffeull /* the largest counter value */
+#define BSD_MSG_DONTWAIT 0x80
+int bsdg_eventfd(BsdGuest *g, uint64_t initval, int flags, int *err) {
+    ensure(g);
+    if (initval > EV_MAX) {
+        *err = HZ_EINVAL;
+        return -1;
+    }
+    int fd = -1, slot = -1;
+    pthread_mutex_lock(&g->lock);
+    for (int i = 0; i < BSD_MAX_FDS && fd < 0; i++)
+        if (g->h[i] == -1) fd = i;
+    for (int i = 0; i < BSD_MAX_FDS && slot < 0; i++)
+        if (!g->ev[i].used) slot = i;
+    if (fd >= 0 && slot >= 0) {
+        BsdEventFd *e = &g->ev[slot];
+        e->used = 1, e->count = initval;
+        e->semaphore = (flags & BSD_EFD_SEMAPHORE) != 0;
+        e->nonblock = (flags & (BSD_EFD_NONBLOCK | BSD_EFD_NONBLOCK_LINUX)) != 0;
+        g->h[fd] = BSD_EVENTFD_BASE + slot;
+        g->nb[fd] = e->nonblock;
+    }
+    pthread_mutex_unlock(&g->lock);
+    if (fd < 0 || slot < 0) {
+        *err = HZ_EMFILE;
+        return -1;
+    }
+    *err = 0;
+    return fd;
+}
+int bsdg_is_eventfd(BsdGuest *g, int fd) { return is_ev_handle(bsdg_handle(g, fd)); }
+/* Waits on ev_cond until ok(e, arg) holds: 0, or -1 with *err (EAGAIN when it may not block, EBADF when the descriptor closed meanwhile). Holds g->lock. */
+static int ev_wait(BsdGuest *g, BsdEventFd *e, int nonblock, int (*ok)(const BsdEventFd *, uint64_t), uint64_t arg, int *err) {
+    uint32_t gen = e->gen;
+    while (!ok(e, arg)) {
+        if (nonblock) {
+            *err = HZ_EAGAIN;
+            return -1;
+        }
+        pthread_cond_wait(&g->ev_cond, &g->lock);
+        if (!e->used || e->gen != gen) {
+            *err = HZ_EBADF;
+            return -1;
+        }
+    }
+    return 0;
+}
+static int ev_readable(const BsdEventFd *e, uint64_t unused) {
+    (void)unused;
+    return e->count != 0;
+}
+static int ev_fits(const BsdEventFd *e, uint64_t v) { return EV_MAX - e->count >= v; }
+static int64_t ev_read(BsdGuest *g, int h, void *buf, size_t n, int flags, int *err) {
+    if (n < 8 || !buf) {
+        *err = HZ_EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&g->lock);
+    BsdEventFd *e = &g->ev[h - BSD_EVENTFD_BASE];
+    if (ev_wait(g, e, e->nonblock || (flags & BSD_MSG_DONTWAIT), ev_readable, 0, err)) {
+        pthread_mutex_unlock(&g->lock);
+        return -1;
+    }
+    uint64_t v = e->semaphore ? 1 : e->count;
+    e->count -= v;
+    pthread_cond_broadcast(&g->ev_cond); /* a blocked writer may fit now */
+    pthread_mutex_unlock(&g->lock);
+    memcpy(buf, &v, 8);
+    *err = 0;
+    return 8;
+}
+static int64_t ev_write(BsdGuest *g, int h, const void *buf, size_t n, int flags, int *err) {
+    uint64_t v;
+    if (n < 8 || !buf) {
+        *err = HZ_EINVAL;
+        return -1;
+    }
+    memcpy(&v, buf, 8);
+    if (v == UINT64_MAX) {
+        *err = HZ_EINVAL;
+        return -1;
+    }
+    pthread_mutex_lock(&g->lock);
+    BsdEventFd *e = &g->ev[h - BSD_EVENTFD_BASE];
+    if (ev_wait(g, e, e->nonblock || (flags & BSD_MSG_DONTWAIT), ev_fits, v, err)) {
+        pthread_mutex_unlock(&g->lock);
+        return -1;
+    }
+    e->count += v;
+    pthread_cond_broadcast(&g->ev_cond);
+    pthread_mutex_unlock(&g->lock);
+    *err = 0;
+    return 8;
+}
+/* Poll readiness of an event descriptor (caller holds g->lock). */
+static int16_t ev_revents(const BsdGuest *g, int h, int16_t events) {
+    const BsdEventFd *e = &g->ev[h - BSD_EVENTFD_BASE];
+    int16_t r = 0;
+    if ((events & ONLINE_POLLIN) && e->count) r |= ONLINE_POLLIN;
+    if ((events & ONLINE_POLLOUT) && e->count < EV_MAX) r |= ONLINE_POLLOUT;
+    return r;
+}
+int bsdg_shutdown_all(BsdGuest *g, int how, int *err) {
+    ensure(g);
+    if (how < 0 || how > 2) {
+        *err = HZ_EINVAL;
+        return -1;
+    }
+    const OnlineProvider *p = online_provider();
+    int (*sh)(void *, int, int, int *) = ONLINE_FN(p, sock_shutdown);
+    int hs[BSD_MAX_FDS], n = 0;
+    pthread_mutex_lock(&g->lock);
+    for (int i = 0; i < BSD_MAX_FDS; i++) {
+        int h = g->h[i], seen = 0;
+        if (h < 0 || is_ev_handle(h)) continue;
+        for (int k = 0; k < n && !seen; k++) seen = hs[k] == h; /* DuplicateSocket aliases: one provider socket */
+        if (!seen) hs[n++] = h;
+    }
+    pthread_mutex_unlock(&g->lock);
+    for (int k = 0; k < n && sh; k++) {
+        int e;
+        sh(p->ctx, hs[k], how, &e);
+    }
+    *err = 0;
+    return 0;
+}
 
 int bsdg_bind(BsdGuest *g, int fd, const OnlineAddr *a, int *err) {
     WITH_HANDLE(g, fd, err, -1)
@@ -163,6 +317,9 @@ int bsdg_connect(BsdGuest *g, int fd, const OnlineAddr *a, int *err) {
     return r;
 }
 int64_t bsdg_send(BsdGuest *g, int fd, const void *buf, size_t n, int flags, const OnlineAddr *to, int *err) {
+    ensure(g);
+    int eh = bsdg_handle(g, fd);
+    if (is_ev_handle(eh)) return ev_write(g, eh, buf, n, flags, err);
     WITH_HANDLE(g, fd, err, -1)
     PROV(f, sock_send, err, -1)
     int64_t r = f(P_->ctx, h, buf, n, flags, to, err);
@@ -170,6 +327,12 @@ int64_t bsdg_send(BsdGuest *g, int fd, const void *buf, size_t n, int flags, con
     return r;
 }
 int64_t bsdg_recv(BsdGuest *g, int fd, void *buf, size_t n, int flags, OnlineAddr *from, int *err) {
+    ensure(g);
+    int eh = bsdg_handle(g, fd);
+    if (is_ev_handle(eh)) {
+        if (from) memset(from, 0, sizeof *from);
+        return ev_read(g, eh, buf, n, flags, err);
+    }
     WITH_HANDLE(g, fd, err, -1)
     PROV(f, sock_recv, err, -1)
     int64_t r = f(P_->ctx, h, buf, n, flags, from, err);
@@ -212,6 +375,15 @@ int bsdg_getsockopt(BsdGuest *g, int fd, int level, int opt, void *v, size_t *n,
     return r;
 }
 int bsdg_nonblock(BsdGuest *g, int fd, int on, int *err) {
+    ensure(g);
+    int eh = bsdg_handle(g, fd);
+    if (is_ev_handle(eh)) { /* the event descriptor's own flag (shared by its aliases) */
+        pthread_mutex_lock(&g->lock);
+        g->ev[eh - BSD_EVENTFD_BASE].nonblock = (uint8_t)(on != 0);
+        pthread_mutex_unlock(&g->lock);
+        *err = 0;
+        return 0;
+    }
     WITH_HANDLE(g, fd, err, -1)
     PROV(f, sock_set_nonblock, err, -1)
     int r = f(P_->ctx, h, on, err);
@@ -219,25 +391,74 @@ int bsdg_nonblock(BsdGuest *g, int fd, int on, int *err) {
     return r;
 }
 
+static int64_t ms_since(const struct timespec *t0) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)(t.tv_sec - t0->tv_sec) * 1000 + (t.tv_nsec - t0->tv_nsec) / 1000000;
+}
+/* Poll with event descriptors among the entries: their readiness is the service's own, the sockets' the provider's. Waits in slices of at most 5 ms
+ * (the provider's poll, then ev_cond for what is left of the slice) until something is ready or the timeout passes; a negative timeout waits for ever. */
+static int poll_with_events(BsdGuest *g, OnlinePollFd *fds, OnlinePollFd *tmp, const int *src, unsigned m, const int *evsrc, const int *evh, unsigned ne,
+                            int ready, int timeout_ms, int *err) {
+    const OnlineProvider *p = online_provider();
+    int (*pollf)(void *, OnlinePollFd *, unsigned, int, int *) = ONLINE_FN(p, sock_poll);
+    if (m && !pollf) {
+        *err = HZ_EOPNOTSUPP;
+        return -1;
+    }
+    struct timespec t0;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    for (;;) {
+        int evr = 0, sr = 0;
+        pthread_mutex_lock(&g->lock);
+        for (unsigned k = 0; k < ne; k++)
+            if ((fds[evsrc[k]].revents = ev_revents(g, evh[k], fds[evsrc[k]].events))) evr++;
+        pthread_mutex_unlock(&g->lock);
+        int64_t left = timeout_ms < 0 ? 5 : timeout_ms - ms_since(&t0);
+        int now = evr || ready || left <= 0, slice = now ? 0 : (int)(left < 5 ? left : 5);
+        if (m) {
+            for (unsigned k = 0; k < m; k++) tmp[k].revents = 0;
+            if (pollf(p->ctx, tmp, m, slice, err) < 0) return -1;
+            for (unsigned k = 0; k < m; k++)
+                if ((fds[src[k]].revents = tmp[k].revents)) sr++;
+        }
+        if (now || sr) {
+            *err = 0;
+            return ready + evr + sr;
+        }
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        int64_t until_ns = (int64_t)tv.tv_usec * 1000 + (int64_t)slice * 1000000;
+        struct timespec ts = {tv.tv_sec + (time_t)(until_ns / 1000000000), (long)(until_ns % 1000000000)};
+        pthread_mutex_lock(&g->lock);
+        pthread_cond_timedwait(&g->ev_cond, &g->lock, &ts); /* a write to an event descriptor ends the wait early */
+        pthread_mutex_unlock(&g->lock);
+    }
+}
 int bsdg_poll(BsdGuest *g, OnlinePollFd *fds, unsigned n, int timeout_ms, int *err) {
     ensure(g);
-    PROV(poll, sock_poll, err, -1)
     OnlinePollFd tmp[BSD_MAX_FDS];
-    int src[BSD_MAX_FDS];
-    unsigned m = 0;
+    int src[BSD_MAX_FDS], evsrc[BSD_MAX_FDS], evh[BSD_MAX_FDS];
+    unsigned m = 0, ne = 0;
     int ready = 0;
     for (unsigned i = 0; i < n; i++) {
         int h = fds[i].fd >= 0 ? bsdg_handle(g, fds[i].fd) : -1;
         fds[i].revents = 0;
         if (fds[i].fd < 0) continue; /* a negative descriptor is ignored */
-        if (h < 0 || m == BSD_MAX_FDS) {
+        if (h < 0 || m == BSD_MAX_FDS || ne == BSD_MAX_FDS) {
             fds[i].revents = ONLINE_POLLNVAL;
             ready++;
+            continue;
+        }
+        if (is_ev_handle(h)) {
+            evsrc[ne] = (int)i, evh[ne++] = h;
             continue;
         }
         tmp[m] = (OnlinePollFd){h, fds[i].events, 0};
         src[m++] = (int)i;
     }
+    if (ne) return poll_with_events(g, fds, tmp, src, m, evsrc, evh, ne, ready, timeout_ms, err);
+    PROV(poll, sock_poll, err, -1)
     if (!m && !ready && timeout_ms != 0 && online_has(P_, ONLINE_CAP_SOCKETS)) {
         /* nothing pollable (no descriptors, or only negative ones): a real stack still waits for the timeout, and titles back off in a Poll(0, t)
          * loop that would otherwise spin. The provider waits (giving the core away); the NullProvider keeps answering at once, as offline always did. */

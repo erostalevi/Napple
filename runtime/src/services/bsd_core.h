@@ -7,11 +7,23 @@
 #include "online_provider.h"
 #include <pthread.h>
 
+/* An event descriptor (EventFd / NoSfEventFd): a 64-bit counter kept by the service, no provider socket behind it. Its descriptor's handle is
+ * BSD_EVENTFD_BASE + its slot in ev[] (provider handles are small numbers), so DuplicateSocket aliases share the counter like any open description. */
+#define BSD_EVENTFD_BASE 0x40000000
+enum { BSD_EFD_SEMAPHORE = 0x1, BSD_EFD_NONBLOCK = 0x4, BSD_EFD_NONBLOCK_LINUX = 0x800 }; /* [unverified] which numbering the guest's flags use: both accepted */
+typedef struct {
+    uint8_t used, semaphore, nonblock, pad;
+    uint32_t gen; /* bumped on close: a reader or writer blocked on a closed descriptor wakes with EBADF */
+    uint64_t count;
+} BsdEventFd;
+
 typedef struct {
     pthread_mutex_t lock;
     int init;
     int h[BSD_MAX_FDS];      /* provider handle, or -1 when the descriptor is free */
     uint8_t nb[BSD_MAX_FDS]; /* O_NONBLOCK as set through Fcntl / Ioctl(FIONBIO) */
+    BsdEventFd ev[BSD_MAX_FDS];
+    pthread_cond_t ev_cond; /* broadcast whenever an event counter changes or an event descriptor closes */
 } BsdGuest;
 
 void bsdg_reset(BsdGuest *g); /* closes every socket through the provider and empties the table */
@@ -39,6 +51,15 @@ int bsdg_getpeername(BsdGuest *g, int fd, OnlineAddr *out, int *err);
 int bsdg_setsockopt(BsdGuest *g, int fd, int level, int opt, const void *v, size_t n, int *err);
 int bsdg_getsockopt(BsdGuest *g, int fd, int level, int opt, void *v, size_t *n, int *err);
 int bsdg_nonblock(BsdGuest *g, int fd, int on, int *err);
+/* EventFd(initval, flags): an event descriptor (lowest free number). Read (Recv / Read) needs 8 bytes and returns the counter and zeroes it (with
+ * BSD_EFD_SEMAPHORE: returns 1 and decrements); with a zero counter it blocks, or fails with EAGAIN when non-blocking (the flag, Fcntl O_NONBLOCK or
+ * MSG_DONTWAIT). Write (Send / Write) adds an 8-byte value (UINT64_MAX is EINVAL) and blocks while the sum would pass UINT64_MAX - 1. Poll: readable
+ * while the counter is non-zero, writable while 1 more fits. Socket calls on it fail with ENOTSOCK. Linux eventfd(2) semantics. */
+int bsdg_eventfd(BsdGuest *g, uint64_t initval, int flags, int *err);
+int bsdg_is_eventfd(BsdGuest *g, int fd);
+/* ShutdownAllSockets(how): shutdown(how) on every socket descriptor (event descriptors are not sockets and are left alone); the descriptors stay open.
+ * how outside 0..2 is EINVAL; a socket the provider refuses to shut down (not connected) does not fail the call. */
+int bsdg_shutdown_all(BsdGuest *g, int how, int *err);
 /* poll over guest descriptors (revents are written back into fds[]); returns the ready count. */
 int bsdg_poll(BsdGuest *g, OnlinePollFd *fds, unsigned n, int timeout_ms, int *err);
 /* select over fd_set bitmaps (byte i/8, bit i%8; any set may be NULL). Sets are rewritten with the ready descriptors; returns the ready count. */

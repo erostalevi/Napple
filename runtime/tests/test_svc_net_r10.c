@@ -360,8 +360,255 @@ static void test_nifm_power(IpcObject *gen) {
     use_null();
 }
 
+/* ---- bsd */
+static int32_t g_ret, g_errno;
+static void bsd_do(IpcObject *b, unsigned cmd, const void *in, uint32_t n, IpcCall *c) {
+    svc_call(b, cmd, in, n, c);
+    g_ret = c->out_size >= 8 ? SVC_OUT(c, int32_t, 0) : -99;
+    g_errno = c->out_size >= 8 ? SVC_OUT(c, int32_t, 4) : -99;
+}
+static int new_eventfd(IpcObject *b, unsigned cmd, uint64_t init, uint32_t flags) {
+    IpcCall c;
+    uint8_t in[16] = {0};
+    memcpy(in, &init, 8), memcpy(in + 8, &flags, 4);
+    bsd_do(b, cmd, in, cmd == 39 ? 16 : 12, &c);
+    return g_ret;
+}
+static int64_t ev_rd(IpcObject *b, int fd, uint64_t *v) {
+    IpcCall c;
+    memset(&c, 0, sizeof c);
+    c.in = (const uint8_t *)&fd;
+    c.in_size = 4;
+    svc_set_out_buf(&c, v, 8);
+    svc_call_c(b, 25, &c);
+    g_ret = SVC_OUT(&c, int32_t, 0), g_errno = SVC_OUT(&c, int32_t, 4);
+    return g_ret;
+}
+static int64_t ev_wr(IpcObject *b, int fd, uint64_t v, uint32_t len) {
+    IpcCall c;
+    memset(&c, 0, sizeof c);
+    c.in = (const uint8_t *)&fd;
+    c.in_size = 4;
+    svc_set_in_buf(&c, &v, len);
+    svc_call_c(b, 24, &c);
+    g_ret = SVC_OUT(&c, int32_t, 0), g_errno = SVC_OUT(&c, int32_t, 4);
+    return g_ret;
+}
+static int16_t poll1(IpcObject *b, int fd, int16_t events, int32_t timeout) {
+    IpcCall c;
+    uint8_t pin[8], pout[8];
+    memcpy(pin, &fd, 4), memcpy(pin + 4, &events, 2), memset(pin + 6, 0, 2);
+    uint32_t in[2] = {1, (uint32_t)timeout};
+    memset(&c, 0, sizeof c);
+    c.in = (const uint8_t *)in;
+    c.in_size = 8;
+    svc_set_in_buf(&c, pin, 8);
+    svc_set_out_buf(&c, pout, 8);
+    svc_call_c(b, 6, &c);
+    g_ret = SVC_OUT(&c, int32_t, 0), g_errno = SVC_OUT(&c, int32_t, 4);
+    int16_t rev;
+    memcpy(&rev, pout + 6, 2);
+    return rev;
+}
+static void set_nonblock(IpcObject *b, int fd) {
+    IpcCall c;
+    int32_t in[3] = {fd, 4, 4}; /* F_SETFL O_NONBLOCK */
+    bsd_do(b, 20, in, 12, &c);
+}
+static int64_t now_ms(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+typedef struct {
+    IpcObject *b;
+    int fd;
+    uint64_t v;
+} Writer;
+static void *writer_thread(void *arg) {
+    Writer *w = arg;
+    struct timespec d = {0, 30 * 1000000};
+    nanosleep(&d, NULL);
+    ev_wr(w->b, w->fd, w->v, 8);
+    return NULL;
+}
+static int g_shutdowns, g_last_how;
+static int count_shutdown(void *ctx, int h, int how, int *err) {
+    (void)ctx, (void)h, (void)err;
+    g_shutdowns++;
+    g_last_how = how;
+    return 0;
+}
+static void test_bsd(void) {
+    IpcCall c;
+    IpcObject *b = bsd_open();
+    use_null();
+    bsdg_reset(bsd_g());
+    online_null_reset();
+    uint64_t v = 0;
+    /* ---- EventFd: a counter */
+    int fd = new_eventfd(b, 31, 5, 0);
+    CHECK(fd >= 0 && g_errno == 0, "31 EventFd(5, 0): a descriptor (%d)", fd);
+    CHECK(bsdg_is_eventfd(bsd_g(), fd), "...an event descriptor");
+    CHECK(ev_rd(b, fd, &v) == 8 && v == 5 && g_errno == 0, "Read returns the counter (5)");
+    set_nonblock(b, fd);
+    CHECK(g_ret == 0, "Fcntl(F_SETFL, O_NONBLOCK) on it");
+    {
+        int32_t in[3] = {fd, 3, 0};
+        bsd_do(b, 20, in, 12, &c);
+        CHECK(g_ret == 4, "...F_GETFL reads O_NONBLOCK back");
+    }
+    CHECK(ev_rd(b, fd, &v) == -1 && g_errno == 11, "...a read of a zero counter: EAGAIN (11 in the guest's numbering)");
+    CHECK(poll1(b, fd, ONLINE_POLLIN | ONLINE_POLLOUT, 0) == ONLINE_POLLOUT && g_ret == 1, "Poll: writable, not readable");
+    CHECK(ev_wr(b, fd, 3, 8) == 8 && ev_wr(b, fd, 4, 8) == 8, "Write adds to the counter");
+    CHECK(poll1(b, fd, ONLINE_POLLIN, 0) == ONLINE_POLLIN && g_ret == 1, "Poll: readable now");
+    CHECK(ev_rd(b, fd, &v) == 8 && v == 7, "...Read returns the sum (7) and zeroes it");
+    CHECK(ev_wr(b, fd, UINT64_MAX, 8) == -1 && g_errno == 22, "Write of UINT64_MAX: EINVAL");
+    CHECK(ev_wr(b, fd, 1, 4) == -1 && g_errno == 22, "Write of fewer than 8 bytes: EINVAL");
+    {
+        uint64_t small = 0;
+        IpcCall r;
+        memset(&r, 0, sizeof r);
+        r.in = (const uint8_t *)&fd;
+        r.in_size = 4;
+        svc_set_out_buf(&r, &small, 4);
+        svc_call_c(b, 25, &r);
+        CHECK(SVC_OUT(&r, int32_t, 0) == -1 && SVC_OUT(&r, int32_t, 4) == 22, "Read into fewer than 8 bytes: EINVAL");
+    }
+    {
+        uint8_t addr[16] = {16, 2};
+        IpcCall r;
+        memset(&r, 0, sizeof r);
+        r.in = (const uint8_t *)&fd;
+        r.in_size = 4;
+        svc_set_in_buf(&r, addr, sizeof addr);
+        svc_call_c(b, 13, &r);
+        CHECK(SVC_OUT(&r, int32_t, 0) == -1 && SVC_OUT(&r, int32_t, 4) == 88, "Bind on an event descriptor: ENOTSOCK (88)");
+    }
+    /* semaphore mode, through NoSfEventFd */
+    int sfd = new_eventfd(b, 39, 2, BSD_EFD_SEMAPHORE | BSD_EFD_NONBLOCK);
+    CHECK(sfd >= 0 && sfd != fd, "39 NoSfEventFd(2, semaphore | nonblock): another descriptor");
+    CHECK(ev_rd(b, sfd, &v) == 8 && v == 1 && ev_rd(b, sfd, &v) == 8 && v == 1, "semaphore: each read returns 1");
+    CHECK(ev_rd(b, sfd, &v) == -1 && g_errno == 11, "...then EAGAIN (the nonblock flag)");
+    /* a full counter */
+    int ffd = new_eventfd(b, 31, 0xfffffffffffffffeull, BSD_EFD_NONBLOCK_LINUX);
+    CHECK(ffd >= 0 && ev_wr(b, ffd, 1, 8) == -1 && g_errno == 11, "a counter at its maximum: Write would block -> EAGAIN (Linux nonblock bit)");
+    CHECK(poll1(b, ffd, ONLINE_POLLOUT, 0) == 0 && g_ret == 0, "...and Poll does not report it writable");
+    CHECK(new_eventfd(b, 31, UINT64_MAX, 0) == -1 && g_errno == 22, "EventFd with initval UINT64_MAX: EINVAL");
+    /* duplicate / close */
+    {
+        int32_t in = fd;
+        bsd_do(b, 27, &in, 4, &c);
+        int dfd = g_ret;
+        CHECK(dfd >= 0 && dfd != fd, "DuplicateSocket of an event descriptor");
+        ev_wr(b, fd, 9, 8);
+        bsd_do(b, 26, &in, 4, &c);
+        CHECK(g_ret == 0, "Close the original");
+        CHECK(ev_rd(b, dfd, &v) == 8 && v == 9, "...the alias still reads the shared counter (9)");
+        CHECK(ev_rd(b, fd, &v) == -1 && g_errno == 9, "...the closed number is EBADF");
+        in = dfd;
+        bsd_do(b, 26, &in, 4, &c);
+        CHECK(g_ret == 0 && bsdg_handle(bsd_g(), dfd) == -1, "Close the alias: the descriptor is free");
+    }
+    /* blocking: a read and a poll wait for a write from another thread */
+    {
+        int bfd = new_eventfd(b, 31, 0, 0);
+        Writer w = {b, bfd, 42};
+        pthread_t t;
+        pthread_create(&t, NULL, writer_thread, &w);
+        int64_t t0 = now_ms();
+        CHECK(ev_rd(b, bfd, &v) == 8 && v == 42 && now_ms() - t0 >= 20, "a blocking Read waits for the writer (42 after %lld ms)", (long long)(now_ms() - t0));
+        pthread_join(t, NULL);
+        w.v = 7;
+        pthread_create(&t, NULL, writer_thread, &w);
+        t0 = now_ms();
+        int16_t rev = poll1(b, bfd, ONLINE_POLLIN, -1);
+        CHECK(rev == ONLINE_POLLIN && g_ret == 1 && now_ms() - t0 >= 20, "Poll(-1) wakes when the other thread writes");
+        pthread_join(t, NULL);
+        ev_rd(b, bfd, &v);
+        t0 = now_ms();
+        rev = poll1(b, bfd, ONLINE_POLLIN, 40);
+        int64_t el = now_ms() - t0;
+        CHECK(rev == 0 && g_ret == 0 && el >= 35 && el < 1000, "Poll(40 ms) of a zero counter times out (%lld ms)", (long long)el);
+        /* a mixed poll: a socket and the event descriptor */
+        int32_t sa[3] = {2, 2, 0};
+        bsd_do(b, 2, sa, 12, &c);
+        int sock = g_ret;
+        ev_wr(b, bfd, 1, 8);
+        uint8_t pin[16], pout[16];
+        int16_t evin = ONLINE_POLLIN, z = 0;
+        memcpy(pin, &sock, 4), memcpy(pin + 4, &evin, 2), memcpy(pin + 6, &z, 2);
+        memcpy(pin + 8, &bfd, 4), memcpy(pin + 12, &evin, 2), memcpy(pin + 14, &z, 2);
+        uint32_t pa[2] = {2, 100};
+        memset(&c, 0, sizeof c);
+        c.in = (const uint8_t *)pa;
+        c.in_size = 8;
+        svc_set_in_buf(&c, pin, 16);
+        svc_set_out_buf(&c, pout, 16);
+        svc_call_c(b, 6, &c);
+        int16_t r_sock, r_ev;
+        memcpy(&r_sock, pout + 6, 2), memcpy(&r_ev, pout + 14, 2);
+        CHECK(sock >= 0 && SVC_OUT(&c, int32_t, 0) == 1 && r_ev == ONLINE_POLLIN && r_sock == 0, "Poll over a socket and an event descriptor: the event is ready");
+    }
+    /* ShutdownAllSockets(how) closes nothing */
+    {
+        OnlineProvider p = *online_null_provider();
+        p.sock_shutdown = count_shutdown;
+        online_provider_install(&p);
+        bsdg_reset(bsd_g());
+        int32_t sa[3] = {2, 1, 0};
+        bsd_do(b, 2, sa, 12, &c);
+        int s1 = g_ret;
+        bsd_do(b, 2, sa, 12, &c);
+        int s2 = g_ret;
+        int32_t in = s1;
+        bsd_do(b, 27, &in, 4, &c);
+        int e1 = new_eventfd(b, 31, 1, BSD_EFD_NONBLOCK);
+        int32_t how = 2;
+        g_shutdowns = 0;
+        bsd_do(b, 40, &how, 4, &c);
+        CHECK(g_ret == 0 && g_errno == 0, "40 ShutdownAllSockets(2): {0, 0}");
+        CHECK(g_shutdowns == 2 && g_last_how == 2, "...shutdown(2) once per provider socket (a duplicate shares its socket; %d calls)", g_shutdowns);
+        CHECK(bsdg_handle(bsd_g(), s1) >= 0 && bsdg_handle(bsd_g(), s2) >= 0 && ev_rd(b, e1, &v) == 8 && v == 1, "...the descriptors stay open, the event descriptor untouched");
+        how = 3;
+        bsd_do(b, 40, &how, 4, &c);
+        CHECK(g_ret == -1 && g_errno == 22, "ShutdownAllSockets(3): EINVAL");
+        bsdg_reset(bsd_g());
+        CHECK(bsdg_handle(bsd_g(), e1) == -1 && !bsd_g()->ev[0].used && !bsd_g()->ev[1].used, "bsdg_reset frees the event descriptors too");
+        use_null();
+    }
+    /* RegisterClientShared, the NoMem mmsg calls, the core mask */
+    uint32_t before = bsd_clients;
+    uint8_t reg[0x30] = {0};
+    svc_call(b, 33, reg, sizeof reg, &c);
+    CHECK(c.result == 0 && c.out_size == 4 && SVC_OUT(&c, uint32_t, 0) == 0 && bsd_clients == before + 1, "33 RegisterClientShared: registered like RegisterClient (0)");
+    int32_t bad[3] = {77, 1, 0};
+    bsd_do(b, 42, bad, 12, &c);
+    CHECK(g_ret == -1 && g_errno == 9, "42 SendMMsgNoMem on an unknown descriptor: EBADF");
+    bsd_do(b, 43, bad, 12, &c);
+    CHECK(g_ret == -1 && g_errno == 9, "43 RecvMMsgNoMem on an unknown descriptor: EBADF");
+    {
+        int32_t sa[3] = {2, 2, 0};
+        bsd_do(b, 2, sa, 12, &c);
+        int32_t ok[3] = {g_ret, 0, 0};
+        bsd_do(b, 43, ok, 12, &c);
+        CHECK(g_ret == 0 && g_errno == 0, "43 RecvMMsgNoMem with no messages on a socket: 0");
+    }
+    svc_call(b, 201, NULL, 0, &c);
+    CHECK(c.out_size == 8 && SVC_OUT(&c, uint64_t, 0) == 8, "201 GetThreadCoreMask: core 3 before any Set");
+    uint64_t mask = 0x3;
+    svc_call(b, 200, &mask, 8, &c);
+    svc_call(b, 201, NULL, 0, &c);
+    CHECK(SVC_OUT(&c, uint64_t, 0) == 3, "200 SetThreadCoreMask reads back through 201");
+    const unsigned real[] = {31, 33, 39, 40, 42, 43, 200, 201}, stub[] = {32, 34, 35, 37};
+    for (unsigned i = 0; i < sizeof real / sizeof real[0]; i++) CHECK(svc_find(b, real[i])->status == IPC_IMPL, "bsd %u is real", real[i]);
+    for (unsigned i = 0; i < sizeof stub / sizeof stub[0]; i++) CHECK(svc_find(b, stub[i])->status == IPC_STUB, "bsd %u stays a documented default", stub[i]);
+    bsdg_reset(bsd_g());
+}
+
 int main(void) {
     IpcCall c;
+    test_bsd();
     IpcObject *nf = nifm_open();
     svc_call(nf, 5, NULL, 0, &c);
     IpcObject *gen = c.out_objects[0];
