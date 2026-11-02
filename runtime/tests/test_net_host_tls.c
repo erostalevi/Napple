@@ -156,6 +156,40 @@ int main(void) {
         svc_call_c(conn, 1, &c);
         svc_call(conn, 8, NULL, 0, &c);
         CHECK(c.result == HZ_R_SSL_NOT_CONNECTED, "ssl DoHandshake reaches the server and refuses its unknown CA");
+        conn->destroy(conn);
+        svc_call(b0, 26, &fd, 4, &c); /* bsd Close: s_server serves one client at a time */
+        /* the same with the CA imported through ImportServerPki (format 1 = DER): accepted, then a request and its answer through Write / Read */
+        int32_t fd2 = -1;
+        svc_call(b0, 2, sa_args, 12, &c);
+        fd2 = SVC_OUT(&c, int32_t, 0);
+        memset(&c, 0, sizeof c);
+        c.in = (const uint8_t *)&fd2, c.in_size = 4;
+        svc_set_in_buf(&c, sa, 16);
+        svc_call_c(b0, 14, &c);
+        uint32_t fmt = 1;
+        memset(&c, 0, sizeof c);
+        c.in = (const uint8_t *)&fmt, c.in_size = 4;
+        svc_set_in_buf(&c, der, der_n);
+        svc_call_c(ctx, 4, &c);
+        CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) != 0, "ssl ImportServerPki (DER) -> an id");
+        svc_call(ctx, 2, NULL, 0, &c);
+        conn = c.out_objects[0];
+        svc_call(conn, 0, &fd2, 4, &c);
+        memset(&c, 0, sizeof c);
+        svc_set_in_buf(&c, "localhost", 9);
+        svc_call_c(conn, 1, &c);
+        svc_call(conn, 8, NULL, 0, &c);
+        CHECK(c.result == 0, "ssl DoHandshake with the imported CA: established");
+        const char *req = "GET / HTTP/1.0\r\n\r\n";
+        memset(&c, 0, sizeof c);
+        svc_set_in_buf(&c, req, strlen(req));
+        svc_call_c(conn, 11, &c);
+        CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == strlen(req), "ssl Write");
+        char ans[128] = {0};
+        memset(&c, 0, sizeof c);
+        svc_set_out_buf(&c, ans, sizeof ans - 1);
+        svc_call_c(conn, 10, &c);
+        CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) > 8 && !memcmp(ans, "HTTP/1.", 7), "ssl Read: the server's answer");
         conn->destroy(conn), ctx->destroy(ctx); /* frees the provider connection (tls_free) */
         bsdg_reset(bsd_g());
     }
