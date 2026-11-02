@@ -187,7 +187,7 @@ impl Ck<'_> {
             .collect();
         let mut changed = BTreeSet::new();
         for a in (0..self.out.layout.text_end).step_by(4) {
-            if self.ow(a) != self.pw(a) {
+            if self.ow(a) != self.pw(a) && !a64::is_ordering_upgrade(self.ow(a), self.pw(a)) {
                 changed.insert(a);
                 match self.b_target(a) {
                     Some(t) if self.in_patch(t) => {}
@@ -800,7 +800,8 @@ impl Ck<'_> {
                     a64::subst_reg18(ow, s)
                 } else {
                     Some(ow)
-                };
+                }
+                .map(|e| if a64::is_ordering_upgrade(e, pw) { pw } else { e }); /* the ordering pass (crate::ordering) */
                 if let Some(tgt) = a64::direct_target(ow, oa as u64) {
                     // same opcode/registers, displacement may differ
                     let ew = expected_plain.unwrap_or(ow);

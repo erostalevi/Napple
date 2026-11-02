@@ -73,6 +73,8 @@ cntvct cntfrq`), `lo<TAB>W<TAB>hi` exclusive window `[lo,hi)` (head word at `lo`
   `-144` is just below the 128-byte red zone (clang/AArch64 leaf functions keep live locals there; Link's Awakening main does).
 * `cbz/tbz x18`, `adr/adrp x18`, `ldr x18,<literal>`, `blr x18` (x16/x17 are dead into a call; no spill), `br x18` (landing pads, shared per table), ldxr/stxr windows copied whole.
 * `mrs/msr tpidr_el0`, `mrs tpidrro_el0`: slot access; `svc`/counters: host gate.
+* Exclusive pairs (`ldxr`..`stxr`, byte/half/pair forms) get acquire/release ordering in place (`ldaxr`/`stlxr`, `ordering.rs`, on by default): guest
+  spinlocks without acquire ordering are reordered by Apple cores (ACNH's job-claim race, 2026-11-01). The verifier accepts exactly that one-bit change.
 * **Runtime contract**: signal handlers for guest threads must run on an alternate stack (`sigaltstack`); the
   rewritten code treats `[sp-160, sp-128)` as scratch and a signal frame there would corrupt it.
 

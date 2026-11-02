@@ -170,6 +170,16 @@ pub fn is_excl_load(word: u32) -> bool {
 pub fn is_excl_store(word: u32) -> bool {
     is_exclusive(word) && word & (1 << 22) == 0
 }
+/// Bit 15 (`o0`) of a load/store exclusive: acquire on `ldaxr`/`ldaxp`, release on `stlxr`/`stlxp`.
+pub const EXCL_ORDERED: u32 = 1 << 15;
+/// `ldxr`/`ldxp`/`stxr`/`stxp` without ordering -> the acquire/release form (`ldaxr`, `stlxr`, ...); `None` when already ordered or not exclusive.
+pub fn ordered_exclusive(word: u32) -> Option<u32> {
+    (is_exclusive(word) && word & EXCL_ORDERED == 0).then_some(word | EXCL_ORDERED)
+}
+/// `new` is `orig` with only its exclusive ordering bit added (the ordering pass, `crate::ordering`).
+pub fn is_ordering_upgrade(orig: u32, new: u32) -> bool {
+    ordered_exclusive(orig) == Some(new)
+}
 /// Any instruction that ends a straight-line sequence or transfers control.
 pub fn is_control_flow(word: u32) -> bool {
     direct_target(word, 0).is_some()

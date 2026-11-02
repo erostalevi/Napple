@@ -114,6 +114,8 @@ pub struct RewriteOptions {
     pub max_jump_pads: u32,
     /// Longest exclusive window (instructions between `ldxr` and the status test).
     pub max_window_len: usize,
+    /// Give every `ldxr`..`stxr` pair acquire/release ordering (`crate::ordering`).
+    pub order_exclusives: bool,
 }
 
 impl Default for RewriteOptions {
@@ -121,6 +123,7 @@ impl Default for RewriteOptions {
         Self {
             max_jump_pads: 1 << 17,
             max_window_len: 16,
+            order_exclusives: true,
         }
     }
 }

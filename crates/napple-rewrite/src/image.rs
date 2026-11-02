@@ -124,6 +124,11 @@ impl ModuleImage {
         u32_at(&self.bytes, addr as usize).unwrap_or(0)
     }
 
+    pub fn set_word(&mut self, addr: u32, word: u32) {
+        let a = addr as usize;
+        self.bytes[a..a + 4].copy_from_slice(&word.to_le_bytes());
+    }
+
     pub fn text(&self) -> &[u8] {
         &self.bytes[..self.layout.text_end as usize]
     }
