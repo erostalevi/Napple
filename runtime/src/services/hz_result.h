@@ -92,3 +92,6 @@ enum {
 /* getaddrinfo / netdb error numbers (FreeBSD numbering) */
 enum { HZ_EAI_AGAIN = 2, HZ_EAI_FAIL = 4, HZ_EAI_NONAME = 8 };
 enum { HZ_NETDB_HOST_NOT_FOUND = 1, HZ_NETDB_TRY_AGAIN = 2, HZ_NETDB_NO_RECOVERY = 3, HZ_NETDB_NO_DATA = 4 };
+/* acc (module 124), switchbrew 'Error codes': 200 NetworkServiceAccountRegistrationRequired (0x1907C), the user has no network service account. That acc and
+ * olsc report exactly this code for each network operation of an unlinked user is [unverified]. */
+#define HZ_R_ACC_NSA_REGISTRATION_REQUIRED HZ_RESULT(124, 200)

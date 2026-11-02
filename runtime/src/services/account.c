@@ -5,6 +5,7 @@
 #include "host_info.h"
 #include "online_provider.h"
 #include "hz_result.h"
+#include <pthread.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -101,12 +102,76 @@ static const IpcCmd profile_cmds[] = {
 };
 /* The network account of the local user, from the active provider (ONLINE_CAP_ACCOUNT). The NullProvider has none: the user is not linked, which titles
  * tolerate as "nothing cached" and offline play. Returns 1 and fills *out when the provider reports a linked account. */
-static int account_linked(OnlineAccountInfo *out) {
+static int account_linked_uid(const uint8_t uid[16], OnlineAccountInfo *out) {
     const OnlineProvider *p = online_provider();
     int (*info)(void *, const uint8_t[16], OnlineAccountInfo *) = online_has(p, ONLINE_CAP_ACCOUNT) ? ONLINE_FN(p, account_info) : NULL;
     memset(out, 0, sizeof *out);
-    return info && info(p->ctx, g_user_id, out) == 0 && out->linked;
+    return info && info(p->ctx, uid, out) == 0 && out->linked;
 }
+static int account_linked(OnlineAccountInfo *out) { return account_linked_uid(g_user_id, out); }
+
+/* ---- network operations (ipc-depth-95 r10) ---------------------------------------------------------------------------------
+ * The BaaS calls (id token, license kind, application authentication, service availability) are asynchronous on the console: the command hands out an
+ * IAsyncContext and the outcome is read with GetResult. The outcome is known here at once, so the context is done when it is made. */
+/* The outcome of a network service account operation for `uid`. A user without a network service account (every user of the NullProvider and of
+ * NAPPLE_NET=host, which has no ONLINE_CAP_ACCOUNT) gets NetworkServiceAccountRegistrationRequired whether or not there is a network. A linked user
+ * (a custom provider module) would talk to the account server: OnlineProvider has no hook for that exchange (it would need an id-token / license-kind
+ * call next to account_info), so the server is unreachable and the answer is nifm's no-network result, connected or not. */
+static uint32_t acc_nsa_result(const uint8_t uid[16]) {
+    OnlineAccountInfo ai;
+    if (!account_linked_uid(uid, &ai)) return HZ_R_ACC_NSA_REGISTRATION_REQUIRED;
+    return HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+}
+typedef struct {
+    uint32_t result;
+    uint32_t license_kind; /* IAsyncNetworkServiceLicenseKindContext */
+} AccAsync;
+static void async_event(IpcObject *s, IpcCall *c) { svc_ret_event_signaled(s, c); } /* 0 GetSystemEvent: signalled, the work is done */
+static void async_cancel(IpcObject *s, IpcCall *c) { /* 1 Cancel: nothing is in flight; the outcome stays */
+    (void)s;
+    (void)c;
+}
+static void async_has_done(IpcObject *s, IpcCall *c) { svc_ret_u8_1(s, c); }
+static void async_get_result(IpcObject *s, IpcCall *c) { c->result = ((AccAsync *)s->state)->result; }
+/* 100 GetNetworkServiceLicenseKind -> u32 (0 = no Nintendo Switch Online license [unverified value]): the context's result when it failed. */
+static void async_license_kind(IpcObject *s, IpcCall *c) {
+    AccAsync *a = s->state;
+    if (a->result) {
+        c->result = a->result;
+        return;
+    }
+    IPC_OUT(c, a->license_kind);
+}
+static const IpcCmd async_cmds[] = {
+    {0, "GetSystemEvent", async_event, IPC_IMPL},
+    {1, "Cancel", async_cancel, IPC_IMPL},
+    {2, "HasDone", async_has_done, IPC_IMPL},
+    {3, "GetResult", async_get_result, IPC_IMPL},
+};
+static const IpcCmd license_ctx_cmds[] = {
+    {0, "GetSystemEvent", async_event, IPC_IMPL},     {1, "Cancel", async_cancel, IPC_IMPL},
+    {2, "HasDone", async_has_done, IPC_IMPL},         {3, "GetResult", async_get_result, IPC_IMPL},
+    {100, "GetNetworkServiceLicenseKind", async_license_kind, IPC_IMPL},
+};
+static void async_destroy(IpcObject *o) { free(o->state); }
+static void out_async(IpcCall *c, uint32_t result, int license) {
+    AccAsync *a = calloc(1, sizeof *a);
+    a->result = result;
+    if (license) ipc_out_object(c, IPC_OBJECT("IAsyncNetworkServiceLicenseKindContext", license_ctx_cmds, a, async_destroy));
+    else ipc_out_object(c, IPC_OBJECT("IAsyncContext", async_cmds, a, async_destroy));
+}
+/* The IManagerForApplication object is the account manager of one user (GetBaasAccountManagerForApplication(uid)); it remembers how its last
+ * EnsureIdTokenCacheAsync ended. */
+typedef struct {
+    uint8_t uid[16];
+    int ensured;
+    uint32_t ensure_result;
+} AccManager;
+static IpcObject *manager_new(const uint8_t uid[16]);
+/* Users whose open context was stored (160 StoreOpenContext), for the next application to pick up (acc:u0 130 / 131). */
+static pthread_mutex_t g_open_ctx_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint8_t g_open_ctx[ACCOUNT_MAX_PROFILES][16];
+static unsigned g_open_ctx_n;
 /* 0 CheckAvailability: the local user is always usable; whether a network account sits behind it is the provider's business and is not an error either way. */
 static void manager_check(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -134,15 +199,59 @@ static void manager_na_cache(IpcObject *s, IpcCall *c) {
         ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
     }
 }
+/* 2 EnsureIdTokenCacheAsync -> IAsyncContext: fetches the user's id token into the manager's cache; the outcome is acc_nsa_result (no token can be
+ * fetched without an id-token provider hook, so the cache never fills). */
+static void manager_ensure_token(IpcObject *s, IpcCall *c) {
+    AccManager *m = s->state;
+    uint32_t r = acc_nsa_result(m ? m->uid : g_user_id);
+    if (m) m->ensured = 1, m->ensure_result = r;
+    out_async(c, r, 0);
+}
+/* 3 LoadIdTokenCache (LoadIdTokenCacheDeprecated since 19.0.0) / 4 LoadIdTokenCache [19.0.0+] (out buffer) -> u32 size: copies the cached id token. The
+ * cache is empty: the call fails with how the last EnsureIdTokenCacheAsync ended, or (none yet) with the user's account state. A cache that could be
+ * filled would be copied here; with r == 0 and nothing cached the size is 0. */
+static void manager_load_token(IpcObject *s, IpcCall *c) {
+    AccManager *m = s->state;
+    uint32_t r = m && m->ensured ? m->ensure_result : acc_nsa_result(m ? m->uid : g_user_id);
+    if (r) {
+        c->result = r;
+        return;
+    }
+    uint32_t n = 0;
+    IPC_OUT(c, n);
+}
+/* 160 StoreOpenContext: keeps this manager's user as an open context the next application can load (acc:u0 130 LoadOpenContext). */
+static void manager_store_open_context(IpcObject *s, IpcCall *c) {
+    (void)c;
+    AccManager *m = s->state;
+    const uint8_t *uid = m ? m->uid : g_user_id;
+    pthread_mutex_lock(&g_open_ctx_mu);
+    unsigned i = 0;
+    while (i < g_open_ctx_n && memcmp(g_open_ctx[i], uid, 16)) i++;
+    if (i == g_open_ctx_n && g_open_ctx_n < ACCOUNT_MAX_PROFILES) memcpy(g_open_ctx[g_open_ctx_n++], uid, 16);
+    pthread_mutex_unlock(&g_open_ctx_mu);
+}
+/* 170 LoadNetworkServiceLicenseKindAsync -> IAsyncNetworkServiceLicenseKindContext: the license kind needs the account server (acc_nsa_result). */
+static void manager_license_kind(IpcObject *s, IpcCall *c) {
+    AccManager *m = s->state;
+    out_async(c, acc_nsa_result(m ? m->uid : g_user_id), 1);
+}
 static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IPC_IMPL},
                                       {1, "GetAccountId", manager_account_id, IPC_IMPL},
                                       {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_IMPL},
-    {2, "EnsureIdTokenCacheAsync", sysd_err_generic, IPC_STUB},
-    {3, "LoadIdTokenCacheDeprecated", sysd_err_generic, IPC_STUB},
-    {4, "LoadIdTokenCache", sysd_err_generic, IPC_STUB},
+    {2, "EnsureIdTokenCacheAsync", manager_ensure_token, IPC_IMPL},
+    {3, "LoadIdTokenCacheDeprecated", manager_load_token, IPC_IMPL},
+    {4, "LoadIdTokenCache", manager_load_token, IPC_IMPL},
+    /* 150: IAuthorizationRequest (an OAuth flow with the Nintendo Account server through transfer memory); the input layout is not documented */
     {150, "CreateAuthorizationRequest", sysd_err_generic, IPC_STUB},
-    {160, "StoreOpenContext", sysd_ok, IPC_STUB},
-    {170, "LoadNetworkServiceLicenseKindAsync", sysd_err_generic, IPC_STUB}};
+    {160, "StoreOpenContext", manager_store_open_context, IPC_IMPL},
+    {170, "LoadNetworkServiceLicenseKindAsync", manager_license_kind, IPC_IMPL}};
+static void manager_destroy(IpcObject *o) { free(o->state); }
+static IpcObject *manager_new(const uint8_t uid[16]) {
+    AccManager *m = calloc(1, sizeof *m);
+    if (m) memcpy(m->uid, uid, 16);
+    return IPC_OBJECT("IManagerForApplication", manager_cmds, m, manager_destroy);
+}
 
 static void acc_user_count(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -257,7 +366,49 @@ static void acc_initialize(IpcObject *s, IpcCall *c) {
 }
 static void acc_baas_manager(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, IPC_OBJECT("IManagerForApplication", manager_cmds, NULL, NULL));
+    ipc_out_object(c, manager_new(c->in_size >= 16 ? ipc_in(c, 0, 16) : g_user_id));
+}
+/* 102 AuthenticateApplicationAsync -> IAsyncContext: authenticates the application (not a user) with the account server. Offline that ends with nifm's
+ * no-network result. With a connection (NAPPLE_NET=host) a console would succeed, but the exchange needs an application-authentication provider hook that
+ * OnlineProvider lacks, so the answer stays the offline one: the row stays IPC_STUB until such a hook exists. */
+static void acc_authenticate_app(IpcObject *s, IpcCall *c) {
+    (void)s;
+    out_async(c, HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, 0);
+}
+/* 103 CheckNetworkServiceAvailabilityAsync [4.0.0+] -> IAsyncContext: whether the user can use network services. The input is not documented: a leading
+ * uid is read when present [unverified], else the local user. */
+static void acc_check_nsa_availability(IpcObject *s, IpcCall *c) {
+    (void)s;
+    out_async(c, acc_nsa_result(c->in_size >= 16 ? ipc_in(c, 0, 16) : g_user_id), 0);
+}
+/* 130 LoadOpenContext(uid [unverified layout]) -> IManagerForApplication of a user whose context an application stored; another uid is UserNotExist. */
+static void acc_load_open_context(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 16) {
+        c->result = HZ_RESULT(124, 20); /* InvalidUserId */
+        return;
+    }
+    const uint8_t *uid = ipc_in(c, 0, 16);
+    pthread_mutex_lock(&g_open_ctx_mu);
+    int found = 0;
+    for (unsigned i = 0; i < g_open_ctx_n && !found; i++) found = !memcmp(g_open_ctx[i], uid, 16);
+    pthread_mutex_unlock(&g_open_ctx_mu);
+    if (!found) {
+        c->result = R_ACC_USER_NOT_FOUND;
+        return;
+    }
+    ipc_out_object(c, manager_new(uid));
+}
+/* 131 ListOpenContextStoredUsers [6.0.0+] (out buffer uid[]): the users with a stored open context, the rest of the buffer zero (like ListAllUsers). */
+static void acc_list_open_context_users(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (!b) return;
+    uint8_t list[16 * ACCOUNT_MAX_PROFILES] = {0};
+    pthread_mutex_lock(&g_open_ctx_mu);
+    memcpy(list, g_open_ctx, 16 * g_open_ctx_n);
+    pthread_mutex_unlock(&g_open_ctx_mu);
+    ipc_write_buf(c, b, list, b->size < sizeof list ? b->size : sizeof list);
 }
 static void acc_destroy(IpcObject *o) { free(o->state); }
 static const IpcCmd acc_cmds[] = {
@@ -277,13 +428,14 @@ static const IpcCmd acc_cmds[] = {
     {160, "InitializeApplicationInfoV2", acc_initialize, IPC_IMPL},
     {6, "GetProfileDigest", acc_profile_digest, IPC_IMPL},
     {52, "TrySelectUserWithoutInteraction", acc_last_opened, IPC_IMPL}, /* 19.0.0+ name of 51: the one local user (or the last opened one) is selected without a dialog */
-    {102, "AuthenticateApplicationAsync", sysd_err_generic, IPC_STUB},
-    {103, "CheckNetworkServiceAvailabilityAsync", sysd_err_generic, IPC_STUB},
+    {102, "AuthenticateApplicationAsync", acc_authenticate_app, IPC_STUB}, /* offline answer only: no application-authentication provider hook */
+    {103, "CheckNetworkServiceAvailabilityAsync", acc_check_nsa_availability, IPC_IMPL},
     {110, "StoreSaveDataThumbnail", acc_store_thumbnail, IPC_IMPL},
     {111, "ClearSaveDataThumbnail", acc_clear_thumbnail, IPC_IMPL},
+    /* 120: IGuestLoginRequest is filled by the Nintendo Account web login (a system applet + server); the transfer-memory input is not documented */
     {120, "CreateGuestLoginRequest", sysd_err_generic, IPC_STUB},
-    {130, "LoadOpenContext", sysd_err_generic, IPC_STUB},
-    {131, "ListOpenContextStoredUsers", sysd_err_generic, IPC_STUB},
+    {130, "LoadOpenContext", acc_load_open_context, IPC_IMPL},
+    {131, "ListOpenContextStoredUsers", acc_list_open_context_users, IPC_IMPL},
 };
 static IpcObject *acc_open(void) { return IPC_OBJECT("acc:u0", acc_cmds, calloc(1, sizeof(AccSession)), acc_destroy); }
 void service_register_account(void) {
