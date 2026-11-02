@@ -624,7 +624,9 @@ static void test_nsd_prepo(void) {
     svc_call(n, 100, NULL, 0, &c);
     CHECK(c.result == 0 && c.out[0] == 1, "nsd 102 DeleteApplicationServerEnvironmentType: back to the identifier's type");
     for (unsigned id = 100; id <= 102; id++) CHECK(svc_find(n, id)->status == IPC_IMPL, "nsd %u is real", id);
-    CHECK(svc_find(n, 5)->status == IPC_STUB && svc_find(n, 64)->status == IPC_STUB, "nsd 5 and 64 stay documented defaults");
+    { uint8_t url[0x100]; memset(url, 0xcc, sizeof url); IpcCall u; memset(&u, 0, sizeof u); svc_set_out_buf(&u, url, sizeof url); svc_call_c(n, 5, &u);
+      CHECK(u.result == 0 && url[0] == 0 && url[0xff] == 0, "nsd 5 GetSettingUrl: success, the empty Url of the lp1 settings"); }
+    CHECK(svc_find(n, 5)->status == IPC_IMPL && svc_find(n, 64)->status == IPC_STUB, "nsd 5 real, 64 stays a documented default");
     IpcObject *pr = prepo_open();
     CHECK(svc_find(pr, 50100)->status == IPC_STUB && svc_find(pr, 90100)->status == IPC_STUB, "prepo 50100 / 90100 stay documented defaults");
 }

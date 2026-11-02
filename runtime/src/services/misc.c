@@ -287,10 +287,13 @@ static void ec_async_cancel(IpcObject *s, IpcCall *c) {
     (void)c;
     ((EcAsyncData *)s->state)->cancelled = 1;
 }
+/* IAsyncData of the token request: the request has completed (its event is signalled) with a.result, so GetSize and Get report that result, as every
+ * nn::ec async object does for a finished failed request; Cancel of a finished request has nothing to stop (it is remembered). GetSize's u64 is only
+ * written for a successful request [unverified layout], which needs an ec-server provider hook (aoc_contents_token_result). */
 static const IpcCmd ec_async_data_cmds[] = {
-    {0, "GetSize", ec_async_get_size, IPC_STUB}, /* output layout not public: a u64 [unverified] */
-    {1, "Get", ec_async_get, IPC_STUB},
-    {2, "Cancel", ec_async_cancel, IPC_STUB},
+    {0, "GetSize", ec_async_get_size, IPC_IMPL},
+    {1, "Get", ec_async_get, IPC_IMPL},
+    {2, "Cancel", ec_async_cancel, IPC_IMPL},
 };
 static void ec_state_destroy(IpcObject *o) { free(o->state); }
 static uint32_t aoc_contents_token_result(void) {

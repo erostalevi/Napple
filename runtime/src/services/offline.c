@@ -1939,6 +1939,14 @@ static void nsd_resolve(IpcObject *s, IpcCall *c) {
     }
     IPC_OUT(c, r);
 }
+/* 5 GetSettingUrl -> buffer 0x100: switchbrew: copies the 0x100-byte Url of the current settings and returns 0. Napple's "lp1" settings carry no Url
+ * (nothing is ever contacted), so the copy is empty. */
+static void nsd_setting_url(IpcObject *s, IpcCall *c) {
+    (void)s;
+    static const char url[0x100];
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b && b->size) ipc_write_buf(c, b, url, b->size < sizeof url ? b->size : sizeof url);
+}
 /* GetDeviceId: a fixed zero id (the console has none to give; the NullProvider never uses it). */
 static void nsd_device_id(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -2014,7 +2022,7 @@ static const IpcCmd nsd_cmds[] = {
     {42, "GetNasApiFqdn", nsd_resolve, IPC_IMPL},
     {43, "GetNasApiFqdnEx", nsd_resolve, IPC_IMPL},
     {50, "GetCurrentSetting", nsd_zero_struct, IPC_IMPL},
-    {5, "GetSettingUrl", sysd_err_generic, IPC_STUB}, /* success with the 0x100-byte Url of the settings: its content is not public */
+    {5, "GetSettingUrl", nsd_setting_url, IPC_IMPL},
     {15, "SetChangeEnvironmentIdentifierDisabled", nsd_set_change_env_disabled, IPC_IMPL},
     {63, "IsChangeEnvironmentIdentifierDisabled", nsd_is_change_env_disabled, IPC_IMPL},
     {64, "SetWithoutDomainExchangeFqdns", sysd_ok, IPC_STUB}, /* needs nsd!test_mode = 1; the retail refusal result is not public */
@@ -2509,7 +2517,7 @@ static void mifare_create_user(IpcObject *s, IpcCall *c) {
 static const IpcCmd mifare_root_cmds[] = {{0, "CreateUserInterface", mifare_create_user, IPC_IMPL}};
 static IpcObject *mifare_open(void) { return IPC_OBJECT("nfc:mf:u", mifare_root_cmds, NULL, NULL); }
 
-/* prepo:u (play reports): reports are accepted and dropped. */
+/* prepo:u (play reports): reports are accepted, kept for read-back and handed to the provider's report hook. */
 static void ret_u64_1(IpcObject *s, IpcCall *c) {
     (void)s;
     uint64_t v = 1;
@@ -2525,24 +2533,68 @@ static PrepoStore *prepo_st(void) { /* caller holds prepo_lock */
     if (!prepo_store_ready) prepo_init(&prepo_store), prepo_store_ready = 1;
     return &prepo_store;
 }
-static void prepo_deliver(IpcCall *c, unsigned buf_index) {
+/* The accepted reports are kept (in memory, within PREPO_STORAGE_LIMIT, like the console's unsent-report storage) so ReadAll*ReportFiles can read them
+ * back; ClearStorage drops them. `system`: saved through the system variants (SaveSystemReport*), which ReadAllApplicationReportFiles leaves out. */
+typedef struct PrepoKept {
+    struct PrepoKept *next;
+    uint8_t system;
+    uint64_t application_id;
+    uint32_t size;
+    uint8_t data[];
+} PrepoKept;
+static PrepoKept *prepo_kept, **prepo_kept_tail = &prepo_kept;
+static void prepo_kept_clear(void) { /* caller holds prepo_lock */
+    for (PrepoKept *k = prepo_kept, *n; k; k = n) n = k->next, free(k);
+    prepo_kept = NULL, prepo_kept_tail = &prepo_kept;
+}
+static void prepo_deliver(IpcCall *c, unsigned buf_index, int system) {
     const OnlineProvider *p = online_provider();
     void (*rep)(void *, const void *, size_t) = ONLINE_FN(p, report);
     const IpcBuf *b = ipc_in_buf(c, buf_index);
     if (!b) b = ipc_in_buf(c, 0);
     const void *d = b && b->size ? ipc_buf_ptr(b) : NULL;
     pthread_mutex_lock(&prepo_lock);
+    uint32_t before = prepo_st()->count;
     prepo_account(prepo_st(), d ? b->size : 0);
+    PrepoKept *k = d && prepo_st()->count != before ? malloc(sizeof *k + (size_t)b->size) : NULL;
+    if (k) {
+        k->next = NULL, k->system = (uint8_t)system, k->application_id = g_program_id, k->size = (uint32_t)b->size;
+        memcpy(k->data, d, (size_t)b->size);
+        *prepo_kept_tail = k, prepo_kept_tail = &k->next;
+    }
     pthread_mutex_unlock(&prepo_lock);
     if (rep && d) rep(p->ctx, d, (size_t)b->size);
 }
 static void prepo_save(IpcObject *s, IpcCall *c) {
     (void)s;
-    prepo_deliver(c, 1);
+    prepo_deliver(c, 1, 0);
 }
 static void prepo_save_system(IpcObject *s, IpcCall *c) {
     (void)s;
-    prepo_deliver(c, 0);
+    prepo_deliver(c, 0, 1);
+}
+/* 50100 ReadAllApplicationReportFiles / 90100 ReadAllReportFiles (out buffer) -> u32 count: the kept reports in arrival order, each as
+ * {u32 record size, u32 payload size, u64 application id, payload, zero padding to 8} [unverified record encoding: switchbrew documents only the names];
+ * a report that does not fit ends the list. 50100 only the application's own reports, 90100 every report. */
+static void prepo_read_all(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint64_t cap = b ? b->size : 0, used = 0;
+    uint32_t n = 0;
+    uint8_t *out = cap ? calloc(1, (size_t)cap) : NULL;
+    pthread_mutex_lock(&prepo_lock);
+    for (PrepoKept *k = prepo_kept; k && out; k = k->next) {
+        if (c->cmd == 50100 && k->system) continue;
+        uint32_t rs = (uint32_t)((16 + (uint64_t)k->size + 7) & ~7ull);
+        if (used + rs > cap) break;
+        uint32_t hdr[2] = {rs, k->size};
+        memcpy(out + used, hdr, 8), memcpy(out + used + 8, &k->application_id, 8), memcpy(out + used + 16, k->data, k->size);
+        used += rs, n++;
+    }
+    pthread_mutex_unlock(&prepo_lock);
+    if (out && used) ipc_write_buf(c, b, out, used);
+    free(out);
+    IPC_OUT(c, n);
 }
 static void prepo_storage_usage(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -2556,6 +2608,7 @@ static void prepo_clear_storage(IpcObject *s, IpcCall *c) {
     (void)c;
     pthread_mutex_lock(&prepo_lock);
     prepo_clear(prepo_st());
+    prepo_kept_clear();
     pthread_mutex_unlock(&prepo_lock);
 }
 static void prepo_get_agreement(IpcObject *s, IpcCall *c) {
@@ -2580,7 +2633,7 @@ static void prepo_set_operation_mode(IpcObject *s, IpcCall *c) {
     pthread_mutex_unlock(&prepo_lock);
 }
 /* ids per switchbrew 'BCAT services' (nn::prepo::detail::ipc::IPrepoService): the SaveReport / SaveReportWithUser pairs were renumbered three times (10100 / 10101 up to
- * 5.1.0, 10102 / 10103 up to 9.2.0, 10104 / 10105 up to 20.5.0, 10106 / 10107 from 21.0.0); all are accepted and counted in the report storage, none is kept. */
+ * 5.1.0, 10102 / 10103 up to 9.2.0, 10104 / 10105 up to 20.5.0, 10106 / 10107 from 21.0.0); all are accepted, counted in the report storage and kept for ReadAll*ReportFiles. */
 static const IpcCmd prepo_cmds[] = {
     {10100, "SaveReportOld", prepo_save, IPC_IMPL},
     {10101, "SaveReportWithUserOld", prepo_save, IPC_IMPL},
@@ -2602,8 +2655,8 @@ static const IpcCmd prepo_cmds[] = {
     {30300, "GetStorageUsage", prepo_storage_usage, IPC_IMPL},
     {40100, "IsUserAgreementCheckEnabled", prepo_get_agreement, IPC_IMPL},
     {40101, "SetUserAgreementCheckEnabled", prepo_set_agreement, IPC_IMPL},
-    {50100, "ReadAllApplicationReportFiles", sysd_err_generic, IPC_STUB},
-    {90100, "ReadAllReportFiles", sysd_err_generic, IPC_STUB}, /* reports are not kept, so there is nothing to read back */
+    {50100, "ReadAllApplicationReportFiles", prepo_read_all, IPC_IMPL},
+    {90100, "ReadAllReportFiles", prepo_read_all, IPC_IMPL},
 };
 static IpcObject *prepo_open(void) { return IPC_OBJECT("prepo:u", prepo_cmds, NULL, NULL); }
 

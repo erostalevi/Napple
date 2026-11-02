@@ -77,7 +77,7 @@ int main(void) {
     CHECK(c.result == 0 && prepo_operation_mode == 2, "...a request without a mode changes nothing");
     const unsigned prepo_rows[] = {20102, 20200, 30100};
     for (unsigned i = 0; i < 3; i++) CHECK(svc_find(pr, prepo_rows[i])->status == IPC_IMPL, "prepo:u %u is real now", prepo_rows[i]);
-    CHECK(svc_find(pr, 50100)->status == IPC_STUB, "50100 ReadAllApplicationReportFiles stays a documented default (reports are not kept)");
+    CHECK(svc_find(pr, 50100)->status == IPC_IMPL, "50100 ReadAllApplicationReportFiles reads the kept reports back (r10; behaviour: test_svc_prepo_r10.c)");
     printf("{\"test\":\"svc_local_offline\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

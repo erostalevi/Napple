@@ -377,6 +377,13 @@ static void csg_set_vr_mode(IpcObject *s, IpcCall *c) {
     (void)s;
     if (IN_OK(c, 0, uint8_t)) AS()->vr_mode = IPC_IN(c, uint8_t, 0) != 0;
 }
+/* 52 SetLcdBacklighOffEnabled(bool): switches the LCD backlight off (true) or on again (false) through lbl, whose GetBacklightSwitchStatus then reads it
+ * (the Mac's own display is never darkened: lbl's state is self-consistent only, see lbl_core.h). */
+void lbl_app_backlight_off(int off);
+static void csg_set_lcd_backlight_off(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) lbl_app_backlight_off(IPC_IN(c, uint8_t, 0) != 0);
+}
 static void csg_set_cpu_boost(IpcObject *s, IpcCall *c) {
     (void)s;
     if (IN_OK(c, 0, uint32_t)) {
@@ -427,7 +434,7 @@ static const IpcCmd csg_cmds[] = {
     {13, "GetAcquiredSleepLockEvent", csg_get_sleep_lock_event, IPC_IMPL},
     {50, "IsVrModeEnabled", csg_is_vr_mode, IPC_IMPL},
     {51, "SetVrModeEnabled", csg_set_vr_mode, IPC_IMPL},
-    {52, "SetLcdBacklighOffEnabled", csg_noop, IPC_STUB}, /* kept: the host drives no backlight (the window cannot be darkened from here) */
+    {52, "SetLcdBacklighOffEnabled", csg_set_lcd_backlight_off, IPC_IMPL},
     {53, "BeginVrModeEx", csg_begin_vr_mode, IPC_IMPL},
     {54, "EndVrModeEx", csg_end_vr_mode, IPC_IMPL},
     {55, "IsInControllerFirmwareUpdateSection", am_out_false, IPC_IMPL},
