@@ -7,6 +7,7 @@
  * The application's own storages are those of applet.c (shared objects below). */
 #include "../ipc.h"
 #include "../frontend.h"
+#include "applet_core.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -63,7 +64,7 @@ static void sa_pop_in(IpcObject *s, IpcCall *c) {
         b[0] = 3;
         n = 0x100;
     }
-    if (!b) { LOG("applet-ae", "PopInData: no input storage %u", i); c->result = 0x680; return; }   /* applet 128 desc 3: no data */
+    if (!b) { LOG("applet-ae", "PopInData: no input storage %u", i); c->result = APPLET_R_NO_DATA_IN_CHANNEL; return; }   /* applet 128 desc 2: no data in channel */
     pthread_mutex_lock(&ae_lock); in_next = i + 1; pthread_mutex_unlock(&ae_lock);
     if (first) applet_push_message(1); /* what the system tells a library applet once it was started: ChangeIntoForeground (the SDK brings its UI up on it) */
     LOG("applet-ae", "PopInData: storage %u, %llu bytes (first words %08x %08x %08x %08x)", i, (unsigned long long)n,
@@ -86,7 +87,7 @@ static void sa_pop_interactive_in(IpcObject *s, IpcCall *c) {
     pthread_mutex_lock(&ae_lock); unsigned i = iin_next; pthread_mutex_unlock(&ae_lock);
     snprintf(p, sizeof p, "%s/iin%u.bin", d ? d : ".", i);
     uint8_t *b = d ? read_file(p, &n) : NULL;
-    if (!b) { c->result = 0x680; return; }
+    if (!b) { c->result = APPLET_R_NO_DATA_IN_CHANNEL; return; }
     pthread_mutex_lock(&ae_lock); iin_next = i + 1; pthread_mutex_unlock(&ae_lock);
     LOG("applet-ae", "PopInteractiveInData: storage %u, %llu bytes", i, (unsigned long long)n);
     ipc_out_object(c, applet_storage_make(b, n)); free(b);
@@ -132,7 +133,7 @@ static const IpcCmd pw_cmds[] = {{0, "GetLaunchReason", pw_launch_reason, IPC_IM
 /* ---- IAppletCommonFunctions ---------------------------------------------------------------------------------------------------------------- */
 /* Accepted silently: with no Home menu process the debug message has no receiver (see csg_noop in applet.c). */
 static void acf_noop(IpcObject *s, IpcCall *c) { (void)s; (void)c; }
-static void acf_no_data(IpcObject *s, IpcCall *c) { (void)s; c->result = 0x680; }
+static void acf_no_data(IpcObject *s, IpcCall *c) { (void)s; c->result = APPLET_R_NO_DATA_IN_CHANNEL; } /* TryPopFromAppletBoundChannel: an empty channel */
 static void acf_set_terminate_result(IpcObject *s, IpcCall *c) {
     (void)s; if (c->in_size >= 4) { terminate_result = IPC_IN(c, uint32_t, 0); LOG("applet-ae", "SetTerminateResult %#x", terminate_result); }
 }

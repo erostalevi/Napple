@@ -8,20 +8,44 @@
 
 enum { LIBAPPLET_ID_CONTROLLER = 0x0c, LIBAPPLET_ID_ERROR = 0x0e, LIBAPPLET_ID_PLAYER_SELECT = 0x10, LIBAPPLET_ID_SWKBD = 0x11 };
 
-/* Error applet. The guest pushes CommonArguments, then ErrorCommonHeader { u8 type; u8 jump_flag; ... } and an argument storage. It reads no
- * output: the applet terminates after the user dismisses it. Answer: dismissed (success), never jump to system settings. */
+/* Error applet. The guest pushes CommonArguments, then the error viewer's startup parameter (one storage; for some modes an extra storage follows:
+ * the ErrorContext (0x200), the ResultBacktrace (0x84) or the EULA data). Layout from MK8D v1376256's sdk (nn::err, +0x11a51c..+0x11b2e4):
+ *   +0 u8 type, +1 u8 jump flag (1: the applet itself may jump to System Settings; 0: ShowErrorWithoutJump), +5 u8 a ResultBacktrace follows,
+ *   +6 u8 the argument is an ErrorCode (else a Result), +7 u8 an ErrorContext follows.
+ *   type 0 normal (0x14):        ErrorCode {u32 category, u32 number} at +8 when +6 is set, else the Result at +0x10
+ *   type 1 system error (0x1018): ErrorCode at +8, language code at +0x10, dialog message (UTF-8, 0x800) at +0x18, full-screen message at +0x818
+ *   type 2 application error (0x1014): application error number u32 at +8, language code at +0xc, dialog message at +0x14, full-screen at +0x814
+ *   type 3 EULA / 8 system update EULA (0xc): region code u32 at +8 (type 8 pushes the EULA data, 0x20000, as a second storage)
+ *   type 4 (0xc): a Result at +8 (ShowError for module 142 descriptions 100..119)
+ *   type 5 error record (0x18): ErrorCode at +8 (from a Result: category 2000 + module, number = description), posix time at +0x10
+ *   type 6 recorded error (CreateErrorViewerStartupParamForRecordedError): no code read here
+ * Output: the SDK waits for the applet (nn::err +0x11b1c8: Start, Join, GetLibraryAppletExitReason), then TryPopFromOutChannel: when a storage is
+ * there it reads 2 bytes and returns byte 1, the jump destination that only ShowErrorWithoutJump hands back to the caller; when the channel is
+ * empty (PopOutData answers NoDataInChannel, 0x480) it returns 0, no jump. The headless answer is "dismissed, no jump": exit normally, no output. */
+enum {
+    APPLET_ERROR_TYPE_NORMAL = 0, APPLET_ERROR_TYPE_SYSTEM = 1, APPLET_ERROR_TYPE_APPLICATION = 2, APPLET_ERROR_TYPE_EULA = 3, APPLET_ERROR_TYPE_RESULT = 4,
+    APPLET_ERROR_TYPE_RECORD = 5, APPLET_ERROR_TYPE_RECORDED = 6, APPLET_ERROR_TYPE_SYSTEM_UPDATE_EULA = 8
+};
 typedef struct {
     int valid;
     uint8_t type, jump_flag;
-    uint32_t first_word, second_word;
+    uint32_t first_word, second_word; /* the code: ErrorCode category / number, the Result (first only), or the application error number */
     int has_word, has_word2;
+    int is_result, is_app_code;       /* first_word is a Result / an application error number */
+    int has_context, has_backtrace;   /* an ErrorContext / ResultBacktrace storage follows */
+    uint32_t region;                  /* EULA types */
+    char message[256];                /* system / application error: the dialog message (UTF-8), empty otherwise */
 } AppletErrorInfo;
+/* `header` is the startup parameter storage. `arg` is the storage after it, or NULL: a startup parameter shorter than its type's layout (an older
+ * caller) takes the code from it (an ErrorCode, two words, for a system error; else a Result, one word). */
 void applet_error_parse(const uint8_t *header, size_t header_size, const uint8_t *arg, size_t arg_size, AppletErrorInfo *out);
 /* One log line describing the request (the error code a game hits is the most useful thing a headless run can report). */
 void applet_error_describe(const AppletErrorInfo *e, char *buf, size_t cap);
+/* Name of an error type ("normal", "system", ...; "type N" for others). */
+const char *applet_error_type_name(uint8_t type);
 
-/* Error code text for the dialog: type 1 (error code) shows the first two argument words as "CCCC-NNNN"; any other type shows the first word as a Result
- * ("2MMM-DDDD": module = r & 0x1ff, description = r >> 9 & 0x1fff). [unverified against a title] Empty when the arguments are missing. */
+/* Error code text for the dialog: an ErrorCode as "CCCC-NNNN", a Result as "2MMM-DDDD" (module = r & 0x1ff, description = r >> 9 & 0x1fff),
+ * an application error number as "%04u". Empty when the parameter carries no code. */
 void applet_error_code_text(const AppletErrorInfo *e, char *buf, size_t cap);
 
 /* Software keyboard answer. Config (KeyboardConfig 0x4C8): +0 type (0 normal, 1 numpad, 2 qwerty), +0x3AC max, +0x3B0 min, +0x3B4 password. */

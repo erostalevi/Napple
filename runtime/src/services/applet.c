@@ -18,7 +18,7 @@
 #include <unistd.h>
 
 enum { MSG_EXIT_REQUESTED = 4, MSG_FOCUS_CHANGED = 15, MSG_RESUME = 16, MSG_OPERATION_MODE_CHANGED = 30, MSG_PERFORMANCE_MODE_CHANGED = 31 };
-#define R_NO_MESSAGES 0x680u /* applet module 128 desc 3 */
+#define R_NO_MESSAGES APPLET_R_NO_MESSAGES /* applet module 128 desc 3 (applet_core.h) */
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static uint32_t queue[32];
@@ -192,7 +192,7 @@ static void am_unavailable(IpcObject *s, IpcCall *c) {
 /* A channel that is empty (friend invitation / notification storage): the same "nothing to pop" result as PopOutData on an empty queue. */
 static void am_channel_empty(IpcObject *s, IpcCall *c) {
     (void)s;
-    c->result = 0x680;
+    c->result = APPLET_R_NO_DATA_IN_CHANNEL;
 }
 static void csg_begin_vr_mode(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -1085,18 +1085,20 @@ static void libapplet_run_controller(LibApplet *a) {
         ans.players, ans.connected, ans.min, ans.max, ans.single_mode ? ", single mode" : "", ans.short_of_min ? ", fewer pads than asked" : "",
         ans.selected_id);
 }
-/* Error applet (id 0xe, libnx errorCodeShow / errorResultShow / the SDK's error viewer): nothing to read back; the guest waits for it to end. The
- * headless answer is "the user dismissed it" and the request is logged and noted in the run summary, since a game that shows an error screen
- * is the most important thing for an unattended run to report. A jump-to-settings request is not followed. */
+/* Error applet (id 0xe, nn::err::Show*, libnx errorCodeShow / errorResultShow). Input: CommonArguments, then the startup parameter (applet_lib_core.h,
+ * every mode), sometimes an ErrorContext / ResultBacktrace / EULA storage after it. The headless answer is "the user dismissed it": the applet exits
+ * normally (GetResult 0, exit reason normal) and pushes no output, so the SDK's TryPopFromOutChannel finds the channel empty (NoDataInChannel) and
+ * reports no jump destination; a jump-to-settings request is not followed. The request is logged and noted in the run summary, since a game that
+ * shows an error screen is the most important thing for an unattended run to report. */
 static void libapplet_run_error(LibApplet *a) {
     const uint8_t *hdr = NULL, *arg = NULL;
     size_t hn = 0, an = 0;
-    for (unsigned i = 0; i < a->nin; i++) {
+    for (unsigned i = 1; i < a->nin; i++) { /* storage 0 is CommonArguments */
         if (a->in[i].gaddr || !a->in[i].data) continue;
-        if (a->in[i].size <= 0x20 && !hdr && i > 0) {
+        if (!hdr) {
             hdr = a->in[i].data;
             hn = a->in[i].size;
-        } else if (a->in[i].size > 0x20 && !arg) {
+        } else if (!arg) {
             arg = a->in[i].data;
             an = a->in[i].size;
         }
@@ -1550,7 +1552,7 @@ static void la_start(IpcObject *s, IpcCall *c) {
     else { /* unknown library applet: the guest sees it terminate without output (as if the user cancelled), instead of the process dying */
         LOG("applet", "library applet %#x is not implemented: reporting it as cancelled", a->applet_id);
         a->unsupported = 1;
-        a->result = 0x1480;
+        a->result = APPLET_R_LIBRARY_APPLET_TERMINATED; /* exit reason Canceled (applet_core.h) */
     }
     la_finish(a);
 }
@@ -1659,7 +1661,7 @@ static void la_push_interactive(IpcObject *s, IpcCall *c) {
 static void la_pop_out(IpcObject *s, IpcCall *c) {
     LibApplet *a = s->state;
     if (a->out_head >= a->nout) {
-        c->result = 0x680;
+        c->result = APPLET_R_NO_DATA_IN_CHANNEL;
         return;
     }
     Storage *src = a->outq[a->out_head++];
@@ -1672,7 +1674,7 @@ static void la_pop_out(IpcObject *s, IpcCall *c) {
 static void la_pop_interactive_out(IpcObject *s, IpcCall *c) {
     LibApplet *a = s->state;
     if (a->iout_head >= a->niout) {
-        c->result = 0x680;
+        c->result = APPLET_R_NO_DATA_IN_CHANNEL;
         return;
     }
     Storage *src = a->ioutq[a->iout_head++];
@@ -1828,7 +1830,7 @@ static void af_pop_launch_parameter(IpcObject *s, IpcCall *c) {
         memcpy(d->data + 4, &sel, 4);
         memcpy(d->data + 8, g_user_id, 16);
         ipc_out_object(c, st);
-    } else c->result = 0x480;
+    } else c->result = APPLET_R_NO_DATA_IN_CHANNEL;
 }
 /* EnsureSaveData(uid): the reply is the extra size the console needs to create the save (0 = it exists or fits). The host creates the save data on the first mount, so the
  * answer is always 0. */

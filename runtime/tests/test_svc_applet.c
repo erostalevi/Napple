@@ -74,8 +74,8 @@ int main(void) {
     /* am-depth-applets: switchbrew numbering and the new application-reachable rows */
     svc_call(af, 120, NULL, 0, &c); CHECK(c.result == 0x1480, "ExecuteProgram (120): unavailable, not an event");
     svc_call(af, 110, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 0, "QueryApplicationPlayStatistics (110): no entries");
-    svc_call(af, 141, NULL, 0, &c); CHECK(c.result == 0x680, "TryPopFromFriendInvitationStorageChannel: empty");
-    svc_call(af, 151, NULL, 0, &c); CHECK(c.result == 0x680, "TryPopFromNotificationStorageChannel: empty");
+    svc_call(af, 141, NULL, 0, &c); CHECK(c.result == 0x480, "TryPopFromFriendInvitationStorageChannel: empty (NoDataInChannel)");
+    svc_call(af, 151, NULL, 0, &c); CHECK(c.result == 0x480, "TryPopFromNotificationStorageChannel: empty (NoDataInChannel)");
     svc_call(af, 150, NULL, 0, &c); CHECK(c.result == 0 && c.nout_copy == 1 && !event_is_signaled(c.out_copy[0]), "GetNotificationStorageChannelEvent: a quiet event");
     svc_call(af, 28, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int64_t, 0) == (4ll << 30), "GetSaveDataSizeMax: 4 GiB");
     svc_call(af, 27, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 8) == 0, "CreateCacheStorage: nothing more required");
