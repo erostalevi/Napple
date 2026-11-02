@@ -207,6 +207,54 @@ static void aoc_is_mounted(IpcObject *s, IpcCall *c) {
     pthread_mutex_unlock(&g_aoc_mu);
     IPC_OUT(c, v);
 }
+/* 100 CreateEcPurchasedEventManager / 101 CreatePermanentEcPurchasedEventManager -> IPurchaseEventManager (switchbrew 'NS services', layout facts only):
+ *   0 SetDefaultDeliveryTarget(u64 pid placeholder + pid, type-5 buffer)  1 SetDeliveryTarget(u64 application id, type-5 buffer)
+ *   2 GetPurchasedEventReadableHandle -> copy handle  3 PopPurchasedProductInfo -> PurchasedProductInfo  4 PopPurchasedProductInfoWithUid(Uid) -> the same
+ * Purchases arrive from the eShop, which an offline console never reaches: the delivery targets are kept (per manager), the purchased event never fires and
+ * popping finds nothing, with the "no purchased product info" result the SDK checks for (napple's reading of the result, unverified). */
+#define R_AOC_NO_PURCHASED_PRODUCT HZ_RESULT(166, 400) /* [unverified] module 166 (NIM shop), description 400 */
+#define AOC_TARGET_MAX 0x100u
+typedef struct {
+    uint64_t target_app;
+    uint8_t target[AOC_TARGET_MAX];
+    uint32_t target_size, has_default, has_target, permanent, pops;
+} AocPurchaseMgr;
+static void purchase_set_target(IpcObject *s, IpcCall *c) {
+    AocPurchaseMgr *m = s->state;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    uint32_t n = p ? (uint32_t)(b->size < AOC_TARGET_MAX ? b->size : AOC_TARGET_MAX) : 0;
+    if (n) memcpy(m->target, p, n);
+    m->target_size = n;
+    if (c->cmd == 0) m->has_default = 1;
+    else {
+        m->has_target = 1;
+        m->target_app = c->in_size >= 8 ? IPC_IN(c, uint64_t, 0) : 0;
+    }
+}
+static void purchase_pop(IpcObject *s, IpcCall *c) {
+    AocPurchaseMgr *m = s->state;
+    m->pops++;
+    c->result = R_AOC_NO_PURCHASED_PRODUCT;
+}
+static const IpcCmd purchase_cmds[] = {
+    {0, "SetDefaultDeliveryTarget", purchase_set_target, IPC_IMPL},
+    {1, "SetDeliveryTarget", purchase_set_target, IPC_IMPL},
+    {2, "GetPurchasedEventReadableHandle", event, IPC_IMPL},
+    {3, "PopPurchasedProductInfo", purchase_pop, IPC_IMPL},
+    {4, "PopPurchasedProductInfoWithUid", purchase_pop, IPC_IMPL},
+};
+static void purchase_destroy(IpcObject *o) { free(o->state); }
+static void aoc_create_purchase_mgr(IpcObject *s, IpcCall *c) {
+    (void)s;
+    AocPurchaseMgr *m = calloc(1, sizeof *m);
+    if (!m) {
+        c->result = IPC_R_UNKNOWN_COMMAND;
+        return;
+    }
+    m->permanent = c->cmd == 101;
+    ipc_out_object(c, IPC_OBJECT("IPurchaseEventManager", purchase_cmds, m, purchase_destroy));
+}
 static const IpcCmd aoc_cmds[] = {
     {0, "CountAddOnContentByApplicationId", aoc_count_app, IPC_IMPL},
     {1, "ListAddOnContentByApplicationId", aoc_list_app, IPC_IMPL},
@@ -224,8 +272,8 @@ static const IpcCmd aoc_cmds[] = {
     {12, "NotifyUnmountAddOnContent", aoc_notify_unmount, IPC_IMPL},
     {13, "IsAddOnContentMountedForDebug", aoc_is_mounted, IPC_IMPL},
         {50, "CheckAddOnContentMountStatus", noop, IPC_IMPL},
-    {100, "CreateEcPurchasedEventManager", sysd_err_generic, IPC_STUB},
-    {101, "CreatePermanentEcPurchasedEventManager", sysd_err_generic, IPC_STUB},
+    {100, "CreateEcPurchasedEventManager", aoc_create_purchase_mgr, IPC_IMPL},
+    {101, "CreatePermanentEcPurchasedEventManager", aoc_create_purchase_mgr, IPC_IMPL},
     {110, "CreateContentsServiceManager", sysd_err_generic, IPC_STUB},
     {200, "SetRequiredAddOnContentsOnContentsAvailabilityTransition", aoc_set_required, IPC_IMPL},
     {300, "SetupHostAddOnContent", sysd_ok, IPC_STUB},
