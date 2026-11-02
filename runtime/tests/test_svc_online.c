@@ -46,16 +46,16 @@ int main(void) {
     /* ---- the offline answers (NullProvider) of the calls the titles make, pinned ---- */
     IpcCall c; IpcObject *b0 = bsd_open(); bsdg_reset(bsd_g()); online_null_reset();
     CHECK(BS(b0, 2, 2, 1, 0)->out_size == 8, "Socket -> 8 bytes"); IpcCall *r = BS(b0, 2, 2, 1, 0); CHECK(ri(r, 0) == 1 && ri(r, 1) == 0, "second socket is fd 1");
-    r = BS(b0, 14, 0, 0, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_ENETDOWN, "Connect: ENETDOWN");
+    r = BS(b0, 14, 0, 0, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == bsd_errno_to_guest(HZ_ENETDOWN), "Connect: ENETDOWN");
     r = BS(b0, 6, 0, 0, 0); CHECK(ri(r, 0) == 0 && ri(r, 1) == 0, "Poll without buffers: timeout");
     r = BS(b0, 5, 0, 0, 0); CHECK(ri(r, 0) == 0 && ri(r, 1) == 0, "Select without sets: timeout");
     r = BS(b0, 17, 0, 1, 4); CHECK(ri(r, 0) == 0, "GetSockOpt: ok"); r = BS(b0, 21, 0, 1, 4); CHECK(ri(r, 0) == 0, "SetSockOpt: ok");
     r = BS(b0, 20, 0, 4, 4); CHECK(ri(r, 0) == 0, "Fcntl(F_SETFL): ok"); r = BS(b0, 20, 0, 3, 0); CHECK(ri(r, 0) == 4, "Fcntl(F_GETFL) returns O_NONBLOCK once set");
     r = BS(b0, 27, 0, 0, 0); CHECK(ri(r, 0) == 2 && ri(r, 1) == 0, "DuplicateSocket: the lowest free descriptor (0 and 1 are open)");
-    r = BS(b0, 27, 77, 0, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_EBADF, "DuplicateSocket of an unknown descriptor: EBADF");
+    r = BS(b0, 27, 77, 0, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == bsd_errno_to_guest(HZ_EBADF), "DuplicateSocket of an unknown descriptor: EBADF");
     r = BS(b0, 20, 2, 3, 0); CHECK(ri(r, 0) == 4, "the duplicate shares the non-blocking flag");
     r = BS(b0, 26, 0, 0, 0); CHECK(ri(r, 0) == 0, "Close the original"); r = BS(b0, 20, 2, 3, 0); CHECK(ri(r, 0) == 4, "the duplicate outlives the original");
-    r = BS(b0, 26, 2, 0, 0); CHECK(ri(r, 0) == 0, "Close the duplicate"); r = BS(b0, 26, 0, 0, 0); CHECK(ri(r, 1) == HZ_EBADF, "Close again: EBADF");
+    r = BS(b0, 26, 2, 0, 0); CHECK(ri(r, 0) == 0, "Close the duplicate"); r = BS(b0, 26, 0, 0, 0); CHECK(ri(r, 1) == bsd_errno_to_guest(HZ_EBADF), "Close again: EBADF");
     bsdg_reset(bsd_g());
     { /* nifm */
         IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0];
@@ -93,9 +93,9 @@ int main(void) {
     uint8_t laddr[16]; sin_addr(laddr, 7000, 127, 0, 0, 1);
     r = bs(bsd, 13, srv, 0, 0, laddr, 16, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 0) == 0, "Bind");
     r = BS(bsd, 18, srv, 4, 0); CHECK(ri(r, 0) == 0, "Listen");
-    r = bs(bsd, 12, srv, 0, 0, NULL, 0, NULL, 0, enc, sizeof enc, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_EAGAIN, "Accept with nobody connecting: EAGAIN");
+    r = bs(bsd, 12, srv, 0, 0, NULL, 0, NULL, 0, enc, sizeof enc, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == bsd_errno_to_guest(HZ_EAGAIN), "Accept with nobody connecting: EAGAIN");
     uint8_t bad_addr[16]; sin_addr(bad_addr, 9999, 127, 0, 0, 1);
-    r = bs(bsd, 14, cli, 0, 0, bad_addr, 16, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_ECONNREFUSED, "Connect to a port nobody listens on: ECONNREFUSED");
+    r = bs(bsd, 14, cli, 0, 0, bad_addr, 16, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == bsd_errno_to_guest(HZ_ECONNREFUSED), "Connect to a port nobody listens on: ECONNREFUSED");
     r = bs(bsd, 14, cli, 0, 0, laddr, 16, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 0) == 0 && ri(r, 1) == 0, "Connect to the listener");
     { uint32_t pf[2] = {(uint32_t)srv, 0}; ((int16_t *)&pf[1])[0] = ONLINE_POLLIN; uint8_t out[8];
       uint32_t nfds = 1; int32_t args[2]; args[0] = (int32_t)nfds; args[1] = 0; Call k; memset(&k, 0, sizeof k); memcpy(k.in, args, 8); k.c.in = (const uint8_t *)k.in; k.c.in_size = 8;
@@ -108,7 +108,7 @@ int main(void) {
     char rx[64] = {0}; r = bs(bsd, 8, conn, 0, 0, NULL, 0, NULL, 0, rx, sizeof rx, NULL, 0); CHECK(ri(r, 0) == (int)sizeof msg && !strcmp(rx, msg), "Recv returns the bytes sent");
     r = bs(bsd, 10, conn, 0, 0, rx, (uint64_t)strlen(rx) + 1, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r, 0) == (int)sizeof msg, "Echo back");
     char rx2[64] = {0}; r = bs(bsd, 9, cli, 0, 0, NULL, 0, NULL, 0, rx2, sizeof rx2, peer, sizeof peer); CHECK(ri(r, 0) == (int)sizeof msg && !strcmp(rx2, msg), "RecvFrom gets the echo");
-    r = bs(bsd, 8, cli, 0, 0, NULL, 0, NULL, 0, rx2, sizeof rx2, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_EAGAIN, "Recv with no data: EAGAIN");
+    r = bs(bsd, 8, cli, 0, 0, NULL, 0, NULL, 0, rx2, sizeof rx2, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == bsd_errno_to_guest(HZ_EAGAIN), "Recv with no data: EAGAIN");
     r = bs(bsd, 16, srv, 0, 0, NULL, 0, NULL, 0, enc, sizeof enc, NULL, 0); CHECK(ri(r, 0) == 0 && ri(r, 2) == 16 && enc[2] == 0x1b && enc[3] == 0x58, "GetSockName returns the bound port 7000");
     r = bs(bsd, 15, cli, 0, 0, NULL, 0, NULL, 0, enc, sizeof enc, NULL, 0); CHECK(ri(r, 0) == 0 && enc[2] == 0x1b, "GetPeerName on the client");
     r = bs(bsd, 17, cli, 0xffff, 0x1007, NULL, 0, NULL, 0, rx2, 4, NULL, 0); CHECK(ri(r, 0) == 0 && ri(r, 2) == 4, "GetSockOpt(SO_ERROR) returns 4 bytes");
@@ -121,9 +121,9 @@ int main(void) {
       svc_call_c(bsd, 5, &k.c); CHECK(ri(&k.c, 0) == 1 && ri(&k.c, 1) == 0 && (owr[0] & (1 << cli)) && !(ord[0] & (1 << conn)), "Select: client writable, accepted socket has nothing to read"); }
     r = BS(bsd, 26, cli, 0, 0); CHECK(ri(r, 0) == 0, "Close the client");
     r = bs(bsd, 8, conn, 0, 0, NULL, 0, NULL, 0, rx2, sizeof rx2, NULL, 0); CHECK(ri(r, 0) == 0 && ri(r, 1) == 0, "Recv after the peer closed: end of stream (0)");
-    r = BS(bsd, 26, cli, 0, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_EBADF, "Close of a closed descriptor: EBADF");
-    r = BS(bsd, 14, 99, 0, 0); CHECK(ri(r, 1) == HZ_EBADF, "unknown descriptor: EBADF");
-    svc_call(bsd, 23, NULL, 0, &c); CHECK(c.result == 0, "ShutdownAllSockets"); r = BS(bsd, 26, srv, 0, 0); CHECK(ri(r, 1) == HZ_EBADF && !lb.s[0].used, "everything closed through the provider");
+    r = BS(bsd, 26, cli, 0, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == bsd_errno_to_guest(HZ_EBADF), "Close of a closed descriptor: EBADF");
+    r = BS(bsd, 14, 99, 0, 0); CHECK(ri(r, 1) == bsd_errno_to_guest(HZ_EBADF), "unknown descriptor: EBADF");
+    svc_call(bsd, 23, NULL, 0, &c); CHECK(c.result == 0, "ShutdownAllSockets"); r = BS(bsd, 26, srv, 0, 0); CHECK(ri(r, 1) == bsd_errno_to_guest(HZ_EBADF) && !lb.s[0].used, "everything closed through the provider");
     { int last = 0, err = 0; BsdGuest *g = bsd_g(); for (int i = 0; i < 40; i++) { int fd = bsdg_socket(g, 2, 1, 6, &err); if (fd < 0) break; last = i + 1; }
       CHECK(last == LB_MAX && err == HZ_EMFILE, "provider socket limit surfaces as EMFILE"); bsdg_reset(g); }
 
@@ -157,7 +157,7 @@ int main(void) {
       svc_call(rq, 2, NULL, 0, &c); uint32_t ev0 = c.out_copy[0]; CHECK(!event_is_signaled(ev0), "request event clear before Submit");
       svc_call(rq, 4, NULL, 0, &c); CHECK(c.result == 0 && lb.net_connects == 1 && event_is_signaled(ev0), "Submit asks the provider to connect and signals");
       svc_call(rq, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == NIFM_STATE_ACCEPTED, "request is Accepted"); svc_call(rq, 1, NULL, 0, &c); CHECK(c.result == 0, "GetResult: success");
-      svc_call(gen, 21, NULL, 0, &c); CHECK(c.out[0] == 1, "IsAnyInternetRequestAccepted"); svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0x0a000002, "GetCurrentIpAddress from the provider");
+      svc_call(gen, 21, NULL, 0, &c); CHECK(c.out[0] == 1, "IsAnyInternetRequestAccepted"); svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == htonl(0x0a000002), "GetCurrentIpAddress from the provider (an in_addr, network order)");
       svc_call(gen, 18, NULL, 0, &c); CHECK(c.out_size == 4 && c.out[0] == 1 && c.out[1] == 3 && c.out[2] == 4, "connection status: wireless, strength 3, connected");
       svc_call(gen, 17, NULL, 0, &c); CHECK(c.out[0] == 1, "wireless communication enabled");
       svc_call(rq, 3, NULL, 0, &c); CHECK(lb.net_releases == 1, "Cancel releases the connection"); svc_call(gen, 21, NULL, 0, &c); CHECK(c.out[0] == 0, "no accepted request after Cancel");
@@ -186,8 +186,8 @@ int main(void) {
       svc_call(fs, 20100, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 2, "friend count from the provider");
       uint64_t ids[4] = {0}; uint32_t off = 0; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, ids, sizeof ids); svc_call_c(fs, 10100, &c);
       CHECK(SVC_OUT(&c, uint32_t, 0) == 2 && ids[0] == 0x1000 && ids[1] == 0x1001, "GetFriendListIds");
-      static uint8_t recs[2 * 0x300]; off = 1; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, recs, sizeof recs); svc_call_c(fs, 10101, &c);
-      CHECK(SVC_OUT(&c, uint32_t, 0) == 1 && !strcmp((char *)recs + 0x40, "friend1"), "GetFriendList honours the offset");
+      static uint8_t recs[2 * 0x200]; off = 1; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&off; c.in_size = 4; svc_set_out_buf(&c, recs, sizeof recs); svc_call_c(fs, 10101, &c);
+      CHECK(SVC_OUT(&c, uint32_t, 0) == 1 && !strcmp((char *)recs + 0x18, "friend1") && recs[0x128] == 1, "GetFriendList honours the offset (FriendImpl: nickname at 0x18, valid)");
       char pres[] = "presence"; memset(&c, 0, sizeof c); svc_set_in_buf(&c, pres, sizeof pres); svc_call_c(fs, 10610, &c); CHECK(lb.presence_updates == 1, "UpdateUserPresence reaches the provider");
       IpcObject *nd = nsd_open(); char in[] = "x.example", out[64] = {0}; memset(&c, 0, sizeof c); svc_set_in_buf(&c, in, sizeof in); svc_set_out_buf(&c, out, sizeof out); svc_call_c(nd, 21, &c);
       CHECK(!strcmp(out, "mapped.x.example"), "nsd Resolve goes through the provider");
@@ -218,7 +218,7 @@ int main(void) {
           snprintf(path, sizeof path, "%s/good.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset();
           const OnlineProvider *p = online_provider(); CHECK(p != online_null_provider() && !strcmp(p->name, "plugin-test") && online_has(p, ONLINE_CAP_NETWORK), "a provider module is loaded from NAPPLE_ONLINE_PROVIDER");
           OnlineNetInfo ni; CHECK(p->net_info(p->ctx, &ni) == 0 && ni.connected && ni.ip == 0x01020304, "and its entry points are called");
-          IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0]; svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0x01020304, "nifm reports the module's address");
+          IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0]; svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == htonl(0x01020304), "nifm reports the module's address (network order)");
           CHECK(ONLINE_FN(p, sock_open) == NULL, "entry points the module leaves NULL stay NULL");
           snprintf(path, sizeof path, "%s/badabi.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset(); CHECK(online_provider() == online_null_provider(), "a module with the wrong ABI version is rejected: NullProvider");
           snprintf(path, sizeof path, "%s/nosym.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset(); CHECK(online_provider() == online_null_provider(), "a module without the entry symbol is rejected");
@@ -262,8 +262,8 @@ int main(void) {
         memcpy(rm + 0x10, &rp, 8); memcpy(rm + 0x18, &rn, 4);
         r2 = bs(bs2, 29, s3, 1, 0, NULL, 0, NULL, 0, rm, sizeof rm, NULL, 0); CHECK(ri(r2, 0) == 1, "RecvMMsg returns one message");
         uint32_t rl; memcpy(&rl, rm + 0x30, 4); CHECK(rl == 8 && !memcmp(q1, "123", 3) && !strcmp(q2, "45678"), "RecvMMsg scatters across the iovecs");
-        r2 = bs(bs2, 29, s3, 1, 0, NULL, 0, NULL, 0, rm, sizeof rm, NULL, 0); CHECK(ri(r2, 0) == -1 && ri(r2, 1) == HZ_EAGAIN, "RecvMMsg with nothing queued: EAGAIN");
-        r2 = bs(bs2, 30, 99, 1, 0, mm, sizeof mm, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r2, 0) == -1 && ri(r2, 1) == HZ_EBADF, "SendMMsg on an unknown descriptor: EBADF");
+        r2 = bs(bs2, 29, s3, 1, 0, NULL, 0, NULL, 0, rm, sizeof rm, NULL, 0); CHECK(ri(r2, 0) == -1 && ri(r2, 1) == bsd_errno_to_guest(HZ_EAGAIN), "RecvMMsg with nothing queued: EAGAIN");
+        r2 = bs(bs2, 30, 99, 1, 0, mm, sizeof mm, NULL, 0, NULL, 0, NULL, 0); CHECK(ri(r2, 0) == -1 && ri(r2, 1) == bsd_errno_to_guest(HZ_EBADF), "SendMMsg on an unknown descriptor: EBADF");
         bsdg_reset(bsd_g()); online_provider_install(NULL);
     }
     printf("{\"test\":\"svc_online\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);

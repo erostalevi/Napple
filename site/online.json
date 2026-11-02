@@ -1,0 +1,238 @@
+{
+ "backends": {
+  "nex": "NEX, the game-server protocol of most first-party games; served by napple-online",
+  "none": "no online features",
+  "npln": "NPLN, the newer game-server protocol",
+  "own-servers": "the publisher's own servers, not run by Napple"
+ },
+ "generator": "tools/support/gen_online.py",
+ "last_checked": "2026-11-02",
+ "modes": [
+  {
+   "about": "The game's LAN mode, its broadcast traffic carried between players by a Napple room (napple-room).",
+   "key": "lan_play",
+   "label": "LAN Play",
+   "short": "LAN"
+  },
+  {
+   "about": "The game's local wireless play (LDN), emulated over the network through a Napple room.",
+   "key": "local_wireless",
+   "label": "Local wireless",
+   "short": "Local"
+  },
+  {
+   "about": "Logging in to napple-online, reaching the game's online menu and being matched with other players into one session (gathering).",
+   "key": "online_matchmaking",
+   "label": "Online matchmaking",
+   "short": "Matchmaking"
+  },
+  {
+   "about": "Actually playing the matched session together: the race, battle or visit, with players talking peer to peer.",
+   "key": "online_race_or_match",
+   "label": "Online race / match",
+   "short": "Race / match"
+  },
+  {
+   "about": "Friend list, presence and joining friends, between Napple accounts.",
+   "key": "friends",
+   "label": "Friends",
+   "short": "Friends"
+  },
+  {
+   "about": "Leaderboards uploaded to and read from the Napple server.",
+   "key": "rankings",
+   "label": "Rankings",
+   "short": "Rankings"
+  },
+  {
+   "about": "Shared user content stored on the Napple server: ghosts, designs, levels and similar.",
+   "key": "datastore",
+   "label": "DataStore",
+   "short": "DataStore"
+  }
+ ],
+ "schema": 1,
+ "servers": "pretend.napple.lat",
+ "source": "compat/online.json",
+ "statuses": {
+  "broken": "tried and fails; the note says how",
+  "partial": "parts work; the note says what is missing",
+  "unsupported": "the game has no such mode",
+  "untested": "the game has this mode, nobody has tried it on Napple yet",
+  "works": "verified working on Napple"
+ },
+ "titles": [
+  {
+   "backend": "nex",
+   "modes": {
+    "datastore": {
+     "checked": "2026-11-02",
+     "note": "Dream Addresses and shared designs; not tried yet.",
+     "status": "untested"
+    },
+    "friends": {
+     "checked": "2026-11-02",
+     "note": "Best friends and friend island visits; not tried yet.",
+     "status": "untested"
+    },
+    "lan_play": {
+     "checked": "2026-11-02",
+     "note": "Local play is wireless; a separate LAN mode is not confirmed.",
+     "status": "untested"
+    },
+    "local_wireless": {
+     "checked": "2026-11-02",
+     "note": "Local play (island visits over LDN) through a room; not tried yet.",
+     "status": "untested"
+    },
+    "online_matchmaking": {
+     "checked": "2026-11-02",
+     "note": "Online island visits (Dodo Code and friends' islands); not tried yet.",
+     "status": "untested"
+    },
+    "online_race_or_match": {
+     "checked": "2026-11-02",
+     "note": "The online island visit session itself; not tried yet.",
+     "status": "untested"
+    },
+    "rankings": {
+     "checked": "2026-11-02",
+     "note": "The game has no rankings.",
+     "status": "unsupported"
+    }
+   },
+   "name": "Animal Crossing: New Horizons",
+   "short": "ACNH",
+   "title_id": "01006F8002326000"
+  },
+  {
+   "backend": "none",
+   "modes": {
+    "datastore": {
+     "checked": "2026-11-02",
+     "note": "The game has no online features.",
+     "status": "unsupported"
+    },
+    "friends": {
+     "checked": "2026-11-02",
+     "note": "The game has no online features.",
+     "status": "unsupported"
+    },
+    "lan_play": {
+     "checked": "2026-11-02",
+     "note": "The game has no LAN mode.",
+     "status": "unsupported"
+    },
+    "local_wireless": {
+     "checked": "2026-11-02",
+     "note": "The game has no local wireless mode.",
+     "status": "unsupported"
+    },
+    "online_matchmaking": {
+     "checked": "2026-11-02",
+     "note": "The game has no online play.",
+     "status": "unsupported"
+    },
+    "online_race_or_match": {
+     "checked": "2026-11-02",
+     "note": "The game has no online play.",
+     "status": "unsupported"
+    },
+    "rankings": {
+     "checked": "2026-11-02",
+     "note": "The game has no online features.",
+     "status": "unsupported"
+    }
+   },
+   "name": "Link's Awakening",
+   "short": "LAS",
+   "title_id": "01006BB00C6F0000"
+  },
+  {
+   "backend": "nex",
+   "modes": {
+    "datastore": {
+     "checked": "2026-11-02",
+     "note": "Ghost upload and download; not tried yet.",
+     "status": "untested"
+    },
+    "friends": {
+     "checked": "2026-11-02",
+     "note": "A friend shows as joinable; the friend list on the Friends menu is still empty.",
+     "status": "partial"
+    },
+    "lan_play": {
+     "checked": "2026-11-02",
+     "note": "LAN Play through a local napple-room: two instances verified in the same room (one creates it, the other lists and joins it; both reach its character select).",
+     "status": "works"
+    },
+    "local_wireless": {
+     "checked": "2026-11-02",
+     "note": "Local wireless (LDN) through a room: the station crashes right after joining.",
+     "status": "broken"
+    },
+    "online_matchmaking": {
+     "checked": "2026-11-02",
+     "note": "Through a local napple-online: login, the online menu, and two instances matched into one gathering (verified).",
+     "status": "works"
+    },
+    "online_race_or_match": {
+     "checked": "2026-11-02",
+     "note": "Open: the host reaches the course vote; the joiner completes NAT traversal with the host, then ends with 2618-0502.",
+     "status": "partial"
+    },
+    "rankings": {
+     "checked": "2026-11-02",
+     "note": "Time trial rankings; not tried yet.",
+     "status": "untested"
+    }
+   },
+   "name": "Mario Kart 8 Deluxe",
+   "short": "MK8D",
+   "title_id": "0100152000022000"
+  },
+  {
+   "backend": "nex",
+   "modes": {
+    "datastore": {
+     "checked": "2026-11-02",
+     "note": "Luigi's Balloon World balloons (upload and find); not tried yet.",
+     "status": "untested"
+    },
+    "friends": {
+     "checked": "2026-11-02",
+     "note": "The game has no friend features.",
+     "status": "unsupported"
+    },
+    "lan_play": {
+     "checked": "2026-11-02",
+     "note": "The game has no LAN mode.",
+     "status": "unsupported"
+    },
+    "local_wireless": {
+     "checked": "2026-11-02",
+     "note": "The game has no local wireless mode (two-player is on one console).",
+     "status": "unsupported"
+    },
+    "online_matchmaking": {
+     "checked": "2026-11-02",
+     "note": "The game has no online multiplayer.",
+     "status": "unsupported"
+    },
+    "online_race_or_match": {
+     "checked": "2026-11-02",
+     "note": "The game has no online multiplayer.",
+     "status": "unsupported"
+    },
+    "rankings": {
+     "checked": "2026-11-02",
+     "note": "Luigi's Balloon World scores; not tried yet.",
+     "status": "untested"
+    }
+   },
+   "name": "Super Mario Odyssey",
+   "short": "SMO",
+   "title_id": "0100000000010000"
+  }
+ ]
+}

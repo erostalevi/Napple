@@ -150,7 +150,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 - [2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
 - [2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
 
-## Unattended rounds (2026-10-27-b7 to 2026-11-02-r7)
+## Unattended rounds (2026-10-27-b7 to 2026-11-02-r10)
 
 ### Batch 2026-10-27-b7 (notes not listed above)
 | Note | Summary |
@@ -212,3 +212,26 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | Note | Summary |
 |---|---|
 | [2026-11-02-claude-napple-infra-2026-11-02-r7](2026-11-02-claude-napple-infra-2026-11-02-r7.md) | AWS auto-deploy of the game servers to `pretend.napple.lat` (OpenTofu, Docker + Caddy, a workflow that skips without secrets), `napple.lat` DNS to GitHub Pages, the native local test stack. |
+| [2026-11-02-claude-net-rooms-2026-11-02-r7](2026-11-02-claude-net-rooms-2026-11-02-r7.md) | Napple rooms: the `napple-room` relay server (own protocol, std only) and the runtime client (`NAPPLE_ROOM`): virtual LAN and LDN between Napple instances over the internet. |
+| [2026-11-02-claude-mk8d-lan-session-2026-11-02-r7](2026-11-02-claude-mk8d-lan-session-2026-11-02-r7.md) | bsd replies use the console's (Linux) errno numbers (MK8D 2618-0006 fixed), nifm GetCurrentIpConfigInfo, a per-installation GetPseudoDeviceId, friend 10700, ldn GetSecurityParameter; two MK8D instances meet in a LAN Play room through napple-room. |
+| [2026-11-02-claude-napple-online-2026-11-02-r7](2026-11-02-claude-napple-online-2026-11-02-r7.md) | napple-online: Napple-run accounts/tokens and a NEX game server (PRUDP Lite over WebSocket), runtime client glue (`NAPPLE_ONLINE_SERVER`), ssl IoMode + ResultWouldBlock; MK8D reaches its online menu. |
+
+### Round 2026-11-02-r8
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-napple-account-2026-11-02-r8](2026-11-02-claude-napple-account-2026-11-02-r8.md) | napple-account: the Napple Account server (email magic link + passkeys, devices, Ed25519 JWT + JWKS, E2E save-key exchange, profiles with reserved names and admin grants, cloud-save metadata with presigned S3 URLs); no billing. |
+| [2026-11-02-claude-cloud-saves-client-2026-11-02-r8](2026-11-02-claude-cloud-saves-client-2026-11-02-r8.md) | cloud-saves-client: end-to-end encrypted cloud saves (crates/napple-cloud: Keychain store, HPKE key wrap, 24-word recovery, deterministic AES-256-GCM blobs, sync engine, runtime FFI), runtime pull-before-mount / push-after-commit hooks, `napple account` / `napple saves` CLI. |
+
+### Round 2026-11-02-r9
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-napple-social-cloud-2026-11-02-r9](2026-11-02-claude-napple-social-cloud-2026-11-02-r9.md) | napple-social: friends, presence and invites service for Napple players (REST + WebSocket, SQLite). |
+| [2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9](2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9.md) | ipc-depth-cloud: 98 IPC rows made real (11 stub to impl, 87 new impl rows): set:sys settings store, time, vi display settings, aoc purchase events, notif:a alarms, pctl PIN / rating / free communication, pdm, lbl, ncm. |
+
+### Round 2026-11-02-r10
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10](2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10.md) | nvdrv-public-layouts: GPU nodes, nvdisp (tegra_dc_ext) and NVDEC / VIC / NVJPG / MSENC on layouts checked against public sources (libnx, L4T, open-gpu-doc); mismatches fixed, every struct pinned by tests. |
+| [2026-11-02-claude-online-support-table-2026-11-02-r10](2026-11-02-claude-online-support-table-2026-11-02-r10.md) | Per-game online support table generated from `compat/online.json`: `docs/reference/online-support.md`, a block in the README Status section, `site/online.json` and an "Online play" section on the landing page. |
+| [2026-11-02-claude-online-friends-2026-11-02-r10](2026-11-02-claude-online-friends-2026-11-02-r10.md) | online-friends: friend:u backed by napple-social through the napple-online wrapper (friend list, presence, join tokens, notifications); napple-online GetPlayingSession from reported friends; MK8D Friends menu opens, its list still empty. |
+| [2026-11-02-claude-ipc-depth-95-2026-11-02-r10](2026-11-02-claude-ipc-depth-95-2026-11-02-r10.md) | ipc-depth-95: IPC command depth 92% to 98% (1264 impl / 61 stub of 1325 reference rows, missing 0): friend:u (friend_core), ssl, nifm / bsd / nsd / sfdnsres, fs / account / olsc, applet / btm / lm / ovln / aoc, bcat / npns / ldn. |

@@ -53,6 +53,9 @@ static void lbl_switch_off(IpcObject *s, IpcCall *c) {
     (void)c;
     lbl_switch(state(), 0);
 }
+/* am ICommonStateGetter::SetLcdBacklighOffEnabled: the application asks the system to switch the backlight off (1) or back on (0); the same switch state
+ * lbl's own SwitchBacklightOn/Off keep and GetBacklightSwitchStatus reads. */
+void lbl_app_backlight_off(int off) { lbl_switch(state(), !off); }
 static void lbl_get_switch_status(IpcObject *s, IpcCall *c) {
     (void)s;
     uint32_t v = state()->switch_status;
@@ -147,6 +150,20 @@ static void lbl_is_vr(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, v);
 }
 
+/* 19 / 20 Set/GetCurrentBrightnessMapping and 21 / 22 Set/GetCurrentAmbientLightSensorMapping: the curves auto-brightness uses (0xC bytes each, three f32
+ * per switchbrew, unverified). The host panel is not driven by them, but the controller keeps what it was given and hands it back (all zero until set). */
+#define LBL_MAPPING_SIZE 0xCu
+static uint8_t g_brightness_mapping[LBL_MAPPING_SIZE], g_als_mapping[LBL_MAPPING_SIZE];
+static uint8_t *mapping_for(unsigned cmd) { return cmd <= 20 ? g_brightness_mapping : g_als_mapping; }
+static void lbl_set_mapping(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t n = c->in_size < LBL_MAPPING_SIZE ? c->in_size : LBL_MAPPING_SIZE;
+    if (n) memcpy(mapping_for(c->cmd), c->in, n);
+}
+static void lbl_get_mapping(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out(c, mapping_for(c->cmd), LBL_MAPPING_SIZE);
+}
 static const IpcCmd lbl_cmds[] = {
     {0, "SaveCurrentSetting", lbl_save_current, IPC_IMPL},
     {1, "LoadCurrentSetting", lbl_load_current, IPC_IMPL},
@@ -167,9 +184,10 @@ static const IpcCmd lbl_cmds[] = {
     {16, "GetAmbientLightSensorValue", lbl_get_ambient, IPC_IMPL},
     {17, "SetBrightnessReflectionDelayLevel", lbl_set_delay_level, IPC_IMPL},
     {18, "GetBrightnessReflectionDelayLevel", lbl_get_delay_level, IPC_IMPL},
-    {19, "SetCurrentBrightnessMapping", svc_noop,
-     IPC_IMPL}, /* the curve shapes a real panel's auto-brightness; the host backlight is not driven: documented no-op */
-    {21, "SetCurrentAmbientLightSensorMapping", svc_noop, IPC_IMPL}, /* same: sensor curve, no sensor on the host */
+    {19, "SetCurrentBrightnessMapping", lbl_set_mapping, IPC_IMPL},
+    {20, "GetCurrentBrightnessMapping", lbl_get_mapping, IPC_IMPL},
+    {21, "SetCurrentAmbientLightSensorMapping", lbl_set_mapping, IPC_IMPL},
+    {22, "GetCurrentAmbientLightSensorMapping", lbl_get_mapping, IPC_IMPL},
     {23, "IsAmbientLightSensorAvailable", svc_ret_u8_0, IPC_IMPL},   /* the host exposes no sensor */
     {24, "SetCurrentBrightnessSettingForVrMode", lbl_set_vr, IPC_IMPL},
     {25, "GetCurrentBrightnessSettingForVrMode", lbl_get_vr, IPC_IMPL},

@@ -83,7 +83,9 @@ int main(void) {
     { IpcObject *csg2 = applet_shared_object("common");
       uint8_t on = 1; svc_call(csg2, 53, &on, 0, &c); svc_call(csg2, 1002, NULL, 0, &c); CHECK(c.out[0] == 1, "BeginVrModeEx turns VR mode on (seen by IsVrModeEnabled3d)");
       svc_call(csg2, 54, NULL, 0, &c); svc_call(csg2, 50, NULL, 0, &c); CHECK(c.out[0] == 0, "EndVrModeEx turns it off");
-      svc_call(csg2, 62, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 2, "GetHdcpAuthenticationState: authenticated");
+      /* r10: HDCP is authenticated once the application activated it (SetHdcpAuthenticationActivated), unauthenticated before (was: always 2) */
+      svc_call(csg2, 62, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 0, "GetHdcpAuthenticationState: unauthenticated before activation");
+      svc_call(af, 170, &on, 1, &c); svc_call(csg2, 62, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 2, "GetHdcpAuthenticationState: authenticated");
       svc_call(csg2, 1005, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 1280 && SVC_OUT(&c, uint32_t, 4) == 720, "GetPanelResolutionForSpecificTitle: 1280x720"); }
     { IpcObject *lac2 = applet_shared_object("creator");
       static uint8_t mem[0x4000]; IpcTransferMemory tm = {(uint64_t)(uintptr_t)mem, sizeof mem, 3}; int64_t size = 0x1000;

@@ -81,6 +81,13 @@ __attribute__((weak)) ssize_t romfs_img_read(const RomfsImg *img, uint64_t off, 
 #define R_FS_NOT_FOUND_DATA FS_RESULT(1001)
 #define R_FS_UNEXPECTED FS_RESULT(5000)
 #define R_FS_INVALID_ENUM FS_RESULT(6001) /* 0x2EE202: an enum value the service does not know (OpenCustomStorageFileSystem, OpenContentStorageFileSystem) */
+/* ipc-depth-95 (r10). Values from switchbrew 'Error codes' (module 2): 2520 GameCardCardNotInserted (0x13B002), 3001 NotImplemented (0x177202, what the
+ * Switch 2 firmware answers for OpenSaveDataTransferManager), and the range bases 6300 UnsupportedOperation (0x313802) and 6400 PermissionDenied
+ * (0x320002). The range bases are [unverified] as the exact sub-code a console reports for these commands. */
+#define R_FS_GAME_CARD_NOT_INSERTED FS_RESULT(2520)
+#define R_FS_NOT_IMPLEMENTED FS_RESULT(3001)
+#define R_FS_UNSUPPORTED_OPERATION FS_RESULT(6300)
+#define R_FS_PERMISSION_DENIED FS_RESULT(6400)
 
 static uint32_t errno_result(void) {
     switch (errno) {
@@ -111,7 +118,18 @@ typedef struct {
     int read_only;
     SaveJournal *journal;
     int64_t quota;
+    int sd; /* the SD card file system (FAT on a console): QueryEntry, FAT open-entry peaks */
 } HostFs; /* quota: save data size, 0 unknown */
+
+/* Open files / directories of the SD card file system and their peaks since the last GetAndClearErrorInfo (the SD card's FatFatReportInfo1). */
+static pthread_mutex_t g_sd_open_mu = PTHREAD_MUTEX_INITIALIZER;
+static unsigned g_sd_open[2], g_sd_open_peak[2]; /* [0] files, [1] directories */
+static void sd_open_track(int dir, int delta) {
+    pthread_mutex_lock(&g_sd_open_mu);
+    if (delta > 0 || g_sd_open[dir]) g_sd_open[dir] += (unsigned)delta;
+    if (g_sd_open[dir] > g_sd_open_peak[dir]) g_sd_open_peak[dir] = g_sd_open[dir];
+    pthread_mutex_unlock(&g_sd_open_mu);
+}
 
 /* Maps a guest path ("/dir/file", "dir/file") below the file system root; 0 when the path is not acceptable. */
 static int host_path(const HostFs *fs, const char *guest, char *out, size_t cap) {
@@ -201,10 +219,12 @@ typedef struct {
     int writable;
     char path[1100];
     SaveJournal *journal;
+    int sd; /* counted in g_sd_open */
 } HostFile;
 static void file_destroy(IpcObject *o) {
     HostFile *f = o->state;
     if (f) {
+        if (f->sd) sd_open_track(0, -1);
         if (f->fd >= 0) close(f->fd);
         free(f);
     }
@@ -303,10 +323,12 @@ typedef struct {
     DIR *d;
     int mode;
     char path[1100];
+    int sd; /* counted in g_sd_open */
 } HostDir;
 static void dir_destroy(IpcObject *o) {
     HostDir *d = o->state;
     if (d) {
+        if (d->sd) sd_open_track(1, -1);
         closedir(d->d);
         free(d);
     }
@@ -691,6 +713,10 @@ static void save_delete(const char *root) {
     unlink(p);
     snprintf(p, sizeof p, "%s" META_SUFFIX, root);
     unlink(p);
+    for (unsigned t = 1; t <= 2; t++) {
+        snprintf(p, sizeof p, "%s.napple-savemeta%u", root, t);
+        unlink(p);
+    }
     pthread_mutex_lock(&g_journals_mu);
     for (int i = 0; i < 16 && g_journals[i]; i++)
         if (!strcmp(g_journals[i]->live, root)) {
@@ -802,6 +828,7 @@ static void fs_open_file(IpcObject *s, IpcCall *c) {
     f->writable = writable;
     f->journal = fs->journal;
     snprintf(f->path, sizeof f->path, "%s", p);
+    if ((f->sd = fs->sd)) sd_open_track(0, 1);
     ipc_out_object(c, IPC_OBJECT("IFile", file_cmds, f, file_destroy));
 }
 static void fs_open_directory(IpcObject *s, IpcCall *c) {
@@ -816,6 +843,7 @@ static void fs_open_directory(IpcObject *s, IpcCall *c) {
     hd->d = d;
     hd->mode = (int)IPC_IN(c, uint32_t, 0);
     snprintf(hd->path, sizeof hd->path, "%s", p);
+    if ((hd->sd = fs->sd)) sd_open_track(1, 1);
     ipc_out_object(c, IPC_OBJECT("IDirectory", dir_cmds, hd, dir_destroy));
 }
 /* Every commit of a save gives it a new commit id (GetSaveDataCommitId, SaveDataExtraData.commit_id): strictly increasing, seeded from the clock. */
@@ -829,14 +857,22 @@ static void meta_bump_commit_id(const char *root) {
     }
     pthread_mutex_unlock(&g_meta_mu);
 }
+/* Cloud saves hooks (runtime/src/cloud/cloud.c): a commit that took a new snapshot schedules a debounced background push; both clean exits
+ * (fs_report_uncommitted) push what is pending. Weak no-ops here so builds without runtime/src/cloud (CLOUD=0, tools/build_ios.sh) link. */
+__attribute__((weak)) void cloud_on_commit(const char *root) { (void)root; }
+__attribute__((weak)) void cloud_on_exit(void) {}
 static void fs_commit(IpcObject *s, IpcCall *c) {
     HostFs *fs = s->state;
     if (fs_trace()) LOG("fs", "Commit %s%s (thread %#llx)", fs->root, fs->journal ? (fs->journal->dirty ? " (changes pending)" : " (clean)") : " (not transactional)",
                             (unsigned long long)threads_current_id());
     if (fs->journal) {
+        int had_changes = fs->journal->dirty;
         uint32_t r = journal_commit(fs->journal);
         if (r) c->result = r;
-        else meta_bump_commit_id(fs->root);
+        else {
+            meta_bump_commit_id(fs->root);
+            if (had_changes) cloud_on_commit(fs->root);
+        }
     } else sync();
 }
 /* Sizes: a save created with a size answers from it (free = size - blocks in use); everything else reports 1 GiB. */
@@ -875,6 +911,99 @@ static void fs_get_timestamp(IpcObject *s, IpcCall *c) {
     ipc_out(c, t, sizeof t);
     ipc_out(c, local, 8);
 }
+/* SetConcatenationFileAttribute on the host: on a console the archive bit turns a FAT directory into one ConcatenationFile whose data is its chunk files
+ * ("00", "01", ... in order [unverified names]) laid end to end, so GetEntryType answers File and OpenFile reads the joined data. The host file system has
+ * no 4 GiB file limit, so the faithful result is that file: the chunks are joined into one host file that replaces the directory. A directory holding
+ * anything but a contiguous run of chunk files is refused (InvalidArgument); a path that is already a file stays as it is. */
+static uint32_t concat_directory(const char *p) {
+    struct stat sb;
+    if (stat(p, &sb)) return R_FS_PATH_NOT_FOUND;
+    if (!S_ISDIR(sb.st_mode)) return 0;
+    unsigned n = 0, seen[256] = {0};
+    DIR *d = opendir(p);
+    if (!d) return errno_result();
+    struct dirent *e;
+    uint32_t r = 0;
+    while (!r && (e = readdir(d))) {
+        if (!strcmp(e->d_name, ".") || !strcmp(e->d_name, "..")) continue;
+        char *end;
+        unsigned long k = strtoul(e->d_name, &end, 10);
+        if (!*e->d_name || *end || k >= 256 || seen[k]) r = R_FS_INVALID_ARGUMENT;
+        else seen[k] = 1, n++;
+    }
+    closedir(d);
+    for (unsigned k = 0; !r && k < n; k++)
+        if (!seen[k]) r = R_FS_INVALID_ARGUMENT;
+    if (r) return r;
+    char tmp[1450];
+    snprintf(tmp, sizeof tmp, "%s.napple-concat", p);
+    int out = open(tmp, O_CREAT | O_TRUNC | O_WRONLY, 0644);
+    if (out < 0) return errno_result();
+    for (unsigned k = 0; !r && k < n; k++) {
+        char cp[1450];
+        snprintf(cp, sizeof cp, "%s/%02u", p, k);
+        int in = open(cp, O_RDONLY);
+        if (in < 0) { /* "0", "1": accept the unpadded spelling too */
+            snprintf(cp, sizeof cp, "%s/%u", p, k);
+            in = open(cp, O_RDONLY);
+        }
+        if (in < 0) {
+            r = errno_result();
+            break;
+        }
+        char buf[65536];
+        ssize_t got;
+        while ((got = read(in, buf, sizeof buf)) > 0)
+            if (write(out, buf, (size_t)got) != got) {
+                r = errno_result();
+                break;
+            }
+        if (got < 0) r = errno_result();
+        close(in);
+    }
+    close(out);
+    if (!r && (rm_rf(p, 0) || rename(tmp, p))) r = errno_result();
+    if (r) unlink(tmp);
+    return r;
+}
+/* 15 QueryEntry(u32 query id; in path (X), in buffer, out buffer). FileSystemQueryId (libnx fs.h): 0 SetConcatenationFileAttribute [4.0.0+],
+ * 2 IsValidSignedSystemPartitionOnSdCard [8.0.0+]. Both belong to the SD card file system (FAT); save data and the other host-backed file systems answer
+ * UnsupportedOperation, as does any other query id. The SD card directory never holds a signed system partition (no system update is ever written to
+ * it), so query 2 answers false. */
+static void fs_query_entry(IpcObject *s, IpcCall *c) {
+    HostFs *fs = s->state;
+    uint32_t q = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0xffffffffu;
+    if (!fs->sd || (q != 0 && q != 2)) {
+        c->result = R_FS_UNSUPPORTED_OPERATION;
+        return;
+    }
+    FS_PATH(p, 0);
+    if (q == 0) {
+        FS_WRITE_CHECK();
+        uint32_t r = concat_directory(p);
+        if (r) c->result = r;
+        return;
+    }
+    struct stat sb;
+    if (stat(p, &sb)) {
+        c->result = R_FS_PATH_NOT_FOUND;
+        return;
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint8_t valid = 0;
+    if (b && b->size) ipc_write_buf(c, b, &valid, 1);
+}
+/* 16 GetFileSystemAttribute -> FileSystemAttribute (0xC0, libnx fs.h FsFileSystemAttribute: 13 has-value flags, 0x1B reserved, 13 s32 limits, 0x64
+ * reserved). The limits are the ones this file system enforces: host_path takes a path of up to 0x300 bytes (an FspPath without its NUL) and the host
+ * directory takes entry names of up to NAME_MAX bytes. No UTF-16 limit exists here, so those flags stay clear. */
+static void fs_get_attribute(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t a[0xC0] = {0};
+    int32_t lim[4] = {NAME_MAX, NAME_MAX, 0x300, 0x300}; /* directory name, file name, directory path, file path */
+    for (int i = 0; i < 4; i++) a[i] = 1;
+    memcpy(a + 0x28, lim, sizeof lim);
+    ipc_out(c, a, sizeof a);
+}
 static const IpcCmd fs_cmds[] = {
     {0, "CreateFile", fs_create_file, IPC_IMPL},
     {1, "DeleteFile", fs_delete_file, IPC_IMPL},
@@ -891,8 +1020,8 @@ static const IpcCmd fs_cmds[] = {
     {12, "GetTotalSpaceSize", fs_total_space, IPC_IMPL},
     {13, "CleanDirectoryRecursively", fs_clean_directory, IPC_IMPL},
     {14, "GetFileTimeStampRaw", fs_get_timestamp, IPC_IMPL},
-    {15, "QueryEntry", sysd_ok, IPC_STUB},
-    {16, "GetFileSystemAttribute", sysd_z32, IPC_STUB},
+    {15, "QueryEntry", fs_query_entry, IPC_IMPL},
+    {16, "GetFileSystemAttribute", fs_get_attribute, IPC_IMPL},
 };
 static IpcObject *open_host_fs(const char *root, int read_only, int journaled, int64_t quota) {
     HostFs *fs = calloc(1, sizeof *fs);
@@ -1190,7 +1319,9 @@ static void srv_open_sdcard(IpcObject *s, IpcCall *c) {
     (void)s;
     char root[1200];
     snprintf(root, sizeof root, "%s/%s/sdcard", g_cfg.save_root, g_cfg.title_id);
-    ipc_out_object(c, open_host_fs(root, 0, 0, 0));
+    IpcObject *o = open_host_fs(root, 0, 0, 0);
+    ((HostFs *)o->state)->sd = 1;
+    ipc_out_object(c, o);
 }
 /* Temporary storage is erased when the application starts: the first mount in a process empties it. */
 static int temporary_first_mount(const char *root) {
@@ -1241,18 +1372,55 @@ static void srv_open_save_read_only(IpcObject *s, IpcCall *c) {
 /* CreateSaveDataFileSystem(SaveDataAttribute, SaveDataCreationInfo {s64 size, s64 journal size, u64 block size, u64 owner, u32 flags,
  * u8 space, ...}[, SaveDataMetaInfo][, HashSalt]): the directory and its meta record. PathAlreadyExists when it was created before (the
  * SDK's EnsureSaveData treats that as success); a directory that exists without a record (opened before it was created) is adopted. */
+/* SaveDataMetaInfo {u32 size, u8 type (SaveDataMetaType: 0 None, 1 Thumbnail, 2 ExtensionContext), 11 reserved} (switchbrew): the save's meta file of
+ * that type, kept next to the save root as <root>.napple-savemeta<type> and opened by OpenSaveDataMetaFile. */
+static void meta_file_path(const char *root, unsigned type, char *out, size_t cap) { snprintf(out, cap, "%s.napple-savemeta%u", root, type); }
+static void create_save(IpcCall *c, const uint8_t *attr, int64_t size, int64_t journal, uint64_t owner, uint32_t flags, uint8_t space, uint8_t meta_type,
+                        uint32_t meta_size);
 static void srv_create_save(IpcObject *s, IpcCall *c) {
     (void)s;
     const uint8_t *attr = ipc_in(c, 0, 0x40), *ci = ipc_in(c, 0x40, 0x40);
     int64_t size, journal;
     uint64_t owner;
-    uint32_t flags;
+    uint32_t flags, meta_size = 0;
+    uint8_t meta_type = 0;
     memcpy(&size, ci, 8);
     memcpy(&journal, ci + 8, 8);
     memcpy(&owner, ci + 0x18, 8);
     memcpy(&flags, ci + 0x20, 4);
-    uint8_t space = ci[0x24];
-    if (size < 0 || journal < 0 || attr[0x20] > SAVE_CACHE) {
+    if (c->in_size >= 0x90) { /* 22 and 35 carry a SaveDataMetaInfo after the creation info; 23 does not */
+        memcpy(&meta_size, ipc_in(c, 0x80, 4), 4);
+        meta_type = IPC_IN(c, uint8_t, 0x84);
+    }
+    create_save(c, attr, size, journal, owner, flags, ci[0x24], meta_type, meta_size);
+}
+/* 37 CreateSaveDataFileSystemWithCreationInfo2(in buffer SaveDataCreationInfo2, 0x200): switchbrew layout {u32 version, u32 reserved, SaveDataAttribute
+ * 0x40 @8, s64 size @0x48, s64 journal size @0x50, s64 block size @0x58, u64 owner id @0x60, u32 flags @0x68, u8 space @0x6C, u8 format type @0x6D,
+ * u8 hash salt specified @0x70, hash salt 0x20 @0x74, u8 meta type @0x94, u32 meta size @0x98}. The same save as 22 with the same meta file; the
+ * hash salt only seeds the console's encryption, which the host directory does not have. */
+static void srv_create_save2(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *ci = b && b->size >= 0x200 ? ipc_buf_ptr(b) : NULL;
+    if (!ci) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    uint8_t info[0x200];
+    memcpy(info, ci, sizeof info);
+    int64_t size, journal;
+    uint64_t owner;
+    uint32_t flags, meta_size;
+    memcpy(&size, info + 0x48, 8);
+    memcpy(&journal, info + 0x50, 8);
+    memcpy(&owner, info + 0x60, 8);
+    memcpy(&flags, info + 0x68, 4);
+    memcpy(&meta_size, info + 0x98, 4);
+    create_save(c, info + 8, size, journal, owner, flags, info[0x6C], info[0x94], meta_size);
+}
+static void create_save(IpcCall *c, const uint8_t *attr, int64_t size, int64_t journal, uint64_t owner, uint32_t flags, uint8_t space, uint8_t meta_type,
+                        uint32_t meta_size) {
+    if (size < 0 || journal < 0 || attr[0x20] > SAVE_CACHE || meta_type > 2) {
         c->result = R_FS_INVALID_ARGUMENT;
         return;
     }
@@ -1272,6 +1440,13 @@ static void srv_create_save(IpcObject *s, IpcCall *c) {
     m.extra.data_size = size;
     m.extra.journal_size = journal;
     int w = meta_write(root, &m);
+    if (!w && meta_type) {
+        char mp[1400];
+        meta_file_path(root, meta_type, mp, sizeof mp);
+        int fd = open(mp, O_CREAT | O_TRUNC | O_RDWR, 0644);
+        w = fd < 0 || ftruncate(fd, meta_size);
+        if (fd >= 0) close(fd);
+    }
     pthread_mutex_unlock(&g_meta_mu);
     if (w) {
         c->result = errno_result();
@@ -2114,6 +2289,239 @@ static void srv_open_reader_filter(IpcObject *s, IpcCall *c) {
     ipc_out_object(c, IPC_OBJECT("ISaveDataInfoReader", reader_cmds, collect_infos(IPC_IN(c, uint8_t, 0), 0, ipc_in(c, 8, 0x48)), reader_destroy));
 }
 
+/* ---- fsp-srv: access-checked commands (ipc-depth-95 r10) -----------------------------------------------------------------
+ * fsp-srv checks every command against the FS permission bits of the calling process (main.npdm, ACI0 FsAccessHeader; switchbrew 'NPDM' FsAccessFlag
+ * table). The masks below are the switchbrew 'Filesystem services' permission tables: a command is allowed when the process has at least one bit of the
+ * mask. Bits 62 (Debug) and 63 (FullPermission) count only on a console in debug mode, which this one is not. A retail application holds none of the
+ * transfer / content-manager / rights-id bits, so for it these commands answer PermissionDenied, exactly as on the console. Without a usable main.npdm
+ * the runtime checks nothing (like the service and svc access lists), and the commands take their permitted path. */
+#define FS_PERM_DEBUG_BITS (3ull << 62)
+static int fs_permitted(uint64_t mask) { return !g_npdm.valid || (g_npdm.fs_perms & mask & ~FS_PERM_DEBUG_BITS) != 0; }
+#define FS_REQUIRE(mask)                                                                                                                                       \
+    if (!fs_permitted(mask)) {                                                                                                                                 \
+        c->result = R_FS_PERMISSION_DENIED;                                                                                                                    \
+        return;                                                                                                                                                \
+    }
+#define FS_PERM_MOUNT_GAME_CARD 0x8000000000000010ull         /* GameCard */
+#define FS_PERM_OPEN_SAVE_META_FILE 0x8000000000020000ull     /* SaveDataMeta */
+#define FS_PERM_TRANSFER_MANAGER 0x8000000040000000ull        /* SaveDataTransfer */
+#define FS_PERM_TRANSFER_MANAGER_V2 0x8000000200000000ull     /* SaveDataTransferVersion2 */
+#define FS_PERM_TRANSFER_PROHIBITER 0x8000000200002000ull     /* SaveDataTransferVersion2 | CreateSaveData: any application's saves */
+#define FS_PERM_OWN_TRANSFER_PROHIBITER 0x8000000800000000ull /* CreateOwnSaveData: the caller's own saves */
+#define FS_PERM_TRANSFER_REPAIR 0x8000000200000000ull         /* 85 (and 88, [unverified]: not in the table, 21.0.0+) */
+#define FS_PERM_SAVE_MOVER 0x8000001000000000ull              /* MoveCacheStorage */
+#define FS_PERM_TRANSFER_FOR_REPAIR 0x8000000000000020ull     /* SaveDataManagement */
+#define FS_PERM_MOUNT_CONTENT_STORAGE 0x8000000000000800ull   /* ContentManager */
+#define FS_PERM_GET_RIGHTS_ID 0x8000000008000000ull           /* GetRightsId (606, 610) and GetProgramId (618) */
+
+/* 0 OpenFileSystem(u32 FileSystemProxyType; path): removed in 2.0.0 (switchbrew; libnx maps it to OpenFileSystemWithId since). This console runs a
+ * current firmware, where the command id does not exist: the answer is the one the dispatcher gives any id the interface lacks. */
+static void srv_open_fs_removed(IpcObject *s, IpcCall *c) {
+    (void)s;
+    c->result = IPC_R_UNKNOWN_COMMAND;
+}
+/* 31 OpenGameCardFileSystem(u32 GameCardHandle, u32 GameCardPartition: 0 Update, 1 Normal, 2 Secure, 3 Logo). The title runs from installed content and
+ * the host has no game card slot, so no card is ever inserted: GameCardCardNotInserted for a process allowed to mount one. */
+static void srv_open_game_card_fs(IpcObject *s, IpcCall *c) {
+    (void)s;
+    FS_REQUIRE(FS_PERM_MOUNT_GAME_CARD);
+    if (c->in_size < 8 || IPC_IN(c, uint32_t, 4) > 3) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    c->result = R_FS_GAME_CARD_NOT_INSERTED;
+}
+/* 80 OpenSaveDataMetaFile(u8 space id, u32 SaveDataMetaType, SaveDataAttribute) -> IFile [field offsets 0 / 4 / 8 unverified]: the meta file the save was
+ * created with (SaveDataMetaInfo of 22/35/37), read and written in place. A save that does not exist is TargetNotFound; one created without a meta file
+ * of that type is PathNotFound. */
+static void srv_open_save_meta_file(IpcObject *s, IpcCall *c) {
+    (void)s;
+    FS_REQUIRE(FS_PERM_OPEN_SAVE_META_FILE);
+    if (c->in_size < 0x48) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    uint32_t type = IPC_IN(c, uint32_t, 4);
+    if (type != 1 && type != 2) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    char root[1300], mp[1400];
+    save_root(IPC_IN(c, uint8_t, 0), ipc_in(c, 8, 0x40), root, sizeof root);
+    SaveMeta m;
+    pthread_mutex_lock(&g_meta_mu);
+    int found = meta_read(root, &m);
+    pthread_mutex_unlock(&g_meta_mu);
+    if (!found) {
+        c->result = R_FS_TARGET_NOT_FOUND;
+        return;
+    }
+    meta_file_path(root, type, mp, sizeof mp);
+    int fd = open(mp, O_RDWR);
+    if (fd < 0) {
+        c->result = R_FS_PATH_NOT_FOUND;
+        return;
+    }
+    HostFile *f = calloc(1, sizeof *f);
+    f->fd = fd;
+    f->writable = 1;
+    snprintf(f->path, sizeof f->path, "%s", mp);
+    ipc_out_object(c, IPC_OBJECT("IFile", file_cmds, f, file_destroy));
+}
+/* 81 / 82 / 85 / 86 / 87 / 88: the save data transfer managers (console-to-console transfer and repair) and the cache storage mover. Only system tools
+ * hold these permissions; an application gets PermissionDenied. A permitted process gets NotImplemented: a transfer needs the peer console and the
+ * transfer server, which this single host does not have (the Switch 2 firmware answers 81 the same way). */
+static void transfer_unavailable(IpcCall *c, uint64_t mask) {
+    FS_REQUIRE(mask);
+    c->result = R_FS_NOT_IMPLEMENTED;
+}
+static void srv_transfer_manager(IpcObject *s, IpcCall *c) {
+    (void)s;
+    transfer_unavailable(c, FS_PERM_TRANSFER_MANAGER);
+}
+static void srv_transfer_manager_v2(IpcObject *s, IpcCall *c) {
+    (void)s;
+    transfer_unavailable(c, FS_PERM_TRANSFER_MANAGER_V2);
+}
+static void srv_transfer_manager_repair(IpcObject *s, IpcCall *c) {
+    (void)s;
+    transfer_unavailable(c, FS_PERM_TRANSFER_REPAIR);
+}
+static void srv_save_mover(IpcObject *s, IpcCall *c) {
+    (void)s;
+    transfer_unavailable(c, FS_PERM_SAVE_MOVER);
+}
+static void srv_transfer_manager_for_repair(IpcObject *s, IpcCall *c) {
+    (void)s;
+    transfer_unavailable(c, FS_PERM_TRANSFER_FOR_REPAIR);
+}
+/* 83 OpenSaveDataTransferProhibiter(u64 application id) -> ISaveDataTransferProhibiter (no commands): while the object lives, the saves of that application
+ * may not be exported. The process keeps the count of live prohibiters per application (fs_transfer_prohibited); a transfer manager would honour it. */
+static pthread_mutex_t g_prohibit_mu = PTHREAD_MUTEX_INITIALIZER;
+static struct {
+    uint64_t app;
+    unsigned refs;
+} g_prohibit[16];
+__attribute__((unused)) static unsigned fs_transfer_prohibited(uint64_t app) { /* read by the tests; no exporter exists to consult it */
+    unsigned n = 0;
+    pthread_mutex_lock(&g_prohibit_mu);
+    for (unsigned i = 0; i < 16; i++)
+        if (g_prohibit[i].refs && g_prohibit[i].app == app) n = g_prohibit[i].refs;
+    pthread_mutex_unlock(&g_prohibit_mu);
+    return n;
+}
+static void prohibiter_destroy(IpcObject *o) {
+    uint64_t app = (uint64_t)(uintptr_t)o->state;
+    pthread_mutex_lock(&g_prohibit_mu);
+    for (unsigned i = 0; i < 16; i++)
+        if (g_prohibit[i].refs && g_prohibit[i].app == app) g_prohibit[i].refs--;
+    pthread_mutex_unlock(&g_prohibit_mu);
+}
+/* The interface has no commands. An empty table would make the dispatcher's tolerant stub object, so the one row is a placeholder id no SDK sends, and
+ * every real id is "unknown command". */
+static void prohibiter_none(IpcObject *s, IpcCall *c) {
+    (void)s;
+    c->result = IPC_R_UNKNOWN_COMMAND;
+}
+static const IpcCmd prohibiter_cmds[] = {{0xffffffffu, "(no commands)", prohibiter_none, IPC_IMPL}};
+static void srv_transfer_prohibiter(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 8) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    uint64_t app = IPC_IN(c, uint64_t, 0);
+    if (!fs_permitted(FS_PERM_TRANSFER_PROHIBITER) && !(app == g_program_id && fs_permitted(FS_PERM_OWN_TRANSFER_PROHIBITER))) {
+        c->result = R_FS_PERMISSION_DENIED;
+        return;
+    }
+    int slot = -1;
+    pthread_mutex_lock(&g_prohibit_mu);
+    for (int i = 0; i < 16 && slot < 0; i++)
+        if (g_prohibit[i].refs && g_prohibit[i].app == app) slot = i;
+    for (int i = 0; i < 16 && slot < 0; i++)
+        if (!g_prohibit[i].refs) slot = i;
+    if (slot >= 0) g_prohibit[slot].app = app, g_prohibit[slot].refs++;
+    pthread_mutex_unlock(&g_prohibit_mu);
+    if (slot < 0) {
+        c->result = R_FS_UNEXPECTED;
+        return;
+    }
+    ipc_out_object(c, IPC_OBJECT("ISaveDataTransferProhibiter", prohibiter_cmds, (void *)(uintptr_t)app, prohibiter_destroy));
+}
+/* 110 OpenContentStorageFileSystem(u32 ContentStorageId: 0 System, 1 User, 2 SdCard, 3 System0 [16.0.0+]) -> IFileSystem of NCA files. Invalid ids are
+ * 0x2EE202 (switchbrew). The title runs from its extracted data, so every content storage of this console is an empty, writable directory below the save
+ * root (what ncm would write NCA files into). */
+static void srv_open_content_storage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    FS_REQUIRE(FS_PERM_MOUNT_CONTENT_STORAGE);
+    static const char *const names[] = {"system", "user", "sdcard", "system0"};
+    uint32_t id = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0xffffffffu;
+    if (id > 3) {
+        c->result = R_FS_INVALID_ENUM;
+        return;
+    }
+    char root[1300];
+    snprintf(root, sizeof root, "%s/%s/contentstorage/%s", g_cfg.save_root, g_cfg.title_id, names[id]);
+    ipc_out_object(c, open_host_fs(root, 0, 0, 0));
+}
+/* 606 GetRightsId(u64 program id, u8 storage id) -> RightsId, 610 GetRightsIdAndKeyGenerationByPath(path) -> u8 key generation + RightsId, 618
+ * GetProgramId(path, content attributes) -> u64: facts read from an NCA header. Only system processes hold GetRightsId; an application gets
+ * PermissionDenied. A permitted process asks about NCA files the host does not have (the title runs from extracted data, `napple build` does not keep
+ * the rights id): content paths are PathNotFound and program ids TargetNotFound, as for content that is not installed. */
+static void srv_get_rights_id(IpcObject *s, IpcCall *c) {
+    (void)s;
+    FS_REQUIRE(FS_PERM_GET_RIGHTS_ID);
+    c->result = c->in_size < 9 ? R_FS_INVALID_ARGUMENT : R_FS_TARGET_NOT_FOUND;
+}
+static void srv_get_by_content_path(IpcObject *s, IpcCall *c) {
+    (void)s;
+    FS_REQUIRE(FS_PERM_GET_RIGHTS_ID);
+    char gp[0x302];
+    c->result = guest_path(c, 0, gp, sizeof gp) && *gp ? R_FS_PATH_NOT_FOUND : R_FS_INVALID_ARGUMENT;
+}
+/* 800 GetAndClearErrorInfo -> FileSystemProxyErrorInfo (0x80, libnx fs.h; raw output before 21.0.0, an output buffer since): the error counters since the
+ * last call, then cleared. The host never remounts a RomFS for corruption, has no FAT driver and no game card, so those counters are 0; what is real here
+ * is the number of save data in the index (save_data_index_count @0x2C) and the SD card's open file / directory peaks (sd_card_fat_report_info_1 @0x38),
+ * reset to the currently open counts by the call. */
+static int count_save_cb(const char *root, const SaveMeta *m, void *arg) {
+    (void)root;
+    (void)m;
+    (*(uint32_t *)arg)++;
+    return 0;
+}
+static void srv_get_and_clear_error_info(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t info[0x80] = {0};
+    uint32_t saves = 0;
+    pthread_mutex_lock(&g_meta_mu);
+    meta_walk(host_save_dir(), 6, count_save_cb, &saves);
+    pthread_mutex_unlock(&g_meta_mu);
+    memcpy(info + 0x2C, &saves, 4);
+    pthread_mutex_lock(&g_sd_open_mu);
+    uint16_t peaks[2] = {(uint16_t)g_sd_open_peak[0], (uint16_t)g_sd_open_peak[1]};
+    g_sd_open_peak[0] = g_sd_open[0];
+    g_sd_open_peak[1] = g_sd_open[1];
+    pthread_mutex_unlock(&g_sd_open_mu);
+    memcpy(info + 0x38, peaks, sizeof peaks);
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b) ipc_write_buf(c, b, info, b->size < sizeof info ? b->size : sizeof info);
+    else ipc_out(c, info, sizeof info);
+}
+/* 1001 SetSaveDataSize(s64 size, s64 journal size): switchbrew: stored in the fsp-srv session object (defaults 32 MiB / 16 MiB) and not read by anything
+ * else, so storing them per connection is the whole behaviour. */
+typedef struct {
+    int64_t save_size, save_journal_size;
+} FspSession;
+static void srv_set_save_data_size(IpcObject *s, IpcCall *c) {
+    FspSession *fs = s->state;
+    if (c->in_size < 16) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    if (fs) fs->save_size = IPC_IN(c, int64_t, 0), fs->save_journal_size = IPC_IN(c, int64_t, 8);
+}
+
 static const IpcCmd srv_cmds[] = {
     {1, "SetCurrentProcess", srv_noop, IPC_IMPL},
     {18, "OpenSdCardFileSystem", srv_open_sdcard, IPC_IMPL},
@@ -2148,49 +2556,55 @@ static const IpcCmd srv_cmds[] = {
     {1003, "DisableAutoSaveDataCreation", srv_noop, IPC_IMPL},
     {1005, "GetGlobalAccessLogMode", srv_get_log_mode, IPC_IMPL},
     {1006, "OutputAccessLogToSdCard", srv_noop, IPC_IMPL},
-    {0, "OpenFileSystem", sysd_err_generic, IPC_STUB},
+    {0, "OpenFileSystem", srv_open_fs_removed, IPC_IMPL},
     {2, "OpenDataFileSystemByCurrentProcess", srv_open_data_fs_current, IPC_IMPL},
     {7, "OpenFileSystemWithPatch", srv_open_fs_with_patch, IPC_IMPL},
     {9, "OpenDataFileSystemByProgramId", srv_open_data_fs_by_program, IPC_IMPL},
     {10, "OpenFileSystemWithId", srv_open_fs_with_id, IPC_IMPL},
     {27, "IsExFatSupported", srv_is_exfat_supported, IPC_IMPL},
-    {31, "OpenGameCardFileSystem", sysd_err_generic, IPC_STUB},
-    {37, "CreateSaveDataFileSystemWithCreationInfo2", sysd_err_generic, IPC_STUB},
+    {31, "OpenGameCardFileSystem", srv_open_game_card_fs, IPC_IMPL},
+    {37, "CreateSaveDataFileSystemWithCreationInfo2", srv_create_save2, IPC_IMPL},
     {64, "OpenSaveDataInternalStorageFileSystem", srv_open_internal_storage, IPC_IMPL},
     {67, "FindSaveDataWithFilter", srv_find_with_filter, IPC_IMPL},
     {68, "OpenSaveDataInfoReaderWithFilter", srv_open_reader_filter, IPC_IMPL},
-    {80, "OpenSaveDataMetaFile", sysd_ok, IPC_STUB},
-    {81, "OpenSaveDataTransferManager", sysd_err_generic, IPC_STUB},
-    {82, "OpenSaveDataTransferManagerVersion2", sysd_err_generic, IPC_STUB},
-    {83, "OpenSaveDataTransferProhibiter", sysd_err_generic, IPC_STUB},
+    {80, "OpenSaveDataMetaFile", srv_open_save_meta_file, IPC_IMPL},
+    {81, "OpenSaveDataTransferManager", srv_transfer_manager, IPC_IMPL},
+    {82, "OpenSaveDataTransferManagerVersion2", srv_transfer_manager_v2, IPC_IMPL},
+    {83, "OpenSaveDataTransferProhibiter", srv_transfer_prohibiter, IPC_IMPL},
+    /* 84: the 0x10-byte input is not documented, and the permitted path lists the FsAccessControl save-data owner ids, which npdm.c does not parse */
     {84, "ListAccessibleSaveDataOwnerId", sysd_err_generic, IPC_STUB},
-    {85, "OpenSaveDataTransferManagerForSaveDataRepair", sysd_err_generic, IPC_STUB},
-    {86, "OpenSaveDataMover", sysd_err_generic, IPC_STUB},
-    {87, "OpenSaveDataTransferManagerForRepair", sysd_err_generic, IPC_STUB},
-    {88, "OpenSaveDataTransferManagerForSaveDataRepairWithPolicy", sysd_ok, IPC_STUB},
+    {85, "OpenSaveDataTransferManagerForSaveDataRepair", srv_transfer_manager_repair, IPC_IMPL},
+    {86, "OpenSaveDataMover", srv_save_mover, IPC_IMPL},
+    {87, "OpenSaveDataTransferManagerForRepair", srv_transfer_manager_for_repair, IPC_IMPL},
+    {88, "OpenSaveDataTransferManagerForSaveDataRepairWithPolicy", srv_transfer_manager_repair, IPC_IMPL},
     {100, "OpenImageDirectoryFileSystem", srv_open_image_directory, IPC_IMPL},
-    {110, "OpenContentStorageFileSystem", sysd_err_generic, IPC_STUB},
+    {110, "OpenContentStorageFileSystem", srv_open_content_storage, IPC_IMPL},
     {130, "OpenCustomStorageFileSystem", srv_open_custom_storage, IPC_IMPL},
     {201, "OpenDataStorageByProgramId", srv_open_data_storage_by_program, IPC_IMPL},
     {205, "OpenDataStorageWithProgramIndex", srv_open_data_storage_with_index, IPC_IMPL},
     {510, "OpenSystemDataUpdateEventNotifier", srv_open_sysdata_notifier, IPC_IMPL},
     {511, "NotifySystemDataUpdateEvent", srv_notify_sysdata_update, IPC_IMPL},
-    {606, "GetRightsId", sysd_err_generic, IPC_STUB},
-    {610, "GetRightsIdAndKeyGenerationByPath", sysd_err_generic, IPC_STUB},
+    {606, "GetRightsId", srv_get_rights_id, IPC_IMPL},
+    {610, "GetRightsIdAndKeyGenerationByPath", srv_get_by_content_path, IPC_IMPL},
     {612, "GetFreeSpaceSizeForSaveData", srv_free_space_for_save, IPC_IMPL},
     {616, "GetSaveDataCommitId", srv_get_commit_id, IPC_IMPL},
-    {618, "GetProgramId", sysd_err_generic, IPC_STUB},
+    {618, "GetProgramId", srv_get_by_content_path, IPC_IMPL},
     {620, "SetSdCardEncryptionSeed", srv_set_sd_encryption_seed, IPC_IMPL},
     {630, "SetSdCardAccessibility", srv_set_sd_accessibility, IPC_IMPL},
     {631, "IsSdCardAccessible", srv_is_sd_accessible, IPC_IMPL},
-    {800, "GetAndClearErrorInfo", sysd_err_generic, IPC_STUB},
-    {1001, "SetSaveDataSize", sysd_ok, IPC_STUB},
+    {800, "GetAndClearErrorInfo", srv_get_and_clear_error_info, IPC_IMPL},
+    {1001, "SetSaveDataSize", srv_set_save_data_size, IPC_IMPL},
     {1004, "SetGlobalAccessLogMode", srv_set_log_mode, IPC_IMPL},
     {1011, "GetProgramIndexForAccessLog", srv_get_program_index_for_access_log, IPC_IMPL},
-    {1012, "GetFsStackUsage", sysd_z8, IPC_STUB},
+    {1012, "GetFsStackUsage", sysd_z8, IPC_STUB}, /* the stack peak of an fs-internal thread type (enum not documented); the host has no such threads */
     {1016, "FlushAccessLogOnSdCard", srv_noop, IPC_IMPL}, /* the access log is never written (mode 0 unless the guest sets it, and nothing is buffered) */
 };
-static IpcObject *fsp_open(void) { return IPC_OBJECT("fsp-srv", srv_cmds, NULL, NULL); }
+static void fsp_destroy(IpcObject *o) { free(o->state); }
+static IpcObject *fsp_open(void) {
+    FspSession *s = calloc(1, sizeof *s);
+    if (s) s->save_size = 0x2000000, s->save_journal_size = 0x1000000; /* the defaults switchbrew gives for SetSaveDataSize */
+    return IPC_OBJECT("fsp-srv", srv_cmds, s, fsp_destroy);
+}
 void service_register_fs(void) { ipc_register_service("fsp-srv", fsp_open); }
 
 /* Called when the process stops: tells which transactional save roots still hold changes the game never committed (those are rolled back
@@ -2200,4 +2614,5 @@ void fs_report_uncommitted(void) {
         if (g_journals[i]->dirty)
             LOG("fs", "save %s: changes since the last commit are discarded (%u commits this run)", g_journals[i]->live, g_journals[i]->commits);
         else if (g_journals[i]->commits) LOG("fs", "save %s: %u commits this run, nothing pending", g_journals[i]->live, g_journals[i]->commits);
+    cloud_on_exit();
 }

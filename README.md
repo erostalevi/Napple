@@ -79,6 +79,19 @@ The iPhone results were played by a person on an iPhone 16 Pro Max (2026-11-02);
 ([`docs/architecture/ios.md`](docs/architecture/ios.md)). Each title page lists what is still open. Per-stage results are in the
 [compatibility matrix](COMPATIBILITY.md); symptoms and fixes are in [`docs/symptoms.md`](docs/symptoms.md).
 
+<!-- online:begin -->
+**Online play** is between Napple players only, through the Napple-run servers at `pretend.napple.lat`, never Nintendo's. Generated from [`compat/online.json`](compat/online.json) (last checked 2026-11-02); what each mode means and the notes per title are in [online support](docs/reference/online-support.md).
+
+| Title | Backend | LAN | Local | Matchmaking | Race / match | Friends | Rankings | DataStore |
+|---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Animal Crossing: New Horizons (ACNH) | nex | untested | untested | untested | untested | untested | - | untested |
+| Link's Awakening (LAS) | none | - | - | - | - | - | - | - |
+| Mario Kart 8 Deluxe (MK8D) | nex | works | broken | works | partial | partial | untested | untested |
+| Super Mario Odyssey (SMO) | nex | - | - | - | - | - | untested | untested |
+
+`-` means the game has no such mode.
+<!-- online:end -->
+
 The table below is an **estimate of how much of the Switch platform surface the pipeline and runtime cover** (not per-game compatibility), produced by the `%Analysis` scanner:
 
 | Area | Coverage |
@@ -87,18 +100,18 @@ The table below is an **estimate of how much of the Switch platform surface the 
 | Loader: NSO / NRO / modules / relocations | 100% |
 | Kernel: svcs + scheduling | 100% |
 | IPC: HLE service coverage | 100% |
-| IPC: command depth (implemented vs. stubbed) | 91% |
+| IPC: command depth (implemented vs. stubbed) | 98% |
 | GPU: Maxwell shader ISA | 100% |
 | GPU: NVN API surface | 99% |
 | GPU: formats + pipeline features | 98% |
-| GPU: nvdrv / host1x devices | 89% |
+| GPU: nvdrv / host1x devices | 90% |
 | Audio | 100% |
 | Input | 99% |
 | Content: containers, crypto, updates, DLC | 99% |
 | Saves + storage | 100% |
-| Library applets | 99% |
+| Library applets | 100% |
 | Video / media decode | 97% |
-| **Overall** | **≈ 98.9%** (2026-11-02) |
+| **Overall** | **≈ 99.3%** (2026-11-02, scanner estimate) |
 
 Coverage is not compatibility: a long tail of command depth, shader corner cases and GPU behaviour is exactly what real games trip over first.
 

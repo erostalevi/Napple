@@ -6,6 +6,7 @@
 #include "ldn_core.h"
 #include "hz_result.h"
 #include "online_provider.h"
+#include <pthread.h>
 #include <stdlib.h>
 #include "sys_default.h"
 
@@ -15,11 +16,21 @@ static const OnlineProvider *ldn_provider(void) {
     return online_has(p, ONLINE_CAP_LDN) ? p : NULL;
 }
 
+struct LdnMonitor;
 typedef struct {
     LdnState state;
     uint32_t event_w;
     LdnConfig cfg;
     int watching; /* registered for the provider's change notifications */
+    /* configuration rows (105, 106, 403, 500-505, 600, 601): what the guest set, per object as on the console */
+    uint32_t audio_policy, protocol, operation_mode;
+    int action_frame; /* EnableActionFrame done (settings kept below) */
+    uint8_t action_frame_settings[LDN_ACTION_FRAME_SETTINGS_SIZE];
+    uint16_t home_band, home_channel; /* SetHomeChannel (MHz, channel number); 0 = not set */
+    int32_t tx_power;                 /* SetTxPower; -1 = the default (ResetTxPower) */
+    uint64_t frames_sent;             /* SendActionFrame calls that went out */
+    struct LdnMonitor *monitor;       /* the IClientProcessMonitor that holds this client (RegisterClient), or NULL */
+    int orphan;                       /* the service object was closed while a monitor still held it */
 } Ldn;
 static LdnState *st(IpcObject *s) { return &((Ldn *)s->state)->state; }
 static void notify(IpcObject *s) {
@@ -113,14 +124,17 @@ static void l_disconnect_reason(IpcObject *s, IpcCall *c) {
     (void)s;
     IPC_OUT(c, v);
 }
-static void l_security_parameter(IpcObject *s, IpcCall *c) { /* 4 -> security parameter (16 bytes) */
+static void l_security_parameter(IpcObject *s, IpcCall *c) { /* 4 -> SecurityParameter (0x20 bytes: 16 bytes of data, then the network's SessionId) */
     OnlineLdnNetwork net;
     uint32_t r = current_network(s, &net, NULL);
     if (r) {
         c->result = r;
         return;
     }
-    ipc_out(c, net.security_param, 16);
+    uint8_t v[0x20];
+    memcpy(v, net.security_param, 16);
+    ldn_session_id(&net, v + 16);
+    ipc_out(c, v, sizeof v);
 }
 static void l_network_config(IpcObject *s, IpcCall *c) { /* 5 -> NetworkConfig (0x20 bytes) */
     OnlineLdnNetwork net;
@@ -280,10 +294,138 @@ static void l_disconnect(IpcObject *s, IpcCall *c) {
     drop_network(s);
     apply(s, c, LDN_OP_DISCONNECT);
 }
-static void l_initialize(IpcObject *s, IpcCall *c) { apply(s, c, LDN_OP_INITIALIZE); }
+/* The ldn client registry RegisterClient searches (switchbrew: "The initialization cmds add an entry to the above global state"): pid -> client. */
+#define LDN_MAX_CLIENTS 16
+static struct {
+    uint64_t pid;
+    Ldn *ldn;
+} g_clients[LDN_MAX_CLIENTS];
+static pthread_mutex_t g_clients_mu = PTHREAD_MUTEX_INITIALIZER;
+static void clients_add(uint64_t pid, Ldn *l) {
+    pthread_mutex_lock(&g_clients_mu);
+    int slot = -1;
+    for (int i = 0; i < LDN_MAX_CLIENTS && slot < 0; i++)
+        if (g_clients[i].ldn && g_clients[i].pid == pid) slot = i; /* the process initialised again: its newest object */
+    for (int i = 0; i < LDN_MAX_CLIENTS && slot < 0; i++)
+        if (!g_clients[i].ldn) slot = i;
+    if (slot >= 0) g_clients[slot].pid = pid, g_clients[slot].ldn = l;
+    pthread_mutex_unlock(&g_clients_mu);
+}
+static void clients_forget(Ldn *l) {
+    pthread_mutex_lock(&g_clients_mu);
+    for (int i = 0; i < LDN_MAX_CLIENTS; i++)
+        if (g_clients[i].ldn == l) g_clients[i].ldn = NULL;
+    pthread_mutex_unlock(&g_clients_mu);
+}
+static void l_initialize(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    int fresh = l->state == LDN_NONE;
+    apply(s, c, LDN_OP_INITIALIZE);
+    if (c->result || !fresh) return;
+    /* "The Initialize* cmds configure state the same as using SetProtocol with Protocol NX"; the rest is the state init of a new client */
+    l->protocol = LDN_PROTOCOL_NX;
+    l->operation_mode = 0; /* Stable */
+    l->action_frame = 0;
+    l->home_band = l->home_channel = 0;
+    l->tx_power = -1;
+    if (c->has_pid && c->pid) clients_add(c->pid, l);
+}
 static void l_finalize(IpcObject *s, IpcCall *c) {
     drop_network(s); /* Finalize from any state ends a hosted or joined network too */
     apply(s, c, LDN_OP_FINALIZE);
+}
+
+/* 105 SetWirelessAudioPolicy(u32 BluetoothAudioDeviceConnectableMode): the page gives no State rule; the value is kept (it reaches btm on the console,
+ * which napple does not model further). */
+static void l_set_audio_policy(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    if (c->in_size >= 4) l->audio_policy = IPC_IN(c, uint32_t, 0);
+}
+/* 106 SetProtocol(u32 Protocol), the 20.0.0+ behaviour: non-zero and permitted (1 or 3 on NX), State Initialized; kept. */
+static void l_set_protocol(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    uint32_t v = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0;
+    uint32_t r = ldn_check_protocol(l->state, v);
+    if (r) c->result = r;
+    else l->protocol = v;
+}
+/* 403 SetOperationMode(u32 OperationMode: 0 Stable, 1 HighSpeed): State must be Initialized, "the input value is written into state". */
+static void l_set_operation_mode(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    if (l->state != LDN_INITIALIZED) {
+        c->result = LDN_R_INVALID_STATE;
+        return;
+    }
+    l->operation_mode = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0;
+}
+/* 500 EnableActionFrame(ActionFrameSettings 0x80) / 501 DisableActionFrame: State Initialized; the settings are checked and kept. */
+static void l_enable_action_frame(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    if (l->state != LDN_INITIALIZED) {
+        c->result = LDN_R_INVALID_STATE;
+        return;
+    }
+    uint32_t r = ldn_check_action_frame_settings(c->in, c->in_size);
+    if (r) {
+        c->result = r;
+        return;
+    }
+    memcpy(l->action_frame_settings, c->in, LDN_ACTION_FRAME_SETTINGS_SIZE);
+    l->action_frame = 1;
+}
+static void l_disable_action_frame(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    if (l->state != LDN_INITIALIZED) c->result = LDN_R_INVALID_STATE;
+    else l->action_frame = 0;
+}
+/* 502 SendActionFrame(type-0x21 frame; MacAddress destination at 0, MacAddress bssid at 6, channel argument at 0xC (ldn_decode_channel), MessageFlagSet at
+ * 0x10 [offsets unverified: the page lists the fields in this order, not their offsets]): State AccessPointCreated / Station / StationConnected,
+ * ChannelNumber non-zero. The frame goes out over the radio and nobody answers: the OnlineProvider has no action-frame hook, so neither the NullProvider
+ * nor NAPPLE_NET=host carries it to another node (an online path needs a provider ldn_send_action_frame / ldn_recv_action_frame pair). Sending into the
+ * air succeeds, blocking (flag bit0 clear) or not. The buffer limit is lp2p SendToOtherGroup's 0x400 bytes [unverified for ldn]. */
+#define LDN_ACTION_FRAME_MAX 0x400u
+static void l_send_action_frame(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    if (!ldn_state_in(l->state, LDN_STATES(LDN_AP_CREATED, LDN_STATION_OPENED, LDN_STATION_CONNECTED))) {
+        c->result = LDN_R_INVALID_STATE;
+        return;
+    }
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    uint16_t band, ch;
+    if (!b || !b->size || b->size > LDN_ACTION_FRAME_MAX || c->in_size < 0x10 || ldn_decode_channel(c->in + 0xc, c->in_size - 0xc, &band, &ch)) {
+        c->result = LDN_R_INVALID_ARGUMENT;
+        return;
+    }
+    l->frames_sent++;
+}
+/* 503 RecvActionFrame: EnableActionFrame must come first (invalid state otherwise). Nothing ever arrives (no provider hook, see 502); the console's answer
+ * to a non-blocking receive with nothing queued is not documented, and a blocking one would wait forever, which a service handler cannot do. */
+static void l_recv_action_frame(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    c->result = l->action_frame ? HZ_R_LDN_NETWORK_NOT_AVAILABLE : LDN_R_INVALID_STATE;
+}
+/* 505 SetHomeChannel(channel argument, ldn_decode_channel): State Station, band 2.4 or 5 GHz, ChannelNumber non-zero; kept. */
+static void l_set_home_channel(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    uint16_t band, ch;
+    if (l->state != LDN_STATION_OPENED) c->result = LDN_R_INVALID_STATE;
+    else if (ldn_decode_channel(c->in, c->in_size, &band, &ch)) c->result = LDN_R_INVALID_ARGUMENT;
+    else l->home_band = band, l->home_channel = ch;
+}
+/* 600 SetTxPower(s16 Power, 0..0xFF) / 601 ResetTxPower: State AccessPoint, AccessPointCreated, Station or StationConnected. The page also names a "state
+ * field" that must be non-zero without saying which; napple has no such field and does not check it. */
+static int tx_state_ok(LdnState s) { return ldn_state_in(s, LDN_STATES(LDN_AP_OPENED, LDN_AP_CREATED, LDN_STATION_OPENED, LDN_STATION_CONNECTED)); }
+static void l_set_tx_power(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    int16_t v = c->in_size >= 2 ? IPC_IN(c, int16_t, 0) : -1;
+    if (v < 0 || v > 0xff) c->result = LDN_R_INVALID_ARGUMENT;
+    else if (!tx_state_ok(l->state)) c->result = LDN_R_INVALID_STATE;
+    else l->tx_power = v;
+}
+static void l_reset_tx_power(IpcObject *s, IpcCall *c) {
+    Ldn *l = s->state;
+    if (!tx_state_ok(l->state)) c->result = LDN_R_INVALID_STATE;
+    else l->tx_power = -1;
 }
 
 static const IpcCmd local_cmds[] = {
@@ -316,28 +458,80 @@ static const IpcCmd local_cmds[] = {
     {400, "Initialize", l_initialize, IPC_IMPL},
     {401, "Finalize", l_finalize, IPC_IMPL},
     {402, "InitializeWithVersion", l_initialize, IPC_IMPL},
-    {105, "SetWirelessAudioPolicy", sysd_ok, IPC_STUB},
-    {106, "SetProtocol", sysd_ok, IPC_STUB},
-    {403, "SetOperationMode", sysd_ok, IPC_STUB},
-    {500, "EnableActionFrame", sysd_ok, IPC_STUB},
-    {501, "DisableActionFrame", sysd_ok, IPC_STUB},
-    {502, "SendActionFrame", sysd_err_ldn, IPC_STUB},
-    {503, "RecvActionFrame", sysd_err_ldn, IPC_STUB},
-    {505, "SetHomeChannel", sysd_ok, IPC_STUB},
-    {600, "SetTxPower", sysd_ok, IPC_STUB},
-    {601, "ResetTxPower", sysd_ok, IPC_STUB},
+    {105, "SetWirelessAudioPolicy", l_set_audio_policy, IPC_IMPL},
+    {106, "SetProtocol", l_set_protocol, IPC_IMPL},
+    {403, "SetOperationMode", l_set_operation_mode, IPC_IMPL},
+    {500, "EnableActionFrame", l_enable_action_frame, IPC_IMPL},
+    {501, "DisableActionFrame", l_disable_action_frame, IPC_IMPL},
+    {502, "SendActionFrame", l_send_action_frame, IPC_IMPL},
+    {503, "RecvActionFrame", l_recv_action_frame, IPC_STUB}, /* the "nothing received" answer is undocumented; blocking mode cannot be honoured */
+    {505, "SetHomeChannel", l_set_home_channel, IPC_IMPL},
+    {600, "SetTxPower", l_set_tx_power, IPC_IMPL},
+    {601, "ResetTxPower", l_reset_tx_power, IPC_IMPL},
 };
 /* Closing the service object ends a network it still hosts or joined, and stops the provider's notifications to it. */
+static void ldn_teardown(Ldn *l) {
+    IpcObject o = {.state = l};
+    drop_network(&o);
+    watch(&o, 0); /* no notification may reach the freed state */
+    free(l);
+}
+/* An IClientProcessMonitor that registered this client holds a reference to it (switchbrew: the object "is then incref'd and written into the
+ * IClientProcessMonitor state"): the client, and a network it hosts or joined, then lives until the monitor is closed too. */
 static void ldn_local_destroy(IpcObject *o) {
-    drop_network(o);
-    watch(o, 0); /* no notification may reach the freed state */
-    free(o->state);
+    Ldn *l = o->state;
+    clients_forget(l);
+    if (l->monitor) {
+        l->orphan = 1;
+        return;
+    }
+    ldn_teardown(l);
 }
 static void ldn_create_local(IpcObject *s, IpcCall *c) {
     (void)s;
     Ldn *l = calloc(1, sizeof *l);
     ipc_out_object(c, IPC_OBJECT("IUserLocalCommunicationService", local_cmds, l, ldn_local_destroy));
 }
-static const IpcCmd ldn_cmds[] = {{0, "CreateUserLocalCommunicationService", ldn_create_local, IPC_IMPL}, {1, "CreateClientProcessMonitor", sysd_err_ldn, IPC_STUB}};
+/* ldn:u 1 CreateClientProcessMonitor [18.0.0+] -> IClientProcessMonitor { 0 RegisterClient(PID, u64 pid_placeholder) }; sdknso uses the pair at the end of
+ * its ldn initialisation. RegisterClient, per switchbrew: already registered -> 0; no registry entry for the PID -> 0; PID 0 -> 0; otherwise the client
+ * is referenced by the monitor and its registry entry is cleared; 0. Every path answers success. */
+typedef struct LdnMonitor {
+    Ldn *client;
+} LdnMonitor;
+static void mon_register_client(IpcObject *s, IpcCall *c) {
+    LdnMonitor *m = s->state;
+    uint64_t pid = c->has_pid ? c->pid : 0;
+    if (m->client || !pid) return;
+    pthread_mutex_lock(&g_clients_mu);
+    for (int i = 0; i < LDN_MAX_CLIENTS; i++)
+        if (g_clients[i].ldn && g_clients[i].pid == pid) {
+            Ldn *l = g_clients[i].ldn;
+            g_clients[i].ldn = NULL;
+            if (!l->monitor) { /* a client is held by one monitor */
+                m->client = l;
+                l->monitor = m;
+            }
+            break;
+        }
+    pthread_mutex_unlock(&g_clients_mu);
+}
+static const IpcCmd monitor_cmds[] = {{0, "RegisterClient", mon_register_client, IPC_IMPL}};
+static void monitor_destroy(IpcObject *o) {
+    LdnMonitor *m = o->state;
+    Ldn *l = m->client;
+    if (l) {
+        l->monitor = NULL;
+        if (l->orphan) ldn_teardown(l); /* the last reference to a client whose service object is already closed */
+    }
+    free(m);
+}
+static void ldn_create_monitor(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_object(c, IPC_OBJECT("IClientProcessMonitor", monitor_cmds, calloc(1, sizeof(LdnMonitor)), monitor_destroy));
+}
+static const IpcCmd ldn_cmds[] = {
+    {0, "CreateUserLocalCommunicationService", ldn_create_local, IPC_IMPL},
+    {1, "CreateClientProcessMonitor", ldn_create_monitor, IPC_IMPL},
+};
 static IpcObject *ldn_open(void) { return IPC_OBJECT("ldn:u", ldn_cmds, NULL, NULL); }
 void service_register_ldn(void) { ipc_register_service("ldn:u", ldn_open); }

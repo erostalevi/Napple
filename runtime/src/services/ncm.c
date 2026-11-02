@@ -264,6 +264,71 @@ static void meta_attributes(IpcObject *s, IpcCall *c) {
     uint8_t v = m && ncm_meta_parse(m->data, m->size, &mv) == 0 ? mv.attributes : 0;
     IPC_OUT(c, v);
 }
+/* Extended-header queries (switchbrew 'NCM services' extended header layouts, layout facts only): the extended header follows the 8-byte meta header.
+ *   Application {u64 patch id, u32 required system version, u32 required application version}
+ *   Patch {u64 application id, u32 required system version, u32 pad}   AddOnContent {u64 application id, u32 required application version,
+ *   u8 content accessibilities, u8 pad[3], ...}
+ * 19 GetRequiredApplicationVersion(key) -> u32 (AddOnContent only), 22 GetOwnerApplicationId(key) -> u64 (the application itself, or the application a
+ * patch / add-on belongs to), 23 GetContentAccessibilities(key) -> u8 (AddOnContent only). A meta of another type, or one whose extended header is too short,
+ * answers "invalid content meta key" (napple's reading of the result, unverified). */
+#define R_NCM_INVALID_CONTENT_META_KEY HZ_RESULT(HZ_MOD_NCM, 240) /* [unverified] */
+static const uint8_t *meta_ext(IpcCall *c, NcmMeta **out_m, uint16_t need) {
+    NcmMeta *m = meta_find(in_key(c, 0));
+    NcmMetaView v;
+    if (!m) {
+        c->result = HZ_R_NCM_CONTENT_META_NOT_FOUND;
+        return NULL;
+    }
+    if (ncm_meta_parse(m->data, m->size, &v) || v.ext_size < need || 8u + v.ext_size > m->size) {
+        c->result = R_NCM_INVALID_CONTENT_META_KEY;
+        return NULL;
+    }
+    if (out_m) *out_m = m;
+    return m->data + 8;
+}
+static void meta_required_app_version(IpcObject *s, IpcCall *c) {
+    (void)s;
+    NcmMeta *m = NULL;
+    const uint8_t *ext = meta_ext(c, &m, 0xC);
+    if (!ext) return;
+    if (m->key[12] != NCM_TYPE_ADDON) {
+        c->result = R_NCM_INVALID_CONTENT_META_KEY;
+        return;
+    }
+    uint32_t v;
+    memcpy(&v, ext + 8, 4);
+    IPC_OUT(c, v);
+}
+static void meta_owner_application_id(IpcObject *s, IpcCall *c) {
+    (void)s;
+    NcmMeta *m = meta_find(in_key(c, 0));
+    if (m && m->key[12] == NCM_TYPE_APPLICATION) {
+        uint64_t id = key_id(m->key);
+        IPC_OUT(c, id);
+        return;
+    }
+    const uint8_t *ext = meta_ext(c, &m, 8);
+    if (!ext) return;
+    if (m->key[12] != NCM_TYPE_PATCH && m->key[12] != NCM_TYPE_ADDON) {
+        c->result = R_NCM_INVALID_CONTENT_META_KEY;
+        return;
+    }
+    uint64_t id;
+    memcpy(&id, ext, 8);
+    IPC_OUT(c, id);
+}
+static void meta_content_accessibilities(IpcObject *s, IpcCall *c) {
+    (void)s;
+    NcmMeta *m = NULL;
+    const uint8_t *ext = meta_ext(c, &m, 0xD);
+    if (!ext) return;
+    if (m->key[12] != NCM_TYPE_ADDON) {
+        c->result = R_NCM_INVALID_CONTENT_META_KEY;
+        return;
+    }
+    uint8_t v = ext[0xC];
+    IPC_OUT(c, v);
+}
 
 /* ---- IContentStorage ---- */
 static void st_generate_placeholder_id(IpcObject *s, IpcCall *c) {
@@ -415,6 +480,9 @@ static const IpcCmd meta_db_cmds[] = {
     {16, "HasContent", meta_has_content, IPC_IMPL},
     {17, "ListContentMetaInfo", meta_list_meta_info, IPC_IMPL},
     {18, "GetAttributes", meta_attributes, IPC_IMPL},
+    {19, "GetRequiredApplicationVersion", meta_required_app_version, IPC_IMPL},
+    {22, "GetOwnerApplicationId", meta_owner_application_id, IPC_IMPL},
+    {23, "GetContentAccessibilities", meta_content_accessibilities, IPC_IMPL},
 };
 static const IpcCmd storage_cmds[] = {
     {0, "GeneratePlaceHolderId", st_generate_placeholder_id, IPC_IMPL},

@@ -98,8 +98,22 @@ int main(void) {
         memset(&c, 0, sizeof c); svc_set_in_buf(&c, ids, 8); svc_call_c(o, 200, &c);
         CHECK(g_aoc_required_n == 1, "...a later call replaces the list");
         svc_call(o, 200, NULL, 0, &c); CHECK(c.result == 0 && g_aoc_required_n == 0, "...an empty request clears it");
-        CHECK(svc_find(o, 200)->status == IPC_IMPL && svc_find(o, 302)->status == IPC_IMPL && svc_find(o, 300)->status == IPC_STUB && svc_find(o, 100)->status == IPC_STUB, "200 and 302 are real; the e-shop and host setup rows stay documented defaults");
+        CHECK(svc_find(o, 200)->status == IPC_IMPL && svc_find(o, 302)->status == IPC_IMPL && svc_find(o, 300)->status == IPC_STUB && svc_find(o, 110)->status == IPC_IMPL, "200 and 302 are real; the host setup rows stay documented defaults (100 / 101 real since r9, 110 since r10)");
         unlink(mp); rmdir(dd); g_cfg.data_dir = NULL;
+    }
+    { /* ipc-depth-cloud r9: 100 / 101 IPurchaseEventManager */
+        IpcObject *ao = aoc_open(); IpcCall d;
+        svc_call(ao, 100, NULL, 0, &d); CHECK(d.result == 0 && d.nout_objects == 1 && !strcmp(d.out_objects[0]->iface, "IPurchaseEventManager"), "100 CreateEcPurchasedEventManager");
+        IpcObject *pm = d.out_objects[0]; AocPurchaseMgr *m = pm->state; CHECK(!m->permanent, "...not the permanent one");
+        uint8_t tgt[24] = "delivery-target"; uint64_t pid0 = 0; memset(&d, 0, sizeof d); d.in = (const uint8_t *)&pid0; d.in_size = 8; svc_set_in_buf(&d, tgt, sizeof tgt); svc_call_c(pm, 0, &d);
+        CHECK(d.result == 0 && m->has_default && m->target_size == sizeof tgt && !memcmp(m->target, tgt, sizeof tgt), "0 SetDefaultDeliveryTarget keeps the target");
+        uint64_t appid = APP; memset(&d, 0, sizeof d); d.in = (const uint8_t *)&appid; d.in_size = 8; svc_set_in_buf(&d, tgt, 4); svc_call_c(pm, 1, &d);
+        CHECK(d.result == 0 && m->has_target && m->target_app == APP && m->target_size == 4, "1 SetDeliveryTarget keeps the application id and target");
+        svc_call(pm, 2, NULL, 0, &d); CHECK(d.result == 0 && d.nout_copy == 1, "2 GetPurchasedEventReadableHandle: an event");
+        svc_call(pm, 3, NULL, 0, &d); CHECK(d.result == R_AOC_NO_PURCHASED_PRODUCT && d.out_size == 0, "3 PopPurchasedProductInfo: nothing purchased offline");
+        uint8_t uid[16] = {1}; svc_call(pm, 4, uid, 16, &d); CHECK(d.result == R_AOC_NO_PURCHASED_PRODUCT && m->pops == 2, "4 PopPurchasedProductInfoWithUid: the same");
+        svc_call(ao, 101, NULL, 0, &d); CHECK(d.result == 0 && d.nout_objects == 1 && ((AocPurchaseMgr *)d.out_objects[0]->state)->permanent, "101 CreatePermanentEcPurchasedEventManager");
+        CHECK(svc_find(ao, 100)->status == IPC_IMPL && svc_find(ao, 101)->status == IPC_IMPL, "100 / 101 are real rows");
     }
     printf("{\"test\":\"svc_aoc\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;

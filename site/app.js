@@ -40,6 +40,49 @@
     $("dl-meta").textContent = "Set the repo in index.html";
   }
 
+  // Online support: online.json is generated from compat/online.json by tools/support/gen_support.py. On failure the static link stays.
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text != null) e.textContent = text;
+    return e;
+  }
+  fetch("online.json")
+    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
+    .then(function (d) {
+      var grid = $("online-grid"), modes = d.modes || [];
+      grid.textContent = "";
+      (d.titles || []).forEach(function (t) {
+        var card = el("article", "ocard"), h = el("h3", null, t.name), ul = el("ul"), none = [];
+        h.appendChild(el("small", null, t.backend === "none" ? "no online" : t.backend));
+        card.appendChild(h);
+        modes.forEach(function (m) {
+          var s = (t.modes || {})[m.key];
+          if (!s) return;
+          if (s.status === "unsupported") { none.push(m.label); return; }
+          var li = el("li");
+          li.appendChild(el("span", null, m.label));
+          li.appendChild(el("em", "st " + s.status, s.status));
+          li.appendChild(el("small", null, s.note + " (" + s.checked + ")"));
+          ul.appendChild(li);
+        });
+        if (ul.children.length) card.appendChild(ul);
+        if (none.length) card.appendChild(el("p", null, none.length === modes.length ? "No online or local multiplayer in this game."
+          : "Not in this game: " + none.join(", ") + "."));
+        grid.appendChild(card);
+      });
+      var dl = $("online-modes");
+      modes.forEach(function (m) {
+        var w = el("div");
+        w.appendChild(el("dt", null, m.label));
+        w.appendChild(el("dd", null, m.about));
+        dl.appendChild(w);
+      });
+      dl.hidden = !modes.length;
+      $("online-meta").textContent = "Last checked " + d.last_checked + ". works · partial · broken · untested (the game has the mode, not tried on Napple yet).";
+    })
+    .catch(function () {});
+
   // Screenshots: assets/screens/<file>. Studio slots fall back to the illustrated window, optional (game) slots disappear.
   var anyGame = false;
   document.querySelectorAll(".shot[data-shot]").forEach(function (fig) {

@@ -54,9 +54,10 @@ int main(void) {
     svc_call(bsv, 30200, NULL, 0, &c); CHECK(c.result == 0, "register task"); svc_call(bsv, 90100, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no tasks");
     svc_call(bsv, 90201, NULL, 0, &c); CHECK(c.result == 0, "clear storage");
     /* ipc-depth-sys: bcat commands that needed a network answer offline the way the sync does */
-    svc_call(bsv, 90200, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "GetDeliveryList: offline");
+    /* ipc-depth-95 r10: GetDeliveryList reads the list a sync left (none without a provider: not found) and 20400 keeps the registration (now real rows) */
+    svc_call(bsv, 90200, NULL, 0, &c); CHECK(c.result == HZ_R_BCAT_NOT_FOUND, "GetDeliveryList: offline, no list");
     svc_call(bsv, 20400, NULL, 0, &c); CHECK(c.result == 0, "RegisterSystemApplicationDeliveryTask: accepted");
-    CHECK(svc_find(bsv, 20400)->status == IPC_STUB, "...as a documented default");
+    CHECK(svc_find(bsv, 20400)->status == IPC_IMPL, "...and kept");
 
     /* MD5 vectors */
     { uint8_t d[16];
@@ -175,6 +176,14 @@ int main(void) {
     svc_call(bs, 10100, NULL, 0, &c); IpcObject *pg3 = c.out_objects[0];
     memset(&c, 0, sizeof c); svc_set_out_buf(&c, big, sizeof big); svc_call_c(pg3, 1, &c); memcpy(&res, big + 4, 4);
     CHECK(res == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "no provider: the sync fails offline");
+    { /* ipc-depth-cloud r9: 20101 is the 10101 sync with an explicit application id (no provider here: the sync fails offline like 10100) */
+        svc_call(root, 0, NULL, 0, &c); IpcObject *b2 = c.out_objects[0];
+        uint8_t in20101[8 + BCAT_NAME_SIZE] = {0}; memcpy(in20101 + 8, "news", 4);
+        svc_call(b2, 20101, in20101, sizeof in20101, &c); CHECK(c.result == 0 && c.nout_objects == 1 && !strcmp(c.out_objects[0]->iface, "IDeliveryCacheProgressService"), "20101 returns a progress service");
+        IpcObject *pg4 = c.out_objects[0]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, big, sizeof big); svc_call_c(pg4, 1, &c); memcpy(&res, big + 4, 4);
+        CHECK(res == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "...whose result matches 10100 without a provider");
+        CHECK(svc_find(b2, 20101)->status == IPC_IMPL, "20101 is a real row");
+    }
     printf("{\"test\":\"svc_bcat\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

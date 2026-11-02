@@ -4,7 +4,10 @@
  * encode the answer. The default provider (online_null_provider) is a console with no network. An external module (a private build, another
  * user's library) supplies a different table through the C ABI documented in docs/guides/network-providers.md.
  *
- * This repository contains NO online service implementation: no endpoints, tokens, certificates or protocol code. Portable, no macOS dependency.
+ * This repository contains no Nintendo online service implementation and never contacts Nintendo: no Nintendo endpoints, tokens, certificates or
+ * keys. The only online service it knows is Napple's own (runtime/src/net/net_online*.c over NAPPLE_NET=host, server crates/napple-online/): with
+ * NAPPLE_ONLINE_SERVER set, a title's game-server name goes to a community-run Napple server and its account token is issued by that server
+ * (docs/guides/napple-online.md). This header stays portable, no macOS dependency.
  * Numbering of errors is FreeBSD's (hz_result.h): a provider returns -1 and sets *err to an HZ_E* value, exactly what a guest sees from bsd:u. */
 #pragma once
 #include <stddef.h>
@@ -102,7 +105,10 @@ typedef struct {
 } OnlineLdnNode;
 /* ssl SetVerifyOption bits (nn::ssl::Connection::VerifyOption) as the provider receives them. */
 enum { ONLINE_TLS_VERIFY_PEER_CA = 1u << 0, ONLINE_TLS_VERIFY_HOST_NAME = 1u << 1, ONLINE_TLS_VERIFY_DATE = 1u << 2 };
+/* ssl IoMode values (tls_set_io_mode, napple-online addition). */
+enum { ONLINE_TLS_IO_BLOCKING = 1, ONLINE_TLS_IO_NONBLOCKING = 2 };
 
+struct OnlineFriendInfo; /* friend details (online-friends), defined after the table */
 /* TLS: the provider owns the whole connection state. sock is a provider socket handle (see sockets) or -1. */
 typedef struct OnlineProvider {
     uint32_t abi_version;        /* must be ONLINE_ABI_VERSION */
@@ -184,7 +190,49 @@ typedef struct OnlineProvider {
     int (*ldn_get_nodes)(void *ctx, OnlineLdnNode *out, uint32_t max, uint32_t *self);
     /* ldn: `cb(arg)` is called (from any thread) whenever the hosted or joined network changes: a station joined or left, the host went away. NULL clears. */
     void (*ldn_set_notify)(void *ctx, void (*cb)(void *arg), void *arg);
+
+    /* ---- additions of napple-online (2026-11-02-r7): struct_size-extensible, ABI version unchanged ---- */
+    /* acc (ONLINE_CAP_ACCOUNT): the ID token of the linked account of `user_id`, as EnsureIdTokenCacheAsync / LoadIdTokenCache hand it to the title (an
+     * opaque printable string; the Napple provider returns a token issued by the configured Napple server). Returns the length written to out (no NUL
+     * needed), 0 = no token (not linked, server unreachable). */
+    size_t (*account_id_token)(void *ctx, const uint8_t user_id[16], char *out, size_t n);
+    /* ssl: the connection's I/O mode as the guest set it (nn::ssl IoMode: 1 = blocking, the default; 2 = non-blocking). On a non-blocking connection
+     * tls_read (and tls_write) return -1 with *err = HZ_EAGAIN instead of waiting, which the ssl service answers with ResultWouldBlock. 0 = ok. */
+    int (*tls_set_io_mode)(void *ctx, void *conn, uint32_t mode);
+
+    /* ---- additions of online-friends (2026-11-02-r10): struct_size-extensible, ABI version unchanged (ONLINE_CAP_FRIENDS) ---- */
+    /* The friend list with presence (online first): the count written to out (<= max), starting at `offset`. */
+    uint32_t (*friend_list_info)(void *ctx, uint32_t offset, struct OnlineFriendInfo *out, uint32_t max);
+    /* One friend by id: 0 and *out filled, nonzero = not a friend. */
+    int (*friend_find)(void *ctx, uint64_t id, struct OnlineFriendInfo *out);
+    /* Friend requests received and still pending. */
+    uint32_t (*friend_request_count)(void *ctx);
+    /* The next queued friend notification (ONLINE_FRIEND_NOTE_*): 0 and *type / *id filled, nonzero = queue empty. */
+    int (*friend_pop_note)(void *ctx, uint32_t *type, uint64_t *id);
+    /* `cb(arg)` is called (from any thread) when a friend notification is queued. NULL clears. */
+    void (*friend_set_notify)(void *ctx, void (*cb)(void *arg), void *arg);
+    /* The local user declared (1) or closed (0) an online-play session (DeclareOpenOnlinePlaySession / DeclareCloseOnlinePlaySession). */
+    void (*friend_online_play)(void *ctx, int open);
 } OnlineProvider;
+
+/* friend (online-friends): what friend_list_info / friend_find return. The app field is the friend's own UpdateUserPresence app data, visible only
+ * to a title of the same presence group (same_app); status follows nn::friends PresenceStatus (0 offline, 1 online, 2 online play). */
+#define ONLINE_FRIEND_APP_FIELD 0xC0u
+typedef struct OnlineFriendInfo {
+    uint64_t id;          /* as OnlineFriend.id */
+    char name[33];        /* UTF-8 nickname */
+    uint8_t status;       /* 0 offline, 1 online, 2 online play */
+    uint8_t same_app;     /* playing the running title */
+    uint8_t is_new;       /* became a friend during this run */
+    uint8_t has_app_field;
+    uint8_t pad[3];
+    uint64_t last_online_s; /* unix seconds, 0 = unknown */
+    uint64_t title_id;      /* the title the friend plays, 0 = none */
+    char icon_id[32];       /* provider-defined picture id, empty = none */
+    uint8_t app_field[ONLINE_FRIEND_APP_FIELD];
+} OnlineFriendInfo;
+/* friend_pop_note types (nn::friends NotificationType). */
+enum { ONLINE_FRIEND_NOTE_LIST_UPDATED = 0x1, ONLINE_FRIEND_NOTE_NEW_REQUEST = 0x65 };
 
 /* The active provider; never NULL. The first call loads ONLINE_ENV_PROVIDER once (a failure is logged and falls back to the NullProvider). */
 const OnlineProvider *online_provider(void);

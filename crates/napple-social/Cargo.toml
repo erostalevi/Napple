@@ -1,0 +1,33 @@
+[package]
+name = "napple-social"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Napple friends and presence service: friend codes, requests, blocks, presence, session invites (REST + WebSocket, SQLite). Napple's own community service."
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "napple-social"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws", "macros"] }
+base64 = "0.22"
+ed25519-dalek = "2"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+tracing = "0.1"
+unicode-normalization = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "env-filter", "std", "ansi"] }
+uuid = { version = "1", features = ["v7"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+tokio-tungstenite = "0.27"

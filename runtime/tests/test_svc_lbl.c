@@ -42,6 +42,16 @@ int main(void) {
     svc_call(o, 5, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) != 0.35f, "leaving VR mode applies the normal brightness");
     svc_call(o, 29, NULL, 0, &c); CHECK(c.out_size == 1 && c.out[0] == 0, "auto brightness not supported (no sensor)");
     svc_call(o, 19, NULL, 0, &c); CHECK(c.result == 0, "brightness mapping accepted");
+    { /* ipc-depth-cloud r9: 19-22 mappings are kept and read back */
+        IpcObject *lo = lbl_open(); IpcCall d;
+        svc_call(lo, 20, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 12 && SVC_OUT(&d, float, 0) == 0.f, "20 GetCurrentBrightnessMapping: zero until set");
+        float bm[3] = {0.25f, 0.5f, 1.f}, am[3] = {10.f, 200.f, 3000.f};
+        svc_call(lo, 19, bm, sizeof bm, &d); CHECK(d.result == 0, "19 SetCurrentBrightnessMapping");
+        svc_call(lo, 21, am, sizeof am, &d); CHECK(d.result == 0, "21 SetCurrentAmbientLightSensorMapping");
+        svc_call(lo, 20, NULL, 0, &d); CHECK(!memcmp(d.out, bm, 12), "20 reads back the brightness mapping");
+        svc_call(lo, 22, NULL, 0, &d); CHECK(d.out_size == 12 && !memcmp(d.out, am, 12), "22 GetCurrentAmbientLightSensorMapping reads back its own");
+        for (unsigned k = 19; k <= 22; k++) CHECK(svc_find(lo, k)->status == IPC_IMPL, "lbl %u is a real row", k);
+    }
     printf("{\"test\":\"svc_lbl\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

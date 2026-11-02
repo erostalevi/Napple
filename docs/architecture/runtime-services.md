@@ -438,3 +438,23 @@ Every "is named X, the reference says Y" note of `test_ipc_reference runtime -v`
 - **NetConnect (0x0f) output:** one storage `{u32 0; Result}`, as netConnect writes it. The Result is 2110-0190 (ErrorHandlingCompleted; the title resubmits) when a connection was made, and 2110-2900 when the user left without one. Offline, the host answers 2900. The old `{2110-1111, 0}` read as Result 0, which the SDK turns into 0190, so titles retried.
 - **Verified** on MK8D Online Play offline: one CreateLibraryApplet 0xf per attempt, no retry, back to the menu.
 - Filler: vi 2102 ConvertScalingMode is real.
+
+### ipc-depth-cloud (2026-11-02, r9): set:sys store, pctl local settings, notif:a alarms, display settings
+[Note](../archive/changes/2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9.md). Status: tested on Linux, unbuilt on macOS. IPC depth went from 1473 impl / 257 stub to 1571 impl / 246 stub (11 stub rows converted, 87 new rows).
+- **set:sys** keeps what Set* writes for the life of the process (`sysset_core.c`), and Get* reads it back. set GetLanguageCode / GetRegionCode / GetQuestFlag / GetDeviceNickName and set:sys GetColorSetId / GetDeviceTimeZoneLocationName follow the store and fall back to the host values. The serial number comes from `NAPPLE_SERIAL`, else `XAW00000000000`.
+- **notif:a** keeps up to 8 alarms with their parameters (`notif_core.c`). They never fire, because there is no HOME menu.
+- **pctl** keeps a local PIN code, the temporary unlock, the default rating organization (from `NAPPLE_REGION`), the free-communication list and the last-change time (`pctl_core.c`).
+- **aoc 100 / 101** hand out an IPurchaseEventManager: it keeps delivery targets, its event never fires and nothing can be popped.
+- **vi display settings:** ISystemDisplayService and IManagerDisplayService keep gamma, contrast, CMU, RGB range, content type, magnification, alpha and power state. The host window is not affected. The indirect layer image maps (2450 / 2451) return a transparent frame.
+- **time:** ParseTimeZoneBinary turns TZif data into a fixed-offset rule at the zone's standard offset (DST is dropped).
+- **Other new rows:** pdm 18 / 19, lbl 20 / 22, ncm meta 19 / 22 / 23, bcat 20101.
+
+### ipc-depth-95 (2026-11-02, r10): friend store, ssl/nifm/bsd/sfdnsres depth, fs permission checks, applet restarts
+[Note](../archive/changes/2026-11-02-claude-ipc-depth-95-2026-11-02-r10.md). Status: tested on the Mac (full runtime gate), verified with four-title boots offline and with `NAPPLE_NET=host`. IPC depth (scan.py) 92% -> 98.02%: reference rows 1264 impl / 61 stub, missing 0.
+- **friend:u** (`friend_core.c`): the console's per-user state is kept: play history, in-person requests, own presence and the user setting with an installation friend code. Cache rows need a linked network service account (provider `account_info`) and answer from the provider's friend list; sync rows also need `ONLINE_CAP_FRIENDS` and a connection. Offline: unchanged ("no network service account").
+- **ssl:** Peek / Poll / verify errors / per-connection options are real; context PKI and CRL ids are kept; the certificate-list rows agree (an empty built-in list).
+- **nifm:** profile store, scan request (0 access points), sleep / wake / shutdown over live requests, telemetry event. **bsd:** eventfd descriptors, ShutdownAllSockets(how), core mask. **sfdnsres:** resolver options, Query / Fetch / CancelQuery. **nsd:** application environment type (default lp), GetSettingUrl.
+- **fs:** fsp-srv access-checked rows follow the title's main.npdm FS permission bits (PermissionDenied without the bit). **account / olsc:** async contexts whose result follows the provider's account state (0x1907C for an unlinked user); open contexts (160 / 130 / 131).
+- **applet:** ExecuteProgram / CreateApplication*AndRequestToStart restart the running program (macOS `execv`, user channel carried over); HDCP, GPU-error abort delay, system button, Home short press, PrepareForJit; SetLcdBacklighOffEnabled drives lbl's switch state.
+- **ldn / npns / bcat / prepo / lm / ovln / btm / aoc:** ldn configuration rows and client process monitor; npns suspend state and receiver; bcat notifier, suspension, delivery list; prepo keeps reports for ReadAll*; lm accessor (retail no-op); ovln per-sender queues; btm documented constants; aoc contents service manager.
+- 61 reference rows stay `IPC_STUB` (no public layout, a missing provider hook, or a host feature Napple lacks); each has its reason in the table.

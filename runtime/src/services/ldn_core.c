@@ -99,10 +99,16 @@ static uint64_t get64(const uint8_t *p) {
     memcpy(&v, p, 8);
     return v;
 }
+/* NetworkId.sessionId (NetworkInfo +0x10, SecurityParameter +0x10): random per network on a console. The provider ABI has no field for it, so it is
+ * derived from the network's random bssid and security data: every node of a network computes the same id. */
+void ldn_session_id(const OnlineLdnNetwork *n, uint8_t out[16]) {
+    for (unsigned i = 0; i < 16; i++) out[i] = (uint8_t)(n->security_param[15 - i] ^ n->bssid[i % 6] ^ (0x5a + i));
+}
 void ldn_net_encode(const OnlineLdnNetwork *n, uint8_t out[LDN_NETINFO_SIZE]) {
     memset(out, 0, LDN_NETINFO_SIZE);
     put64(out, n->local_communication_id);
     put16(out + 0x0a, n->scene_id);
+    ldn_session_id(n, out + 0x10);
     memcpy(out + 0x20, n->bssid, 6);
     size_t sl = strnlen(n->ssid, sizeof n->ssid - 1);
     out[0x26] = (uint8_t)sl;
@@ -197,3 +203,37 @@ uint32_t ldn_connect_done(LdnState *s, uint32_t r) {
     return 0;
 }
 int ldn_state_has_network(LdnState s) { return s == LDN_AP_CREATED || s == LDN_STATION_CONNECTED; }
+
+/* ---- configuration rows (ldn_core.h) ---- */
+unsigned ldn_state_mask(const int *states) {
+    unsigned m = 0;
+    for (; *states >= 0; states++) m |= 1u << (unsigned)*states;
+    return m;
+}
+uint32_t ldn_check_protocol(LdnState state, uint32_t protocol) {
+    if (protocol == 0 || protocol >= 32 || !(LDN_PROTOCOL_NX_PERMISSION >> protocol & 1u))
+        return R_INVALID_ARG; /* the console returns a separate (undocumented) result for an unpermitted value */
+    if (state != LDN_INITIALIZED) return R_INVALID_STATE;
+    return 0;
+}
+uint32_t ldn_check_action_frame_settings(const uint8_t *in, size_t n) {
+    if (!in || n < LDN_ACTION_FRAME_SETTINGS_SIZE) return R_INVALID_ARG;
+    uint16_t mode, size;
+    memcpy(&mode, in + 0x3c, 2);
+    memcpy(&size, in + 0x3e, 2);
+    return mode >= 1 && mode <= 2 && size >= 0x10 && size <= 0x40 ? 0 : R_INVALID_ARG;
+}
+int ldn_decode_channel(const uint8_t *in, size_t n, uint16_t *band_mhz, uint16_t *channel) {
+    uint16_t a = 0, b = 0;
+    if (n >= 2) memcpy(&a, in, 2);
+    if (n >= 4) memcpy(&b, in + 2, 2);
+    if (a == 24 || a == 50) { /* before 20.0.0: s16 Band, s16 ChannelNumber */
+        *band_mhz = a == 24 ? 2400 : 5000;
+        *channel = b;
+    } else { /* 20.0.0+: u16 band index << 10 | ChannelNumber */
+        unsigned idx = a >> 10;
+        *band_mhz = idx == 2 ? 2400 : idx == 5 ? 5000 : 0;
+        *channel = a & 0x3ffu;
+    }
+    return *band_mhz && *channel ? 0 : -1;
+}

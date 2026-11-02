@@ -145,7 +145,7 @@ int main(void) {
     CHECK(c.result == 0 && c.out_size == 4 && c.out[2] == 0, "18 GetInternetConnectionStatus: disconnected");
     svc_call(gen, 15, NULL, 0, &c);
     CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "15 GetCurrentIpConfigInfo: no connection");
-    CHECK(svc_find(gen, 15)->status == IPC_STUB && svc_find(gen, 18)->status == IPC_IMPL, "...a documented default; 18 is real");
+    CHECK(svc_find(gen, 15)->status == IPC_IMPL && svc_find(gen, 18)->status == IPC_IMPL, "...15 and 18 are real");
     uint32_t types = 3;
     svc_call(gen, 41, NULL, 0, &c);
     CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "41 GetAcceptableNetworkTypeFlag: none by default");
@@ -183,7 +183,9 @@ int main(void) {
     CHECK(!strcmp(svc_find(bs, 28)->name, "GetResourceStatistics") && svc_find(bs, 28)->status == IPC_IMPL, "bsd 28 GetResourceStatistics");
     CHECK(!strcmp(svc_find(bs, 29)->name, "RecvMMsg") && !strcmp(svc_find(bs, 30)->name, "SendMMsg") && !strcmp(svc_find(bs, 31)->name, "EventFd"), "bsd 29 RecvMMsg, 30 SendMMsg, 31 EventFd");
     svc_call(bs, 31, NULL, 0, &c);
-    CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, int32_t, 0) == -1 && SVC_OUT(&c, int32_t, 4) == HZ_EOPNOTSUPP, "bsd 31 EventFd: {-1, EOPNOTSUPP}");
+    /* ipc-depth-95 r10: EventFd became a real event descriptor (test_svc_net_r10.c covers it); with no arguments it is EventFd(0, 0) */
+    CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, int32_t, 0) >= 0 && SVC_OUT(&c, int32_t, 4) == 0, "bsd 31 EventFd: {a descriptor, 0}");
+    bsdg_reset(bsd_g());
 
     /* ---- prepo renumbering */
     IpcObject *pr = prepo_open();
@@ -199,7 +201,7 @@ int main(void) {
     }
     svc_call(pr, 30300, NULL, 0, &c);
     CHECK(SVC_OUT(&c, uint64_t, 0) == 8 * sizeof rep, "all eight report ids are counted in the storage");
-    CHECK(svc_find(pr, 90200) == NULL && svc_find(pr, 90100)->status == IPC_STUB && !strcmp(svc_find(pr, 90100)->name, "ReadAllReportFiles"), "90100 is ReadAllReportFiles (no stored reports); the invented 90200 is gone");
+    CHECK(svc_find(pr, 90200) == NULL && svc_find(pr, 90100)->status == IPC_IMPL && !strcmp(svc_find(pr, 90100)->name, "ReadAllReportFiles"), "90100 is ReadAllReportFiles (kept reports read back); the invented 90200 is gone");
     CHECK(!strcmp(svc_find(pr, 20100)->name, "SaveSystemReportOld") && !strcmp(svc_find(pr, 20102)->name, "SaveSystemReport"), "20100 is the old SaveSystemReport, 20102 the current one");
 
     printf("{\"test\":\"svc_nifm_audit\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);

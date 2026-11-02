@@ -51,6 +51,9 @@ enum {
 #define HZ_R_HID_NOT_CONNECTED HZ_RESULT(HZ_MOD_HID, 7)                                /* [unverified] */
 #define HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE HZ_RESULT(HZ_MOD_FRIENDS, 15) /* [unverified] */
 #define HZ_R_SSL_NOT_CONNECTED HZ_RESULT(HZ_MOD_SSL, 205)                              /* [unverified] */
+#define HZ_R_SSL_INVALID_ARGUMENT HZ_RESULT(HZ_MOD_SSL, 2)                             /* [unverified] a bad option, size, format or a second client cert */
+#define HZ_R_SSL_NOT_FOUND HZ_RESULT(HZ_MOD_SSL, 3)                                    /* [unverified] an unknown CRL id, certificate id or index */
+#define HZ_R_SSL_WOULD_BLOCK HZ_RESULT(HZ_MOD_SSL, 204) /* a non-blocking connection has nothing to read or write yet (MK8D's NEX loop waits for it) */
 
 /* BSD errno values as the Horizon socket service reports them (FreeBSD numbering). */
 enum {
@@ -92,3 +95,19 @@ enum {
 /* getaddrinfo / netdb error numbers (FreeBSD numbering) */
 enum { HZ_EAI_AGAIN = 2, HZ_EAI_FAIL = 4, HZ_EAI_NONAME = 8 };
 enum { HZ_NETDB_HOST_NOT_FOUND = 1, HZ_NETDB_TRY_AGAIN = 2, HZ_NETDB_NO_RECOVERY = 3, HZ_NETDB_NO_DATA = 4 };
+/* acc (module 124), switchbrew 'Error codes': 200 NetworkServiceAccountRegistrationRequired (0x1907C), the user has no network service account. That acc and
+ * olsc report exactly this code for each network operation of an unlinked user is [unverified]. */
+#define HZ_R_ACC_NSA_REGISTRATION_REQUIRED HZ_RESULT(124, 200)
+/* ipc-depth-95 r10 (nifm network profiles). No public value is known for these two: they are placed in the nifm module so a title sees a nifm failure;
+ * the descriptions are [unverified] placeholders. */
+#define HZ_R_NIFM_NETWORK_PROFILE_NOT_FOUND HZ_RESULT(HZ_MOD_NIFM, 3400) /* [unverified] GetNetworkProfile / RemoveNetworkProfile of an unknown uuid */
+#define HZ_R_NIFM_NETWORK_PROFILE_FULL HZ_RESULT(HZ_MOD_NIFM, 3401)      /* [unverified] SetNetworkProfile with every profile slot taken */
+
+/* ipc-depth-95 r10 (applet part): am results from switchbrew 'Error codes' (module 128 rows, value and description as listed there), the lr result
+ * switchbrew's PrepareForJit note quotes, and the ovln / ec answers napple picked where no public code exists. */
+#define HZ_R_AM_TITLE_NOT_FOUND HZ_RESULT(HZ_MOD_APPLET, 37)           /* 0x4A80 "Title-ID not found" (listed for applet launches; [unverified] for applications) */
+#define HZ_R_AM_INVALID_PARAMETERS HZ_RESULT(HZ_MOD_APPLET, 506)       /* 0x3F480 "Invalid parameters" */
+#define HZ_R_AM_DEBUG_MODE_NOT_ENABLED HZ_RESULT(HZ_MOD_APPLET, 974)   /* 0x79C80 "DebugMode not enabled" */
+#define HZ_R_LR_PROGRAM_NOT_FOUND HZ_RESULT(8, 2)                      /* 0x408: what PrepareForJit returns when the jit sysmodule does not exist */
+#define HZ_R_OVLN_QUEUE_FULL HZ_RESULT(25, 2)                          /* [unverified] ovln (module 25) Send into a full queue with OverflowOption Error */
+#define HZ_R_EC_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE HZ_RESULT(124, 280) /* [unverified] account: the user has no linked Nintendo account */

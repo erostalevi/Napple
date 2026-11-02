@@ -43,8 +43,22 @@ static void logger_set_destination(IpcObject *self, IpcCall *c) {
     (void)self;
     (void)c;
 }
+/* 11 OpenSharedMemoryAccessorForHashedLog [22.0.0+] -> ISharedMemoryAccessor (switchbrew 'Log services': 0 GetBufferSize, 1 GetSharedMemoryHandle,
+ * 2 GetCanPushEventHandle, 3 GetCanPopEventHandle). switchbrew: lm "is stubbed on retail, with all the commands/interfaces being present but returning
+ * success and doing nothing", so the console hands out the accessor and its commands succeed with nothing behind them. The same here: the object
+ * exists and its rows give the retail answer, success with no output (no shared log buffer, no handles). */
+static const IpcCmd shm_accessor_cmds[] = {
+    {0, "GetBufferSize", sysd_ok, IPC_IMPL},
+    {1, "GetSharedMemoryHandle", sysd_ok, IPC_IMPL},
+    {2, "GetCanPushEventHandle", sysd_ok, IPC_IMPL},
+    {3, "GetCanPopEventHandle", sysd_ok, IPC_IMPL},
+};
+static void logger_open_shm_accessor(IpcObject *self, IpcCall *c) {
+    (void)self;
+    ipc_out_object(c, IPC_OBJECT("ISharedMemoryAccessor", shm_accessor_cmds, NULL, NULL));
+}
 static const IpcCmd logger_cmds[] = {{0, "Log", logger_log, IPC_IMPL}, {1, "SetDestination", logger_set_destination, IPC_IMPL},
-                                      {2, "TransmitHashedLog", logger_hashed, IPC_IMPL}, {3, "DevNotify", logger_hashed, IPC_IMPL}, {11, "OpenSharedMemoryAccessorForHashedLog", sysd_err_generic, IPC_STUB}};
+                                      {2, "TransmitHashedLog", logger_hashed, IPC_IMPL}, {3, "DevNotify", logger_hashed, IPC_IMPL}, {11, "OpenSharedMemoryAccessorForHashedLog", logger_open_shm_accessor, IPC_IMPL}};
 
 static void lm_open_logger(IpcObject *self, IpcCall *c) {
     (void)self;

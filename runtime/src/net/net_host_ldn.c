@@ -13,6 +13,7 @@
  *
  * Not modelled: the passphrase (the service does not hand it over) and the accept policy / MAC filters (the service keeps them). */
 #include "net_host.h"
+#include "net_room.h"
 #include "hz_result.h"
 #include <arpa/inet.h>
 #include <errno.h>
@@ -193,6 +194,27 @@ static void get_nodes(Rd *r, OnlineLdnNode *nodes) {
         rstr(r, nodes[i].user_name);
     }
 }
+/* The encodings, for net_room_ldn.c (LDN over a Napple room uses the same NetworkInfo and node list layout). */
+size_t nh_ldn_encode_net(const OnlineLdnNetwork *n, uint8_t *buf, size_t cap) {
+    W w = {buf, 0, cap, 0};
+    put_net(&w, n);
+    return w.bad ? 0 : w.n;
+}
+size_t nh_ldn_decode_net(const uint8_t *buf, size_t n, OnlineLdnNetwork *out) {
+    Rd r = {buf, n, 0, 0};
+    get_net(&r, out);
+    return r.bad ? 0 : r.off;
+}
+size_t nh_ldn_encode_nodes(const OnlineLdnNode *nodes, uint8_t *buf, size_t cap) {
+    W w = {buf, 0, cap, 0};
+    put_nodes(&w, nodes, nodes[0].ipv4);
+    return w.bad ? 0 : w.n;
+}
+size_t nh_ldn_decode_nodes(const uint8_t *buf, size_t n, OnlineLdnNode *nodes) {
+    Rd r = {buf, n, 0, 0};
+    get_nodes(&r, nodes);
+    return r.bad ? 0 : r.off;
+}
 static void hdr(W *w, uint16_t type) {
     w32(w, LDN_MAGIC);
     w16(w, type);
@@ -296,6 +318,10 @@ void nh_ldn_free(NhLdn *l) {
     free(l);
 }
 void nh_ldn_set_notify(void *ctx, void (*cb)(void *), void *arg) {
+    if (net_room_ldn_active()) { /* rooms: LDN goes through the room server (net_room_ldn.c) */
+        nr_ldn_set_notify(cb, arg);
+        return;
+    }
     NhLdn *l = nh_ldn_of(ctx);
     pthread_mutex_lock(&l->cb_lock); /* after this returns with NULL, no callback runs any more */
     l->cb = cb;
@@ -575,6 +601,7 @@ static void teardown(NhLdn *l, uint16_t reason) {
 
 /* ---- host ------------------------------------------------------------------------------------------------------------ */
 uint32_t nh_ldn_create(void *ctx, const OnlineLdnNetwork *cfg) {
+    if (net_room_ldn_active()) return nr_ldn_create(cfg);
     NhLdn *l = nh_ldn_of(ctx);
     nh_ldn_destroy(ctx);
     nh_ldn_disconnect(ctx);
@@ -635,6 +662,10 @@ fail:
     return HZ_R_LDN_NETWORK_NOT_AVAILABLE;
 }
 void nh_ldn_destroy(void *ctx) {
+    if (net_room_ldn_active()) {
+        nr_ldn_destroy();
+        return;
+    }
     NhLdn *l = nh_ldn_of(ctx);
     pthread_mutex_lock(&l->lock);
     int host = l->role == 1;
@@ -649,6 +680,7 @@ void nh_ldn_destroy(void *ctx) {
     pthread_mutex_unlock(&l->lock);
 }
 uint32_t nh_ldn_set_advertise(void *ctx, const void *data, uint32_t n) {
+    if (net_room_ldn_active()) return nr_ldn_set_advertise(data, n);
     NhLdn *l = nh_ldn_of(ctx);
     if (n > ONLINE_LDN_ADVERTISE_MAX) n = ONLINE_LDN_ADVERTISE_MAX;
     pthread_mutex_lock(&l->lock);
@@ -662,6 +694,7 @@ uint32_t nh_ldn_set_advertise(void *ctx, const void *data, uint32_t n) {
     return r;
 }
 uint32_t nh_ldn_reject(void *ctx, uint32_t ipv4) {
+    if (net_room_ldn_active()) return nr_ldn_reject(ipv4);
     NhLdn *l = nh_ldn_of(ctx);
     uint32_t r = R_NODE_NOT_FOUND;
     pthread_mutex_lock(&l->lock);
@@ -702,6 +735,7 @@ static void probe(int fd, uint32_t ip, uint16_t base, const uint8_t *pkt, size_t
     }
 }
 int nh_ldn_scan(void *ctx, uint64_t lcid, OnlineLdnNetwork *out, uint32_t max) {
+    if (net_room_ldn_active()) return nr_ldn_scan(lcid, out, max);
     NhLdn *l = nh_ldn_of(ctx);
     int fd = socket(AF_INET, SOCK_DGRAM, 0), one = 1;
     if (fd < 0) return -1;
@@ -770,6 +804,7 @@ static int find_seen(NhLdn *l, const uint8_t bssid[6], uint32_t *ip, uint16_t *p
     return found;
 }
 uint32_t nh_ldn_connect(void *ctx, const OnlineLdnNetwork *net) {
+    if (net_room_ldn_active()) return nr_ldn_connect(net);
     NhLdn *l = nh_ldn_of(ctx);
     nh_ldn_destroy(ctx);
     nh_ldn_disconnect(ctx);
@@ -846,6 +881,10 @@ uint32_t nh_ldn_connect(void *ctx, const OnlineLdnNetwork *net) {
     return 0;
 }
 void nh_ldn_disconnect(void *ctx) {
+    if (net_room_ldn_active()) {
+        nr_ldn_disconnect();
+        return;
+    }
     NhLdn *l = nh_ldn_of(ctx);
     pthread_mutex_lock(&l->lock);
     int station = l->role == 2;
@@ -860,6 +899,7 @@ void nh_ldn_disconnect(void *ctx) {
 
 /* ---- queries --------------------------------------------------------------------------------------------------------- */
 uint32_t nh_ldn_get_network(void *ctx, OnlineLdnNetwork *out, uint16_t *reason) {
+    if (net_room_ldn_active()) return nr_ldn_get_network(out, reason);
     NhLdn *l = nh_ldn_of(ctx);
     pthread_mutex_lock(&l->lock);
     uint32_t r = l->role ? 0 : HZ_R_LDN_NETWORK_NOT_AVAILABLE;
@@ -874,6 +914,7 @@ uint32_t nh_ldn_get_network(void *ctx, OnlineLdnNetwork *out, uint16_t *reason) 
     return r;
 }
 int nh_ldn_get_nodes(void *ctx, OnlineLdnNode *out, uint32_t max, uint32_t *self) {
+    if (net_room_ldn_active()) return nr_ldn_get_nodes(out, max, self);
     NhLdn *l = nh_ldn_of(ctx);
     pthread_mutex_lock(&l->lock);
     int n = -1;
