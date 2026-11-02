@@ -33,6 +33,7 @@ void napple_online_register_subtab(const char *title, napple_online_page_fn make
 }
 NSUInteger fe_online_subtab_count(void) { return g_subtabs.count; }
 NSString *fe_online_subtab_title(NSUInteger i) { return g_subtab_titles[i]; }
+napple_online_page_fn fe_online_subtab_fn(NSUInteger i) { return (napple_online_page_fn)[g_subtabs[i] pointerValue]; }
 NSView *fe_online_subtab_make(NSUInteger i) {
     napple_online_page_fn f = (napple_online_page_fn)[g_subtabs[i] pointerValue];
     return (__bridge_transfer NSView *)f(fe_online_api());

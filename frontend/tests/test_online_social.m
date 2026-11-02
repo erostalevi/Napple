@@ -3,18 +3,13 @@
 #import <Cocoa/Cocoa.h>
 #include <string.h>
 #include "napple_online_social.h"
+#include "overlay_online.h"
 
 static int g_checked, g_failed;
 #define CHECK(c, ...) do { g_checked++; if (!(c)) { g_failed++; fprintf(stderr, "FAIL %s:%d: ", __FILE__, __LINE__); fprintf(stderr, __VA_ARGS__); fprintf(stderr, "\n"); } } while (0)
 
 /* ---- the shell side, faked ---- */
-typedef struct { char title[16]; napple_online_page_fn make; } sub;
-static sub g_subs[8];
-static int g_nsubs;
-void napple_online_register_subtab(const char *title, napple_online_page_fn make) {
-    strlcpy(g_subs[g_nsubs].title, title, sizeof g_subs[0].title);
-    g_subs[g_nsubs++].make = make;
-}
+/* The real shell registry (overlay_online.m) collects the sub-tabs; the pages are built with this test's canned API. */
 
 /* ---- canned API ---- */
 static napple_online_friend g_friends[4];
@@ -78,7 +73,7 @@ static NSButton *find_btn(NSView *page, NSString *title, int nth) {
     return nil;
 }
 static NSView *page_for(const char *title) {
-    for (int i = 0; i < g_nsubs; i++) if (!strcmp(g_subs[i].title, title)) return (__bridge_transfer NSView *)g_subs[i].make(&g_api);
+    for (NSUInteger i = 0; i < fe_online_subtab_count(); i++) if (!strcmp(fe_online_subtab_title(i).UTF8String, title)) return (__bridge_transfer NSView *)fe_online_subtab_fn(i)(&g_api);
     return nil;
 }
 static NSWindow *g_win;
@@ -108,9 +103,9 @@ int main(void) {
         fill();
         napple_online_social_host host = {.toast = host_toast};
         napple_online_social_init(&host);
-        CHECK(g_nsubs == 6, "six sub-tabs registered, got %d", g_nsubs);
+        CHECK(fe_online_subtab_count() == 6, "six sub-tabs registered, got %d", (int)fe_online_subtab_count());
         napple_online_social_init(&host);
-        CHECK(g_nsubs == 6, "init is idempotent");
+        CHECK(fe_online_subtab_count() == 6, "init is idempotent");
 
         NSView *fr = page_for("Friends");
         CHECK(fr && find_btn(fr, @"Join", 0) && !find_btn(fr, @"Join", 1), "exactly one friend is joinable");
