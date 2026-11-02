@@ -12,11 +12,26 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
 void log_line(const char *tag, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+
+/* NAPPLE_NET_LOG=1: one line per socket call with its arguments and result (never payload bytes). */
+static int net_log = -1;
+#define NHLOG(...)                                                                                                                                             \
+    do {                                                                                                                                                       \
+        if (net_log < 0) net_log = getenv("NAPPLE_NET_LOG") && *getenv("NAPPLE_NET_LOG") == '1';                                                            \
+        if (net_log) log_line("net", __VA_ARGS__);                                                                                                             \
+    } while (0)
+static const char *addr_str(const OnlineAddr *a, char *b, size_t n) {
+    if (!a) return "-";
+    if (a->family == 28) snprintf(b, n, "[v6]:%u", a->port);
+    else snprintf(b, n, "%u.%u.%u.%u:%u", a->addr[0], a->addr[1], a->addr[2], a->addr[3], a->port);
+    return b;
+}
 
 #define NH_MAX_SOCKS 512
 #define NH_SLICE_MS 50
@@ -132,6 +147,7 @@ int nh_sock_open(void *ctx, int domain, int type, int protocol, int *err) {
     int nb = (type & BSD_SOCK_NONBLOCK) != 0;
     type &= ~(BSD_SOCK_NONBLOCK | BSD_SOCK_CLOEXEC);
     int hd = domain == BSD_AF_INET ? AF_INET : domain == BSD_AF_INET6 ? AF_INET6 : -1;
+    NHLOG("socket(domain %d, type %d, protocol %d)", domain, type, protocol);
     if (hd < 0) return fail(err, HZ_EAFNOSUPPORT);
     int ht = type == BSD_SOCK_STREAM ? SOCK_STREAM : type == BSD_SOCK_DGRAM ? SOCK_DGRAM : type == BSD_SOCK_RAW ? SOCK_RAW : -1;
     if (ht < 0) return fail(err, HZ_EPROTONOSUPPORT);
@@ -180,6 +196,8 @@ int nh_sock_bind(void *ctx, int h, const OnlineAddr *a, int *err) {
     if (e) *err = e;
     else if (bind(s->fd, (struct sockaddr *)&ss, len) == 0) r = 0;
     else *err = nh_errno(errno);
+    char ab[64];
+    NHLOG("bind(%d, %s) = %d errno %d", h, addr_str(a, ab, sizeof ab), r, r ? *err : 0);
     nh_sock_put(s);
     return r;
 }
@@ -244,6 +262,8 @@ int nh_sock_connect(void *ctx, int h, const OnlineAddr *a, int *err) {
         else if (so) *err = nh_errno(so);
         else r = 0;
     }
+    char ab[64];
+    NHLOG("connect(%d, %s) = %d errno %d", h, addr_str(a, ab, sizeof ab), r, r ? *err : 0);
     nh_sock_put(s);
     return r;
 }
@@ -293,6 +313,8 @@ int64_t nh_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, con
             break;
         }
     }
+    char ab[64];
+    NHLOG("send(%d, %zu bytes, flags %#x, to %s) = %lld errno %d", h, n, flags, addr_str(len ? to : NULL, ab, sizeof ab), (long long)r, r < 0 ? *err : 0);
     nh_sock_put(s);
     return r;
 }
@@ -333,6 +355,8 @@ int64_t nh_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, OnlineAdd
             break;
         }
     }
+    char ab[64];
+    NHLOG("recv(%d, %zu bytes, flags %#x) = %lld errno %d from %s", h, n, flags, (long long)r, r < 0 ? *err : 0, addr_str(r >= 0 ? from : NULL, ab, sizeof ab));
     nh_sock_put(s);
     return r;
 }
@@ -450,6 +474,9 @@ int nh_sock_setsockopt(void *ctx, int h, int level, int opt, const void *val, si
             if (setsockopt(s->fd, hl, ho, val, (socklen_t)n) != 0) r = fail_host(err);
             break;
     }
+    int v32 = 0;
+    if (val && n >= 4) memcpy(&v32, val, 4);
+    NHLOG("setsockopt(%d, level %#x, name %#x, %zu bytes, first word %d) = %d errno %d", h, level, opt, n, v32, r, r ? *err : 0);
     nh_sock_put(s);
     return r;
 }

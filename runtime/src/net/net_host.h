@@ -61,6 +61,12 @@ int nh_sock_poll(void *ctx, OnlinePollFd *fds, unsigned n, int timeout_ms, int *
 int nh_dns_resolve(void *ctx, const char *host, const char *service, int family, OnlineResolved *out);
 int nh_dns_reverse(void *ctx, const OnlineAddr *a, char *host, size_t n);
 int nh_eai(int host_eai); /* a host EAI_* as the guest's */
+/* 1 when `name` is one of the console vendor's online-service domains or a subdomain of one: it never resolves to the real servers (EAI_NONAME). */
+int nh_dns_blocked(const char *name);
+/* Redirect hook, NULL by default (a later item, napple-online, sets it). Called by dns_resolve for every name the guest resolves: return 1 with `out`
+ * (capacity n, NUL-terminated) holding the name or address to resolve instead, or 0 to leave the name alone. Applied before the block check, so a blocked
+ * name resolves only when redirected, and a redirect to a blocked name is refused. Only DNS consults it: sockets take addresses. */
+extern int (*net_host_redirect_lookup)(const char *name, char *out, size_t n);
 
 /* ---- TLS (net_host_tls.m) ---- */
 void *nh_tls_new(void *ctx, int sock_handle);

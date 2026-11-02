@@ -293,3 +293,4 @@ reads them. `NAPPLE_PACING_FIXED` and `NAPPLE_PACING_GAME` (gfx pacing) and `NAP
 | `NAPPLE_LDN_PORT` | port; default 11452 | First of the 8 UDP discovery ports a host listens on and a scan probes (host provider LDN). | `runtime/src/net/net_host_ldn.c` |
 | `NAPPLE_LDN_PEERS` | comma-separated IPv4 addresses; unset = none | Extra addresses a scan probes, for networks that drop broadcasts. | `runtime/src/net/net_host_ldn.c` |
 | `NAPPLE_LDN_SCAN_MS` | 1..5000; default 150 | How long a scan waits for hosts to answer. | `runtime/src/net/net_host_ldn.c` |
+| `NAPPLE_NET_LOG` | `1`; unset = off | Host provider: one `net:` line per socket call (socket, bind, connect, setsockopt, send, recv) with arguments and result, never payload bytes. | `runtime/src/net/net_host_sock.c` |

@@ -7,7 +7,9 @@ Branch `claude/net-host-provider-2026-11-02-r6`, Mac session. Integrator file: `
   - `net_host_sock.c`: real BSD sockets. Host descriptors always non-blocking; guest blocking mode, `SO_RCVTIMEO`/`SO_SNDTIMEO`, `MSG_DONTWAIT`, `MSG_WAITALL`
     applied by waiting in 50 ms poll slices (a Close from another guest thread ends a wait with EBADF); waits give the virtual core away (`thread_core_away`).
     FreeBSD option / flag / errno numbering (Darwin's above 65 mapped).
-  - `net_host_dns.c`: `getaddrinfo` / `getnameinfo`, EAI mapping.
+  - `net_host_dns.c`: `getaddrinfo` / `getnameinfo`, EAI mapping. Names under the console vendor's domains (nintendo.net, .com, .co.jp, .eu,
+    nintendowifi.net, nintendo-europe.com, nintendoswitch.com) answer EAI_NONAME unless the `net_host_redirect_lookup` hook (NULL here) redirects them
+    (orchestrator requirement, added at hand-off).
   - `net_host_tls.m`: SecureTransport client over the guest's socket; verification against the host trust store plus guest-imported CAs; verify option.
   - `net_host_nifm.m`: SystemConfiguration (primary IPv4 interface, router, DNS) + `getifaddrs`; wired-style connection; 1 s cache.
   - `net_host_ldn.c`: LDN over the LAN (UDP discovery on `NAPPLE_LDN_PORT`..+7 via 127.0.0.1, broadcast, `NAPPLE_LDN_PEERS`; TCP session JOIN / ACCEPT /
@@ -30,6 +32,8 @@ reports, nsd and network accounts keep their offline answers (NULL entry points)
 - Verified here (Mac, macOS stack): sockets, DNS (localhost and a public name), nifm (the Mac's address), TLS (throw-away local CA, public server against
   the host trust store), LDN between provider instances and through `ldn:u`, the bsd / ssl / ldn / nifm handlers routing to it. `make -C runtime test
   test-services test-ipc-reference` green.
-- Title boots: see the integrator file (four titles 60 s with and without `NAPPLE_NET=host`, MK8D Online Play).
+- Title boots (verified): SMO, LAS, MK8D, ACNH 60 s with and without `NAPPLE_NET=host`: rc 0, no missing IPC. SMO and ACNH's nifm requests are accepted in
+  host mode. MK8D Online Play in host mode reaches the account ID token check (refused: no Nintendo account), shows the error applet and then aborts
+  (svcBreak) because the error applet gives no output data: an applet-area gap, listed in the integrator file. Offline, unchanged.
 - `offline.c` (after merging main once nifm-netconnect had landed): ssl ImportServerPki keeps the certificate; DoHandshake hands the context's CAs and an
   explicit SetVerifyOption to the provider. Verified through the ssl handlers against the local test server.

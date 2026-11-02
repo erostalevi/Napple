@@ -31,6 +31,12 @@ static void *blocked_recv(void *arg) {
     return NULL;
 }
 
+static int test_redirect(const char *name, char *out, size_t n) { /* the shape napple-online's server hook has */
+    if (!strcmp(name, "conntest.nintendowifi.net")) return snprintf(out, n, "127.0.0.1"), 1;
+    if (!strcmp(name, "nintendo.com")) return snprintf(out, n, "www.nintendo.com"), 1;
+    return 0;
+}
+
 int main(void) {
     (void)svc_call;
     /* ---- selection: unset / offline / unknown keep the NullProvider; host picks the built-in one ---- */
@@ -93,6 +99,14 @@ int main(void) {
     as = p->sock_accept(c0, ls, NULL, &err); CHECK(as >= 0, "accept");
     OnlinePollFd rp[2] = {{as, ONLINE_POLLIN, 0}, {-1, ONLINE_POLLIN, 0}}; t0 = nh_now_ms();
     CHECK(p->sock_poll(c0, rp, 2, 120, &err) == 0 && nh_now_ms() - t0 >= 100, "poll with nothing to read times out");
+    { /* Poll with nothing pollable waits out its timeout (titles back off with Poll(0, t)); offline it still answers at once */
+        OnlinePollFd neg = {-1, ONLINE_POLLIN, 0};
+        t0 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 0, 120, &err) == 0 && nh_now_ms() - t0 >= 100, "bsd poll of zero descriptors waits for the timeout");
+        t0 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 1, 120, &err) == 0 && nh_now_ms() - t0 >= 100, "bsd poll of only negative descriptors waits too");
+        t0 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 0, 0, &err) == 0 && nh_now_ms() - t0 < 50, "timeout 0 returns at once");
+        IpcObject *bp = bsd_open(); static Call k; memset(&k, 0, sizeof k); k.in[0] = 0; k.in[1] = 120; k.c.in = (const uint8_t *)k.in; k.c.in_size = 8;
+        t0 = nh_now_ms(); svc_call_c(bp, 6, &k.c); CHECK(ri(&k.c, 0) == 0 && nh_now_ms() - t0 >= 100, "bsd:u Poll(nfds 0, 120 ms) without buffers waits");
+    }
     OnlinePollFd bad = {400, ONLINE_POLLIN, 0}; CHECK(p->sock_poll(c0, &bad, 1, 0, &err) == 1 && bad.revents == ONLINE_POLLNVAL, "poll on an unknown handle: POLLNVAL");
     p->sock_close(c0, as, &err); p->sock_close(c0, ns, &err); p->sock_close(c0, ls, &err);
 
@@ -131,6 +145,19 @@ int main(void) {
     OnlineResolved res; CHECK(p->dns_resolve(c0, "localhost", NULL, 2, &res) == 0 && res.count >= 1 && res.addrs[0].family == 2 && res.addrs[0].addr[0] == 127, "resolve localhost (IPv4)");
     CHECK(p->dns_resolve(c0, "localhost", "80", 0, &res) == 0 && res.addrs[0].port == 80, "resolve localhost with a service: the port");
     CHECK(p->dns_resolve(c0, "napple-test.invalid", NULL, 0, &res) == HZ_EAI_NONAME, "an .invalid name: EAI_NONAME");
+    /* the console vendor's online-service domains never resolve (EAI_NONAME, like an offline resolver); look-alikes are not caught */
+    const char *blocked[] = {"nintendo.net", "conntest.nintendowifi.net", "ACCOUNTS.Nintendo.COM.", "x-%.nintendo.net", "a.b.nintendo.co.jp", "nintendo.eu",
+                             "www.nintendo-europe.com", "nintendoswitch.com", "api.nintendoswitch.com"};
+    for (size_t i = 0; i < sizeof blocked / sizeof *blocked; i++)
+        CHECK(nh_dns_blocked(blocked[i]) && p->dns_resolve(c0, blocked[i], "443", 0, &res) == HZ_EAI_NONAME && res.count == 0, "%s: refused, host not found", blocked[i]);
+    CHECK(!nh_dns_blocked("notnintendo.net") && !nh_dns_blocked("nintendo.net.example.org") && !nh_dns_blocked("nintendo") && !nh_dns_blocked("localhost") &&
+          !nh_dns_blocked(""), "look-alike and unrelated names are not blocked");
+    CHECK(net_host_redirect_lookup == NULL, "no redirect hook by default");
+    net_host_redirect_lookup = test_redirect;
+    CHECK(p->dns_resolve(c0, "conntest.nintendowifi.net", "80", 2, &res) == 0 && res.addrs[0].addr[0] == 127 && res.addrs[0].port == 80, "a redirected name resolves to its target");
+    CHECK(p->dns_resolve(c0, "nintendo.com", NULL, 2, &res) == HZ_EAI_NONAME, "a redirect to another blocked name is refused");
+    CHECK(p->dns_resolve(c0, "accounts.nintendo.net", NULL, 2, &res) == HZ_EAI_NONAME, "a name the hook leaves alone stays blocked");
+    net_host_redirect_lookup = NULL;
     OnlineAddr l1 = lo(0); char hn[256] = {0}; CHECK(p->dns_reverse(c0, &l1, hn, sizeof hn) == 0 && hn[0], "reverse 127.0.0.1 -> '%s'", hn);
     OnlineNetInfo ni; CHECK(p->net_info(c0, &ni) == 0, "nifm net_info");
     int rc = p->dns_resolve(c0, "example.com", NULL, 2, &res);
@@ -153,6 +180,7 @@ int main(void) {
     /* ---- back to offline: the previous answers ---- */
     unsetenv("NAPPLE_NET"); online_provider_reset(); bsdg_reset(bsd_g()); online_null_reset();
     r = bs(b0, 2, 2, 1, 0, NULL, 0, NULL, 0, NULL, 0); r = bs(b0, 14, 0, 0, 0, sa, 16, NULL, 0, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_ENETDOWN, "variable unset again: Connect is ENETDOWN as before");
+    { OnlinePollFd neg = {-1, 1, 0}; int64_t t1 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 0, 200, &err) == 0 && nh_now_ms() - t1 < 50, "offline: Poll of nothing still answers at once"); }
     printf("%d checks, %d failed\n", g_checked, g_failed);
     return g_failed != 0;
 }
