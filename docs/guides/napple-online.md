@@ -44,16 +44,27 @@ NAPPLE_NET=host NAPPLE_ONLINE_SERVER=http://<server address>:8737 runtime/build/
 | Variable | Meaning |
 |---|---|
 | `NAPPLE_NET=host` | the host network provider (real sockets, DNS, TLS, nifm); required |
-| `NAPPLE_ONLINE_SERVER` | `http://host[:port]` (plain, LAN / same Mac) or `https://host[:port]` (a public server behind a TLS proxy). Unset = no Napple online (r6 behaviour) |
+| `NAPPLE_ONLINE_SERVER` | `http://host[:port]` (plain, LAN / same Mac), `https://host[:port]` (a public server behind a TLS proxy), or `default` = `https://pretend.napple.lat`, the community server. Unset = no Napple online (r6 behaviour); it is always opt-in |
 | `NAPPLE_ONLINE_STATE_DIR` | where account credentials are kept; default `<support dir>/online/<host_port>/<uid>.txt` (mode 0600) |
 | `NAPPLE_ONLINE_DEBUG=1` | logs every lookup, connection, TLS step and (dropped) play report of the glue |
 
-Server options: `--listen ADDR:PORT` (default `127.0.0.1:8737`), `--data DIR` (accounts and the server key; default
-`~/Library/Application Support/Napple/online-server`), `-v` (every call and every packet in hex).
+Server configuration (flags win over environment variables; a container needs only `napple-online serve`):
+
+| Flag | Variable | Meaning |
+|---|---|---|
+| `--listen ADDR:PORT` | `NAPPLE_ONLINE_HTTP` | the one TCP listener: account/token API, `GET /healthz` (200 `ok`), `GET /napple/v1/info`, and the NEX game server (PRUDP Lite inside WebSocket). Default `127.0.0.1:8737` |
+| `--data DIR` | `NAPPLE_ONLINE_DATA` | `accounts.json` and `server.key`, the only state the server keeps. Default `~/Library/Application Support/Napple/online-server` |
+| `-v` | `NAPPLE_ONLINE_VERBOSE=1` | every call and every packet in hex |
+| | `NAPPLE_ONLINE_PUBLIC_HOST` | the name clients use (reported by `/napple/v1/info`) |
+| | `NAPPLE_ONLINE_NEX_AUTH`, `NAPPLE_ONLINE_NEX_SECURE`, `NAPPLE_ONLINE_PUBLIC_IP` | accepted and ignored (logged): Switch titles reach NEX through the WebSocket on the HTTP listener and the station URLs name "the same server", so no UDP ports or public IP are needed |
+
+Logs go to stdout. Behind a reverse proxy the client address is taken from the first `X-Forwarded-For` entry. The crate needs only std,
+`serde`/`serde_json` and `sha2`: no TLS library, nothing macOS-specific.
 
 ### A public server
 
-Run `napple-online serve --listen 127.0.0.1:8737` behind any TLS reverse proxy that forwards WebSocket upgrades (Caddy, nginx), with a normal
+Run `napple-online serve --listen 127.0.0.1:8737` behind any TLS reverse proxy that forwards WebSocket upgrades (Caddy's `reverse_proxy` does
+by default; nginx needs the `Upgrade` / `Connection` headers), with a normal
 public certificate for its name, and give players `NAPPLE_ONLINE_SERVER=https://<name>`. The runtime verifies that certificate against the Mac's
 trust store, so a server needs no Napple-specific certificate and the account secret never crosses the internet in clear. Keep `--data` private:
 `server.key` signs every token and seals every ticket.
@@ -111,8 +122,8 @@ two clients matched into one room over PRUDP, in process.
 | 1. Trace MK8D's online path | verified (table above) |
 | 2. Server unit tests | tested (`cargo test -p napple-online`) |
 | 3. Client: Napple tokens, game-server name redirected | verified on MK8D (run log) |
-| 4. MK8D connects, logs in, reaches the online menu | verified on MK8D **with two service fixes that are not in this branch** (bsd Poll honouring its timeout; ssl ResultWouldBlock / IoMode), see the integrator file |
-| 4. Worldwide matchmaking / two instances in one room | not reached: the title reports a communication error right after AutoMatchmake (cause under investigation, see the integrator file) |
+| 4. MK8D connects, logs in, reaches the online menu | verified on MK8D, **with one ssl service change that is not in this branch** (IoMode handed to the provider, would-block answered as ResultWouldBlock; patch in the integrator file). The bsd Poll timeout fix it also needs landed with net-host-provider |
+| 4. Worldwide matchmaking / two instances in one room | not reached: after AutoMatchmakeWithParam_Postpone the title shows "A communication error has occurred." (play report: error 2618-0562, `SessionKeepFailed`, a Pia error) before Pia opens any socket |
 | 5. Without `NAPPLE_ONLINE_SERVER`: unchanged | tested (unit test; runtime tests) |
 
 Not implemented: DataStore (115), the MK8D tournament ("Competition") and SimpleSearchObject methods, real rankings, friends / presence through
