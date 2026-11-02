@@ -7,6 +7,7 @@
 #include "applet_lib_core.h"
 #include "applet_web_core.h"
 #include "applet_album_core.h"
+#include "install_id_core.h"
 #include "hz_result.h"
 #include "../frontend.h"
 #include "../gfx.h"
@@ -1863,9 +1864,13 @@ static void af_notify_running(IpcObject *s, IpcCall *c) {
     summary_stage("notify-running");
     LOG("applet", "the guest reports it is running (NotifyRunning)");
 }
+/* GetPseudoDeviceId: a UUID per (installation, application, user), stable across runs: two Napple players are two consoles to the title (local and LAN
+ * play tell stations apart by it). The installation id lives in the user-data root (install_id_core.c). */
 static void af_get_pseudo_device_id(IpcObject *s, IpcCall *c) {
     (void)s;
-    uint8_t id[16] = {0x4e, 0x61, 0x70, 0x70, 0x6c, 0x65};
+    uint8_t inst[16], id[16];
+    install_id_get(g_cfg.save_root, inst);
+    install_pseudo_device_id(inst, strtoull(g_cfg.title_id, NULL, 16), g_user_id, id);
     ipc_out(c, id, 16);
 }
 /* GetSaveDataSize(): {size, journal size} of the account save, from control.nacp (UserAccountSaveDataSize 0x3080, UserAccountSaveDataJournalSize 0x3088) when
