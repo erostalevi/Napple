@@ -427,6 +427,16 @@ impl Server {
         } else {
             vec![]
         };
+        let existing: Vec<u64> = if flags & GATHERING_FLAG_VERBOSE_PARTICIPANTS != 0 {
+            let mut v: Vec<u64> = s.participants.iter().map(|p| p.pid).filter(|p| *p != joiner).collect();
+            v.dedup();
+            v
+        } else {
+            vec![]
+        };
+        for p in existing {
+            self.notify(w, joiner, p, notif::PARTICIPANT_JOINED, gid as u64, p, "", n as u64);
+        }
         for t in targets {
             self.notify(w, t, joiner, notif::PARTICIPANT_JOINED, gid as u64, joiner, msg, n as u64);
         }
@@ -1158,7 +1168,10 @@ mod tests {
         assert_eq!(s2.g.id, s1.g.id);
         // the second join reaches both
         assert_eq!(notification(&rx_a), (200, notif::PARTICIPANT_JOINED, s1.g.id as u64, 200));
+        // the joiner is told about everyone already there (the owner) before its own join: Pia's connect job refuses a station it has not heard of
+        assert_eq!(notification(&rx_b), (100, notif::PARTICIPANT_JOINED, s1.g.id as u64, 100));
         assert_eq!(notification(&rx_b), (200, notif::PARTICIPANT_JOINED, s1.g.id as u64, 200));
+        assert!(rx_b.try_recv().is_err());
     }
 
     #[test]
