@@ -3,6 +3,7 @@
 # into /opt/napple, log in to ECR, `docker compose pull && up -d`, prune old images.
 #   roll.sh <instance id> <online image ref> <room image ref> <public ip> <domain> <log group>
 # Rollback = run it again with older image refs (workflow_dispatch input image_tag).
+# shellcheck source=common.sh source-path=SCRIPTDIR
 source "$(dirname "$0")/common.sh"
 require_ci
 [ $# -eq 6 ] || { echo "usage: $0 <instance id> <online image> <room image> <public ip> <domain> <log group>" >&2; exit 2; }

@@ -15,11 +15,13 @@ Branch `claude/napple-infra-2026-11-02-r7` (Mac session, base `91c5b2e`). Guide:
   native arm64 image builds to ECR, the SSM roll and the smoke test. Scripts in `infra/scripts/`; trust and deploy policies in `infra/aws/`.
 - `infra/local/run.sh`: native local stack on 127.0.0.1 (no Docker), `--stub` / `--bin-dir` for testing without the crates.
 - `site/CNAME` = `www.napple.lat`.
+- Names per the orchestrator's contract: secret `AWS_DEPLOY_ROLE_ARN` (role `napple-deploy`) + access-key fallback, variables `AWS_REGION`,
+  `NAPPLE_DOMAIN`, `NAPPLE_ZONE_ID`, environment `napple-servers`, modes `bootstrap`/`plan`/`apply`/`destroy` (destroy keeps the zone and the Pages records).
 
 ## Status
-- **tested**: both stacks `tofu fmt -check`, `validate` and `tofu test` (6 mocked plan runs, no AWS call); actionlint and shellcheck clean; the
-  workflow's guard script run for 5 secret/branch combinations; `docker compose config` of the three compose combinations; `tools/check_docs.py`.
+- **tested**: both stacks `tofu fmt -check`, `validate` and `tofu test` (8 mocked plan runs, no AWS call); actionlint and shellcheck clean; the
+  workflow's guard script run for 7 secret/branch/mode combinations; `docker compose config` of the three compose combinations; `tools/check_docs.py`.
 - **verified (plumbing only)**: `infra/local/run.sh` with the stand-in server: start, `/healthz`, UDP echo on the NEX ports, TCP on the room port,
   refusal of a second start, clean stop, failure cleanup.
-- **untested**: the Docker image builds (no Docker on this Mac), any real AWS apply, the SSM roll, Caddy's certificate, the real server
+- **untested**: the `destroy` path, the Docker image builds (no Docker on this Mac), any real AWS apply, the SSM roll, Caddy's certificate, the real server
   binaries (the crates were not committed on their branches at hand-off).

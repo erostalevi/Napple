@@ -1,7 +1,8 @@
-# Records in the existing napple.lat zone (looked up, never managed): the game servers, plus the GitHub Pages landing page.
+# Records in the existing napple.lat zone (looked up by id or name, never managed): the game servers, plus the GitHub Pages landing page.
 # GitHub Pages addresses: https://docs.github.com/pages/configuring-a-custom-domain-for-your-github-pages-site/managing-a-custom-domain-for-your-github-pages-site
 data "aws_route53_zone" "main" {
-  name         = var.domain
+  zone_id      = var.zone_id != "" ? var.zone_id : null
+  name         = var.zone_id == "" ? var.domain : null
   private_zone = false
 }
 

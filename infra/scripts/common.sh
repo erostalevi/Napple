@@ -1,3 +1,4 @@
+# shellcheck shell=bash
 # Shared by the deploy scripts (sourced, not run). Names of the state bucket and lock table, derived the same way as the bootstrap stack.
 # Needs AWS credentials in the environment (the workflow's configure-aws-credentials step); never run from a laptop by accident: see require_ci.
 set -euo pipefail

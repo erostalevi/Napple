@@ -3,7 +3,6 @@
 mock_provider "aws" {
   mock_data "aws_route53_zone" {
     defaults = {
-      zone_id      = "Z0123456789MOCKZONE"
       name_servers = ["ns-1.awsdns-00.org", "ns-2.awsdns-00.com"]
     }
   }
@@ -74,6 +73,10 @@ run "defaults" {
     error_message = "NEX UDP range not open"
   }
   assert {
+    condition     = startswith(aws_iam_role.instance.name, "napple-") && startswith(aws_iam_instance_profile.instance.name, "napple-")
+    error_message = "IAM resources must be named napple-* (the deploy role may only manage role/napple-* and instance-profile/napple-*)"
+  }
+  assert {
     condition     = aws_ecr_repository.image["napple-online"].image_tag_mutability == "IMMUTABLE"
     error_message = "image tags must be immutable"
   }
@@ -97,6 +100,25 @@ run "pages_off_and_verification" {
   assert {
     condition     = aws_route53_record.www[0].records == toset(["someorg.github.io"])
     error_message = "owner is not lower-cased in the CNAME target"
+  }
+}
+
+run "zone_by_id" {
+  command = plan
+  variables {
+    zone_id = "Z0EXPLICITZONE"
+  }
+  assert {
+    condition     = data.aws_route53_zone.main.zone_id == "Z0EXPLICITZONE" && aws_route53_record.server.zone_id == "Z0EXPLICITZONE"
+    error_message = "NAPPLE_ZONE_ID must select the zone by id"
+  }
+}
+
+run "zone_by_name" {
+  command = plan
+  assert {
+    condition     = data.aws_route53_zone.main.name == "napple.lat"
+    error_message = "without a zone id the zone is looked up by var.domain"
   }
 }
 

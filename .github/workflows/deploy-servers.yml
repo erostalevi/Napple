@@ -1,10 +1,12 @@
-# Deploys the Napple game servers (napple-online + napple-room behind Caddy) to AWS at pretend.napple.lat, and keeps the napple.lat DNS records.
+# Deploys the Napple game servers (napple-online + napple-room behind Caddy) to AWS at pretend.<NAPPLE_DOMAIN>, and keeps the domain's DNS records.
 # Does nothing until AWS credentials are configured: the `guard` job looks for the secrets and every other job is skipped with a notice.
-# One-time setup (hosted zone, OIDC role or access keys, the bootstrap run): docs/guides/deploy-servers.md
-#   push to main touching the servers or infra/ -> plan + apply, build + push images, roll the instance, smoke-test https://pretend.napple.lat/healthz
+# One-time setup (hosted zone, OIDC role napple-deploy or access keys, environment napple-servers, the bootstrap run): docs/guides/deploy-servers.md
+#   push to main touching the servers or infra/ -> plan + apply, build + push images, roll the instance, smoke-test https://pretend.<domain>/healthz
+#   workflow_dispatch mode=bootstrap            -> create/update the state bucket + lock table (infra/terraform/bootstrap)
 #   workflow_dispatch mode=plan                 -> plan only (no apply, no images, no roll)
 #   workflow_dispatch mode=apply                -> same as a push (image_tag set = roll back to that already-pushed tag, no build)
-#   workflow_dispatch mode=bootstrap            -> create/update the state bucket + lock table (infra/terraform/bootstrap)
+#   workflow_dispatch mode=destroy              -> remove the servers stack (needs confirm=destroy); keeps the hosted zone and the GitHub Pages records
+# Every job that touches AWS runs in the GitHub environment napple-servers (its secrets and variables apply; the OIDC trust policy names it).
 name: deploy-servers
 
 on:
@@ -19,12 +21,16 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "plan, apply, or bootstrap (one-time state bucket + lock table)"
+        description: "bootstrap (one-time state bucket + lock table), plan, apply, or destroy (keeps the hosted zone)"
         type: choice
-        options: [plan, apply, bootstrap]
+        options: [bootstrap, plan, apply, destroy]
         default: plan
       image_tag:
         description: "apply only: roll to this existing image tag (a commit SHA) instead of building this commit (rollback)"
+        type: string
+        default: ""
+      confirm:
+        description: "destroy only: type destroy"
         type: string
         default: ""
 
@@ -38,27 +44,43 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  AWS_REGION: ${{ vars.NAPPLE_AWS_REGION || 'us-east-1' }}
   TOFU_VERSION: "1.13.5"
   TF_IN_AUTOMATION: "1"
-  # Optional repository variables (Settings > Secrets and variables > Actions > Variables) feeding the servers stack.
-  TF_VAR_github_owner: ${{ github.repository_owner }}
-  TF_VAR_instance_type: ${{ vars.NAPPLE_INSTANCE_TYPE || 't4g.small' }}
-  TF_VAR_architecture: ${{ vars.NAPPLE_ARCHITECTURE || 'arm64' }}
-  TF_VAR_github_pages_verification_txt: ${{ vars.NAPPLE_PAGES_VERIFICATION_TXT || '' }}
-  TF_VAR_dns_allow_overwrite: ${{ vars.NAPPLE_DNS_ALLOW_OVERWRITE || 'false' }}
 
 jobs:
   guard:
     name: Check AWS credentials and server crates
     runs-on: ubuntu-latest
+    environment: napple-servers # so environment-scoped secrets and variables are visible here too
     timeout-minutes: 5
     outputs:
       auth: ${{ steps.check.outputs.auth }}
       run: ${{ steps.check.outputs.run }}
       mode: ${{ steps.check.outputs.mode }}
+      region: ${{ steps.vars.outputs.region }}
+      domain: ${{ steps.vars.outputs.domain }}
+      zone_id: ${{ steps.vars.outputs.zone_id }}
+      instance_type: ${{ steps.vars.outputs.instance_type }}
+      architecture: ${{ steps.vars.outputs.architecture }}
+      pages_txt: ${{ steps.vars.outputs.pages_txt }}
+      dns_overwrite: ${{ steps.vars.outputs.dns_overwrite }}
     steps:
       - uses: actions/checkout@v4
+      - id: vars
+        name: Resolve the repository / environment variables
+        env:
+          REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+          DOMAIN: ${{ vars.NAPPLE_DOMAIN || 'napple.lat' }}
+          ZONE_ID: ${{ vars.NAPPLE_ZONE_ID || '' }}
+          INSTANCE_TYPE: ${{ vars.NAPPLE_INSTANCE_TYPE || 't4g.small' }}
+          ARCHITECTURE: ${{ vars.NAPPLE_ARCHITECTURE || 'arm64' }}
+          PAGES_TXT: ${{ vars.NAPPLE_PAGES_VERIFICATION_TXT || '' }}
+          DNS_OVERWRITE: ${{ vars.NAPPLE_DNS_ALLOW_OVERWRITE || 'false' }}
+        run: |
+          {
+            echo "region=$REGION"; echo "domain=$DOMAIN"; echo "zone_id=$ZONE_ID"; echo "instance_type=$INSTANCE_TYPE"
+            echo "architecture=$ARCHITECTURE"; echo "pages_txt=$PAGES_TXT"; echo "dns_overwrite=$DNS_OVERWRITE"
+          } >> "$GITHUB_OUTPUT"
       - id: check
         env:
           ROLE_ARN: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
@@ -66,6 +88,7 @@ jobs:
           KEY_SECRET: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           EVENT: ${{ github.event_name }}
           INPUT_MODE: ${{ inputs.mode }}
+          CONFIRM: ${{ inputs.confirm }}
           REF: ${{ github.ref }}
         run: |
           mode="apply"; [ "$EVENT" = workflow_dispatch ] && mode="$INPUT_MODE"
@@ -77,7 +100,8 @@ jobs:
           fi
           echo "auth=$auth" >> "$GITHUB_OUTPUT"
           if [ "$mode" != plan ] && [ "$REF" != refs/heads/main ]; then skip "mode=$mode only runs on main (this run is on $REF); use mode=plan elsewhere."; fi
-          if [ "$mode" != bootstrap ]; then
+          if [ "$mode" = destroy ] && [ "$CONFIRM" != destroy ]; then skip "mode=destroy needs the input confirm=destroy."; fi
+          if [ "$mode" = plan ] || [ "$mode" = apply ]; then
             for c in napple-online napple-room; do
               [ -f "crates/$c/Cargo.toml" ] || skip "crates/$c is not in this commit yet: nothing to deploy."
             done
@@ -90,7 +114,10 @@ jobs:
     needs: guard
     if: needs.guard.outputs.run == 'true' && needs.guard.outputs.mode == 'bootstrap'
     runs-on: ubuntu-latest
+    environment: napple-servers
     timeout-minutes: 15
+    env:
+      AWS_REGION: ${{ needs.guard.outputs.region }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -98,7 +125,6 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
           role-session-name: napple-bootstrap-${{ github.run_id }}
       - uses: aws-actions/configure-aws-credentials@v4
         if: needs.guard.outputs.auth == 'keys'
@@ -106,7 +132,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
       - uses: opentofu/setup-opentofu@v1
         with:
           tofu_version: ${{ env.TOFU_VERSION }}
@@ -118,7 +143,17 @@ jobs:
     needs: guard
     if: needs.guard.outputs.run == 'true' && needs.guard.outputs.mode != 'bootstrap'
     runs-on: ubuntu-latest
+    environment: napple-servers
     timeout-minutes: 30
+    env:
+      AWS_REGION: ${{ needs.guard.outputs.region }}
+      TF_VAR_domain: ${{ needs.guard.outputs.domain }}
+      TF_VAR_zone_id: ${{ needs.guard.outputs.zone_id }}
+      TF_VAR_github_owner: ${{ github.repository_owner }}
+      TF_VAR_instance_type: ${{ needs.guard.outputs.instance_type }}
+      TF_VAR_architecture: ${{ needs.guard.outputs.architecture }}
+      TF_VAR_github_pages_verification_txt: ${{ needs.guard.outputs.pages_txt }}
+      TF_VAR_dns_allow_overwrite: ${{ needs.guard.outputs.dns_overwrite }}
     outputs:
       instance_id: ${{ steps.tofu.outputs.instance_id }}
       public_ip: ${{ steps.tofu.outputs.public_ip }}
@@ -133,15 +168,15 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
           role-session-name: napple-infra-${{ github.run_id }}
+          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
       - uses: aws-actions/configure-aws-credentials@v4
         if: needs.guard.outputs.auth == 'keys'
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+          mask-aws-account-id: false
       - uses: opentofu/setup-opentofu@v1
         with:
           tofu_version: ${{ env.TOFU_VERSION }}
@@ -162,8 +197,11 @@ jobs:
     needs: [guard, infra]
     if: needs.guard.outputs.mode == 'apply' && !inputs.image_tag
     # Native runner for the instance's architecture: no QEMU, so a release build of a Rust crate takes minutes, not an hour.
-    runs-on: ${{ (vars.NAPPLE_ARCHITECTURE || 'arm64') == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ needs.guard.outputs.architecture == 'x86_64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm' }}
+    environment: napple-servers
     timeout-minutes: 60
+    env:
+      AWS_REGION: ${{ needs.guard.outputs.region }}
     strategy:
       matrix:
         image: [napple-online, napple-room]
@@ -174,15 +212,15 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
           role-session-name: napple-images-${{ github.run_id }}
+          mask-aws-account-id: false
       - uses: aws-actions/configure-aws-credentials@v4
         if: needs.guard.outputs.auth == 'keys'
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+          mask-aws-account-id: false
       - id: exists
         name: Skip when this commit's image is already in ECR (tags are immutable)
         env:
@@ -200,7 +238,7 @@ jobs:
         with:
           context: .
           file: infra/docker/${{ matrix.image }}.Dockerfile
-          platforms: linux/${{ vars.NAPPLE_ARCHITECTURE == 'x86_64' && 'amd64' || 'arm64' }}
+          platforms: linux/${{ needs.guard.outputs.architecture == 'x86_64' && 'amd64' || 'arm64' }}
           push: true
           provenance: false
           tags: ${{ matrix.image == 'napple-online' && needs.infra.outputs.ecr_online || needs.infra.outputs.ecr_room }}:${{ github.sha }}
@@ -213,7 +251,10 @@ jobs:
     # images is skipped on a rollback (image_tag set): still roll then.
     if: always() && needs.guard.outputs.mode == 'apply' && needs.infra.result == 'success' && (needs.images.result == 'success' || needs.images.result == 'skipped')
     runs-on: ubuntu-latest
+    environment: napple-servers
     timeout-minutes: 30
+    env:
+      AWS_REGION: ${{ needs.guard.outputs.region }}
     steps:
       - uses: actions/checkout@v4
       - uses: aws-actions/configure-aws-credentials@v4
@@ -221,15 +262,15 @@ jobs:
         with:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
           role-session-name: napple-roll-${{ github.run_id }}
+          mask-aws-account-id: false
       - uses: aws-actions/configure-aws-credentials@v4
         if: needs.guard.outputs.auth == 'keys'
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-          mask-aws-account-id: false # the ECR URLs carry it and masked values cannot pass between jobs
+          mask-aws-account-id: false
       - name: Roll through SSM
         env:
           TAG: ${{ inputs.image_tag || github.sha }}

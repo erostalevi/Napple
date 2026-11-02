@@ -11,9 +11,15 @@ variable "az_suffix" {
 }
 
 variable "domain" {
-  description = "Existing public Route 53 hosted zone. It is looked up by name, never created or destroyed by this stack."
+  description = "The domain (repository variable NAPPLE_DOMAIN). Its existing public hosted zone is looked up (by zone_id when set, else by this name), never created or destroyed by this stack."
   type        = string
   default     = "napple.lat"
+}
+
+variable "zone_id" {
+  description = "Route 53 hosted zone id of the domain (repository variable NAPPLE_ZONE_ID). Empty = look the zone up by name (var.domain)."
+  type        = string
+  default     = ""
 }
 
 variable "server_subdomain" {

@@ -3,6 +3,7 @@
 #   bootstrap.sh plan|apply
 # First run: the stack is applied with a local state, then the state is migrated into the bucket it created (key bootstrap/terraform.tfstate).
 # Later runs: the state is read from the bucket and the stack is planned/applied like any other.
+# shellcheck source=common.sh source-path=SCRIPTDIR
 source "$(dirname "$0")/common.sh"
 require_ci
 mode="${1:-plan}"

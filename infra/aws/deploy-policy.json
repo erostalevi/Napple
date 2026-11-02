@@ -29,14 +29,20 @@
       "Sid": "InstanceRole",
       "Effect": "Allow",
       "Action": ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole", "iam:UpdateAssumeRolePolicy", "iam:PutRolePolicy", "iam:GetRolePolicy", "iam:DeleteRolePolicy", "iam:ListRolePolicies", "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole", "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile", "iam:TagInstanceProfile", "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile"],
-      "Resource": ["arn:aws:iam::*:role/napple-servers-*", "arn:aws:iam::*:instance-profile/napple-servers-*"]
+      "Resource": ["arn:aws:iam::*:role/napple-*", "arn:aws:iam::*:instance-profile/napple-*"]
     },
     {
       "Sid": "PassOnlyTheInstanceRole",
       "Effect": "Allow",
       "Action": "iam:PassRole",
-      "Resource": "arn:aws:iam::*:role/napple-servers-*",
+      "Resource": "arn:aws:iam::*:role/napple-*",
       "Condition": { "StringEquals": { "iam:PassedToService": "ec2.amazonaws.com" } }
+    },
+    {
+      "Sid": "NeverTouchTheDeployRoleItself",
+      "Effect": "Deny",
+      "Action": "iam:*",
+      "Resource": "arn:aws:iam::*:role/napple-deploy"
     },
     {
       "Sid": "AttachOnlySsmCore",

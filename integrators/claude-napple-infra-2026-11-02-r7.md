@@ -17,9 +17,14 @@ Everything needed to deploy `napple-online` and `napple-room` to AWS once the us
 - OpenTofu: a `bootstrap/` stack (S3 state + DynamoDB lock) and the servers stack (own VPC, SG without SSH, t4g.small AL2023 with Docker + Compose,
   EIP, a persistent encrypted data volume, instance role for SSM/ECR/logs, ECR repositories, log group, Route 53 records in the existing zone,
   looked up by name: `pretend` A, apex A/AAAA to Pages, `www` + `*` CNAME to `erostalevi.github.io`, optional Pages verification TXT).
+- Names follow the orchestrator's contract (the user set AWS/GitHub up with these): secret `AWS_DEPLOY_ROLE_ARN` (OIDC role `napple-deploy`) with the
+  `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` fallback; variables `AWS_REGION`, `NAPPLE_DOMAIN`, `NAPPLE_ZONE_ID` (zone by id when set, else by name);
+  every AWS job runs in environment `napple-servers`; dispatch modes `bootstrap`, `plan`, `apply`, `destroy`; IAM resources `napple-*`
+  (instance role/profile `napple-servers-instance`).
 - `.github/workflows/deploy-servers.yml`: a guard job skips cleanly (green run, notice in the summary) without `AWS_DEPLOY_ROLE_ARN` or both
   access-key secrets, or while either crate is missing. After that come bootstrap (dispatch), plan/apply, native arm64 image builds to ECR, the SSM roll
-  and the smoke test of `/healthz` + `/room/healthz`. Rollback is a dispatch with `image_tag`.
+  and the smoke test of `/healthz` + `/room/healthz`. Rollback is a dispatch with `image_tag`; `destroy` (with `confirm=destroy`) removes the servers
+  and keeps the hosted zone and the GitHub Pages records.
 - `infra/local/run.sh`: native local stack (no Docker), with `--stub` / `--bin-dir` for testing before the crates exist.
 - `site/CNAME` = `www.napple.lat`; guide `docs/guides/deploy-servers.md` (one-time setup, OIDC trust policy, costs, rollback/destroy, security).
 NOT done: acceptance 3's "a Napple runtime pointed at it reaches them". Neither `crates/napple-online` nor `crates/napple-room` was committed on its
@@ -38,9 +43,9 @@ only. `app.napple.lat` is deliberately not built.
 ## Built and tested here
 | Item | Status | Evidence (command + result) |
 |---|---|---|
-| Acceptance 1: `tofu fmt -check`, `validate`, plan against a mock provider, both stacks | tested | `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` gives 4 passed (defaults, pages_off_and_verification, x86_64, bad_architecture); `cd bootstrap && …` gives 2 passed. OpenTofu 1.13.5, hashicorp/aws 6.71.0. `mock_provider "aws"`, so no AWS call. |
+| Acceptance 1: `tofu fmt -check`, `validate`, plan against a mock provider, both stacks | tested | `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` gives 6 passed (defaults incl. `napple-*` IAM names, pages_off_and_verification, zone_by_id, zone_by_name, x86_64, bad_architecture); `cd bootstrap && …` gives 2 passed. OpenTofu 1.13.5, hashicorp/aws 6.71.0. `mock_provider "aws"`, so no AWS call. |
 | Acceptance 1: actionlint on the workflow | tested | `actionlint .github/workflows/deploy-servers.yml`: no findings (actionlint 1.7.12, includes shellcheck of the run blocks). |
-| Acceptance 2: skips cleanly without secrets | tested | Guard script extracted and run: no secrets → `run=false` + notice; only the key id → skip; role but crates missing (this tree) → skip; dispatch apply off main → skip; bootstrap with keys on main → `run=true`. Every later job requires `run == 'true'` (`roll` also requires `infra` success). `act` not installed, not used. |
+| Acceptance 2: skips cleanly without secrets | tested | Guard script extracted and run: no secrets → `run=false` + notice; only the key id → skip; role but crates missing (this tree) → skip; dispatch apply off main → skip; bootstrap with keys on main → `run=true`; destroy without `confirm` → skip; destroy confirmed → `run=true` (crates not required). Every later job requires `run == 'true'` (`roll` also requires `infra` success). `act` not installed, not used. |
 | Acceptance 3: `infra/local/run.sh` starts both servers | verified (stand-in only) | Under `/bin/bash` 3.2: `run.sh start --stub` brings both up healthy; curl `/healthz` OK; UDP echo on 60000/60001; TCP echo on 31415; second start refused (exit 1); `stop` leaves no process; `--bin-dir` + custom ports; `KEEP_DATA=1`; a crashing binary makes start fail and clean up; without the crates it exits with "crates/napple-online is not in this checkout". |
 | Acceptance 3: a Napple runtime reaches them | not done | The crates and the client side were not committed on their branches (see Summary). |
 | Acceptance 4: no AWS call from this Mac | verified | No AWS CLI calls, no apply; `tofu test` runs with a mocked provider. The deploy scripts refuse to run outside Actions (`require_ci`). No credentials written anywhere. |
@@ -56,6 +61,8 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 - `infra/scripts/bootstrap.sh`, `tofu-servers.sh`, `roll.sh`, `smoke.sh`: lint-clean, never run against AWS. Commit a3e4ebb.
 - `infra/terraform/user_data.sh.tftpl`: never booted on an instance. Commit 1924402.
 - The `images` and `roll` jobs of the workflow: never run.
+- The `destroy` path of `infra/scripts/tofu-servers.sh` (targeted apply of `ecr_force_delete`, then `tofu destroy -exclude=<Pages records>`): never run;
+  `-exclude` exists in the pinned OpenTofu 1.13.5 (`tofu destroy -help`).
 
 ## Findings
 - **Decision: the server contract.** The crates did not exist yet, so I fixed the env/ports the infra assumes and sent it to both sessions
@@ -70,6 +77,14 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
 - **Decision: deploy mechanics.** User data only installs Docker/Compose/the data volume; each deploy writes the compose files + `.env` through SSM
   `send-command` and pulls images by commit SHA (immutable ECR tags). This makes rollback a re-roll to an older tag, and a replaced instance comes
   back on the next run. Instance `ignore_changes = [ami]` so new AMIs don't replace the server unasked.
+- **Decision: destroy keeps the Pages records.** "destroy keeps the hosted zone; only stack resources": the apex/`www`/wildcard/TXT records are
+  stack resources, but deleting them takes the landing page down, so `destroy` excludes them (`-exclude`) and removes everything else.
+  Delete them by hand (or `tofu destroy` without the excludes) if that is ever wanted.
+- **Decision: the guard job runs in `napple-servers` too**, so secrets/variables stored on the environment (not only on the repo) are visible to it,
+  and it hands the resolved variables to the other jobs. Consequence: a `plan` from a non-`main` branch is blocked by the environment's branch
+  rule before the guard can skip it (documented in Troubleshooting).
+- **Decision: the deploy policy** in `infra/aws/deploy-policy.json` now allows `role/napple-*` and `instance-profile/napple-*` as the orchestrator
+  specified, plus an explicit deny of `iam:*` on `role/napple-deploy` so the deploy role cannot widen its own rights.
 - **Decision: own VPC** (no reliance on a default VPC), no NAT. **Separate EBS data volume** so accounts survive instance replacement.
 - **Decision: state bootstrap.** The bootstrap stack starts with local state; `bootstrap.sh` then writes `backend_override.tf` and migrates its state into the
   bucket it created, so later runs are idempotent. The servers stack uses a partial `backend "s3" {}` filled from the account id + region.
@@ -95,7 +110,7 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   (upstream ports), `infra/local/run.sh` (the two launch lines), `infra/terraform/variables.tf` (`nex_udp_*`, `room_port`) and the guide's table. If a crate
   has no `/healthz`, ask its owner rather than dropping the health checks. If the binary name differs, update `--bin` in the Dockerfile.
 - Build/check commands, in order:
-  1. `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` → 4 passed; same in `infra/terraform/bootstrap` → 2 passed.
+  1. `cd infra/terraform && tofu init -backend=false && tofu validate && tofu test` → 6 passed; same in `infra/terraform/bootstrap` → 2 passed.
   2. `actionlint .github/workflows/deploy-servers.yml` → silent.
   3. `infra/local/run.sh` (with the crates merged) → "online healthy", "room healthy" and the env block; `infra/local/run.sh stop`.
   4. `python3 tools/check_docs.py` → OK.
@@ -103,7 +118,7 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   is written for macOS `/bin/bash` 3.2.
 
 ## How to test
-1. Offline IaC tests: commands 1-2 above. Passing looks like `Success! 4 passed, 0 failed.`; failing names the assert.
+1. Offline IaC tests: commands 1-2 above. Passing looks like `Success! 6 passed, 0 failed.`; failing names the assert.
 2. Local stack with the real servers: `infra/local/run.sh`, then
    `NAPPLE_NET=host NAPPLE_ONLINE_SERVER=http://127.0.0.1:18080 NAPPLE_ROOM=127.0.0.1:31415` on a headless MK8D run under the run lock (≤120 s). Passing:
    the server logs (`infra/local/run.sh logs`) show the runtime's token request and/or room HELLO. Failing: no request lines, so check the

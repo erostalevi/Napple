@@ -5,6 +5,11 @@
 `https://pretend.napple.lat`, and keeps the `napple.lat` records pointing at the GitHub Pages landing page. Until the secrets exist the workflow
 skips with a notice and nothing is deployed.
 
+Names the setup uses (match them exactly): secret `AWS_DEPLOY_ROLE_ARN` (OIDC role `napple-deploy`; fallback secrets `AWS_ACCESS_KEY_ID` +
+`AWS_SECRET_ACCESS_KEY`), variables `AWS_REGION` (default `us-east-1`), `NAPPLE_DOMAIN` (default `napple.lat`), `NAPPLE_ZONE_ID` (optional),
+GitHub environment `napple-servers` (every job that touches AWS runs in it), workflow modes `bootstrap`, `plan`, `apply`, `destroy`.
+Every IAM resource the stack creates is named `napple-*` (the instance role and profile are `napple-servers-instance`).
+
 Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.github/workflows/deploy-servers.yml`, `site/CNAME`.
 `app.napple.lat` is deliberately **not** built (no hosted upload of games or keys); it falls under the wildcard record.
 
@@ -35,7 +40,8 @@ Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.gi
 | `*.napple.lat` | CNAME | `<owner>.github.io` | everything else, `app` included (variable `wildcard_to_pages`) |
 | `_github-pages-challenge-<owner>.napple.lat` | TXT | from GitHub | only when the repository variable `NAPPLE_PAGES_VERIFICATION_TXT` is set |
 
-The hosted zone itself is never created or destroyed by the stack: it is looked up by name (`data "aws_route53_zone"`). Existing records with the
+The hosted zone itself is never created or destroyed by the stack: it is looked up (`data "aws_route53_zone"`) by id when the variable
+`NAPPLE_ZONE_ID` is set, else by the name in `NAPPLE_DOMAIN`. Record names follow `NAPPLE_DOMAIN` (`pretend.<domain>`, `www.<domain>`, ...). Existing records with the
 same name and type make the apply fail rather than being taken over, unless the repository variable `NAPPLE_DNS_ALLOW_OVERWRITE` is `true`.
 
 **The wildcard and GitHub Pages.** GitHub only serves the one custom domain set in the repository (`www.napple.lat`); a request for
@@ -73,30 +79,42 @@ Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=p
      `NAPPLE_PAGES_VERIFICATION_TXT` (the stack creates the record), or add the record by hand, then press *Verify*.
    - Repository Settings > Pages > Custom domain: `www.napple.lat`, then *Enforce HTTPS* once the certificate is issued. With Actions-based Pages
      (`pages.yml`) this setting is what counts; `site/CNAME` documents it and is used if the site is ever published from a branch.
-3. **AWS credentials**, one of:
-   - **OIDC role (preferred, no long-lived key).** In IAM > Identity providers, add an OpenID Connect provider `https://token.actions.githubusercontent.com`
-     with audience `sts.amazonaws.com`. Create a role (for example `napple-github-deploy`) with the trust policy
-     [`infra/aws/github-oidc-trust.json`](../../infra/aws/github-oidc-trust.json) (replace `<ACCOUNT_ID>`; it only trusts workflow runs on `main`
-     of `erostalevi/napple`), and attach [`infra/aws/deploy-policy.json`](../../infra/aws/deploy-policy.json) as an inline or customer-managed policy.
-     Add the role ARN as the repository **secret** `AWS_DEPLOY_ROLE_ARN`.
-   - **Access keys.** An IAM user with the same policy and an access key; repository secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+3. **GitHub environment.** Repository Settings > Environments > *New environment* `napple-servers`. Under *Deployment branches and tags*, allow
+   only `main` (the OIDC trust accepts this environment, so the branch rule is what keeps other branches out). The secrets and variables below
+   can live in the repository or in this environment; the workflow reads both.
+4. **AWS credentials**, one of:
+   - **OIDC role `napple-deploy` (preferred, no long-lived key).** In IAM > Identity providers, add an OpenID Connect provider
+     `https://token.actions.githubusercontent.com` with audience `sts.amazonaws.com`. Create the role `napple-deploy` with the trust policy
+     [`infra/aws/github-oidc-trust.json`](../../infra/aws/github-oidc-trust.json) (replace `<ACCOUNT_ID>`). It accepts tokens of `erostalevi/napple`
+     whose subject is `repo:erostalevi/napple:environment:napple-servers` (every AWS job of the workflow) or `repo:erostalevi/napple:ref:refs/heads/main`.
+     Attach [`infra/aws/deploy-policy.json`](../../infra/aws/deploy-policy.json) as an inline policy: it manages only `role/napple-*` and
+     `instance-profile/napple-*`, never `napple-deploy` itself (explicit deny). Add the role ARN as the **secret** `AWS_DEPLOY_ROLE_ARN`.
+   - **Access keys (fallback).** An IAM user with the same policy and an access key; secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+     The workflow uses the role when `AWS_DEPLOY_ROLE_ARN` is set, else the keys.
    ```bash
    aws iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com --client-id-list sts.amazonaws.com
    ```
    ```bash
-   aws iam create-role --role-name napple-github-deploy --assume-role-policy-document file://trust.json
+   aws iam create-role --role-name napple-deploy --assume-role-policy-document file://trust.json
    ```
    ```bash
-   aws iam put-role-policy --role-name napple-github-deploy --policy-name napple-deploy --policy-document file://infra/aws/deploy-policy.json
+   aws iam put-role-policy --role-name napple-deploy --policy-name napple-deploy --policy-document file://infra/aws/deploy-policy.json
    ```
    (`trust.json` = `infra/aws/github-oidc-trust.json` with your account id filled in.)
-4. **Optional repository variables** (Settings > Secrets and variables > Actions > Variables): `NAPPLE_AWS_REGION` (default `us-east-1`),
-   `NAPPLE_INSTANCE_TYPE` (default `t4g.small`), `NAPPLE_ARCHITECTURE` (`arm64` default, `x86_64` for t3/m6i types), `NAPPLE_PAGES_VERIFICATION_TXT`,
-   `NAPPLE_DNS_ALLOW_OVERWRITE`.
-5. **Bootstrap the state**: Actions > deploy-servers > *Run workflow* on `main`, mode `bootstrap`. This creates the S3 state bucket
+5. **Variables** (Settings > Secrets and variables > Actions > Variables, or the environment's variables; `vars.*`, not secrets):
+   | Variable | Default | Meaning |
+   |---|---|---|
+   | `AWS_REGION` | `us-east-1` | region of the state, the servers and ECR |
+   | `NAPPLE_DOMAIN` | `napple.lat` | the domain whose zone holds the records |
+   | `NAPPLE_ZONE_ID` | empty | Route 53 hosted zone id; set = the zone is looked up by id, empty = by `NAPPLE_DOMAIN` |
+   | `NAPPLE_INSTANCE_TYPE` | `t4g.small` | optional |
+   | `NAPPLE_ARCHITECTURE` | `arm64` | optional; `x86_64` for t3/m6i types |
+   | `NAPPLE_PAGES_VERIFICATION_TXT` | empty | optional; the GitHub Pages domain verification value (step 2) |
+   | `NAPPLE_DNS_ALLOW_OVERWRITE` | `false` | optional; `true` = take over records made by hand |
+6. **Bootstrap the state**: Actions > deploy-servers > *Run workflow* on `main`, mode `bootstrap`. This creates the S3 state bucket
    `napple-tfstate-<account>-<region>` (versioned, encrypted, private, TLS only) and the DynamoDB lock table `napple-tflock`, then moves its own
    state into the bucket. Running it again is safe.
-6. **First deploy**: *Run workflow* with mode `plan` to read the plan, then mode `apply` (or push to `main`). The first apply takes about 10 minutes:
+7. **First deploy**: *Run workflow* with mode `plan` to read the plan, then mode `apply` (or push to `main`). The first apply takes about 10 minutes:
    the instance boots, the images are built on an arm64 runner, Caddy gets its certificate once `pretend.napple.lat` resolves, and the smoke test
    retries for up to 5 minutes.
 
@@ -104,12 +122,13 @@ Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=p
 
 | Job | What |
 |---|---|
-| guard | Looks for `AWS_DEPLOY_ROLE_ARN` or both access-key secrets, and for `crates/napple-online` + `crates/napple-room` in the commit. Missing: a notice in the run summary and every other job is skipped (the run is green). `apply` and `bootstrap` only run on `main`. |
-| infra | `tofu fmt -check`, `validate`, the offline mocked plan tests, then `infra/scripts/tofu-servers.sh plan|apply` against the S3 state. |
+| guard | Resolves the variables, looks for `AWS_DEPLOY_ROLE_ARN` or both access-key secrets, and (for `plan`/`apply`) for `crates/napple-online` + `crates/napple-room` in the commit. Missing: a notice in the run summary and every other job is skipped (the run is green). `bootstrap`, `apply` and `destroy` only run on `main`; `destroy` also needs the input `confirm` = `destroy`. |
+| bootstrap | mode `bootstrap` only: `infra/scripts/bootstrap.sh apply`. |
+| infra | `tofu fmt -check`, `validate`, the offline mocked plan tests, then `infra/scripts/tofu-servers.sh plan|apply|destroy` against the S3 state. |
 | images | One native build per image (`ubuntu-24.04-arm` for arm64), pushed to ECR as `<repo>:<commit sha>` (immutable tags; a commit already pushed is skipped). |
-| roll | `infra/scripts/roll.sh`: through SSM `send-command`, writes `compose.yml`, `compose.aws.yml`, `Caddyfile` and `.env` into `/opt/napple` on the instance, `docker compose pull && up -d`, prunes week-old images. Then `infra/scripts/smoke.sh https://pretend.napple.lat` checks `/healthz` and `/room/healthz`. |
+| roll | `infra/scripts/roll.sh`: through SSM `send-command`, writes `compose.yml`, `compose.aws.yml`, `Caddyfile` and `.env` into `/opt/napple` on the instance, `docker compose pull && up -d`, prunes week-old images. Then `infra/scripts/smoke.sh https://pretend.<domain>` checks `/healthz` and `/room/healthz`. |
 
-The workflow has one concurrency group and never cancels a running deploy.
+Every job runs in the environment `napple-servers`. The workflow has one concurrency group and never cancels a running deploy.
 
 ## Rollback and destroy
 
@@ -120,9 +139,11 @@ The workflow has one concurrency group and never cancels a running deploy.
 - **Replace the instance** (new AMI, broken host): from a machine with the deploy credentials, run
   `tofu apply -replace=aws_instance.servers` in `infra/terraform` (same `-backend-config` flags as `infra/scripts/tofu-servers.sh`), then run the
   workflow with mode `apply` so the new instance gets the containers. Accounts, room state and certificates are on the separate data volume and survive.
-- **Destroy everything**: in `infra/terraform`, `tofu destroy` with the same backend flags (set `ecr_force_delete = true` first if the repositories
-  still hold images). This deletes the data volume, so the accounts go with it. The zone and its other records stay. The bootstrap stack has
-  `prevent_destroy` on the bucket and table: remove those lines to delete them on purpose.
+- **Destroy the servers**: *Run workflow* on `main`, mode `destroy`, `confirm` = `destroy`. It removes the instance, the data volume (so the
+  accounts go with it), the Elastic IP, the ECR repositories and their images, the VPC, the `napple-servers-instance` role and profile, the log group
+  and the `pretend` record. It **keeps** the hosted zone (never managed by the stack) and the GitHub Pages records (apex, `www`, wildcard,
+  verification TXT), so the landing page stays up. A later `apply` builds the servers again. The bootstrap stack (state bucket and lock table) is
+  not touched; it has `prevent_destroy`: remove those lines and destroy it by hand to delete it on purpose.
 - Disable deploys without deleting anything: remove the AWS secrets (the workflow goes back to skipping).
 
 ## Costs (us-east-1, on-demand, rough)
@@ -145,7 +166,8 @@ The workflow has one concurrency group and never cancels a running deploy.
   `Cargo.lock` and `crates/` into the build stage, and only the binary into the final image). No game files, keys, firmware or title data are
   uploaded, and the servers never ask clients for any. `app.napple.lat` (hosted uploads) was rejected for this reason.
 - Credentials live only in GitHub secrets (or are short-lived, through OIDC). Nothing in `infra/` holds a credential; the instance uses its role.
-- The OIDC trust policy only accepts runs on `main` of this repository. The deploy policy is scoped to `napple-*` names where AWS allows it.
+- The OIDC trust policy only accepts this repository's environment `napple-servers` (limited to `main` by its branch rule) and `main`. The deploy
+  policy is scoped to `napple-*` names where AWS allows it and denies any change to `napple-deploy` itself.
 - Instance: no SSH port (Session Manager), IMDSv2 only, encrypted volumes, unattended security updates. Containers: the servers run as uid 10001; Caddy runs as
   root in its container with only `NET_BIND_SERVICE` kept, read-only root filesystems, all other capabilities dropped, `no-new-privileges`.
 - The internet-facing parsers are the NEX/PRUDP and room protocol code: they take untrusted UDP/TCP input, so they want fuzzing and per-peer
@@ -192,6 +214,8 @@ GitHub Actions unless `NAPPLE_DEPLOY_ALLOW_LOCAL=1` is set.
 | Symptom | Look at |
 |---|---|
 | Run is green but did nothing | The run summary: the guard's notice says which secret or crate is missing. |
+| A `plan` from another branch fails before the guard | The environment `napple-servers` only allows `main`: run it on `main`, or allow the branch in the environment. |
+| `Not authorized to perform sts:AssumeRoleWithWebIdentity` | The trust policy's subjects: the jobs present `repo:erostalevi/napple:environment:napple-servers`. |
 | `State bucket ... not found` | Run mode `bootstrap` once. |
 | Apply fails with "record already exists" | A record was made by hand: delete it, or set `NAPPLE_DNS_ALLOW_OVERWRITE=true`. |
 | Roll waits for SSM forever | The instance has no route out (check the route table) or the SSM agent is down: EC2 > the instance > Get system log; `/var/log/napple-bootstrap.log` from a Session Manager shell. |
