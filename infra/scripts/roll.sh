@@ -45,6 +45,8 @@ mv .env.new .env && chmod 600 .env
 aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $registry
 docker compose -f compose.yml -f compose.aws.yml pull
 docker compose -f compose.yml -f compose.aws.yml up -d --remove-orphans
+# tar replaces the Caddyfile with a new inode, so the running Caddy keeps reading the old file through its single-file bind mount: recreate it (certificates live in the caddy-data volume).
+docker compose -f compose.yml -f compose.aws.yml up -d --force-recreate --no-deps caddy
 docker image prune -af --filter until=168h >/dev/null || true
 sleep 5
 docker compose -f compose.yml -f compose.aws.yml ps
