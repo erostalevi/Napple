@@ -68,14 +68,15 @@ Per-game knowledge lives only in **data** (signatures, patch tables), never in p
 Napple is early and moving fast. This is the state of the four titles used for testing, taken from [`docs/titles/README.md`](docs/titles/README.md)
 (measured by scripted runs on an Apple Silicon Mac; a title is only called "played" where a person did) and [`docs/architecture/ios.md`](docs/architecture/ios.md):
 
-| Title | macOS | iOS Simulator | Details |
-|---|---|---|---|
-| Link's Awakening (LAS) | plays, ~58 fps headless, 60 fps live | title screen | [LAS](docs/titles/01006BB00C6F0000.md) |
-| Super Mario Odyssey (SMO) | plays, 60 fps live | start menu | [SMO](docs/titles/0100000000010000.md) |
-| Animal Crossing: New Horizons (ACNH) | boots through the opening and shows its picture (stopgap present), ~30 fps | stops before the first frame | [ACNH](docs/titles/01006F8002326000.md) |
-| Mario Kart 8 Deluxe (MK8D) | update + DLC runs races at 40-47 fps | stops (colour attachment limit / `time:u`) | [MK8D](docs/titles/0100152000022000.md) |
+| Title | macOS | iPhone (device) | iOS Simulator | Details |
+|---|---|---|---|---|
+| Link's Awakening (LAS) | plays, ~58 fps headless, 60 fps live | **plays perfectly**, 60 fps at 1x render (iPhone 16 Pro Max) | title screen | [LAS](docs/titles/01006BB00C6F0000.md) |
+| Super Mario Odyssey (SMO) | plays, 60 fps live | plays at 60 fps at 1x render (iPhone 16 Pro Max), then **runs out of memory and crashes after about a minute** | start menu | [SMO](docs/titles/0100000000010000.md) |
+| Animal Crossing: New Horizons (ACNH) | boots through the opening and shows its picture (stopgap present), ~30 fps | not tried yet | stops before the first frame | [ACNH](docs/titles/01006F8002326000.md) |
+| Mario Kart 8 Deluxe (MK8D) | update + DLC runs races at 40-47 fps | not tried yet | stops (colour attachment limit / `time:u`) | [MK8D](docs/titles/0100152000022000.md) |
 
-Nothing has run on a physical iPhone or iPad yet ([`docs/architecture/ios.md`](docs/architecture/ios.md)). Each title page lists what is still open. Per-stage results are in the
+The iPhone results were played by a person on an iPhone 16 Pro Max (2026-11-02); the iOS memory limit is the open issue for SMO
+([`docs/architecture/ios.md`](docs/architecture/ios.md)). Each title page lists what is still open. Per-stage results are in the
 [compatibility matrix](COMPATIBILITY.md); symptoms and fixes are in [`docs/symptoms.md`](docs/symptoms.md).
 
 The table below is an **estimate of how much of the Switch platform surface the pipeline and runtime cover** (not per-game compatibility), produced by the `%Analysis` scanner:
@@ -84,19 +85,20 @@ The table below is an **estimate of how much of the Switch platform surface the 
 |---|---|
 | CPU: AOT A64 rewrite | 100% |
 | Loader: NSO / NRO / modules / relocations | 100% |
-| Kernel: svcs + scheduling | 99% |
-| IPC: HLE service coverage | 97% |
-| IPC: command depth (implemented vs. stubbed) | 45% |
-| GPU: Maxwell shader ISA | 81% |
-| GPU: NVN API surface | 81% |
-| GPU: formats + pipeline features | 83% |
-| Audio | 94% |
+| Kernel: svcs + scheduling | 100% |
+| IPC: HLE service coverage | 100% |
+| IPC: command depth (implemented vs. stubbed) | 91% |
+| GPU: Maxwell shader ISA | 100% |
+| GPU: NVN API surface | 99% |
+| GPU: formats + pipeline features | 98% |
+| GPU: nvdrv / host1x devices | 89% |
+| Audio | 100% |
 | Input | 99% |
-| Content: containers, crypto, updates, DLC | 91% |
+| Content: containers, crypto, updates, DLC | 99% |
 | Saves + storage | 100% |
-| Library applets | 48% |
-| Video / media decode | 61% |
-| **Overall** | **≈ 87%** |
+| Library applets | 99% |
+| Video / media decode | 97% |
+| **Overall** | **≈ 98.9%** (2026-11-02) |
 
 Coverage is not compatibility: a long tail of command depth, shader corner cases and GPU behaviour is exactly what real games trip over first.
 
@@ -171,7 +173,7 @@ re-implemented (HLE, NVN to Metal). See [`docs/architecture/overview.md`](docs/a
 **Does it run on Intel Macs, Windows or Linux?** The product targets Apple Silicon Macs. The Rust crates and the portable tests also build on Linux (CI and `tools/linux-check/`),
 but the runtime, graphics and Studio are macOS-only.
 
-**Does it run on iPhone or iPad?** The iOS build compiles and runs on the iOS Simulator (LAS reaches its title screen, SMO its menu); it has never been run on a device. See [`docs/architecture/ios.md`](docs/architecture/ios.md).
+**Does it run on iPhone or iPad?** Yes, on a real device: on an iPhone 16 Pro Max, Link's Awakening plays perfectly at 60 fps (1x render), and Super Mario Odyssey runs at 60 fps but runs out of memory and crashes after about a minute (being worked on). See [`docs/architecture/ios.md`](docs/architecture/ios.md).
 
 **Why is my game slow or glitchy?** Check [`docs/symptoms.md`](docs/symptoms.md) and the title page, then open a compatibility report.
 
