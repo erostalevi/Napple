@@ -77,6 +77,17 @@ Further two-instance runs (same job setup as below):
 - Blocking condition, as far as known: after a *successful* probe exchange the joiner's `InetConnectStationJob` reports failure without
   sending `SendConnectionRequest`, i.e. before its own connection step, from a path that does not wait for a timeout.
 
+## Final pass (time-boxed): what the ConnectionFailed sites are
+- The `adrp/add` sites that reference the step-name strings (0x99ddc4 → `SendConnectionRequest`, 0x99df54 → `ConnectionFailed`, 0x932aa8 etc.)
+  store the job's *next state name* in the job object (`[x20+0x40]`) together with a result code in w0/x0 (0 = continue, 5 = wait) and then
+  return. They are state transitions of the `InetConnectStationJob` step machine, not the failure conditions. The conditions are the
+  branches that reach them (`b 0x99df44` → `0x99df54`).
+- So the failing branch cannot be found by reading call sites alone. It needs a dynamic hook: break at 0x99df44/0x99df54 (or log the value
+  stored at `[job+0x40]` on every step) and take the caller's registers. The runtime has no guest breakpoint facility; `NAPPLE_WATCH`
+  (store watch on `<module>+<offset>`) on the job's `[+0x40]` field would log every state change with pc and value: that is the cheapest next
+  step (find the job object address from a guest stack at the error report, `x19`/`x20` in the functions above).
+- Everything needed to reproduce and continue is committed: two-instance job setup, ports, logs to read, and the evidence sequence.
+
 ## Files
 - `runtime/src/services/offline.c`: `nifm_ip` only.
 - `runtime/tests/test_net_host_sock.c`, `runtime/tests/test_svc_online.c`: the host-order expectations.
