@@ -907,6 +907,41 @@ int main(void) {
                 MSL_COMPILES(t3->msl, "TEX.3D AOFFI");
                 maxwell_free(t3);
             }
+            /* integer textures of the other targets (ShaderKey.tex_uint_slots / tex_sint_slots): 3D, cube, 2D multisample wrappers */
+            {
+                ShaderKey ik = {0};
+                ik.tex_uint_slots = 1; /* binding slot 0 = handle offset 0x20 (index 8) */
+                const uint64_t t3 = (ins_tex2d_lz(0, 4, 8, 8) & ~(3ull << 29)) | (2ull << 29), tc = ins_tex2d_lz(0, 4, 8, 8) | (3ull << 29);
+                const uint64_t tms = 0xdc38000000000000ull | (4ull << 8) | (6ull << 20) | (1ull << 29) | (0xfull << 31) | (8ull << 36) | (1ull << 50) | PT_BITS;
+                XL_OK(i3, STAGE_FRAGMENT, ik, 0xf, "uint 3D", t3, ins_exit());
+                CHECK(HAS(i3, "texture3d<uint> t0_i") && HAS(i3, "const IntTex3D<uint> t0 = {t0_i};"), "integer 3D binding: texture3d<uint> + IntTex3D");
+                MSL_COMPILES(i3->msl, "uint 3D");
+                maxwell_free(i3);
+                ik.tex_uint_slots = 0;
+                ik.tex_sint_slots = 1;
+                XL_OK(ic, STAGE_FRAGMENT, ik, 0xf, "int cube", tc, ins_exit());
+                CHECK(HAS(ic, "texturecube<int> t0_i") && HAS(ic, "const IntTexCube<int> t0 = {t0_i};"), "integer cube binding: texturecube<int> + IntTexCube");
+                MSL_COMPILES(ic->msl, "int cube");
+                maxwell_free(ic);
+                ik.tex_sint_slots = 0;
+                ik.tex_uint_slots = 1;
+                XL_OK(im, STAGE_FRAGMENT, ik, 0xf, "uint 2D MS", tms, ins_exit());
+                CHECK(HAS(im, "texture2d_ms<uint> t0_i") && HAS(im, "const IntTex2DMS<uint> t0 = {t0_i};"), "integer multisampled binding: texture2d_ms<uint>");
+                MSL_COMPILES(im->msl, "uint 2D MS");
+                maxwell_free(im);
+            }
+            /* separate texture / sampler handles: LDC c2 texture word, LDC c2 sampler word, OR, TEX.B */
+            {
+                const uint64_t ldc_t = 0xef90000000000000ull | 10 | (255ull << 8) | ((uint64_t)SEP_TEX_C2_BASE << 20) | (2ull << 36) | (4ull << 48) | PT_BITS;
+                const uint64_t ldc_s = 0xef90000000000000ull | 11 | (255ull << 8) | ((uint64_t)(SEP_SAMP_C2_BASE + 8) << 20) | (2ull << 36) | (4ull << 48) | PT_BITS;
+                const uint64_t lor = 0x5c40000000000000ull | 12 | (10ull << 8) | (11ull << 20) | (1ull << 41) | (7ull << 48) | PT_BITS;
+                const uint64_t texb = 0xdeb8000000000000ull | (4ull << 8) | (12ull << 20) | (1ull << 29) | (0xfull << 31) | (1ull << 37) | PT_BITS;
+                XL_OK(sp1, STAGE_FRAGMENT, z, 0xf, "separate handles", ldc_t, ldc_s, lor, texb, ins_exit());
+                CHECK(sp1->ntex == 1 && sp1->tex[0].separate && sp1->tex[0].bindless_cbuf == 2 && sp1->tex[0].bindless_offset == SEP_TEX_C2_BASE &&
+                          sp1->tex[0].sep_cbuf == 2 && sp1->tex[0].sep_offset == SEP_SAMP_C2_BASE + 8,
+                      "TEX.B through (c2 word | c2 word) is a separate texture / sampler pair (%d textures, separate %d)", sp1->ntex, sp1->ntex ? sp1->tex[0].separate : -1);
+                maxwell_free(sp1);
+            }
             XL_OK(g4, STAGE_FRAGMENT, z, 0xf, "TLD4 PTP + depth compare", i_tld4(0, 8, 12, 8, 2, 0, 1), ins_exit());
             CHECK(HAS(g4, "gather_compare(s0, float2(") && HAS(g4, "as_type<float>(r14)).w"), "PTP: two offset registers precede the depth reference");
             maxwell_free(g4);
