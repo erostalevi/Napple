@@ -249,30 +249,14 @@ int napjpeg_info(const uint8_t *data, size_t size, JpegInfo *info) {
 }
 static uint8_t clamp8(float v) { return v <= 0 ? 0 : v >= 255 ? 255 : (uint8_t)(v + 0.5f); }
 
-uint8_t *napjpeg_decode_rgba(const uint8_t *d, size_t n, int *width, int *height, int *err) {
-    int dummy;
-    if (!err) err = &dummy;
-    *err = JPEGCORE_OK;
-    dct_init();
-    uint16_t q[4][64];
-    memset(q, 0, sizeof q);
-    Huff *hdc = calloc(8, sizeof(Huff)), *hac = hdc + 4;
-    Frame f;
-    Comp c[3], fc[3];
-    memset(c, 0, sizeof c);
+/* Everything after the headers, shared by the headered decode and the header-less (NVJPG) one so both give identical pixels: `hdc`/`hac` are the
+ * four DC / AC Huffman tables, `q` the quantisation tables in natural order, `c` the scan's table selectors, `scan` where the entropy data starts. */
+static uint8_t *decode_frame(const Frame *fp, uint16_t q[4][64], const Huff *hdc, const Huff *hac, const Comp *c, int nsc, int ri, const uint8_t *d, size_t n, size_t scan,
+                             int *width, int *height, int *err) {
+    const Frame f = *fp;
+    Comp fc[3];
     memset(fc, 0, sizeof fc);
-    int ri = 0, nsc = 0;
-    size_t scan = 0;
     uint8_t *rgba = NULL;
-    if (!hdc) {
-        *err = JPEGCORE_NOMEM;
-        return NULL;
-    }
-    int r = parse_headers(d, n, &f, q, hdc, hac, &ri, &scan, c, &nsc);
-    if (r != JPEGCORE_OK) {
-        *err = r;
-        goto out;
-    }
     int hmax = 1, vmax = 1;
     for (int i = 0; i < f.ncomp; i++) {
         if (f.h[i] > hmax) hmax = f.h[i];
@@ -389,6 +373,29 @@ uint8_t *napjpeg_decode_rgba(const uint8_t *d, size_t n, int *width, int *height
     *height = f.height;
 out:
     for (int i = 0; i < 3; i++) free(fc[i].plane);
+    return rgba;
+}
+uint8_t *napjpeg_decode_rgba(const uint8_t *d, size_t n, int *width, int *height, int *err) {
+    int dummy;
+    if (!err) err = &dummy;
+    *err = JPEGCORE_OK;
+    dct_init();
+    uint16_t q[4][64];
+    memset(q, 0, sizeof q);
+    Huff *hdc = calloc(8, sizeof(Huff)), *hac = hdc + 4;
+    Frame f;
+    Comp c[3];
+    memset(c, 0, sizeof c);
+    int ri = 0, nsc = 0;
+    size_t scan = 0;
+    if (!hdc) {
+        *err = JPEGCORE_NOMEM;
+        return NULL;
+    }
+    int r = parse_headers(d, n, &f, q, hdc, hac, &ri, &scan, c, &nsc);
+    uint8_t *rgba = NULL;
+    if (r != JPEGCORE_OK) *err = r;
+    else rgba = decode_frame(&f, q, hdc, hac, c, nsc, ri, d, n, scan, width, height, err);
     free(hdc);
     return rgba;
 }
