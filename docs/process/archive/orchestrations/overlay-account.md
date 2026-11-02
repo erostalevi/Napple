@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_b04e99f2-21b0-4c6f-bf32-02e8a8c6db5d
 launched_at: 2026-11-03
@@ -33,3 +33,4 @@ Everything else: other r12 items edit the other paths in parallel (account auth/
 Shared title data read-only; game runs under `lockf -k /Users/neto/NappleWork/.run.lock` (<=120 s, private --save-root); local only, never push; never ask the user; never commit credentials or Nintendo material. Test-first, small commits.
 
 ## Result
+Outcome: Clean + mechanical conflict (napple_online_ui.h add/add, comment-only difference; changes index not conflicting). Merged at dc7a750. Details: [integrator result](../integrators/claude-overlay-account-2026-11-03-r12.md).

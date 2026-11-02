@@ -6,7 +6,7 @@ head: 49ed527
 env: mac
 date: 2026-11-03
 areas: [frontend]
-status: ready-with-caveats
+status: integrated
 ---
 
 # overlay-account: Online tab in the overlay (shell, account/profile screens, UI API header)
@@ -50,3 +50,9 @@ Layout/cosmetic issues are safe to fix. The API shape is a contract: changing it
 
 ## Needs from other areas
 client-core: implement the table; legal: confirm the terms/privacy URLs; overlay-social: use the registration API.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at dc7a750. Outcome: Clean + mechanical conflict (napple_online_ui.h add/add, comment-only difference; changes index not conflicting).
+- integrate: fixes: none beyond the header conflict resolution (kept the +1 retained wording)
+- Tests: make -C frontend test: settings 77/0 window 13/0 online-ui 38/0; make -C runtime GFX=napple test test-services test-ipc-reference test-online: 0 failed; eight boots rc 0 missing_ipc [] except one ACNH NAPPLE_NET=host SIGBUS at sdk+0x508334 (the known intermittent r10 crash; two reruns rc 0); check_docs only archive orphans; gen_support OK
+- Corrections to instructions: gfx adapter must be built (make -C gfx adapter) before runtime GFX=napple
