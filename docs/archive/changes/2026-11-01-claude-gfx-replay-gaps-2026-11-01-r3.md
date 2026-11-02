@@ -1,0 +1,22 @@
+# gfx-replay-gaps (2026-11-01, batch r3): D24 / D24S8 readback, separate texture / sampler handles, integer 3D / cube / multisample textures
+
+Branch `claude/gfx-replay-gaps-2026-11-01-r3` (Mac, Metal, base 84cb5a6). Contract: [gfx.md section 13](../../architecture/gfx.md) ("Replay gaps").
+
+## What changed
+1. **D24 / D24S8 texture -> buffer copies** (`mtl_replay.m` `copy_d24_from_tex`). DEPTH24 (0x33) and DEPTH24_STENCIL8 (0x35) are 32-bit float depth (+ stencil) in Metal. A readback blits the depth (and stencil) aspect into staging memory, and a kernel writes NVN's packed words: unorm24 in the low 24 bits for 0x33, `depth << 8 | stencil` for 0x35. It is the exact inverse of the upload (`copy_d24_to_tex`). This replaces "reading back a 24-bit depth texture ... is not implemented".
+2. **Separate texture / sampler handles**:
+   - The replay stores `BindSeparateTexture(s)` / `BindSeparateSampler(s)` and their `Deferred` forms per stage (`S.septex` / `S.sepsamp`), replacing "separate texture/sampler binding is not supported yet".
+   - The translator recognises a bindless TEX whose handle register is the OR (LOP.OR, IADD, or LOP3 with an OR table) of two constant buffer words. It records the pair (`ShaderTexture.separate`, `sep_cbuf` / `sep_offset`).
+   - `bind_stage` ORs the two words, each from c2's handle tables (`handle_word`) or from a user uniform buffer.
+   - The c2 offsets of the separate tables (`SEP_TEX_C2_BASE` 0x120, `SEP_SAMP_C2_BASE` 0x520, 8 bytes per binding, in `shader/maxwell.h`) are a **hypothesis**: no title binds separate handles. The replay logs, once, the offsets a shader uses.
+3. **Integer views of 3D, cube and 2D multisample targets** are declared `texture3d` / `texturecube` / `texture2d_ms<uint|int>` and read through the new wrappers `IntTex3D`, `IntTexCube` (face and texel from the direction) and `IntTex2DMS` (read by sample). Before this, they kept the float declaration, which is a Metal validation error.
+4. `TRANSLATOR_VERSION` 16 -> 17.
+
+## Tests
+- New: `t_d24_readback` (64 / 64 words for both formats) and `t_sep_sampler` (clamp vs repeat sampler through c2 words, a uniform buffer pair with IADD).
+- Extended: `t_int_tex` cases 4-6 (a 3D RGBA8UI texture, a cube view of a 2D RGBA8UI texture, a 4x RGBA8UI target filled by a draw and read with TLD.MS).
+- `t_xlate` pins the integer wrappers (with Metal compiles) and the separate pair.
+- `make -C gfx test`: ALL TESTS PASSED. The LAS corpus still gives 5767 / 5767 / 5767.
+
+## Not verified on a title
+None of the four titles reads back a 24-bit depth texture in the scenes reached, binds separate handles, or samples an integer 3D, cube or multisample view. All three items are *tested* (unit tests under the Metal debug layer), and the four-title boots show no regression (integrator file).
