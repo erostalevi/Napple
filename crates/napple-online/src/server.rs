@@ -22,6 +22,7 @@ pub const PROTO_MATCH_MAKING: u16 = 21;
 pub const PROTO_MATCH_MAKING_EXT: u16 = 50;
 pub const PROTO_MATCHMAKE_EXT: u16 = 109;
 pub const PROTO_UTILITY: u16 = 110;
+pub const PROTO_RANKING: u16 = 112;
 
 /// NEX "success" as a %retval% Result.
 pub const RESULT_SUCCESS: u32 = 0x0001_0001;
@@ -59,6 +60,8 @@ pub struct World {
     next_call: u32,
     pub clients: HashMap<u32, Client>,
     pub sessions: Sessions,
+    /// Ranking common data (the player's Mii and name blob) per principal.
+    pub common_data: HashMap<u64, Vec<u8>>,
 }
 
 /// What an authentication connection remembers between calls.
@@ -116,7 +119,7 @@ pub fn token_from_extra(object: &[u8]) -> Option<String> {
 impl Server {
     pub fn new(accounts: Accounts, verbose: bool) -> Server {
         let secure_key = kerberos::secure_key(accounts.server_key());
-        Server { accounts, secure_key, world: Mutex::new(World { next_cid: 1, next_call: 1, clients: HashMap::new(), sessions: Sessions::new() }), verbose }
+        Server { accounts, secure_key, world: Mutex::new(World { next_cid: 1, next_call: 1, clients: HashMap::new(), sessions: Sessions::new(), common_data: HashMap::new() }), verbose }
     }
 
     /// A secure connection was accepted: the client gets a connection id.
@@ -271,6 +274,7 @@ impl Server {
             PROTO_MATCH_MAKING_EXT => self.match_making_ext(me, req),
             PROTO_NAT_TRAVERSAL => self.nat_traversal(me, req),
             PROTO_UTILITY => self.utility(me, req),
+            PROTO_RANKING => self.ranking(me, req),
             PROTO_HEALTH => ok(|w| {
                 w.bool(true);
             }),
@@ -709,6 +713,47 @@ impl Server {
                     });
                 })
             }
+            _ => Reply::Err(err::CORE_NOT_IMPLEMENTED),
+        }
+    }
+
+    /// Ranking: common data is kept (others read it back); scores are accepted and every ranking is empty (no leaderboards on this server yet).
+    fn ranking(&self, me: Caller, req: &Request) -> Reply {
+        let mut r = Reader::new(&req.body);
+        let empty_result = |w: &mut Writer| {
+            w.structure(0, |w| {
+                w.u32(0).u32(0).datetime(DateTime::now());
+            });
+        };
+        match req.method {
+            4 => {
+                let Ok(data) = r.buffer() else { return Reply::Err(err::CORE_INVALID_ARGUMENT) };
+                self.world.lock().unwrap().common_data.insert(me.pid, data);
+                ok(|_| {})
+            }
+            5 => {
+                self.world.lock().unwrap().common_data.remove(&me.pid);
+                ok(|_| {})
+            }
+            6 => {
+                let d = self.world.lock().unwrap().common_data.get(&me.pid).cloned().unwrap_or_default();
+                ok(|w| {
+                    w.buffer(&d);
+                })
+            }
+            1 | 2 | 3 | 7 | 8 => ok(|_| {}),
+            9 | 12 | 13 | 14 => ok(empty_result),
+            10 => ok(|w| {
+                w.u32(0);
+            }),
+            11 => ok(|w| {
+                w.structure(0, |w| {
+                    w.u32(0);
+                });
+            }),
+            15 => ok(|w| {
+                w.u32(0);
+            }),
             _ => Reply::Err(err::CORE_NOT_IMPLEMENTED),
         }
     }

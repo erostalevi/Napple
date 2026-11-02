@@ -67,7 +67,7 @@ impl NexSession {
     pub fn on_message(&mut self, data: &[u8], now_ms: u64) -> Vec<Vec<u8>> {
         let mut out = Vec::new();
         if self.server.verbose {
-            eprintln!("napple-online: {} <- {}", self.peer, crate::crypto::hex(&data[..data.len().min(96)]));
+            eprintln!("napple-online: [{:.3}] {} <- {}", now_ms as f64 / 1000.0, self.peer, crate::crypto::hex(&data[..data.len().min(4096)]));
         }
         let packets = prudp::decode_all(data);
         if packets.is_empty() {
@@ -79,7 +79,7 @@ impl NexSession {
         out.extend(self.tick(now_ms));
         if self.server.verbose {
             for m in &out {
-                eprintln!("napple-online: {} -> {}", self.peer, crate::crypto::hex(&m[..m.len().min(96)]));
+                eprintln!("napple-online: [{:.3}] {} -> {}", now_ms as f64 / 1000.0, self.peer, crate::crypto::hex(&m[..m.len().min(4096)]));
             }
         }
         out
@@ -158,7 +158,7 @@ impl NexSession {
                 Reply::Err(code) => (rmc::encode_error(req.protocol, req.call_id, code), format!("error 0x{:08x}", code | 0x8000_0000)),
             };
             if self.server.verbose || status != "ok" {
-                eprintln!("napple-online: {}: {} ({}) method {} -> {status}", self.peer, proto_name(req.protocol), req.protocol, req.method);
+                eprintln!("napple-online: [{:.3}] {}: {} ({}) method {} -> {status}", now_ms as f64 / 1000.0, self.peer, proto_name(req.protocol), req.protocol, req.method);
             }
             for p in slot.conn.send(&bytes, now_ms) {
                 out.push(p.encode());

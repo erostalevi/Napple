@@ -464,6 +464,19 @@ static size_t no_account_id_token(void *ctx, const uint8_t uid[16], char *out, s
     return len;
 }
 
+/* ---- prepo: play reports are dropped (never sent anywhere); NAPPLE_ONLINE_DEBUG shows them, they often carry a title's error details ---- */
+
+static void no_report(void *ctx, const void *record, size_t n) {
+    (void)ctx;
+    if (no_debug < 0) no_debug = getenv("NAPPLE_ONLINE_DEBUG") && *getenv("NAPPLE_ONLINE_DEBUG") == '1';
+    if (!no_debug) return;
+    char hex[1025];
+    size_t m = n < 512 ? n : 512;
+    for (size_t i = 0; i < m; i++) snprintf(hex + 2 * i, 3, "%02x", ((const uint8_t *)record)[i]);
+    hex[2 * m] = 0;
+    log_line("online", "napple debug: play report (%zu bytes, dropped): %s", n, hex);
+}
+
 /* ---- construction ---- */
 
 OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer *server, const char *state_dir) {
@@ -499,6 +512,7 @@ OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer
     t->account_info = no_account_info;
     t->account_id_token = no_account_id_token;
     t->tls_set_io_mode = no_tls_set_io_mode;
+    t->report = no_report;
     pthread_mutex_lock(&reg_mu);
     unsigned i = 0;
     while (i < 8 && reg[i]) i++;
