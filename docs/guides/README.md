@@ -15,6 +15,7 @@ Background on how the pieces fit: [architecture](../architecture/overview.md); p
 | [debugging.md](debugging.md) | Crash and hang triage: `CRASH` output, tracing, screenshots, perf log, scripted input, the four reference titles. |
 | [network-providers.md](network-providers.md) | The `OnlineProvider` extension point: what bsd, nifm, sfdnsres, ssl, friend, nsd and prepo ask of it, the C ABI, loading a provider module, the NullProvider. |
 | [online-rooms.md](online-rooms.md) | Napple rooms: local wireless (LDN) and LAN play between Napple instances over the internet through a `napple-room` server; running a server, joining, what is relayed, limits. |
+| [napple-online.md](napple-online.md) | The Napple online service (`crates/napple-online`, `NAPPLE_ONLINE_SERVER`): Napple accounts and tokens, the NEX game server (PRUDP Lite over WebSocket), MK8D's online path, boundaries, deployment. |
 | [hardware-simulators.md](hardware-simulators.md) | NFC / amiibo (virtual amiibo, picker contract, optional dumps) and the IR camera simulator, and how the in-game overlay wires them. |
 | [studio.md](studio.md) | Napple Studio: the panes, building for a Mac, iPhone/iPad devices and Simulators, signing modes, bundle ids, the free/paid memory-limit rule, debug flags. |
 | [ios-device-candidate.md](ios-device-candidate.md) | Which iPhone/iPad fits which games: Simulator profiling method, memory figures, picks. |

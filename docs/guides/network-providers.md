@@ -6,6 +6,8 @@ guest's request, call the active provider and encode its answer; they never open
 The repository ships exactly one provider, the **NullProvider**: a console with no network. A private build, another user or an external module supplies a different one.
 **This repository contains no online service implementation of any kind: no endpoints, tokens, certificates or protocol code, and none will be accepted.**
 
+The one exception is Napple's own community service for Napple players, never Nintendo's: [napple-online.md](napple-online.md) (a Napple-run server that issues its own identities; it never contacts Nintendo servers and ships no console keys, certificates or Nintendo-issued tokens).
+
 ## What goes through the provider
 
 | Service | Provider entry points | NullProvider answer |
