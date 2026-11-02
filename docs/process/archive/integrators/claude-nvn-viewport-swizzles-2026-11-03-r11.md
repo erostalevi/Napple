@@ -6,7 +6,7 @@ head: 281f4d3
 env: mac
 date: 2026-11-03
 areas: [gfx]
-status: ready
+status: integrated
 ---
 
 # claude/nvn-viewport-swizzles-2026-11-03-r11: per-viewport swizzles
@@ -42,3 +42,9 @@ n/a
 
 ## Needs from other areas
 None.
+
+## Integration result
+- Date: 2026-11-03 (batch r11 integrator run, local main, unpushed)
+- Merged commit: 017bc14
+- Outcome: Clean
+- Docs-only hand-off (assignment already implemented before the round, no source change); nothing to fix, no native port.
