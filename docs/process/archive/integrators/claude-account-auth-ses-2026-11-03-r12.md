@@ -6,7 +6,7 @@ head: 05c0462
 env: mac
 date: 2026-11-03
 areas: [napple-account auth, mail]
-status: ready-with-caveats
+status: integrated
 ---
 
 # account-auth-ses: email + password accounts with SES codes (napple-account auth side)
@@ -54,3 +54,9 @@ Safe: dependency/feature typos, route names. Design decision: how profile creati
 
 ## Needs from other areas
 client-core: update napple-cloud/overlay API to `signup/verify/login/reset`. infra: set `NAPPLE_MAIL_PROVIDER=ses`, `NAPPLE_SES_CONFIG_SET=napple-transactional`; instance role needs ses:SendEmail on the config set. account-profiles: see profile INSERT note.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at a1482a6. Outcome: Small fix + mechanical conflicts (Cargo.toml, account.rs, app.rs, db.rs, lib.rs, changes index: kept both sides, passkey module dropped).
+- integrate: fixes: signin::verify creates the first profile via nicknames::validate + profiles::insert (was raw INSERT), with test signup_yields_a_valid_unique_first_profile_nickname
+- Native ports: none (Rust only). Tests: cargo test --workspace: 497 passed, 0 failed, 2 ignored; check_docs baseline only archive orphans; gen_support OK
+- Corrections to instructions: cargo needs PATH=/opt/homebrew/opt/rustup/bin; used a shared CARGO_TARGET_DIR.
