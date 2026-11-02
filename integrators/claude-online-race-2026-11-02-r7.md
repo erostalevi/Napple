@@ -35,6 +35,32 @@ Worked the suspect list in order of evidence. Two MK8D instances, one job under 
 4. **Not reached: the race lobby.** About 150 ms after the probe exchange the joiner calls MatchMakingExt EndParticipation without sending a Pia
    connection request, and shows **2618-0502**. The host keeps waiting (no error) until the run ends.
 
+
+## Update (second round on this branch)
+Further two-instance runs (same job setup as below):
+- **Reported at loopback** (`NAPPLE_ONLINE_PUBLIC_IP=127.0.0.1` on the server): each console's public address (127.0.0.1) then differs from its
+  local one (192.168.5.229), as behind a home NAT.
+  - Both consoles publish their station with SecureConnection ReplaceURL; the call replaces their *private* URL with
+    `address=192.168.5.229;port=<Pia port>;natf=1;natm=1`.
+  - GetSessionURLs gives the joiner `[private 192.168.5.229:<port>, public 127.0.0.1:<port>]` (both with `type=3`, port filled from the claim).
+  - The joiner probes the host's private URL, and the probe exchange completes. Then the same 2618-0502 ~150 ms later.
+  - So the outcome does not depend on whether the host publishes its station or the server fills it in.
+- **CID.** The joiner names the host with `CID=0`; the host's own URL (in its RequestProbeInitiationExt) carries a random CID. Tried:
+  - copying it into handed-out URLs once known;
+  - sending the host an InitiateProbe naming itself when it publishes, to make it reveal its CID before a joiner arrives. The host does not
+    answer that with RequestProbeInitiationExt, so its CID is not known before the joiner's GetSessionURLs.
+  - Reverted (no effect, speculative). A host's ReplaceURL never carries a CID either, so a real server would not have it: probably not the cause.
+- **Not done: a distinct public address per console on one Mac.** It would put the joiner on Pia's normal internet path instead of the
+  same-NAT path. It cannot be made consistent with the NAT check, which only sees (address, port).
+- **Best next steps:**
+  1. **Two Macs on one LAN**, server on one of them: each console has its own address, so no same-NAT special case, and the server reports each
+     at its own LAN address. If the race lobby works there, the remaining problem is specific to two instances behind one address.
+  2. **Disassemble Pia's joiner path after a successful probe** (InetConnectStationJob / the job that calls EndParticipation; strings near main
+     0xf0bdea, "ConnectStationJob::SendRelayConnectionRequest", "InetConnectStationJob::PrepareNatTraversalByRelay") to see what it checks.
+     Also implement GetRelaySignatureKey (NATTraversal 6, already answered) and relay settings, if the joiner wants a relay route when the
+     direct one fails.
+  3. Read the joiner's Pia packets after the probes (none are sent: the decision is local).
+
 ## Files
 - `runtime/src/services/offline.c`: `nifm_ip` only.
 - `runtime/tests/test_net_host_sock.c`, `runtime/tests/test_svc_online.c`: the host-order expectations.
