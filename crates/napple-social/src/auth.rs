@@ -39,6 +39,12 @@ pub struct ProfileInfo {
     pub profile_id: String,
     pub nickname: String,
     pub icon_id: String,
+    /// Visibility tier 1..=5 (1 when the account service does not say).
+    pub tier: i64,
+    /// Opaque photo reference (`photo` or `photo_ref` in the account's profile JSON).
+    pub photo: Option<String>,
+    /// When the account service said so (unix ms); 0 for a freshly parsed document.
+    pub as_of_ms: i64,
 }
 
 #[derive(Deserialize)]
@@ -209,6 +215,8 @@ pub struct Auth {
     http: reqwest::Client,
     jwks_url: String,
     profiles_url: String,
+    directory_url: String,
+    service_token: Option<String>,
     audience: String,
     keys: Mutex<KeyCache>,
     refresh_lock: tokio::sync::Mutex<()>,
@@ -227,6 +235,8 @@ impl Auth {
             http,
             jwks_url: config.jwks_url(),
             profiles_url: config.profiles_url(),
+            directory_url: config.directory_url(),
+            service_token: config.account_service_token.clone(),
             audience: config.audience.clone(),
             keys: Mutex::new(KeyCache {
                 keys: HashMap::new(),
@@ -379,7 +389,11 @@ impl Auth {
                         c.profiles
                             .iter()
                             .find(|p| p.profile_id == profile_id)
-                            .cloned(),
+                            .cloned()
+                            .map(|p| ProfileInfo {
+                                as_of_ms: c.fetched_at_ms,
+                                ..p
+                            }),
                         now_ms - c.fetched_at_ms,
                     )
                 })
@@ -398,7 +412,11 @@ impl Auth {
         let found = profiles
             .iter()
             .find(|p| p.profile_id == profile_id)
-            .cloned();
+            .cloned()
+            .map(|p| ProfileInfo {
+                as_of_ms: now_ms,
+                ..p
+            });
         self.profiles
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -415,6 +433,34 @@ impl Auth {
                 "this profile does not belong to your Napple Account",
             )
         })
+    }
+
+    /// Looks one profile up with the service credential (`GET /account/v1/internal/profiles/{id}`). `None` when no
+    /// credential is configured or the lookup fails: callers keep their last snapshot.
+    pub async fn directory_lookup(&self, profile_id: &str, now_ms: i64) -> Option<ProfileInfo> {
+        let token = self.service_token.as_deref()?;
+        let resp = self
+            .http
+            .get(format!("{}/{}", self.directory_url, profile_id))
+            .header("X-Napple-Service", token)
+            .send()
+            .await
+            .map_err(|e| tracing::warn!(error = %e, "directory lookup failed"))
+            .ok()?;
+        if !resp.status().is_success() {
+            tracing::debug!(status = resp.status().as_u16(), "directory lookup refused");
+            return None;
+        }
+        let v: Value = resp.json().await.ok()?;
+        let v = v.get("profile").cloned().unwrap_or(v);
+        let mut p = parse_profiles(&serde_json::json!({ "profiles": [v] }))
+            .into_iter()
+            .next()?;
+        if p.profile_id != profile_id {
+            return None;
+        }
+        p.as_of_ms = now_ms;
+        Some(p)
     }
 
     /// Forgets expired ownership lists.
@@ -455,6 +501,18 @@ pub fn parse_profiles(v: &Value) -> Vec<ProfileInfo> {
                 profile_id: id,
                 nickname: text(it.get("nickname").or_else(|| it.get("name"))),
                 icon_id: text(it.get("icon_id").or_else(|| it.get("icon"))),
+                tier: it
+                    .get("tier")
+                    .and_then(Value::as_i64)
+                    .filter(|t| (1..=5).contains(t))
+                    .unwrap_or(1),
+                photo: it
+                    .get("photo")
+                    .or_else(|| it.get("photo_ref"))
+                    .and_then(Value::as_str)
+                    .filter(|p| !p.is_empty() && p.len() <= 256)
+                    .map(String::from),
+                as_of_ms: 0,
             })
         })
         .collect()
@@ -579,9 +637,16 @@ mod tests {
             vec![ProfileInfo {
                 profile_id: p.to_lowercase(),
                 nickname: "Tal".into(),
-                icon_id: "3".into()
+                icon_id: "3".into(),
+                tier: 1,
+                photo: None,
+                as_of_ms: 0,
             }]
         );
+        let v =
+            parse_profiles(&json!([{"id": p, "tier": 4, "photo": "ph-1"}, {"id": p, "tier": 9}]));
+        assert_eq!((v[0].tier, v[0].photo.as_deref()), (4, Some("ph-1")));
+        assert_eq!(v[1].tier, 1, "out-of-range tiers fall back to the default");
         let v = parse_profiles(&json!([{"id": p, "name": "X", "icon": "mii-2"}]));
         assert_eq!(v[0].icon_id, "mii-2");
         assert!(parse_profiles(&json!("x")).is_empty());

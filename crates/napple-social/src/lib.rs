@@ -14,6 +14,7 @@ pub mod error;
 pub mod hub;
 pub mod names;
 pub mod ratelimit;
+pub mod social;
 pub mod stream;
 pub mod visibility;
 
@@ -45,6 +46,9 @@ pub struct Limits {
     pub friend_request: RateLimiter,
     pub invite: RateLimiter,
     pub code_regen: RateLimiter,
+    pub search: RateLimiter,
+    pub stats: RateLimiter,
+    pub report: RateLimiter,
 }
 
 pub struct Inner {
@@ -82,6 +86,9 @@ impl AppState {
                 3_600_000,
             ),
             code_regen: RateLimiter::new(3, 3, 86_400_000),
+            search: RateLimiter::per_minute(config.searches_per_min),
+            stats: RateLimiter::per_minute(120),
+            report: RateLimiter::new(config.reports_per_hour, config.reports_per_hour, 3_600_000),
         };
         let auth = Auth::new(&config);
         AppState(Arc::new(Inner {
@@ -181,22 +188,20 @@ impl FromRequestParts<AppState> for Caller {
             })?
             .hyphenated()
             .to_string();
-        let ProfileInfo {
-            profile_id,
-            nickname,
-            icon_id,
-        } = state
+        let info: ProfileInfo = state
             .auth
             .owned_profile(&token, &claims.account_id, &profile_id, now)
             .await?;
+        let profile_id = info.profile_id.clone();
         let account_id = claims.account_id.clone();
-        let pid = profile_id.clone();
         state
             .db
-            .call(move |c| {
-                db::ensure_profile(c, &account_id, &pid, &nickname, &icon_id, now).map(|_| ())
-            })
+            .call(move |c| db::ensure_profile_info(c, &account_id, &info, now).map(|_| ()))
             .await?;
+        // The ownership list can be a minute old; the directory is authoritative for the tier.
+        state
+            .refresh_profiles(std::slice::from_ref(&profile_id))
+            .await;
         Ok(Caller {
             account_id: claims.account_id,
             device_id: claims.device_id,
@@ -293,6 +298,7 @@ pub async fn sweep(state: &AppState) -> Result<(), ApiError> {
             Ok((out, expired))
         })
         .await?;
+    state.db.call(move |c| social::prune(c, now)).await?;
     let (presence, invites) = changes;
     for ch in &presence {
         tracing::debug!(profile = %ch.profile_id, "presence timed out");
@@ -311,6 +317,9 @@ pub async fn sweep(state: &AppState) -> Result<(), ApiError> {
     state.limits.friend_request.prune(now);
     state.limits.invite.prune(now);
     state.limits.code_regen.prune(now);
+    state.limits.search.prune(now);
+    state.limits.stats.prune(now);
+    state.limits.report.prune(now);
     state.auth.prune(now);
     Ok(())
 }
@@ -365,6 +374,17 @@ pub fn router(state: AppState) -> Router {
         .route("/invites/{invite_id}", delete(api::cancel_invite))
         .route("/invites/{invite_id}/accept", post(api::accept_invite))
         .route("/invites/{invite_id}/decline", post(api::decline_invite))
+        .route("/search", get(social::search))
+        .route("/profiles/{profile_id}/public", get(social::public_profile))
+        .route("/profiles/{profile_id}/stats", get(social::get_stats))
+        .route("/stats", post(social::post_stats))
+        .route("/recent", get(social::recent))
+        .route("/reports", post(social::post_report))
+        .route("/lobbies/{lobby_id}", get(social::lobby_view))
+        .route("/encounters", post(social::post_encounters))
+        .route("/internal/lobbies", post(social::internal_lobby))
+        .route("/internal/stats", post(social::internal_stats))
+        .route("/internal/reports", get(social::internal_reports))
         .route("/stream", get(stream::stream));
     Router::new()
         .nest("/social/v1", v1)

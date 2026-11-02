@@ -16,6 +16,7 @@ use crate::db::{self, FriendView, InviteRow, PresenceRow, PresenceView, ProfileR
 use crate::error::ApiError;
 use crate::hub::Event;
 use crate::names;
+use crate::visibility::{Kind, can_view};
 use crate::{AppState, Caller, PresenceChange, codes, presence_pair};
 
 type R<T> = Result<T, ApiError>;
@@ -74,6 +75,8 @@ pub async fn me(State(s): State<AppState>, caller: Caller) -> R<Json<Value>> {
                 "device_id": device,
                 "nickname": p.nickname,
                 "icon_id": p.icon_id,
+                "photo": p.photo,
+                "tier": p.tier.as_i64(),
                 "friend_code": codes::display(&p.friend_code),
                 "settings": settings_of(&p),
                 "friend_count": db::friend_count(c, &p.profile_id)?,
@@ -307,7 +310,10 @@ pub async fn list_requests(State(s): State<AppState>, caller: Caller) -> R<Json<
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SendRequestBody {
-    friend_code: String,
+    friend_code: Option<String>,
+    profile_id: Option<String>,
+    /// A lobby napple-online vouches both players are in (opens tier 3).
+    lobby_id: Option<String>,
 }
 
 struct Accepted {
@@ -390,20 +396,58 @@ pub async fn send_request(
     caller: Caller,
     ApiJson(body): ApiJson<SendRequestBody>,
 ) -> R<Response> {
-    let code = codes::parse(&body.friend_code).ok_or_else(|| {
-        ApiError::bad_request(
-            "invalid_friend_code",
-            "not a valid Napple friend code (NP-dddd-dddd-dddd)",
-        )
-    })?;
+    enum Sel {
+        Code(String),
+        Id(String),
+    }
+    let sel = match (&body.friend_code, &body.profile_id) {
+        (Some(code), None) if body.lobby_id.is_none() => {
+            Sel::Code(codes::parse(code).ok_or_else(|| {
+                ApiError::bad_request(
+                    "invalid_friend_code",
+                    "not a valid Napple friend code (NP-dddd-dddd-dddd)",
+                )
+            })?)
+        }
+        (None, Some(id)) => Sel::Id(uuid_param(id, "profile_id")?),
+        _ => {
+            return Err(ApiError::bad_request(
+                "invalid_request",
+                "give friend_code, or profile_id (with an optional lobby_id)",
+            ));
+        }
+    };
+    let lobby = body.lobby_id.clone();
     let (now, timeout) = (s.now_ms(), s.timeout_ms());
     s.limits.friend_request.check(&caller.profile_id, now)?;
     let me = caller.profile_id.clone();
-    let not_found =
-        || ApiError::not_found("code_not_found", "no Napple profile has that friend code");
+    let by_code = matches!(sel, Sel::Code(_));
+    let not_found = move || {
+        if by_code {
+            ApiError::not_found("code_not_found", "no Napple profile has that friend code")
+        } else {
+            ApiError::not_found("profile_not_found", "no such Napple profile")
+        }
+    };
+    // Learn the target's current tier before deciding anything.
+    let target_id = match &sel {
+        Sel::Id(id) => Some(id.clone()),
+        Sel::Code(code) => {
+            let code = code.clone();
+            s.db.call(move |c| Ok(db::profile_by_code(c, &code)?.map(|p| p.profile_id)))
+                .await?
+        }
+    };
+    if let Some(t) = &target_id {
+        s.refresh_profiles(std::slice::from_ref(t)).await;
+    }
     let outcome =
         s.db.tx(move |c| {
-            let target = db::profile_by_code(c, &code)?.ok_or_else(not_found)?;
+            let target = match (&sel, &target_id) {
+                (Sel::Code(code), _) => db::profile_by_code(c, code)?,
+                (Sel::Id(id), _) => db::profile(c, id)?,
+            }
+            .ok_or_else(not_found)?;
             let t = target.profile_id.as_str();
             if t == me {
                 return Err(ApiError::bad_request(
@@ -432,6 +476,11 @@ pub async fn send_request(
                 return Ok(SendOutcome::Friends(Box::new(accept_core(
                     c, &reverse, &me, now, timeout,
                 )?)));
+            }
+            // Tier rules: who may be asked at all (an existing request from them was handled above).
+            let viewer = crate::social::viewer_of(c, &me, t, lobby.as_deref(), now)?;
+            if !can_view(viewer, target.tier, Kind::FriendRequest) {
+                return Err(not_found());
             }
             if db::request_between(c, &me, t)?.is_some() {
                 return Err(ApiError::conflict(
@@ -697,6 +746,7 @@ pub struct PresenceBody {
     title_id: Option<String>,
     title_name: Option<String>,
     mode: Option<String>,
+    #[serde(alias = "joinable_token")]
     join_token: Option<String>,
 }
 

@@ -41,7 +41,11 @@ pub struct Mock {
     pub data: Arc<Mutex<MockData>>,
     pub jwks_hits: Arc<AtomicUsize>,
     pub profile_hits: Arc<AtomicUsize>,
+    pub directory_hits: Arc<AtomicUsize>,
 }
+
+pub const SOCIAL_SERVICE_TOKEN: &str = "social-service-secret";
+pub const ACCOUNT_SERVICE_TOKEN: &str = "account-service-secret";
 
 fn decode_sub(token: &str) -> Option<String> {
     let p = token.split('.').nth(1)?;
@@ -80,6 +84,30 @@ async fn profiles(
     Ok(axum::Json(
         json!({ "profiles": d.profiles.get(&sub).cloned().unwrap_or_default() }),
     ))
+}
+
+/// Service-credential profile lookup (what napple-social calls to learn a target's current tier).
+async fn directory(
+    State(m): State<Mock>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    headers: HeaderMap,
+) -> Result<axum::Json<Value>, StatusCode> {
+    m.directory_hits.fetch_add(1, Ordering::SeqCst);
+    if headers
+        .get("x-napple-service")
+        .and_then(|v| v.to_str().ok())
+        != Some(ACCOUNT_SERVICE_TOKEN)
+    {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    let d = m.data.lock().unwrap();
+    d.profiles
+        .values()
+        .flatten()
+        .find(|p| p["profile_id"] == id.as_str())
+        .cloned()
+        .map(axum::Json)
+        .ok_or(StatusCode::NOT_FOUND)
 }
 
 pub fn mint(key: &SigningKey, kid: &str, claims: &Value) -> String {
@@ -124,6 +152,9 @@ pub fn test_config(account_url: &str, dir: &std::path::Path) -> Config {
     c.ip_rate_per_min = 100_000;
     c.friend_requests_per_hour = 10_000;
     c.invites_per_hour = 10_000;
+    c.service_token = Some(SOCIAL_SERVICE_TOKEN.into());
+    c.account_service_token = Some(ACCOUNT_SERVICE_TOKEN.into());
+    c.profile_ttl_secs = 0;
     c
 }
 
@@ -144,6 +175,7 @@ impl Env {
         let mock_app = Router::new()
             .route("/account/v1/.well-known/jwks.json", get(jwks))
             .route("/account/v1/profiles", get(profiles))
+            .route("/account/v1/internal/profiles/{id}", get(directory))
             .with_state(mock.clone());
         let ml = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let account_url = format!("http://{}", ml.local_addr().unwrap());
@@ -312,6 +344,49 @@ impl Env {
         let hello = next_event(&mut ws, "hello").await;
         assert_eq!(hello["profile_id"], u.profile_id.as_str());
         ws
+    }
+
+    /// Changes a profile's tier at the mock account service (what `PATCH /profiles/{id}` would do).
+    pub fn set_tier(&self, u: &User, tier: i64) {
+        let mut d = self.mock.data.lock().unwrap();
+        for p in d.profiles.get_mut(&u.account_id).unwrap() {
+            if p["profile_id"] == u.profile_id.as_str() {
+                p["tier"] = json!(tier);
+            }
+        }
+    }
+
+    /// A user whose account lists the given tier.
+    pub fn user_tier(&self, nickname: &str, tier: i64) -> User {
+        let u = self.user(nickname);
+        self.set_tier(&u, tier);
+        u
+    }
+
+    /// POST with the napple-online service credential.
+    pub async fn service(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let m = reqwest::Method::from_bytes(method.as_bytes()).unwrap();
+        let mut rb = self
+            .http
+            .request(m, format!("{}{}", self.base, path))
+            .header("X-Napple-Service", SOCIAL_SERVICE_TOKEN);
+        if let Some(b) = body {
+            rb = rb.json(&b);
+        }
+        let resp = rb.send().await.unwrap();
+        let status = StatusCode::from_u16(resp.status().as_u16()).unwrap();
+        let text = resp.text().await.unwrap();
+        let v = if text.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_str(&text).unwrap_or(Value::String(text))
+        };
+        (status, v)
     }
 
     pub async fn sweep(&self) {

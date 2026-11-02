@@ -111,18 +111,36 @@ mod tests {
 
     #[test]
     fn stranger_columns_match_the_contract_table() {
-        assert_eq!(row(STRANGER, Kind::Search), [true, true, false, false, false]);
-        assert_eq!(row(STRANGER, Kind::FriendRequest), [true, true, false, false, false]);
+        assert_eq!(
+            row(STRANGER, Kind::Search),
+            [true, true, false, false, false]
+        );
+        assert_eq!(
+            row(STRANGER, Kind::FriendRequest),
+            [true, true, false, false, false]
+        );
         assert_eq!(row(STRANGER, Kind::Card), [true, true, false, false, false]);
-        assert_eq!(row(STRANGER, Kind::Details), [true, false, false, false, false]);
-        assert_eq!(row(STRANGER, Kind::LobbyReal), [true, true, true, true, false]);
+        assert_eq!(
+            row(STRANGER, Kind::Details),
+            [true, false, false, false, false]
+        );
+        assert_eq!(
+            row(STRANGER, Kind::LobbyReal),
+            [true, true, true, true, false]
+        );
         assert_eq!(row(STRANGER, Kind::Recent), [true, true, true, true, false]);
     }
 
     #[test]
     fn shared_lobby_only_opens_tier_three_requests() {
-        let v = Viewer { shared_lobby: true, ..STRANGER };
-        assert_eq!(row(v, Kind::FriendRequest), [true, true, true, false, false]);
+        let v = Viewer {
+            shared_lobby: true,
+            ..STRANGER
+        };
+        assert_eq!(
+            row(v, Kind::FriendRequest),
+            [true, true, true, false, false]
+        );
         // It does not open search or details.
         assert_eq!(row(v, Kind::Search), row(STRANGER, Kind::Search));
         assert_eq!(row(v, Kind::Details), row(STRANGER, Kind::Details));
@@ -130,18 +148,36 @@ mod tests {
 
     #[test]
     fn friends_see_everything_but_ghosts() {
-        let v = Viewer { is_friend: true, ..STRANGER };
+        let v = Viewer {
+            is_friend: true,
+            ..STRANGER
+        };
         assert_eq!(row(v, Kind::Card), [true, true, true, true, false]);
         assert_eq!(row(v, Kind::Details), [true, true, true, true, false]);
     }
 
     #[test]
     fn blocked_sees_nothing_and_self_sees_all() {
-        let b = Viewer { blocked: true, is_friend: true, shared_lobby: true, ..STRANGER };
-        for k in [Kind::Search, Kind::FriendRequest, Kind::Card, Kind::Details, Kind::LobbyReal, Kind::Recent] {
+        let b = Viewer {
+            blocked: true,
+            is_friend: true,
+            shared_lobby: true,
+            ..STRANGER
+        };
+        for k in [
+            Kind::Search,
+            Kind::FriendRequest,
+            Kind::Card,
+            Kind::Details,
+            Kind::LobbyReal,
+            Kind::Recent,
+        ] {
             assert_eq!(row(b, k), [false; 5], "{k:?}");
         }
-        let me = Viewer { is_self: true, ..STRANGER };
+        let me = Viewer {
+            is_self: true,
+            ..STRANGER
+        };
         assert_eq!(row(me, Kind::Details), [true; 5]);
         assert_eq!(row(me, Kind::Card), [true; 5]);
         assert_eq!(row(me, Kind::Search), [false; 5]);
