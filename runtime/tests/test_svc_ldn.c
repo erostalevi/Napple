@@ -89,7 +89,8 @@ int main(void) {
         uint8_t ni[LDN_NETINFO_SIZE]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, ni, sizeof ni); svc_call_c(host, 1, &c);
         CHECK(c.result == 0 && ni[0x26] == 12 && !memcmp(ni + 0x27, "loopback-ldn", 12) && ni[0x67] == 1, "GetNetworkInfo while hosting");
         svc_call(host, 2, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 0xc0a80001, "GetIpv4Address = the provider's address");
-        svc_call(host, 4, NULL, 0, &c); CHECK(c.result == 0 && c.out[0] == 0x5a && c.out_size == 16, "GetSecurityParameter");
+        svc_call(host, 4, NULL, 0, &c); CHECK(c.result == 0 && c.out[0] == 0x5a && c.out_size == 0x20 && !memcmp(c.out + 16, ni + 0x10, 16) && memcmp(c.out + 16, (uint8_t[16]){0}, 16),
+                                              "GetSecurityParameter: data, then the network's SessionId (as in NetworkInfo's NetworkId)");
         svc_call(host, 5, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 0x20 && SVC_OUT(&c, uint64_t, 0) == lc && c.out[0x12] == 4, "GetNetworkConfig carries the creation config");
         uint8_t adv[10] = "advertise"; memset(&c, 0, sizeof c); svc_set_in_buf(&c, adv, 10); svc_call_c(host, 206, &c);
         CHECK(c.result == 0 && lb.ldn_adv_updates == 1 && lb.ldn_net.advertise_len == 10 && !memcmp(lb.ldn_net.advertise, "advertise", 9), "SetAdvertiseData reaches the provider");

@@ -523,6 +523,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "napple-room"
+version = "0.0.1"
+
+[[package]]
 name = "napple-sigs"
 version = "0.0.1"
 dependencies = [

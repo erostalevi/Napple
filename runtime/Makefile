@@ -249,3 +249,16 @@ test-net-online: $(NETONLINE_TESTS)
 	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
 test-services: $(NETONLINE_TESTS)
 .PHONY: test-net-online
+
+# net-rooms (2026-11-02-r7): Napple rooms (NAPPLE_ROOM) against a real napple-room server (crates/napple-room, built here with cargo) and two consoles (the
+# test process and a forked child). Part of `make test-services`; alone: `make test-net-room`
+CARGO ?= $(shell command -v cargo 2>/dev/null || ls $(HOME)/.cargo/bin/cargo $(HOME)/.rustup/toolchains/*/bin/cargo 2>/dev/null | head -1)
+ROOM_TESTS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_net_room*.c))
+../target/debug/napple-room: $(wildcard ../crates/napple-room/src/*.rs) ../crates/napple-room/Cargo.toml
+	cd .. && $(CARGO) build -q -p napple-room
+$(ROOM_TESTS): $(BUILD)/tests/%: tests/%.c tests/check.h tests/svc_test.h src/net/net_room.h src/net/net_host.h $(BUILD)/tests/stubs.o $(OBJ) | ../target/debug/napple-room
+	$(CC) $(CFLAGS) $< $(BUILD)/tests/stubs.o $(filter-out $(call svc_included,$<),$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
+test-net-room: $(ROOM_TESTS)
+	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
+test-services: $(ROOM_TESTS)
+.PHONY: test-net-room

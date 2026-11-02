@@ -1,0 +1,12 @@
+[package]
+name = "napple-room"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Napple room server: rooms that relay local-wireless (LDN) and LAN-play traffic between Napple instances over the internet (own protocol, std only)."
+
+[dependencies]
+
+[[bin]]
+name = "napple-room"
+path = "src/main.rs"
