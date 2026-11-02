@@ -46,7 +46,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  TOFU_VERSION: "1.13.5"
+  TOFU_VERSION: "1.13.2"   # latest published GitHub release of the 1.13 line (setup-opentofu downloads releases)
   TF_IN_AUTOMATION: "1"
 
 jobs:
