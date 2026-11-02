@@ -2,7 +2,7 @@
 branch: claude/overlay-account-2026-11-03-r12
 orchestration: overlay-account
 base: ac6692c
-head: HEADPLACEHOLDER
+head: 49ed527
 env: mac
 date: 2026-11-03
 areas: [frontend]
