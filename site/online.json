@@ -178,7 +178,7 @@
     },
     "online_race_or_match": {
      "checked": "2026-11-02",
-     "note": "Open: the host reaches the course vote; the joiner completes NAT traversal with the host, then ends with 2618-0502.",
+     "note": "In a two-instance run through a local napple-online the race starts; it has not been played through to the end.",
      "status": "partial"
     },
     "rankings": {

@@ -54,7 +54,7 @@ Backend `nex`: NEX, the game-server protocol of most first-party games; served b
 | LAN Play | works | LAN Play through a local napple-room: two instances verified in the same room (one creates it, the other lists and joins it; both reach its character select). | 2026-11-02 |
 | Local wireless | broken | Local wireless (LDN) through a room: the station crashes right after joining. | 2026-11-02 |
 | Online matchmaking | works | Through a local napple-online: login, the online menu, and two instances matched into one gathering (verified). | 2026-11-02 |
-| Online race / match | partial | Open: the host reaches the course vote; the joiner completes NAT traversal with the host, then ends with 2618-0502. | 2026-11-02 |
+| Online race / match | partial | In a two-instance run through a local napple-online the race starts; it has not been played through to the end. | 2026-11-02 |
 | Friends | partial | A friend shows as joinable; the friend list on the Friends menu is still empty. | 2026-11-02 |
 | Rankings | untested | Time trial rankings; not tried yet. | 2026-11-02 |
 | DataStore | untested | Ghost upload and download; not tried yet. | 2026-11-02 |
