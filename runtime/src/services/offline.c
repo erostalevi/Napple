@@ -1797,6 +1797,9 @@ static void ssl_set_verify(IpcObject *s, IpcCall *c) {
 static void ssl_set_io_mode(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
     if (c->in_size >= 4) k->io_mode = IPC_IN(c, uint32_t, 0);
+    const OnlineProvider *p = online_provider();
+    int (*io)(void *, void *, uint32_t) = ONLINE_FN(p, tls_set_io_mode);
+    if (io && k->conn) io(p->ctx, k->conn, k->io_mode);
 }
 static void ssl_get_verify(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
@@ -1859,6 +1862,8 @@ static void ssl_handshake(IpcObject *s, IpcCall *c) {
         for (unsigned i = 0; ca && k->ctx && i < k->ctx->npki; i++)
             if (k->ctx->ca[i]) ca(p->ctx, k->conn, k->ctx->ca[i], k->ctx->ca_n[i]);
         if (vf && k->verify_set) vf(p->ctx, k->conn, k->verify);
+        int (*io)(void *, void *, uint32_t) = ONLINE_FN(p, tls_set_io_mode);
+        if (io && k->io_mode) io(p->ctx, k->conn, k->io_mode);
     }
     if (sh && k->host[0]) sh(p->ctx, k->conn, k->host);
     uint32_t res = 0;
@@ -1881,7 +1886,7 @@ static void ssl_read(IpcObject *s, IpcCall *c) {
     static __thread uint8_t buf[0x10000];
     int64_t r = rd(p->ctx, k->conn, buf, b->size < sizeof buf ? (size_t)b->size : sizeof buf, &err);
     if (r < 0) {
-        c->result = HZ_R_SSL_NOT_CONNECTED;
+        c->result = err == HZ_EAGAIN ? HZ_R_SSL_WOULD_BLOCK : HZ_R_SSL_NOT_CONNECTED;
         return;
     }
     ipc_write_buf(c, b, buf, (uint64_t)r);
@@ -1901,7 +1906,7 @@ static void ssl_write(IpcObject *s, IpcCall *c) {
     }
     int64_t r = wr(p->ctx, k->conn, src, (size_t)b->size, &err);
     if (r < 0) {
-        c->result = HZ_R_SSL_NOT_CONNECTED;
+        c->result = err == HZ_EAGAIN ? HZ_R_SSL_WOULD_BLOCK : HZ_R_SSL_NOT_CONNECTED;
         return;
     }
     uint32_t n = (uint32_t)r;
