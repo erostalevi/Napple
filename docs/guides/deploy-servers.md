@@ -1,7 +1,8 @@
 # Deploy the Napple game servers (pretend.napple.lat) and the napple.lat DNS
 
 **Goal:** once AWS credentials are in the repository's secrets, every push to `main` that touches the servers or `infra/` deploys
-`napple-online` (accounts/tokens + NEX game server) and `napple-room` (LDN / LAN Play relay) to one small AWS instance behind
+`napple-online` (NEX game server), `napple-account` (accounts, profiles, photos, cloud saves), `napple-social` (friends, presence, search, stats) and
+`napple-room` (LDN / LAN Play relay) to one small AWS instance behind
 `https://pretend.napple.lat`, and keeps the `napple.lat` records pointing at the GitHub Pages landing page. Until the secrets exist the workflow
 skips with a notice and nothing is deployed.
 
@@ -22,13 +23,20 @@ Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.gi
                                                                                                v
    EC2 t4g.micro, Amazon Linux 2023, Docker Compose  (/opt/napple, state on a 1 GB EBS volume at /var/lib/napple)
      caddy  :80/:443 tcp, :443 udp ── TLS (automatic certificate for pretend.napple.lat)
-        ├─ /room/*  -> room:8081    (napple-room status API, prefix stripped)
-        └─ /*       -> online:8080  (napple-online: account/token API, /healthz, and the NEX game server as PRUDP Lite
-                                     over a WebSocket upgrade)
+        ├─ /room/*              -> room:8081     (napple-room status API, prefix stripped)
+        ├─ /account/v1/*        -> account:8082  (napple-account; /account/healthz -> its /healthz)
+        ├─ /social/v1/*         -> social:8083   (napple-social incl. the WebSocket /social/v1/stream; /social/healthz)
+        └─ /*                   -> online:8080   (napple-online: /healthz, and the NEX game server as PRUDP Lite
+                                                  over a WebSocket upgrade)
      online :10025, 10125, 33334, 33335 + the same +1000 /udp  Pia NAT check (published directly)
      room   :31415/tcp+udp    room protocol (published directly)
    Logs: CloudWatch group /napple/servers. Shell: SSM Session Manager (no SSH port).
 ```
+
+**Data buckets and mail (round r12).** The stack creates two private S3 buckets (Block Public Access, TLS only, SSE-S3, no versioning, aborted
+multipart uploads expire after 2 days): `napple-photos-<account>-<region>` and `napple-saves-<account>-<region>`. The instance role gets object
+access on those two only, and `ses:SendEmail`/`ses:SendRawEmail` on the `napple.lat` identity and the `napple-transactional` configuration set only
+(both exist in the account; `tofu` does not manage them). Photos never expire on their own: napple-account deletes them with the profile or account.
 
 ## DNS records
 
@@ -64,6 +72,12 @@ different names only needs those few files changed.
 | | `NAPPLE_ONLINE_VERBOSE` | `0` | `1` = log every request |
 | | `NAPPLE_ONLINE_NATCHECK_BASE` | `10025` | first UDP port of the Pia NAT check that titles run before matchmaking: UDP 10025, 10125, 33334, 33335 (primary server) and the same + 1000 (secondary), bound on the listener's address; `0` = off. The security group (`natcheck_udp_ports`) and the compose port list follow 10025: change all three together. |
 | | `NAPPLE_ONLINE_PUBLIC_IP` | the Elastic IP | the address reported for a client on the server's own machine (from `.env`, written by each deploy) |
+| `napple-account serve` | `NAPPLE_ACCOUNT_BIND` | `0.0.0.0:8082` | `/account/v1/*` and `/healthz`. State in `NAPPLE_ACCOUNT_DATA_DIR` (`/var/lib/napple/account`). |
+| | `NAPPLE_MAIL_PROVIDER` / `NAPPLE_MAIL_FROM` / `NAPPLE_SES_REGION` / `NAPPLE_SES_CONFIG_SET` | `ses` / `no-reply@napple.lat` / the stack region / `napple-transactional` | confirmation and reset codes through SES v2 with the instance role (no keys). SES is in the sandbox until production access is granted: it only delivers to verified recipients. |
+| | `NAPPLE_PHOTO_BUCKET` / `NAPPLE_ACCOUNT_S3_BUCKET` | `napple-photos-<account>-<region>` / `napple-saves-<account>-<region>` | private S3 buckets (profile photos / cloud-save blobs), written by the instance role |
+| | `NAPPLE_ADMIN_EMAILS` | empty | comma list of admin accounts (optional repository variable is not wired: set it in `/opt/napple/.env` if needed) |
+| `napple-social` | `NAPPLE_SOCIAL_BIND` | `0.0.0.0:8083` | `/social/v1/*` (+ WebSocket) and `/healthz`; state in `NAPPLE_SOCIAL_DATA_DIR` (`/var/lib/napple/social`); verifies account JWTs against `NAPPLE_ACCOUNT_URL` (`http://account:8082` inside the compose network) |
+| `napple-online` (added) | `NAPPLE_ACCOUNT_URL`, `NAPPLE_SOCIAL_URL` | `http://account:8082`, `http://social:8083` | JWKS and encounter/stat reporting over the compose network |
 | `napple-room serve` | `NAPPLE_ROOM_LISTEN` | `0.0.0.0:31415` | room protocol, TCP (31415/udp is opened too) |
 | | `NAPPLE_ROOM_HTTP` | `0.0.0.0:8081` | plain-HTTP `GET /healthz` -> 200 `ok`, `GET /rooms` (JSON); served as `/room/healthz`, `/room/rooms` |
 | | `NAPPLE_ROOM_DATA` | `/var/lib/napple/room` | accepted, unused (the room server keeps no state); the other `NAPPLE_ROOM_*` limits keep their defaults |
@@ -125,7 +139,7 @@ Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=p
    retries for up to 5 minutes. This works before the server crates exist: see [stand-in servers](#stand-in-servers).
 
 ### Stand-in servers
-While `crates/napple-online` or `crates/napple-room` is not in the deployed commit, the `images` job builds `infra/docker/stub.Dockerfile`
+While any of `crates/napple-online`, `napple-room`, `napple-account` or `napple-social` is not in the deployed commit, the `images` job builds `infra/docker/stub.Dockerfile`
 (`infra/local/stub-server.py` on `python:3.13-alpine`, about 25 MB) into that repository instead, with a notice in the run summary. The stand-in
 listens on the same ports and env vars as the real server, answers `/healthz` (`ok stub online`, `ok stub room`) and echoes TCP on the room port, so DNS,
 TLS, the SSM roll and the smoke test are proven end to end. It holds no state and speaks no game protocol. The first push to `main` that brings
@@ -139,7 +153,7 @@ a crate (the workflow triggers on `crates/napple-online/**` and `crates/napple-r
 | bootstrap | mode `bootstrap` only: `infra/scripts/bootstrap.sh apply`. |
 | infra | `tofu fmt -check`, `validate`, the offline mocked plan tests, then `infra/scripts/tofu-servers.sh plan|apply|destroy` against the S3 state. |
 | images | One native build per image (`ubuntu-24.04-arm` for arm64), pushed to ECR as `<repo>:<commit sha>` (immutable tags; a commit already pushed is skipped). |
-| roll | `infra/scripts/roll.sh`: through SSM `send-command`, writes `compose.yml`, `compose.aws.yml`, `Caddyfile` and `.env` into `/opt/napple` on the instance, `docker compose pull && up -d`, prunes week-old images. Then `infra/scripts/smoke.sh https://pretend.<domain>` checks `/healthz` and `/room/healthz`. |
+| roll | `infra/scripts/roll.sh`: through SSM `send-command`, writes `compose.yml`, `compose.aws.yml`, `Caddyfile` and `.env` into `/opt/napple` on the instance, `docker compose pull && up -d`, prunes week-old images. Then `infra/scripts/smoke.sh https://pretend.<domain>` checks `/healthz`, `/room/healthz`, `/account/healthz` and `/social/healthz`. |
 
 Every job runs in the environment `napple-servers`. The workflow has one concurrency group and never cancels a running deploy.
 
@@ -206,9 +220,10 @@ No AWS and no Docker needed:
 infra/local/run.sh
 ```
 
-It builds both crates (debug; `--release` for release), starts them on 127.0.0.1 with a throwaway data dir under `$TMPDIR/napple-local-stack`,
+It builds the four crates (debug; `--release` for release), starts them on 127.0.0.1 with a throwaway data dir under `$TMPDIR/napple-local-stack`
+(account 18082, social 18083, online 18080, room 31415/18081; the account service uses the dev mailer, so sign-in codes appear in `logs/account.log`),
 waits for `/healthz`, and prints the env for a Napple runtime (`NAPPLE_NET=host`, `NAPPLE_ONLINE_SERVER=http://127.0.0.1:18080`,
-`NAPPLE_ROOM=127.0.0.1:31415`). `infra/local/run.sh stop` stops both and deletes the data (`KEEP_DATA=1` keeps it); `status`, `logs` and `env` do what
+`NAPPLE_ACCOUNT_URL=http://127.0.0.1:18082`, `NAPPLE_SOCIAL_URL=http://127.0.0.1:18083`, `NAPPLE_ROOM=127.0.0.1:31415`). `infra/local/run.sh stop` stops all four and deletes the data (`KEEP_DATA=1` keeps it); `status`, `logs` and `env` do what
 they say. `--bin-dir DIR` runs prebuilt binaries; `--stub` runs `infra/local/stub-server.py`, a stand-in that answers `/healthz` and echoes TCP on the room port,
 for testing the plumbing without the crates.
 
