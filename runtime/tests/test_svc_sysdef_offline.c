@@ -33,7 +33,7 @@ int main(void) {
     IpcObject *ssl = ssl_open();
     no_dup(ssl);
     svc_call(ssl, 11, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 4, "GetTrustedCertificateCount: zero");
-    svc_call(ssl, 2, NULL, 0, &c); CHECK(c.result == HZ_R_SSL_NOT_CONNECTED, "GetCertificates: no store, not connected result");
+    svc_call(ssl, 2, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 0, "GetCertificates: no ids asked, no built-in entries (ipc-depth-95 r10: was the stub's not-connected result)");
     /* bsd / nsd / sfdnsres */
     IpcObject *bs = bsd_open();
     no_dup(bs);

@@ -1777,19 +1777,34 @@ static IpcObject *prepo_open(void) { return IPC_OBJECT("prepo:u", prepo_cmds, NU
 
 /* ssl (nn::ssl): contexts and connections can be created and configured. Handshake and I/O go through the active OnlineProvider's TLS entry points over
  * the bsd descriptor the connection was given (bsd_core.c maps it to a provider socket). With the NullProvider no handshake can complete (there is no
- * socket peer), so DoHandshake reports "not connected". Commands past 8 are the author's memory of the public description (unverified). */
+ * socket peer), so DoHandshake reports "not connected". Layouts of the commands past 8 follow switchbrew 'SSL services' and libnx ssl.h; the result codes
+ * of the failure cases are not public ([unverified], hz_result.h). What the provider has no entry point for (the server's certificate bytes, the negotiated
+ * cipher, ALPN, DTLS, client certificates) is said at each handler, with what the online path would need. */
+enum { SSL_OPT_DO_NOT_CLOSE_SOCKET, SSL_OPT_GET_SERVER_CERT_CHAIN, SSL_OPT_SKIP_DEFAULT_VERIFY, SSL_OPT_ENABLE_ALPN, SSL_OPT_COUNT }; /* SslOptionType */
+enum { SSL_POLL_READ = 1u << 0, SSL_POLL_WRITE = 1u << 1, SSL_POLL_EXCEPT = 1u << 2 };                                                 /* SslPollEvent */
+enum { SSL_PRIV_DTLS_SESSION = 1, SSL_PRIV_SET_CIPHER = 2 };                                                                            /* SslPrivateOptionType */
+#define SSL_ALPN_MAX 0x200u    /* SetNextAlpnProto list kept per connection (a limit chosen here; real lists are a few names) */
+#define SSL_PEEK_MAX 0x10000u  /* Peek: bytes read from the provider and held for the next Read */
 typedef struct SslCtx {
     uint32_t refs, nconn, options[8], next_pki;
-    uint64_t pki[8]; /* ids handed out by ImportServerPki / ImportClientPki and not yet removed */
+    uint64_t pki[8]; /* ids handed out by ImportServerPki / ImportClientPki / RegisterInternalPki / ImportClientCertKeyPki and not yet removed */
     unsigned npki;
     uint8_t *ca[8]; /* ImportServerPki: the certificate of pki[i] (NULL for client PKI), handed to the provider as a trusted CA at the handshake */
     uint32_t ca_n[8];
+    uint64_t client_id; /* the context's client certificate (any of the client imports), 0 = none: RegisterInternalPki refuses a second one */
+    uint64_t *crl;      /* ImportCrl ids not yet removed (same id space as the PKIs) */
+    unsigned ncrl;
+    char **oid; /* AddPolicyOid strings */
+    unsigned noid;
 } SslCtx;                     /* shared by the context object and its connections (refcounted so a connection can outlive its context object) */
 static uint32_t ssl_contexts; /* live ISslContext objects, for GetContextCount */
 static uint32_t ssl_interface_version;
 static void ssl_ctx_unref(SslCtx *x) {
     if (x && --x->refs == 0) {
         for (unsigned i = 0; i < x->npki; i++) free(x->ca[i]);
+        for (unsigned i = 0; i < x->noid; i++) free(x->oid[i]);
+        free(x->oid);
+        free(x->crl);
         free(x);
     }
 }
@@ -1801,6 +1816,21 @@ typedef struct {
     void *conn;
     int established;
     int verify_set; /* SetVerifyOption was called: the provider gets that option instead of its own default (every check) */
+    int fd_set;     /* SetSocketDescriptor / SetDtlsSocketDescriptor was called */
+    int dtls;       /* SetDtlsSocketDescriptor was called (at most once) */
+    uint8_t dtls_addr[32];
+    uint32_t dtls_addr_n;
+    uint32_t options;                         /* SetOption flags, bit per SslOptionType */
+    uint32_t priv_dtls_session, priv_cipher;  /* SetPrivateOption values */
+    uint8_t alpn[SSL_ALPN_MAX];               /* SetNextAlpnProto: {u8 size, data[size]}... as given */
+    uint32_t alpn_n;
+    uint16_t srtp[4]; /* SetSrtpCiphers: the profiles (1, 2) offered at a DTLS handshake */
+    unsigned nsrtp;
+    uint32_t verify_error;     /* GetVerifyCertError: the failing handshake's result, cleared when read */
+    uint32_t hs_error;         /* GetVerifyCertErrors: the last handshake's result (0 = it passed or none ran) */
+    uint32_t needed_cert_size; /* GetNeededServerCertBufferSize: the server certificate data the last handshake had to return */
+    uint8_t *peek;             /* Peek: bytes read from the provider and not yet returned by Read */
+    uint32_t npeek;
 } SslConn;
 static void ssl_conn_destroy(IpcObject *o) {
     SslConn *k = o->state;
@@ -1811,11 +1841,13 @@ static void ssl_conn_destroy(IpcObject *o) {
         if (k->ctx->nconn) k->ctx->nconn--;
         ssl_ctx_unref(k->ctx);
     }
+    free(k->peek);
     free(k);
 }
 static void ssl_set_fd(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
     k->fd = c->in_size >= 4 ? IPC_IN(c, int32_t, 0) : -1;
+    k->fd_set = 1;
     int32_t v = k->fd;
     IPC_OUT(c, v);
 }
@@ -1853,9 +1885,16 @@ static void ssl_get_host_len(IpcObject *s, IpcCall *c) {
     uint32_t v = (uint32_t)strlen(k->host);
     IPC_OUT(c, v);
 }
+/* 17 SetSessionCacheMode(u32): with the DtlsSession private option set, a non-zero mode is refused (switchbrew SetPrivateOption). */
 static void ssl_set_cache(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
-    if (c->in_size >= 4) k->cache_mode = IPC_IN(c, uint32_t, 0);
+    if (c->in_size < 4) return;
+    uint32_t m = IPC_IN(c, uint32_t, 0);
+    if (m && k->priv_dtls_session) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    k->cache_mode = m;
 }
 static void ssl_get_cache(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
@@ -1878,23 +1917,19 @@ static void ssl_get_io_timeout(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
     IPC_OUT(c, k->io_timeout);
 }
-static void ssl_handshake(IpcObject *s, IpcCall *c) {
-    SslConn *k = s->state;
+/* The handshake of DoHandshake / DoHandshakeGetServerCert: 0 or the result to report. A handshake the provider ran and refused is remembered for
+ * GetVerifyCertError(s); the provider reports one result for every failure (a refused certificate and a dropped connection look the same). A DTLS
+ * connection cannot be handshaken: no provider runs DTLS (that would need a datagram TLS entry point). */
+static uint32_t ssl_do_handshake(SslConn *k) {
     const OnlineProvider *p = online_provider();
     void *(*mk)(void *, int) = ONLINE_FN(p, tls_new);
     int (*hs)(void *, void *, uint32_t *) = ONLINE_FN(p, tls_handshake);
     int (*sh)(void *, void *, const char *) = ONLINE_FN(p, tls_set_host);
     int h = bsdg_handle(bsdg_global(), k->fd);
-    if (!mk || !hs || h < 0) {
-        c->result = HZ_R_SSL_NOT_CONNECTED; /* no socket can be connected, so no handshake can run */
-        return;
-    }
+    if (!mk || !hs || h < 0 || k->dtls) return HZ_R_SSL_NOT_CONNECTED; /* no socket can be connected, so no handshake can run */
     int fresh = !k->conn;
     if (!k->conn) k->conn = mk(p->ctx, h);
-    if (!k->conn) {
-        c->result = HZ_R_SSL_NOT_CONNECTED;
-        return;
-    }
+    if (!k->conn) return HZ_R_SSL_NOT_CONNECTED;
     if (fresh) { /* the context's imported server CAs and the guest's verify option (providers without these entry points keep their own policy) */
         int (*ca)(void *, void *, const void *, size_t) = ONLINE_FN(p, tls_add_ca);
         int (*vf)(void *, void *, uint32_t) = ONLINE_FN(p, tls_set_verify);
@@ -1905,11 +1940,29 @@ static void ssl_handshake(IpcObject *s, IpcCall *c) {
     if (sh && k->host[0]) sh(p->ctx, k->conn, k->host);
     uint32_t res = 0;
     if (hs(p->ctx, k->conn, &res) != 0) {
-        c->result = res ? res : HZ_R_SSL_NOT_CONNECTED;
+        k->verify_error = k->hs_error = res ? res : HZ_R_SSL_NOT_CONNECTED;
+        return k->hs_error;
+    }
+    k->verify_error = k->hs_error = 0;
+    k->needed_cert_size = 0; /* the provider hands back no certificate bytes (that needs a peer-certificate entry point), so none are owed */
+    k->established = 1;
+    return 0;
+}
+static void ssl_handshake(IpcObject *s, IpcCall *c) { c->result = ssl_do_handshake(s->state); }
+/* 9 DoHandshakeGetServerCert(buffer type 0x6) -> u32 cert data size, u32 cert count: the handshake of 8, then the server certificate (or the chain with
+ * GetServerCertChain, behind a "CertChMN" header) when PeerCa is verified. The provider exposes no certificate bytes, so a passed handshake returns
+ * none (0, 0) and GetNeededServerCertBufferSize stays 0; the online path would need a provider entry point returning the peer chain as DER. */
+static void ssl_handshake_get_cert(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    uint32_t r = ssl_do_handshake(k);
+    if (r) {
+        c->result = r;
         return;
     }
-    k->established = 1;
+    uint32_t out[2] = {0, 0};
+    ipc_out(c, out, sizeof out);
 }
+/* Bytes held by Peek come first: a Read after a Peek returns them (and only them) without asking the provider. */
 static void ssl_read(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
     const OnlineProvider *p = online_provider();
@@ -1918,6 +1971,14 @@ static void ssl_read(IpcObject *s, IpcCall *c) {
     int err = 0;
     if (!k->established || !rd || !b || !b->size) {
         c->result = HZ_R_SSL_NOT_CONNECTED;
+        return;
+    }
+    if (k->npeek) {
+        uint32_t n = b->size < k->npeek ? (uint32_t)b->size : k->npeek;
+        ipc_write_buf(c, b, k->peek, n);
+        memmove(k->peek, k->peek + n, k->npeek - n);
+        k->npeek -= n;
+        IPC_OUT(c, n);
         return;
     }
     static __thread uint8_t buf[0x10000];
@@ -1949,12 +2010,200 @@ static void ssl_write(IpcObject *s, IpcCall *c) {
     uint32_t n = (uint32_t)r;
     IPC_OUT(c, n);
 }
-static void ssl_pending(IpcObject *s, IpcCall *c) {
-    SslConn *k = s->state;
+static int64_t ssl_provider_pending(SslConn *k) {
     const OnlineProvider *p = online_provider();
     int64_t (*pd)(void *, void *) = ONLINE_FN(p, tls_pending);
-    int32_t v = k->established && pd ? (int32_t)pd(p->ctx, k->conn) : 0;
+    return k->established && pd ? pd(p->ctx, k->conn) : 0;
+}
+static void ssl_pending(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    int32_t v = k->established ? (int32_t)(ssl_provider_pending(k) + k->npeek) : 0;
     IPC_OUT(c, v);
+}
+/* 13 Peek(buffer type 0x6) -> u32 size: like Read, but the bytes stay readable. The provider has no peek, so they are read from it once and held in the
+ * connection until Read returns them. */
+static void ssl_peek(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    const OnlineProvider *p = online_provider();
+    int64_t (*rd)(void *, void *, void *, size_t, int *) = ONLINE_FN(p, tls_read);
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    int err = 0;
+    if (!k->established || !rd || !b || !b->size) {
+        c->result = HZ_R_SSL_NOT_CONNECTED;
+        return;
+    }
+    if (!k->npeek) {
+        if (!k->peek && !(k->peek = malloc(SSL_PEEK_MAX))) {
+            c->result = HZ_R_SSL_NOT_CONNECTED;
+            return;
+        }
+        int64_t r = rd(p->ctx, k->conn, k->peek, b->size < SSL_PEEK_MAX ? (size_t)b->size : SSL_PEEK_MAX, &err);
+        if (r < 0) {
+            c->result = HZ_R_SSL_NOT_CONNECTED;
+            return;
+        }
+        k->npeek = (uint32_t)r;
+    }
+    uint32_t n = b->size < k->npeek ? (uint32_t)b->size : k->npeek;
+    ipc_write_buf(c, b, k->peek, n);
+    IPC_OUT(c, n);
+}
+/* 14 Poll(u32 SslPollEvent, u32 timeout ms) -> u32 SslPollEvent: readiness of the connection's socket through the provider's poll. Bytes already
+ * decrypted (the provider's pending count, or bytes held by Peek) make Read ready at once. A timeout past INT_MAX waits without limit [unverified]. */
+static void ssl_poll(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    const OnlineProvider *p = online_provider();
+    int (*pl)(void *, OnlinePollFd *, unsigned, int, int *) = ONLINE_FN(p, sock_poll);
+    uint32_t want = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0, tmo = c->in_size >= 8 ? IPC_IN(c, uint32_t, 4) : 0, got = 0;
+    int h = k->fd_set ? bsdg_handle(bsdg_global(), k->fd) : -1;
+    if (h < 0 || !pl) {
+        c->result = HZ_R_SSL_NOT_CONNECTED;
+        return;
+    }
+    if ((want & SSL_POLL_READ) && (k->npeek || ssl_provider_pending(k) > 0)) got |= SSL_POLL_READ;
+    int ev = ((want & SSL_POLL_READ) ? ONLINE_POLLIN : 0) | ((want & SSL_POLL_WRITE) ? ONLINE_POLLOUT : 0) | ((want & SSL_POLL_EXCEPT) ? ONLINE_POLLPRI : 0);
+    OnlinePollFd f = {h, (int16_t)ev, 0};
+    int err = 0;
+    if (pl(p->ctx, &f, 1, got ? 0 : tmo > INT_MAX ? -1 : (int)tmo, &err) < 0) {
+        c->result = HZ_R_SSL_NOT_CONNECTED;
+        return;
+    }
+    if ((want & SSL_POLL_READ) && (f.revents & (ONLINE_POLLIN | ONLINE_POLLHUP))) got |= SSL_POLL_READ;
+    if ((want & SSL_POLL_WRITE) && (f.revents & ONLINE_POLLOUT)) got |= SSL_POLL_WRITE;
+    if ((want & SSL_POLL_EXCEPT) && (f.revents & (ONLINE_POLLPRI | ONLINE_POLLERR | ONLINE_POLLNVAL))) got |= SSL_POLL_EXCEPT;
+    IPC_OUT(c, got);
+}
+/* 15 GetVerifyCertError: no data; the result is the last refused handshake's, and reading it clears it (switchbrew). */
+static void ssl_get_verify_error(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    c->result = k->verify_error;
+    k->verify_error = 0;
+}
+/* 16 GetNeededServerCertBufferSize -> u32: the server certificate data size the last handshake had (see DoHandshakeGetServerCert). */
+static void ssl_get_needed_cert_size(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    IPC_OUT(c, k->needed_cert_size);
+}
+/* 22 SetOption({u8 flag, u8 pad[3], u32 SslOptionType}) / 23 GetOption(u32 SslOptionType) -> u8: per-connection flags. DoNotCloseSocket can only be
+ * set before SetSocketDescriptor. The flags are kept; SkipDefaultVerify and EnableAlpn change nothing the provider does (it has no switch for the
+ * built-in store and offers no ALPN). */
+static void ssl_set_conn_option(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    uint32_t o = c->in_size >= 8 ? IPC_IN(c, uint32_t, 4) : SSL_OPT_COUNT;
+    if (o >= SSL_OPT_COUNT || (o == SSL_OPT_DO_NOT_CLOSE_SOCKET && k->fd_set)) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    if (IPC_IN(c, uint8_t, 0)) k->options |= 1u << o;
+    else k->options &= ~(1u << o);
+}
+static void ssl_get_conn_option(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    uint32_t o = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : SSL_OPT_COUNT;
+    if (o >= SSL_OPT_COUNT) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    uint8_t v = (k->options >> o) & 1;
+    IPC_OUT(c, v);
+}
+/* 24 GetVerifyCertErrors(buffer type 0x6 of Result) -> u32 written, u32 total: the results of the last handshake (one entry when it was refused). */
+static void ssl_get_verify_errors(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint32_t total = k->hs_error ? 1 : 0, cap = b ? (uint32_t)(b->size / 4) : 0, n = total < cap ? total : cap;
+    if (n) ipc_write_buf(c, b, &k->hs_error, 4);
+    uint32_t out[2] = {n, total};
+    ipc_out(c, out, sizeof out);
+}
+/* 25 GetCipherInfo(u32 version = 1, buffer type 0x6 of 0x48 bytes: char cipher[0x40], char protocol_version[8]). Only a passed handshake has a cipher.
+ * The provider does not say which suite it negotiated, so an established connection gets empty strings; the online path would need a cipher entry point. */
+static void ssl_get_cipher_info(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (c->in_size < 4 || IPC_IN(c, uint32_t, 0) != 1 || !b || b->size != 0x48) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    if (!k->fd_set || !k->established) {
+        c->result = HZ_R_SSL_NOT_CONNECTED;
+        return;
+    }
+    static const uint8_t info[0x48] = {0};
+    ipc_write_buf(c, b, info, sizeof info);
+}
+/* 26 SetNextAlpnProto(buffer type 0x5: {u8 size, data[size]}..., at least 2 bytes, every entry inside the buffer): kept per connection. The provider
+ * offers no ALPN (that would need an ALPN entry point), so the list never reaches a server. */
+static void ssl_set_alpn(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    if (!k->fd_set) {
+        c->result = HZ_R_SSL_NOT_CONNECTED;
+        return;
+    }
+    uint64_t n = p ? b->size : 0, i = 0;
+    while (i < n && p[i] && i + 1 + p[i] <= n) i += 1u + p[i];
+    if (n < 2 || n > SSL_ALPN_MAX || i != n) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    memcpy(k->alpn, p, (size_t)n);
+    k->alpn_n = (uint32_t)n;
+}
+/* 27 GetNextAlpnProto(buffer type 0x6) -> u32 SslAlpnProtoState, u32 size. Before a handshake the answer is empty (libnx). After one the server could
+ * not select a protocol because none was offered (see 26): NoSupport (0), empty. */
+static void ssl_get_alpn(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    if (!k->fd_set) {
+        c->result = HZ_R_SSL_NOT_CONNECTED;
+        return;
+    }
+    uint32_t out[2] = {0, 0};
+    ipc_out(c, out, sizeof out);
+}
+/* 28 SetDtlsSocketDescriptor(s32 fd, buffer type 0x5: SockAddr, at least 0x10 bytes, byte 0 = its size) -> s32 fd: like SetSocketDescriptor with
+ * the peer's address; only once per connection. The handshake of a DTLS connection reports "not connected" (no provider runs DTLS). */
+static void ssl_set_dtls_fd(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *a = b && b->size ? ipc_buf_ptr(b) : NULL;
+    if (c->in_size < 4 || !a || b->size < 0x10 || a[0] != b->size || k->dtls) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    k->fd = IPC_IN(c, int32_t, 0);
+    k->fd_set = k->dtls = 1;
+    k->dtls_addr_n = b->size < sizeof k->dtls_addr ? (uint32_t)b->size : (uint32_t)sizeof k->dtls_addr;
+    memcpy(k->dtls_addr, a, k->dtls_addr_n);
+    int32_t v = k->fd;
+    IPC_OUT(c, v);
+}
+/* 30 SetPrivateOption({u32 value (a bool before 17.0.0), u32 SslPrivateOptionType}) [unverified order, as SetOption]: 1 DtlsSession (a non-zero
+ * SetSessionCacheMode is then refused), 2 SetCipher (the only suite to offer, kept; the provider has no suite selection). */
+static void ssl_set_private_option(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    uint32_t v = c->in_size >= 8 ? IPC_IN(c, uint32_t, 0) : 0, o = c->in_size >= 8 ? IPC_IN(c, uint32_t, 4) : 0;
+    if (o == SSL_PRIV_DTLS_SESSION) k->priv_dtls_session = v != 0;
+    else if (o == SSL_PRIV_SET_CIPHER) k->priv_cipher = v;
+    else c->result = HZ_R_SSL_INVALID_ARGUMENT;
+}
+/* 31 SetSrtpCiphers(buffer type 0x5: u16[], 2-byte aligned, at most 4): the profiles 1 and 2 are kept for a DTLS handshake, other values ignored. */
+static void ssl_set_srtp(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    uint64_t n = p ? b->size : 0;
+    if (n % 2 || n / 2 > 4) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    k->nsrtp = 0;
+    for (uint64_t i = 0; i < n / 2; i++) {
+        uint16_t v;
+        memcpy(&v, p + 2 * i, 2);
+        if (v == 1 || v == 2) k->srtp[k->nsrtp++] = v;
+    }
 }
 static void ssl_flush_cache(IpcObject *s, IpcCall *c) { /* no session cache is kept: nothing to flush */
     (void)s;
@@ -1976,29 +2225,29 @@ static const IpcCmd ssl_connection_cmds[] = {
     {19, "FlushSessionCache", ssl_flush_cache, IPC_IMPL},
     {20, "SetRenegotiationMode", ssl_set_reneg, IPC_IMPL},
     {21, "GetRenegotiationMode", ssl_get_reneg, IPC_IMPL},
-    {9, "DoHandshakeGetServerCert", sysd_err_ssl, IPC_STUB},
-    {13, "Peek", sysd_err_ssl, IPC_STUB},
-    {14, "Poll", sysd_event, IPC_STUB},
-    {15, "GetVerifyCertError", sysd_z4, IPC_STUB},
-    {16, "GetNeededServerCertBufferSize", sysd_z4, IPC_STUB},
+    {9, "DoHandshakeGetServerCert", ssl_handshake_get_cert, IPC_IMPL},
+    {13, "Peek", ssl_peek, IPC_IMPL},
+    {14, "Poll", ssl_poll, IPC_IMPL},
+    {15, "GetVerifyCertError", ssl_get_verify_error, IPC_IMPL},
+    {16, "GetNeededServerCertBufferSize", ssl_get_needed_cert_size, IPC_IMPL},
     {17, "SetSessionCacheMode", ssl_set_cache, IPC_IMPL},
     {18, "GetSessionCacheMode", ssl_get_cache, IPC_IMPL},
-    {22, "SetOption", sysd_ok, IPC_STUB},
-    {23, "GetOption", sysd_z4, IPC_STUB},
-    {24, "GetVerifyCertErrors", sysd_err_ssl, IPC_STUB},
-    {25, "GetCipherInfo", sysd_err_ssl, IPC_STUB},
-    {26, "SetNextAlpnProto", sysd_ok, IPC_STUB},
-    {27, "GetNextAlpnProto", sysd_err_ssl, IPC_STUB},
-    {28, "SetDtlsSocketDescriptor", sysd_z4, IPC_STUB},
-    {29, "GetDtlsHandshakeTimeout", sysd_err_ssl, IPC_STUB},
-    {30, "SetPrivateOption", sysd_ok, IPC_STUB},
-    {31, "SetSrtpCiphers", sysd_ok, IPC_STUB},
-    {32, "GetSrtpCipher", sysd_z4, IPC_STUB},
-    {33, "ExportKeyingMaterial", sysd_err_ssl, IPC_STUB},
+    {22, "SetOption", ssl_set_conn_option, IPC_IMPL},
+    {23, "GetOption", ssl_get_conn_option, IPC_IMPL},
+    {24, "GetVerifyCertErrors", ssl_get_verify_errors, IPC_IMPL},
+    {25, "GetCipherInfo", ssl_get_cipher_info, IPC_IMPL},
+    {26, "SetNextAlpnProto", ssl_set_alpn, IPC_IMPL},
+    {27, "GetNextAlpnProto", ssl_get_alpn, IPC_IMPL},
+    {28, "SetDtlsSocketDescriptor", ssl_set_dtls_fd, IPC_IMPL},
+    {29, "GetDtlsHandshakeTimeout", sysd_err_ssl, IPC_STUB}, /* the retransmit timer of a running DTLS handshake: no provider runs DTLS */
+    {30, "SetPrivateOption", ssl_set_private_option, IPC_IMPL},
+    {31, "SetSrtpCiphers", ssl_set_srtp, IPC_IMPL},
+    {32, "GetSrtpCipher", sysd_z4, IPC_STUB},             /* the profile a DTLS handshake negotiated: none can run */
+    {33, "ExportKeyingMaterial", sysd_err_ssl, IPC_STUB}, /* needs the session's master secret, which the provider does not expose */
     {34, "SetIoTimeout", ssl_set_io_timeout, IPC_IMPL},
     {35, "GetIoTimeout", ssl_get_io_timeout, IPC_IMPL},
-    {36, "GetSessionTicket", sysd_err_ssl, IPC_STUB},
-    {37, "SetSessionTicket", sysd_ok, IPC_STUB},
+    {36, "GetSessionTicket", sysd_err_ssl, IPC_STUB}, /* 20.0.0+: no public layout */
+    {37, "SetSessionTicket", sysd_ok, IPC_STUB},      /* 20.0.0+: no public layout */
 };
 static void ssl_create_connection(IpcObject *s, IpcCall *c) {
     SslConn *k = calloc(1, sizeof *k);
@@ -2008,7 +2257,8 @@ static void ssl_create_connection(IpcObject *s, IpcCall *c) {
     ipc_out_object(c, IPC_OBJECT("ISslConnection", ssl_connection_cmds, k, ssl_conn_destroy));
 }
 /* ISslContext: options (SetOption(option, value) / GetOption(option) over 8 slots), connection count, and certificate imports. Importing a certificate store
- * hands back an id and remembers it until RemovePki; no certificate is parsed or trusted because no handshake can complete without a provider. */
+ * hands back an id and remembers it until RemovePki; server certificates are handed to the provider as trusted CAs at the handshake. Client
+ * certificates, CRLs and policy OIDs are kept but reach no provider (it has no client-certificate, CRL or policy entry point). */
 static SslCtx *ssl_x(IpcObject *s) { return s->state; }
 static void ssl_set_option(IpcObject *s, IpcCall *c) {
     if (c->in_size >= 8) {
@@ -2030,6 +2280,11 @@ static void ssl_import_pki(IpcObject *s, IpcCall *c) {
     if (x->npki < 8) x->ca[x->npki] = NULL, x->ca_n[x->npki] = 0, x->pki[x->npki++] = id;
     IPC_OUT(c, id);
 }
+static void ssl_import_client_pki(IpcObject *s, IpcCall *c) {
+    SslCtx *x = ssl_x(s);
+    ssl_import_pki(s, c);
+    if (!x->client_id) x->client_id = x->next_pki;
+}
 /* 4 ImportServerPki(u32 format: 0 PEM, 1 DER; buffer certificate) -> u64 id: the certificate is kept (at most 64 KiB) so a provider can trust it as a CA. */
 static void ssl_import_server_pki(IpcObject *s, IpcCall *c) {
     SslCtx *x = ssl_x(s);
@@ -2050,8 +2305,86 @@ static void ssl_remove_pki(IpcObject *s, IpcCall *c) {
             free(x->ca[i]);
             --x->npki;
             x->pki[i] = x->pki[x->npki], x->ca[i] = x->ca[x->npki], x->ca_n[i] = x->ca_n[x->npki];
+            if (x->client_id == id) x->client_id = 0;
             return;
         }
+}
+/* 8 RegisterInternalPki(u32 SslInternalPki) -> u64 id: 1 DeviceClientCertDefault (the console's device certificate as the client certificate) is the
+ * only value; refused when the context already has a client certificate. This runtime has no device certificate, so no handshake presents one. */
+static void ssl_register_internal_pki(IpcObject *s, IpcCall *c) {
+    SslCtx *x = ssl_x(s);
+    if (c->in_size < 4 || IPC_IN(c, uint32_t, 0) != 1 || x->client_id) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    ssl_import_client_pki(s, c);
+}
+/* 9 AddPolicyOid(buffer type 0x5: string): the NUL must be inside the buffer and the string at most 0xFE long. Kept per context. */
+static void ssl_add_policy_oid(IpcObject *s, IpcCall *c) {
+    SslCtx *x = ssl_x(s);
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const char *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    size_t n = p ? strnlen(p, (size_t)b->size) : 0;
+    char **grown = p && n < b->size && n <= 0xFE ? realloc(x->oid, (x->noid + 1) * sizeof *x->oid) : NULL;
+    if (!grown) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    x->oid = grown;
+    if ((x->oid[x->noid] = malloc(n + 1))) memcpy(x->oid[x->noid], p, n + 1), x->noid++;
+}
+/* A whole DER element starting with tag `tag` fills [p, p + n): the outer shape of a certificate, key or CRL. */
+static int ssl_der_whole(const uint8_t *p, uint64_t n, uint8_t tag) {
+    if (!p || n < 2 || p[0] != tag) return 0;
+    uint64_t len = p[1], hdr = 2;
+    if (len & 0x80) {
+        unsigned nb = (unsigned)(len & 0x7f);
+        if (!nb || nb > 4 || n < 2 + nb) return 0;
+        len = 0;
+        for (unsigned i = 0; i < nb; i++) len = len << 8 | p[2 + i];
+        hdr += nb;
+    }
+    return hdr + len == n;
+}
+/* 10 ImportCrl(buffer type 0x5: DER CRL) -> u64 id / 11 RemoveCrl(u64 id): kept per context in the PKI id space. An id that is not there is refused. */
+static void ssl_import_crl(IpcObject *s, IpcCall *c) {
+    SslCtx *x = ssl_x(s);
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    uint64_t *grown = ssl_der_whole(p, p ? b->size : 0, 0x30) ? realloc(x->crl, (x->ncrl + 1) * sizeof *x->crl) : NULL;
+    if (!grown) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    x->crl = grown;
+    uint64_t id = x->crl[x->ncrl++] = ++x->next_pki;
+    IPC_OUT(c, id);
+}
+static void ssl_remove_crl(IpcObject *s, IpcCall *c) {
+    SslCtx *x = ssl_x(s);
+    uint64_t id = c->in_size >= 8 ? IPC_IN(c, uint64_t, 0) : 0;
+    for (unsigned i = 0; i < x->ncrl; i++)
+        if (x->crl[i] == id) {
+            x->crl[i] = x->crl[--x->ncrl];
+            return;
+        }
+    c->result = HZ_R_SSL_NOT_FOUND;
+}
+/* 12 ImportClientCertKeyPki(buffer type 0x5 cert, buffer type 0x5 key, u32 SslCertificateFormat: 1 PEM, 2 DER) -> u64 id: the pair becomes the
+ * context's client certificate. The format must match the data's shape. The provider has no client-certificate entry point, so it is not presented. */
+static void ssl_import_client_cert_key(IpcObject *s, IpcCall *c) {
+    const IpcBuf *cb = ipc_in_buf(c, 0), *kb = ipc_in_buf(c, 1);
+    const uint8_t *cp = cb && cb->size ? ipc_buf_ptr(cb) : NULL, *kp = kb && kb->size ? ipc_buf_ptr(kb) : NULL;
+    uint32_t fmt = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0;
+    int ok = cp && kp &&
+             (fmt == 1   ? cb->size > 10 && kb->size > 10 && !memcmp(cp, "-----BEGIN", 10) && !memcmp(kp, "-----BEGIN", 10)
+              : fmt == 2 ? ssl_der_whole(cp, cb->size, 0x30) && ssl_der_whole(kp, kb->size, 0x30)
+                         : 0);
+    if (!ok) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    ssl_import_client_pki(s, c);
 }
 static void ssl_ctx_destroy(IpcObject *o) {
     if (ssl_contexts) ssl_contexts--;
@@ -2063,15 +2396,15 @@ static const IpcCmd ssl_context_cmds[] = {
     {2, "CreateConnection", ssl_create_connection, IPC_IMPL},
     {3, "GetConnectionCount", ssl_conn_count, IPC_IMPL},
     {4, "ImportServerPki", ssl_import_server_pki, IPC_IMPL},
-    {5, "ImportClientPki", ssl_import_pki, IPC_IMPL},
+    {5, "ImportClientPki", ssl_import_client_pki, IPC_IMPL},
     {6, "RemoveServerPki", ssl_remove_pki, IPC_IMPL},
     {7, "RemoveClientPki", ssl_remove_pki, IPC_IMPL},
-    {8, "RegisterInternalPki", sysd_z8, IPC_STUB},
-    {9, "AddPolicyOid", sysd_ok, IPC_STUB},
-    {10, "ImportCrl", sysd_z8, IPC_STUB},
-    {11, "RemoveCrl", sysd_ok, IPC_STUB},
-    {12, "ImportClientCertKeyPki", sysd_z8, IPC_STUB},
-    {13, "GeneratePrivateKeyAndCert", sysd_err_ssl, IPC_STUB},
+    {8, "RegisterInternalPki", ssl_register_internal_pki, IPC_IMPL},
+    {9, "AddPolicyOid", ssl_add_policy_oid, IPC_IMPL},
+    {10, "ImportCrl", ssl_import_crl, IPC_IMPL},
+    {11, "RemoveCrl", ssl_remove_crl, IPC_IMPL},
+    {12, "ImportClientCertKeyPki", ssl_import_client_cert_key, IPC_IMPL},
+    {13, "GeneratePrivateKeyAndCert", sysd_err_ssl, IPC_STUB}, /* needs RSA key generation and an X.509 signer: no crypto library in the runtime */
 };
 static void ssl_create_context(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -2089,16 +2422,142 @@ static void ssl_set_interface_version(IpcObject *s, IpcCall *c) {
     (void)s;
     if (c->in_size >= 4) ssl_interface_version = IPC_IN(c, uint32_t, 0);
 }
+/* The built-in trusted certificates (the console's CertStore system data, ssl_TrustedCerts.bdf). Napple ships no CertStore, so the list is empty and
+ * handshakes trust what the provider trusts (the host's store) plus the guest's imports; GetCertificates / GetCertificateBufSize / GetCertificateByIndex /
+ * GetTrustedCertificateCount answer from this list, so they agree with each other (tests install entries to check the non-empty case). */
+typedef struct {
+    uint32_t id, status; /* SslCaCertificateId, SslTrustedCertStatus (1 = EnabledTrusted) */
+    const uint8_t *der;
+    uint32_t size;
+} SslBuiltinCert;
+static const SslBuiltinCert *ssl_builtin;
+static unsigned ssl_nbuiltin;
+#define SSL_CA_ALL 0xFFFFFFFFu  /* SslCaCertificateId_All */
+#define SSL_CERT_INFO_SIZE 0x18u /* BuiltInCertificateInfo: u32 id, u32 status, u64 size, u64 data offset (from the buffer start) */
+/* The entries `ids` names, in order (All = every entry); 0 or HZ_R_SSL_NOT_FOUND when an id is not in the list. *bytes = the GetCertificates size. */
+static uint32_t ssl_resolve_certs(const uint32_t *ids, unsigned nids, const SslBuiltinCert **out, unsigned cap, unsigned *n, uint64_t *bytes) {
+    *n = 0, *bytes = 0;
+    for (unsigned i = 0; i < nids; i++) {
+        int found = 0;
+        for (unsigned j = 0; j < ssl_nbuiltin; j++) {
+            if (ids[i] != SSL_CA_ALL && ids[i] != ssl_builtin[j].id) continue;
+            found = 1;
+            if (*n < cap) out[*n] = &ssl_builtin[j];
+            ++*n, *bytes += SSL_CERT_INFO_SIZE + ssl_builtin[j].size;
+        }
+        if (!found && ids[i] != SSL_CA_ALL) return HZ_R_SSL_NOT_FOUND;
+    }
+    return 0;
+}
+/* Writes `n` entries (info array, then the DER data) into out buffer `b`, which must hold `bytes`. */
+static uint32_t ssl_write_certs(IpcCall *c, const IpcBuf *b, const SslBuiltinCert *const *e, unsigned n, uint64_t bytes) {
+    if (!bytes) return 0;
+    uint8_t *dst = b && b->size >= bytes ? malloc((size_t)bytes) : NULL;
+    if (!dst) return HZ_R_SSL_INVALID_ARGUMENT; /* the buffer cannot hold the entries [unverified result] */
+    uint64_t data = (uint64_t)n * SSL_CERT_INFO_SIZE;
+    for (unsigned i = 0; i < n; i++) {
+        uint64_t sz = e[i]->size;
+        memcpy(dst + i * SSL_CERT_INFO_SIZE, &e[i]->id, 4);
+        memcpy(dst + i * SSL_CERT_INFO_SIZE + 4, &e[i]->status, 4);
+        memcpy(dst + i * SSL_CERT_INFO_SIZE + 8, &sz, 8);
+        memcpy(dst + i * SSL_CERT_INFO_SIZE + 16, &data, 8);
+        memcpy(dst + data, e[i]->der, e[i]->size);
+        data += sz;
+    }
+    ipc_write_buf(c, b, dst, bytes);
+    free(dst);
+    return 0;
+}
+/* 2 GetCertificates(buffer type 0x5: u32 CaCertificateId[], buffer type 0x6) -> u32 entries / 3 GetCertificateBufSize(buffer type 0x5 ids) -> u32. */
+static void ssl_get_certs_common(IpcCall *c, int write) {
+    const IpcBuf *ib = ipc_in_buf(c, 0);
+    const uint8_t *ip = ib && ib->size ? ipc_buf_ptr(ib) : NULL;
+    unsigned nids = ip ? (unsigned)(ib->size / 4) : 0, n = 0;
+    uint32_t *ids = nids ? malloc(nids * 4u) : NULL;
+    const SslBuiltinCert **e = ssl_nbuiltin ? malloc(ssl_nbuiltin * (size_t)(nids ? nids : 1) * sizeof *e) : NULL;
+    uint64_t bytes = 0;
+    if (ids) memcpy(ids, ip, nids * 4u);
+    uint32_t r = ids || !nids ? ssl_resolve_certs(ids, nids, e, e ? ssl_nbuiltin * nids : 0, &n, &bytes) : HZ_R_SSL_INVALID_ARGUMENT;
+    if (!r && write) r = ssl_write_certs(c, ipc_out_buf(c, 0), e, n, bytes);
+    free(ids);
+    free(e);
+    if (r) {
+        c->result = r;
+        return;
+    }
+    uint32_t v = write ? n : (uint32_t)bytes;
+    IPC_OUT(c, v);
+}
+static void ssl_get_certificates(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ssl_get_certs_common(c, 1);
+}
+static void ssl_get_certificate_buf_size(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ssl_get_certs_common(c, 0);
+}
+/* 11 GetTrustedCertificateCount -> u32 / 10 GetCertificateByIndex(u32 index, buffer type 0x6) -> u32 size [unverified layouts: 21.0.0+, switchbrew lists
+ * the names only]: the EnabledTrusted entries of the list, by index, in GetCertificates' format (one info entry, then the DER). */
+static const SslBuiltinCert *ssl_trusted_at(unsigned index, unsigned *count) {
+    const SslBuiltinCert *hit = NULL;
+    *count = 0;
+    for (unsigned j = 0; j < ssl_nbuiltin; j++)
+        if (ssl_builtin[j].status == 1 && (*count)++ == index) hit = &ssl_builtin[j];
+    return hit;
+}
+static void ssl_trusted_count(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v;
+    ssl_trusted_at(UINT_MAX, &v);
+    IPC_OUT(c, v);
+}
+static void ssl_get_certificate_by_index(IpcObject *s, IpcCall *c) {
+    (void)s;
+    unsigned count;
+    const SslBuiltinCert *e = c->in_size >= 4 ? ssl_trusted_at(IPC_IN(c, uint32_t, 0), &count) : NULL;
+    if (!e) {
+        c->result = HZ_R_SSL_NOT_FOUND;
+        return;
+    }
+    uint64_t bytes = SSL_CERT_INFO_SIZE + e->size;
+    uint32_t r = ssl_write_certs(c, ipc_out_buf(c, 0), &e, 1, bytes);
+    if (r) {
+        c->result = r;
+        return;
+    }
+    uint32_t v = (uint32_t)bytes;
+    IPC_OUT(c, v);
+}
+/* 6 FlushSessionCache(buffer type 0x5: host string, u32 type: 0 SingleHost, 1 AllHosts) -> u32 entries flushed. The service keeps no session cache (the
+ * provider runs a full handshake every time), so after the arguments are checked nothing is flushed. */
+static void ssl_flush_session_cache(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const char *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    uint32_t type = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 2;
+    if (type > 1 || (type == 0 && (!p || !p[0] || strnlen(p, (size_t)b->size) == b->size))) {
+        c->result = HZ_R_SSL_INVALID_ARGUMENT;
+        return;
+    }
+    uint32_t v = 0;
+    IPC_OUT(c, v);
+}
+/* 9 ClearTls12FallbackFlag: clears the flag that forces TLS 1.2 after repeated connection errors. No handshake here falls back (the provider picks the
+ * version itself), so the flag is never set and clearing it leaves nothing to do. */
+static void ssl_clear_tls12_fallback(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+}
 static const IpcCmd ssl_cmds[] = {
     {0, "CreateContext", ssl_create_context, IPC_IMPL},
     {1, "GetContextCount", ssl_context_count, IPC_IMPL},
     {5, "SetInterfaceVersion", ssl_set_interface_version, IPC_IMPL},
-    {2, "GetCertificates", sysd_err_ssl, IPC_STUB},
-    {3, "GetCertificateBufSize", sysd_z4, IPC_STUB},
-    {6, "FlushSessionCache", sysd_z4, IPC_STUB},
-    {9, "ClearTls12FallbackFlag", sysd_ok, IPC_STUB},
-    {10, "GetCertificateByIndex", sysd_err_ssl, IPC_STUB},
-    {11, "GetTrustedCertificateCount", sysd_z4, IPC_STUB},
+    {2, "GetCertificates", ssl_get_certificates, IPC_IMPL},
+    {3, "GetCertificateBufSize", ssl_get_certificate_buf_size, IPC_IMPL},
+    {6, "FlushSessionCache", ssl_flush_session_cache, IPC_IMPL},
+    {9, "ClearTls12FallbackFlag", ssl_clear_tls12_fallback, IPC_IMPL},
+    {10, "GetCertificateByIndex", ssl_get_certificate_by_index, IPC_IMPL},
+    {11, "GetTrustedCertificateCount", ssl_trusted_count, IPC_IMPL},
 };
 static IpcObject *ssl_open(void) { return IPC_OBJECT("ssl", ssl_cmds, NULL, NULL); }
 
