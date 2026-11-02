@@ -124,7 +124,7 @@ int main(void) {
         start_result(la); n = pop_out(la, out); CHECK(out[8] == g_user_id[0], "player select without an account lister: the local user");
     }
     { /* error applet: the frontend hook, else the alert */
-        uint8_t hdr[0x10] = {1, 1}, arg[0x1000] = {0x7b, 0x01, 0, 0, 0x2a};
+        uint8_t hdr[0x18] = {1, 1, 0, 0, 0, 0, 0, 0, 0x7b, 0x01, 0, 0, 0x2a}, arg[0x1000] = {0}; /* a system error: ErrorCode 0379-0042 at +8 */
         int a0 = g_alerts;
         IpcObject *la = create_applet(lac, LIBAPPLET_ID_ERROR, 0); push(la, common, 0x20); push(la, hdr, sizeof hdr); push(la, arg, sizeof arg);
         CHECK(start_result(la) == 0 && pop_out(la, out) < 0 && g_alerts == a0 + 1, "error applet without a hook: dismissed, the generic alert is raised");
@@ -206,7 +206,7 @@ int main(void) {
         { uint8_t in[8] = {1}; IpcObject *la = create_applet(lac, LIBAPPLET_ID_ERROR, 0); push(la, in, sizeof in); start_result(la); n = pop_out(la, out);
           CHECK(n > 8 && out[0] == 'O', "NAPPLE_FIRMWARE_APPLETS=all runs every table entry"); }
         setenv("NAPPLE_FIRMWARE_APPLETS", "0", 1);
-        { uint8_t in[8] = {1}; IpcObject *la = create_applet(lac, 0x12, 0); push(la, in, sizeof in); CHECK(start_result(la) == 0x1480, "NAPPLE_FIRMWARE_APPLETS=0 turns the Mii Maker off"); }
+        { uint8_t in[8] = {1}; IpcObject *la = create_applet(lac, 0x12, 0); push(la, in, sizeof in); CHECK(start_result(la) == 0x2c80, "NAPPLE_FIRMWARE_APPLETS=0 turns the Mii Maker off (LibraryAppletTerminated)"); }
         unsetenv("NAPPLE_FIRMWARE_APPLETS");
         /* the applet leaves a failure result: GetResult reports it */
         snprintf(cmd, sizeof cmd, "printf '#!/bin/sh\\necho 2005 > \"$NAPPLE_APPLET_OUT/result.txt\"\\n' > %s/fail.sh && chmod +x %s/fail.sh", root, root);

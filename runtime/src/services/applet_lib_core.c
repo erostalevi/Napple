@@ -6,36 +6,105 @@
 #include <strings.h>
 #include <string.h>
 
+static uint32_t rd32(const uint8_t *p) {
+    uint32_t v;
+    memcpy(&v, p, 4);
+    return v;
+}
+const char *applet_error_type_name(uint8_t type) {
+    static const char *const n[9] = {"normal", "system", "application", "EULA", "result", "error record", "recorded error", "type 7", "system update EULA"};
+    return type < 9 ? n[type] : "unknown type";
+}
+static void error_code(AppletErrorInfo *e, const uint8_t *p) {
+    e->first_word = rd32(p);
+    e->second_word = rd32(p + 4);
+    e->has_word = e->has_word2 = 1;
+}
+static void error_result(AppletErrorInfo *e, const uint8_t *p) {
+    e->first_word = rd32(p);
+    e->has_word = e->is_result = 1;
+}
+static void error_message(AppletErrorInfo *e, const uint8_t *p, size_t avail) {
+    size_t n = avail < sizeof e->message - 1 ? avail : sizeof e->message - 1;
+    memcpy(e->message, p, n);
+    e->message[n] = 0;
+    for (char *c = e->message; *c; c++)
+        if ((unsigned char)*c < 0x20) *c = ' ';
+}
 void applet_error_parse(const uint8_t *h, size_t hn, const uint8_t *arg, size_t an, AppletErrorInfo *e) {
     memset(e, 0, sizeof *e);
-    if (h && hn >= 2) {
-        e->valid = 1;
-        e->type = h[0];
-        e->jump_flag = h[1];
+    if (!h || hn < 2) return;
+    e->valid = 1;
+    e->type = h[0];
+    e->jump_flag = h[1];
+    if (hn >= 8) {
+        e->has_backtrace = h[5] != 0;
+        e->has_context = h[7] != 0;
     }
-    if (arg && an >= 4) {
-        memcpy(&e->first_word, arg, 4);
-        e->has_word = 1;
+    switch (e->type) {
+        case APPLET_ERROR_TYPE_NORMAL:
+            if (hn >= 0x14) {
+                if (h[6]) error_code(e, h + 8);
+                else error_result(e, h + 0x10);
+                return;
+            }
+            break;
+        case APPLET_ERROR_TYPE_SYSTEM:
+            if (hn >= 0x10) error_code(e, h + 8);
+            if (hn > 0x18) error_message(e, h + 0x18, hn - 0x18 < 0x800 ? hn - 0x18 : 0x800);
+            if (hn >= 0x10) return;
+            break;
+        case APPLET_ERROR_TYPE_APPLICATION:
+            if (hn >= 0xc) {
+                e->first_word = rd32(h + 8);
+                e->has_word = e->is_app_code = 1;
+                if (hn > 0x14) error_message(e, h + 0x14, hn - 0x14 < 0x800 ? hn - 0x14 : 0x800);
+                return;
+            }
+            break;
+        case APPLET_ERROR_TYPE_EULA:
+        case APPLET_ERROR_TYPE_SYSTEM_UPDATE_EULA:
+            if (hn >= 0xc) e->region = rd32(h + 8);
+            return;
+        case APPLET_ERROR_TYPE_RESULT:
+            if (hn >= 0xc) {
+                error_result(e, h + 8);
+                return;
+            }
+            break;
+        case APPLET_ERROR_TYPE_RECORD:
+            if (hn >= 0x10) {
+                error_code(e, h + 8);
+                return;
+            }
+            break;
+        default: return;
     }
-    if (arg && an >= 8) {
-        memcpy(&e->second_word, arg + 4, 4);
-        e->has_word2 = 1;
-    }
+    /* a parameter shorter than its type's layout (the libnx-style split form): the code is in the next storage, an ErrorCode for a system error,
+     * else a Result */
+    if (arg && an >= 8 && e->type == APPLET_ERROR_TYPE_SYSTEM) error_code(e, arg);
+    else if (arg && an >= 4) error_result(e, arg);
 }
 void applet_error_describe(const AppletErrorInfo *e, char *buf, size_t cap) {
     if (!e->valid) {
         snprintf(buf, cap, "no header");
         return;
     }
-    int n = snprintf(buf, cap, "type %u, jump-to-settings %s", e->type, e->jump_flag ? "requested (not done)" : "no");
-    if (e->has_word && n > 0 && (size_t)n < cap) snprintf(buf + n, cap - (size_t)n, ", first argument word %#x", e->first_word);
+    int n = snprintf(buf, cap, "type %u (%s), jump-to-settings %s", e->type, applet_error_type_name(e->type), e->jump_flag ? "requested (not done)" : "no");
+    if (e->has_word && n > 0 && (size_t)n < cap)
+        n += snprintf(buf + n, cap - (size_t)n, ", %s %#x", e->is_result ? "result" : e->is_app_code ? "application error" : "first argument word", e->first_word);
+    if ((e->type == APPLET_ERROR_TYPE_EULA || e->type == APPLET_ERROR_TYPE_SYSTEM_UPDATE_EULA) && n > 0 && (size_t)n < cap)
+        n += snprintf(buf + n, cap - (size_t)n, ", region %u", e->region);
+    if (e->has_context && n > 0 && (size_t)n < cap) n += snprintf(buf + n, cap - (size_t)n, ", with an error context");
+    if (e->message[0] && n > 0 && (size_t)n < cap) snprintf(buf + n, cap - (size_t)n, ": \"%.120s\"", e->message);
 }
 
 void applet_error_code_text(const AppletErrorInfo *e, char *buf, size_t cap) {
     if (!cap) return;
     buf[0] = 0;
     if (!e->valid || !e->has_word) return;
-    if (e->type == 1 && e->has_word2) snprintf(buf, cap, "%04u-%04u", e->first_word % 10000u, e->second_word % 10000u);
+    if (e->is_app_code) snprintf(buf, cap, "%04u", e->first_word % 10000u);
+    else if (e->has_word2) snprintf(buf, cap, "%04u-%04u", e->first_word % 10000u, e->second_word % 10000u);
     else snprintf(buf, cap, "2%03u-%04u", e->first_word & 0x1ffu, (e->first_word >> 9) & 0x1fffu);
 }
 

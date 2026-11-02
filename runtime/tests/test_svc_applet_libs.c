@@ -34,11 +34,12 @@ static void push(IpcObject *la, const uint8_t *data, uint64_t size) {
     IpcCall c; memset(&c, 0, sizeof c); c.in_objects[0] = st; c.nin_objects = 1; svc_call_c(la, 100, &c); CHECK(c.result == 0, "PushInData");
 }
 /* Start, then GetResult; returns the result and, when the applet produced output, its bytes in out (size returned via *n) */
+static uint32_t g_last_pop; /* the result of the last PopOutData that run() issued */
 static uint32_t run(IpcObject *la, uint8_t *out, uint64_t *n) {
     IpcCall c; svc_call(la, 10, NULL, 0, &c); CHECK(c.result == 0, "Start");
     svc_call(la, 1, NULL, 0, &c); CHECK(c.out[0] == 1, "IsCompleted after Start");
     svc_call(la, 30, NULL, 0, &c); uint32_t r = c.result;
-    svc_call(la, 101, NULL, 0, &c);
+    svc_call(la, 101, NULL, 0, &c); g_last_pop = c.result;
     if (c.result == 0 && c.nout_objects) { Storage *s = c.out_objects[0]->state; *n = s->size; memcpy(out, s->data, s->size); } else *n = 0;
     return r;
 }
@@ -105,6 +106,34 @@ int main(void) {
       applet_error_parse(hdr, 8, a2, 8, &e); applet_error_code_text(&e, code, sizeof code); CHECK(!strcmp(code, "0379-0042"), "error code text: %s", code);
       hdr[0] = 2; uint8_t r[4] = {0x02, 0x04, 0, 0}; /* module 2, description 2 */ applet_error_parse(hdr, 8, r, 4, &e); applet_error_code_text(&e, code, sizeof code); CHECK(!strcmp(code, "2002-0002"), "error result text: %s", code); }
     applet_error_parse(NULL, 0, NULL, 0, &e); applet_error_describe(&e, d, sizeof d); CHECK(!e.valid && !strcmp(d, "no header"), "error info without header");
+    { /* the startup parameter of every mode, as MK8D v1376256's sdk (nn::err) writes it */
+      char code[32]; uint8_t p[0x1018];
+      memset(p, 0, sizeof p); p[0] = 0; p[1] = 1; uint32_t r = 0x2c80; memcpy(p + 0x10, &r, 4); /* ShowError(Result) */
+      applet_error_parse(p, 0x14, NULL, 0, &e); applet_error_code_text(&e, code, sizeof code);
+      CHECK(e.type == 0 && e.jump_flag && e.is_result && e.first_word == 0x2c80 && !strcmp(code, "2128-0022"), "mode normal / Result: %s", code);
+      memset(p, 0, 0x14); p[1] = 1; p[6] = 1; uint32_t cc[2] = {2124, 4027}; memcpy(p + 8, cc, 8); /* ShowError(ErrorCode) */
+      applet_error_parse(p, 0x14, NULL, 0, &e); applet_error_code_text(&e, code, sizeof code);
+      CHECK(!e.is_result && !strcmp(code, "2124-4027"), "mode normal / ErrorCode: %s", code);
+      memset(p, 0, 0x14); p[1] = 0; p[7] = 1; memcpy(p + 0x10, &r, 4); /* ShowErrorWithoutJump + an ErrorContext storage */
+      applet_error_parse(p, 0x14, NULL, 0, &e); applet_error_describe(&e, d, sizeof d);
+      CHECK(!e.jump_flag && e.has_context && strstr(d, "jump-to-settings no") && strstr(d, "error context"), "without jump, with context: %s", d);
+      memset(p, 0, sizeof p); p[0] = 1; memcpy(p + 8, cc, 8); strcpy((char *)p + 0x18, "Could not connect.\nTry again later."); /* ShowSystemError (0x1018) */
+      applet_error_parse(p, 0x1018, NULL, 0, &e); applet_error_code_text(&e, code, sizeof code); applet_error_describe(&e, d, sizeof d);
+      CHECK(e.type == 1 && !strcmp(code, "2124-4027") && !strcmp(e.message, "Could not connect. Try again later.") && strstr(d, "system"), "mode system: %s / %s", code, d);
+      memset(p, 0, sizeof p); p[0] = 2; p[1] = 1; uint32_t an = 1234; memcpy(p + 8, &an, 4); strcpy((char *)p + 0x14, "Data corrupted"); /* ShowApplicationError (0x1014) */
+      applet_error_parse(p, 0x1014, NULL, 0, &e); applet_error_code_text(&e, code, sizeof code);
+      CHECK(e.type == 2 && e.is_app_code && !strcmp(code, "1234") && !strcmp(e.message, "Data corrupted"), "mode application: %s %s", code, e.message);
+      memset(p, 0, 0x14); p[0] = 3; p[1] = 1; uint32_t reg = 2; memcpy(p + 8, &reg, 4); /* ShowEula */
+      applet_error_parse(p, 0xc, NULL, 0, &e); applet_error_code_text(&e, code, sizeof code); applet_error_describe(&e, d, sizeof d);
+      CHECK(e.type == 3 && e.region == 2 && !code[0] && strstr(d, "region 2"), "mode EULA: %s", d);
+      p[0] = 8; applet_error_parse(p, 0xc, NULL, 0, &e); applet_error_describe(&e, d, sizeof d); CHECK(e.type == 8 && strstr(d, "system update EULA"), "mode system update EULA: %s", d);
+      memset(p, 0, 0x14); p[0] = 4; p[1] = 1; uint32_t r4 = 0x8e | 100u << 9; memcpy(p + 8, &r4, 4); /* the short Result form (module 142) */
+      applet_error_parse(p, 0xc, NULL, 0, &e); applet_error_code_text(&e, code, sizeof code); CHECK(e.type == 4 && !strcmp(code, "2142-0100"), "mode result: %s", code);
+      memset(p, 0, 0x18); p[0] = 5; p[1] = 1; uint32_t rc[2] = {2128, 22}; memcpy(p + 8, rc, 8); /* ShowErrorRecord(Result): ErrorCode 2000 + module, description */
+      applet_error_parse(p, 0x18, NULL, 0, &e); applet_error_code_text(&e, code, sizeof code); CHECK(e.type == 5 && !strcmp(code, "2128-0022"), "mode error record: %s", code);
+      memset(p, 0, 0x20); p[0] = 6; applet_error_parse(p, 0x20, NULL, 0, &e); applet_error_code_text(&e, code, sizeof code); applet_error_describe(&e, d, sizeof d);
+      CHECK(e.valid && e.type == 6 && !code[0] && strstr(d, "recorded error"), "mode recorded error: %s", d);
+      p[0] = 0; applet_error_parse(p, 0x13, NULL, 0, &e); CHECK(e.valid && !e.has_word, "a truncated normal parameter: no code read past it"); }
 
     /* ---- through the accessor ---- */
     IpcObject *la = create_applet(lac, LIBAPPLET_ID_PLAYER_SELECT); CHECK(la != NULL, "create player select");
@@ -113,7 +142,17 @@ int main(void) {
 
     la = create_applet(lac, LIBAPPLET_ID_ERROR);
     uint8_t ehdr[0x10] = {0, 0}; uint8_t earg[0x1000] = {0x7b, 0x01}; push(la, common, 0x20); push(la, ehdr, sizeof ehdr); push(la, earg, sizeof earg);
-    CHECK(run(la, out, &n) == 0 && n == 0, "error applet is dismissed with no output (not the 0x1480 unsupported result)");
+    CHECK(run(la, out, &n) == 0 && n == 0, "error applet is dismissed with no output (not the unsupported result)");
+    CHECK(g_last_pop == 0x480, "error applet: PopOutData on its empty channel answers NoDataInChannel (0x480), which the SDK's TryPopFromOutChannel takes as empty (%#x)", g_last_pop);
+    { /* nn::err::ShowError(Result) as MK8D's sdk builds it: CommonArguments + the 0x14-byte startup parameter {type 0, jump 1, result at +0x10} */
+      uint8_t p[0x14] = {0, 1}; uint32_t res = 0xf601 /* 2001-0123 */; memcpy(p + 0x10, &res, 4);
+      la = create_applet(lac, LIBAPPLET_ID_ERROR); push(la, common, 0x20); push(la, p, sizeof p);
+      g_err_calls = 0; applet_set_error_hook(err_ui);
+      CHECK(run(la, out, &n) == 0 && n == 0 && g_last_pop == 0x480, "ShowError(Result): exit normally, no output, empty channel");
+      CHECK(g_err_calls == 1 && !strcmp(g_err_code, "2001-0123") && strstr(g_err_desc, "type 0 (normal)") && strstr(g_err_desc, "result 0xf601"), "ShowError(Result): code %s, %s", g_err_code, g_err_desc);
+      applet_set_error_hook(NULL);
+      /* the same applet with a second PopOutData: still empty, never a different error */
+      IpcCall c2; svc_call(la, 101, NULL, 0, &c2); CHECK(c2.result == 0x480, "a second PopOutData: still NoDataInChannel"); }
 
     la = create_applet(lac, LIBAPPLET_ID_CONTROLLER);
     uint8_t carg[0x21c] = {0}; carg[0] = 1; carg[1] = 2; carg[5] = 1; push(la, common, 0x20); push(la, carg, sizeof carg);
@@ -150,7 +189,7 @@ int main(void) {
     CHECK(run(la, out, &n) == 0 && !g_ctl_calls && *(uint32_t *)(out + 8) == 0, "controller: a scripted policy skips the sheet");
     unsetenv("NAPPLE_CONTROLLER_SUPPORT"); applet_set_controller_ui(NULL);
 
-    applet_set_error_hook(err_ui);
+    applet_set_error_hook(err_ui); g_err_calls = 0;
     la = create_applet(lac, LIBAPPLET_ID_ERROR); push(la, common, 0x20); push(la, ehdr, sizeof ehdr); push(la, earg, sizeof earg);
     CHECK(run(la, out, &n) == 0 && g_err_calls == 1 && !strcmp(g_err_code, "2379-0000") && g_err_desc[0], "error hook: code %s, text '%s'", g_err_code, g_err_desc);
     applet_set_error_hook(NULL);
@@ -171,7 +210,7 @@ int main(void) {
     { LibAppletCall cc; memset(&cc, 0, sizeof cc); CHECK(libapplet_dispatch(&cc) == 0, "dispatch without a handler"); }
 
     la = create_applet(lac, 0x13);  /* web: still not implemented */
-    CHECK(run(la, out, &n) == 0x1480 && n == 0, "unimplemented library applets still report cancelled");
+    CHECK(run(la, out, &n) == 0x2c80 && n == 0, "unimplemented library applets report LibraryAppletTerminated (the SDK's exit reason Canceled)");
 
 
     /* the firmware applet host (parent side): a stand-in program plays the Mii Maker: it reads in0.bin and writes out0.bin = "OK" + the input */
@@ -185,14 +224,14 @@ int main(void) {
         g_cfg.data_dir = dd; g_cfg.save_root = root;
         IpcObject *la = create_applet(lac, 0x12); uint8_t in[0x100] = {3, 0, 0, 0, 7}; push(la, in, sizeof in);
         setenv("NAPPLE_FIRMWARE_APPLETS", "0", 1);
-        CHECK(run(la, out, &n) == 0x1480, "Mii Maker with NAPPLE_FIRMWARE_APPLETS=0: cancelled as before");
+        CHECK(run(la, out, &n) == 0x2c80, "Mii Maker with NAPPLE_FIRMWARE_APPLETS=0: cancelled (LibraryAppletTerminated)");
         setenv("NAPPLE_FIRMWARE_APPLETS", "1", 1); setenv("NAPPLE_APPLET_EXE", fk, 1);
         la = create_applet(lac, 0x12); push(la, in, sizeof in);
         uint32_t r = run(la, out, &n);
         CHECK(r == 0 && n == 2 + sizeof in && out[0] == 'O' && out[1] == 'K' && out[2] == 3 && out[6] == 7, "firmware applet host: storages go to the child as files and its output comes back (result %#x, %llu bytes)", r, (unsigned long long)n);
         setenv("NAPPLE_APPLET_EXE", "/bin/false", 1);
         la = create_applet(lac, 0x12); push(la, in, sizeof in);
-        CHECK(run(la, out, &n) == 0x1480 && n == 0, "a child that produces nothing: cancelled");
+        CHECK(run(la, out, &n) == 0x2c80 && n == 0, "a child that produces nothing: cancelled (LibraryAppletTerminated)");
         unsetenv("NAPPLE_FIRMWARE_APPLETS"); unsetenv("NAPPLE_APPLET_EXE");
         snprintf(cmd, sizeof cmd, "rm -rf %s", root); (void)!system(cmd);
     }
