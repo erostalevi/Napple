@@ -24,3 +24,6 @@
   virtual addressing) entitlements in the iOS build, memory footprint audit (guest heap mapping, texture/shader caches, RomFS map, staging buffers),
   Metal resource eviction under memory pressure (`didReceiveMemoryWarning`), purgeable caches; target: SMO 30 min on device without a crash.
 - LAS: plays perfectly at 60 fps at 1x on device.
+
+## Integration note for napple-social-cloud (r9)
+- Apply the reserved-name rule (ACCOUNT-CONTRACT.md "Reserved names") to any user-visible free text it accepts (presence mode text, labels); it could not be messaged (cloud).
