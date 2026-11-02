@@ -2,7 +2,7 @@
 branch: claude/infra-online-2026-11-03-r12
 orchestration: infra-online
 base: ac6692cb300be6fc6e90eb894de0268c3732e948
-head: HEADPLACEHOLDER
+head: 7e4024cf49152c4bc032b25de8c49b27378b19ec
 env: mac
 date: 2026-11-03
 areas: [infra, .github/workflows/deploy-servers.yml, docs/guides/deploy-servers.md]
