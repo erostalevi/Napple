@@ -1,0 +1,8 @@
+# interface IStorageAccessor (nn::am::service::IStorageAccessor; switchbrew 'Applet Manager services' command table; layout facts only)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x; n = not reachable from an application (reason in the trailing comment
+# lines: debug-only (am.debug!dev_function / GetDebugModeFlag), [S2] = Switch 2 only, newer than 22.x, system-applet service, unnamed id).
+# Written for napple (am-depth-applets, 2026-11-01-r3).
+0	GetSize	1.0.0	y
+10	Write	1.0.0	y
+11	Read	1.0.0	y

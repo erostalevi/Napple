@@ -1,0 +1,90 @@
+# interface IApplicationFunctions (nn::am::service::IApplicationFunctions; switchbrew 'Applet Manager services' command table; layout facts only)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x; n = not reachable from an application (reason in the trailing comment
+# lines: debug-only (am.debug!dev_function / GetDebugModeFlag), [S2] = Switch 2 only, newer than 22.x, system-applet service, unnamed id).
+# Written for napple (am-depth-applets, 2026-11-01-r3).
+1	PopLaunchParameter	1.0.0	y
+10	CreateApplicationAndPushAndRequestToStart	1.0.0	y
+# 11: kiosk (Quest) units
+11	CreateApplicationAndPushAndRequestToStartForQuest	3.0.0	n
+12	CreateApplicationAndRequestToStart	4.0.0	y
+# 13: kiosk (Quest) units
+13	CreateApplicationAndRequestToStartForQuest	4.0.0	n
+# 14: kiosk (Quest) units
+14	CreateApplicationWithAttributeAndPushAndRequestToStartForQuest	7.0.0	n
+# 15: kiosk (Quest) units
+15	CreateApplicationWithAttributeAndRequestToStartForQuest	7.0.0	n
+20	EnsureSaveData	1.0.0	y
+21	GetDesiredLanguage	1.0.0	y
+22	SetTerminateResult	1.0.0	y
+23	GetDisplayVersion	1.0.0	y
+# 24: debug
+24	GetLaunchStorageInfoForDebug	2.0.0	n
+25	ExtendSaveData	3.0.0	y
+26	GetSaveDataSize	3.0.0	y
+27	CreateCacheStorage	5.0.0	y
+28	GetSaveDataSizeMax	11.0.0	y
+29	GetCacheStorageMax	11.0.0	y
+30	BeginBlockingHomeButtonShortAndLongPressed	1.0.0	y
+31	EndBlockingHomeButtonShortAndLongPressed	1.0.0	y
+32	BeginBlockingHomeButton	1.0.0	y
+33	EndBlockingHomeButton	1.0.0	y
+34	SelectApplicationLicense	10.0.0-15.0.1	y
+35	GetDeviceSaveDataSizeMax	11.0.0	y
+36	GetLimitedApplicationLicense	14.0.0	y
+37	GetLimitedApplicationLicenseUpgradableEvent	14.0.0	y
+40	NotifyRunning	1.0.0	y
+50	GetPseudoDeviceId	2.0.0	y
+60	SetMediaPlaybackStateForApplication	2.0.0	y
+65	IsGamePlayRecordingSupported	3.0.0	y
+66	InitializeGamePlayRecording	3.0.0	y
+67	SetGamePlayRecordingState	3.0.0	y
+68	RequestFlushGamePlayingMovieForDebug	4.0.0	y
+70	RequestToShutdown	3.0.0	y
+71	RequestToReboot	3.0.0	y
+72	RequestToSleep	10.0.0	y
+80	ExitAndRequestToShowThanksMessage	4.0.0	y
+90	EnableApplicationCrashReport	4.0.0	y
+100	InitializeApplicationCopyrightFrameBuffer	5.0.0	y
+101	SetApplicationCopyrightImage	5.0.0	y
+102	SetApplicationCopyrightVisibility	5.0.0	y
+110	QueryApplicationPlayStatistics	5.0.0	y
+111	QueryApplicationPlayStatisticsByUid	6.0.0	y
+# 112: unnamed
+112	(unnamed)	20.0.0	n
+# 113: unnamed
+113	(unnamed)	20.0.0	n
+120	ExecuteProgram	5.0.0	y
+121	ClearUserChannel	5.0.0	y
+122	UnpopToUserChannel	5.0.0	y
+123	GetPreviousProgramIndex	5.0.0	y
+124	EnableApplicationAllThreadDumpOnCrash	6.0.0	y
+130	GetGpuErrorDetectedSystemEvent	8.0.0	y
+131	SetDelayTimeToAbortOnGpuError	11.0.0	y
+140	GetFriendInvitationStorageChannelEvent	9.0.0	y
+141	TryPopFromFriendInvitationStorageChannel	9.0.0	y
+150	GetNotificationStorageChannelEvent	9.0.0	y
+151	TryPopFromNotificationStorageChannel	9.0.0	y
+160	GetHealthWarningDisappearedSystemEvent	9.0.0	y
+170	SetHdcpAuthenticationActivated	9.0.0	y
+180	GetLaunchRequiredVersion	10.1.0	y
+181	UpgradeLaunchRequiredVersion	10.1.0	y
+190	SendServerMaintenanceOverlayNotification	11.0.0	y
+200	GetLastApplicationExitReason	11.0.0	y
+# 210: unnamed
+210	(unnamed)	20.0.0	n
+220	SetAudioOutputPolicy	20.0.0	y
+# 230: S2
+230	IsTensorRtSupported	20.0.0	n
+# 300: not usable on NX (GRC command stubbed)
+300	CreateMovieWriter	19.0.0	n
+310	RequestExitApplicationAndTryPopMessage	20.0.0	y
+# 320: unnamed
+320	(unnamed)	20.0.0	n
+# 321: unnamed, S2
+321	(unnamed)	20.0.0	n
+330	IsLanguageSelectionLimited	20.2.0	y
+# 500: debug
+500	StartContinuousRecordingFlushForDebug	5.0.0	n
+1000	CreateMovieMaker	5.0.0	y
+1001	PrepareForJit	5.0.0	y

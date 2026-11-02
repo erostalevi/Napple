@@ -1,0 +1,93 @@
+# interface ISelfController (nn::am::service::ISelfController; switchbrew 'Applet Manager services' command table; layout facts only)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x; n = not reachable from an application (reason in the trailing comment
+# lines: debug-only (am.debug!dev_function / GetDebugModeFlag), [S2] = Switch 2 only, newer than 22.x, system-applet service, unnamed id).
+# Written for napple (am-depth-applets, 2026-11-01-r3).
+0	Exit	1.0.0	y
+1	LockExit	1.0.0	y
+2	UnlockExit	1.0.0	y
+3	EnterFatalSection	2.0.0	y
+4	LeaveFatalSection	2.0.0	y
+9	GetLibraryAppletLaunchableEvent	1.0.0	y
+10	SetScreenShotPermission	1.0.0	y
+11	SetOperationModeChangedNotification	1.0.0	y
+12	SetPerformanceModeChangedNotification	1.0.0	y
+13	SetFocusHandlingMode	1.0.0	y
+14	SetRestartMessageEnabled	1.0.0	y
+15	SetScreenShotAppletIdentityInfo	2.0.0	y
+16	SetOutOfFocusSuspendingEnabled	2.0.0	y
+17	SetControllerFirmwareUpdateSection	3.0.0	y
+18	SetRequiresCaptureButtonShortPressedMessage	3.0.0	y
+19	SetAlbumImageOrientation	3.0.0	y
+20	SetDesirableKeyboardLayout	4.0.0	y
+# 21: system applets
+21	GetScreenShotProgramId	13.0.0	n
+# 22: system applets
+22	GetScreenShotAcdIndex	19.0.0	n
+# 23: system applets
+23	GetScreenShotApparentPlatform	19.0.0	n
+# 24: system applets
+24	GetScreenShotApplicationProperty	19.0.0	n
+40	CreateManagedDisplayLayer	1.0.0	y
+41	IsSystemBufferSharingEnabled	4.0.0	y
+42	GetSystemSharedLayerHandle	4.0.0	y
+# 43: system applets
+43	GetSystemSharedBufferHandle	5.0.0	n
+44	CreateManagedDisplaySeparableLayer	10.0.0	y
+45	SetManagedDisplayLayerSeparationMode	10.0.0	y
+46	SetRecordingLayerCompositionEnabled	13.0.0	y
+50	SetHandlesRequestToDisplay	1.0.0	y
+51	ApproveToDisplay	1.0.0	y
+60	OverrideAutoSleepTimeAndDimmingTime	1.0.0	y
+61	SetMediaPlaybackState	1.0.0	y
+62	SetIdleTimeDetectionExtension	1.0.0	y
+63	GetIdleTimeDetectionExtension	1.0.0	y
+64	SetInputDetectionSourceSet	1.0.0	y
+65	ReportUserIsActive	2.0.0	y
+66	GetCurrentIlluminance	3.0.0	y
+67	IsIlluminanceAvailable	3.0.0	y
+68	SetAutoSleepDisabled	5.0.0	y
+69	IsAutoSleepDisabled	5.0.0	y
+70	ReportMultimediaError	4.0.0	y
+71	GetCurrentIlluminanceEx	5.0.0	y
+# 72: system applets
+72	SetInputDetectionPolicy	9.0.0	n
+# 73: unnamed
+73	(unnamed)	21.0.0	n
+80	SetWirelessPriorityMode	4.0.0	y
+90	GetAccumulatedSuspendedTickValue	6.0.0	y
+91	GetAccumulatedSuspendedTickChangedEvent	6.0.0	y
+100	SetAlbumImageTakenNotificationEnabled	7.0.0	y
+110	SetApplicationAlbumUserData	8.0.0	y
+120	SaveCurrentScreenshot	11.0.0	y
+130	SetRecordVolumeMuted	13.0.0	y
+# 200: unnamed
+200	(unnamed)	20.0.0	n
+# 210: unnamed
+210	(unnamed)	20.0.0	n
+# 211: unnamed
+211	(unnamed)	20.0.0	n
+# 220: unnamed
+220	(unnamed)	20.0.0	n
+# 221: unnamed
+221	(unnamed)	20.0.0	n
+# 230: unnamed
+230	(unnamed)	20.0.0	n
+# 240: newer than 22.x
+240	(unnamed)	23.0.0	n
+# 1000: debug
+1000	GetDebugStorageChannel	7.0.0	n
+# 2000: S2
+2000	GetGraphicsSupervisor	1.0.0	n
+# 2100: S2
+2100	SetRecordingLayerEnabled	1.0.0	n
+# 2200: S2
+2200	SetSharingLayerEnabled	1.0.0	n
+# 2300: S2
+2300	SetCopyrightLayerEnabled	20.0.0	n
+# 2400: S2
+2400	SetRtcScreenSharingAudioEnabled	1.0.0	n
+# 2401: S2
+2401	SetStreamPlayMirroringAudioEnabled	20.0.0	n
+# 2402: S2
+2402	(unnamed)	20.0.0	n

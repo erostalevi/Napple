@@ -1,0 +1,32 @@
+# interface ILibraryAppletAccessor (nn::am::service::ILibraryAppletAccessor (ids 0-30 inherited from IAppletAccessor); switchbrew 'Applet Manager services' command table; layout facts only)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x; n = not reachable from an application (reason in the trailing comment
+# lines: debug-only (am.debug!dev_function / GetDebugModeFlag), [S2] = Switch 2 only, newer than 22.x, system-applet service, unnamed id).
+# Written for napple (am-depth-applets, 2026-11-01-r3).
+0	GetAppletStateChangedEvent	1.0.0	y
+1	IsCompleted	1.0.0	y
+10	Start	1.0.0	y
+20	RequestExit	1.0.0	y
+25	Terminate	1.0.0	y
+30	GetResult	1.0.0	y
+50	SetOutOfFocusApplicationSuspendingEnabled	1.0.0	y
+60	PresetLibraryAppletGpuTimeSliceZero	10.0.0	y
+# 70: S2
+70	(unnamed)	1.0.0	n
+80	RequestForLibraryAppletToGetForeground	19.0.0	y
+81	GetCurrentChildLibraryApplet	19.0.0	y
+# 90: unnamed
+90	(unnamed)	20.0.0	n
+100	PushInData	1.0.0	y
+101	PopOutData	1.0.0	y
+102	PushExtraStorage	1.0.0	y
+103	PushInteractiveInData	1.0.0	y
+104	PopInteractiveOutData	1.0.0	y
+105	GetPopOutDataEvent	1.0.0	y
+106	GetPopInteractiveOutDataEvent	1.0.0	y
+110	NeedsToExitProcess	1.0.0	y
+120	GetLibraryAppletInfo	1.0.0	y
+150	RequestForAppletToGetForeground	1.0.0	y
+160	GetIndirectLayerConsumerHandle	2.0.0	y
+# 170: unnamed
+170	(unnamed)	22.0.0	n
