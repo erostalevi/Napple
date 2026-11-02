@@ -6,7 +6,7 @@ head: 23fefed (this file's own commit follows)
 env: mac
 date: 2026-11-03
 areas: [runtime/tests, tools/golden]
-status: ready
+status: integrated
 ---
 
 # claude/ipc-risk-mac-checks-2026-11-03-r11: exercise the recent IPC risk rows on the real titles
@@ -48,3 +48,9 @@ Safe to fix: include/path typos. NAPPLE_WORK overrides the title data root.
 
 ## Needs from other areas
 nvdrv:13 stub (nvdrv owner).
+
+## Integration result
+- Date: 2026-11-03 (batch r11 integrator run, local main, unpushed)
+- Merged commit: 075b7dc
+- Outcome: Clean
+- No fixes needed. make -C runtime test-risk-title: 158 checks 0 failed 0 skipped; runtime test/test-services/test-ipc-reference green (missing 0); gfx test green. Note: the PATH needs the rustup toolchain bin for the runtime test-net-room cargo step.
