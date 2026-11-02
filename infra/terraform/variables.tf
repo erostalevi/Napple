@@ -92,18 +92,6 @@ variable "data_volume_gb" {
   default     = 1
 }
 
-variable "nex_udp_from" {
-  description = "First UDP port of the NEX/PRUDP range opened to the internet."
-  type        = number
-  default     = 60000
-}
-
-variable "nex_udp_to" {
-  description = "Last UDP port of the NEX/PRUDP range opened to the internet."
-  type        = number
-  default     = 60010
-}
-
 variable "room_port" {
   description = "napple-room port, opened for TCP and UDP."
   type        = number

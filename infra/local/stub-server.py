@@ -2,7 +2,7 @@
 """Stand-in for the napple-online / napple-room binaries, for testing infra/local/run.sh (and the compose wiring) before the real crates exist.
 
 It reads the same env vars as the real servers (docs/guides/deploy-servers.md#server-contract) and only proves the plumbing:
-  online: HTTP on NAPPLE_ONLINE_HTTP (/healthz -> 200), UDP echo on NAPPLE_ONLINE_NEX_AUTH and NAPPLE_ONLINE_NEX_SECURE
+  online: HTTP on NAPPLE_ONLINE_HTTP (/healthz -> 200)
   room:   TCP on NAPPLE_ROOM_LISTEN (logs the connection, echoes bytes), HTTP on NAPPLE_ROOM_HTTP (/healthz -> 200)
 Usage: stub-server.py online|room
 """
@@ -49,20 +49,6 @@ def serve_http(a):
     threading.Thread(target=srv.serve_forever, daemon=True).start()
 
 
-def serve_udp_echo(a):
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.bind(a)
-    log(f"udp echo on {a[0]}:{a[1]}")
-
-    def loop():
-        while True:
-            data, peer = s.recvfrom(65535)
-            log(f"udp {a[1]} <- {peer[0]}:{peer[1]} {len(data)} bytes")
-            s.sendto(data, peer)
-
-    threading.Thread(target=loop, daemon=True).start()
-
-
 def serve_tcp_echo(a):
     class Echo(socketserver.BaseRequestHandler):
         def handle(self):
@@ -87,8 +73,6 @@ def main():
         sys.exit(__doc__)
     if sys.argv[1] == "online":
         serve_http(addr("NAPPLE_ONLINE_HTTP", "0.0.0.0:8080"))
-        serve_udp_echo(addr("NAPPLE_ONLINE_NEX_AUTH", "0.0.0.0:60000"))
-        serve_udp_echo(addr("NAPPLE_ONLINE_NEX_SECURE", "0.0.0.0:60001"))
     else:
         serve_tcp_echo(addr("NAPPLE_ROOM_LISTEN", "0.0.0.0:31415"))
         serve_http(addr("NAPPLE_ROOM_HTTP", "0.0.0.0:8081"))

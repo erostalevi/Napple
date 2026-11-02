@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# napple-online (accounts/tokens HTTP API + NEX/PRUDP game server) as a small non-root Linux image.
+# napple-online (accounts/tokens HTTP API + the NEX game server, PRUDP Lite over WebSocket on the same port) as a small non-root Linux image.
 # Build context: the repository root (only Cargo.toml, Cargo.lock and crates/ are sent, see napple-online.Dockerfile.dockerignore).
 #   docker buildx build -f infra/docker/napple-online.Dockerfile --platform linux/arm64,linux/amd64 -t napple-online .
 # Each platform compiles natively (QEMU under buildx for the non-native one); the deploy workflow builds arm64 on an arm64 runner.
@@ -24,12 +24,11 @@ RUN apt-get update \
 COPY --from=build /out/napple-online /usr/local/bin/napple-online
 USER 10001:10001
 ENV NAPPLE_ONLINE_HTTP=0.0.0.0:8080 \
-    NAPPLE_ONLINE_NEX_AUTH=0.0.0.0:60000 \
-    NAPPLE_ONLINE_NEX_SECURE=0.0.0.0:60001 \
     NAPPLE_ONLINE_DATA=/var/lib/napple/online
-EXPOSE 8080/tcp 60000/udp 60001/udp
+EXPOSE 8080/tcp
 VOLUME ["/var/lib/napple/online"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/healthz >/dev/null || exit 1
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/napple-online"]
+CMD ["serve"]

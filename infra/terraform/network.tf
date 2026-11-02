@@ -37,11 +37,11 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Inbound: HTTP(S) for Caddy (80 is needed for the ACME HTTP-01 challenge and the HTTPS redirect), the NEX UDP range and the room port.
+# Inbound: HTTP(S) for Caddy (80 is needed for the ACME HTTP-01 challenge and the HTTPS redirect; NEX rides on 443 as WebSocket) and the room port.
 # No SSH: shell access is SSM Session Manager (`aws ssm start-session --target <instance id>`).
 resource "aws_security_group" "servers" {
   name        = local.name
-  description = "Napple game servers: HTTPS API, NEX/PRUDP UDP, room relay"
+  description = "Napple game servers: HTTPS API + NEX over WebSocket, room relay"
   vpc_id      = aws_vpc.main.id
   tags        = { Name = local.name }
 }
@@ -51,7 +51,6 @@ locals {
     http     = { proto = "tcp", from = 80, to = 80 }
     https    = { proto = "tcp", from = 443, to = 443 }
     https_h3 = { proto = "udp", from = 443, to = 443 }
-    nex      = { proto = "udp", from = var.nex_udp_from, to = var.nex_udp_to }
     room_tcp = { proto = "tcp", from = var.room_port, to = var.room_port }
     room_udp = { proto = "udp", from = var.room_port, to = var.room_port }
   }

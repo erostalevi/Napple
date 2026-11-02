@@ -1,5 +1,6 @@
-# Napple game servers behind Caddy: https://${NAPPLE_DOMAIN} -> napple-online's HTTP API (and /room/* -> napple-room's status API).
-# The NEX/PRUDP UDP ports and the room port are published directly (Caddy only terminates TLS for HTTP).
+# Napple game servers behind Caddy: https://${NAPPLE_DOMAIN} -> napple-online (account/token API, and the NEX game server as PRUDP Lite over a
+# WebSocket upgrade on the same port; Caddy forwards upgrades and sets X-Forwarded-For), /room/* -> napple-room's status API.
+# Only the room port is published directly; napple-online needs no UDP.
 #   AWS instance: docker compose -f compose.yml -f compose.aws.yml up -d   (images from ECR, .env written by infra/scripts/roll.sh)
 #   Local Docker: NAPPLE_DOMAIN=localhost docker compose -f compose.yml -f compose.build.yml up --build
 # The env/port contract the two binaries follow: docs/guides/deploy-servers.md#server-contract
@@ -19,14 +20,9 @@ services:
     image: ${NAPPLE_ONLINE_IMAGE:-napple-online:local}
     environment:
       NAPPLE_ONLINE_HTTP: 0.0.0.0:8080
-      NAPPLE_ONLINE_NEX_AUTH: 0.0.0.0:60000
-      NAPPLE_ONLINE_NEX_SECURE: 0.0.0.0:60001
       NAPPLE_ONLINE_PUBLIC_HOST: ${NAPPLE_DOMAIN:-pretend.napple.lat}
-      NAPPLE_ONLINE_PUBLIC_IP: ${NAPPLE_PUBLIC_IP:-127.0.0.1}
       NAPPLE_ONLINE_DATA: /var/lib/napple/online
-      RUST_LOG: ${RUST_LOG:-info}
-    ports:
-      - "60000-60001:60000-60001/udp"
+      NAPPLE_ONLINE_VERBOSE: ${NAPPLE_ONLINE_VERBOSE:-0}
     volumes:
       - online-data:/var/lib/napple/online
     expose: ["8080"]

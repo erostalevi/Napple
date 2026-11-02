@@ -23,8 +23,8 @@ Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.gi
    EC2 t4g.micro, Amazon Linux 2023, Docker Compose  (/opt/napple, state on a 1 GB EBS volume at /var/lib/napple)
      caddy  :80/:443 tcp, :443 udp ── TLS (automatic certificate for pretend.napple.lat)
         ├─ /room/*  -> room:8081    (napple-room status API, prefix stripped)
-        └─ /*       -> online:8080  (napple-online account/token API, /healthz)
-     online :60000-60001/udp  NEX/PRUDP authentication + secure servers (published directly; the security group opens 60000-60010)
+        └─ /*       -> online:8080  (napple-online: account/token API, /healthz, and the NEX game server as PRUDP Lite
+                                     over a WebSocket upgrade; no UDP)
      room   :31415/tcp+udp    room protocol (published directly)
    Logs: CloudWatch group /napple/servers. Shell: SSM Session Manager (no SSH port).
 ```
@@ -57,17 +57,16 @@ different names only needs those few files changed.
 
 | Binary | Env var | Container default | Meaning |
 |---|---|---|---|
-| `napple-online` | `NAPPLE_ONLINE_HTTP` | `0.0.0.0:8080` | plain-HTTP account/token API, `GET /healthz` -> 200 (Caddy terminates TLS) |
-| | `NAPPLE_ONLINE_NEX_AUTH` | `0.0.0.0:60000` | NEX/PRUDP authentication server, UDP |
-| | `NAPPLE_ONLINE_NEX_SECURE` | `0.0.0.0:60001` | NEX/PRUDP secure server, UDP |
+| `napple-online serve` | `NAPPLE_ONLINE_HTTP` | `0.0.0.0:8080` | everything, over TCP: the account/token API, `GET /healthz` -> 200 `ok`, and the NEX game server (Switch NEX is PRUDP Lite inside a WebSocket: an upgrade on any other path). Caddy terminates TLS, forwards the upgrade and sets `X-Forwarded-For`, which the server reads for the client address. |
 | | `NAPPLE_ONLINE_PUBLIC_HOST` | `pretend.napple.lat` | host name clients reach |
-| | `NAPPLE_ONLINE_PUBLIC_IP` | the Elastic IP | address put in the station URLs handed to clients |
-| | `NAPPLE_ONLINE_DATA` | `/var/lib/napple/online` | accounts and state (persistent volume) |
-| `napple-room` | `NAPPLE_ROOM_LISTEN` | `0.0.0.0:31415` | room protocol, TCP (31415/udp is opened too) |
-| | `NAPPLE_ROOM_HTTP` | `0.0.0.0:8081` | plain-HTTP `GET /healthz` -> 200 (served as `/room/healthz`) |
-| | `NAPPLE_ROOM_DATA` | `/var/lib/napple/room` | optional state |
+| | `NAPPLE_ONLINE_DATA` | `/var/lib/napple/online` | `accounts.json` and `server.key` (persistent volume) |
+| | `NAPPLE_ONLINE_VERBOSE` | `0` | `1` = log every request |
+| `napple-room serve` | `NAPPLE_ROOM_LISTEN` | `0.0.0.0:31415` | room protocol, TCP (31415/udp is opened too) |
+| | `NAPPLE_ROOM_HTTP` | `0.0.0.0:8081` | plain-HTTP `GET /healthz` -> 200 `ok`, `GET /rooms` (JSON); served as `/room/healthz`, `/room/rooms` |
+| | `NAPPLE_ROOM_DATA` | `/var/lib/napple/room` | accepted, unused (the room server keeps no state); the other `NAPPLE_ROOM_*` limits keep their defaults |
 
-Both are built with `cargo build --release --locked -p <crate> --bin <crate>` from the workspace root on Linux (arm64 and amd64). They need no
+`napple-online` also accepts `NAPPLE_ONLINE_NEX_AUTH`, `NAPPLE_ONLINE_NEX_SECURE` and `NAPPLE_ONLINE_PUBLIC_IP` and logs them as unused, so no NEX
+UDP ports are opened. Both are built with `cargo build --release --locked -p <crate> --bin <crate>` from the workspace root on Linux (arm64 and amd64). They need no
 system library beyond libc (no OpenSSL), run as uid 10001 in a read-only container, log to stdout/stderr and exit on SIGTERM.
 Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=pretend.napple.lat:31415`.
 
@@ -124,7 +123,7 @@ Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=p
 ### Stand-in servers
 While `crates/napple-online` or `crates/napple-room` is not in the deployed commit, the `images` job builds `infra/docker/stub.Dockerfile`
 (`infra/local/stub-server.py` on `python:3.13-alpine`, about 25 MB) into that repository instead, with a notice in the run summary. The stand-in
-listens on the same ports and env vars as the real server, answers `/healthz` (`ok stub online`, `ok stub room`) and echoes UDP/TCP, so DNS,
+listens on the same ports and env vars as the real server, answers `/healthz` (`ok stub online`, `ok stub room`) and echoes TCP on the room port, so DNS,
 TLS, the SSM roll and the smoke test are proven end to end. It holds no state and speaks no game protocol. The first push to `main` that brings
 a crate (the workflow triggers on `crates/napple-online/**` and `crates/napple-room/**`) builds the real image and rolls it in its place.
 
@@ -191,8 +190,8 @@ real servers need more, set `NAPPLE_INSTANCE_TYPE=t4g.small` (about $12.3/month 
   policy is scoped to `napple-*` names where AWS allows it and denies any change to `napple-deploy` itself.
 - Instance: no SSH port (Session Manager), IMDSv2 only, encrypted volumes, unattended security updates. Containers: the servers run as uid 10001; Caddy runs as
   root in its container with only `NET_BIND_SERVICE` kept, read-only root filesystems, all other capabilities dropped, `no-new-privileges`.
-- The internet-facing parsers are the NEX/PRUDP and room protocol code: they take untrusted UDP/TCP input, so they want fuzzing and per-peer
-  rate limits (the server crates' job).
+- The internet-facing parsers are napple-online's HTTP/WebSocket/PRUDP Lite code (behind Caddy) and the room protocol (direct TCP): they take
+  untrusted input, so they want fuzzing and per-peer rate limits (the server crates' job; napple-room has rate limits built in).
 - Verify `napple.lat` in GitHub before the wildcard goes live (see [DNS records](#dns-records)).
 
 ## Local test stack
@@ -206,7 +205,7 @@ infra/local/run.sh
 It builds both crates (debug; `--release` for release), starts them on 127.0.0.1 with a throwaway data dir under `$TMPDIR/napple-local-stack`,
 waits for `/healthz`, and prints the env for a Napple runtime (`NAPPLE_NET=host`, `NAPPLE_ONLINE_SERVER=http://127.0.0.1:18080`,
 `NAPPLE_ROOM=127.0.0.1:31415`). `infra/local/run.sh stop` stops both and deletes the data (`KEEP_DATA=1` keeps it); `status`, `logs` and `env` do what
-they say. `--bin-dir DIR` runs prebuilt binaries; `--stub` runs `infra/local/stub-server.py`, a stand-in that answers `/healthz` and echoes UDP/TCP,
+they say. `--bin-dir DIR` runs prebuilt binaries; `--stub` runs `infra/local/stub-server.py`, a stand-in that answers `/healthz` and echoes TCP on the room port,
 for testing the plumbing without the crates.
 
 With Docker installed, the production stack runs locally too (Caddy uses its internal CA for `localhost`):
