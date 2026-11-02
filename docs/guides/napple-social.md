@@ -40,6 +40,11 @@ cargo test -p napple-social
 | `NAPPLE_SOCIAL_FRIEND_REQUESTS_PER_HOUR` | `30` | Friend requests sent per profile per hour (also slows friend-code guessing). |
 | `NAPPLE_SOCIAL_INVITES_PER_HOUR` | `120` | Invites sent per profile per hour. |
 | `NAPPLE_SOCIAL_TRUST_PROXY` | off | `1`: take the client IP from the **last** `X-Forwarded-For` entry (set behind a load balancer that appends it). |
+| `NAPPLE_SOCIAL_SERVICE_TOKEN` | unset | Credential napple-online sends as `X-Napple-Service` to `/encounters` and `/internal/*`. Unset: those endpoints answer 401. |
+| `NAPPLE_ACCOUNT_SERVICE_TOKEN` | unset | Credential napple-social sends (header `x-napple-internal`; the same value as napple-account's `NAPPLE_INTERNAL_TOKEN`) to `GET ${NAPPLE_ACCOUNT_URL}/account/v1/internal/profiles/{id}` to learn other profiles' current tier. Unset: tiers come only from each owner's own calls. |
+| `NAPPLE_SOCIAL_PROFILE_TTL_SECS` | `10` | How long a profile snapshot (tier, nickname, photo) is trusted before the directory is asked again. A failed lookup keeps the last snapshot. |
+| `NAPPLE_SOCIAL_SEARCHES_PER_MIN` | `30` | `GET /search` per profile per minute. |
+| `NAPPLE_SOCIAL_REPORTS_PER_HOUR` | `10` | Reports filed per profile per hour. |
 | `NAPPLE_SOCIAL_LOG` | `info` | Log filter (`tracing` env-filter syntax, e.g. `debug`). Logs go to stdout, plain text; colour only on a terminal. |
 
 ## Authentication
@@ -184,6 +189,51 @@ presence (pushing `offline` to friends), deletes expired invites (pushing `invit
 Code map: `src/auth.rs` (JWT, JWKS, profile check), `src/db.rs` (schema, queries, privacy views), `src/api.rs` (REST), `src/stream.rs` (WebSocket),
 `src/hub.rs` (connections and events), `src/codes.rs` (friend codes), `src/ratelimit.rs`, `src/config.rs`, `src/lib.rs` (router, auth extractor,
 sweeper, server). Tests: `tests/auth.rs`, `tests/friends.rs`, `tests/presence.rs`, `tests/invites.rs` (harness in `tests/common/mod.rs`).
+
+## Visibility tiers, search, lobbies, recent players, reports, stats (round 12)
+
+Every profile has a tier 1..5 owned by napple-account (`tier` in its profile JSON). Social keeps a snapshot (refreshed by the owner's own calls and by
+the service-credential directory lookup, TTL above) and applies the table of `orchestrations/ONLINE-CONTRACT.md` in `src/visibility.rs` (a thin adapter over `crates/napple-visibility`)
+(`can_view(viewer, tier, kind)`; a private copy of the names `crates/napple-visibility` will own). A profile a viewer may not see answers exactly like a missing
+one (404), and **a block hides both ways** at every tier.
+
+| Tier | Search / friend code | Friend request | Card (nickname, icon, photo) | Presence, stats | Lobby | Recent |
+|---|---|---|---|---|---|---|
+| 1 Public | everyone | anyone | everyone | everyone | real | yes |
+| 2 Friends, searchable | everyone | anyone | everyone | friends | real | yes |
+| 3 Friends, hidden | nobody | shared lobby only | friends | friends | real | yes |
+| 4 Private | nobody | nobody | friends | friends | real | yes |
+| 5 Ghost | nobody | nobody | nobody | nobody (friends too) | bot alias | no trace |
+
+Existing friendships survive a tier change; a ghost's friends see it offline with no title and get no presence events. `GET /me` now also returns `tier` and `photo`.
+
+| Method and path | Body / query | Answer |
+|---|---|---|
+| `GET /search?q=` | nickname prefix (>= 2 chars, case-insensitive) or friend code | `{results: [{profile, friend_status, can_friend_request}]}`, max 20, tiers 1-2 only, self and blocks excluded |
+| `POST /friend-requests` | `{friend_code}` **or** `{profile_id, lobby_id?}` | as before; tiers 3-5 answer 404 `code_not_found` / `profile_not_found` unless the shared-lobby proof holds (tier 3 only) |
+| `GET /profiles/{id}/public` | | `{profile, friend_status, can_friend_request, presence?, stats_visible?}`; presence only when the viewer may see details |
+| `POST /stats` | `{title_id, deltas: {key: int}}` | own counters for the title (keys `[a-z0-9_.]` up to 48 chars, <= 16 per call, <= 32 per title, deltas within +-1e9) |
+| `GET /profiles/{id}/stats?title_id=` | | `{profile_id, titles: {TITLE: {key: n}}}`, details-tier filtered |
+| `GET /recent` | | `{recent: [{profile, title_id, match_id, last_played_ms, friend_status, can_friend_request}]}`, newest first, 100 max, 30 days |
+| `GET /lobbies/{lobby_id}` | | members of a lobby the caller is in: real card, or `{ghost: true, alias}` for tier 5; blocked players are left out |
+| `POST /reports` | `{profile_id, reason, match_id?}` or `{lobby_id, alias, reason, match_id?}` | 202 `{report_id}`; reason 1-500 chars; the alias form reports a ghost without learning who it is |
+
+Presence also accepts `joinable_token` as an alias of `join_token`; the reserved-name rule covers `title_name` and `mode`.
+
+**Shared lobby proof.** napple-online registers lobbies with the service credential; a friend request to a tier 3 profile is allowed when both are members of the
+named live lobby (`lobby_id`), or of any live lobby, or met in a match in the last 24 h (`/encounters`). Tier 4 and 5 never accept requests.
+
+Service endpoints (header `X-Napple-Service`, constant-time compare):
+
+| Method and path | Body | Answer |
+|---|---|---|
+| `POST /encounters` | `{profile_ids: [2..64], title_id, match_id}` | `{recorded}`; records every non-ghost, non-blocked pair, one row per pair (latest wins); unknown ids ignored |
+| `POST /internal/lobbies` | `{lobby_id, members: [{profile_id}], ttl_secs?}` (default 2 h, max 24 h) | `{lobby_id, expires_ms, members: [{profile_id, alias}]}`; aliases (`Bot-XXXX`) are random per lobby and stable while a member stays; use them as the in-game ghost name |
+| `POST /internal/stats` | `{profile_id, title_id, deltas}` | the title's counters |
+| `GET /internal/reports` | | latest 200 reports with the real profile and account on both sides (moderation) |
+
+Profile source: `GET /account/v1/profiles` (caller's token) for the acting profile, and `GET /account/v1/internal/profiles/{id}` with `x-napple-internal` for
+others. Tables added in schema 2: `stats`, `encounters`, `lobbies`, `reports` (and `tier`, `photo`, `synced_ms` on `profiles`); code in `src/social.rs`, tests in `tests/tiers.rs`.
 
 ## Operating notes
 

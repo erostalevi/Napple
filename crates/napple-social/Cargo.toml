@@ -15,6 +15,7 @@ path = "src/main.rs"
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "ws", "macros"] }
 base64 = "0.22"
+napple-visibility = { path = "../napple-visibility" }
 ed25519-dalek = "2"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 rand = "0.8"

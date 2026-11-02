@@ -1607,6 +1607,7 @@ dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
  "futures-util",
+ "napple-visibility",
  "rand 0.8.8",
  "reqwest",
  "rusqlite",
