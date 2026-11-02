@@ -70,3 +70,9 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | mk8d-lan-session | [mk8d-lan-session.md](orchestrations/mk8d-lan-session.md) | [claude-mk8d-lan-session-2026-11-02-r7.md](integrators/claude-mk8d-lan-session-2026-11-02-r7.md) | MK8D 2618-0006 fixed (bsd errno numbering), nifm IpConfigInfo, unique pseudo device id; two MK8D instances meet in LAN Play through napple-room |
 | napple-online | [napple-online.md](orchestrations/napple-online.md) | [claude-napple-online-2026-11-02-r7.md](integrators/claude-napple-online-2026-11-02-r7.md) | Pretendo-style Napple online service (accounts/tokens, NEX over WebSocket) + runtime glue; MK8D reaches its online menu |
 | online-pia | [online-pia.md](orchestrations/online-pia.md) | [claude-online-pia-2026-11-02-r7.md](integrators/claude-online-pia-2026-11-02-r7.md) | SessionKeepFailed fixed (verbose-gathering join notifications), Pia NAT check server + glue; two MK8D instances matched into one gathering |
+
+## Round 2026-11-02-r8
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| napple-account | [napple-account.md](orchestrations/napple-account.md) | [claude-napple-account-2026-11-02-r8.md](integrators/claude-napple-account-2026-11-02-r8.md) | the Napple Account server: sign-in, devices, JWT/JWKS, E2E save-key exchange, profiles with reserved names, cloud-save metadata (no billing) |

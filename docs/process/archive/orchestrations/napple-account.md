@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r8
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_c64384ec-6d13-4c51-94f4-d0c620829c33 (fresh)
 launched_at: 2026-11-02
@@ -39,3 +39,5 @@ data retention/deletion — include account deletion that removes all saves), ow
 Read `orchestrations/ENV-MAC.md` (local-only, never ask, never push). Never write real AWS credentials anywhere; tests use mocks.
 
 ## Result
+Integrated 2026-11-02 into main as 69edb14 (head 9167b95), outcome **Clean**. 43 crate tests and the curl walkthrough pass on this Mac; JWT/JWKS + profiles
+verified live against napple-social. Real AWS / SES / passkeys not exercised. Details: [integrator file](../integrators/claude-napple-account-2026-11-02-r8.md).
