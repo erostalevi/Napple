@@ -72,3 +72,4 @@ See the [guide index](guides/README.md).
 - [Parallel-session workflow](process/README.md)
 - [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r10) (batch b7, rounds r1-r10)
 - [Process archive](process/archive/README.md): orchestration and integrator files of the landed rounds
+- [Legal documents](legal/README.md): Napple Online terms, privacy and report policy (v1)
