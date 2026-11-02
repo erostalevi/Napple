@@ -71,8 +71,10 @@ int gfx_xfb_layout_from_varyings(const uint16_t stride[MAX_XFB_BUFFERS], const u
 #define GLSLC_XFB_STRIDE_OFF (GLSLC_XFB_BLOCK_OFF)
 #define GLSLC_XFB_COUNT_OFF (GLSLC_XFB_BLOCK_OFF + 0x10u)
 #define GLSLC_XFB_LOCS_OFF (GLSLC_XFB_BLOCK_OFF + 0x20u)
-/* Tessellation word candidate (hypothesis): +0x718 = Maxwell TESSELLATION_MODE form (bits 0..1 domain 0 isoline 1 triangle 2 quad, bits 4..5 spacing
- * 0 integer 1 fractional odd 2 fractional even, bit 8 clockwise, bit 9 connected) in the stage-specific words after +0x714. Zero = not present. */
+/* Tessellation word candidate (the place is a hypothesis; the form is NVB197_SET_TESSELLATION_PARAMETERS of NVIDIA open-gpu-doc clb197.h): +0x718, bits 0..1
+ * domain 0 isoline 1 triangle 2 quad, bits 4..5 spacing 0 integer 1 fractional odd 2 fractional even, bits 8..9 output primitives 0 points 1 lines 2 triangles cw
+ * 3 triangles ccw, in the stage-specific words after +0x714. Zero = not present. The xfb block above follows SET_STREAM_OUT_CONTROL_STRIDE / _COMPONENT_COUNT
+ * (bytes / components per buffer) and SET_STREAM_OUT_LAYOUT_SELECT (0x2800 + buffer * 128 + word * 4, four 8-bit attribute numbers per word, low byte first). */
 #define GLSLC_TESS_MODE_OFF 0x718u
 
 #ifdef __cplusplus

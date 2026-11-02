@@ -110,11 +110,21 @@ int main(void) {
     las_vertex(c);
     w32(c, 0x714, 4);
     CHECK(!gfx_control_tess(c, sizeof c, &tp), "zero mode word = not present");
-    w32(c, GLSLC_TESS_MODE_OFF, 0x2 | (2 << 4) | (1 << 8));
+    w32(c, GLSLC_TESS_MODE_OFF, 0x2 | (2 << 4) | (2 << 8)); /* NVB197_SET_TESSELLATION_PARAMETERS: OUTPUT_PRIMITIVES 9:8 = TRIANGLES_CW (2) */
     CHECK(gfx_control_tess(c, sizeof c, &tp) && tp.domain == TESS_DOMAIN_QUAD && tp.spacing == TESS_SPACING_FRACTIONAL_EVEN && tp.winding == TESS_WINDING_CW,
           "quad / fractional even / cw read (%u %u %u)", tp.domain, tp.spacing, tp.winding);
-    w32(c, GLSLC_TESS_MODE_OFF, 0x1 | (1 << 4));
+    w32(c, GLSLC_TESS_MODE_OFF, 0x1 | (1 << 4) | (3 << 8)); /* TRIANGLES_CCW (3) */
     CHECK(gfx_control_tess(c, sizeof c, &tp) && tp.domain == TESS_DOMAIN_TRIANGLE && tp.spacing == TESS_SPACING_FRACTIONAL_ODD && tp.winding == TESS_WINDING_CCW, "triangle / fractional odd / ccw");
+    /* Source for the tess word (layout facts only): NVIDIA open-gpu-doc classes/3d/clb197.h, NVB197_SET_TESSELLATION_PARAMETERS (0x0320): DOMAIN_TYPE 1:0
+     * ISOLINE 0 / TRIANGLE 1 / QUAD 2; SPACING 5:4 INTEGER 0 / FRACTIONAL_ODD 1 / FRACTIONAL_EVEN 2; OUTPUT_PRIMITIVES 9:8 POINTS 0 / LINES 1 / TRIANGLES_CW 2 / TRIANGLES_CCW 3. */
+    w32(c, GLSLC_TESS_MODE_OFF, 0 | (0 << 4) | (1 << 8));
+    CHECK(gfx_control_tess(c, sizeof c, &tp) && tp.domain == TESS_DOMAIN_ISOLINE && tp.spacing == TESS_SPACING_EQUAL, "isoline / integer / lines output");
+    w32(c, GLSLC_TESS_MODE_OFF, 0x1 | (1 << 8));
+    CHECK(!gfx_control_tess(c, sizeof c, &tp), "triangle domain with LINES output is inconsistent: not taken");
+    w32(c, GLSLC_TESS_MODE_OFF, 0x2 | (3 << 8));
+    CHECK(gfx_control_tess(c, sizeof c, &tp) && tp.winding == TESS_WINDING_CCW, "quad / ccw");
+    w32(c, GLSLC_TESS_MODE_OFF, 0x2 | (0 << 8) | (1 << 4));
+    CHECK(!gfx_control_tess(c, sizeof c, &tp), "point-mode output (POINTS) is not represented: not taken, the caller keeps its defaults");
     w32(c, GLSLC_TESS_MODE_OFF, 0x12345678);
     CHECK(!gfx_control_tess(c, sizeof c, &tp), "a word with bits outside the mode form is not taken");
     /* 6. real geometry sections: header fields read, no transform feedback layout, no tessellation word (geometry parameters come from the SPH) */

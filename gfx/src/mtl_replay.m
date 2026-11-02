@@ -261,7 +261,15 @@ static void end_encoders(void) {
     }
 }
 static void flush_clears(void);
+static int clears_pending(void) {
+    int pending = P.clear_depth || P.clear_stencil;
+    for (int i = 0; i < 8; i++) pending |= P.clear_color[i];
+    return pending;
+}
 static id<MTLBlitCommandEncoder> blit(void) {
+    /* A clear folded into the next pass's load action (after a copy opened this encoder) must land before this copy reads or writes the target:
+     * close the encoder so flush_clears runs the pass. */
+    if (g_be && clears_pending()) end_encoders();
     if (!g_be) {
         flush_clears();
         end_encoders();
@@ -890,9 +898,7 @@ static MTLScissorRect scissor_rect_clamp(MTLScissorRect sr) {
 }
 static MTLScissorRect scissor_rect(void) { return scissor_rect_of(0); }
 static void flush_clears(void) {
-    int pending = P.clear_depth || P.clear_stencil;
-    for (int i = 0; i < 8; i++) pending |= P.clear_color[i];
-    if (!pending || P.open) return;
+    if (!clears_pending() || P.open) return;
     if (pass_begin()) pass_end();
 }
 
@@ -3364,6 +3370,33 @@ static void do_downsample(const p_copy_t2t *c) {
     id<MTLRenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:rp];
     [e endEncoding];
 }
+/* A rectangle / channel-masked clear of a texture (ClearTexture with a region or a mask): a single-attachment pass over the subresource and a clear quad
+ * under a scissor, with the colour write mask of the NVN channel mask. Pipelines are cached per (format, kind, mask, samples). */
+static id<MTLRenderPipelineState> clear_tex_pipe(MTLPixelFormat pf, int kind, uint32_t mask, uint32_t samples) {
+    static NSMutableDictionary<NSNumber *, id> *cache;
+    static id<MTLLibrary> lib;
+    if (!cache) cache = [NSMutableDictionary dictionary];
+    NSNumber *k = @((uint64_t)pf | (uint64_t)kind << 16 | (uint64_t)mask << 20 | (uint64_t)samples << 28);
+    id p = cache[k];
+    if (p) return p;
+    if (!lib) lib = [g_mtl.dev newLibraryWithSource:kClearMSL options:nil error:nil];
+    MTLRenderPipelineDescriptor *d = [MTLRenderPipelineDescriptor new];
+    d.vertexFunction = [lib newFunctionWithName:@"cv"];
+    d.fragmentFunction = [lib newFunctionWithName:kind == 1 ? @"cfi" : kind == 2 ? @"cfu" : @"cf"];
+    d.rasterSampleCount = samples ? samples : 1;
+    d.colorAttachments[0].pixelFormat = pf;
+    d.colorAttachments[0].writeMask = (mask & 1 ? MTLColorWriteMaskRed : 0) | (mask & 2 ? MTLColorWriteMaskGreen : 0) | (mask & 4 ? MTLColorWriteMaskBlue : 0) |
+                                      (mask & 8 ? MTLColorWriteMaskAlpha : 0);
+    NSError *e = nil;
+    p = [g_mtl.dev newRenderPipelineStateWithDescriptor:d error:&e];
+    if (!p) {
+        LOGW("texture clear pipeline: %s", e.localizedDescription.UTF8String);
+        return nil;
+    }
+    cache[k] = p;
+    return p;
+}
+
 static void do_clear_tex(const p_copy_xfer *c) {
     GfxTex *t = mtl_tex_get(&c->tex.s, 1);
     if (!t) return;
@@ -3384,6 +3417,42 @@ static void do_clear_tex(const p_copy_xfer *c) {
         rp.depthAttachment.clearDepth = *(float *)&v[0];
         rp.depthAttachment.storeAction = MTLStoreActionStore;
     } else {
+        uint32_t rx, ry, rz, rw, rh, rd;
+        copy_region_dims(t, c->region, lv, &rx, &ry, &rz, &rw, &rh, &rd);
+        uint32_t lw = t->w >> lv ? t->w >> lv : 1, lh = t->h >> lv ? t->h >> lv : 1;
+        int partial = mask != 0xf || rx != 0 || ry != 0 || rw < lw || rh < lh;
+        MTLPixelFormat pf = t->tex.pixelFormat;
+        id<MTLRenderPipelineState> ps = nil;
+        if (partial && mask && t->tex.textureType != MTLTextureType3D && t->tex.textureType != MTLTextureType1DArray && t->tex.textureType != MTLTextureType1D)
+            ps = clear_tex_pipe(pf, (int)kind, mask, (uint32_t)t->tex.sampleCount);
+        if (partial && !mask) return;
+        if (ps) { /* rectangle / channel-masked clear: draw it into each addressed layer */
+            uint32_t nl = t->tex.textureType == MTLTextureType2DArray || t->tex.textureType == MTLTextureTypeCubeArray || t->tex.textureType == MTLTextureTypeCube ? rd : 1;
+            uint32_t s0 = nl > 1 || rz ? sl + rz : sl;
+            for (uint32_t k = 0; k < nl; k++) {
+                MTLRenderPassDescriptor *pr = [MTLRenderPassDescriptor renderPassDescriptor];
+                pr.colorAttachments[0].texture = t->tex;
+                pr.colorAttachments[0].level = lv;
+                pr.colorAttachments[0].slice = s0 + k;
+                pr.colorAttachments[0].loadAction = MTLLoadActionLoad;
+                pr.colorAttachments[0].storeAction = MTLStoreActionStore;
+                id<MTLRenderCommandEncoder> pe = [g_cb renderCommandEncoderWithDescriptor:pr];
+                float z = 0;
+                [pe setRenderPipelineState:ps];
+                [pe setCullMode:MTLCullModeNone];
+                [pe setVertexBytes:&z length:4 atIndex:0];
+                [pe setFragmentBytes:v length:16 atIndex:0];
+                MTLViewport vp = {0, 0, (double)lw, (double)lh, 0, 1};
+                [pe setViewport:vp];
+                if (rx > lw) rx = lw;
+                if (ry > lh) ry = lh;
+                MTLScissorRect sr = {rx, ry, rw > lw - rx ? lw - rx : rw, rh > lh - ry ? lh - ry : rh};
+                [pe setScissorRect:sr];
+                [pe drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+                [pe endEncoding];
+            }
+            return;
+        }
         rp.colorAttachments[0].texture = t->tex;
         rp.colorAttachments[0].level = lv;
         rp.colorAttachments[0].slice = sl;
