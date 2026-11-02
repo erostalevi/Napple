@@ -93,6 +93,7 @@ uint32_t mtl_tex_alias_pending(void);                    /* refreshes queued and
 void mtl_tex_alias_flush(id<MTLCommandBuffer> cb);       /* encode them (no encoder may be open on cb) */
 int  mtl_tex_samples_as_depth(const texsnap *s, const view_t *v, int has_view);   /* the sampled view is a depth texture (shader declares depth2d): ds slot masks */
 int  mtl_tex_samples_as_uint(const texsnap *s, const view_t *v, int has_view);    /* the sampled view is a copy in R8 / R16 / R32 UINT: bound as a stencil slot (texture2d<uint>) */
+int  mtl_tex_int_kind(const texsnap *s, const view_t *v, int has_view);           /* IMGKIND_UINT / IMGKIND_INT: the bound texture is an integer colour format (tex_*_slots) */
 id<MTLTexture> mtl_tex_attach_view(GfxTex *t, const view_t *v, int has_view, uint32_t *level, uint32_t *slice);
 int  mtl_tex_format_info(const texsnap *s, MTLPixelFormat *pf, int *is_depth, int *has_stencil);
 id<MTLSamplerState> mtl_sampler_get(const samp_par *p);
@@ -115,6 +116,8 @@ typedef struct pipe_key {
     uint32_t depth_slots[2];          /* per stage (vs, fs): binding slots holding depth textures */
     uint32_t stencil_slots[2];        /* per stage (vs, fs): binding slots holding a stencil view (ds mode STENCIL: sampled as uint) */
     uint32_t img_int[2], img_uint[2]; /* per stage (vs, fs): image bindings whose texture is signed / unsigned integer (ShaderKey.image_*_mask) */
+    uint32_t tex_uint[2], tex_sint[2]; /* per stage (vs, fs): sampled bindings (depth_slots numbering) whose texture / view is an unsigned / signed integer colour
+                                        * format (ShaderKey.tex_uint_slots / tex_sint_slots; mtl_tex_int_slot_masks) */
 } pipe_key;
 @interface GfxPipe : NSObject { @public id<MTLRenderPipelineState> ps; GfxShader *vs, *fs; int state; int claimed; /* build started (atomic 0 -> 1) */ } @end
 blend_st mtl_blend_resolve(blend_st b);         /* advanced blend modes -> plain factors (logs the ones it approximates) */
