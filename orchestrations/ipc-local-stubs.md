@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r3
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: launched
+status: handed-off
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_afc5486b-71f2-45b6-b9f1-22a1a94901ac (reused, sonnet)
 launched_at: 2026-11-01
