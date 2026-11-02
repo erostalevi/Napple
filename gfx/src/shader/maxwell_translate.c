@@ -484,6 +484,8 @@ static void attr_store_staged(Ctx *c, int src, uint32_t addr) {
     int comp = (addr >> 2) & 3;
     if (c->stage == STAGE_GEOMETRY) {
         c->gs_slots |= 1ull << sv;
+        if (sv == STAGE_SLOT_SYS && comp == 1) c->info->writes_layer = true;    // routed by the pass-through vertex function (gs_passthrough_fn)
+        if (sv == STAGE_SLOT_SYS && comp == 2) c->info->writes_vp_index = true;
         sp(&c->body, "    gso[%d][%d] = as_type<float>(%s);\n", sv, comp, v);
     } else if (c->ald_patch) {
         c->patch_slots |= 1ull << sv;
@@ -504,7 +506,8 @@ static void attr_store(Ctx *c, int src, uint32_t addr) {
     }
     if (addr >= 0x60 && addr < 0x6C) {   // primitive id / layer / viewport index: kept for the stage-out record
         c->uses_vsys = true;
-        if (addr == 0x68) c->writes_vp_index = true;
+        if (addr == 0x68) c->writes_vp_index = c->info->writes_vp_index = true;
+        if (addr == 0x64) c->info->writes_layer = true;
         sp(&c->body, "    vsys[%d] = as_type<float>(%s);\n", (addr >> 2) & 3, v);
     } else if (addr >= 0x70 && addr < 0x80) {
         sp(&c->body, "    out.pos[%d] = as_type<float>(%s);\n", (addr >> 2) & 3, v);
@@ -3649,6 +3652,9 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         for (int i = 0; i < 32; i++)
             if (c->out_attr_mask & (1u << i)) sp(&s, "  float4 v%d [[user(locn%d)]];\n", i, i);
         if (info->writes_point_size) sp(&s, "  float psize [[point_size]];\n");
+        /* the viewport index and layer route the primitive (all 16 viewports are set on the encoder; the pass is layered when the program writes the layer) */
+        if (info->writes_vp_index) sp(&s, "  uint vpi [[viewport_array_index]];\n");
+        if (info->writes_layer && key && key->layered) sp(&s, "  uint layer [[render_target_array_index]];\n");
         sp(&s, "};\n");
     } else if (stage == STAGE_FRAGMENT) {
         sp(&s, "struct FIn {\n  float4 pos [[position]];\n");
@@ -3816,6 +3822,8 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         }
         if (key && key->flip_y) sp(&s, "  out.pos.y = -out.pos.y;\n");
         if (key && key->depth_minus_one) sp(&s, "  out.pos.z = (out.pos.z + out.pos.w) * 0.5f;\n");
+        if (info->writes_vp_index) sp(&s, "  out.vpi = min(as_type<uint>(vsys[2]), 15u);\n");
+        if (info->writes_layer && key && key->layered) sp(&s, "  out.layer = as_type<uint>(vsys[1]);\n");
         if (key && key->capture_void) sp(&s, "  (void)out;\n}\n");
         else sp(&s, "  return out;\n}\n");
     } else if (stage == STAGE_FRAGMENT) {

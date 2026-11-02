@@ -124,6 +124,8 @@ typedef struct pipe_key {
     uint16_t pad_vp;
     uint16_t vp_swizzle_vp[15];        /* ShaderKey.vp_swizzle_vp: viewports 1-15, the same encoding */
     uint16_t pad_vp2;
+    uint8_t layered;                   /* ShaderKey.layered: the draw's pass is layered (passinfo.layered in mtl_replay.m) */
+    uint8_t pad_layered[3];
 } pipe_key;
 @interface GfxPipe : NSObject { @public id<MTLRenderPipelineState> ps; GfxShader *vs, *fs; int state; int claimed; /* build started (atomic 0 -> 1) */ } @end
 blend_st mtl_blend_resolve(blend_st b);         /* advanced blend modes -> plain factors (logs the ones it approximates) */
@@ -148,7 +150,9 @@ typedef struct stage_pipe_key {
     uint32_t xfb_id;                /* SPK_CAPTURE: content hash of the xfb layout below (0 = no transform feedback) */
     uint32_t te_depth, te_stencil, te_img_int, te_img_uint; /* SPK_TESS: depth / stencil slots and integer images of the tess eval stage */
     uint32_t pad2;
+    uint32_t gs_sys;                /* SPK_GS_DRAW: GS_SYS_* system values the geometry program stores (routed by the pass-through vertex function) */
 } stage_pipe_key;
+enum { GS_SYS_LAYER = 1, GS_SYS_VP_INDEX = 2 };
 GfxPipe *mtl_stage_pipe_get(const stage_pipe_key *k, const gfx_xfb_layout *xfb /* SPK_CAPTURE with xfb_id */);
 id<MTLComputePipelineState> mtl_compute_pipe_key(uint64_t hash, const ShaderKey *key, GfxShader *__autoreleasing *sh);   /* geometry / tess control kernels */
 void mtl_shader_init(void);
