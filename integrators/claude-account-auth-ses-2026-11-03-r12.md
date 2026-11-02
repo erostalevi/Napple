@@ -2,7 +2,7 @@
 branch: claude/account-auth-ses-2026-11-03-r12
 orchestration: account-auth-ses
 base: ac6692c
-head: PLACEHOLDER
+head: 05c0462
 env: mac
 date: 2026-11-03
 areas: [napple-account auth, mail]
