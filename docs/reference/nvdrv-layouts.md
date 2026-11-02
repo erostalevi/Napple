@@ -163,3 +163,15 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
 `runtime/tests/test_svc_nvdrv_nodes.c` and `runtime/tests/test_svc_nvdrv_media.c` start with mirror structs (one source comment each) and `layout_pins()`:
 `sizeof` and `offsetof` of every structure above against the constants the code uses, the ioctl command words libnx / tegra_dc_ext encode, the method
 byte offsets of the class headers; then each ioctl / method block is round-tripped through the real `nv_ioctl` handler.
+
+## Round 11 additions (claude/nvdrv-gpu-routing-2026-11-03-r11, integrated onto the round-10 table)
+The cloud session had no network access to switchbrew or the NVIDIA headers and did not see this table: its layouts are written from memory and are **proposed**, never checked against a source or trace. Status *tested* = unit test (`runtime/tests/test_svc_nvdrv_nodes.c`).
+Rows kept next to the round-10 ones (the round-10 numbers and layouts above stay authoritative; the branch's other rows duplicated them: its 0x17 GET_ERROR_NOTIFICATION is the round-10 row):
+
+| type | nr | name | struct | status |
+|---|---|---|---|---|
+| 'H' | 0x1D | EVENT_ID_CTRL (branch form, shares the enable mask of 0x12) | {u32 cmd 0 disable/1 enable/2 clear, u32 event_id 0..2, s32 fd, u32} (0x10); clear keeps the mask, the fd is not kept | tested, proposed |
+| 'G' | 0x0C | GET_TPC_EXCEPTION_EN_STATUS | {u64 mask out} (8): 0, no SM exception enabled | tested, proposed |
+| 'G' | 0x0D | NUM_VSMS | {u32 num out = 2, u32 reserved = 0} (8) | tested, proposed |
+
+The branch's list of ioctls "that stay NotImplemented" (KICKOFF_PB, SET_TIMESLICE, REMAP, ...) is superseded by the round-10 table above. Routing: unchanged (`gpu_node_ioctl` in `nvdrv.c`).
