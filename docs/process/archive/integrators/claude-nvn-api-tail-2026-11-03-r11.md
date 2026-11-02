@@ -6,7 +6,7 @@ head: 87503c1
 env: mac
 date: 2026-11-03
 areas: [gfx]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/nvn-api-tail-2026-11-03-r11: NVN tail entry points (nvnTextureBuilderGetViewOffset, nvnDeviceWaitForError, nvnProgramGetSubtileSize)
@@ -46,3 +46,9 @@ n/a
 
 ## Needs from other areas
 None.
+
+## Integration result
+- Date: 2026-11-03 (batch r11 integrator run, local main, unpushed)
+- Merged commit: 5e50896
+- Outcome: Clean
+- Docs-only hand-off (assignment already implemented before the round, no source change); nothing to fix, no native port.
