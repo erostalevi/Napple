@@ -15,8 +15,17 @@ env_file="$(printf '%s\n' \
   "NAPPLE_ONLINE_IMAGE=$online_image" "NAPPLE_ROOM_IMAGE=$room_image" "NAPPLE_DOMAIN=$domain" \
   "NAPPLE_PUBLIC_IP=$public_ip" "AWS_REGION=$AWS_REGION" "NAPPLE_LOG_GROUP=$log_group" | base64 | tr -d '\n')"
 
+# The command runs on the instance (escaped \$ = expanded there). On a fresh instance it can arrive while the user data is still installing Docker
+# and Compose, so it first waits for cloud-init (at most 10 minutes) and checks /opt/napple and `docker compose` before touching anything.
 script=$(cat <<SH
 set -euo pipefail
+timeout 600 cloud-init status --wait >/dev/null 2>&1 || echo "cloud-init: \$(cloud-init status 2>&1 | tr '\n' ' ')"
+for _ in \$(seq 1 60); do [ -d /opt/napple ] && docker compose version >/dev/null 2>&1 && break; sleep 5; done
+if [ ! -d /opt/napple ] || ! docker compose version; then
+  echo "first boot did not finish (/opt/napple or docker compose missing); last lines of /var/log/napple-bootstrap.log:" >&2
+  tail -n 30 /var/log/napple-bootstrap.log >&2 || true
+  exit 1
+fi
 cd /opt/napple
 echo '$bundle' | base64 -d | tar -xzf -
 echo '$env_file' | base64 -d > .env.new && mv .env.new .env && chmod 600 .env
@@ -37,13 +46,14 @@ for _ in $(seq 1 40); do
 done
 [ "$state" = Online ] || { echo "::error::instance $instance never came online in SSM" >&2; exit 1; }
 
-params="$(jq -cn --arg s "$script" '{commands: [$s], executionTimeout: ["900"]}')"
+# executionTimeout covers the cloud-init wait (600 s) plus pull/up; the poll below waits a little longer than that.
+params="$(jq -cn --arg s "$script" '{commands: [$s], executionTimeout: ["1200"]}')"
 cmd_id="$(aws ssm send-command --instance-ids "$instance" --document-name AWS-RunShellScript \
   --comment "napple deploy ${GITHUB_SHA:-manual}" --parameters "$params" --query Command.CommandId --output text)"
 echo "SSM command $cmd_id"
 
 status=Pending
-for _ in $(seq 1 90); do
+for _ in $(seq 1 130); do
   sleep 10
   status="$(aws ssm get-command-invocation --command-id "$cmd_id" --instance-id "$instance" --query Status --output text 2>/dev/null || echo Pending)"
   case "$status" in Pending|InProgress|Delayed) continue ;; *) break ;; esac
