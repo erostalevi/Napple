@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r6
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_3b3cd256-1668-4a2b-8542-c3387e1fbb05 (reused)
 launched_at: 2026-11-02
@@ -33,3 +33,4 @@ net-host-provider found: MK8D Online Play with `NAPPLE_NET=host` is refused an a
 Read `orchestrations/ENV-MAC.md` (shared data read-only, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-02 into main as ea7f6fa (head 203f488), outcome **Clean** (plus its change-archive row). Acceptance 2 verified on main with net-host-provider: MK8D Online Play with `NAPPLE_NET=host` shows the error applet (2001-0123), returns to its menu and retries, rc 0, no svcBreak; offline still one NetConnect applet per attempt. Details: [integrator file](../integrators/claude-error-applet-output-2026-11-02-r6.md).

@@ -6,7 +6,7 @@ head: 4311917 (code; the commit on top adds the change note and this file)
 env: mac
 date: 2026-11-02
 areas: [runtime/services/applet]
-status: ready
+status: integrated
 ---
 
 # claude/error-applet-output-2026-11-02-r6: empty applet channels answer what the SDK expects; error applet modes decoded
@@ -92,3 +92,10 @@ status: ready
 - account (`account.c`): `EnsureIdTokenCacheAsync` answers 0xf601 synchronously. The game handles it, but net-host-provider noted that a console
   answers through an IAsyncContext.
 - `.claude/skills/percent-analysis/verified.json`: the error applet row can cite this MK8D run (verified with `NAPPLE_NET=host`).
+
+## Integration result
+- Date 2026-11-02, merged into main as ea7f6fa (branch head 203f488), second of batch r6, after net-host-provider; no conflicts (applet files auto-merged). Outcome: **Clean**, plus one doc commit `integrate: error-applet-output row in the change archive` (341061d, the row this file asked for under "How to integrate"). No native ports (pure service logic).
+- `make -C runtime GFX=napple` rc 0, no new warnings; `make -C runtime GFX=napple test test-services test-ipc-reference` rc 0: svc_applet 116, svc_applet_ae 52, svc_applet_libs 290, svc_applet_host 539, svc_applet_album 63, svc_applet_web 219, svc_nifm_audit 144, svc_offline 70, all 0 failed; `ipc_reference` 111 fixtures, missing 0. No other branch's test pinned 0x680 / 0x1480 for an empty channel (the remaining 0x680 / 0x1480 checks are unrelated commands).
+- **Verified on the main tree** (scratch build identical to main, run lock, private copy of the shared MK8D save): MK8D update Online Play with `NAPPLE_NET=host NAPPLE_INPUT_SCRIPT=15:A,19:DOWN,20.5:DOWN,22:A,32:A NAPPLE_TRACE_IPC=all`, 55 s: Submit accepted (nifm connected, 192.168.5.229) -> `EnsureIdTokenCacheAsync` 0xf601 -> `error applet: type 0 (normal), jump-to-settings requested (not done), ..., code 2001-0123 (dismissed)` -> `PopOutData answered with error result 0x480` at 25.07 s; the game returns to its menu and the A at 32 s retries (Submit 33.15 s, second error applet 35.07 s, PopOutData 0x480); rc 0, no Break, `missing_ipc []`, `unsupported_svcs []`, 3266 frames, 0 skipped draws.
+- **Verified** offline (same script, no `NAPPLE_NET`): two attempts (Submit 23.15 s / 33.13 s), each exactly one `CreateLibraryApplet id 0xf` (NetConnect) and one PopOutData, rc 0, `missing_ipc []`: still one applet per attempt.
+- Still untested (as declared): error modes 1-8 from a title (synthetic parameters only), the friend-invitation / notification / applet-bound channel results from a title.

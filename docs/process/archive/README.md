@@ -52,3 +52,10 @@ They are kept as written: paths, line numbers and statuses are those of the time
 |---|---|---|---|
 | leftovers-a32-viewport-docs | [leftovers-a32-viewport-docs.md](orchestrations/leftovers-a32-viewport-docs.md) | [claude-leftovers-a32-viewport-docs-2026-11-02-r5.md](integrators/claude-leftovers-a32-viewport-docs-2026-11-02-r5.md) | interpreter lda/stl seq_cst + alignment fault, per-viewport swizzles, docs orphans |
 | nifm-netconnect | [nifm-netconnect.md](orchestrations/nifm-netconnect.md) | [claude-nifm-netconnect-2026-11-02-r5.md](integrators/claude-nifm-netconnect-2026-11-02-r5.md) | nifm Cancel semantics + the real NetConnect output (MK8D Online Play shows the console's flow) |
+
+## Round 2026-11-02-r6
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| net-host-provider | [net-host-provider.md](orchestrations/net-host-provider.md) | [claude-net-host-provider-2026-11-02-r6.md](integrators/claude-net-host-provider-2026-11-02-r6.md) | opt-in macOS host network provider (`NAPPLE_NET=host`): sockets, DNS with the vendor's domains refused, TLS, nifm, LDN over the LAN |
+| error-applet-output | [error-applet-output.md](orchestrations/error-applet-output.md) | [claude-error-applet-output-2026-11-02-r6.md](integrators/claude-error-applet-output-2026-11-02-r6.md) | empty applet channels answer 0x480, error applet modes decoded (MK8D Online Play with a network returns to its menu) |
