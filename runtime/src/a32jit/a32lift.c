@@ -855,16 +855,17 @@ static int lift_ldst_plain(Lift *L, const A32Insn *i) {
     return LIFT_OK;
 }
 
-/* lda / ldab / ldah and stl / stlb / stlh (FL_ACQ): the access plus a barrier on the weakly ordered host (acquire: dmb ishld after a load; release: dmb ish before a store) */
+/* lda / ldab / ldah and stl / stlb / stlh (FL_ACQ): the host's own acquire / release accesses (ldar / stlr). These are RCsc like the guest's: a
+ * release store (stl, stlex) followed by an acquire load (lda, ldaex) stays in order, which a plain access plus a one-sided barrier does not give
+ * (dmb ish; str followed by ldr; dmb ishld lets the load pass the store). The guest forms take no offset or writeback; an unaligned address is an
+ * alignment fault on both cores. */
 static int lift_ldst(Lift *L, const A32Insn *i) {
     if (!(i->fl & FL_ACQ)) return lift_ldst_plain(L, i);
-    A32Insn t = *i;
-    t.fl &= (uint8_t)~FL_ACQ;
-    int load = t.sub >= 8 ? t.sub == 9 : (t.sub & 1 || t.sub >= 6);
-    if (!load) out(L, "\tdmb ish");
-    int r = lift_ldst_plain(L, &t);
-    if (r != LIFT_NO && load) out(L, "\tdmb ishld");
-    return r;
+    static const char *const op[6] = {"stlr", "ldar", "stlrb", "ldarb", "stlrh", "ldarh"}; /* by sub: str ldr strb ldrb strh ldrh */
+    if (i->sub > 5 || i->rn == 15 || i->rd == 15 || i->imm || (i->fl & (FL_REG | FL_W))) return LIFT_NO;
+    out(L, "\tadd x17, x20, %s, uxtw", W[i->rn]);
+    out(L, "\t%s %s, [x17]", op[i->sub], W[i->rd]);
+    return LIFT_OK;
 }
 
 static int lift_ldm(Lift *L, const A32Insn *i) {
@@ -910,9 +911,12 @@ static int lift_ldm(Lift *L, const A32Insn *i) {
 }
 
 /* ldrex / strex (and the acquire / release forms) on the host's own exclusive monitor: the guest's retry loops see the same 0 / 1 status. The load and the
- * store of a pair are always lifted together (a lifted strex whose ldrex ran in the interpreter would never succeed). */
+ * store of a pair are always lifted together (a lifted strex whose ldrex ran in the interpreter would never succeed).
+ * Every form is emitted as acquire / release (ldaxr / stlxr, ldaxp / stlxp), the plain ldrex / strex too: guest locks written for the Cortex-A57
+ * take a lock with a plain pair and no barrier, and Apple cores do run the protected loads ahead of the store-exclusive (the A64 twin is
+ * crates/napple-rewrite/src/ordering.rs; litmus tools/soak/litmus_excl_claim.c). The interpreter's exclusives are acquire / seq_cst as well. */
 static int lift_excl(Lift *L, const A32Insn *i) {
-    unsigned sz = i->sub, acq = (i->fl & FL_ACQ) != 0;
+    unsigned sz = i->sub;
     if (sz > 3) return LIFT_NO;
     uint32_t pcv = L->pc + (L->thumb ? 4 : 8);
     (void)pcv;
@@ -930,11 +934,11 @@ static int lift_excl(Lift *L, const A32Insn *i) {
     out(L, "\tadd x17, x20, %s, uxtw", base);
     static const char *const sfx[3] = {"b", "h", ""};
     if (i->op == OP_LDREX) {
-        if (sz == 3) out(L, "\t%s %s, %s, [x17]", acq ? "ldaxp" : "ldxp", W[i->rd], W[i->ra]);
-        else out(L, "\t%s%s %s, [x17]", acq ? "ldaxr" : "ldxr", sfx[sz], W[i->rd]);
+        if (sz == 3) out(L, "\tldaxp %s, %s, [x17]", W[i->rd], W[i->ra]);
+        else out(L, "\tldaxr%s %s, [x17]", sfx[sz], W[i->rd]);
     } else {
-        if (sz == 3) out(L, "\t%s %s, %s, %s, [x17]", acq ? "stlxp" : "stxp", W[i->rd], W[i->rm], W[i->ra]);
-        else out(L, "\t%s%s %s, %s, [x17]", acq ? "stlxr" : "stxr", sfx[sz], W[i->rd], W[i->rm]);
+        if (sz == 3) out(L, "\tstlxp %s, %s, %s, [x17]", W[i->rd], W[i->rm], W[i->ra]);
+        else out(L, "\tstlxr%s %s, %s, [x17]", sfx[sz], W[i->rd], W[i->rm]);
     }
     return LIFT_OK;
 }
