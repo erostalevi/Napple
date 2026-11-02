@@ -2,6 +2,7 @@
  * does not override is the host's own; the overrides find their state through a small registry keyed by that ctx. */
 #include "net_online.h"
 #include "net_host.h"
+#include "net_room.h"
 #include "hz_result.h"
 #include "offline_core.h"
 #include "napple.h"
@@ -296,10 +297,33 @@ static int no_sock_connect(void *ctx, int h, const OnlineAddr *a, int *err) {
     NO_DBG("connect socket %d to the server: rc %d errno %d", h, rc, rc ? *err : 0);
     return rc;
 }
+/* NAPPLE_ONLINE_NATCHECK_LOCALIP (1, 0, or unset = on while a room's virtual LAN is up): a NAT check message (type 1..5 / 101..103, 16 bytes) whose "local IPv4" field is still zero gets the console's own
+ * address (nifm) there. The server reports a client it sees on loopback at that address instead of the Mac's LAN address, so two instances on one Mac (each
+ * with its own virtual address, e.g. from a room) get two distinct public addresses: Pia identifies a station by address, and one shared address makes a host
+ * refuse its first joiner. Real clients are never seen on loopback, so the server ignores the field for them. */
+static int natcheck_local_ip_on(void) {
+    const char *e = getenv("NAPPLE_ONLINE_NATCHECK_LOCALIP"); /* 1 on, 0 off; unset: on while a room's virtual LAN is up */
+    if (e && *e) return *e == '1';
+    return net_room_vlan_on();
+}
+static void natcheck_local_ip(NetOnline *o, const void *buf, size_t n, uint8_t out[16], const void **use) {
+    *use = buf;
+    if (!natcheck_local_ip_on() || n != 16) return;
+    const uint8_t *b = buf;
+    uint32_t kind = (uint32_t)b[0] << 24 | (uint32_t)b[1] << 16 | (uint32_t)b[2] << 8 | b[3];
+    if (!((kind >= 1 && kind <= 5) || (kind >= 101 && kind <= 103)) || b[12] | b[13] | b[14] | b[15]) return;
+    OnlineNetInfo ni;
+    if (o->host->net_info(o->host->ctx, &ni) != 0 || !ni.connected || !ni.ip) return;
+    memcpy(out, buf, 16);
+    out[12] = (uint8_t)(ni.ip >> 24), out[13] = (uint8_t)(ni.ip >> 16), out[14] = (uint8_t)(ni.ip >> 8), out[15] = (uint8_t)ni.ip;
+    *use = out;
+}
 static int64_t no_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, const OnlineAddr *to, int *err) {
     NetOnline *o = no_of(ctx);
     OnlineAddr real;
     int v = to ? is_virtual(to) : 0;
+    uint8_t patched[16];
+    if (!to || v) natcheck_local_ip(o, buf, n, patched, &buf);
     if (v) {
         if (server_address(o, &real)) {
             *err = HZ_ENETUNREACH;
@@ -325,6 +349,15 @@ static int64_t no_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, On
         else if (nat_check_port((uint16_t)(p - NET_ONLINE_NATCHECK_SECONDARY))) set_ip(from, NET_ONLINE_VIRTUAL_IP2, (uint16_t)(p - NET_ONLINE_NATCHECK_SECONDARY));
         else return r;
         if (r >= 16) memcpy((uint8_t *)buf + 12, from->addr, 4); /* the reply's "server address" field: the server the title knows */
+        if (r >= 16 && natcheck_local_ip_on()) {
+            /* the port the server saw is the host socket's; on a virtual LAN (rooms) the title's socket has its own virtual port, the one a peer must send to */
+            OnlineAddr me;
+            int e2 = 0;
+            if (o->host->sock_getsockname && o->host->sock_getsockname(o->host->ctx, h, &me, &e2) == 0 && me.port) {
+                uint8_t *b = buf;
+                b[4] = (uint8_t)(me.port >> 24), b[5] = (uint8_t)(me.port >> 16), b[6] = (uint8_t)(me.port >> 8), b[7] = (uint8_t)me.port;
+            }
+        }
         NO_DBG("datagram socket %d from the NAT check (server port %u)", h, q);
     }
     return r;

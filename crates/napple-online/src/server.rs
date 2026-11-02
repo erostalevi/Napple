@@ -337,7 +337,10 @@ impl Server {
                 // (private) URLs: ReplaceURL later names exactly this one, and GetSessionURLs hands out both, so two consoles behind one
                 // address can use the private one.
                 let mut public = c.urls.first().cloned().unwrap_or_else(|| StationUrl::parse("prudp:/"));
-                public.set("address", crate::natcheck::observed_ip(c.peer));
+                // a client on the server's own machine is reported at the address it names itself (its console address: a virtual one when several
+                // instances share the Mac), else at the machine's LAN address; every other client at the address the connection comes from
+                let own = public.get("address").and_then(|a| a.parse::<std::net::Ipv4Addr>().ok());
+                public.set("address", crate::natcheck::public_ip(c.peer, own));
                 public.set("type", 3); // NAT type flags as the server sees the client: reachable at this public address (2) | behind a NAT (1)
                 if !c.urls.contains(&public) {
                     c.urls.push(public.clone());

@@ -84,6 +84,7 @@ static int ip_is(const OnlineAddr *a, uint32_t ip) {
 int main(void) {
     (void)svc_call;
     snprintf(g_cfg.title_id, sizeof g_cfg.title_id, "0100152000022000");
+    setenv("NAPPLE_ONLINE_NATCHECK_LOCALIP", "1", 1);
 
     /* ---- server URLs ---- */
     NetOnlineServer s;
@@ -193,6 +194,21 @@ int main(void) {
             socklen_t fl = sizeof from;
             ssize_t got = recvfrom(us, b, sizeof b, 0, (struct sockaddr *)&from, &fl);
             CHECK(got == 8, "arrives on the server's NAT check port + 1000");
+            /* a NAT check message (type 101) with an empty "local IPv4" field carries the console's own address there (the server reports a loopback client at it) */
+            static const uint8_t msg101[16] = {0, 0, 0, 101};
+            CHECK(p->sock_send(ctx, g, msg101, 16, 0, &to, &nerr) == 16, "a NAT check message");
+            uint8_t m[16];
+            got = recvfrom(us, m, sizeof m, 0, (struct sockaddr *)&from, &fl);
+            OnlineNetInfo ni;
+            memset(&ni, 0, sizeof ni);
+            int have_ip = p->net_info(ctx, &ni) == 0 && ni.connected && ni.ip;
+            CHECK(got == 16 && m[3] == 101 && (have_ip ? (m[12] == (ni.ip >> 24 & 255) && m[13] == (ni.ip >> 16 & 255) && m[14] == (ni.ip >> 8 & 255) && m[15] == (ni.ip & 255))
+                                                          : !(m[12] | m[13] | m[14] | m[15])),
+                  "its local IPv4 field is the console's address (nifm)");
+            const uint8_t msg_set[16] = {0, 0, 0, 101, 0, 0, 0, 0, 0, 0, 0, 0, 9, 9, 9, 9};
+            CHECK(p->sock_send(ctx, g, msg_set, 16, 0, &to, &nerr) == 16, "a NAT check message that names its address already");
+            got = recvfrom(us, m, sizeof m, 0, (struct sockaddr *)&from, &fl);
+            CHECK(got == 16 && m[12] == 9 && m[15] == 9, "is left alone");
             sendto(us, "reply", 5, 0, (struct sockaddr *)&from, fl);
             OnlineAddr src;
             usleep(50000);
