@@ -49,6 +49,7 @@ See the [guide index](guides/README.md).
 | [CLI](reference/cli.md) | `napple` and the runtime command line |
 | [System data folders](reference/system-data-folders.md) | The one support root: Mii database, amiibo store, fonts, `system.json` |
 | [Environment variables](reference/environment-variables.md) | Every `NAPPLE_*` variable read by the code |
+| [nvdrv layouts](reference/nvdrv-layouts.md) | GPU nodes, nvdisp and host1x media engine ioctl / method layouts with their public sources |
 | [Support matrix](reference/support-matrix.md) | Generated per-title status per platform (macOS now, iOS deferred) |
 | [Feature support](reference/feature-support.md) | Generated coverage by domain and what is not implemented yet ([JSON for the site](reference/support-data.json)) |
 | [Catalogue field reference](reference/catalogue-howto.md) | Where each title fact is written and what the generated support tables read |
@@ -68,5 +69,5 @@ See the [guide index](guides/README.md).
 
 ### Process and history
 - [Parallel-session workflow](process/README.md)
-- [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r9) (batch b7, rounds r1-r9)
+- [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r10) (batch b7, rounds r1-r10)
 - [Process archive](process/archive/README.md): orchestration and integrator files of the landed rounds

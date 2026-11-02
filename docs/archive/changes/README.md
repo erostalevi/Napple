@@ -150,7 +150,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 - [2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
 - [2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
 
-## Unattended rounds (2026-10-27-b7 to 2026-11-02-r9)
+## Unattended rounds (2026-10-27-b7 to 2026-11-02-r10)
 Hand-off files of these rounds (orchestrations and integrator files) are in the [process archive](../../process/archive/README.md).
 
 ### Batch 2026-10-27-b7 (notes not listed above)
@@ -228,3 +228,8 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 |---|---|
 | [2026-11-02-claude-napple-social-cloud-2026-11-02-r9](2026-11-02-claude-napple-social-cloud-2026-11-02-r9.md) | napple-social: friends, presence and invites service for Napple players (REST + WebSocket, SQLite). |
 | [2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9](2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9.md) | ipc-depth-cloud: 98 IPC rows made real (11 stub to impl, 87 new impl rows): set:sys settings store, time, vi display settings, aoc purchase events, notif:a alarms, pctl PIN / rating / free communication, pdm, lbl, ncm. |
+
+### Round 2026-11-02-r10
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10](2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10.md) | nvdrv-public-layouts: GPU nodes, nvdisp (tegra_dc_ext) and NVDEC / VIC / NVJPG / MSENC on layouts checked against public sources (libnx, L4T, open-gpu-doc); mismatches fixed, every struct pinned by tests. |
