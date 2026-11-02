@@ -927,6 +927,21 @@ static const char *tex_type_name(int t) {
     }
 }
 
+/* Suffix of the StencilTex / IntTex wrapper for a texture type */
+static const char *wrapper_name(int t) {
+    switch (t) {
+        case TEXTYPE_1D: return "1D";
+        case TEXTYPE_1D_ARRAY: return "1DArray";
+        case TEXTYPE_2D_ARRAY: return "2DArray";
+        case TEXTYPE_3D: return "3D";
+        case TEXTYPE_CUBE: return "Cube";
+        case TEXTYPE_CUBE_ARRAY: return "CubeArray";
+        case TEXTYPE_2D_MS: return "2DMS";
+        case TEXTYPE_2D_MS_ARRAY: return "2DMSArray";
+        default: return "2D";
+    }
+}
+
 // Write texture results: component mask selects which of r,g,b,a go to consecutive registers.
 static void write_tex_result(Ctx *c, int slot, const char *call, uint32_t mask, int d0, int d1, bool texs, bool f16) {
     if (f16 && (c->info->tex[slot].stencil || c->info->tex[slot].int_kind)) {
@@ -3279,14 +3294,14 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     for (int i = 0; i < info->ntex && !c->fail; i++) {
         ShaderTexture *t = &info->tex[i];
         if (t->int_kind) {
-            /* integer colour textures: 2D / 2D array through the IntTex wrapper; other targets, and depth comparison, keep the float declaration */
-            if ((t->type == TEXTYPE_2D || t->type == TEXTYPE_2D_ARRAY || t->type == TEXTYPE_3D || t->type == TEXTYPE_CUBE || t->type == TEXTYPE_2D_MS) && !t->shadow)
-                c->uses_itex = true;
+            /* integer colour textures: every sampled target through the IntTex wrappers; texel buffers, and depth comparison, keep the float declaration */
+            if (t->type != TEXTYPE_BUFFER && !t->shadow) c->uses_itex = true;
             else t->int_kind = IMGKIND_FLOAT;
             continue;
         }
         if (!t->stencil) continue;
-        if (t->type != TEXTYPE_2D && t->type != TEXTYPE_2D_ARRAY) fail(c, "stencil sampling of a texture of type %d (only 2D and 2D array stencil views exist)", t->type);
+        if (t->type != TEXTYPE_2D && t->type != TEXTYPE_2D_ARRAY && t->type != TEXTYPE_CUBE && t->type != TEXTYPE_CUBE_ARRAY)
+            fail(c, "stencil sampling of a texture of type %d (2D, 2D array, cube and cube array stencil views exist)", t->type);
         else if (t->shadow) fail(c, "depth comparison on a stencil texture binding");
         else c->uses_stencil = true;
     }
@@ -3366,6 +3381,15 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "    int y = sb ? int(char(b >> (i * 8u))) : int((b >> (i * 8u)) & 0xFFu);\n    uint dl = uint(abs(x - y)), cl = (c >> (i * 8u)) & 0xFFu;\n"
            "    sum += dl;\n    r |= ((op == 2u ? min(dl, cl) : (op == 3u ? max(dl, cl) : dl)) & 0xFFu) << (i * 8u);\n  }\n"
            "  if (op == 1u) { uint t = sum + c; return (sat && t < sum) ? 0xFFFFFFFFu : t; }\n  return r;\n}\n");
+    if (c->uses_stencil || c->uses_itex)
+        /* Cube face selection for the integer and stencil cube wrappers (no sampler can address an integer cube): the face the major axis of `d` names and
+         * the [0, 1] coordinate on it, in the GL / Metal face convention (+X, -X, +Y, -Y, +Z, -Z) */
+        sp(&s, "static inline uint cube_face(float3 d, thread float2 &uv) { float3 a = abs(d); uint f;\n"
+               "  if (a.x >= a.y && a.x >= a.z) { f = d.x >= 0.0f ? 0u : 1u; uv = float2(d.x >= 0.0f ? -d.z : d.z, -d.y) / a.x; }\n"
+               "  else if (a.y >= a.z) { f = d.y >= 0.0f ? 2u : 3u; uv = float2(d.x, d.y >= 0.0f ? d.z : -d.z) / a.y; }\n"
+               "  else { f = d.z >= 0.0f ? 4u : 5u; uv = float2(d.z >= 0.0f ? d.x : -d.x, -d.y) / a.z; }\n"
+               "  uv = uv * 0.5f + 0.5f; return f; }\n"
+               "static inline uint2 cube_texel(float2 uv, int s, int2 o, float h) { return uint2(clamp(int2(floor(uv * float(s) - h)) + o, int2(0), int2(s - 1))); }\n");
     if (c->uses_stencil) {
         /* Stencil views are uint textures (X32_Stencil8 / Stencil8): Metal cannot `sample` an integer texture, so the shader's texture name is a wrapper with the
          * float-texture member functions the translator emits. Sampling is a nearest read of level 0 (stencil values are never filtered; bias / lod / offset
@@ -3375,7 +3399,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "struct StencilTex2D { texture2d<uint> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
            "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
-           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float calculate_clamped_lod(sampler, float2) const { return 0.0f; } float calculate_unclamped_lod(sampler, float2) const { return 0.0f; }\n"
            "  float4 read(uint2 c, uint l = 0u) const { return stx(t.read(c, l).x); }\n"
            "  uint at(int2 p) const { return t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1)))).x; }\n"
            "  template <typename... A> float4 sample(sampler, float2 uv, A...) const { return stx(at(int2(floor(uv * float2(t.get_width(), t.get_height()))))); }\n"
@@ -3385,12 +3409,34 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "struct StencilTex2DArray { texture2d_array<uint> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
            "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
-           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float calculate_clamped_lod(sampler, float2) const { return 0.0f; } float calculate_unclamped_lod(sampler, float2) const { return 0.0f; }\n"
            "  float4 read(uint2 c, uint layer, uint l = 0u) const { return stx(t.read(c, layer, l).x); }\n"
            "  uint at(int2 p, uint layer) const { return t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))), layer).x; }\n"
            "  template <typename... A> float4 sample(sampler, float2 uv, uint layer, A...) const { return stx(at(int2(floor(uv * float2(t.get_width(), t.get_height()))), layer)); }\n"
            "  template <typename... A> float4 gather(sampler, float2 uv, uint layer, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
            "    return as_type<float4>(uint4(at(b + int2(0, 1), layer), at(b + int2(1, 1), layer), at(b + int2(1, 0), layer), at(b, layer))); } };\n");
+        /* cube / cube array stencil views (X32_Stencil8 view of a cube depth-stencil texture): the face and texel the direction selects (cube_face) */
+        sp(&s,
+           "struct StencilTexCube { texturecube<uint> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint face, uint l = 0u) const { return stx(t.read(c, face, l).x); }\n"
+           "  uint at(float3 d, int2 o = int2(0), float h = 0.0f) const { float2 uv; uint f = cube_face(d, uv); return t.read(cube_texel(uv, int(t.get_width()), o, h), f).x; }\n"
+           "  template <typename... A> float4 sample(sampler, float3 d, A...) const { return stx(at(d)); }\n"
+           "  template <typename... A> float4 gather(sampler, float3 d, A...) const {\n"
+           "    return as_type<float4>(uint4(at(d, int2(0, 1), 0.5f), at(d, int2(1, 1), 0.5f), at(d, int2(1, 0), 0.5f), at(d, int2(0), 0.5f))); } };\n");
+        sp(&s,
+           "struct StencilTexCubeArray { texturecube_array<uint> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint face, uint layer, uint l = 0u) const { return stx(t.read(c, face, layer, l).x); }\n"
+           "  uint at(float3 d, uint layer, int2 o = int2(0), float h = 0.0f) const { float2 uv; uint f = cube_face(d, uv);\n"
+           "    return t.read(cube_texel(uv, int(t.get_width()), o, h), f, layer).x; }\n"
+           "  template <typename... A> float4 sample(sampler, float3 d, uint layer, A...) const { return stx(at(d, layer)); }\n"
+           "  template <typename... A> float4 gather(sampler, float3 d, uint layer, A...) const {\n"
+           "    return as_type<float4>(uint4(at(d, layer, int2(0, 1), 0.5f), at(d, layer, int2(1, 1), 0.5f), at(d, layer, int2(1, 0), 0.5f), at(d, layer, int2(0), 0.5f))); } };\n");
     }
     if (c->uses_txq) {
         /* TXQ / TXA: the binding's texture type is only fixed once the whole program is read (a later TLDS.MS makes it multisampled), so the size query
@@ -3414,7 +3460,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "template <typename T> struct IntTex2D { texture2d<T> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
            "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
-           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float calculate_clamped_lod(sampler, float2) const { return 0.0f; } float calculate_unclamped_lod(sampler, float2) const { return 0.0f; }\n"
            "  float4 read(uint2 c, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, l))); }\n"
            "  uint4 at(int2 p) const { return uint4(t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))))); }\n"
            "  template <typename... A> float4 sample(sampler, float2 uv, A...) const { return as_type<float4>(at(int2(floor(uv * float2(t.get_width(), t.get_height()))))); }\n"
@@ -3424,7 +3470,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "template <typename T> struct IntTex2DArray { texture2d_array<T> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
            "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
-           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float calculate_clamped_lod(sampler, float2) const { return 0.0f; } float calculate_unclamped_lod(sampler, float2) const { return 0.0f; }\n"
            "  float4 read(uint2 c, uint layer, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, layer, l))); }\n"
            "  uint4 at(int2 p, uint layer) const { return uint4(t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))), layer)); }\n"
            "  template <typename... A> float4 sample(sampler, float2 uv, uint layer, A...) const { return as_type<float4>(at(int2(floor(uv * float2(t.get_width(), t.get_height()))), layer)); }\n"
@@ -3434,7 +3480,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "template <typename T> struct IntTex3D { texture3d<T> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
            "  uint get_depth(uint l = 0u) const { return t.get_depth(l); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
-           "  float3 calculate_clamped_lod(sampler, float3) const { return float3(0.0f); } float3 calculate_unclamped_lod(sampler, float3) const { return float3(0.0f); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
            "  float4 read(uint3 c, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, l))); }\n"
            "  template <typename... A> float4 sample(sampler, float3 uvw, A...) const { int3 sz = int3(t.get_width(), t.get_height(), t.get_depth());\n"
            "    return as_type<float4>(uint4(t.read(uint3(clamp(int3(floor(uvw * float3(sz))), int3(0), sz - 1))))); } };\n");
@@ -3442,21 +3488,49 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "template <typename T> struct IntTexCube { texturecube<T> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
            "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
-           "  float2 calculate_clamped_lod(sampler, float3) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float3) const { return float2(0.0f); }\n"
-           "  uint4 at(float3 d, int2 o = int2(0)) const { float3 a = abs(d); uint f; float2 uv;\n"
-           "    if (a.x >= a.y && a.x >= a.z) { f = d.x >= 0.0f ? 0u : 1u; uv = float2(d.x >= 0.0f ? -d.z : d.z, -d.y) / a.x; }\n"
-           "    else if (a.y >= a.z) { f = d.y >= 0.0f ? 2u : 3u; uv = float2(d.x, d.y >= 0.0f ? d.z : -d.z) / a.y; }\n"
-           "    else { f = d.z >= 0.0f ? 4u : 5u; uv = float2(d.z >= 0.0f ? d.x : -d.x, -d.y) / a.z; }\n"
-           "    int s = int(t.get_width()); int2 p = clamp(int2(floor((uv * 0.5f + 0.5f) * float(s))) + o, int2(0), int2(s - 1));\n"
-           "    return uint4(t.read(uint2(p), f)); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint face, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, face, l))); }\n"
+           "  uint4 at(float3 d, int2 o = int2(0), float h = 0.0f) const { float2 uv; uint f = cube_face(d, uv); return uint4(t.read(cube_texel(uv, int(t.get_width()), o, h), f)); }\n"
            "  template <typename... A> float4 sample(sampler, float3 d, A...) const { return as_type<float4>(at(d)); }\n"
            "  template <typename... A> float4 gather(sampler, float3 d, A...) const {\n"
-           "    return as_type<float4>(uint4(at(d, int2(0, 1)).x, at(d, int2(1, 1)).x, at(d, int2(1, 0)).x, at(d).x)); } };\n");
+           "    return as_type<float4>(uint4(at(d, int2(0, 1), 0.5f).x, at(d, int2(1, 1), 0.5f).x, at(d, int2(1, 0), 0.5f).x, at(d, int2(0), 0.5f).x)); } };\n");
         sp(&s,
            "template <typename T> struct IntTex2DMS { texture2d_ms<T> t;\n"
            "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return t.get_height(); }\n"
            "  uint get_num_samples() const { return t.get_num_samples(); } uint get_num_mip_levels() const { return 1u; }\n"
            "  float4 read(uint2 c, uint smp) const { return as_type<float4>(uint4(t.read(c, smp))); } };\n");
+        /* 1D / 1D array (Metal 1D textures have one level: read() takes a constant 0 lod), cube array, 2D multisample array (read by layer and sample) */
+        sp(&s,
+           "template <typename T> struct IntTex1D { texture1d<T> t;\n"
+           "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return 1u; } uint get_num_mip_levels() const { return 1u; }\n"
+           "  float calculate_clamped_lod(sampler, float) const { return 0.0f; } float calculate_unclamped_lod(sampler, float) const { return 0.0f; }\n"
+           "  float4 read(uint x, uint = 0u) const { return as_type<float4>(uint4(t.read(x))); }\n"
+           "  template <typename... A> float4 sample(sampler, float u, A...) const { int w = int(t.get_width());\n"
+           "    return as_type<float4>(uint4(t.read(uint(clamp(int(floor(u * float(w))), 0, w - 1))))); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex1DArray { texture1d_array<T> t;\n"
+           "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return 1u; }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return 1u; }\n"
+           "  float calculate_clamped_lod(sampler, float) const { return 0.0f; } float calculate_unclamped_lod(sampler, float) const { return 0.0f; }\n"
+           "  float4 read(uint x, uint layer, uint = 0u) const { return as_type<float4>(uint4(t.read(x, layer))); }\n"
+           "  template <typename... A> float4 sample(sampler, float u, uint layer, A...) const { int w = int(t.get_width());\n"
+           "    return as_type<float4>(uint4(t.read(uint(clamp(int(floor(u * float(w))), 0, w - 1)), layer))); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTexCubeArray { texturecube_array<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint face, uint layer, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, face, layer, l))); }\n"
+           "  uint4 at(float3 d, uint layer, int2 o = int2(0), float h = 0.0f) const { float2 uv; uint f = cube_face(d, uv);\n"
+           "    return uint4(t.read(cube_texel(uv, int(t.get_width()), o, h), f, layer)); }\n"
+           "  template <typename... A> float4 sample(sampler, float3 d, uint layer, A...) const { return as_type<float4>(at(d, layer)); }\n"
+           "  template <typename... A> float4 gather(sampler, float3 d, uint layer, A...) const {\n"
+           "    return as_type<float4>(uint4(at(d, layer, int2(0, 1), 0.5f).x, at(d, layer, int2(1, 1), 0.5f).x, at(d, layer, int2(1, 0), 0.5f).x, at(d, layer, int2(0), 0.5f).x)); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex2DMSArray { texture2d_ms_array<T> t;\n"
+           "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return t.get_height(); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_samples() const { return t.get_num_samples(); } uint get_num_mip_levels() const { return 1u; }\n"
+           "  float4 read(uint2 c, uint layer, uint smp) const { return as_type<float4>(uint4(t.read(c, layer, smp))); } };\n");
     }
     if (c->uses_idp)
         sp(&s,
@@ -3653,12 +3727,9 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (c->uses_local) sp(&s, "  uint lmem[%d] = {};\n", LMEM_WORDS);
     if (c->uses_lmb) sp(&s, "  uint lmb = 0u;\n");
     for (int i = 0; i < info->ntex; i++)
-        if (info->tex[i].stencil) sp(&s, "  const StencilTex%s t%d = {t%d_u};\n", info->tex[i].type == TEXTYPE_2D_ARRAY ? "2DArray" : "2D", i, i);
-        else if (info->tex[i].int_kind) {
-            int ty = info->tex[i].type;
-            const char *wn = ty == TEXTYPE_2D_ARRAY ? "2DArray" : ty == TEXTYPE_3D ? "3D" : ty == TEXTYPE_CUBE ? "Cube" : ty == TEXTYPE_2D_MS ? "2DMS" : "2D";
-            sp(&s, "  const IntTex%s<%s> t%d = {t%d_i};\n", wn, info->tex[i].int_kind == IMGKIND_INT ? "int" : "uint", i, i);
-        }
+        if (info->tex[i].stencil) sp(&s, "  const StencilTex%s t%d = {t%d_u};\n", wrapper_name(info->tex[i].type), i, i);
+        else if (info->tex[i].int_kind)
+            sp(&s, "  const IntTex%s<%s> t%d = {t%d_i};\n", wrapper_name(info->tex[i].type), info->tex[i].int_kind == IMGKIND_INT ? "int" : "uint", i, i);
     if (any_branch) {
         sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0; uint cal[16]; uint cal_n = 0;\n");
         if (c->uses_ljs) sp(&s, "  uint ljs[16]; uint ljs_n = 0;\n");

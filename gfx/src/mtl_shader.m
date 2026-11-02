@@ -15,7 +15,7 @@
 #import "mtl_priv.h"
 #include "cache_trim.h"
 
-#define TRANSLATOR_VERSION 17u /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 18u /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader
 @end

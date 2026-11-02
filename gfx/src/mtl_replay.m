@@ -2439,6 +2439,12 @@ static void copy_region_dims(const GfxTex *t, const int32_t r[6], uint32_t lv, u
     *w = r[3] > 0 ? (uint32_t)r[3] : mw;
     *h = r[4] > 0 ? (uint32_t)r[4] : mh;
     *d = r[5] > 0 ? (uint32_t)r[5] : 1;
+    if (t->tex.textureType == MTLTextureType1DArray) { /* 1D arrays: the region's y / height are layers (as in GL), each layer one row of the buffer */
+        *z = *y;
+        *d = r[4] > 0 ? (uint32_t)r[4] : (uint32_t)t->tex.arrayLength;
+        *y = 0;
+        *h = 1;
+    }
 }
 /* Upload of 24-bit depth data into the 32-bit float depth texture that stands in for DEPTH24 (0x33, depth in the low 24 bits of a 32-bit word) and DEPTH24_STENCIL8
  * (0x35, depth in the high 24 bits, stencil in the low 8: the Maxwell Z24S8 layout): the words are converted on the CPU and blitted into the depth (and
