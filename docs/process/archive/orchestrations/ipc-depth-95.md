@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r10 (main after mk8d-lan-session); merge main again
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: launched
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_a3121690-1a9f-4389-a496-a7b6c07862df (fresh)
 launched_at: 2026-11-02
@@ -35,3 +35,5 @@ merging main/online-friends if they land first; runtime/tests/; docs/architectur
 
 ## Env notes
 Read orchestrations/ENV-MAC.md. Layout facts from switchbrew/libnx only, no GPL code.
+Integrated 2026-11-02 into main as 5d0c5ec (head 98dc102), outcome **Clean**: IPC depth 98% measured, suites green, LAN / online regression runs unchanged,
+four-title boots unchanged. Details: [integrator file](../integrators/claude-ipc-depth-95-2026-11-02-r10.md).

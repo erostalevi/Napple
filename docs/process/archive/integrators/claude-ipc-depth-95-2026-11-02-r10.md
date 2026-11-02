@@ -6,7 +6,7 @@ head: see git log (last commit of the branch)
 env: mac
 date: 2026-11-02
 areas: [runtime/services, runtime/tests]
-status: ready
+status: integrated
 ---
 
 # claude/ipc-depth-95-2026-11-02-r10: IPC command depth 92% -> 98.0%
@@ -42,3 +42,16 @@ Main (e412e99) merged; change note docs/archive/changes/2026-11-02-claude-ipc-de
 ## Needs from other areas
 - signals.c: honour IApplicationFunctions 124 EnableApplicationAllThreadDumpOnCrash (thread_dump_all on crash).
 - OnlineProvider hooks for friend images/requests, TLS cert/cipher, ec tokens, application authentication (rows kept as stubs).
+
+## Integration result
+- Date 2026-11-02, merged into main as 5d0c5ec (head 98dc102, which already contained main e412e99 and ipc-depth-cloud). No conflicts with what landed
+  since (online-race's nifm row, nvdrv-public-layouts, online-support-table). Outcome: **Clean** plus one doc commit (the change note's row in the r10
+  change archive; it was linked only from runtime-services.md).
+- `make -C runtime GFX=napple`: no new warnings. `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0, ipc_reference 111 / 1325 /
+  missing 0 / errors 0. `scan.py`: IPC command depth **98%** (1264 impl / 61 stub reference rows, 237 / 1 unfixtured).
+- Regression runs for the rows it changed in nifm / bsd / ssl / account (one job each under the run lock): MK8D LAN Play pair through napple-room:
+  2,226 / 2,167 Pia unicasts, no error; MK8D online login through napple-online: Authentication + SecureConnection ok, no error; online pair: both
+  matched into one gathering, joiner MatchMaking 41 + NAT traversal, joiner 2618-0502 (as before). Four-title 45 s boots offline and `NAPPLE_NET=host`:
+  rc 0, notify-running, `missing_ipc []`, stubbed only `nvdrv:13`.
+- No native ports. Not checked: the applet ExecuteProgram execv path on a title (Risks), FS permission bits beyond the four titles.
+- online-friends (landed next) conflicted with this branch's friend rows in `offline.c`; see that file's result for the resolution.
