@@ -6,7 +6,7 @@ head: 9617793
 env: mac
 date: 2026-11-03
 areas: [napple-account, napple-visibility]
-status: ready
+status: integrated
 ---
 
 # claude/account-profiles-2026-11-03-r12: profiles, unique nicknames, sanitized photos, visibility tiers
@@ -63,3 +63,9 @@ Safe: import/signature drift after merging the auth session's changes. Needs a d
 
 ## Needs from other areas
 - account-auth: use `profiles::insert` for the first profile (above). napple-infra: Caddy must not expose `/account/v1/internal/*`; set `NAPPLE_PHOTO_BUCKET` (private) and `NAPPLE_INTERNAL_TOKEN`. napple-social: depend on napple-visibility and the internal routes.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at bf5cbba. Outcome: Small fix (changes-index link).
+- integrate: fixes: changes-index link for the orphaned change note
+- Native ports: none (Rust only). Tests: cargo test --workspace: 482 passed, 0 failed, 2 ignored; check_docs baseline 22 unchanged; gen_support OK
+- Corrections to instructions: cargo needs PATH=/opt/homebrew/opt/rustup/bin; used a shared CARGO_TARGET_DIR.
