@@ -45,6 +45,11 @@ resource "aws_security_group" "servers" {
   description = "Napple game servers: HTTPS API + NEX over WebSocket, room relay, NAT check"
   vpc_id      = aws_vpc.main.id
   tags        = { Name = local.name }
+
+  # A changed description forces replacement, and AWS cannot delete a group the running instance uses: keep the existing one.
+  lifecycle {
+    ignore_changes = [description]
+  }
 }
 
 locals {

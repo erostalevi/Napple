@@ -12,7 +12,10 @@ const EMAIL: &str = "player@example.com";
 const CHEAP: (u32, u32, u32) = (256, 1, 1);
 
 fn tmp() -> PathBuf {
-    let d = std::env::temp_dir().join(format!("napple-cloud-e2e-{}", std::process::id()));
+    // one directory per call: the tests run in parallel and must not wipe each other's files
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let d = std::env::temp_dir().join(format!("napple-cloud-e2e-{}-{}", std::process::id(), n));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).unwrap();
     d
