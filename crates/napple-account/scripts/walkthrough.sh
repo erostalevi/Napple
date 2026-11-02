@@ -3,19 +3,20 @@
 set -euo pipefail
 BIN=${BIN:-target/release/napple-account}
 DATA=$(mktemp -d)
-export NAPPLE_ACCOUNT_DATA=$DATA NAPPLE_ACCOUNT_HTTP=127.0.0.1:18082 NAPPLE_ACCOUNT_PUBLIC_BASE=http://127.0.0.1:18082/account/v1
+export NAPPLE_ACCOUNT_DATA_DIR=$DATA NAPPLE_ACCOUNT_BIND=127.0.0.1:18082 NAPPLE_ACCOUNT_PUBLIC_BASE=http://127.0.0.1:18082/account/v1
 "$BIN" > "$DATA/server.log" 2>&1 & PID=$!
 trap 'kill $PID 2>/dev/null; wait $PID 2>/dev/null; rm -rf "$DATA"' EXIT
 API=$NAPPLE_ACCOUNT_PUBLIC_BASE
 for i in $(seq 50); do curl -fsS "$API/healthz" >/dev/null 2>&1 && break; sleep 0.1; done
 echo "== healthz";   curl -fsS http://127.0.0.1:18082/healthz
 echo "== jwks";      curl -fsS "$API/.well-known/jwks.json"; echo
-echo "== email start"; curl -fsS -X POST "$API/auth/email/start" -H 'content-type: application/json' -d '{"email":"walk@napple.test"}'; echo
-CODE=$(grep -o 'sign-in code is [0-9]\{6\}' "$DATA/server.log" | tail -1 | awk '{print $4}')
 PUB=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')
-echo "== email finish (code from the dev mailer on stdout)"
-TOK=$(curl -fsS -X POST "$API/auth/email/finish" -H 'content-type: application/json' \
-  -d "{\"email\":\"walk@napple.test\",\"code\":\"$CODE\",\"device\":{\"name\":\"Walk Mac\",\"platform\":\"macos\",\"pubkey\":\"$PUB\"}}")
+DEV="{\"name\":\"Walk Mac\",\"platform\":\"macos\",\"pubkey\":\"$PUB\"}"
+echo "== signup"; curl -fsS -X POST "$API/auth/signup" -H 'content-type: application/json' \
+  -d "{\"email\":\"walk@napple.test\",\"password\":\"correct horse battery\",\"nickname\":\"Walker_1\",\"age_ok\":true,\"terms_ok\":true,\"device\":$DEV}"; echo
+CODE=$(grep -E '^ +[0-9]{6}$' "$DATA/server.log" | tail -1 | tr -d ' ')
+echo "== verify (code from the dev mailer on stdout)"
+TOK=$(curl -fsS -X POST "$API/auth/verify" -H 'content-type: application/json' -d "{\"email\":\"walk@napple.test\",\"code\":\"$CODE\"}")
 echo "$TOK" | python3 -c 'import json,sys; v=json.load(sys.stdin); print({k: v[k] for k in ("account_id","device_id","key_state","new_account","expires_in")})'
 AT=$(echo "$TOK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
 H="authorization: Bearer $AT"
@@ -37,4 +38,4 @@ DL=$(curl -fsS "$API/saves/01006BB00C6F0000/$PROFILE/versions/1" -H "$H" | pytho
 echo "== download matches upload: $(curl -fsS "$DL" | shasum -a 256 | awk '{print $1}' | grep -c "$SHA")"
 echo "== delete account"; curl -sS -o /dev/null -w "%{http_code}\n" -X DELETE "$API/me" -H "$H" -H 'content-type: application/json' -d '{"confirm_email":"walk@napple.test"}'
 echo "== blobs left: $(find "$DATA/blobs" -type f | wc -l | tr -d ' ')"
-echo "== server log (codes printed by the dev mailer only)"; grep -v -e '^To:' -e 'sign-in code' -e '^Or open' -e '^http' -e '^The code' -e '^If you' -e '^-' -e '^Subject' -e '^$' "$DATA/server.log"
+echo "== server log (codes printed by the dev mailer only)"; grep -v -e '^To:' -e '^ *[0-9]\{6\}$' -e '^-' -e '^Subject' -e '^$' -e 'Napple' -e 'code' -e 'password' -e 'email' "$DATA/server.log"

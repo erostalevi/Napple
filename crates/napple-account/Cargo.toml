@@ -3,18 +3,17 @@ name = "napple-account"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "The Napple Account server: email magic link + passkeys, devices, Ed25519 JWT + JWKS, the end-to-end save-key exchange, profiles, cloud-save version metadata with S3 presigned URLs, and plans with Stripe billing. Never involves Nintendo accounts or servers."
+description = "The Napple Account server: email + password accounts with emailed codes, devices, Ed25519 JWT + JWKS, the end-to-end save-key exchange, profiles, cloud-save version metadata with S3 presigned URLs, and plans with Stripe billing. Never involves Nintendo accounts or servers."
 
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "multipart"] }
+argon2 = "0.5"
 base64 = "0.22"
-ciborium = "0.2"
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 hex = "0.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 napple-visibility = { path = "../napple-visibility" }
 hmac = "0.12"
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "std"] }
 percent-encoding = "2"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
@@ -23,7 +22,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 subtle = "2.6"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync", "io-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring"] }
+webpki-roots = "0.26"
 tower = { version = "0.5", default-features = false, features = ["util"] }
 tower-http = { version = "0.6", default-features = false, features = ["cors", "limit"] }
 unicode-normalization = "0.1"

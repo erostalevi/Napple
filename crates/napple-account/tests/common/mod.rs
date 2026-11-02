@@ -57,6 +57,8 @@ impl T {
         let dir = temp_dir("srv");
         let mut v: HashMap<String, String> = HashMap::new();
         v.insert("NAPPLE_ACCOUNT_DATA".into(), dir.display().to_string());
+        // Tiny Argon2 memory so flows run fast in debug builds (the production cost is checked in password.rs).
+        v.insert("NAPPLE_ACCOUNT_ARGON_M_KIB".into(), "64".into());
         for (k, val) in vars {
             v.insert(k.to_string(), val.to_string());
         }
@@ -128,11 +130,22 @@ impl T {
         (s, serde_json::from_slice(&body).unwrap_or(Value::Null))
     }
 
+    /// The 6-digit code in the newest mail to `email`.
     pub fn code_for(&self, email: &str) -> String {
-        let m = self.mail.last_to(email).expect("a sign-in mail");
-        m.text.split("code is ").nth(1).unwrap()[..6].to_string()
+        let m = self.mail.last_to(email).expect("a code mail");
+        m.text
+            .lines()
+            .map(str::trim)
+            .find(|l| l.len() == 6 && l.bytes().all(|b| b.is_ascii_digit()))
+            .expect("a code line")
+            .to_string()
     }
 
+    pub fn device_json(name: &str, platform: &str, pubkey: &[u8]) -> Value {
+        json!({"name": name, "platform": platform, "pubkey": b64url(pubkey)})
+    }
+
+    /// Signs up (new address: signup -> code -> verify) or logs in (known address) with `PASSWORD`.
     pub async fn sign_in_with(
         &self,
         email: &str,
@@ -140,19 +153,30 @@ impl T {
         platform: &str,
         pubkey: &[u8],
     ) -> Session {
-        let (s, v) = self
-            .req(
-                "POST",
-                "/auth/email/start",
-                None,
-                Some(json!({"email": email})),
-            )
+        let dev = T::device_json(device, platform, pubkey);
+        let (mut s, mut v) = self
+            .req("POST", "/auth/login", None, Some(json!({"email": email, "password": PASSWORD, "device": dev})))
             .await;
-        assert_eq!(s, StatusCode::ACCEPTED, "{v}");
-        let code = self.code_for(&email.to_ascii_lowercase());
-        let (s, v) = self
-            .req("POST", "/auth/email/finish", None, Some(json!({"email": email, "code": code, "device": {"name": device, "platform": platform, "pubkey": b64url(pubkey)}})))
-            .await;
+        if s == StatusCode::UNAUTHORIZED {
+            // Nickname = the email's local part when it is a valid, free one, else a random one.
+            let local = email.split('@').next().unwrap_or("").to_string();
+            let mut nick = local.clone();
+            let (mut s2, mut v2) = (StatusCode::BAD_REQUEST, Value::Null);
+            for attempt in 0..2 {
+                (s2, v2) = self
+                    .req("POST", "/auth/signup", None, Some(json!({"email": email, "password": PASSWORD, "nickname": nick, "age_ok": true, "terms_ok": true, "device": dev})))
+                    .await;
+                if s2 == StatusCode::ACCEPTED || attempt == 1 {
+                    break;
+                }
+                nick = format!("p{}", hex::encode(random_bytes::<5>()));
+            }
+            assert_eq!(s2, StatusCode::ACCEPTED, "{v2}");
+            let code = self.code_for(&email.to_ascii_lowercase());
+            (s, v) = self
+                .req("POST", "/auth/verify", None, Some(json!({"email": email, "code": code})))
+                .await;
+        }
         assert_eq!(s, StatusCode::OK, "{v}");
         Session {
             access: v["access_token"].as_str().unwrap().into(),
@@ -250,3 +274,4 @@ pub const LAS: &str = "01006BB00C6F0000";
 pub const SMO: &str = "0100000000010000";
 pub const MK8D: &str = "0100152000022000";
 pub const DAY: i64 = 86_400;
+pub const PASSWORD: &str = "correct horse battery";

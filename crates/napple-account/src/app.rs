@@ -194,23 +194,15 @@ pub fn limit(app: &App, bucket: &str, key: &str, limit: u32, window: i64) -> Api
 }
 
 pub fn router(app: AppState) -> Router {
-    use crate::{account, admin, keys, pages, passkey, photos, profiles, saves, signin};
+    use crate::{account, admin, keys, pages, photos, profiles, saves, signin};
     let api = Router::new()
         .route("/healthz", get(pages::healthz))
         .route("/.well-known/jwks.json", get(pages::jwks))
-        .route("/auth/email/start", post(signin::email_start))
-        .route("/auth/email/finish", post(signin::email_finish))
-        .route("/auth/email/link", get(pages::email_link))
-        .route(
-            "/auth/passkey/register/begin",
-            post(passkey::register_begin),
-        )
-        .route(
-            "/auth/passkey/register/finish",
-            post(passkey::register_finish),
-        )
-        .route("/auth/passkey/login/begin", post(passkey::login_begin))
-        .route("/auth/passkey/login/finish", post(passkey::login_finish))
+        .route("/auth/signup", post(signin::signup))
+        .route("/auth/verify", post(signin::verify))
+        .route("/auth/login", post(signin::login))
+        .route("/auth/password/reset/start", post(signin::reset_start))
+        .route("/auth/password/reset/finish", post(signin::reset_finish))
         .route("/auth/refresh", post(signin::refresh))
         .route("/auth/logout", post(signin::logout))
         .route(
@@ -219,8 +211,6 @@ pub fn router(app: AppState) -> Router {
                 .patch(account::patch_me)
                 .delete(account::delete_me),
         )
-        .route("/passkeys", get(passkey::list))
-        .route("/passkeys/{id}", delete(passkey::remove))
         .route(
             "/profiles",
             get(profiles::list_profiles).post(profiles::create_profile),
