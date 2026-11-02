@@ -88,14 +88,19 @@ impl Api {
         if s.trim().is_empty() { Ok(Value::Null) } else { serde_json::from_str(&s).map_err(|e| Error::Format(format!("{path}: {e}"))) }
     }
 
-    /// PUT to a presigned upload URL.
-    pub fn put_bytes(&self, url: &str, data: &[u8]) -> Result<()> {
-        self.agent
-            .put(&self.url(url))
-            .timeout(self.per_request()?.max(Duration::from_secs(10)))
-            .set("Content-Type", "application/octet-stream")
-            .send_bytes(data)
-            .map_err(map_err)?;
+    /// PUT to a presigned upload URL. `headers` are the create response's `upload_headers`, sent verbatim (a presigned S3 PUT signs
+    /// them, e.g. `x-amz-checksum-sha256`); `host` and `content-length` are left to the HTTP client.
+    pub fn put_bytes(&self, url: &str, data: &[u8], headers: &[(String, String)]) -> Result<()> {
+        let mut req = self.agent.put(&self.url(url)).timeout(self.per_request()?.max(Duration::from_secs(10)));
+        if !headers.iter().any(|(k, _)| k.eq_ignore_ascii_case("content-type")) {
+            req = req.set("Content-Type", "application/octet-stream");
+        }
+        for (k, v) in headers {
+            if !k.eq_ignore_ascii_case("host") && !k.eq_ignore_ascii_case("content-length") {
+                req = req.set(k, v);
+            }
+        }
+        req.send_bytes(data).map_err(map_err)?;
         Ok(())
     }
 
@@ -119,4 +124,38 @@ pub fn list<'a>(v: &'a Value, key: &str) -> &'a [Value] {
 /// A string field under any of the given names.
 pub fn str_field<'a>(v: &'a Value, names: &[&str]) -> Option<&'a str> {
     names.iter().find_map(|n| v[*n].as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The presigned PUT carries the create response's `upload_headers` (S3 refuses a PUT without the headers it signed).
+    #[test]
+    fn put_bytes_sends_the_upload_headers() {
+        let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let port = server.server_addr().to_ip().unwrap().port();
+        let t = std::thread::spawn(move || {
+            let mut req = server.recv().unwrap();
+            fn h(r: &tiny_http::Request, n: &'static str) -> Option<String> {
+                r.headers().iter().find(|h| h.field.equiv(n)).map(|h| h.value.as_str().to_string())
+            }
+            let got = (h(&req, "x-amz-checksum-sha256"), h(&req, "Content-Type"));
+            let mut body = Vec::new();
+            req.as_reader().read_to_end(&mut body).unwrap();
+            req.respond(tiny_http::Response::empty(200)).unwrap();
+            (got, body)
+        });
+        let api = Api::new("http://127.0.0.1:1");
+        let headers = vec![
+            ("x-amz-checksum-sha256".to_string(), "c2hh".to_string()),
+            ("content-type".to_string(), "application/octet-stream".to_string()),
+            ("host".to_string(), "ignored.example".to_string()),
+        ];
+        api.put_bytes(&format!("http://127.0.0.1:{port}/blob"), b"sealed", &headers).unwrap();
+        let ((ck, ct), body) = t.join().unwrap();
+        assert_eq!(ck.as_deref(), Some("c2hh"));
+        assert_eq!(ct.as_deref(), Some("application/octet-stream"));
+        assert_eq!(body, b"sealed");
+    }
 }

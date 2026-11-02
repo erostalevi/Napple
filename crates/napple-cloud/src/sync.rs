@@ -200,7 +200,11 @@ fn push_tar(s: &Session, t: &Target, tar: Vec<u8>, local_sha: &str, force: bool)
             return Err(Error::Format(format!("server assigned version {got}, expected {version} (base_version + 1)")));
         }
         let url = str_field(&v, &["upload_url", "url"]).ok_or_else(|| Error::Format("no upload_url".into()))?.to_string();
-        s.api.put_bytes(&url, &data)?;
+        let headers: Vec<(String, String)> = v["upload_headers"]
+            .as_object()
+            .map(|h| h.iter().filter_map(|(k, x)| x.as_str().map(|x| (k.clone(), x.to_string()))).collect())
+            .unwrap_or_default();
+        s.api.put_bytes(&url, &data, &headers)?;
         s.call("POST", &format!("{}/{}/commit", versions_path(t), version), Some(&json!({})))?;
         Ok(())
     });
