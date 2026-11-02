@@ -18,3 +18,9 @@
 - Napple Plus 2.99 USD/mo or 24.99/yr: unlimited E2E cloud saves (30-day history, 10 GiB), settings sync, album sync (5 GiB), 3 persistent private
   rooms, beta channel, cosmetic badge. Family 4.99/mo or 39.99/yr for 4 accounts. 14-day trial without card. Never gates online play; data never
   held hostage (read-only 90 days after downgrade). Stripe Checkout/Portal/webhooks; config-driven entitlements; launch with a grace period.
+
+## iOS device (user report 2026-11-02, iPhone 16 Pro Max)
+- SMO: 60 fps at 1x, then out of memory (jetsam) after ~1 min. Next round item: `com.apple.developer.kernel.increased-memory-limit` (+ extended
+  virtual addressing) entitlements in the iOS build, memory footprint audit (guest heap mapping, texture/shader caches, RomFS map, staging buffers),
+  Metal resource eviction under memory pressure (`didReceiveMemoryWarning`), purgeable caches; target: SMO 30 min on device without a crash.
+- LAS: plays perfectly at 60 fps at 1x on device.
