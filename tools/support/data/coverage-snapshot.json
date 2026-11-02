@@ -1,5 +1,5 @@
 {
- "commit": "8389280",
+ "commit": "2da952e",
  "date": "2026-11-02",
  "domains": [
   {
@@ -91,7 +91,7 @@
    "weight": 10
   },
   {
-   "adjust_reason": "65 reference mismatches fixed (0 left, missing 0); left: nifm IRequest::Cancel resets a rejected request (offline_core.c:120-127, pinned by test_svc_nifm_audit.c:47), so the SDK's Submit/GetResult/Cancel/GetAppletInfo never launches NetConnect (MK8D Online Play trace, r4 integration); GetAppletInfo argument array empty (inferred); renumbered pctl/pdm/ISteadyClock/ssl/miiimg/ectx rows tested, no title reaches them",
+   "adjust_reason": "r11/r12 rows (friend/nifm/acc/olsc provider hooks, bcat, ldn 503) landed on unit and fake-server tests; the MK8D Wireless join still crashes and the in-game Friends list is empty, so the online-facing rows are not proven on a title (runtime/src/services/offline.c, ldn.c)",
    "counts": {
     "common": [
      0,
@@ -106,8 +106,8 @@
      0
     ]
    },
-   "judged_points": 4.53,
-   "judged_ratio": 0.9067,
+   "judged_points": 4.89,
+   "judged_ratio": 0.9782,
    "key": "ipc_depth",
    "title": "IPC: command depth (impl vs stub)",
    "weight": 5
@@ -179,7 +179,7 @@
    "weight": 8
   },
   {
-   "adjust_reason": "nvdrv_nodes_core.c GPU-node layouts PROPOSED, need real hardware traces (unreachable on the Mac)",
+   "adjust_reason": "",
    "counts": {
     "common": [
      0,
@@ -190,12 +190,12 @@
      2
     ],
     "rare": [
-     0,
+     1,
      2
     ]
    },
-   "judged_points": 1.78,
-   "judged_ratio": 0.89,
+   "judged_points": 1.85,
+   "judged_ratio": 0.925,
    "key": "nvdrv",
    "title": "GPU: nvdrv / host1x devices",
    "weight": 2
@@ -289,7 +289,7 @@
    "weight": 2
   },
   {
-   "adjust_reason": "NetConnect output {u32 result; u32 pad} (applet_lib_core.c:341-351) is [unverified] and wrong in practice: with Cancel fixed experimentally MK8D re-submits and relaunches it 20x before its own error; error / player-select / album still unit-tested only",
+   "adjust_reason": "",
    "counts": {
     "common": [
      2,
@@ -304,14 +304,14 @@
      3
     ]
    },
-   "judged_points": 1.98,
-   "judged_ratio": 0.99,
+   "judged_points": 2.0,
+   "judged_ratio": 1.0,
    "key": "applets",
    "title": "Library applets",
    "weight": 2
   },
   {
-   "adjust_reason": "movie AAC/VP8/ARGB host decoders tested on encoder-made streams only (no title uses them); HE-AAC untested",
+   "adjust_reason": "NVJPG header-less decode (8f9e646) and movie decoders tested on self-made streams only",
    "counts": {
     "common": [
      1,
@@ -333,7 +333,7 @@
    "weight": 1
   }
  ],
- "final_percent": 98.9,
+ "final_percent": 99.3,
  "items": {
   "applets": {
    "controller applet": "impl",
@@ -570,7 +570,7 @@
    "Vorbis/Opus movie audio": "impl"
   },
   "nvdrv": {
-   "/dev/nvdisp-disp0": "partial",
+   "/dev/nvdisp-disp0": "impl",
    "/dev/nvhost-ctrl": "impl",
    "/dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)": "partial",
    "/dev/nvhost-nvdec, vic, nvjpg, msenc": "partial",
@@ -1269,7 +1269,7 @@
    "XMAD": "impl"
   }
  },
- "measured_percent": 99.0,
+ "measured_percent": 99.4,
  "priorities": [
   {
    "domain": "cpu_rewrite",
@@ -1278,8 +1278,8 @@
    "importance": 1,
    "item": "A32 interpreter lda/stl ordering + alignment fault",
    "rank": 1,
-   "where": "runtime/src/a32/a32_exec.c, runtime/tests/a32jit/difftest.c",
-   "why": "debug-only interpreter uses fences around plain accesses (not RCsc) and no alignment fault; the shipped runtime has no interpreter; difftest skips those samples"
+   "where": "runtime/src/a32/a32_exec.c",
+   "why": "debug-only interpreter; shipped runtime has none"
   },
   {
    "domain": "nvn",
@@ -1288,18 +1288,8 @@
    "importance": 1,
    "item": "nvnCommandBufferSetProvokingVertexMode",
    "rank": 2,
-   "where": "gfx/src/mtl_replay.m OP_PROVOKING, api_cmd.c; evidence: title NVN driver method writes",
-   "why": "0=first/1=last mapping is a hypothesis; if NVN's default were LAST every title's flat inputs would differ; indirect/GS/tess draws keep first"
-  },
-  {
-   "domain": "nvn",
-   "effort": "S",
-   "gain_pts": 0.01,
-   "importance": 1,
-   "item": "nvnCommandBufferSetViewportSwizzles",
-   "rank": 3,
-   "where": "gfx/src/shader/maxwell_translate.c vertex epilogue, mtl_replay.m vp_swizzle_key",
-   "why": "per-viewport swizzles: viewports 1-15 take viewport 0's (single-pass layered/cube rendering uses several)"
+   "where": "gfx/src/mtl_replay.m OP_PROVOKING",
+   "why": "0=first/1=last mapping is a hypothesis; indirect/GS/tess draws keep first"
   },
   {
    "domain": "nvn",
@@ -1307,9 +1297,19 @@
    "gain_pts": 0.01,
    "importance": 1,
    "item": "nvnCommandBufferBindSeparateTexture",
-   "rank": 4,
+   "rank": 3,
    "where": "gfx/src/shader/maxwell.h SEP_*_C2_BASE",
-   "why": "c2 table offsets 0x120/0x520 are a hypothesis (6 BindSeparate* items); confirm from a GLSLC program or the title NVN driver"
+   "why": "c2 table offsets 0x120/0x520 are a hypothesis (6 BindSeparate* items); confirm from a GLSLC program"
+  },
+  {
+   "domain": "nvn",
+   "effort": "S",
+   "gain_pts": 0.01,
+   "importance": 1,
+   "item": "nvnCommandBufferSetViewportSwizzles",
+   "rank": 4,
+   "where": "gfx/src/shader/maxwell_translate.c, mtl_replay.m",
+   "why": "viewports 1-15 take viewport 0's swizzle"
   },
   {
    "domain": "nvn",
@@ -1319,17 +1319,17 @@
    "item": "nvnCommandBufferBindTexturesDeferred",
    "rank": 5,
    "where": "gfx/src/nvnapi/nvn_protos_ext.h",
-   "why": "7 entry points with inferred signatures never called by a title; a driver disassembly would fix them"
+   "why": "7 entry points with inferred signatures; a driver disassembly fixes them"
   },
   {
    "domain": "ipc_depth",
    "effort": "S",
    "gain_pts": null,
    "importance": 2,
-   "item": "nifm IRequest Cancel + NetConnect output (offline network-error flow)",
+   "item": "IPC risk rows untested on a title (applet ExecuteProgram execv, fs permission-bit checks, 0x1907C for unlinked users)",
    "rank": 6,
-   "where": "runtime/src/services/offline_core.c:120-127, offline.c GetAppletInfo, applet_lib_core.c:341-351; evidence: sdk NSO nn::nifm::HandleNetworkRequestResult, firmware 22.1.0 netConnect applet 0100000000001006",
-   "why": "every title's online entry point goes through nn::nifm::HandleNetworkRequestResult; offline it must land once on the console's NetConnect / error UI and return; today Cancel wipes the rejection (no applet), and with that fixed the applet output makes the SDK retry 20x"
+   "where": "runtime/src/services/applet.c, fs.c, account.c",
+   "why": "landed with host/hook tests only; a title that uses them would exercise them"
   },
   {
    "domain": "gpu_fixed",
@@ -1339,7 +1339,7 @@
    "item": "transform feedback",
    "rank": 7,
    "where": "gfx/src/mtl_stages.inc, shader/control.c",
-   "why": "XFB layouts self-authored; needs a title or real GLSLC program with XFB (none in the material)"
+   "why": "XFB layouts self-authored; needs a title or real GLSLC program with XFB"
   },
   {
    "domain": "gpu_fixed",
@@ -1349,17 +1349,7 @@
    "item": "tessellation",
    "rank": 8,
    "where": "gfx/src/mtl_stages.inc",
-   "why": "tess parameters self-authored; needs a real tess program (none in the material)"
-  },
-  {
-   "domain": "ipc_depth",
-   "effort": "S",
-   "gain_pts": null,
-   "importance": 1,
-   "item": "local documented-default stubs (fs QueryEntry / GetFileSystemAttribute / GetProgramId / GetRightsId, vi ConvertScalingMode)",
-   "rank": 9,
-   "where": "runtime/src/services/fs.c:894-2190, vi.c:355",
-   "why": "a handful of local rows have documented behaviour; the rest are correct no-ops (no game card, no transfer, one application per runtime)"
+   "why": "tess parameters self-authored; needs a real tess program"
   },
   {
    "domain": "content",
@@ -1367,9 +1357,19 @@
    "gain_pts": 0.04,
    "importance": 1,
    "item": "NCA2 / NCA0",
-   "rank": 10,
+   "rank": 9,
    "where": "crates/napple-core nca.rs",
-   "why": "pre-release container versions; all retail NCAs in the material are NCA3"
+   "why": "pre-release containers; no retail sample"
+  },
+  {
+   "domain": "nvdrv",
+   "effort": "S",
+   "gain_pts": 0.1,
+   "importance": 2,
+   "item": "/dev/nvhost-nvdec, vic, nvjpg, msenc",
+   "rank": 10,
+   "where": "runtime/src/services/nvdrv_media_core.c",
+   "why": "VIC 4.0 struct trace-matched; NVJPG header-less scan refused; no title drives NVJPG/MSENC"
   },
   {
    "domain": "nvn",
@@ -1379,17 +1379,37 @@
    "item": "nvnCommandBufferSetProgramSubroutines",
    "rank": 11,
    "where": "gfx/src/api_cmd.c, api_program.c",
-   "why": "subroutine uniforms and linkage dropped (with nvnProgramSetSubroutineLinkage); no title in the material uses them"
+   "why": "subroutine uniforms/linkage dropped; no title uses them"
   },
   {
-   "domain": "nvdrv",
-   "effort": "S",
-   "gain_pts": 0.1,
+   "domain": "ipc_depth",
+   "effort": "M",
+   "gain_pts": null,
    "importance": 2,
-   "item": "/dev/nvhost-nvdec, vic, nvjpg, msenc",
+   "item": "remaining IPC_STUB rows (35 reference rows: ISslConnection, IApplicationFunctions, IGeneralService, bsd:u, ILibraryAppletAccessor, ISelfController)",
    "rank": 12,
-   "where": "runtime/src/services/nvdrv_media_core.c",
-   "why": "NVJPG/MSENC/VP9-on-NVDEC tested only; no title opens them"
+   "where": "runtime/src/services/offline.c, push.c, bcat.c",
+   "why": "need OnlineProvider hooks; each row has its reason in the table comment"
+  },
+  {
+   "domain": "ipc_depth",
+   "effort": "M",
+   "gain_pts": null,
+   "importance": 2,
+   "item": "LDN join path crash after joining a Napple room (station dies right after join)",
+   "rank": 13,
+   "where": "runtime/src/services/ldn.c, ldn_core.c",
+   "why": "local wireless is a common feature class; join must not take the guest down"
+  },
+  {
+   "domain": "ipc_depth",
+   "effort": "M",
+   "gain_pts": null,
+   "importance": 2,
+   "item": "friend:u list stays empty in a title although the Napple profile has friends",
+   "rank": 14,
+   "where": "runtime/src/services/offline.c, online_provider.h",
+   "why": "friend list/presence is the common online-feature path"
   },
   {
    "domain": "nvdrv",
@@ -1397,19 +1417,9 @@
    "gain_pts": 0.05,
    "importance": 1,
    "item": "/dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)",
-   "rank": 13,
-   "where": "runtime/src/services/nvdrv_nodes_core.c",
-   "why": "proposed layouts; need hardware traces"
-  },
-  {
-   "domain": "nvdrv",
-   "effort": "S",
-   "gain_pts": 0.05,
-   "importance": 1,
-   "item": "/dev/nvdisp-disp0",
-   "rank": 14,
-   "where": "nvdrv_media_core.c",
-   "why": "unit-tested only; no title opens it"
+   "rank": 15,
+   "where": "runtime/src/services/nvdrv.c, nvdrv_nodes_core.c",
+   "why": "apply the one-line nvdrv.c routing to nvgpu_chan_ioctl_typed (nvdrv.c:643); rest needs a title that bypasses NVN"
   },
   {
    "domain": "input",
@@ -1417,9 +1427,9 @@
    "gain_pts": 0.05,
    "importance": 1,
    "item": "IR camera (irs)",
-   "rank": 15,
+   "rank": 16,
    "where": "runtime/src/services/irs.c",
-   "why": "processor layouts need a real Joy-Con IR trace (unreachable on the Mac)"
+   "why": "processor layouts need a Joy-Con R IR trace (hardware)"
   },
   {
    "domain": "nvn",
@@ -1427,7 +1437,7 @@
    "gain_pts": 0.01,
    "importance": 1,
    "item": "nvnCommandBufferSetConservativeRasterEnable",
-   "rank": 16,
+   "rank": 17,
    "where": "gfx/src/api_cmd.c:829",
    "why": "Metal on Apple GPUs has no conservative rasterization (platform limit)"
   },
@@ -1437,9 +1447,9 @@
    "gain_pts": 0.03,
    "importance": 1,
    "item": "JPEG (nvjpg / caps)",
-   "rank": 17,
+   "rank": 18,
    "where": "runtime/src/services/jpeg_core.c",
-   "why": "NVJPG register path synthetic only"
+   "why": "NVJPG register path not exercised by a title"
   },
   {
    "domain": "ipc_depth",
@@ -1447,14 +1457,14 @@
    "gain_pts": null,
    "importance": 1,
    "item": "offline network service stubs (friend, nifm, ssl, bsd, nsd, npns, bcat, ldn)",
-   "rank": 18,
-   "where": "runtime/src/services/offline.c, sys_default.h",
-   "why": "~200 documented offline defaults; real host networking is a design decision (Nintendo services and LDN peers unreachable), not a gap to close blindly"
+   "rank": 19,
+   "where": "runtime/src/services/offline.c, runtime/src/net",
+   "why": "by design: Nintendo services unreachable; Napple-run online replaces them title by title"
   }
  ],
  "range": [
-  98.9,
-  98.9
+  99.3,
+  99.3
  ],
  "schema": 2
 }
