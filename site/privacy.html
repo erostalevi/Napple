@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Napple Online Privacy Policy · Napple</title>
+<meta name="description" content="Napple Online Privacy Policy for the optional Napple Online service. Version v1, effective 2026-11-03.">
+<meta name="theme-color" content="#120c1a">
+<link rel="icon" href="assets/favicon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg" aria-hidden="true"></div>
+<header class="nav">
+  <a class="brand" href="./"><img src="assets/favicon.png" alt="" width="28" height="28"> Napple</a>
+  <nav><a href="./">Home</a><a href="terms.html">Terms</a><a href="privacy.html">Privacy</a><a href="report.html">Reports</a><a href="docs/">Docs</a></nav>
+</header>
+<main class="legal">
+<h1>Napple Online Privacy Policy</h1>
+<p><b>Version:</b> v1 · <b>Effective:</b> 2026-11-03 · Plain-English description of what Napple Online collects. Not legal advice; the project owner should have it reviewed before a public launch.</p>
+<p>The Napple app works fully offline without an account. This policy covers only the optional Napple Online service (accounts, profiles, friends, cloud saves, matchmaking). Data controller: the Napple project owner; contact <code>legal@napple.lat</code> (placeholder, to be confirmed before launch).</p>
+<h2>What we collect</h2>
+<div class="tbl"><table><thead><tr><th>Data</th><th>Why</th><th>Notes</th></tr></thead><tbody><tr><td>Email address</td><td>sign-in, verification codes, password reset, account notices</td><td>never shown to other players</td></tr><tr><td>Password</td><td>sign-in</td><td>stored only as an Argon2id hash</td></tr><tr><td>Nickname, bio, links, icon</td><td>your in-game identity</td><td>shown according to your visibility tier</td></tr><tr><td>Profile photo (optional)</td><td>your in-game identity</td><td>we keep <b>only a re-encoded 256x256 copy</b>; the original and its metadata (EXIF, location) are discarded</td></tr><tr><td>Friends, requests, blocks, recent players</td><td>friends features</td><td></td></tr><tr><td>Presence (which game and mode you are in) and per-game stats</td><td>friends features</td><td>shown according to your tier</td></tr><tr><td>Devices (name, platform, public key)</td><td>device approval and cloud-save key sharing</td><td>you can revoke devices</td></tr><tr><td>Cloud saves</td><td>sync between your devices</td><td><b>encrypted on your device; we store ciphertext and cannot read it</b></td></tr><tr><td>Match log</td><td>reports, bans, abuse prevention</td><td>see below</td></tr><tr><td>IP address and request logs</td><td>security and debugging</td><td>transient, see below</td></tr><tr><td>Accepted terms version, age confirmation, timestamps</td><td>proof of consent</td><td></td></tr></tbody></table></div>
+<h2>The match log (including Private and Ghost)</h2>
+<p>For every online match we record the game, match id, time and participants <b>linked to the real account</b>, and keep it for <b>30 days</b>. This applies to all visibility tiers, <b>including Private and Ghost</b>: those tiers hide you from other players, not from the server. We use it only to handle reports, bans and abuse, and to answer lawful requests. Other players never see your account behind a Ghost alias.</p>
+<h2>What we do not do</h2>
+<p>No advertising, no ad or analytics trackers, no cookies on napple.lat beyond what the static site needs (none today), no selling or renting of data, no profiling, no reading your saves, no messaging content (there is no chat).</p>
+<h2>Who processes data for us</h2>
+<ul><li><b>Amazon Web Services (AWS)</b>: hosting and storage, and <b>Amazon SES</b> for sending verification and reset emails. Data may be processed in the United States; AWS acts under its data processing terms and standard contractual clauses.</li><li>Nobody else. We do not contact Nintendo.</li></ul>
+<h2>How long we keep it</h2>
+<ul><li>Account, profile, friends, devices, saves: until you delete them or the account.</li><li>Match log: 30 days, then deleted automatically.</li><li>IP addresses and server logs: short-lived (target 14 days or less).</li><li>Email bounce/complaint suppression entries: kept so we do not mail an address that asked to stop.</li><li>Backups: removed within about 35 days after deletion.</li><li>Reports and the evidence needed for a ban: up to 12 months after the case closes.</li></ul>
+<h2>Your rights</h2>
+<p>Under the EU/UK GDPR (and similar laws) you can access, export, correct and delete your data, object to or restrict processing, and complain to your data protection authority. Do it yourself in the game's <b>Online tab</b>: view and edit your profile, export your data, and delete your account (this removes profile, photo, friends, devices and cloud saves). For anything else write to <code>legal@napple.lat</code>. We answer within 30 days.</p>
+<p>Legal bases (GDPR art. 6): contract (running your account), legitimate interests (security, abuse prevention, the 30-day match log) and consent where we ask for it (the photo, optional links).</p>
+<h2>Children</h2>
+<p>Napple Online is for people 13 and over (or the higher age required locally). We delete accounts of younger users when we find them.</p>
+<h2>Security</h2>
+<p>Passwords are hashed with Argon2id, sessions use short-lived tokens, cloud saves are end-to-end encrypted, traffic uses HTTPS. No system is perfectly secure; we will tell affected users and the authorities about serious breaches as required by law.</p>
+<h2>Changes</h2>
+<p>We will update the version above when this policy changes, and tell you about material changes in the app.</p>
+</main>
+<footer>
+  <div class="f-row">
+    <span class="brand"><img src="assets/favicon.png" alt="" width="22" height="22"> Napple</span>
+    <span class="links"><a href="terms.html">Terms</a><a href="privacy.html">Privacy</a><a href="report.html">Reports &amp; takedowns</a><a href="./">Home</a></span>
+  </div>
+  <p>MIT licensed. Napple is not affiliated with Nintendo.</p>
+</footer>
+</body>
+</html>
