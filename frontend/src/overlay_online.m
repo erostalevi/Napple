@@ -4,6 +4,7 @@
 #include <string.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "overlay_online.h"
+#include "napple_online_social.h"
 
 static const napple_online_ui_api *g_api;     /* installed table (copied) */
 static napple_online_ui_api g_api_copy;
@@ -33,27 +34,75 @@ void napple_online_register_subtab(const char *title, napple_online_page_fn make
 }
 NSUInteger fe_online_subtab_count(void) { return g_subtabs.count; }
 NSString *fe_online_subtab_title(NSUInteger i) { return g_subtab_titles[i]; }
+napple_online_page_fn fe_online_subtab_fn(NSUInteger i) { return (napple_online_page_fn)[g_subtabs[i] pointerValue]; }
 NSView *fe_online_subtab_make(NSUInteger i) {
     napple_online_page_fn f = (napple_online_page_fn)[g_subtabs[i] pointerValue];
     return (__bridge_transfer NSView *)f(fe_online_api());
 }
 
 const napple_online_ui_api *fe_online_api(void) { return g_api ? g_api : napple_online_ui_stub(); }
+
+static void rebuild(void);
+/* The shell's own change callback: stays installed for the life of the table, so the social toasts (new friend request) also fire while the overlay
+   is closed; the page is only rebuilt while it exists. */
+static void on_change(void *u) {
+    (void)u;
+    napple_online_social_changed(fe_online_api());
+    rebuild();
+}
+
+/* Social sub-tabs (overlay_online_social.m): toasts go to the game view, text goes through the software keyboard bar. The overlay runs on the main
+   thread, so the bar is awaited with a nested run loop (NAPPLE_SWKBD_ANSWER answers it for scripted runs, like the field buttons). */
+static void social_toast(void *u, const char *text) {
+    (void)u;
+    [g_fe toast:@(text)];
+}
+typedef struct {
+    int done, ok;
+    char *out;
+    size_t cap;
+} social_text_t;
+static void social_text_done(void *u, int ok, const char *t) {
+    social_text_t *s = u;
+    if (ok && t) {
+        strlcpy(s->out, t, s->cap);
+        s->ok = 1;
+    }
+    s->done = 1;
+}
+static int social_text_input(void *u, const char *title, const char *initial, char *out, size_t cap) {
+    (void)u;
+    const char *a = getenv("NAPPLE_SWKBD_ANSWER");
+    if (a) {
+        if (!strcmp(a, "<cancel>")) return 0;
+        strlcpy(out, a, cap);
+        return 1;
+    }
+    if (!g_fe) return 0;
+    social_text_t st = {0, 0, out, cap};
+    napple_text_request rq = {.header = title, .initial = initial, .max_length = (uint32_t)(cap > 1 ? cap - 1 : 1)};
+    fe_textbar_show(g_fe, &rq, social_text_done, &st);
+    while (!st.done) [NSRunLoop.currentRunLoop runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.05]];
+    return st.ok;
+}
+static void ensure_social(void) {
+    static BOOL done;
+    if (done) return;
+    done = YES;
+    napple_online_social_host host = {.toast = social_toast, .text_input = social_text_input};
+    napple_online_social_init(&host);
+}
+
 void napple_frontend_set_online_ui(struct napple_frontend *fe, const napple_online_ui_api *api) {
-    (void)fe;
+    if (fe) g_fe = fe_from_handle(fe);
     if (api && api->version == NAPPLE_ONLINE_UI_VERSION) {
         g_api_copy = *api;
         g_api = &g_api_copy;
     } else g_api = NULL;
-    g_api = g_api ? g_api : NULL;
-    if (g_api) g_api->set_change_callback(g_api->ctx, NULL, NULL);
+    ensure_social();
+    fe_online_api()->set_change_callback(fe_online_api()->ctx, on_change, NULL);
 }
 
-static void rebuild(void);
-static void on_change(void *u) {
-    (void)u;
-    rebuild();
-}
 #define API (fe_online_api())
 #define CTX (API->ctx)
 
@@ -734,7 +783,8 @@ static void rebuild(void) {
     fe_nav_page_changed();
 }
 NSView *fe_online_page(NappleFE *fe) {
-    g_fe = fe;
+    if (fe) g_fe = fe;
+    ensure_social();
     g_host = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 392, 500)];
     API->set_change_callback(CTX, on_change, NULL);
     rebuild();

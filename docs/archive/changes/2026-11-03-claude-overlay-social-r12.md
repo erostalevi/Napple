@@ -1,0 +1,3 @@
+# 2026-11-03 overlay-social (r12)
+
+Overlay Online tab social sub-tabs: Friends (presence, Join/Invite/Remove/Block), Requests (accept/decline/cancel), Add (friend code or tier-aware search), Recent (add/report/block), Blocked (unblock), Stats (all titles), plus toasts for new incoming requests and invites. `frontend/src/overlay_online_social.m`, hooks in `frontend/include/napple_online_social.h`, test `frontend/tests/test_online_social.m` (`make -C frontend test-online-social`, renders PNGs). Tested with a canned API and a faked shell; not yet wired into the real tab shell (overlay-account's `overlay_online.m` was not on the base).

@@ -13,6 +13,7 @@ const napple_online_ui_api *fe_online_api(void);
 NSUInteger fe_online_subtab_count(void);
 NSString *fe_online_subtab_title(NSUInteger i);
 NSView *fe_online_subtab_make(NSUInteger i);
+napple_online_page_fn fe_online_subtab_fn(NSUInteger i); /* the page maker itself (tests call it with their own table) */
 /* Test / screenshot aids: show a named screen (signin, signup, verify, reset_start, reset_finish, home, profile, tier, profiles, devices, saves,
    delete, delete_confirm) in the current page; "error:<text>" / "busy:<text>" set the status line first. */
 void fe_online_debug_screen(NSString *name, NSString *status);
