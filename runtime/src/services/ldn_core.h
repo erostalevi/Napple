@@ -71,6 +71,7 @@ int ldn_net_decode(const uint8_t *in, size_t n, OnlineLdnNetwork *out);
 /* CreateNetwork arguments: SecurityConfig (u16 mode, u16 passphrase size, passphrase[0x40]) at 0, UserConfig (user name[0x21]) at 0x44, NetworkConfig
  * (u64 local communication id, u16 scene id at +0x0a, s16 channel at +0x10, u8 node count max at +0x12, u16 version at +0x14) at 0x78. Short input leaves zeros. */
 void ldn_create_decode(const uint8_t *in, size_t n, OnlineLdnNetwork *out);
+void ldn_session_id(const OnlineLdnNetwork *n, uint8_t out[16]); /* NetworkId.sessionId of a network */
 /* NetworkConfig (0x20 bytes) of a network, as GetNetworkConfig returns it. */
 void ldn_config_encode(const OnlineLdnNetwork *n, uint8_t out[0x20]);
 /* Connect finished with the provider's result: 0 moves STATION_OPENED to STATION_CONNECTED; a failure leaves the state alone and is returned. */

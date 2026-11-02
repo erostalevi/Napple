@@ -10,6 +10,7 @@
 #include "bsd_core.h"
 #include "nfp_core.h"
 #include "amiibo_lib_core.h"
+#include "install_id_core.h"
 #include <limits.h>
 #include <time.h>
 #include <stdio.h>
@@ -193,6 +194,23 @@ static void friend_declare_close(IpcObject *s, IpcCall *c) {
     (void)c;
     if (s->state) *(uint8_t *)s->state = 0;
 }
+/* 10700 GetPlayHistoryRegistrationKey(u32 local, user id at +8) -> buffer 0x40: the key a title hands the other players of a session so they can record
+ * having played together (MK8D asks for it as soon as it hosts a local-wireless room, and ends the room when it fails). A zero user id is refused
+ * like an unknown user [result unverified]. */
+static void friend_play_history_key(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint8_t user[16] = {0}, key[0x40], inst[16];
+    if (c->in_size >= 24) memcpy(user, c->in + 8, 16);
+    static const uint8_t zero[16];
+    if (!memcmp(user, zero, 16)) {
+        c->result = HZ_RESULT(121, 15);
+        return;
+    }
+    install_id_get(g_cfg.save_root, inst);
+    install_play_history_key(inst, user, c->in_size >= 4 && IPC_IN(c, uint32_t, 0) != 0, key);
+    if (b && b->size) ipc_write_buf(c, b, key, b->size < sizeof key ? b->size : sizeof key);
+}
 static const IpcCmd friend_service_cmds[] = {
     {0, "GetCompletionEvent", ret_event, IPC_IMPL},
     {1, "Cancel", noop, IPC_IMPL},
@@ -218,7 +236,7 @@ static const IpcCmd friend_service_cmds[] = {
     {10501, "GetProfileListLegacyV2", sysd_err_friend, IPC_STUB},
     {10502, "GetProfileListV1", sysd_err_friend, IPC_STUB},
     {10503, "GetProfileListV2", sysd_err_friend, IPC_STUB},
-    {10700, "GetPlayHistoryRegistrationKey", sysd_err_friend, IPC_STUB},
+    {10700, "GetPlayHistoryRegistrationKey", friend_play_history_key, IPC_IMPL},
     {10701, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId", sysd_err_friend, IPC_STUB},
     {10702, "AddPlayHistory", sysd_ok, IPC_STUB},
     {11000, "GetProfileImageUrl", sysd_err_friend, IPC_STUB},
@@ -291,6 +309,23 @@ static void ret_conn_status(IpcObject *s, IpcCall *c) {
         v[2] = 4;
     }
     ipc_out(c, v, 4);
+}
+/* GetCurrentIpConfigInfo: IpConfigInfo {IpAddressSetting {u8 automatic, ip, mask, gateway}, DnsSetting {u8 automatic, dns1, dns2}}, 0x16 bytes, addresses
+ * as in_addr (network order). Not connected: the nifm "no network" result. */
+static void nifm_ip_config(IpcObject *s, IpcCall *c) {
+    (void)s;
+    OnlineNetInfo ni;
+    if (!nifm_info(&ni)) {
+        c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+        return;
+    }
+    uint8_t v[0x18] = {0};
+    uint32_t a[5] = {htonl(ni.ip), htonl(ni.mask), htonl(ni.gateway), htonl(ni.dns1), htonl(ni.dns2)};
+    v[0] = 1;
+    memcpy(v + 1, &a[0], 4), memcpy(v + 5, &a[1], 4), memcpy(v + 9, &a[2], 4);
+    v[13] = 1;
+    memcpy(v + 14, &a[3], 4), memcpy(v + 18, &a[4], 4);
+    ipc_out(c, v, 0x16);
 }
 static void nifm_ip(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -589,7 +624,7 @@ static const IpcCmd nifm_general_cmds[] = {
     {9, "SetNetworkProfile", sysd_err_net, IPC_STUB},
     {10, "RemoveNetworkProfile", sysd_ok, IPC_STUB},
     {14, "CreateTemporaryNetworkProfile", sysd_err_net, IPC_STUB},
-    {15, "GetCurrentIpConfigInfo", sysd_err_net, IPC_STUB},
+    {15, "GetCurrentIpConfigInfo", nifm_ip_config, IPC_IMPL},
     {23, "PutToSleep", sysd_ok, IPC_STUB},
     {24, "WakeUp", sysd_ok, IPC_STUB},
     {25, "GetSsidListVersion", sysd_z4, IPC_STUB},
@@ -628,11 +663,11 @@ static IpcObject *nifm_open(void) { return IPC_OBJECT("nifm:u", nifm_cmds, NULL,
 static pthread_mutex_t bsd_lock = PTHREAD_MUTEX_INITIALIZER; /* kept for the unit tests that reset the table; the table has its own lock */
 static BsdGuest *bsd_g(void) { return bsdg_global(); }
 static void bsd_reply(IpcCall *c, int ret, int err) {
-    int32_t v[2] = {ret, err};
+    int32_t v[2] = {ret, bsd_errno_to_guest(err)}; /* the console's bsd answers with Linux errno numbers */
     ipc_out(c, v, 8);
 }
 static void bsd_reply3(IpcCall *c, int ret, int err, uint32_t extra) {
-    int32_t v[3] = {ret, err, (int32_t)extra};
+    int32_t v[3] = {ret, bsd_errno_to_guest(err), (int32_t)extra};
     ipc_out(c, v, 12);
 }
 /* RegisterClient: the library registers once per process. The reply is 0 on every registration (the guest's nn::socket initialiser treats any other value as a
@@ -790,7 +825,14 @@ static void bsd_getsockopt(IpcObject *s, IpcCall *c) {
     const IpcBuf *b = ipc_out_buf(c, 0);
     uint8_t val[64] = {0};
     size_t n = b && b->size < sizeof val ? (size_t)b->size : sizeof val;
-    int r = bsdg_getsockopt(bsd_g(), bsd_in_fd(c), bsd_in32(c, 4, 0), bsd_in32(c, 8, 0), val, &n, &err);
+    int level = bsd_in32(c, 4, 0), opt = bsd_in32(c, 8, 0);
+    int r = bsdg_getsockopt(bsd_g(), bsd_in_fd(c), level, opt, val, &n, &err);
+    if (r == 0 && level == 0xffff && opt == 0x1007 && n >= 4) { /* SO_ERROR: the pending error, in the guest's numbering too */
+        int32_t pe;
+        memcpy(&pe, val, 4);
+        pe = bsd_errno_to_guest(pe);
+        memcpy(val, &pe, 4);
+    }
     if (r == 0 && b && n) ipc_write_buf(c, b, val, n);
     bsd_reply3(c, r, err, r == 0 ? (uint32_t)n : 0);
 }

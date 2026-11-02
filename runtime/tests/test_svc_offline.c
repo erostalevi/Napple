@@ -35,15 +35,15 @@ int main(void) {
     /* bsd:u IPC */
     IpcObject *bs = bsd_open(); IpcCall c; bsdg_reset(bsd_g()); online_null_reset();
     bcall(bs, 2, BSD_AF_INET, BSD_SOCK_STREAM, 0, &c); CHECK(c.out_size == 8 && bsd_ret(&c, 0) == 0 && bsd_ret(&c, 1) == 0, "Socket -> {0, 0}");
-    int32_t fd = 0; svc_call(bs, 14, &fd, 4, &c); CHECK(bsd_ret(&c, 0) == -1 && bsd_ret(&c, 1) == HZ_ENETDOWN, "Connect -> {-1, ENETDOWN}");
-    svc_call(bs, 8, &fd, 4, &c); CHECK(bsd_ret(&c, 1) == HZ_ENOTCONN, "Recv on an unconnected stream -> ENOTCONN");
+    int32_t fd = 0; svc_call(bs, 14, &fd, 4, &c); CHECK(bsd_ret(&c, 0) == -1 && bsd_ret(&c, 1) == bsd_errno_to_guest(HZ_ENETDOWN), "Connect -> {-1, ENETDOWN}");
+    svc_call(bs, 8, &fd, 4, &c); CHECK(bsd_ret(&c, 1) == bsd_errno_to_guest(HZ_ENOTCONN), "Recv on an unconnected stream -> ENOTCONN");
     svc_call(bs, 26, &fd, 4, &c); CHECK(bsd_ret(&c, 0) == 0, "Close");
-    svc_call(bs, 26, &fd, 4, &c); CHECK(bsd_ret(&c, 0) == -1 && bsd_ret(&c, 1) == HZ_EBADF, "Close again -> EBADF");
-    bcall(bs, 2, BSD_AF_INET6, BSD_SOCK_STREAM, 0, &c); CHECK(bsd_ret(&c, 1) == HZ_EAFNOSUPPORT, "Socket(AF_INET6) -> EAFNOSUPPORT");
-    svc_call(bs, 2, NULL, 0, &c); CHECK(bsd_ret(&c, 0) == -1 && bsd_ret(&c, 1) == HZ_EINVAL, "short Socket request -> EINVAL, not fatal");
-    svc_call(bs, 14, NULL, 0, &c); CHECK(bsd_ret(&c, 1) == HZ_EBADF, "short Connect request -> EBADF");
-    bcall(bs, 2, BSD_AF_INET, BSD_SOCK_DGRAM, 0, &c); svc_call(bs, 23, NULL, 0, &c); fd = 0; svc_call(bs, 26, &fd, 4, &c); CHECK(bsd_ret(&c, 1) == HZ_EBADF, "ShutdownAllSockets closes everything");
-    svc_call(bs, 7, NULL, 0, &c); CHECK(bsd_ret(&c, 1) == HZ_ENOENT, "Sysctl -> ENOENT");
+    svc_call(bs, 26, &fd, 4, &c); CHECK(bsd_ret(&c, 0) == -1 && bsd_ret(&c, 1) == bsd_errno_to_guest(HZ_EBADF), "Close again -> EBADF");
+    bcall(bs, 2, BSD_AF_INET6, BSD_SOCK_STREAM, 0, &c); CHECK(bsd_ret(&c, 1) == bsd_errno_to_guest(HZ_EAFNOSUPPORT), "Socket(AF_INET6) -> EAFNOSUPPORT");
+    svc_call(bs, 2, NULL, 0, &c); CHECK(bsd_ret(&c, 0) == -1 && bsd_ret(&c, 1) == bsd_errno_to_guest(HZ_EINVAL), "short Socket request -> EINVAL, not fatal");
+    svc_call(bs, 14, NULL, 0, &c); CHECK(bsd_ret(&c, 1) == bsd_errno_to_guest(HZ_EBADF), "short Connect request -> EBADF");
+    bcall(bs, 2, BSD_AF_INET, BSD_SOCK_DGRAM, 0, &c); svc_call(bs, 23, NULL, 0, &c); fd = 0; svc_call(bs, 26, &fd, 4, &c); CHECK(bsd_ret(&c, 1) == bsd_errno_to_guest(HZ_EBADF), "ShutdownAllSockets closes everything");
+    svc_call(bs, 7, NULL, 0, &c); CHECK(bsd_ret(&c, 1) == bsd_errno_to_guest(HZ_ENOENT), "Sysctl -> ENOENT");
 
     /* nifm IPC */
     IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0];

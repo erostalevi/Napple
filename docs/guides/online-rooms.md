@@ -114,11 +114,16 @@ Without `NAPPLE_ROOM`, none of this runs and the host provider behaves exactly a
 - Runtime: `make -C runtime test-net-room` runs a real server and two consoles (two processes) through the provider: nifm, UDP on the same port from
   both, broadcast, unicast, implicit bind, connected UDP, TCP with 100 kB both ways, LDN scan / join / nodes / advertise / leave / destroy, a member
   quitting.
-- Mario Kart 8 Deluxe (update 3.0.5), two headless instances on one Mac in one room, LAN Play: both bind 49152 / 40000 / 30000 on their own virtual
-  addresses, and each receives the other's LAN session announcement from 10.13.0.x. The title then stops with error 2618-0006 about 2 s later. It does
-  the same with one instance on the real LAN without rooms, and in Wireless Play (LDN). That is a runtime gap outside rooms, still being
-  investigated; see the net-rooms integrator file. LAN Play also needs nifm `GetCurrentIpConfigInfo`, which the offline nifm service still stubs
-  (a patch is in the hand-off).
+- **Mario Kart 8 Deluxe** (update 3.0.5), two headless instances on one Mac in one room (mk8d-lan-session, 2026-11-02):
+  - **LAN Play works.** One instance creates a room; the other sees it in its lobby list, joins it, and both reach the room's character select. Pia
+    traffic flows both ways between 10.13.0.2 and 10.13.0.3.
+  - **Wireless Play (local wireless) partly works.** The host creates its room and the other instance lists and joins it, but the joining instance
+    then crashes inside the game (not diagnosed yet).
+  - How to get there:
+    - LAN Play: A on the title screen, then L+R+left stick together on the main menu, then "LAN Play".
+    - Every player needs their own `--save-root`: that is what makes each instance a different console. Profile names are all "Napple" for now.
+  - The fix that made it work was in bsd, not in rooms: the console's bsd service reports Linux errno numbers, and Napple's reported FreeBSD's, so the
+    game's network library took "nothing to read yet" for a fatal error (error 2618-0006).
 
 ## Not done yet
 
