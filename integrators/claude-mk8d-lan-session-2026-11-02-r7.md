@@ -2,7 +2,7 @@
 branch: claude/mk8d-lan-session-2026-11-02-r7
 orchestration: mk8d-lan-session
 base: 93da095 (claude/net-rooms-2026-11-02-r7 hand-off head)
-head: HEAD_AT_HANDOFF
+head: f74f563 (the commit before this line was set)
 env: mac
 date: 2026-11-02
 areas: [runtime/services (bsd, nifm, am, friend, ldn), runtime/net]
