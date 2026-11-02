@@ -54,3 +54,9 @@ demo: build/demo_window
 clean:
 	rm -rf build libnapple_frontend.a
 .PHONY: all test test-sheets demo clean
+# Overlay Online social sub-tabs against a canned API (renders PNGs to $NAPPLE_SOCIAL_SHOT or $TMPDIR).
+build/test_online_social: tests/test_online_social.m libnapple_frontend.a $(SIBLINGS)
+	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
+test-online-social: build/test_online_social
+	./build/test_online_social
+.PHONY: test-online-social
