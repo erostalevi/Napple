@@ -764,15 +764,68 @@ static void nifm_uncount(NifmReq *q) {
     if (q->counted) __atomic_sub_fetch(&nifm_accepted_requests, 1, __ATOMIC_SEQ_CST);
     q->counted = 0;
 }
+/* Live requests, so the service-wide transitions (PutToSleep, Shutdown, NotifyConnectionStateChanged) can reach every request the way nifm does; and the
+ * service's power state: awake, asleep (PutToSleep until WakeUp) or shut down (Shutdown, for the rest of the session). Asleep or shut down, nifm makes no
+ * connection: Submit is rejected with the communication-disabled result without asking the provider. */
+#define NIFM_MAX_LIVE 64
+enum { NIFM_POWER_AWAKE, NIFM_POWER_ASLEEP, NIFM_POWER_SHUTDOWN };
+static NifmReq *nifm_live[NIFM_MAX_LIVE];
+static int nifm_power;
+static pthread_mutex_t nifm_live_lock = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t nifm_telemetry_w, nifm_telemetry_r; /* GetTelemetorySystemEventReadableHandle: signalled when the connection state changes */
+static void nifm_telemetry_signal(void) {
+    pthread_mutex_lock(&nifm_live_lock);
+    uint32_t w = nifm_telemetry_w;
+    pthread_mutex_unlock(&nifm_live_lock);
+    if (w) event_signal_handle(w);
+}
+static void nifm_live_add(NifmReq *q) {
+    pthread_mutex_lock(&nifm_live_lock);
+    for (unsigned i = 0; i < NIFM_MAX_LIVE; i++)
+        if (!nifm_live[i]) {
+            nifm_live[i] = q;
+            break;
+        }
+    pthread_mutex_unlock(&nifm_live_lock);
+}
+static void nifm_live_remove(NifmReq *q) {
+    pthread_mutex_lock(&nifm_live_lock);
+    for (unsigned i = 0; i < NIFM_MAX_LIVE; i++)
+        if (nifm_live[i] == q) nifm_live[i] = NULL;
+    pthread_mutex_unlock(&nifm_live_lock);
+}
 static void nifm_req_destroy(IpcObject *o) {
     NifmReq *q = o->state;
+    nifm_live_remove(q);
+    int was_accepted = q->req.state == NIFM_STATE_ACCEPTED;
     nifm_request_cancel(&q->req); /* releases the provider connection */
     nifm_uncount(q);
     free(q);
+    if (was_accepted) nifm_telemetry_signal();
 }
 static void nifm_signal(NifmReq *q) {
     for (int i = 0; i < 2; i++)
         if (q->ev_w[i]) event_signal_handle(q->ev_w[i]);
+}
+/* An accepted request loses its connection (sleep without SetKeptInSleep, Shutdown, the provider went down): the connection goes back to the provider and
+ * the request ends free with the communication-disabled result, as a request nifm had to drop; its events fire so the title re-reads the state. */
+static void nifm_drop(NifmReq *q) {
+    nifm_request_cancel(&q->req);
+    q->req.submitted = 1;
+    q->req.result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    nifm_uncount(q);
+    nifm_signal(q);
+}
+/* Drops every accepted live request (under the registry lock: a request cannot be destroyed meanwhile); keep(q) = 1 leaves one alone. */
+static void nifm_drop_accepted(int (*keep)(const NifmReq *)) {
+    int changed = 0;
+    pthread_mutex_lock(&nifm_live_lock);
+    for (unsigned i = 0; i < NIFM_MAX_LIVE; i++) {
+        NifmReq *q = nifm_live[i];
+        if (q && q->req.state == NIFM_STATE_ACCEPTED && !(keep && keep(q))) nifm_drop(q), changed = 1;
+    }
+    pthread_mutex_unlock(&nifm_live_lock);
+    if (changed) nifm_telemetry_signal();
 }
 static void nifm_req_state(IpcObject *s, IpcCall *c) {
     NifmReq *q = s->state;
@@ -795,19 +848,28 @@ static void nifm_req_events(IpcObject *s, IpcCall *c) {
 static void nifm_req_submit(IpcObject *s, IpcCall *c) {
     (void)c;
     NifmReq *q = s->state;
+    int was_accepted = q->req.state == NIFM_STATE_ACCEPTED;
     nifm_uncount(q);
-    nifm_request_submit(&q->req);
+    if (__atomic_load_n(&nifm_power, __ATOMIC_SEQ_CST) != NIFM_POWER_AWAKE) { /* asleep or shut down: no connection is made */
+        nifm_request_cancel(&q->req);
+        q->req.submitted = 1;
+        q->req.state = NIFM_STATE_FREE;
+        q->req.result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    } else nifm_request_submit(&q->req);
     if (q->req.state == NIFM_STATE_ACCEPTED) {
         __atomic_add_fetch(&nifm_accepted_requests, 1, __ATOMIC_SEQ_CST);
         q->counted = 1;
     }
     nifm_signal(q);
+    if (was_accepted || q->req.state == NIFM_STATE_ACCEPTED) nifm_telemetry_signal();
 } /* the NullProvider rejects at once */
 static void nifm_req_cancel(IpcObject *s, IpcCall *c) {
     (void)c;
     NifmReq *q = s->state;
+    int was_accepted = q->req.state == NIFM_STATE_ACCEPTED;
     nifm_request_cancel(&q->req);
     nifm_uncount(q);
+    if (was_accepted) nifm_telemetry_signal();
 }
 static uint32_t nifm_u32(const IpcCall *c) { return c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0; }
 static uint8_t nifm_u8(const IpcCall *c) { return c->in_size >= 1 ? IPC_IN(c, uint8_t, 0) : 0; }
@@ -936,6 +998,7 @@ static void nifm_create_request(IpcObject *s, IpcCall *c) {
     (void)s;
     NifmReq *q = calloc(1, sizeof *q);
     nifm_request_init(&q->req);
+    nifm_live_add(q);
     ipc_out_object(c, IPC_OBJECT("IRequest", nifm_request_cmds, q, nifm_req_destroy));
 }
 /* GetClientId: a stable id per general-service object (a counter in the low word, 16 bytes). SetExclusiveClient remembers the client id given. */
@@ -968,6 +1031,365 @@ static void nifm_set_default_ip(IpcObject *s, IpcCall *c) {
     memset(nifm_default_ip_setting, 0, sizeof nifm_default_ip_setting);
     memcpy(nifm_default_ip_setting, ipc_buf_ptr(b), b->size < sizeof nifm_default_ip_setting ? b->size : sizeof nifm_default_ip_setting);
 }
+/* Network profiles. SfNetworkProfileData, 0x17c bytes (offsets per switchbrew, field names per libnx): IpSettingData @0 (0xc2: IpAddressSetting {u8 auto, ip,
+ * mask, gateway}, DnsSetting {u8 auto, dns1, dns2}, ProxySetting 0xaa, u16 mtu @0xc0), Uuid @0xc2, name[0x40] @0xd2, u8 NetworkProfileType @0x112,
+ * u8 NetworkInterfaceType @0x113 (1 Ieee80211, 2 Ethernet), u8 IsAutoConnect @0x114, u8 IsLargeCapacity @0x115 (libnx: these four convert to
+ * NetworkProfileData +0x50 / +0x54 / +0x58 / +0x59), SfWirelessSettingData @0x116 {u8 ssid_len, ssid[0x20], u8 x21, x22, x23, passphrase[0x41]}, pad.
+ * SfNetworkProfileBasicInfo, 0x75 bytes (libnx field list): Uuid, name[0x40], u8 type, u8 interface type, u8 ssid_len, ssid[0x20], u8 authentication,
+ * u8 encryption; authentication / encryption are copied from the wireless setting's x22 / x23 [unverified: libnx names them unknown].
+ * NetworkProfileType: 0 user, 1 ssid list, 2 temporary; EnumerateNetworkProfiles takes a mask of 1 << type (libnx: NifmNetworkProfileType_User = BIT(0)).
+ * This console has no saved profile until one is saved (SetNetworkProfile, a nifm:a command the shared table also serves); up to NIFM_MAX_PROFILES are
+ * kept for the session ([unverified] limit; a console keeps them in its system save). With a provider that reports a connection (NAPPLE_NET=host: the
+ * Mac's primary interface) that connection is the current profile: built from net_info (automatic addressing reporting its addresses, the interface kind,
+ * auto-connect, MTU 1400 [unverified]) under a fixed uuid, listed first by Enumerate and found by GetNetworkProfile. Temporary profiles live as long as
+ * their INetworkProfile object. */
+#define NIFM_PROFILE_SIZE 0x17cu
+#define NIFM_BASIC_INFO_SIZE 0x75u
+#define NIFM_MAX_PROFILES 16
+#define NIFM_PROF_UUID 0xc2u
+#define NIFM_PROF_NAME 0xd2u
+#define NIFM_PROF_TYPE 0x112u
+#define NIFM_PROF_IFACE 0x113u
+#define NIFM_PROF_AUTO 0x114u
+#define NIFM_PROF_WIRELESS 0x116u
+enum { NIFM_PROFILE_USER = 0, NIFM_PROFILE_SSID_LIST = 1, NIFM_PROFILE_TEMPORARY = 2 };
+typedef struct {
+    uint8_t used;
+    uint8_t d[NIFM_PROFILE_SIZE];
+} NifmProfile;
+static NifmProfile nifm_profiles[NIFM_MAX_PROFILES]; /* saved and temporary profiles (the type byte tells them apart) */
+static pthread_mutex_t nifm_prof_lock = PTHREAD_MUTEX_INITIALIZER;
+static const uint8_t nifm_host_uuid[16] = {0x6e, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x4e, 0x45, 0x80, 0x48, 0x6f, 0x73, 0x74, 0x6e, 0x65, 0x74}; /* a v4-form constant */
+static int nifm_host_profile(uint8_t *d) {
+    OnlineNetInfo ni;
+    if (!nifm_info(&ni)) return 0;
+    memset(d, 0, NIFM_PROFILE_SIZE);
+    uint32_t a[5] = {htonl(ni.ip), htonl(ni.mask), htonl(ni.gateway), htonl(ni.dns1), htonl(ni.dns2)};
+    d[0] = 1;
+    memcpy(d + 1, &a[0], 4), memcpy(d + 5, &a[1], 4), memcpy(d + 9, &a[2], 4);
+    d[0xd] = 1;
+    memcpy(d + 0xe, &a[3], 4), memcpy(d + 0x12, &a[4], 4);
+    uint16_t mtu = 1400;
+    memcpy(d + 0xc0, &mtu, 2);
+    memcpy(d + NIFM_PROF_UUID, nifm_host_uuid, 16);
+    uint8_t kind = ni.kind ? ni.kind : 1;
+    snprintf((char *)d + NIFM_PROF_NAME, 0x40, "%s", kind == 2 ? "Wired Connection" : "Wireless Connection");
+    d[NIFM_PROF_TYPE] = NIFM_PROFILE_USER;
+    d[NIFM_PROF_IFACE] = kind;
+    d[NIFM_PROF_AUTO] = 1;
+    return 1;
+}
+static int nifm_uuid_zero(const uint8_t *u) {
+    for (int i = 0; i < 16; i++)
+        if (u[i]) return 0;
+    return 1;
+}
+static void nifm_new_uuid(uint8_t *u) {
+    arc4random_buf(u, 16);
+    u[6] = (uint8_t)((u[6] & 0x0f) | 0x40), u[8] = (uint8_t)((u[8] & 0x3f) | 0x80); /* random (version 4) uuid */
+}
+/* The profile with `uuid` (the connection's, a saved or a temporary one) copied into d: 1, or 0 when there is none. */
+static int nifm_profile_find(const uint8_t *uuid, uint8_t *d) {
+    if (!memcmp(uuid, nifm_host_uuid, 16)) return nifm_host_profile(d);
+    int found = 0;
+    pthread_mutex_lock(&nifm_prof_lock);
+    for (unsigned i = 0; i < NIFM_MAX_PROFILES && !found; i++)
+        if (nifm_profiles[i].used && !memcmp(nifm_profiles[i].d + NIFM_PROF_UUID, uuid, 16)) memcpy(d, nifm_profiles[i].d, NIFM_PROFILE_SIZE), found = 1;
+    pthread_mutex_unlock(&nifm_prof_lock);
+    return found;
+}
+/* Stores d as a profile of `type`, replacing the one with the same uuid; a zero uuid (or the connection's) gets a new one, written back into d. */
+static uint32_t nifm_profile_store(uint8_t *d, uint8_t type) {
+    if (nifm_uuid_zero(d + NIFM_PROF_UUID) || !memcmp(d + NIFM_PROF_UUID, nifm_host_uuid, 16)) nifm_new_uuid(d + NIFM_PROF_UUID);
+    d[NIFM_PROF_TYPE] = type;
+    int slot = -1;
+    pthread_mutex_lock(&nifm_prof_lock);
+    for (unsigned i = 0; i < NIFM_MAX_PROFILES && slot < 0; i++)
+        if (nifm_profiles[i].used && !memcmp(nifm_profiles[i].d + NIFM_PROF_UUID, d + NIFM_PROF_UUID, 16)) slot = (int)i;
+    for (unsigned i = 0; i < NIFM_MAX_PROFILES && slot < 0; i++)
+        if (!nifm_profiles[i].used) slot = (int)i;
+    if (slot >= 0) nifm_profiles[slot].used = 1, memcpy(nifm_profiles[slot].d, d, NIFM_PROFILE_SIZE);
+    pthread_mutex_unlock(&nifm_prof_lock);
+    return slot < 0 ? HZ_R_NIFM_NETWORK_PROFILE_FULL : 0;
+}
+/* Removes the stored profile with `uuid` when its type is in `mask`; 1 when one was removed. */
+static int nifm_profile_remove(const uint8_t *uuid, unsigned mask) {
+    int done = 0;
+    pthread_mutex_lock(&nifm_prof_lock);
+    for (unsigned i = 0; i < NIFM_MAX_PROFILES; i++)
+        if (nifm_profiles[i].used && !memcmp(nifm_profiles[i].d + NIFM_PROF_UUID, uuid, 16) && (mask >> nifm_profiles[i].d[NIFM_PROF_TYPE] & 1))
+            nifm_profiles[i].used = 0, done = 1;
+    pthread_mutex_unlock(&nifm_prof_lock);
+    return done;
+}
+/* The SfNetworkProfileData of input buffer 0 (missing bytes are zero). */
+static void nifm_profile_in(const IpcCall *c, uint8_t *d) {
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    memset(d, 0, NIFM_PROFILE_SIZE);
+    if (p) memcpy(d, p, b->size < NIFM_PROFILE_SIZE ? (size_t)b->size : NIFM_PROFILE_SIZE);
+}
+static void nifm_profile_out(IpcCall *c, const uint8_t *d) {
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b && b->size) ipc_write_buf(c, b, d, b->size < NIFM_PROFILE_SIZE ? b->size : NIFM_PROFILE_SIZE);
+}
+static const uint8_t *nifm_uuid_in(const IpcCall *c, uint8_t *tmp) {
+    memset(tmp, 0, 16);
+    memcpy(tmp, c->in, c->in_size < 16 ? c->in_size : 16);
+    return tmp;
+}
+/* 5 GetCurrentNetworkProfile -> buffer SfNetworkProfileData: the profile of the current connection; with none, the no-network result. */
+static void nifm_current_profile(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t d[NIFM_PROFILE_SIZE];
+    if (!nifm_host_profile(d)) {
+        c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+        return;
+    }
+    nifm_profile_out(c, d);
+}
+static void nifm_basic_info(const uint8_t *d, uint8_t *o) {
+    const uint8_t *w = d + NIFM_PROF_WIRELESS;
+    memset(o, 0, NIFM_BASIC_INFO_SIZE);
+    memcpy(o, d + NIFM_PROF_UUID, 16);
+    memcpy(o + 0x10, d + NIFM_PROF_NAME, 0x40);
+    o[0x50] = d[NIFM_PROF_TYPE], o[0x51] = d[NIFM_PROF_IFACE];
+    o[0x52] = w[0] > 0x20 ? 0x20 : w[0];
+    memcpy(o + 0x53, w + 1, 0x20);
+    o[0x73] = w[0x22], o[0x74] = w[0x23];
+}
+/* 7 EnumerateNetworkProfiles(u8 type mask) -> buffer SfNetworkProfileBasicInfo[], s32 total: every profile of those types is counted, as many as fit
+ * are written (the connection's first). */
+static void nifm_enum_profiles(IpcObject *s, IpcCall *c) {
+    (void)s;
+    unsigned mask = nifm_u8(c);
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint32_t cap = b ? (uint32_t)(b->size / NIFM_BASIC_INFO_SIZE) : 0, n = 0;
+    uint8_t tmp[(NIFM_MAX_PROFILES + 1) * NIFM_BASIC_INFO_SIZE], d[NIFM_PROFILE_SIZE];
+    int32_t total = 0;
+    if ((mask & 1u << NIFM_PROFILE_USER) && nifm_host_profile(d)) {
+        if (n < cap) nifm_basic_info(d, tmp + n++ * NIFM_BASIC_INFO_SIZE);
+        total++;
+    }
+    pthread_mutex_lock(&nifm_prof_lock);
+    for (unsigned i = 0; i < NIFM_MAX_PROFILES; i++)
+        if (nifm_profiles[i].used && (mask >> nifm_profiles[i].d[NIFM_PROF_TYPE] & 1)) {
+            if (n < cap) nifm_basic_info(nifm_profiles[i].d, tmp + n++ * NIFM_BASIC_INFO_SIZE);
+            total++;
+        }
+    pthread_mutex_unlock(&nifm_prof_lock);
+    if (b && n) ipc_write_buf(c, b, tmp, (uint64_t)n * NIFM_BASIC_INFO_SIZE);
+    IPC_OUT(c, total);
+}
+/* 8 GetNetworkProfile(Uuid) -> buffer SfNetworkProfileData; an unknown uuid is the profile-not-found result. */
+static void nifm_get_profile(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16], d[NIFM_PROFILE_SIZE];
+    if (!nifm_profile_find(nifm_uuid_in(c, u), d)) {
+        c->result = HZ_R_NIFM_NETWORK_PROFILE_NOT_FOUND;
+        return;
+    }
+    nifm_profile_out(c, d);
+}
+/* 9 SetNetworkProfile(buffer SfNetworkProfileData) -> Uuid: saved as a user profile (replacing the one with its uuid; a zero uuid gets a new one). */
+static void nifm_set_profile_data(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t d[NIFM_PROFILE_SIZE];
+    nifm_profile_in(c, d);
+    uint32_t r = nifm_profile_store(d, NIFM_PROFILE_USER);
+    if (r) {
+        c->result = r;
+        return;
+    }
+    ipc_out(c, d + NIFM_PROF_UUID, 16);
+}
+/* 10 RemoveNetworkProfile(Uuid): a saved profile (user or ssid list) is removed; the connection's, a temporary one or an unknown uuid: not found. */
+static void nifm_remove_profile(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!nifm_profile_remove(nifm_uuid_in(c, u), 1u << NIFM_PROFILE_USER | 1u << NIFM_PROFILE_SSID_LIST)) c->result = HZ_R_NIFM_NETWORK_PROFILE_NOT_FOUND;
+}
+/* 14 CreateTemporaryNetworkProfile(buffer SfNetworkProfileData) -> Uuid, INetworkProfile [inputs / outputs unverified: switchbrew only names the object].
+ * The profile is a temporary one (type 2) for as long as the object lives. INetworkProfile: 0 Update(buffer SfNetworkProfileData) replaces its data,
+ * 1 PersistOld / 2 Persist -> Uuid save a copy as a user profile under a new uuid [unverified]. */
+typedef struct {
+    uint8_t uuid[16];
+} NifmTempProfile;
+static void nifm_temp_destroy(IpcObject *o) {
+    NifmTempProfile *t = o->state;
+    nifm_profile_remove(t->uuid, 1u << NIFM_PROFILE_TEMPORARY);
+    free(t);
+}
+static void nifm_temp_update(IpcObject *s, IpcCall *c) {
+    NifmTempProfile *t = s->state;
+    uint8_t d[NIFM_PROFILE_SIZE];
+    nifm_profile_in(c, d);
+    memcpy(d + NIFM_PROF_UUID, t->uuid, 16);
+    c->result = nifm_profile_store(d, NIFM_PROFILE_TEMPORARY);
+}
+static void nifm_temp_persist(IpcObject *s, IpcCall *c) {
+    NifmTempProfile *t = s->state;
+    uint8_t d[NIFM_PROFILE_SIZE];
+    if (!nifm_profile_find(t->uuid, d)) {
+        c->result = HZ_R_NIFM_NETWORK_PROFILE_NOT_FOUND;
+        return;
+    }
+    memset(d + NIFM_PROF_UUID, 0, 16);
+    uint32_t r = nifm_profile_store(d, NIFM_PROFILE_USER);
+    if (r) {
+        c->result = r;
+        return;
+    }
+    ipc_out(c, d + NIFM_PROF_UUID, 16);
+}
+static const IpcCmd nifm_profile_cmds[] = {
+    {0, "Update", nifm_temp_update, IPC_IMPL},
+    {1, "PersistOld", nifm_temp_persist, IPC_IMPL},
+    {2, "Persist", nifm_temp_persist, IPC_IMPL},
+};
+static void nifm_create_temp_profile(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t d[NIFM_PROFILE_SIZE];
+    nifm_profile_in(c, d);
+    memset(d + NIFM_PROF_UUID, 0, 16);
+    uint32_t r = nifm_profile_store(d, NIFM_PROFILE_TEMPORARY);
+    if (r) {
+        c->result = r;
+        return;
+    }
+    NifmTempProfile *t = calloc(1, sizeof *t);
+    memcpy(t->uuid, d + NIFM_PROF_UUID, 16);
+    ipc_out(c, t->uuid, 16);
+    ipc_out_object(c, IPC_OBJECT("INetworkProfile", nifm_profile_cmds, t, nifm_temp_destroy));
+}
+/* 2 CreateScanRequest -> IScanRequest (switchbrew: 0 Submit, 1 IsProcessing, 2 GetResult, 3 GetSystemEventReadableHandle, 4 SetChannels, 5 Cancel). A scan
+ * needs the radio: with wireless communication off or nifm asleep / shut down it fails with the communication-disabled result. Otherwise it finishes inside
+ * Submit and finds what the provider can see: no provider has a scan hook (the Mac's Wi-Fi list would need one in OnlineProvider), so the scan succeeds
+ * with no access point and GetScanData then reports none. SetChannels(buffer s16[]) keeps the channel list [layout unverified]. */
+static uint32_t nifm_scan_count; /* access points found by the last scan */
+typedef struct {
+    uint32_t ev_w, ev_r;
+    int submitted;
+    uint32_t result;
+    int16_t channels[64];
+    unsigned nchannels;
+} NifmScan;
+static void nifm_scan_destroy(IpcObject *o) { free(o->state); }
+static void nifm_scan_submit(IpcObject *s, IpcCall *c) {
+    (void)c;
+    NifmScan *q = s->state;
+    int radio = __atomic_load_n(&nifm_wireless_on, __ATOMIC_SEQ_CST) && __atomic_load_n(&nifm_power, __ATOMIC_SEQ_CST) == NIFM_POWER_AWAKE;
+    q->result = radio ? 0 : HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    if (radio) __atomic_store_n(&nifm_scan_count, 0, __ATOMIC_SEQ_CST);
+    q->submitted = 1;
+    if (q->ev_w) event_signal_handle(q->ev_w);
+}
+static void nifm_scan_processing(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = 0; /* the scan finished inside Submit */
+    IPC_OUT(c, v);
+}
+static void nifm_scan_result(IpcObject *s, IpcCall *c) { c->result = ((NifmScan *)s->state)->result; }
+static void nifm_scan_event(IpcObject *s, IpcCall *c) {
+    NifmScan *q = s->state;
+    if (!q->ev_w) q->ev_w = event_create(&q->ev_r); /* one event per scan request, handed out again on a second call */
+    if (q->submitted) event_signal_handle(q->ev_w);
+    ipc_out_copy_handle(c, q->ev_r);
+}
+static void nifm_scan_set_channels(IpcObject *s, IpcCall *c) {
+    NifmScan *q = s->state;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    q->nchannels = p ? (unsigned)(b->size / 2 < 64 ? b->size / 2 : 64) : 0;
+    if (q->nchannels) memcpy(q->channels, p, q->nchannels * 2);
+}
+static const IpcCmd nifm_scan_cmds[] = {
+    {0, "Submit", nifm_scan_submit, IPC_IMPL},
+    {1, "IsProcessing", nifm_scan_processing, IPC_IMPL},
+    {2, "GetResult", nifm_scan_result, IPC_IMPL},
+    {3, "GetSystemEventReadableHandle", nifm_scan_event, IPC_IMPL},
+    {4, "SetChannels", nifm_scan_set_channels, IPC_IMPL},
+    {5, "Cancel", noop, IPC_IMPL}, /* nothing is in progress: the scan finished inside Submit */
+};
+static void nifm_create_scan(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_object(c, IPC_OBJECT("IScanRequest", nifm_scan_cmds, calloc(1, sizeof(NifmScan)), nifm_scan_destroy));
+}
+/* 35 / 47 GetScanData -> buffer AccessPointData[], s32 count: the access points of the last scan, none (see CreateScanRequest) [layout unverified; switchbrew
+ * documents neither AccessPointData nor the reply]. */
+static void nifm_scan_data(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int32_t n = (int32_t)__atomic_load_n(&nifm_scan_count, __ATOMIC_SEQ_CST);
+    IPC_OUT(c, n);
+}
+/* 36 GetCurrentAccessPoint -> buffer AccessPointData: only a wireless connection has one. A provider reports no SSID / BSSID (the host provider always
+ * reports a wired-style connection), so a wireless connection's data is zero [layout unverified]; no connection or a wired one: the no-network result. */
+static void nifm_current_ap(IpcObject *s, IpcCall *c) {
+    (void)s;
+    OnlineNetInfo ni;
+    if (!nifm_info(&ni) || ni.kind == 2) {
+        c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+        return;
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint8_t z[0x200] = {0};
+    if (b && b->size) ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
+}
+/* 23 PutToSleep: accepted requests that did not ask SetKeptInSleep lose their connection; nifm makes no new one until 24 WakeUp. 37 Shutdown: every
+ * connection is dropped and nifm stays down (WakeUp does not bring it back); 33 ConfirmSystemAvailability then fails with the communication-disabled
+ * result [unverified which result a console gives]. */
+static int nifm_kept_in_sleep(const NifmReq *q) { return q->kept_in_sleep; }
+static void nifm_put_to_sleep(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    int awake = NIFM_POWER_AWAKE;
+    if (__atomic_compare_exchange_n(&nifm_power, &awake, NIFM_POWER_ASLEEP, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) nifm_drop_accepted(nifm_kept_in_sleep);
+}
+static void nifm_wake_up(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    int asleep = NIFM_POWER_ASLEEP;
+    __atomic_compare_exchange_n(&nifm_power, &asleep, NIFM_POWER_AWAKE, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+static void nifm_shutdown(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    __atomic_store_n(&nifm_power, NIFM_POWER_SHUTDOWN, __ATOMIC_SEQ_CST);
+    nifm_drop_accepted(NULL);
+}
+static void nifm_confirm_available(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (__atomic_load_n(&nifm_power, __ATOMIC_SEQ_CST) == NIFM_POWER_SHUTDOWN) c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+}
+/* 31 GetTelemetorySystemEventReadableHandle: one service-wide event, signalled whenever a request gains or loses its connection. */
+static void nifm_telemetry_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&nifm_live_lock);
+    if (!nifm_telemetry_w) nifm_telemetry_w = event_create(&nifm_telemetry_r);
+    uint32_t r = nifm_telemetry_r;
+    pthread_mutex_unlock(&nifm_live_lock);
+    ipc_out_copy_handle(c, r);
+}
+/* 42 NotifyConnectionStateChanged: nifm re-reads the connection. When the provider no longer reports one, every accepted request is dropped; the events of
+ * every request and the telemetry event fire so their owners re-read the state. */
+static void nifm_notify_conn_changed(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    OnlineNetInfo ni;
+    if (!nifm_info(&ni)) nifm_drop_accepted(NULL);
+    pthread_mutex_lock(&nifm_live_lock);
+    for (unsigned i = 0; i < NIFM_MAX_LIVE; i++)
+        if (nifm_live[i]) nifm_signal(nifm_live[i]);
+    pthread_mutex_unlock(&nifm_live_lock);
+    nifm_telemetry_signal();
+}
+/* 44 IsWiredConnectionAvailable -> bool: a wired connection is up (the provider reports a connection of kind 2: the host provider's). */
+static void nifm_wired_available(IpcObject *s, IpcCall *c) {
+    (void)s;
+    OnlineNetInfo ni;
+    uint8_t v = nifm_info(&ni) && ni.kind == 2;
+    IPC_OUT(c, v);
+}
 static const IpcCmd nifm_general_cmds[] = {
     {1, "GetClientId", nifm_get_client_id, IPC_IMPL},
     {4, "CreateRequest", nifm_create_request, IPC_IMPL},
@@ -981,33 +1403,33 @@ static const IpcCmd nifm_general_cmds[] = {
     {22, "IsAnyForegroundRequestAccepted", nifm_any_accepted, IPC_IMPL},
     {26, "SetExclusiveClient", nifm_set_exclusive, IPC_IMPL},
     {27, "GetDefaultIpSetting", nifm_default_ip, IPC_IMPL},
-    {2, "CreateScanRequest", sysd_err_net, IPC_STUB},
-    {5, "GetCurrentNetworkProfile", sysd_err_net, IPC_STUB},
-    {6, "EnumerateNetworkInterfaces", sysd_z4, IPC_STUB},
-    {7, "EnumerateNetworkProfiles", sysd_err_net, IPC_STUB},
-    {8, "GetNetworkProfile", sysd_err_net, IPC_STUB},
-    {9, "SetNetworkProfile", sysd_err_net, IPC_STUB},
-    {10, "RemoveNetworkProfile", sysd_ok, IPC_STUB},
-    {14, "CreateTemporaryNetworkProfile", sysd_err_net, IPC_STUB},
+    {2, "CreateScanRequest", nifm_create_scan, IPC_IMPL},
+    {5, "GetCurrentNetworkProfile", nifm_current_profile, IPC_IMPL},
+    {6, "EnumerateNetworkInterfaces", sysd_z4, IPC_STUB}, /* NetworkInterfaceInfo has no public layout */
+    {7, "EnumerateNetworkProfiles", nifm_enum_profiles, IPC_IMPL},
+    {8, "GetNetworkProfile", nifm_get_profile, IPC_IMPL},
+    {9, "SetNetworkProfile", nifm_set_profile_data, IPC_IMPL},
+    {10, "RemoveNetworkProfile", nifm_remove_profile, IPC_IMPL},
+    {14, "CreateTemporaryNetworkProfile", nifm_create_temp_profile, IPC_IMPL},
     {15, "GetCurrentIpConfigInfo", nifm_ip_config, IPC_IMPL},
-    {23, "PutToSleep", sysd_ok, IPC_STUB},
-    {24, "WakeUp", sysd_ok, IPC_STUB},
-    {25, "GetSsidListVersion", sysd_z4, IPC_STUB},
+    {23, "PutToSleep", nifm_put_to_sleep, IPC_IMPL},
+    {24, "WakeUp", nifm_wake_up, IPC_IMPL},
+    {25, "GetSsidListVersion", sysd_z4, IPC_STUB}, /* SsidListVersion has no public layout */
     {28, "SetDefaultIpSetting", nifm_set_default_ip, IPC_IMPL},
-    {31, "GetTelemetorySystemEventReadableHandle", sysd_err_net, IPC_STUB},
-    {33, "ConfirmSystemAvailability", sysd_ok, IPC_STUB},
+    {31, "GetTelemetorySystemEventReadableHandle", nifm_telemetry_event, IPC_IMPL},
+    {33, "ConfirmSystemAvailability", nifm_confirm_available, IPC_IMPL},
     {34, "SetBackgroundRequestEnabled", nifm_set_background, IPC_IMPL},
-    {35, "GetScanData", sysd_err_net, IPC_STUB},
-    {36, "GetCurrentAccessPoint", sysd_err_net, IPC_STUB},
-    {37, "Shutdown", sysd_ok, IPC_STUB},
-    {38, "GetAllowedChannels", sysd_err_net, IPC_STUB},
-    {39, "NotifyApplicationSuspended", sysd_ok, IPC_STUB},
+    {35, "GetScanData", nifm_scan_data, IPC_IMPL},
+    {36, "GetCurrentAccessPoint", nifm_current_ap, IPC_IMPL},
+    {37, "Shutdown", nifm_shutdown, IPC_IMPL},
+    {38, "GetAllowedChannels", sysd_err_net, IPC_STUB}, /* the channel list layout is not public */
+    {39, "NotifyApplicationSuspended", sysd_ok, IPC_STUB}, /* what nifm does with it is not public */
     {40, "SetAcceptableNetworkTypeFlag", nifm_set_acceptable, IPC_IMPL},
     {41, "GetAcceptableNetworkTypeFlag", nifm_get_acceptable, IPC_IMPL},
-    {42, "NotifyConnectionStateChanged", sysd_ok, IPC_STUB},
+    {42, "NotifyConnectionStateChanged", nifm_notify_conn_changed, IPC_IMPL},
     {43, "SetWowlDelayedWakeTime", nifm_set_wowl_wake, IPC_IMPL},
-    {44, "IsWiredConnectionAvailable", sysd_z1, IPC_STUB},
-    {47, "GetScanData", sysd_err_net, IPC_STUB},
+    {44, "IsWiredConnectionAvailable", nifm_wired_available, IPC_IMPL},
+    {47, "GetScanData", nifm_scan_data, IPC_IMPL},
     {57, "SetWowlTcpKeepAliveTimeout", nifm_set_wowl_keepalive, IPC_IMPL},
 };
 static void nifm_gen_destroy(IpcObject *o) { free(o->state); }
@@ -1058,11 +1480,6 @@ static void bsd_resource_stats(IpcObject *s, IpcCall *c) {
     bsd_reply(c, 0, 0);
 }
 static void bsd_fail(IpcCall *c, int err) { bsd_reply(c, -1, err); }
-/* EventFd(initval, flags): the guest descriptor table maps to provider sockets only, so an event descriptor cannot be made: {-1, EOPNOTSUPP} (documented default). */
-static void bsd_eventfd(IpcObject *s, IpcCall *c) {
-    (void)s;
-    bsd_fail(c, HZ_EOPNOTSUPP);
-}
 static void bsd_enoent(IpcObject *s, IpcCall *c) {
     (void)s;
     bsd_fail(c, HZ_ENOENT);
@@ -1412,6 +1829,36 @@ static void bsd_select(IpcObject *s, IpcCall *c) {
     }
     bsd_reply(c, r, err);
 }
+/* 31 EventFd(u64 initval, u32 flags) / 39 NoSfEventFd (0x10 bytes in, 8 out per switchbrew; the same two arguments [unverified]) -> {s32 fd, errno}: an
+ * event descriptor with eventfd(2) semantics, kept by the service (bsd_core.c): Read / Write / Recv / Send move the 64-bit counter, Poll / Select see it,
+ * Fcntl / Ioctl(FIONBIO) switch it to non-blocking, Close frees it with its last DuplicateSocket alias. No provider is involved, so it works offline. */
+static void bsd_eventfd(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int err = 0;
+    uint64_t initval = c->in_size >= 8 ? IPC_IN(c, uint64_t, 0) : 0;
+    int fd = bsdg_eventfd(bsd_g(), initval, bsd_in32(c, 8, 0), &err);
+    bsd_reply(c, fd, fd < 0 ? err : 0);
+}
+/* 40 ShutdownAllSockets(s32 how) [20.0.0+; the argument as libnx's bsdShutdownAllSockets(how) gives it for 23]: shutdown(how) on every socket of this
+ * client through the provider; the descriptors stay open (23 keeps its older close-everything answer). */
+static void bsd_shutdown_all_how(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int err = 0;
+    int r = bsdg_shutdown_all(bsd_g(), bsd_in32(c, 0, 0), &err);
+    bsd_reply(c, r, err);
+}
+/* 200 SetThreadCoreMask(u64 mask) / 201 GetThreadCoreMask -> u64: the affinity of the service's worker threads, read back as set [layout unverified].
+ * Before any Set it is core 3's bit, where the system modules run [unverified]. */
+static uint64_t bsd_core_mask = 1u << 3;
+static void bsd_set_core_mask(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size >= 8) __atomic_store_n(&bsd_core_mask, IPC_IN(c, uint64_t, 0), __ATOMIC_SEQ_CST);
+}
+static void bsd_get_core_mask(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t v = __atomic_load_n(&bsd_core_mask, __ATOMIC_SEQ_CST);
+    IPC_OUT(c, v);
+}
 static const IpcCmd bsd_cmds[] = {
     {0, "RegisterClient", bsd_register_client, IPC_IMPL},
     {1, "StartMonitoring", bsd_start_monitoring, IPC_IMPL},
@@ -1444,18 +1891,18 @@ static const IpcCmd bsd_cmds[] = {
     {28, "GetResourceStatistics", bsd_resource_stats, IPC_IMPL},
     {29, "RecvMMsg", bsd_recvmmsg, IPC_IMPL},
     {30, "SendMMsg", bsd_sendmmsg, IPC_IMPL},
-    {31, "EventFd", bsd_eventfd, IPC_STUB},
-    {32, "RegisterResourceStatisticsName", sysd_ok, IPC_STUB},
-    {33, "RegisterClientShared", sysd_ok, IPC_STUB},
-    {34, "GetSocketStatistics", sysd_err_generic, IPC_STUB},
-    {35, "NifIoctl", sysd_err_generic, IPC_STUB},
-    {37, "SetSocketBufferAttribute", sysd_ok, IPC_STUB},
-    {39, "NoSfEventFd", sysd_err_generic, IPC_STUB},
-    {40, "ShutdownAllSockets", sysd_ok, IPC_STUB},
-    {42, "SendMMsgNoMem", sysd_err_generic, IPC_STUB},
-    {43, "RecvMMsgNoMem", sysd_err_generic, IPC_STUB},
-    {200, "SetThreadCoreMask", sysd_ok, IPC_STUB},
-    {201, "GetThreadCoreMask", sysd_z8, IPC_STUB},
+    {31, "EventFd", bsd_eventfd, IPC_IMPL},
+    {32, "RegisterResourceStatisticsName", sysd_ok, IPC_STUB}, /* input layout not public, nothing reads the name back */
+    {33, "RegisterClientShared", bsd_register_client, IPC_IMPL}, /* RegisterClient without the transfer memory handle (switchbrew) */
+    {34, "GetSocketStatistics", sysd_err_generic, IPC_STUB}, /* statistics layout not public */
+    {35, "NifIoctl", sysd_err_generic, IPC_STUB}, /* interface ioctls: no public layout */
+    {37, "SetSocketBufferAttribute", sysd_ok, IPC_STUB}, /* attribute layout not public */
+    {39, "NoSfEventFd", bsd_eventfd, IPC_IMPL},
+    {40, "ShutdownAllSockets", bsd_shutdown_all_how, IPC_IMPL},
+    {42, "SendMMsgNoMem", bsd_sendmmsg, IPC_IMPL}, /* SendMMsg's arguments [unverified] */
+    {43, "RecvMMsgNoMem", bsd_recvmmsg, IPC_IMPL}, /* RecvMMsg's arguments [unverified] */
+    {200, "SetThreadCoreMask", bsd_set_core_mask, IPC_IMPL},
+    {201, "GetThreadCoreMask", bsd_get_core_mask, IPC_IMPL},
 };
 static IpcObject *bsd_open(void) { return IPC_OBJECT("bsd:u", bsd_cmds, NULL, NULL); }
 
@@ -1532,6 +1979,26 @@ static void nsd_is_change_env_disabled(IpcObject *s, IpcCall *c) {
     uint8_t v = nsd_change_env_disabled;
     IPC_OUT(c, v);
 }
+/* 100 GetApplicationServerEnvironmentType -> u8 ServerEnvironmentType / 101 Set(u8) / 102 Delete (switchbrew): the type Set configured, else the one the
+ * environment identifier names: "lp1" is lp, 1 (nn::oe::ServerEnvironmentType: 0 dd, 1 lp, 2 sd, 3 sp, 4 dp). Delete forgets the configured type. */
+#define NSD_SERVER_ENV_LP 1u
+static uint8_t nsd_app_env_type, nsd_app_env_set;
+static void nsd_get_app_env(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = nsd_app_env_set ? nsd_app_env_type : NSD_SERVER_ENV_LP;
+    IPC_OUT(c, v);
+}
+static void nsd_set_app_env(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 1) return;
+    nsd_app_env_type = IPC_IN(c, uint8_t, 0);
+    nsd_app_env_set = 1;
+}
+static void nsd_delete_app_env(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    nsd_app_env_set = 0;
+}
 static const IpcCmd nsd_cmds[] = {
     {10, "GetSettingName", nsd_env_name, IPC_IMPL},
     {11, "GetEnvironmentIdentifier", nsd_env_name, IPC_IMPL},
@@ -1547,13 +2014,13 @@ static const IpcCmd nsd_cmds[] = {
     {42, "GetNasApiFqdn", nsd_resolve, IPC_IMPL},
     {43, "GetNasApiFqdnEx", nsd_resolve, IPC_IMPL},
     {50, "GetCurrentSetting", nsd_zero_struct, IPC_IMPL},
-    {5, "GetSettingUrl", sysd_err_generic, IPC_STUB},
+    {5, "GetSettingUrl", sysd_err_generic, IPC_STUB}, /* success with the 0x100-byte Url of the settings: its content is not public */
     {15, "SetChangeEnvironmentIdentifierDisabled", nsd_set_change_env_disabled, IPC_IMPL},
     {63, "IsChangeEnvironmentIdentifierDisabled", nsd_is_change_env_disabled, IPC_IMPL},
-    {64, "SetWithoutDomainExchangeFqdns", sysd_ok, IPC_STUB},
-    {100, "GetApplicationServerEnvironmentType", sysd_z4, IPC_STUB},
-    {101, "SetApplicationServerEnvironmentType", sysd_ok, IPC_STUB},
-    {102, "DeleteApplicationServerEnvironmentType", sysd_ok, IPC_STUB},
+    {64, "SetWithoutDomainExchangeFqdns", sysd_ok, IPC_STUB}, /* needs nsd!test_mode = 1; the retail refusal result is not public */
+    {100, "GetApplicationServerEnvironmentType", nsd_get_app_env, IPC_IMPL},
+    {101, "SetApplicationServerEnvironmentType", nsd_set_app_env, IPC_IMPL},
+    {102, "DeleteApplicationServerEnvironmentType", nsd_delete_app_env, IPC_IMPL},
 };
 static IpcObject *nsd_open(void) { return IPC_OBJECT("nsd:u", nsd_cmds, NULL, NULL); }
 

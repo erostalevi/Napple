@@ -183,7 +183,9 @@ int main(void) {
     CHECK(!strcmp(svc_find(bs, 28)->name, "GetResourceStatistics") && svc_find(bs, 28)->status == IPC_IMPL, "bsd 28 GetResourceStatistics");
     CHECK(!strcmp(svc_find(bs, 29)->name, "RecvMMsg") && !strcmp(svc_find(bs, 30)->name, "SendMMsg") && !strcmp(svc_find(bs, 31)->name, "EventFd"), "bsd 29 RecvMMsg, 30 SendMMsg, 31 EventFd");
     svc_call(bs, 31, NULL, 0, &c);
-    CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, int32_t, 0) == -1 && SVC_OUT(&c, int32_t, 4) == 95, "bsd 31 EventFd: {-1, EOPNOTSUPP (95, the guest's Linux numbering)}");
+    /* ipc-depth-95 r10: EventFd became a real event descriptor (test_svc_net_r10.c covers it); with no arguments it is EventFd(0, 0) */
+    CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, int32_t, 0) >= 0 && SVC_OUT(&c, int32_t, 4) == 0, "bsd 31 EventFd: {a descriptor, 0}");
+    bsdg_reset(bsd_g());
 
     /* ---- prepo renumbering */
     IpcObject *pr = prepo_open();
