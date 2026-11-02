@@ -10,6 +10,7 @@
 #include "gfx.h"
 #include "napple.h"
 #include "napple_frontend.h"
+#include "napple_online_ui.h"
 #include "napple_input.h"
 #include "napple_audio.h"
 #include "napple_display.h"
@@ -443,6 +444,29 @@ static void *debug_sheets_thread(void *arg) {
     LOG("main", "debug-sheets: done");
     return NULL;
 }
+/* Napple Online (client-core): hands the runtime's overlay table to the frontend's Online tab and pumps its completions / change callback on the main
+   thread. src/online/ is linked with CLOUD=1 only; without it these weak defaults keep the overlay on its built-in stub (same pattern as the hooks in main.c). */
+__attribute__((weak)) const napple_online_ui_api *napple_online_runtime_start(const char *home, const char *account_url, const char *social_url, const char *uid_hex) {
+    (void)home;
+    (void)account_url;
+    (void)social_url;
+    (void)uid_hex;
+    return NULL;
+}
+__attribute__((weak)) int napple_online_ui_pump(void) { return 0; }
+static void register_online_ui(void) {
+    const napple_online_ui_api *api = napple_online_runtime_start(NULL, NULL, NULL, NULL);
+    if (!api) {
+        LOG("main", "online: client not started, the Online tab uses its stub");
+        return;
+    }
+    napple_frontend_set_online_ui(g_fe, api);
+    NSTimer *t = [NSTimer timerWithTimeInterval:0.1 repeats:YES block:^(NSTimer *x) {
+        (void)x;
+        napple_online_ui_pump();
+    }];
+    [NSRunLoop.mainRunLoop addTimer:t forMode:NSRunLoopCommonModes];
+}
 static void register_applet_sheets(void) {
     applet_set_error_hook(ui_error);
     applet_set_controller_ui(ui_controller);
@@ -458,6 +482,7 @@ static void register_applet_sheets(void) {
 }
 #else
 static void register_applet_sheets(void) {}
+static void register_online_ui(void) {}
 #endif
 
 int frontend_run(FrontendBoot boot, int headless, int seconds) {
@@ -503,6 +528,7 @@ int frontend_run(FrontendBoot boot, int headless, int seconds) {
         g_fe = napple_frontend_create(&c);
         if (!g_fe) runtime_fail("frontend: cannot create the window");
         register_applet_sheets();
+        register_online_ui();
         napple_frontend_run(g_fe);
     }
     return 0;
