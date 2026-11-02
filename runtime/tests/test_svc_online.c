@@ -218,7 +218,7 @@ int main(void) {
           snprintf(path, sizeof path, "%s/good.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset();
           const OnlineProvider *p = online_provider(); CHECK(p != online_null_provider() && !strcmp(p->name, "plugin-test") && online_has(p, ONLINE_CAP_NETWORK), "a provider module is loaded from NAPPLE_ONLINE_PROVIDER");
           OnlineNetInfo ni; CHECK(p->net_info(p->ctx, &ni) == 0 && ni.connected && ni.ip == 0x01020304, "and its entry points are called");
-          IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0]; svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0x01020304, "nifm reports the module's address");
+          IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0]; svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == htonl(0x01020304), "nifm reports the module's address (network order)");
           CHECK(ONLINE_FN(p, sock_open) == NULL, "entry points the module leaves NULL stay NULL");
           snprintf(path, sizeof path, "%s/badabi.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset(); CHECK(online_provider() == online_null_provider(), "a module with the wrong ABI version is rejected: NullProvider");
           snprintf(path, sizeof path, "%s/nosym.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset(); CHECK(online_provider() == online_null_provider(), "a module without the entry symbol is rejected");
