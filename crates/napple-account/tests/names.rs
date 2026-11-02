@@ -75,12 +75,18 @@ async fn reserved_names_are_422_on_display_name_and_nicknames() {
         .await;
     assert_eq!(s, StatusCode::OK, "{v}");
 
-    // An email whose local part is reserved gets the neutral default name.
-    let n = t.sign_in("napple.fan@napple.test", "Mac").await;
-    let (_, me) = t.req("GET", "/me", Some(&n.access), None).await;
-    assert_eq!(me["display_name"], "Player");
-    let (_, ps) = t.req("GET", "/profiles", Some(&n.access), None).await;
-    assert_eq!(ps["profiles"][0]["nickname"], "Player");
+    // Signup takes the first nickname from the user and applies the same reserved-name rules.
+    let (st, v) = t
+        .req(
+            "POST",
+            "/auth/signup",
+            None,
+            Some(json!({"email": "napple.fan@napple.test", "password": PASSWORD, "nickname": "N4pple.fan", "age_ok": true, "terms_ok": true,
+                "device": {"name": "Mac", "platform": "macos", "pubkey": napple_account::util::b64url(&napple_account::util::random_bytes::<32>())}})),
+        )
+        .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST, "{v}");
+    assert_eq!(v["error_code"], "reserved_nickname");
 }
 
 #[tokio::test]
