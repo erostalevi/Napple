@@ -1,0 +1,23 @@
+# ipc-domain-reuse (2026-11-03, r11)
+
+Branch `claude/ipc-domain-reuse-2026-11-03-r11`.
+
+## IPC domain object ids are reused (`runtime/src/ipc.c`)
+- Before: ids were handed out by a monotonically increasing `next_id`; a close only cleared the slot, so a title creating short-lived objects (MK8D's wireless lobby: an `acc` IProfile every 200 ms) hit "IPC domain full" after ~512 creations.
+- Now: never-used ids (2..512) go first; closed ids go into a per-domain FIFO free list and are reused oldest first once the never-used ids are gone. Both operations run under the domain lock (`domain_alloc_locked` / `domain_release_locked`).
+- Decision: FIFO, not lowest-free. A guest that closes an id twice then usually hits an empty slot (error) instead of the object that reused it. With 512 ids the window is large. A double close after the id was reused for a new object still closes that object, as on real HOS (ids are not generation-tagged on the wire).
+- Closing an unknown, out-of-range, 0 or already-closed id now answers result `0x25A0A` (`IPC_R_DOMAIN_OBJECT_NOT_FOUND` = module 10, description 301, **[unverified]** value) instead of `runtime_fail`. The old code killed the process for that.
+- A full table (512 objects open at once) is still `runtime_fail`, now with the count in the message.
+- The object is unref'd after the domain lock is released (a destroy callback may take other locks).
+
+## Account with no linked profile (`runtime/tests/test_svc_account.c`)
+- Tests only; no code change in account.c / olsc.c. Result `0x1907C` = `HZ_RESULT(124, 200)`. **No row in account.c or olsc.c produces it today**; the tests record what unlinked rows actually return:
+  - acc manager rows 0/1/130/160 succeed with the local id, id 0 + zero cache (bounded by buffer, no crash without a buffer);
+  - rows 2/3/4/150/170 answer the sf unknown-command result (`IPC_R_UNKNOWN_COMMAND`), no object, no output;
+  - linking/unlinking later is picked up by the same manager object; a provider without `ONLINE_CAP_ACCOUNT` is never asked;
+  - secondary local profiles work unlinked; olsc 10 answers the offline result, 13-16 succeed, 18/19/22/25-27 answer unknown-command.
+- Open question for a Mac session with a real title: whether titles expect `0x1907C` from the token-cache rows (2/3/4/150) when no network account exists. Not changed here because no evidence says what the real service returns for each row.
+
+## Tests
+- `test_ipc.c`: churn 5x DOMAIN_MAX create/close cycles, ids stay in range and only the root stays open; held ids stay stable; exhaustion only at 512 open and one close frees one slot; closing unknown ids answers an error; stale double close does not close the new object.
+- Honest status: new ipc.c code and tests are **unbuilt on macOS** (tested on Linux with a stub, see the integrator note). `test_svc_account.c` is **tested** (Linux harness).
