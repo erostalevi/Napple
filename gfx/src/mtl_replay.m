@@ -69,6 +69,7 @@ static id<MTLRenderCommandEncoder> g_re;
 static id<MTLBlitCommandEncoder> g_be;
 static id<MTLComputeCommandEncoder> g_ce;
 static uint64_t g_enc_serial; /* identity of the current encoder (an address can be reused by the next one) */
+static uint64_t g_vp_serial;  /* encoder that has the viewport / scissor arrays of apply_raster_state (0: none; a single-viewport pass resets it) */
 static ring g_ring;
 static uint64_t g_seq;
 
@@ -1012,6 +1013,7 @@ static void clear_color_quad(uint32_t index, uint32_t kind, uint32_t mask, const
     [g_re setFragmentBytes:v length:16 atIndex:0];
     MTLViewport vp = {0, 0, (double)lroundf((float)P.w * P.sx), (double)lroundf((float)P.h * P.sy), 0, 1};
     [g_re setViewport:vp];
+    g_vp_serial = 0;
     [g_re setScissorRect:scissor_rect()];
     [g_re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     g_pk_dirty = 1;
@@ -1078,6 +1080,7 @@ static void do_clear_ds(const p_clear_ds *c) {
     [g_re setVertexBytes:&z length:4 atIndex:0];
     MTLViewport vp = {0, 0, (double)lroundf((float)P.w * P.sx), (double)lroundf((float)P.h * P.sy), 0, 1};
     [g_re setViewport:vp];
+    g_vp_serial = 0;
     [g_re setScissorRect:scissor_rect()];
     [g_re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     g_pk_dirty = 1;
@@ -1419,8 +1422,15 @@ static void apply_raster_state(void) {
         srs[i] = scissor_rect_of(i);
     }
     MTLViewport vp = vps[0];
-    [g_re setViewports:vps count:16];
-    [g_re setScissorRects:srs count:16];
+    static MTLViewport last_vps[16];
+    static MTLScissorRect last_srs[16];
+    if (g_vp_serial != g_enc_serial || memcmp(vps, last_vps, sizeof vps) || memcmp(srs, last_srs, sizeof srs)) { /* unchanged in this encoder: not set again */
+        [g_re setViewports:vps count:16];
+        [g_re setScissorRects:srs count:16];
+        memcpy(last_vps, vps, sizeof vps);
+        memcpy(last_srs, srs, sizeof srs);
+        g_vp_serial = g_enc_serial;
+    }
     {
         MTLScissorRect sr = srs[0];
         static int wl = -1;
@@ -1904,6 +1914,7 @@ static void do_draw_texture(const p_draw_tex *dt) {
     [g_re setFragmentSamplerState:smp atIndex:0];
     MTLViewport vp = {0, 0, (double)lroundf(W * P.sx), (double)lroundf(H * P.sy), 0, 1};
     [g_re setViewport:vp];
+    g_vp_serial = 0;
     [g_re setScissorRect:scissor_rect()];
     [g_re drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     P.draws++;
