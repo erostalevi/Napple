@@ -161,6 +161,11 @@ $(HOST_BUILD)/test_threads_preempt: tests/host/test_threads_preempt.c $(HOST_KER
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_threads_preempt.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
 HOST_TESTS += $(HOST_BUILD)/test_threads_preempt
+# core-ordering-kernel (2026-11-02): svcGetInfo 19 / 27, svcExitProcess after nnMain returned (includes kernel.c; its own fake modules)
+$(HOST_BUILD)/test_kernel_exit: tests/host/test_kernel_exit.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_exit.c src/ipc.c $(filter-out src/kernel.c,$(HOST_KERNEL)) -o $@
+HOST_TESTS += $(HOST_BUILD)/test_kernel_exit
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 
