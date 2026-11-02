@@ -6,7 +6,7 @@ head: (see git log; the commit that adds this file)
 env: mac
 date: 2026-11-02
 areas: [crates/napple-cloud, crates/napple-cli, runtime/src/cloud, runtime hooks (main.c, services/fs.c), runtime/Makefile, docs]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/cloud-saves-client-2026-11-02-r8: Napple Account client + end-to-end encrypted cloud saves (runtime + CLI)
@@ -63,3 +63,29 @@ Link/include fixes in Makefile/iOS script are safe. Wire-format mismatches with 
 ## Needs from other areas
 - `tools/build_ios.sh` (not owned): cloud sources + lib, as above.
 - Overlay Account tab (later round) and iOS sign-in UI: the iOS runtime stays signed out (no-op) until then.
+
+## Integration result
+- Date 2026-11-02, merged into main as 31992fa (head ec7ff51 as handed off), after napple-account. Conflicts, mechanical: `Cargo.toml` members,
+  `runtime/Makefile` (net-host / net-room / net-online blocks and the cloud block all kept), `Cargo.lock` (main's side, then `cargo build --workspace`:
+  only napple-cloud's packages added plus cargo's renames of duplicated names). Outcome: **Small fix** (1) plus one doc commit:
+  - `integrate: napple-cloud sends the create response's upload_headers on the presigned PUT`: `Api::put_bytes` now sends every
+    `upload_headers` entry verbatim (except host / content-length), so a real S3 PUT carries the `x-amz-checksum-sha256` napple-account signs
+    (napple-account's Findings). New test `api::tests::put_bytes_sends_the_upload_headers` (tiny_http). The stub sends no headers, so its path is unchanged.
+  - Docs: guides index row for `cloud-saves.md`, r8 change-archive row (`tools/check_docs.py` reported both as orphans).
+- No native ports: the Keychain code already uses Security.framework through core-foundation; the runtime glue is plain C hooks. Left as written.
+- `cargo test -p napple-cloud --locked`: 18 passed (17 + the new one). `cargo build --release -p napple-cli` ok. `make -C runtime GFX=napple`: cargo builds
+  `libnapple_cloud.a`, the runtime links it (no new warnings). `make CLOUD=0` (separate build dir): builds, no napple_cloud symbol.
+- `make -C runtime GFX=napple test test-services test-ipc-reference` (the fs.c hook): rc 0, ipc_reference 111 / 1325 / missing 0.
+- **LAS A -> B, against the real napple-account server** (release binary, dev mailer, filesystem blobs, 127.0.0.1:18091) instead of the stub, with
+  `NAPPLE_ACCOUNT_STORE=file` secrets: `napple account login` A (recovery phrase shown) and B (key waiting), `napple account approve` on A, B status
+  `save key: ready`. Device A started from a copy of this session's own LAS save (File 1 "Link", from the author's 140 s route; the route itself was not
+  re-run because of the 120 s run limit): `cloud: … the local save is newer than the cloud: pushing`, `pushed … version 1`. Device B from an empty save
+  root: `cloud: pulled 01006BB00C6F0000 … version 1 before mount (10 ms)` before the first `fs: mounted`; the pulled save files are byte-identical
+  to A's (only the runtime's `.napple-meta` timestamps differ); `napple saves list` on B: `v1 68143 synced (v1)`. **Verified** (also the wire
+  alignment with napple-account end to end, including the upload-header fix against the fs backend).
+- Four-title 45 s boots signed out (no `cloud` dir in the support dir), offline and `NAPPLE_NET=host`: SMO, LAS, MK8D, ACNH rc 0, notify-running,
+  `missing_ipc []`, `unsupported_svcs []`, stubbed only `nvdrv:13`; no `cloud:` line.
+- Left as the author wrote it (a design choice, noted): `CLOUD ?= $(if $(shell command -v cargo …),1,0)` builds without cloud saves when cargo is not on
+  PATH, unlike the net-room block's `CARGO` lookup in `~/.rustup`. napple_latest.sh puts cargo on PATH, so its builds include cloud saves.
+- Still unverified: the iOS build (`tools/build_ios.sh` not changed or run), the Keychain path in this run (file store used), conflict path on a real
+  title, a real S3 bucket.

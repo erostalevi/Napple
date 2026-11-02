@@ -76,3 +76,4 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | Item | Orchestration | Integrator file | Goal |
 |---|---|---|---|
 | napple-account | [napple-account.md](orchestrations/napple-account.md) | [claude-napple-account-2026-11-02-r8.md](integrators/claude-napple-account-2026-11-02-r8.md) | the Napple Account server: sign-in, devices, JWT/JWKS, E2E save-key exchange, profiles with reserved names, cloud-save metadata (no billing) |
+| cloud-saves-client | [cloud-saves-client.md](orchestrations/cloud-saves-client.md) | [claude-cloud-saves-client-2026-11-02-r8.md](integrators/claude-cloud-saves-client-2026-11-02-r8.md) | end-to-end encrypted cloud saves: napple-cloud crate, runtime hooks, `napple account` / `napple saves` CLI |
