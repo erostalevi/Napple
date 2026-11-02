@@ -20,8 +20,8 @@
   "date": "2026-11-01"
  },
  "gpu_fixed/texture views / sparse": {
-  "status": "partial",
-  "note": "gfx-replay-gaps r3 e896f51: integer views of 3D / cube / 2D-MS now declared texture3d/texturecube/texture2d_ms<uint|int> (t_int_tex 4-6). Still: integer 1D / 1D-array / cube-array / 2D-MS-array views fall back to the float declaration (maxwell_translate.c:3283-3285, Metal validation error), cube-of-2D faces 1-5 replicate face 0 (choice); sparse remap t_sparse; no title uses sparse or integer views",
+  "status": "impl",
+  "note": "gfx-views-raster r4 1859080: integer 1D / 1D-array / cube-array / 2D-MS-array views declared as integer types (IntTex1D/1DArray/CubeArray/2DMSArray, maxwell_translate.c; t_int_tex 7-10 on Metal with the debug layer), 1D-array copies take y as the layer; with r3's 3D/cube/2D-MS every sampled target has an integer view. Sparse: fully resident, tile layout from the C++ accessors (api_texture.c:74-101, t_sparse). Choice kept: cube-of-2D faces 1-5 replicate face 0. No title uses integer views or sparse",
   "date": "2026-11-02"
  },
  "gpu_fixed/indirect draw/dispatch": {
@@ -350,8 +350,8 @@
   "date": "2026-10-26"
  },
  "gpu_fixed/depth/stencil formats": {
-  "status": "partial",
-  "note": "gfx-replay-gaps r3 e896f51: D24/D24S8 texture->buffer readback now packs NVN words (copy_d24_from_tex, mtl_replay.m; t_d24_readback 0/64 words differ), the r2 refusal is gone. Refused branch left: stencil sampling of cube / cube-array / 3D textures fails in the translator (maxwell_translate.c:3289 'only 2D and 2D array stencil views exist'); no title reads back D24 in the scenes reached",
+  "status": "impl",
+  "note": "gfx-views-raster r4 1859080: stencil sampling of cube / cube-array depth-stencil views (StencilTexCube/StencilTexCubeArray, t_stencil_sample face-exact); with r3's D24/D24S8 readback no refused branch left (3D stencil cannot exist: no 3D depth formats on Maxwell/NVN or Metal)",
   "date": "2026-11-02"
  },
  "input/GameCube / Palma / NES styles": {
@@ -420,8 +420,8 @@
   "date": "2026-10-27"
  },
  "applets/web / offline web": {
-  "status": "partial",
-  "note": "am-depth-applets r3 f1b103b: legal-information and system-data offline kinds resolve (applet_web_core.c; system data 0100000000000804 legallines page verified in the web sheet over a running SMO; test_svc_applet_web 219). Refused branch left: a title's own LegalInformation (CNMT content type 5) is not extracted by napple-build (crates/napple-build/src/html.rs only does HtmlDocument), so title legal pages answer not found",
+  "status": "impl",
+  "note": "am-stubs-legal r4 16946e7: napple-build extracts LegalInformation (CNMT type 5) to <data>/legal/; LAS ipnotices page verified in the web sheet on the rebuilt shared data; with r3's system-data and html kinds every offline document kind resolves (applet_web_core.c:402-418); online URLs open in the host web view",
   "date": "2026-11-02"
  },
  "applets/mii edit": {
@@ -436,38 +436,38 @@
  },
  "nvn/nvnCommandBufferBindSeparateTexture": {
   "status": "partial",
-  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "note": "gfx-replay-gaps r3 e896f51 + gfx-views-raster r4 d361621: replay keeps BindSeparate* (+Deferred) per stage, translator pairs (cbuf word | cbuf word) handles, separate textures now get depth/stencil/integer slot masks (sep_masks, t_sep_sampler 3-4). Guessed layout left: GLSLC c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; no title of the four binds them",
   "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateSampler": {
   "status": "partial",
-  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "note": "gfx-replay-gaps r3 e896f51 + gfx-views-raster r4 d361621: replay keeps BindSeparate* (+Deferred) per stage, translator pairs (cbuf word | cbuf word) handles, separate textures now get depth/stencil/integer slot masks (sep_masks, t_sep_sampler 3-4). Guessed layout left: GLSLC c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; no title of the four binds them",
   "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateTextures": {
   "status": "partial",
-  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "note": "gfx-replay-gaps r3 e896f51 + gfx-views-raster r4 d361621: replay keeps BindSeparate* (+Deferred) per stage, translator pairs (cbuf word | cbuf word) handles, separate textures now get depth/stencil/integer slot masks (sep_masks, t_sep_sampler 3-4). Guessed layout left: GLSLC c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; no title of the four binds them",
   "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateSamplers": {
   "status": "partial",
-  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "note": "gfx-replay-gaps r3 e896f51 + gfx-views-raster r4 d361621: replay keeps BindSeparate* (+Deferred) per stage, translator pairs (cbuf word | cbuf word) handles, separate textures now get depth/stencil/integer slot masks (sep_masks, t_sep_sampler 3-4). Guessed layout left: GLSLC c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; no title of the four binds them",
   "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateTexturesDeferred": {
   "status": "partial",
-  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "note": "gfx-replay-gaps r3 e896f51 + gfx-views-raster r4 d361621: replay keeps BindSeparate* (+Deferred) per stage, translator pairs (cbuf word | cbuf word) handles, separate textures now get depth/stencil/integer slot masks (sep_masks, t_sep_sampler 3-4). Guessed layout left: GLSLC c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; no title of the four binds them",
   "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateSamplersDeferred": {
   "status": "partial",
-  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "note": "gfx-replay-gaps r3 e896f51 + gfx-views-raster r4 d361621: replay keeps BindSeparate* (+Deferred) per stage, translator pairs (cbuf word | cbuf word) handles, separate textures now get depth/stencil/integer slot masks (sep_masks, t_sep_sampler 3-4). Guessed layout left: GLSLC c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; no title of the four binds them",
   "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferSetViewportSwizzles": {
-  "status": "stub",
-  "note": "api_cmd.c:832 body is (void) casts: viewport swizzle (single-pass cube/layered rendering) not applied; Metal needs it in the vertex/GS output (translator key)",
-  "date": "2026-11-01"
+  "status": "partial",
+  "note": "gfx-views-raster r4 d361621: OP_VP_SWIZZLE, viewport 0's swizzle applied to the clip position in vertex / tess eval / GS pass-through (t_vp_swizzle). Branch left: per-viewport swizzles (viewports 1-15 take viewport 0's); not applied in capture-only passes; no title calls it",
+  "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferSetProgramSubroutines": {
   "status": "stub",
@@ -491,8 +491,8 @@
  },
  "nvn/nvnCommandBufferSetProvokingVertexMode": {
   "status": "partial",
-  "note": "gfx-nvn-api r2 6c0d0a9: mode recorded and reported once, not applied (needs a translator ShaderKey bit for flat inputs); signature inferred; no title sets a non-default mode",
-  "date": "2026-11-01"
+  "note": "gfx-views-raster r4 d361621: OP_PROVOKING, mode 1 re-emits direct draws last-vertex-first (t_provoking). Left: the 0=first/1=last mapping is a hypothesis (Maxwell register order, no NVN header), indirect and geometry/tess draws keep the first vertex; no title sets mode 1",
+  "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindUniformBuffersDeferred": {
   "status": "partial",
