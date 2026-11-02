@@ -2,7 +2,7 @@
 branch: claude/online-pia-2026-11-02-r7
 orchestration: online-pia (follow-up assignment by message from the orchestrator; no orchestrations/ file)
 base: 193474f (claude/napple-online-2026-11-02-r7 head; the integration froze napple-online at f7c5b68, so this branch also carries 7dde717..193474f: the ssl IoMode / ResultWouldBlock change with its test, and docs)
-head: HEAD_AT_HANDOFF
+head: 94bbb12
 env: mac
 date: 2026-11-02
 areas: [crates/napple-online, runtime/net (net_online*), runtime/services (offline.c ssl functions, via 7dde717)]
