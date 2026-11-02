@@ -31,4 +31,5 @@ reports, nsd and network accounts keep their offline answers (NULL entry points)
   the host trust store), LDN between provider instances and through `ldn:u`, the bsd / ssl / ldn / nifm handlers routing to it. `make -C runtime test
   test-services test-ipc-reference` green.
 - Title boots: see the integrator file (four titles 60 s with and without `NAPPLE_NET=host`, MK8D Online Play).
-- Not done here: the ssl service does not hand ImportServerPki certificates or SetVerifyOption to the provider (offline.c belongs to nifm-netconnect this round).
+- `offline.c` (after merging main once nifm-netconnect had landed): ssl ImportServerPki keeps the certificate; DoHandshake hands the context's CAs and an
+  explicit SetVerifyOption to the provider. Verified through the ssl handlers against the local test server.

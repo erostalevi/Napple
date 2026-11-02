@@ -93,8 +93,8 @@ needs a signed-in account still sees "no account" and ends its online attempt th
 - Two instances on one Mac share the Mac's address: a title that binds one fixed port on every node can only run one node per Mac (use two Macs).
 - The station's user name, the passphrase, the accept policy and MAC filters are not passed to the provider (the service keeps the last three); stations show an
   empty user name. ldn GetIpv4Address still reports the mask 255.255.0.0.
-- The ssl service does not yet hand ImportServerPki certificates or SetVerifyOption to the provider (`offline.c`, not this item's file): through IPC every server is
-  verified against the host trust store with every check on.
+- The ssl service hands the context's ImportServerPki certificates (PEM or DER) and an explicit SetVerifyOption to the provider at DoHandshake; ImportClientPki,
+  client certificates and the console's built-in CA list (GetCertificates) are not used: the host trust store stands in for the latter.
 - TLS 1.0/1.1-only servers are refused; no client certificates.
 
 Tests: `make -C runtime test-net-host` (also part of `test-services`): localhost TCP/UDP, non-blocking connect + poll, timeouts, DNS, nifm, TLS against a
