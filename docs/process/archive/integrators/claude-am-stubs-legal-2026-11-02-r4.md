@@ -6,7 +6,7 @@ head: see `git log -1` (code at b0723bd; docs commits on top)
 env: mac
 date: 2026-11-02
 areas: [crates/napple-build, runtime/services/applet]
-status: ready
+status: integrated
 ---
 
 # claude/am-stubs-legal-2026-11-02-r4: title legal pages, am stub rows made real, offline network-connection applet
@@ -126,3 +126,14 @@ launches NetConnect.
 - `runtime/src/services/offline.c` (nifm, ipc-reference-audit): IRequest::GetAppletInfo should return NetConnect's id (0x0f), mode and argument
   storage, so titles launch the applet this branch answers.
 - napple-latest / integration: rebuild the shared title data so `legal/` exists for every title.
+
+## Integration result
+- Date 2026-11-02, merged into main as f73b8ec (branch head cb539e3), after core-ordering-kernel and ipc-reference-audit. One mechanical conflict: `docs/architecture/runtime-services.md`, both appended sections kept (ipc-reference-audit's, then this one). Outcome: **Small fix**.
+- `integrate:` fixes (both name-only, closing ipc-reference-audit's two leftover `test_ipc_reference -v` notes): c720417 IApplicationFunctions 210 row named `(unnamed)` as in switchbrew and the fixture (was `GetSystemEvent210`); 47baa0a the am storage object's interface string is `IStorage(am)` (was `IStorage`, compared with fsp-srv's fixture: "row 0 is named Open, the reference says Read"). Nothing compares that string; it only shows in logs and in run summaries (`IStorage(am):0`). After them `test_ipc_reference runtime -v | grep "reference says"`: nothing; fixtures 111, missing 0.
+- No native ports: `applet_capture_host.c` already uses the macOS gfx readback; its `#else` branch is a no-op, left as is.
+- Build: gfx lib adapter, frontend, input, audio, runtime: rc 0. `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0, every suite 0 failed (applet 116, applet_ae 52, applet_album 63, applet_am 67, applet_host 539, applet_libs 263, applet_web 219, nifm_audit 122). `cargo test --release -p napple-build`: all ok (lib 53 passed incl. `write_legal_goes_under_legal`, e2e ok). Note: `cargo` is not on the default PATH here; use `PATH=/opt/homebrew/opt/rustup/bin:$PATH` as napple_latest.sh does.
+- SaveCurrentScreenshot: LAS headless 20 s with `NAPPLE_DEBUG_SAVE_SCREENSHOT=12:<file>`: `saved to the album (113675-byte JPEG)`, the JPEG is the storm frame on screen. **verified**.
+- Four-title boots (60 s, ACNH 90 s, shared data, private save roots, run lock): all rc 0, missing_ipc [], unsupported_svcs [], stubbed_ipc only `nvdrv:13`.
+- **Contract with ipc-reference-audit (MK8D Online Play -> NetConnect): not reached on main.** Scripted headless MK8D update run (`NAPPLE_INPUT_SCRIPT=15:A,19:DOWN,20.5:DOWN,22:A`, `NAPPLE_TRACE_IPC=all`): the SDK calls `IRequest` Submit, GetResult (2110-1111), **Cancel**, and only then (1.7 s later) GetAppletInfo. `nifm_request_cancel` (offline_core.c) resets the request's result, so GetAppletInfo answers 2110-1111 and the title never creates the applet; it shows "Connecting..." and goes back to the main menu (no crash). `test_svc_nifm_audit.c:47` pins "Cancel clears the result", so changing it is a design decision, not an integration fix.
+  - Experiment (not landed): a rejected request keeps its result after Cancel (only an accepted one is reset). Then MK8D calls GetAppletInfo, `CreateLibraryApplet id 0xf mode 0`, Start, GetResult, PopOutData, re-Submits, and repeats that 20 times (24.8 s - 30.3 s) before giving up (`DeclareCloseOnlinePlaySession`) and showing "A communication error has occurred." with OK. So the console's network-error result is reachable, but the NetConnect output (`{u32 result; u32 pad}`, [unverified]) makes the SDK retry; the real applet's output layout / result should end the loop at once.
+- Acceptance 2 (legal page in the web sheet) is checked on the shared data rebuilt from final main; result appended below once that rebuild exists.
