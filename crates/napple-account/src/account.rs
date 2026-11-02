@@ -101,12 +101,14 @@ pub async fn delete_me(
         );
     }
     let now = app.now();
-    let keys = {
+    let (keys, photo_keys) = {
         let db = app.db();
+        let photo_keys = crate::profiles::photo_keys_of_account(&db, &a.account_id)?;
         let keys = delete_versions(&db, "account_id = ?1", &[&a.account_id], now)?;
         db.execute("DELETE FROM accounts WHERE id = ?1", [&a.account_id])?;
-        keys
+        (keys, photo_keys)
     };
+    crate::photos::delete_all(&app, photo_keys).await;
     crate::log::info(&format!(
         "account deleted {} ({} save objects queued)",
         a.account_id,
