@@ -71,10 +71,6 @@ static void sc_get_context(IpcObject *s, IpcCall *c) {
     system_context(b);
     ipc_out(c, b, sizeof b);
 }
-static void sc_noop(IpcObject *s, IpcCall *c) {
-    (void)s;
-    (void)c;
-}
 /* ISystemClock::GetOperationEventReadableHandle: the event the clock signals whenever it is set (SetCurrentTime, SetSystemClockContext). Every call hands out a
  * new event; all of them are signalled on a set. */
 static uint32_t g_clock_events[8];
@@ -104,9 +100,11 @@ static const IpcCmd system_clock_cmds[] = {
     {3, "SetSystemClockContext", sc_set, IPC_IMPL},
     {4, "GetOperationEventReadableHandle", sc_operation_event, IPC_IMPL},
 };
+/* SetTestOffset / GetTestOffset keep a TimeSpanType (ns) that the console adds to the steady clock; here it shifts the time point's seconds. */
+static int64_t g_steady_test_offset_ns;
 static void steady_now(IpcObject *s, IpcCall *c) {
     (void)s;
-    int64_t v = steady_seconds();
+    int64_t v = steady_seconds() + __atomic_load_n(&g_steady_test_offset_ns, __ATOMIC_SEQ_CST) / 1000000000ll;
     ipc_out(c, &v, 8);
     ipc_out(c, clock_source, 16);
 }
@@ -115,15 +113,36 @@ static void steady_zero(IpcObject *s, IpcCall *c) {
     int64_t v = 0;
     IPC_OUT(c, v);
 }
-/* The RTC is the host clock in seconds since 2000-01-01 (the Horizon RTC epoch); it never reports a reset, has no test offset and no internal offset. */
+static void steady_false(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = 0;
+    IPC_OUT(c, v);
+}
+static void steady_zero32(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = 0;
+    IPC_OUT(c, v);
+}
+static void steady_get_test_offset(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t v = __atomic_load_n(&g_steady_test_offset_ns, __ATOMIC_SEQ_CST);
+    IPC_OUT(c, v);
+}
+static void steady_set_test_offset(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size >= 8) __atomic_store_n(&g_steady_test_offset_ns, IPC_IN(c, int64_t, 0), __ATOMIC_SEQ_CST);
+}
+/* The RTC is the host clock in seconds since 2000-01-01 (the Horizon RTC epoch); it never reports a reset, setup succeeded and there is no internal offset. */
 static void steady_rtc(IpcObject *s, IpcCall *c) {
     (void)s;
     int64_t v = posix_now() - 946684800;
     IPC_OUT(c, v);
 }
+/* ids per switchbrew 'Glue services': 0 / 2 / 3 time point and test offset, 100-102 RTC value, reset flag, setup result, 200 GetInternalOffset */
 static const IpcCmd steady_clock_cmds[] = {
-    {0, "GetCurrentTimePoint", steady_now, IPC_IMPL}, {2, "GetTestOffset", steady_zero, IPC_IMPL},        {3, "SetTestOffset", sc_noop, IPC_IMPL},
-    {200, "GetRtcValue", steady_rtc, IPC_IMPL},       {201, "IsRtcResetDetected", steady_zero, IPC_IMPL}, {204, "GetInternalOffset", steady_zero, IPC_IMPL},
+    {0, "GetCurrentTimePoint", steady_now, IPC_IMPL},    {2, "GetTestOffset", steady_get_test_offset, IPC_IMPL}, {3, "SetTestOffset", steady_set_test_offset, IPC_IMPL},
+    {100, "GetRtcValue", steady_rtc, IPC_IMPL},          {101, "IsRtcResetDetected", steady_false, IPC_IMPL},     {102, "GetSetupResultValue", steady_zero32, IPC_IMPL},
+    {200, "GetInternalOffset", steady_zero, IPC_IMPL},
 };
 
 /* time zone. The device zone is the host's IANA zone when /etc/localtime points into a zoneinfo directory, else UTC. A TimeZoneRule is an

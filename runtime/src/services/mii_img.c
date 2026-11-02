@@ -17,35 +17,28 @@ static MiiImgDb *img_db(void) {
     return &db;
 }
 static uint32_t arg_u32(const IpcCall *c) { return c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0xffffffffu; }
-static void img_init(IpcObject *s, IpcCall *c) { /* 0 Initialize, 1 Reload: nothing is stored on disk, so there is nothing to (re)load */
+static void img_init(IpcObject *s, IpcCall *c) { /* 0 Initialize, 10 Reload: nothing is stored on disk, so there is nothing to (re)load */
     (void)s;
     (void)c;
     pthread_mutex_lock(&db_lock);
     img_db();
     pthread_mutex_unlock(&db_lock);
 }
-static void img_reset(IpcObject *s, IpcCall *c) { /* 9 DeleteFile, 10 DestroFile, 13 ForceInitialize: the file is gone and the database empty again */
+static void img_reset(IpcObject *s, IpcCall *c) { /* 100 DeleteFile, 101 DestroyFile, 104 ForceInitialize: the file is gone and the database empty again */
     (void)s;
     (void)c;
     pthread_mutex_lock(&db_lock);
     miiimg_init(&db);
     pthread_mutex_unlock(&db_lock);
 }
-static void img_ok(IpcObject *s, IpcCall *c) { /* 12 ExportFile and the reserved rows: there is no file to export (the database is memory only) */
+static void img_ok(IpcObject *s, IpcCall *c) { /* 102 ImportFile, 103 ExportFile and the migration rows: there is no file to export (the database is memory only) */
     (void)s;
     LOGV("mii-img", "command %u (in %u bytes) answered with success", c->cmd, c->in_size);
 }
-static void img_get_count(IpcObject *s, IpcCall *c) { /* 2 GetCount -> s32 */
+static void img_get_count(IpcObject *s, IpcCall *c) { /* 11 GetCount -> s32 */
     (void)s;
     pthread_mutex_lock(&db_lock);
     int32_t n = (int32_t)miiimg_count(img_db());
-    pthread_mutex_unlock(&db_lock);
-    IPC_OUT(c, n);
-}
-static void img_free_slots(IpcObject *s, IpcCall *c) { /* 11 GetFreeSlotCount -> s32 */
-    (void)s;
-    pthread_mutex_lock(&db_lock);
-    int32_t n = (int32_t)miiimg_free_slots(img_db());
     pthread_mutex_unlock(&db_lock);
     IPC_OUT(c, n);
 }
@@ -63,7 +56,7 @@ static void img_is_full(IpcObject *s, IpcCall *c) {
     pthread_mutex_unlock(&db_lock);
     IPC_OUT(c, v);
 }
-static void img_get_attribute(IpcObject *s, IpcCall *c) { /* 5 GetAttribute(u32 index) -> attribute record (0x20 bytes) */
+static void img_get_attribute(IpcObject *s, IpcCall *c) { /* 14 GetAttribute(u32 index) -> attribute record (0x20 bytes) */
     (void)s;
     pthread_mutex_lock(&db_lock);
     MiiImgDb *d = img_db();
@@ -78,7 +71,7 @@ static void img_get_attribute(IpcObject *s, IpcCall *c) { /* 5 GetAttribute(u32 
     }
     ipc_out(c, a, sizeof a);
 }
-static void img_load_image(IpcObject *s, IpcCall *c) { /* 6 LoadImage(u32 index) -> u32 size, JPEG in buffer 0 (a short buffer gets a prefix) */
+static void img_load_image(IpcObject *s, IpcCall *c) { /* 15 LoadImage(u32 index) -> u32 size, JPEG in buffer 0 (a short buffer gets a prefix) */
     (void)s;
     pthread_mutex_lock(&db_lock);
     MiiImgDb *d = img_db();
@@ -94,7 +87,7 @@ static void img_load_image(IpcObject *s, IpcCall *c) { /* 6 LoadImage(u32 index)
     }
     IPC_OUT(c, n);
 }
-/* 7 AddOrUpdateImage(u8 unique id[16]) with the JPEG in input buffer 0; without an image buffer the host generates a face image from the id (miiimg_generate). */
+/* 16 AddOrUpdateImage(u8 unique id[16]) with the JPEG in input buffer 0; without an image buffer the host generates a face image from the id (miiimg_generate). */
 static void img_add(IpcObject *s, IpcCall *c) {
     (void)s;
     if (c->in_size < 16) {
@@ -108,22 +101,33 @@ static void img_add(IpcObject *s, IpcCall *c) {
     pthread_mutex_unlock(&db_lock);
     if (idx < 0) c->result = MIIIMG_R_FULL;
 }
-static void img_delete(IpcObject *s, IpcCall *c) { /* 8 DeleteImages(u32 index) */
+static void img_delete(IpcObject *s, IpcCall *c) { /* 17 DeleteImages(u32 index) */
     (void)s;
     pthread_mutex_lock(&db_lock);
     int r = miiimg_delete_index(img_db(), arg_u32(c));
     pthread_mutex_unlock(&db_lock);
     if (r) c->result = MIIIMG_R_NOT_FOUND;
 }
+/* ids per switchbrew 'Shared Database services' (nn::mii::detail::IImageDatabaseService): 0 Initialize, 10-17 the image calls, 100-104 the file calls, 18-20
+ * (19.0.0 / 20.0.0) the migration calls, whose arguments are not documented: documented defaults. */
 static const IpcCmd img_cmds[] = {
-    {0, "Initialize", img_init, IPC_IMPL},      {1, "Reload", img_init, IPC_IMPL},
-    {2, "GetCount", img_get_count, IPC_IMPL},   {3, "IsEmpty", img_is_empty, IPC_IMPL},
-    {4, "IsFull", img_is_full, IPC_IMPL},       {5, "GetAttribute", img_get_attribute, IPC_IMPL},
-    {6, "LoadImage", img_load_image, IPC_IMPL}, {7, "AddOrUpdateImage", img_add, IPC_IMPL},
-    {8, "DeleteImages", img_delete, IPC_IMPL},  {9, "DeleteFile", img_reset, IPC_IMPL},
-    {10, "DestroFile", img_reset, IPC_IMPL},    {11, "GetFreeSlotCount", img_free_slots, IPC_IMPL},
-    {12, "ExportFile", img_ok, IPC_IMPL},       {13, "ForceInitialize", img_reset, IPC_IMPL},
-    {14, "Reserved14", img_ok, IPC_IMPL},       {15, "Reserved15", img_ok, IPC_IMPL},
+    {0, "Initialize", img_init, IPC_IMPL},
+    {10, "Reload", img_init, IPC_IMPL},
+    {11, "GetCount", img_get_count, IPC_IMPL},
+    {12, "IsEmpty", img_is_empty, IPC_IMPL},
+    {13, "IsFull", img_is_full, IPC_IMPL},
+    {14, "GetAttribute", img_get_attribute, IPC_IMPL},
+    {15, "LoadImage", img_load_image, IPC_IMPL},
+    {16, "AddOrUpdateImage", img_add, IPC_IMPL},
+    {17, "DeleteImages", img_delete, IPC_IMPL},
+    {18, "AddImageForMigration", img_ok, IPC_STUB},
+    {19, "ClearHeaderForMigration", img_ok, IPC_STUB},
+    {20, "SaveHeaderForMigration", img_ok, IPC_STUB},
+    {100, "DeleteFile", img_reset, IPC_IMPL},
+    {101, "DestroyFile", img_reset, IPC_IMPL},
+    {102, "ImportFile", img_ok, IPC_IMPL},
+    {103, "ExportFile", img_ok, IPC_IMPL},
+    {104, "ForceInitialize", img_reset, IPC_IMPL},
 };
 __attribute__((unused)) static void img_root_get(IpcObject *s, IpcCall *c) {
     (void)s;

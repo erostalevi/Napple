@@ -19,13 +19,14 @@ int main(void) {
     mock_ticks = 1000; since_start();                      /* start = 1000 */
     mock_ticks = 1000 + 19200000ull * 60 * 7;
     uint8_t in[16] = {1}; memcpy(in + 8, &g_program_id, 8);
-    svc_call(o, 1, in, sizeof in, &c); CHECK(c.result == 0 && c.out_size == 0x18, "query by application id");
+    svc_call(o, 4, in, sizeof in, &c); CHECK(c.result == 0 && c.out_size == 0x18, "query by application id");
     PdmStats got; memcpy(&got, c.out, sizeof got); CHECK(got.application_id == g_program_id && got.play_minutes == 7 && got.launch_count == 1, "seven minutes since start");
-    uint64_t other = 42; memcpy(in + 8, &other, 8); svc_call(o, 1, in, sizeof in, &c); memcpy(&got, c.out, sizeof got); CHECK(got.application_id == 42 && got.play_minutes == 0, "other id");
-    uint8_t in2[32] = {0}; memcpy(in2 + 8, &g_program_id, 8); svc_call(o, 2, in2, sizeof in2, &c); memcpy(&got, c.out, sizeof got); CHECK(got.play_minutes == 7, "by application id and user");
+    uint64_t other = 42; memcpy(in + 8, &other, 8); svc_call(o, 4, in, sizeof in, &c); memcpy(&got, c.out, sizeof got); CHECK(got.application_id == 42 && got.play_minutes == 0, "other id");
+    uint8_t in2[32] = {0}; memcpy(in2 + 8, &g_program_id, 8); svc_call(o, 5, in2, sizeof in2, &c); memcpy(&got, c.out, sizeof got); CHECK(got.play_minutes == 7, "by application id and user");
 #endif
-    svc_call(o, 6, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no play events");
-    svc_call(o, 7, NULL, 0, &c); CHECK(c.out_size == 12, "event range");
+    svc_call(o, 8, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no play events");
+    svc_call(o, 9, NULL, 0, &c); CHECK(c.out_size == 12, "event range");
+    svc_call(o, 10, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no account events (10 QueryAccountEvent)");
     { /* ipc-local-stubs: the 10.0.0+ numbering of the statistics queries and QueryLastPlayTime */
         g_program_id = 0x0100000000010000ULL;
         uint8_t in[16] = {1}; memcpy(in + 8, &g_program_id, 8);

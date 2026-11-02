@@ -62,7 +62,7 @@ int main(void) {
     IpcObject *bs = bsd_open();
     svc_call(bs, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "RegisterClient answers 0 (SMO aborts on any other value)"); svc_call(bs, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "RegisterClient answers 0 again");
     svc_call(bs, 1, NULL, 0, &c); CHECK(c.result == 0 && bsd_monitored == 1, "StartMonitoring");
-    uint8_t stats[0x50]; memset(stats, 0xcc, sizeof stats); memset(&c, 0, sizeof c); svc_set_out_buf(&c, stats, sizeof stats); svc_call_c(bs, 29, &c);
+    uint8_t stats[0x50]; memset(stats, 0xcc, sizeof stats); memset(&c, 0, sizeof c); svc_set_out_buf(&c, stats, sizeof stats); svc_call_c(bs, 28, &c);
     CHECK(SVC_OUT(&c, int32_t, 0) == 0 && SVC_OUT(&c, int32_t, 4) == 0 && stats[0] == 0 && stats[0x3f] == 0 && stats[0x40] == 0xcc, "GetResourceStatistics: ok, zeroed block");
 
     /* ---- nsd */
@@ -77,8 +77,8 @@ int main(void) {
     svc_call(pr, 40100, NULL, 0, &c); CHECK(c.out[0] == 1, "agreement check on by default");
     uint8_t zero = 0; svc_call(pr, 40101, &zero, 1, &c); svc_call(pr, 40100, NULL, 0, &c); CHECK(c.out[0] == 0, "SetUserAgreementCheckEnabled");
     uint8_t rep[0x40] = {0}; memset(&c, 0, sizeof c); svc_set_in_buf(&c, rep, sizeof rep); svc_call_c(pr, 10100, &c); svc_call_c(pr, 20100, &c);
-    svc_call(pr, 90200, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0x80 && SVC_OUT(&c, uint64_t, 8) == PREPO_STORAGE_LIMIT, "GetStorageUsage counts both reports");
-    svc_call(pr, 90100, NULL, 0, &c); svc_call(pr, 90200, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0, "ClearStorage");
+    svc_call(pr, 30300, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0x80 && SVC_OUT(&c, uint64_t, 8) == PREPO_STORAGE_LIMIT, "GetStorageUsage counts both reports");
+    svc_call(pr, 30100, NULL, 0, &c); svc_call(pr, 30300, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0, "ClearStorage");
     svc_call(pr, 10300, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "nothing is pending transmission");
 
     /* ---- ssl */
@@ -91,8 +91,8 @@ int main(void) {
     svc_call(cx, 3, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "no connections yet");
     svc_call(cx, 2, NULL, 0, &c); IpcObject *cn = c.out_objects[0]; svc_call(cx, 3, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 1, "CreateConnection counts");
     svc_call(cx, 4, NULL, 0, &c); uint64_t p1 = SVC_OUT(&c, uint64_t, 0); svc_call(cx, 5, NULL, 0, &c); uint64_t p2 = SVC_OUT(&c, uint64_t, 0); CHECK(p1 && p2 && p1 != p2, "PKI imports get distinct ids");
-    svc_call(cx, 6, &p1, 8, &c); CHECK(c.result == 0 && ssl_x(cx)->npki == 1 && ssl_x(cx)->pki[0] == p2, "RemovePki drops one id");
-    svc_call(cn, 21, NULL, 0, &c); CHECK(c.result == 0, "FlushSessionCache");
+    svc_call(cx, 6, &p1, 8, &c); CHECK(c.result == 0 && ssl_x(cx)->npki == 1 && ssl_x(cx)->pki[0] == p2, "RemoveServerPki drops one id");
+    svc_call(cn, 19, NULL, 0, &c); CHECK(c.result == 0, "FlushSessionCache");
     ssl_conn_destroy(cn); svc_call(cx, 3, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "destroying a connection uncounts it");
     uint32_t ver = 5; svc_call(sl, 5, &ver, 4, &c); CHECK(ssl_interface_version == 5, "SetInterfaceVersion");
 

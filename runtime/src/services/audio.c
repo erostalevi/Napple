@@ -491,11 +491,11 @@ static void out_get_volume(IpcObject *s, IpcCall *c) {
 }
 static const IpcCmd out_cmds[] = {
     {0, "GetAudioOutState", out_get_state, IPC_IMPL},
-    {1, "StartAudioOut", out_start, IPC_IMPL},
-    {2, "StopAudioOut", out_stop, IPC_IMPL},
+    {1, "Start", out_start, IPC_IMPL},
+    {2, "Stop", out_stop, IPC_IMPL},
     {3, "AppendAudioOutBuffer", out_append, IPC_IMPL},
     {4, "RegisterBufferEvent", out_event, IPC_IMPL},
-    {5, "GetReleasedAudioOutBuffer", out_released, IPC_IMPL},
+    {5, "GetReleasedAudioOutBuffers", out_released, IPC_IMPL},
     {6, "ContainsAudioOutBuffer", out_contains, IPC_IMPL},
     {7, "AppendAudioOutBufferAuto", out_append, IPC_IMPL},
     {8, "GetReleasedAudioOutBuffersAuto", out_released, IPC_IMPL},
@@ -639,19 +639,19 @@ static void in_flush(IpcObject *s, IpcCall *c) {
 }
 static const IpcCmd in_cmds[] = {
     {0, "GetAudioInState", in_get_state, IPC_IMPL},
-    {1, "StartAudioIn", in_start, IPC_IMPL},
-    {2, "StopAudioIn", in_stop, IPC_IMPL},
+    {1, "Start", in_start, IPC_IMPL},
+    {2, "Stop", in_stop, IPC_IMPL},
     {3, "AppendAudioInBuffer", in_append, IPC_IMPL},
     {4, "RegisterBufferEvent", in_event, IPC_IMPL},
-    {5, "GetReleasedAudioInBuffer", in_released, IPC_IMPL},
+    {5, "GetReleasedAudioInBuffers", in_released, IPC_IMPL},
     {6, "ContainsAudioInBuffer", in_contains, IPC_IMPL},
     {7, "AppendUacInBuffer", in_append, IPC_IMPL}, /* USB-audio-class input: {tag}, a copy handle (the UAC event) and the buffer; same device */
     {8, "AppendAudioInBufferAuto", in_append, IPC_IMPL},
     {9, "GetReleasedAudioInBuffersAuto", in_released, IPC_IMPL},
     {10, "AppendUacInBufferAuto", in_append, IPC_IMPL},
     {11, "GetAudioInBufferCount", in_count, IPC_IMPL},
-    {12, "SetAudioInDeviceGain", in_set_gain, IPC_IMPL},
-    {13, "GetAudioInDeviceGain", in_get_gain, IPC_IMPL},
+    {12, "SetDeviceGain", in_set_gain, IPC_IMPL},
+    {13, "GetDeviceGain", in_get_gain, IPC_IMPL},
     {14, "FlushAudioInBuffers", in_flush, IPC_IMPL},
 };
 static void ain_list(IpcObject *s, IpcCall *c) {

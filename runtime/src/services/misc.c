@@ -183,6 +183,30 @@ static void aoc_set_required(IpcObject *s, IpcCall *c) {
     for (unsigned i = 0; i < g_aoc_required_n; i++) g_aoc_required[i] = ids[i];
     pthread_mutex_unlock(&g_aoc_mu);
 }
+/* 11 NotifyMountAddOnContent / 12 NotifyUnmountAddOnContent / 13 IsAddOnContentMountedForDebug: the content itself is read through the fsp-srv data-id open, so
+ * the service only keeps how many mounts the title announced (never below zero) and answers whether any is outstanding. */
+static unsigned g_aoc_mounts;
+static void aoc_notify_mount(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&g_aoc_mu);
+    g_aoc_mounts++;
+    pthread_mutex_unlock(&g_aoc_mu);
+}
+static void aoc_notify_unmount(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&g_aoc_mu);
+    if (g_aoc_mounts) g_aoc_mounts--;
+    pthread_mutex_unlock(&g_aoc_mu);
+}
+static void aoc_is_mounted(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&g_aoc_mu);
+    uint8_t v = g_aoc_mounts != 0;
+    pthread_mutex_unlock(&g_aoc_mu);
+    IPC_OUT(c, v);
+}
 static const IpcCmd aoc_cmds[] = {
     {0, "CountAddOnContentByApplicationId", aoc_count_app, IPC_IMPL},
     {1, "ListAddOnContentByApplicationId", aoc_list_app, IPC_IMPL},
@@ -196,11 +220,10 @@ static const IpcCmd aoc_cmds[] = {
     {8, "GetAddOnContentListChangedEvent", event, IPC_IMPL},
     {9, "GetAddOnContentLostErrorCode", ret_u32_0, IPC_IMPL},
     {10, "GetAddOnContentListChangedEventWithProcessId", event, IPC_IMPL},
-    {11, "NotifyMountAddOnContent", noop, IPC_IMPL},
-    {12, "NotifyUnmountAddOnContent", noop, IPC_IMPL},
-    {13, "NotifyMountAddOnContentWithProcessId", noop, IPC_IMPL},
-    {14, "NotifyUnmountAddOnContentWithProcessId", noop, IPC_IMPL},
-    {50, "CheckAddOnContentMountStatus", noop, IPC_IMPL},
+    {11, "NotifyMountAddOnContent", aoc_notify_mount, IPC_IMPL},
+    {12, "NotifyUnmountAddOnContent", aoc_notify_unmount, IPC_IMPL},
+    {13, "IsAddOnContentMountedForDebug", aoc_is_mounted, IPC_IMPL},
+        {50, "CheckAddOnContentMountStatus", noop, IPC_IMPL},
     {100, "CreateEcPurchasedEventManager", sysd_err_generic, IPC_STUB},
     {101, "CreatePermanentEcPurchasedEventManager", sysd_err_generic, IPC_STUB},
     {110, "CreateContentsServiceManager", sysd_err_generic, IPC_STUB},
@@ -224,11 +247,12 @@ static const IpcCmd pctl_service_cmds[] = {
     {1005, "ConfirmSystemSettingsPermission", noop, IPC_IMPL},
     {1031, "IsRestrictionEnabled", ret_u8_0, IPC_IMPL},
     {1032, "GetSafetyLevel", ret_u32_0, IPC_IMPL},
-    {1035, "IsFreeCommunicationDefaultValue", ret_u8_0, IPC_IMPL},
-    {1018, "IsRestrictionTemporaryUnlocked", ret_u8_0, IPC_IMPL},
-    {1061, "ConfirmStereoVisionPermission", noop, IPC_IMPL},
-    {1062, "EndFreeCommunication", noop, IPC_IMPL},
-    {1451, "IsStereoVisionPermitted", ret_u8_1, IPC_IMPL},
+    {1018, "IsFreeCommunicationAvailable", noop, IPC_IMPL},
+    {1035, "GetCurrentSettings", sysd_z12, IPC_IMPL},
+    {1061, "ConfirmStereoVisionRestrictionConfigurable", noop, IPC_IMPL},
+    {1062, "GetStereoVisionRestriction", ret_u8_0, IPC_IMPL},
+    {1065, "IsStereoVisionPermitted", ret_u8_1, IPC_IMPL},
+    {1451, "StartPlayTimer", noop, IPC_IMPL},
     {1006, "IsRestrictionTemporaryUnlocked", sysd_z1, IPC_IMPL},
     {1007, "RevertRestrictionTemporaryUnlocked", sysd_ok, IPC_IMPL},
     {1008, "EnterRestrictedSystemSettings", sysd_ok, IPC_IMPL},

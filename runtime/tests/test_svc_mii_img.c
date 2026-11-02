@@ -31,27 +31,28 @@ int main(void) {
 
     /* service rows */
     IpcObject *s = img_open(); IpcCall c;
-    svc_call(s, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "GetCount starts at 0");
-    svc_call(s, 3, NULL, 0, &c); CHECK(c.out[0] == 1, "IsEmpty"); svc_call(s, 4, NULL, 0, &c); CHECK(c.out[0] == 0, "not full");
-    svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == (int)MIIIMG_CAPACITY, "GetFreeSlotCount");
-    uint32_t idx = 0; svc_call(s, 5, &idx, 4, &c); CHECK(c.result == MIIIMG_R_NOT_FOUND, "GetAttribute on an empty database: not found");
-    svc_call(s, 6, &idx, 4, &c); CHECK(c.result == MIIIMG_R_NOT_FOUND, "LoadImage on an empty database: not found");
-    svc_call(s, 7, u1, 16, &c); CHECK(c.result == 0, "AddOrUpdateImage without an image generates one");
-    svc_call(s, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "count 1"); svc_call(s, 3, NULL, 0, &c); CHECK(c.out[0] == 0, "not empty");
-    svc_call(s, 5, &idx, 4, &c); CHECK(c.result == 0 && c.out_size == MIIIMG_ATTR_SIZE && !memcmp(c.out, u1, 16) && SVC_OUT(&c, uint32_t, 16) == MIIIMG_GEN_SIZE, "GetAttribute: id, size 96x96");
-    { static uint8_t img[0x4000]; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&idx; c.in_size = 4; svc_set_out_buf(&c, img, sizeof img); svc_call_c(s, 6, &c);
+    svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "GetCount starts at 0");
+    svc_call(s, 12, NULL, 0, &c); CHECK(c.out[0] == 1, "IsEmpty"); svc_call(s, 13, NULL, 0, &c); CHECK(c.out[0] == 0, "not full");
+    uint32_t idx = 0; svc_call(s, 14, &idx, 4, &c); CHECK(c.result == MIIIMG_R_NOT_FOUND, "GetAttribute on an empty database: not found");
+    svc_call(s, 15, &idx, 4, &c); CHECK(c.result == MIIIMG_R_NOT_FOUND, "LoadImage on an empty database: not found");
+    svc_call(s, 16, u1, 16, &c); CHECK(c.result == 0, "AddOrUpdateImage without an image generates one");
+    svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "count 1"); svc_call(s, 12, NULL, 0, &c); CHECK(c.out[0] == 0, "not empty");
+    svc_call(s, 14, &idx, 4, &c); CHECK(c.result == 0 && c.out_size == MIIIMG_ATTR_SIZE && !memcmp(c.out, u1, 16) && SVC_OUT(&c, uint32_t, 16) == MIIIMG_GEN_SIZE, "GetAttribute: id, size 96x96");
+    { static uint8_t img[0x4000]; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&idx; c.in_size = 4; svc_set_out_buf(&c, img, sizeof img); svc_call_c(s, 15, &c);
       uint32_t sz = SVC_OUT(&c, uint32_t, 0); CHECK(c.result == 0 && sz > 200 && sz < sizeof img, "LoadImage returns the size (%u)", sz);
       JpegInfo ji; CHECK(napjpeg_info(img, sz, &ji) == JPEGCORE_OK, "LoadImage returns a decodable JPEG");
-      uint8_t part[16]; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&idx; c.in_size = 4; svc_set_out_buf(&c, part, sizeof part); svc_call_c(s, 6, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 16 && !memcmp(part, img, 16), "a short buffer gets a prefix"); }
-    { uint8_t two[16]; uid(two, 2); static const uint8_t jpg[] = {0xff, 0xd8, 1, 2, 3}; memset(&c, 0, sizeof c); c.in = two; c.in_size = 16; svc_set_in_buf(&c, jpg, sizeof jpg); svc_call_c(s, 7, &c);
-      CHECK(c.result == 0, "AddOrUpdateImage with a supplied image"); idx = 1; svc_call(s, 5, &idx, 4, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 24) == 5, "the supplied image is stored as given"); }
-    svc_call(s, 7, NULL, 0, &c); CHECK(c.result != 0, "AddOrUpdateImage without an id fails");
-    idx = 0; svc_call(s, 8, &idx, 4, &c); CHECK(c.result == 0, "DeleteImages"); svc_call(s, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "one left");
-    idx = 9; svc_call(s, 8, &idx, 4, &c); CHECK(c.result == MIIIMG_R_NOT_FOUND, "DeleteImages out of range");
-    svc_call(s, 9, NULL, 0, &c); svc_call(s, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "DeleteFile empties the database");
-    svc_call(s, 7, u1, 16, &c); svc_call(s, 13, NULL, 0, &c); svc_call(s, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "ForceInitialize empties it too");
-    svc_call(s, 7, u1, 16, &c); svc_call(s, 0, NULL, 0, &c); svc_call(s, 1, NULL, 0, &c); svc_call(s, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "Initialize and Reload keep the entries");
-    svc_call(s, 12, NULL, 0, &c); CHECK(c.result == 0, "ExportFile: success"); svc_call(s, 14, NULL, 0, &c); svc_call(s, 15, NULL, 0, &c); CHECK(c.result == 0, "reserved rows answer");
+      uint8_t part[16]; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&idx; c.in_size = 4; svc_set_out_buf(&c, part, sizeof part); svc_call_c(s, 15, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 16 && !memcmp(part, img, 16), "a short buffer gets a prefix"); }
+    { uint8_t two[16]; uid(two, 2); static const uint8_t jpg[] = {0xff, 0xd8, 1, 2, 3}; memset(&c, 0, sizeof c); c.in = two; c.in_size = 16; svc_set_in_buf(&c, jpg, sizeof jpg); svc_call_c(s, 16, &c);
+      CHECK(c.result == 0, "AddOrUpdateImage with a supplied image"); idx = 1; svc_call(s, 14, &idx, 4, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 24) == 5, "the supplied image is stored as given"); }
+    svc_call(s, 16, NULL, 0, &c); CHECK(c.result != 0, "AddOrUpdateImage without an id fails");
+    idx = 0; svc_call(s, 17, &idx, 4, &c); CHECK(c.result == 0, "DeleteImages"); svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "one left");
+    idx = 9; svc_call(s, 17, &idx, 4, &c); CHECK(c.result == MIIIMG_R_NOT_FOUND, "DeleteImages out of range");
+    svc_call(s, 100, NULL, 0, &c); svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "DeleteFile empties the database");
+    svc_call(s, 16, u1, 16, &c); svc_call(s, 104, NULL, 0, &c); svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "ForceInitialize empties it too");
+    svc_call(s, 16, u1, 16, &c); svc_call(s, 0, NULL, 0, &c); svc_call(s, 10, NULL, 0, &c); svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "Initialize and Reload keep the entries");
+    svc_call(s, 103, NULL, 0, &c); CHECK(c.result == 0, "ExportFile: success"); svc_call(s, 102, NULL, 0, &c); CHECK(c.result == 0, "ImportFile: success");
+    svc_call(s, 101, NULL, 0, &c); CHECK(c.result == 0, "DestroyFile: success");
+    CHECK(svc_find(s, 1) == NULL && svc_find(s, 9) == NULL && svc_find(s, 11)->status == IPC_IMPL && svc_find(s, 15)->status == IPC_IMPL, "ids follow switchbrew: the old 1-9 numbering is gone");
     printf("{\"test\":\"svc_mii_img\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

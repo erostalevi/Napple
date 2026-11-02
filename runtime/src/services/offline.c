@@ -297,11 +297,50 @@ static void nifm_ip(IpcObject *s, IpcCall *c) {
     uint32_t v = nifm_info(&ni) ? ni.ip : 0;
     IPC_OUT(c, v);
 }
+/* Communication settings of the nifm service (service-wide, shared by all clients): wireless on by default (the console's airplane mode is off), ethernet off (no
+ * LAN adapter), the acceptable network type flags and the Wake-on-WLAN timers are stored as set. */
+static uint8_t nifm_wireless_on = 1, nifm_ethernet_on, nifm_background_requests;
+static uint32_t nifm_acceptable_types, nifm_wowl_wake_time, nifm_wowl_keepalive;
+static uint8_t nifm_default_ip_setting[0x80];
+static uint8_t nifm_flag_in(const IpcCall *c) { return c->in_size >= 1 && IPC_IN(c, uint8_t, 0) ? 1 : 0; }
+static void nifm_set_wireless(IpcObject *s, IpcCall *c) {
+    (void)s;
+    __atomic_store_n(&nifm_wireless_on, nifm_flag_in(c), __ATOMIC_SEQ_CST);
+}
 static void nifm_wireless_enabled(IpcObject *s, IpcCall *c) {
     (void)s;
-    OnlineNetInfo ni;
-    uint8_t v = nifm_info(&ni) && ni.kind != 2;
+    uint8_t v = __atomic_load_n(&nifm_wireless_on, __ATOMIC_SEQ_CST);
     IPC_OUT(c, v);
+}
+static void nifm_set_ethernet(IpcObject *s, IpcCall *c) {
+    (void)s;
+    __atomic_store_n(&nifm_ethernet_on, nifm_flag_in(c), __ATOMIC_SEQ_CST);
+}
+static void nifm_ethernet_enabled(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = __atomic_load_n(&nifm_ethernet_on, __ATOMIC_SEQ_CST);
+    IPC_OUT(c, v);
+}
+static void nifm_set_background(IpcObject *s, IpcCall *c) {
+    (void)s;
+    __atomic_store_n(&nifm_background_requests, nifm_flag_in(c), __ATOMIC_SEQ_CST);
+}
+static void nifm_set_acceptable(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size >= 4) __atomic_store_n(&nifm_acceptable_types, IPC_IN(c, uint32_t, 0), __ATOMIC_SEQ_CST);
+}
+static void nifm_get_acceptable(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = __atomic_load_n(&nifm_acceptable_types, __ATOMIC_SEQ_CST);
+    IPC_OUT(c, v);
+}
+static void nifm_set_wowl_wake(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size >= 4) __atomic_store_n(&nifm_wowl_wake_time, IPC_IN(c, uint32_t, 0), __ATOMIC_SEQ_CST);
+}
+static void nifm_set_wowl_keepalive(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size >= 4) __atomic_store_n(&nifm_wowl_keepalive, IPC_IN(c, uint32_t, 0), __ATOMIC_SEQ_CST);
 }
 static volatile int nifm_accepted_requests; /* requests currently in the accepted state, for IsAnyInternetRequestAccepted */
 static void nifm_any_accepted(IpcObject *s, IpcCall *c) {
@@ -314,9 +353,11 @@ typedef struct {
     uint32_t ev_w[2];
     int counted;
     /* parameters the title set before Submit (nothing without a network reads them, but Submit validates and they read back through the unit tests) */
-    uint32_t requirement_preset, priority, raw_priority, profile_id[4];
-    uint8_t rejectable, persistent, instant, sustainable, confirmation_option;
+    uint32_t requirement_preset, priority, raw_priority, profile_id[4], revision;
+    uint8_t rejectable, persistent, instant, sustainable, confirmation_option, greedy, sharable, kept_in_sleep;
     uint8_t requirement[0x10];
+    int32_t sockets[8];
+    unsigned nsockets;
 } NifmReq; /* the request state machine (offline_core.c) plus the writable ends of its two events */
 static void nifm_uncount(NifmReq *q) {
     if (q->counted) __atomic_sub_fetch(&nifm_accepted_requests, 1, __ATOMIC_SEQ_CST);
@@ -387,6 +428,59 @@ static void nifm_set_persistent(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state
 static void nifm_set_instant(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->instant = nifm_u8(c); }
 static void nifm_set_sustainable(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->sustainable = nifm_u8(c); }
 static void nifm_set_raw_priority(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->raw_priority = nifm_u32(c); }
+static void nifm_set_greedy(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->greedy = nifm_u8(c); }
+static void nifm_set_sharable(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->sharable = nifm_u8(c); }
+static void nifm_set_kept_in_sleep(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->kept_in_sleep = nifm_u8(c); }
+static void nifm_set_revision(IpcObject *s, IpcCall *c) { ((NifmReq *)s->state)->revision = nifm_u32(c); }
+static void nifm_get_revision(IpcObject *s, IpcCall *c) {
+    uint32_t v = ((NifmReq *)s->state)->revision;
+    IPC_OUT(c, v);
+}
+/* GetRequirement: 0x20 bytes of Requirement plus, since 3.0.0, 4 more; the first 0x10 are what SetRequirement stored (zero when the title only chose a preset). */
+static void nifm_get_requirement(IpcObject *s, IpcCall *c) {
+    NifmReq *q = s->state;
+    uint8_t v[0x24] = {0};
+    memcpy(v, q->requirement, sizeof q->requirement);
+    ipc_out(c, v, sizeof v);
+}
+/* GetAppletInfo(u32 theme color) -> buffer {s32 size, data}* ended by size -1, u32 AppletId, u32 LibraryAppletMode, u32 out_size (switchbrew). A request that failed (an
+ * offline console rejects at once) is resolved by the user in the network-connection library applet (netConnect, applet id 0x0f, shown in the foreground, mode 0)
+ * with no extra input storage; a request that did not fail has nothing for an applet to fix. */
+#define NIFM_APPLET_NET_CONNECT 0x0fu
+static void nifm_get_applet_info(IpcObject *s, IpcCall *c) {
+    NifmReq *q = s->state;
+    uint32_t res = nifm_request_result(&q->req);
+    if (!res) {
+        c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+        return;
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    int32_t end = -1;
+    if (b && b->size >= 4) ipc_write_buf(c, b, &end, 4);
+    uint32_t v[3] = {NIFM_APPLET_NET_CONNECT, 0, 4};
+    ipc_out(c, v, 12);
+}
+/* GetAdditionalInfo (undocumented layout): a failed request reports its own failure, a request that did not fail has no additional information. */
+static void nifm_get_additional_info(IpcObject *s, IpcCall *c) {
+    NifmReq *q = s->state;
+    uint32_t res = nifm_request_result(&q->req);
+    c->result = res ? res : HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+}
+/* RegisterSocketDescriptor / UnregisterSocketDescriptor(s32 fd): the descriptors the request keeps alive (up to 8). */
+static void nifm_register_socket(IpcObject *s, IpcCall *c) {
+    NifmReq *q = s->state;
+    int32_t fd = c->in_size >= 4 ? IPC_IN(c, int32_t, 0) : -1;
+    if (q->nsockets < 8) q->sockets[q->nsockets++] = fd;
+}
+static void nifm_unregister_socket(IpcObject *s, IpcCall *c) {
+    NifmReq *q = s->state;
+    int32_t fd = c->in_size >= 4 ? IPC_IN(c, int32_t, 0) : -1;
+    for (unsigned i = 0; i < q->nsockets; i++)
+        if (q->sockets[i] == fd) {
+            q->sockets[i] = q->sockets[--q->nsockets];
+            return;
+        }
+}
 static const IpcCmd nifm_request_cmds[] = {
     {0, "GetRequestState", nifm_req_state, IPC_IMPL},
     {1, "GetResult", nifm_req_result, IPC_IMPL},
@@ -403,16 +497,16 @@ static const IpcCmd nifm_request_cmds[] = {
     {13, "SetInstant", nifm_set_instant, IPC_IMPL},
     {14, "SetSustainable", nifm_set_sustainable, IPC_IMPL},
     {15, "SetRawPriority", nifm_set_raw_priority, IPC_IMPL},
-    {16, "SetGreedy", sysd_ok, IPC_STUB},
-    {17, "SetSharable", sysd_ok, IPC_STUB},
-    {18, "SetRequirementByRevision", sysd_ok, IPC_STUB},
-    {19, "GetRequirement", sysd_err_net, IPC_STUB},
-    {20, "GetRevision", sysd_z4, IPC_STUB},
-    {21, "GetAppletInfo", sysd_err_net, IPC_STUB},
-    {22, "GetAdditionalInfo", sysd_err_net, IPC_STUB},
-    {23, "SetKeptInSleep", sysd_ok, IPC_STUB},
-    {24, "RegisterSocketDescriptor", sysd_ok, IPC_STUB},
-    {25, "UnregisterSocketDescriptor", sysd_ok, IPC_STUB},
+    {16, "SetGreedy", nifm_set_greedy, IPC_IMPL},
+    {17, "SetSharable", nifm_set_sharable, IPC_IMPL},
+    {18, "SetRequirementByRevision", nifm_set_revision, IPC_IMPL},
+    {19, "GetRequirement", nifm_get_requirement, IPC_IMPL},
+    {20, "GetRevision", nifm_get_revision, IPC_IMPL},
+    {21, "GetAppletInfo", nifm_get_applet_info, IPC_IMPL},
+    {22, "GetAdditionalInfo", nifm_get_additional_info, IPC_STUB},
+    {23, "SetKeptInSleep", nifm_set_kept_in_sleep, IPC_IMPL},
+    {24, "RegisterSocketDescriptor", nifm_register_socket, IPC_IMPL},
+    {25, "UnregisterSocketDescriptor", nifm_unregister_socket, IPC_IMPL},
     {26, "GetNetworkAccessStatus", sysd_z4, IPC_STUB},
 };
 static void nifm_create_request(IpcObject *s, IpcCall *c) {
@@ -438,20 +532,28 @@ static void nifm_set_exclusive(IpcObject *s, IpcCall *c) {
     memset(g->exclusive, 0, sizeof g->exclusive);
     memcpy(g->exclusive, c->in, c->in_size < 16 ? c->in_size : 16);
 }
-/* GetDefaultIpSetting: no network profile exists, so the IpSettingData buffer is zero (DHCP, no addresses). */
+/* GetDefaultIpSetting / SetDefaultIpSetting: the IpSettingData buffer (up to 0x80 bytes kept); no profile exists, so it is zero (DHCP, no addresses) until set. */
 static void nifm_default_ip(IpcObject *s, IpcCall *c) {
     (void)s;
     const IpcBuf *b = ipc_out_buf(c, 0);
-    uint8_t z[0x20] = {0};
-    if (b && b->size) ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
+    if (b && b->size) ipc_write_buf(c, b, nifm_default_ip_setting, b->size < sizeof nifm_default_ip_setting ? b->size : sizeof nifm_default_ip_setting);
+}
+static void nifm_set_default_ip(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    if (!b) return;
+    memset(nifm_default_ip_setting, 0, sizeof nifm_default_ip_setting);
+    memcpy(nifm_default_ip_setting, ipc_buf_ptr(b), b->size < sizeof nifm_default_ip_setting ? b->size : sizeof nifm_default_ip_setting);
 }
 static const IpcCmd nifm_general_cmds[] = {
     {1, "GetClientId", nifm_get_client_id, IPC_IMPL},
     {4, "CreateRequest", nifm_create_request, IPC_IMPL},
     {12, "GetCurrentIpAddress", nifm_ip, IPC_IMPL},
-    {15, "GetInternetConnectionStatus", ret_conn_status, IPC_IMPL},
-    {16, "IsWirelessCommunicationEnabled", nifm_wireless_enabled, IPC_IMPL},
-    {17, "GetInternetConnectionStatusEx", ret_conn_status, IPC_IMPL},
+    {16, "SetWirelessCommunicationEnabled", nifm_set_wireless, IPC_IMPL},
+    {17, "IsWirelessCommunicationEnabled", nifm_wireless_enabled, IPC_IMPL},
+    {18, "GetInternetConnectionStatus", ret_conn_status, IPC_IMPL},
+    {19, "SetEthernetCommunicationEnabled", nifm_set_ethernet, IPC_IMPL},
+    {20, "IsEthernetCommunicationEnabled", nifm_ethernet_enabled, IPC_IMPL},
     {21, "IsAnyInternetRequestAccepted", nifm_any_accepted, IPC_IMPL},
     {22, "IsAnyForegroundRequestAccepted", nifm_any_accepted, IPC_IMPL},
     {26, "SetExclusiveClient", nifm_set_exclusive, IPC_IMPL},
@@ -464,28 +566,26 @@ static const IpcCmd nifm_general_cmds[] = {
     {9, "SetNetworkProfile", sysd_err_net, IPC_STUB},
     {10, "RemoveNetworkProfile", sysd_ok, IPC_STUB},
     {14, "CreateTemporaryNetworkProfile", sysd_err_net, IPC_STUB},
-    {18, "GetInternetConnectionStatus", sysd_z4, IPC_STUB},
-    {19, "SetEthernetCommunicationEnabled", sysd_ok, IPC_STUB},
-    {20, "IsEthernetCommunicationEnabled", sysd_z1, IPC_STUB},
+    {15, "GetCurrentIpConfigInfo", sysd_err_net, IPC_STUB},
     {23, "PutToSleep", sysd_ok, IPC_STUB},
     {24, "WakeUp", sysd_ok, IPC_STUB},
     {25, "GetSsidListVersion", sysd_z4, IPC_STUB},
-    {28, "SetDefaultIpSetting", sysd_ok, IPC_STUB},
+    {28, "SetDefaultIpSetting", nifm_set_default_ip, IPC_IMPL},
     {31, "GetTelemetorySystemEventReadableHandle", sysd_err_net, IPC_STUB},
     {33, "ConfirmSystemAvailability", sysd_ok, IPC_STUB},
-    {34, "SetBackgroundRequestEnabled", sysd_ok, IPC_STUB},
+    {34, "SetBackgroundRequestEnabled", nifm_set_background, IPC_IMPL},
     {35, "GetScanData", sysd_err_net, IPC_STUB},
     {36, "GetCurrentAccessPoint", sysd_err_net, IPC_STUB},
     {37, "Shutdown", sysd_ok, IPC_STUB},
     {38, "GetAllowedChannels", sysd_err_net, IPC_STUB},
     {39, "NotifyApplicationSuspended", sysd_ok, IPC_STUB},
-    {40, "SetAcceptableNetworkTypeFlag", sysd_ok, IPC_STUB},
-    {41, "GetAcceptableNetworkTypeFlag", sysd_z4, IPC_STUB},
+    {40, "SetAcceptableNetworkTypeFlag", nifm_set_acceptable, IPC_IMPL},
+    {41, "GetAcceptableNetworkTypeFlag", nifm_get_acceptable, IPC_IMPL},
     {42, "NotifyConnectionStateChanged", sysd_ok, IPC_STUB},
-    {43, "SetWowlDelayedWakeTime", sysd_ok, IPC_STUB},
+    {43, "SetWowlDelayedWakeTime", nifm_set_wowl_wake, IPC_IMPL},
     {44, "IsWiredConnectionAvailable", sysd_z1, IPC_STUB},
     {47, "GetScanData", sysd_err_net, IPC_STUB},
-    {57, "SetWowlTcpKeepAliveTimeout", sysd_ok, IPC_STUB},
+    {57, "SetWowlTcpKeepAliveTimeout", nifm_set_wowl_keepalive, IPC_IMPL},
 };
 static void nifm_gen_destroy(IpcObject *o) { free(o->state); }
 static void nifm_create_general(IpcObject *s, IpcCall *c) {
@@ -535,6 +635,11 @@ static void bsd_resource_stats(IpcObject *s, IpcCall *c) {
     bsd_reply(c, 0, 0);
 }
 static void bsd_fail(IpcCall *c, int err) { bsd_reply(c, -1, err); }
+/* EventFd(initval, flags): the guest descriptor table maps to provider sockets only, so an event descriptor cannot be made: {-1, EOPNOTSUPP} (documented default). */
+static void bsd_eventfd(IpcObject *s, IpcCall *c) {
+    (void)s;
+    bsd_fail(c, HZ_EOPNOTSUPP);
+}
 static void bsd_enoent(IpcObject *s, IpcCall *c) {
     (void)s;
     bsd_fail(c, HZ_ENOENT);
@@ -904,10 +1009,10 @@ static const IpcCmd bsd_cmds[] = {
     {25, "Read", bsd_recv, IPC_IMPL},
     {26, "Close", bsd_close_call, IPC_IMPL},
     {27, "DuplicateSocket", bsd_dup, IPC_IMPL},
-    {29, "GetResourceStatistics", bsd_resource_stats, IPC_IMPL},
-    {30, "RecvMMsg", bsd_recvmmsg, IPC_IMPL},
-    {31, "SendMMsg", bsd_sendmmsg, IPC_IMPL},
-    {28, "GetResourceStatistics", sysd_err_generic, IPC_STUB},
+    {28, "GetResourceStatistics", bsd_resource_stats, IPC_IMPL},
+    {29, "RecvMMsg", bsd_recvmmsg, IPC_IMPL},
+    {30, "SendMMsg", bsd_sendmmsg, IPC_IMPL},
+    {31, "EventFd", bsd_eventfd, IPC_STUB},
     {32, "RegisterResourceStatisticsName", sysd_ok, IPC_STUB},
     {33, "RegisterClientShared", sysd_ok, IPC_STUB},
     {34, "GetSocketStatistics", sysd_err_generic, IPC_STUB},
@@ -1575,26 +1680,31 @@ static void prepo_set_operation_mode(IpcObject *s, IpcCall *c) {
     if (c->in_size >= 4) prepo_operation_mode = IPC_IN(c, uint32_t, 0);
     pthread_mutex_unlock(&prepo_lock);
 }
+/* ids per switchbrew 'BCAT services' (nn::prepo::detail::ipc::IPrepoService): the SaveReport / SaveReportWithUser pairs were renumbered three times (10100 / 10101 up to
+ * 5.1.0, 10102 / 10103 up to 9.2.0, 10104 / 10105 up to 20.5.0, 10106 / 10107 from 21.0.0); all are accepted and counted in the report storage, none is kept. */
 static const IpcCmd prepo_cmds[] = {
-    {10100, "SaveReport", prepo_save, IPC_IMPL},
-    {10101, "SaveReportWithUser", prepo_save, IPC_IMPL},
-    {10102, "SaveReportOld", prepo_save, IPC_IMPL},
-    {10103, "SaveReportWithUserOld", prepo_save, IPC_IMPL},
-    {10104, "SaveReportForApplication", prepo_save, IPC_IMPL},
-    {10105, "SaveReportWithUserForApplication", prepo_save, IPC_IMPL}, /* Animal Crossing 3.0.3 (SDK 20) reports with 10105 */
-    {10200, "RequestImmediateTransmission", noop, IPC_IMPL},           /* offline: queued reports stay queued */
+    {10100, "SaveReportOld", prepo_save, IPC_IMPL},
+    {10101, "SaveReportWithUserOld", prepo_save, IPC_IMPL},
+    {10102, "SaveReportOld2", prepo_save, IPC_IMPL},
+    {10103, "SaveReportWithUserOld2", prepo_save, IPC_IMPL},
+    {10104, "SaveReportOld3", prepo_save, IPC_IMPL},
+    {10105, "SaveReportWithUserOld3", prepo_save, IPC_IMPL}, /* Animal Crossing 3.0.3 (SDK 20) reports with 10105 */
+    {10106, "SaveReport", prepo_save, IPC_IMPL},
+    {10107, "SaveReportWithUser", prepo_save, IPC_IMPL},
+    {10200, "RequestImmediateTransmission", noop, IPC_IMPL}, /* offline: queued reports stay queued */
     {10300, "GetTransmissionStatus", ret_u32_0, IPC_IMPL},
     {10400, "GetSystemSessionId", ret_u64_1, IPC_IMPL},
-    {20100, "SaveSystemReport", prepo_save_system, IPC_IMPL},
-    {20101, "SaveSystemReportWithUser", prepo_save_system, IPC_IMPL},
+    {20100, "SaveSystemReportOld", prepo_save_system, IPC_IMPL},
+    {20101, "SaveSystemReportWithUserOld", prepo_save_system, IPC_IMPL},
+    {20102, "SaveSystemReport", prepo_save_system, IPC_IMPL},
+    {20103, "SaveSystemReportWithUser", prepo_save_system, IPC_IMPL},
+    {20200, "SetOperationMode", prepo_set_operation_mode, IPC_IMPL},
+    {30100, "ClearStorage", prepo_clear_storage, IPC_IMPL},
+    {30300, "GetStorageUsage", prepo_storage_usage, IPC_IMPL},
     {40100, "IsUserAgreementCheckEnabled", prepo_get_agreement, IPC_IMPL},
     {40101, "SetUserAgreementCheckEnabled", prepo_set_agreement, IPC_IMPL},
-    {90100, "ClearStorage", prepo_clear_storage, IPC_IMPL},
-    {90200, "GetStorageUsage", prepo_storage_usage, IPC_IMPL},
-    {20102, "SaveSystemReport", prepo_save_system, IPC_IMPL},    /* the 21.0.0 numbering of 20100 */
-    {20200, "SetOperationMode", prepo_set_operation_mode, IPC_IMPL},
-    {30100, "ClearStorage", prepo_clear_storage, IPC_IMPL},      /* the earlier numbering of 90100 */
     {50100, "ReadAllApplicationReportFiles", sysd_err_generic, IPC_STUB},
+    {90100, "ReadAllReportFiles", sysd_err_generic, IPC_STUB}, /* reports are not kept, so there is nothing to read back */
 };
 static IpcObject *prepo_open(void) { return IPC_OBJECT("prepo:u", prepo_cmds, NULL, NULL); }
 
@@ -1615,7 +1725,7 @@ typedef struct {
     SslCtx *ctx;
     int32_t fd;
     char host[256];
-    uint32_t verify, io_mode, cache_mode, io_timeout;
+    uint32_t verify, io_mode, cache_mode, io_timeout, renegotiation_mode;
     void *conn;
     int established;
 } SslConn;
@@ -1679,6 +1789,14 @@ static void ssl_get_cache(IpcObject *s, IpcCall *c) {
     IPC_OUT(c, k->cache_mode);
 }
 /* 34 SetIoTimeout(u32 milliseconds) / 35 GetIoTimeout -> u32: the connection's I/O timeout (0 = none, the default), kept per connection. */
+static void ssl_set_reneg(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    if (c->in_size >= 4) k->renegotiation_mode = IPC_IN(c, uint32_t, 0);
+}
+static void ssl_get_reneg(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    IPC_OUT(c, k->renegotiation_mode);
+}
 static void ssl_set_io_timeout(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
     if (c->in_size >= 4) k->io_timeout = IPC_IN(c, uint32_t, 0);
@@ -1774,15 +1892,15 @@ static const IpcCmd ssl_connection_cmds[] = {
     {10, "Read", ssl_read, IPC_IMPL},
     {11, "Write", ssl_write, IPC_IMPL},
     {12, "Pending", ssl_pending, IPC_IMPL},
-    {19, "SetSessionCacheMode", ssl_set_cache, IPC_IMPL},
-    {20, "GetSessionCacheMode", ssl_get_cache, IPC_IMPL},
-    {21, "FlushSessionCache", ssl_flush_cache, IPC_IMPL},
+    {19, "FlushSessionCache", ssl_flush_cache, IPC_IMPL},
+    {20, "SetRenegotiationMode", ssl_set_reneg, IPC_IMPL},
+    {21, "GetRenegotiationMode", ssl_get_reneg, IPC_IMPL},
     {9, "DoHandshakeGetServerCert", sysd_err_ssl, IPC_STUB},
     {13, "Peek", sysd_err_ssl, IPC_STUB},
     {14, "Poll", sysd_event, IPC_STUB},
     {15, "GetVerifyCertError", sysd_z4, IPC_STUB},
     {16, "GetNeededServerCertBufferSize", sysd_z4, IPC_STUB},
-    {17, "SetSessionCacheMode", ssl_set_cache, IPC_IMPL}, /* the numbering of the later firmwares for 19 / 20 */
+    {17, "SetSessionCacheMode", ssl_set_cache, IPC_IMPL},
     {18, "GetSessionCacheMode", ssl_get_cache, IPC_IMPL},
     {22, "SetOption", sysd_ok, IPC_STUB},
     {23, "GetOption", sysd_z4, IPC_STUB},
@@ -1851,8 +1969,8 @@ static const IpcCmd ssl_context_cmds[] = {
     {3, "GetConnectionCount", ssl_conn_count, IPC_IMPL},
     {4, "ImportServerPki", ssl_import_pki, IPC_IMPL},
     {5, "ImportClientPki", ssl_import_pki, IPC_IMPL},
-    {6, "RemovePki", ssl_remove_pki, IPC_IMPL},
-    {7, "RemoveClientPki", sysd_ok, IPC_STUB},
+    {6, "RemoveServerPki", ssl_remove_pki, IPC_IMPL},
+    {7, "RemoveClientPki", ssl_remove_pki, IPC_IMPL},
     {8, "RegisterInternalPki", sysd_z8, IPC_STUB},
     {9, "AddPolicyOid", sysd_ok, IPC_STUB},
     {10, "ImportCrl", sysd_z8, IPC_STUB},
