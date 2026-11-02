@@ -7,10 +7,12 @@ use std::sync::{Arc, Mutex};
 use rusqlite::{Connection, OptionalExtension, Row, params};
 use serde::Serialize;
 
+use crate::auth::ProfileInfo;
 use crate::codes;
 use crate::error::ApiError;
+use crate::visibility::Tier;
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS profiles (
@@ -84,6 +86,78 @@ CREATE INDEX IF NOT EXISTS invites_from ON invites(from_profile);
 CREATE INDEX IF NOT EXISTS invites_expires ON invites(expires_ms);
 "#;
 
+/// Added in schema 2 (tiers, stats, recent players, shared lobbies, reports). The new `profiles` columns are added
+/// by `migrate` because `CREATE TABLE IF NOT EXISTS` does not touch an existing table.
+const SCHEMA_V2: &str = r#"
+CREATE TABLE IF NOT EXISTS stats (
+    profile_id TEXT NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,
+    title_id   TEXT NOT NULL,
+    key        TEXT NOT NULL,
+    value      INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, title_id, key)
+);
+
+CREATE TABLE IF NOT EXISTS encounters (
+    profile_id    TEXT NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,
+    other_profile TEXT NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,
+    title_id      TEXT NOT NULL,
+    match_id      TEXT NOT NULL,
+    at_ms         INTEGER NOT NULL,
+    PRIMARY KEY (profile_id, other_profile)
+);
+CREATE INDEX IF NOT EXISTS encounters_at ON encounters(at_ms);
+
+CREATE TABLE IF NOT EXISTS lobbies (
+    lobby_id   TEXT NOT NULL,
+    profile_id TEXT NOT NULL,
+    alias      TEXT NOT NULL,
+    expires_ms INTEGER NOT NULL,
+    PRIMARY KEY (lobby_id, profile_id)
+);
+CREATE INDEX IF NOT EXISTS lobbies_profile ON lobbies(profile_id);
+CREATE INDEX IF NOT EXISTS lobbies_expires ON lobbies(expires_ms);
+
+CREATE TABLE IF NOT EXISTS reports (
+    report_id          TEXT PRIMARY KEY,
+    reporter_profile   TEXT NOT NULL,
+    reporter_account   TEXT NOT NULL,
+    reported_profile   TEXT NOT NULL,
+    reported_account   TEXT NOT NULL,
+    match_id           TEXT,
+    lobby_id           TEXT,
+    reason             TEXT NOT NULL,
+    created_ms         INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reports_created ON reports(created_ms);
+"#;
+
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let mut have = std::collections::HashSet::new();
+    {
+        let mut st = conn.prepare("PRAGMA table_info(profiles)")?;
+        let rows = st.query_map([], |r| r.get::<_, String>(1))?;
+        for r in rows {
+            have.insert(r?);
+        }
+    }
+    for (col, ddl) in [
+        (
+            "tier",
+            "ALTER TABLE profiles ADD COLUMN tier INTEGER NOT NULL DEFAULT 1",
+        ),
+        ("photo", "ALTER TABLE profiles ADD COLUMN photo TEXT"),
+        (
+            "synced_ms",
+            "ALTER TABLE profiles ADD COLUMN synced_ms INTEGER NOT NULL DEFAULT 0",
+        ),
+    ] {
+        if !have.contains(col) {
+            conn.execute_batch(ddl)?;
+        }
+    }
+    conn.execute_batch(SCHEMA_V2)
+}
+
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<Mutex<Connection>>,
@@ -114,6 +188,7 @@ impl Db {
             )));
         }
         conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         conn.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION};"))?;
         Ok(Db {
             conn: Arc::new(Mutex::new(conn)),
@@ -165,9 +240,13 @@ pub struct ProfileRow {
     pub accept_requests: bool,
     pub last_seen_ms: Option<i64>,
     pub visible_last_seen_ms: Option<i64>,
+    pub tier: Tier,
+    pub photo: Option<String>,
+    /// When tier/nickname/photo were last confirmed by the account service (unix ms).
+    pub synced_ms: i64,
 }
 
-const PROFILE_COLS: &str = "profile_id, account_id, friend_code, nickname, icon_id, presence_visibility, appear_offline, accept_requests, last_seen_ms, visible_last_seen_ms";
+const PROFILE_COLS: &str = "profile_id, account_id, friend_code, nickname, icon_id, presence_visibility, appear_offline, accept_requests, last_seen_ms, visible_last_seen_ms, tier, photo, synced_ms";
 
 fn profile_from(r: &Row) -> rusqlite::Result<ProfileRow> {
     Ok(ProfileRow {
@@ -181,6 +260,9 @@ fn profile_from(r: &Row) -> rusqlite::Result<ProfileRow> {
         accept_requests: r.get(7)?,
         last_seen_ms: r.get(8)?,
         visible_last_seen_ms: r.get(9)?,
+        tier: Tier::from_i64(r.get(10)?),
+        photo: r.get(11)?,
+        synced_ms: r.get(12)?,
     })
 }
 
@@ -231,6 +313,8 @@ pub struct ProfileView {
     pub profile_id: String,
     pub nickname: String,
     pub icon_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub photo: Option<String>,
 }
 
 impl From<&ProfileRow> for ProfileView {
@@ -239,6 +323,7 @@ impl From<&ProfileRow> for ProfileView {
             profile_id: p.profile_id.clone(),
             nickname: p.nickname.clone(),
             icon_id: p.icon_id.clone(),
+            photo: p.photo.clone(),
         }
     }
 }
@@ -317,7 +402,7 @@ pub fn friend_presence(
     now_ms: i64,
     timeout_ms: i64,
 ) -> PresenceView {
-    if profile.presence_visibility != "friends" {
+    if profile.presence_visibility != "friends" || profile.tier == Tier::Ghost {
         return PresenceView::offline(None);
     }
     if profile.appear_offline {
@@ -413,20 +498,45 @@ pub fn ensure_profile(
     icon_id: &str,
     now_ms: i64,
 ) -> Result<ProfileRow, ApiError> {
+    let info = ProfileInfo {
+        profile_id: profile_id.into(),
+        nickname: nickname.into(),
+        icon_id: icon_id.into(),
+        tier: 1,
+        photo: None,
+        as_of_ms: now_ms,
+    };
+    ensure_profile_info(c, account_id, &info, now_ms)
+}
+
+/// Same with the tier and photo. An existing row only takes the snapshot when it is newer than what the row already
+/// holds: a 60 s old ownership list must not undo a tier change the directory lookup has just delivered.
+pub fn ensure_profile_info(
+    c: &Connection,
+    account_id: &str,
+    info: &ProfileInfo,
+    now_ms: i64,
+) -> Result<ProfileRow, ApiError> {
+    let profile_id = info.profile_id.as_str();
     if let Some(p) = profile(c, profile_id)? {
-        if p.nickname != nickname || p.icon_id != icon_id || p.account_id != account_id {
+        if p.account_id != account_id {
             c.execute(
-                "UPDATE profiles SET nickname = ?2, icon_id = ?3, account_id = ?4, updated_ms = ?5 WHERE profile_id = ?1",
-                params![profile_id, nickname, icon_id, account_id, now_ms],
+                "UPDATE profiles SET account_id = ?2, updated_ms = ?3 WHERE profile_id = ?1",
+                params![profile_id, account_id, now_ms],
             )?;
-            return must_profile(c, profile_id);
         }
-        return Ok(p);
+        if info.as_of_ms > p.synced_ms {
+            c.execute(
+                "UPDATE profiles SET nickname = ?2, icon_id = ?3, tier = ?4, photo = ?5, synced_ms = ?6, updated_ms = ?7 WHERE profile_id = ?1",
+                params![profile_id, info.nickname, info.icon_id, info.tier, info.photo, info.as_of_ms, now_ms],
+            )?;
+        }
+        return must_profile(c, profile_id);
     }
     let code = unused_code(c)?;
     c.execute(
-        "INSERT INTO profiles (profile_id, account_id, friend_code, nickname, icon_id, created_ms, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-        params![profile_id, account_id, code, nickname, icon_id, now_ms],
+        "INSERT INTO profiles (profile_id, account_id, friend_code, nickname, icon_id, tier, photo, synced_ms, created_ms, updated_ms) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?9)",
+        params![profile_id, account_id, code, info.nickname, info.icon_id, info.tier, info.photo, info.as_of_ms, now_ms],
     )?;
     tracing::info!(profile = profile_id, "profile registered");
     must_profile(c, profile_id)
@@ -955,6 +1065,9 @@ mod tests {
             accept_requests: true,
             last_seen_ms: Some(900),
             visible_last_seen_ms: Some(500),
+            tier: Tier::Public,
+            photo: None,
+            synced_ms: 0,
         };
         let pr = PresenceRow {
             status: "playing".into(),

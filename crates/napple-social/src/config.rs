@@ -53,6 +53,18 @@ pub struct Config {
     pub invites_per_hour: u32,
     /// `NAPPLE_SOCIAL_TRUST_PROXY=1`: take the client IP from the last `X-Forwarded-For` entry (set it behind a load balancer).
     pub trust_proxy: bool,
+    /// `NAPPLE_SOCIAL_SERVICE_TOKEN`: the credential napple-online sends as `X-Napple-Service` to `/encounters` and
+    /// `/internal/*`. Unset: those endpoints refuse everything.
+    pub service_token: Option<String>,
+    /// `NAPPLE_ACCOUNT_SERVICE_TOKEN`: the credential napple-social sends to napple-account to read other profiles' tier.
+    /// Unset: tiers are only learned from each owner's own calls.
+    pub account_service_token: Option<String>,
+    /// `NAPPLE_SOCIAL_PROFILE_TTL_SECS`: how long a profile snapshot (tier, nickname, photo) is trusted, default 10.
+    pub profile_ttl_secs: i64,
+    /// `NAPPLE_SOCIAL_SEARCHES_PER_MIN` per profile, default 30.
+    pub searches_per_min: u32,
+    /// `NAPPLE_SOCIAL_REPORTS_PER_HOUR` per profile, default 10.
+    pub reports_per_hour: u32,
     /// Expected `aud` claim. Fixed to "napple" by the contract; kept here so tests can see it.
     pub audience: String,
 }
@@ -136,6 +148,26 @@ impl Config {
                 1,
             )?,
             trust_proxy: flag("NAPPLE_SOCIAL_TRUST_PROXY"),
+            service_token: get("NAPPLE_SOCIAL_SERVICE_TOKEN"),
+            account_service_token: get("NAPPLE_ACCOUNT_SERVICE_TOKEN"),
+            profile_ttl_secs: num(
+                get("NAPPLE_SOCIAL_PROFILE_TTL_SECS"),
+                "NAPPLE_SOCIAL_PROFILE_TTL_SECS",
+                10,
+                0,
+            )?,
+            searches_per_min: num(
+                get("NAPPLE_SOCIAL_SEARCHES_PER_MIN"),
+                "NAPPLE_SOCIAL_SEARCHES_PER_MIN",
+                30,
+                1,
+            )?,
+            reports_per_hour: num(
+                get("NAPPLE_SOCIAL_REPORTS_PER_HOUR"),
+                "NAPPLE_SOCIAL_REPORTS_PER_HOUR",
+                10,
+                1,
+            )?,
             audience: "napple".into(),
         })
     }
@@ -151,6 +183,10 @@ impl Config {
 
     pub fn profiles_url(&self) -> String {
         format!("{}/account/v1/profiles", self.account_url)
+    }
+
+    pub fn directory_url(&self) -> String {
+        format!("{}/account/v1/internal/profiles", self.account_url)
     }
 
     pub fn db_path(&self) -> PathBuf {
