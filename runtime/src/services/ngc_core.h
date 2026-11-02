@@ -5,7 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
-#define NGC_MAX_WORDS 4096
+#define NGC_MAX_WORDS 8192
 #define NGC_MAX_WORD_LEN 32
 typedef struct {
     uint16_t w[NGC_MAX_WORDS][NGC_MAX_WORD_LEN];
@@ -23,3 +23,8 @@ unsigned ngc_words_load_env(NgcWords *);
 unsigned ngc_check(const NgcWords *, const uint16_t *text, size_t n);
 /* Replaces every matched unit with '*'; returns the number of units masked. */
 size_t ngc_mask(const NgcWords *, uint16_t *text, size_t n);
+/* Adds the words of one firmware NgWord list (system data archive 0100000000000806: UTF-16 big-endian text with a BOM, one pattern per line, a pattern
+ * is ".*word.*" with a backslash escaping the next unit). Lines that use other regular-expression syntax or exceed NGC_MAX_WORD_LEN units are skipped.
+ * Does not clear the list (the caller loads several files, then the version is bumped once with ngc_words_commit). Returns the number of words added. */
+unsigned ngc_words_add_ngword(NgcWords *, const uint8_t *utf16be, size_t n);
+void ngc_words_commit(NgcWords *); /* bumps the content version after a series of adds */

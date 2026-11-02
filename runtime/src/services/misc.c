@@ -161,6 +161,28 @@ static void aoc_prepare_app(IpcObject *s, IpcCall *c) {
  * events never fire, nothing is ever "lost" (error code 0), and mounting or unmounting content has no state to track: the console answers
  * success to Notify(Un)Mount for content that is installed, and CheckAddOnContentMountStatus succeeds for it. These are the real answers for an
  * immutable DLC set (documented no-ops); the actual read access is the fsp-srv data-id open served from the DLC romfs. */
+/* 302 UpdateCachedList: re-reads the add-on content list (the manifest) instead of the list cached at first use, so DLC added to the data directory while the
+ * process runs shows up. 200 SetRequiredAddOnContentsOnContentsAvailabilityTransition(in: u64 ids): remembers which add-on contents the title needs once
+ * contents become available (up to AOC_MAX ids; a later call replaces the list). */
+static uint64_t g_aoc_required[AOC_MAX];
+static unsigned g_aoc_required_n;
+static void aoc_update_cached_list(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&g_aoc_mu);
+    g_aoc_loaded = 0;
+    pthread_mutex_unlock(&g_aoc_mu);
+    aoc_load_once();
+}
+static void aoc_set_required(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint64_t *ids = b && b->size ? ipc_buf_ptr(b) : NULL;
+    pthread_mutex_lock(&g_aoc_mu);
+    g_aoc_required_n = ids ? (unsigned)(b->size / 8 < AOC_MAX ? b->size / 8 : AOC_MAX) : 0;
+    for (unsigned i = 0; i < g_aoc_required_n; i++) g_aoc_required[i] = ids[i];
+    pthread_mutex_unlock(&g_aoc_mu);
+}
 static const IpcCmd aoc_cmds[] = {
     {0, "CountAddOnContentByApplicationId", aoc_count_app, IPC_IMPL},
     {1, "ListAddOnContentByApplicationId", aoc_list_app, IPC_IMPL},
@@ -182,10 +204,10 @@ static const IpcCmd aoc_cmds[] = {
     {100, "CreateEcPurchasedEventManager", sysd_err_generic, IPC_STUB},
     {101, "CreatePermanentEcPurchasedEventManager", sysd_err_generic, IPC_STUB},
     {110, "CreateContentsServiceManager", sysd_err_generic, IPC_STUB},
-    {200, "SetRequiredAddOnContentsOnContentsAvailabilityTransition", sysd_ok, IPC_STUB},
+    {200, "SetRequiredAddOnContentsOnContentsAvailabilityTransition", aoc_set_required, IPC_IMPL},
     {300, "SetupHostAddOnContent", sysd_ok, IPC_STUB},
     {301, "GetRegisteredAddOnContentPath", sysd_err_generic, IPC_STUB},
-    {302, "UpdateCachedList", sysd_ok, IPC_STUB},
+    {302, "UpdateCachedList", aoc_update_cached_list, IPC_IMPL},
 };
 static IpcObject *aoc_open(void) { return IPC_OBJECT("aoc:u", aoc_cmds, NULL, NULL); }
 

@@ -30,12 +30,21 @@ static void logger_log(IpcObject *self, IpcCall *c) {
     text[n] = 0;
     if (n) LOG("guest-log", "[sev %u] %s", severity, text);
 }
+/* 2 TransmitHashedLog / 3 DevNotify: the hashed log entries (a module id and a hash of the format string, with the arguments) cannot be expanded here, but they
+ * are log output all the same: they go to the runtime log next to the readable lines, with the packet's size and severity. */
+static void logger_hashed(IpcObject *self, IpcCall *c) {
+    (void)self;
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const uint8_t *p = b ? ipc_buf_ptr(b) : NULL;
+    if (!p || b->size < 24) return;
+    LOG("guest-log", "[%s, %llu bytes, sev %u]", c->cmd == 2 ? "hashed" : "dev-notify", (unsigned long long)b->size, p[18]);
+}
 static void logger_set_destination(IpcObject *self, IpcCall *c) {
     (void)self;
     (void)c;
 }
 static const IpcCmd logger_cmds[] = {{0, "Log", logger_log, IPC_IMPL}, {1, "SetDestination", logger_set_destination, IPC_IMPL},
-                                      {2, "TransmitHashedLog", sysd_ok, IPC_STUB}, {3, "DevNotify", sysd_ok, IPC_STUB}, {11, "OpenSharedMemoryAccessorForHashedLog", sysd_err_generic, IPC_STUB}};
+                                      {2, "TransmitHashedLog", logger_hashed, IPC_IMPL}, {3, "DevNotify", logger_hashed, IPC_IMPL}, {11, "OpenSharedMemoryAccessorForHashedLog", sysd_err_generic, IPC_STUB}};
 
 static void lm_open_logger(IpcObject *self, IpcCall *c) {
     (void)self;

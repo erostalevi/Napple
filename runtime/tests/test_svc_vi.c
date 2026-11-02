@@ -94,6 +94,25 @@ int main(void) {
         transact(bd, 0, 6, VI_PT_CONNECT, conn, 3, rw); CHECK(vi.producer[6].connected && !vi.producer[5].connected, "binders are independent");
         uint32_t bound[1]; CHECK(transact(bd, 0, 99, VI_PT_QUERY, &what, 1, bound) == 2, "a binder id out of range is answered, not crashed on");
     }
+    { /* ipc-local-stubs: indirect layer rows */
+        IpcObject *vroot = vi_open(), *dsx = sub(vroot, 0), *relay = sub(dsx, 100);
+        IpcCall c;
+        svc_call(dsx, 103, NULL, 0, &c);
+        CHECK(c.result == 0 && c.nout_objects == 1 && !strcmp(c.out_objects[0]->iface, "IHOSBinderDriver") && c.out_objects[0]->ncmds == relay->ncmds, "103 GetIndirectDisplayTransactionService: the same binder driver as the relay service");
+        int64_t wh[2] = {1280, 720};
+        svc_call(dsx, 2460, wh, sizeof wh, &c);
+        CHECK(c.result == 0 && c.out_size == 16 && SVC_OUT(&c, int64_t, 0) == 29 * 0x20000 && SVC_OUT(&c, int64_t, 8) == 0x1000, "2460 GetIndirectLayerImageRequiredMemoryInfo: 1280x720 RGBA rounded up to 0x20000, 0x1000 aligned (got %#llx)", (unsigned long long)SVC_OUT(&c, int64_t, 0));
+        wh[0] = 32; wh[1] = 32;
+        svc_call(dsx, 2460, wh, sizeof wh, &c);
+        CHECK(SVC_OUT(&c, int64_t, 0) == 0x20000, "...a small image still needs one block");
+        wh[0] = 0;
+        svc_call(dsx, 2460, wh, sizeof wh, &c);
+        CHECK(c.result == VI_R_INVALID_RANGE, "...a zero width is out of range");
+        wh[0] = 1 << 20; wh[1] = 1 << 20;
+        svc_call(dsx, 2460, wh, sizeof wh, &c);
+        CHECK(c.result == VI_R_INVALID_RANGE, "...so is an absurd size");
+        CHECK(vi_cmd_is_impl(dsx, 103) && vi_cmd_is_impl(dsx, 2460), "both rows are real now");
+    }
     printf("{\"test\":\"svc_vi\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

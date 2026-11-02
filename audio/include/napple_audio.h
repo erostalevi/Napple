@@ -168,6 +168,10 @@ int napple_audout_flush(napple_audout *o);                     /* releases every
 /* Manual mode for tests: the pacing thread idles and napple_audout_pump consumes `frames` frames from the queue
    immediately (releasing buffers as they finish). */
 void napple_audout_set_manual(napple_audout *o, int manual);
+/* SetAudioOutVolume / GetAudioOutVolume: the stream's own gain, 0.0..1.0 (out-of-range values are clamped, NaN is 0), applied to its samples before they
+   reach the output mix. Default 1.0. */
+void napple_audout_set_volume(napple_audout *o, float volume);
+float napple_audout_get_volume(const napple_audout *o);
 void napple_audout_pump(napple_audout *o, uint32_t frames);
 
 /* ---- audin (nn::audio::AudioIn, audin:u) ----

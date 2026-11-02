@@ -1,15 +1,69 @@
-/* ngc:u (nn::ngc): the profanity filter. Animal Crossing asks for it right after the timezone service during boot. The word lists are not shipped with the
- * runtime, so by default nothing is flagged: Check reports "clean" and Mask returns the text unchanged; a user-supplied list (NAPPLE_NGC_WORDLIST, ngc_core.h) makes both real. Command ids and layouts are from the author's memory of
- * the public documentation (unverified). */
+/* ngc:u (nn::ngc): the profanity filter. Animal Crossing asks for it right after the timezone service during boot. The word lists are the firmware's own
+ * NgWord system data archive (0100000000000806, written by `napple build --firmware` to <title dir>/sysdata/, see ngc_core.h for the list format): every
+ * list in it is loaded, so Check flags and Mask replaces the words the console would. A user-supplied list (NAPPLE_NGC_WORDLIST) wins over the firmware's;
+ * with neither nothing is flagged. Command ids and layouts are from the author's memory of the public documentation (unverified). */
 #include "svc_common.h"
 #include "ngc_core.h"
+#include "romfs_read.h"
 #include "sys_default.h"
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
 
 static NgcWords words;
 static int words_loaded;
+
+static ssize_t fd_read(void *ctx, void *dst, size_t len, uint64_t off) { return pread((int)(intptr_t)ctx, dst, len, (off_t)off); }
+/* Loads every list of the NgWord archive image at `path` (common.txt and 0.txt..15.txt) into `w` (cleared first); the number of words, 0 when the archive is absent. */
+static unsigned ngc_words_load_firmware(NgcWords *w, const char *path) {
+    int fd = open(path, O_RDONLY);
+    if (fd < 0) return 0;
+    off_t size = lseek(fd, 0, SEEK_END);
+    RomfsImg *img = size > 0 ? romfs_img_open(fd_read, (void *)(intptr_t)fd, (uint64_t)size) : NULL;
+    unsigned total = 0;
+    if (img) {
+        ngc_words_clear(w);
+        char name[32];
+        for (int i = -1; i < 16; i++) {
+            if (i < 0) snprintf(name, sizeof name, "/common.txt");
+            else snprintf(name, sizeof name, "/%d.txt", i);
+            uint64_t off, fsz;
+            if (romfs_img_lookup(img, name, &off, &fsz) != ROMFS_FILE || fsz > (1u << 20)) continue;
+            uint8_t *buf = malloc((size_t)fsz);
+            if (buf && romfs_img_read(img, off, fsz, 0, buf, (size_t)fsz) == (ssize_t)fsz) total += ngc_words_add_ngword(w, buf, (size_t)fsz);
+            free(buf);
+        }
+        romfs_img_close(img);
+    }
+    close(fd);
+    return total;
+}
+static void load_words(NgcWords *w) {
+    const char *env = getenv("NAPPLE_NGC_WORDLIST");
+    if (env && *env) {
+        ngc_words_load_env(w);
+        return;
+    }
+    char path[1400];
+    const char *dd = g_cfg.data_dir;
+    unsigned n = 0;
+    if (dd && *dd) {
+        snprintf(path, sizeof path, "%s/sysdata/0100000000000806.bin", dd);
+        n = ngc_words_load_firmware(w, path);
+        if (!n) {
+            snprintf(path, sizeof path, "%s/../sysdata/0100000000000806.bin", dd);
+            n = ngc_words_load_firmware(w, path);
+        }
+    }
+    if (n) {
+        ngc_words_commit(w);
+        LOG("ngc", "%u NG words loaded from the firmware NgWord archive", n);
+    } else ngc_words_clear(w);
+}
 static const NgcWords *wl(void) {
     if (!words_loaded) {
-        ngc_words_load_env(&words);
+        load_words(&words);
         words_loaded = 1;
     }
     return &words;
@@ -48,7 +102,7 @@ static void ngc_mask_call(IpcObject *s, IpcCall *c) {
 static void ngc_reload(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
-    ngc_words_load_env(&words);
+    load_words(&words);
     words_loaded = 1;
 }
 static const IpcCmd ngc_cmds[] = {
@@ -56,8 +110,9 @@ static const IpcCmd ngc_cmds[] = {
     {1, "Check", ngc_check_call, IPC_IMPL},
     {2, "Mask", ngc_mask_call, IPC_IMPL},
     {3, "Reload", ngc_reload, IPC_IMPL},
-    {4, "Check2", sysd_err_generic, IPC_STUB},
-    {5, "Mask2", sysd_err_generic, IPC_STUB},
+    /* 21.0.0+: the second-generation entry points take the same text; the word data behind them is the same archive, so they answer like 1 and 2. */
+    {4, "Check2", ngc_check_call, IPC_IMPL},
+    {5, "Mask2", ngc_mask_call, IPC_IMPL},
 };
 static IpcObject *ngc_open(void) { return IPC_OBJECT("ngc:u", ngc_cmds, NULL, NULL); }
 void service_register_ngc(void) { ipc_register_service("ngc:u", ngc_open); }

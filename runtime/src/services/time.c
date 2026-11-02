@@ -7,6 +7,7 @@
 #include "../timescale.h"
 #include "time_core.h"
 #include "hz_result.h"
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -74,14 +75,34 @@ static void sc_noop(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
 }
+/* ISystemClock::GetOperationEventReadableHandle: the event the clock signals whenever it is set (SetCurrentTime, SetSystemClockContext). Every call hands out a
+ * new event; all of them are signalled on a set. */
+static uint32_t g_clock_events[8];
+static unsigned g_clock_nevents;
+static pthread_mutex_t g_clock_mu = PTHREAD_MUTEX_INITIALIZER;
+static void sc_operation_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t r = 0, w = event_create(&r);
+    pthread_mutex_lock(&g_clock_mu);
+    if (g_clock_nevents < 8) g_clock_events[g_clock_nevents++] = w;
+    pthread_mutex_unlock(&g_clock_mu);
+    ipc_out_copy_handle(c, r);
+}
+static void sc_set(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&g_clock_mu);
+    for (unsigned i = 0; i < g_clock_nevents; i++) event_signal_handle(g_clock_events[i]);
+    pthread_mutex_unlock(&g_clock_mu);
+}
 /* SetCurrentTime / SetSystemClockContext: the guest must never move the Mac's clock, and the system clocks here read the host clock, so a guest set
  * has no effect to record. The console answers success for the privileged setter too (documented no-op, class c). */
 static const IpcCmd system_clock_cmds[] = {
     {0, "GetCurrentTime", sc_get_current_time, IPC_IMPL},
-    {1, "SetCurrentTime", sc_noop, IPC_IMPL},
+    {1, "SetCurrentTime", sc_set, IPC_IMPL},
     {2, "GetSystemClockContext", sc_get_context, IPC_IMPL},
-    {3, "SetSystemClockContext", sc_noop, IPC_IMPL},
-    {4, "GetOperationEventReadableHandle", sysd_event, IPC_STUB},
+    {3, "SetSystemClockContext", sc_set, IPC_IMPL},
+    {4, "GetOperationEventReadableHandle", sc_operation_event, IPC_IMPL},
 };
 static void steady_now(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -107,7 +128,7 @@ static const IpcCmd steady_clock_cmds[] = {
 
 /* time zone. The device zone is the host's IANA zone when /etc/localtime points into a zoneinfo directory, else UTC. A TimeZoneRule is an
  * opaque blob to the guest; ours (time_core.h) says "fixed offset" (UTC family) or "host" (the host's rules, including DST, through localtime_r). */
-static const char *device_zone(void) {
+static const char *host_zone_name(void) {
     static char name[0x24];
     static int done;
     if (!done) {
@@ -123,6 +144,11 @@ static const char *device_zone(void) {
     }
     return name;
 }
+/* SetDeviceLocationName picks one of the zones the host offers (UTC or its own); the device zone is then that one, and the time point of the change is kept for
+ * GetDeviceLocationNameAndUpdatedTime (steady seconds, 0 until the first change). */
+static char g_zone_override[0x24];
+static int64_t g_zone_updated;
+static const char *device_zone(void) { return g_zone_override[0] ? g_zone_override : host_zone_name(); }
 /* Calendar for `t` under the host's rules (utc: no zone). */
 static void host_calendar(int64_t t, int utc, TimeCalendar *cal, TimeCalendarInfo *info) {
     time_t tt = (time_t)t;
@@ -169,7 +195,7 @@ static void tz_location_name(IpcObject *s, IpcCall *c) {
     snprintf(n, sizeof n, "%s", device_zone());
     ipc_out(c, n, sizeof n);
 }
-static int location_total(void) { return strcmp(device_zone(), "UTC") ? 2 : 1; }
+static int location_total(void) { return strcmp(host_zone_name(), "UTC") ? 2 : 1; }
 static void tz_location_count(IpcObject *s, IpcCall *c) {
     (void)s;
     int32_t n = location_total();
@@ -180,7 +206,7 @@ static void tz_location_list(IpcObject *s, IpcCall *c) { /* 3(s32 index) -> name
     int32_t idx = IPC_IN(c, int32_t, 0);
     if (idx < 0) idx = 0;
     const IpcBuf *b = ipc_out_buf(c, 0);
-    const char *names[2] = {"UTC", device_zone()};
+    const char *names[2] = {"UTC", host_zone_name()};
     int written = 0;
     if (b && idx < location_total()) {
         int fit = (int)(b->size / 0x24), avail = location_total() - idx;
@@ -197,7 +223,7 @@ static void tz_load_rule(IpcObject *s, IpcCall *c) { /* 4(LocationName) -> rule 
     (void)s;
     char name[0x25] = {0};
     memcpy(name, ipc_in(c, 0, 0x24), 0x24);
-    int kind = time_location_kind(name, device_zone());
+    int kind = time_location_kind(name, host_zone_name());
     const IpcBuf *b = ipc_out_buf(c, 0);
     if (!kind || !b || b->size < TIME_RULE_SIZE) {
         c->result = HZ_RESULT(HZ_MOD_TIME, 200);
@@ -275,6 +301,27 @@ static void tz_to_posix(IpcObject *s, IpcCall *c) { /* 201: the guest's loaded r
     int ok = !time_to_posix(&cal, have ? r.offset : 0, &t);
     posix_out(c, t, ok);
 }
+/* 1 SetDeviceLocationName(LocationName): only a zone the list offers (kind 0 = not one) is accepted, with the same "time zone not found" error LoadTimeZoneRule gives. */
+static void tz_set_location_name(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char name[0x25] = {0};
+    memcpy(name, ipc_in(c, 0, 0x24), 0x24);
+    if (!time_location_kind(name, host_zone_name())) {
+        c->result = HZ_RESULT(HZ_MOD_TIME, 200);
+        return;
+    }
+    snprintf(g_zone_override, sizeof g_zone_override, "%s", name);
+    g_zone_updated = steady_seconds();
+}
+/* 6 GetDeviceLocationNameAndUpdatedTime -> LocationName (0x24) and the SteadyClockTimePoint of the last change (8-aligned at 0x28: {s64 value, clock source id}). */
+static void tz_location_name_and_time(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t out[0x40] = {0};
+    snprintf((char *)out, 0x24, "%s", device_zone());
+    memcpy(out + 0x28, &g_zone_updated, 8);
+    memcpy(out + 0x30, clock_source, 16);
+    ipc_out(c, out, sizeof out);
+}
 static const IpcCmd timezone_cmds[] = {
     {0, "GetDeviceLocationName", tz_location_name, IPC_IMPL},
     {2, "GetTotalLocationNameCount", tz_location_count, IPC_IMPL},
@@ -285,8 +332,8 @@ static const IpcCmd timezone_cmds[] = {
     {101, "ToCalendarTimeWithMyRule", tz_to_calendar_my_rule, IPC_IMPL},
     {201, "ToPosixTime", tz_to_posix, IPC_IMPL},
     {202, "ToPosixTimeWithMyRule", tz_to_posix_my_rule, IPC_IMPL},
-    {1, "SetDeviceLocationName", sysd_ok, IPC_STUB},
-    {6, "GetDeviceLocationNameAndUpdatedTime", sysd_z60, IPC_STUB},
+    {1, "SetDeviceLocationName", tz_set_location_name, IPC_IMPL},
+    {6, "GetDeviceLocationNameAndUpdatedTime", tz_location_name_and_time, IPC_IMPL},
 };
 
 /* ClockSnapshot (400/401) and the calculations on snapshots (500/501). The "user" and "network" clocks are the same host clock: the host's time
@@ -381,9 +428,19 @@ static void st_auto_correction_get(IpcObject *s, IpcCall *c) {
     uint8_t v = (uint8_t)auto_correction;
     IPC_OUT(c, v);
 }
+static int64_t g_auto_correction_updated; /* steady seconds of the last change of the flag (0 until the guest changes it) */
 static void st_auto_correction_set(IpcObject *s, IpcCall *c) {
     (void)s;
     auto_correction = IPC_IN(c, uint8_t, 0) != 0;
+    g_auto_correction_updated = steady_seconds();
+}
+/* 201 GetStandardUserSystemClockAutomaticCorrectionUpdatedTime -> SteadyClockTimePoint {s64 value, clock source id} of the last change of the flag. */
+static void st_auto_correction_updated(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t out[0x18];
+    memcpy(out, &g_auto_correction_updated, 8);
+    memcpy(out + 8, clock_source, 16);
+    ipc_out(c, out, sizeof out);
 }
 
 static void st_system_clock(IpcObject *s, IpcCall *c) {
@@ -429,7 +486,7 @@ static const IpcCmd static_cmds[] = {
     {401, "GetClockSnapshotFromSystemClockContext", st_get_snapshot_ctx, IPC_IMPL},
     {500, "CalculateStandardUserSystemClockDifferenceByUser", st_user_clock_difference, IPC_IMPL},
     {501, "CalculateSpanBetween", st_span_between, IPC_IMPL},
-    {201, "GetStandardUserSystemClockAutomaticCorrectionUpdatedTime", sysd_z24, IPC_STUB},
+    {201, "GetStandardUserSystemClockAutomaticCorrectionUpdatedTime", st_auto_correction_updated, IPC_IMPL},
 };
 static IpcObject *time_open(void) { return IPC_OBJECT("time:u", static_cmds, NULL, NULL); }
 void service_register_time(void) {
