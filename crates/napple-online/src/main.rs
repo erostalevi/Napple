@@ -12,6 +12,9 @@ const USAGE: &str = "usage: napple-online serve [--listen ADDR:PORT] [--data DIR
   --data     NAPPLE_ONLINE_DATA   accounts and the server key, the only state the server keeps
                                   (default ~/Library/Application Support/Napple/online-server)
   -v         NAPPLE_ONLINE_VERBOSE=1  log every call and every packet
+             NAPPLE_ACCOUNT_URL  http:// base of napple-account: turns on account-JWT logins (JWKS), the match log (<data>/matchlog) and the legacy
+                                 token API off. With NAPPLE_SOCIAL_URL + NAPPLE_SOCIAL_SERVICE_TOKEN it reports encounters and stats;
+                                 NAPPLE_ONLINE_ADMIN_ACCOUNTS (account UUIDs) may call /online/reports and /online/matchlog/export
              NAPPLE_ONLINE_PUBLIC_HOST  the name clients use (reported by /napple/v1/info)
              NAPPLE_ONLINE_PUBLIC_IP    the address reported for clients on the server's own machine (default: its LAN address)
              NAPPLE_ONLINE_NATCHECK_BASE  first UDP port of the NAT check (default 10025: UDP 10025, 10125, 33334, 33335 and the same + 1000; 0 = off)
@@ -86,7 +89,13 @@ fn main() {
             println!("napple-online: NAT check not started (UDP {nat_base}…: {e}); titles that need it cannot matchmake");
         }
     }
-    let server = Arc::new(Server::new(accounts, verbose));
+    let mut server = Server::new(accounts, verbose);
+    if let Some(hub) = napple_online::hub::Hub::from_env(data.join("matchlog")) {
+        println!("napple-online: Napple Account logins on (NAPPLE_ACCOUNT_URL set); self-issued tokens are refused");
+        napple_online::hub::Hub::spawn_maintenance(hub.clone());
+        server = server.with_hub(hub);
+    }
+    let server = Arc::new(server);
     if let Err(e) = napple_online::run(listener, server) {
         eprintln!("napple-online: {e}");
         std::process::exit(1);

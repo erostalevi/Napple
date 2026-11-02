@@ -85,6 +85,8 @@ pub struct Server {
     pub secure_key: [u8; 16],
     pub world: Mutex<World>,
     pub verbose: bool,
+    /// Napple Account / social integration (None = legacy self-issued tokens).
+    pub hub: Option<std::sync::Arc<crate::hub::Hub>>,
 }
 
 fn ok(f: impl FnOnce(&mut Writer)) -> Reply {
@@ -158,7 +160,13 @@ impl Server {
 
     pub fn new(accounts: Accounts, verbose: bool) -> Server {
         let secure_key = kerberos::secure_key(accounts.server_key());
-        Server { accounts, secure_key, world: Mutex::new(World { next_cid: 1, next_call: 1, clients: HashMap::new(), sessions: Sessions::new(), common_data: HashMap::new() }), verbose }
+        Server { accounts, secure_key, world: Mutex::new(World { next_cid: 1, next_call: 1, clients: HashMap::new(), sessions: Sessions::new(), common_data: HashMap::new() }), verbose, hub: None }
+    }
+
+    /// Switches the server to Napple Account JWT logins, the match log and social reporting.
+    pub fn with_hub(mut self, hub: std::sync::Arc<crate::hub::Hub>) -> Server {
+        self.hub = Some(hub);
+        self
     }
 
     /// A secure connection was accepted: the client gets a connection id.
@@ -176,6 +184,11 @@ impl Server {
         let Some(c) = w.clients.remove(&cid) else { return };
         for gid in w.sessions.of(c.pid) {
             self.leave(&mut w, gid, c.pid, notif::PARTICIPANT_DISCONNECTED, "");
+        }
+        if let Some(h) = &self.hub {
+            if !w.clients.values().any(|o| o.pid == c.pid) {
+                h.logout(c.pid);
+            }
         }
     }
 
@@ -200,6 +213,9 @@ impl Server {
     fn leave(&self, w: &mut World, gid: u32, pid: u64, kind: u32, msg: &str) -> bool {
         let old_owner = w.sessions.all.get(&gid).map(|s| s.mm.g.owner);
         let Some(left) = w.sessions.leave(gid, pid) else { return false };
+        if let Some(h) = &self.hub {
+            h.on_leave(gid, pid, left.ended);
+        }
         if left.ended {
             return true;
         }
@@ -219,19 +235,28 @@ impl Server {
 
     fn login(&self, st: &mut AuthState, user: &str, extra: &[u8]) -> Result<(u64, Vec<u8>, String), u32> {
         let token = token_from_extra(extra).ok_or(err::RV_INVALID_USERNAME)?;
+        if let Some(h) = &self.hub {
+            // Napple Account JWT; the game-visible principal derives from the acting profile (see hub.rs)
+            let pid = h.login(&token, user, now_secs()).map_err(|_| err::RV_ACCOUNT_EXPIRED)?;
+            return Ok(self.start_login(st, pid));
+        }
         let claims = self.accounts.verify_token(&token, now_secs()).ok_or(err::RV_ACCOUNT_EXPIRED)?;
         if let Ok(n) = user.trim_end_matches('\0').parse::<u64>() {
             if n != claims.pid {
                 println!("napple-online: login name {n} differs from the token's account {}; the token wins", claims.pid);
             }
         }
+        Ok(self.start_login(st, claims.pid))
+    }
+
+    fn start_login(&self, st: &mut AuthState, pid: u64) -> (u64, Vec<u8>, String) {
         let source_key = random_bytes(16);
         let session = random_bytes(kerberos::SESSION_KEY_LEN);
-        let internal = kerberos::internal_ticket(&self.secure_key, now_secs(), claims.pid, &session);
+        let internal = kerberos::internal_ticket(&self.secure_key, now_secs(), pid, &session);
         let ticket = kerberos::client_ticket(&source_key, &session, SECURE_PID, &internal);
-        st.pid = Some(claims.pid);
+        st.pid = Some(pid);
         st.source_key = source_key.clone();
-        Ok((claims.pid, ticket, hex(&source_key)))
+        (pid, ticket, hex(&source_key))
     }
 
     fn rv_connection_data(w: &mut Writer) {
@@ -288,13 +313,13 @@ impl Server {
                 })
             }
             (PROTO_AUTH, 4) => {
-                let pid = r.string().ok().and_then(|n| n.parse::<u64>().ok()).filter(|p| self.accounts.get(*p).is_some()).unwrap_or(0);
+                let pid = r.string().ok().and_then(|n| n.parse::<u64>().ok()).filter(|p| self.accounts.get(*p).is_some() || self.hub.as_ref().is_some_and(|h| h.known(*p))).unwrap_or(0);
                 ok(|w| {
                     w.pid(pid);
                 })
             }
             (PROTO_AUTH, 5) => {
-                let name = r.pid().ok().filter(|p| self.accounts.get(*p).is_some()).map(|p| p.to_string()).unwrap_or_default();
+                let name = r.pid().ok().filter(|p| self.accounts.get(*p).is_some() || self.hub.as_ref().is_some_and(|h| h.known(*p))).map(|p| self.hub.as_ref().and_then(|h| h.display_name(p)).unwrap_or_else(|| p.to_string())).unwrap_or_default();
                 ok(|w| {
                     w.string(&name);
                 })
@@ -417,6 +442,9 @@ impl Server {
     /// session (10 s, then SessionKeepFailed 2618-0562). Otherwise only the owner hears about others joining.
     fn announce_join(&self, w: &mut World, gid: u32, joiner: u64, msg: &str) {
         let Some(s) = w.sessions.all.get(&gid) else { return };
+        if let Some(h) = &self.hub {
+            h.on_join(gid, joiner);
+        }
         let (owner, n, flags) = (s.mm.g.owner, s.players(), s.mm.g.flags);
         let targets: Vec<u64> = if flags & GATHERING_FLAG_VERBOSE_PARTICIPANTS != 0 {
             let mut v: Vec<u64> = s.participants.iter().map(|p| p.pid).collect();

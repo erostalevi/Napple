@@ -8,6 +8,7 @@
 
 pub mod accounts;
 pub mod ghost;
+pub mod hub;
 pub mod identity;
 pub mod matchlog;
 pub mod reporting;
