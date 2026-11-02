@@ -77,6 +77,30 @@ int main(void) {
     CHECK(aoc_data_id_romfs(0x0100000000011003ULL) == NULL && aoc_data_id_romfs(APP) == NULL, "unknown data ids do not resolve");
     app = 0x0100000000020000ULL; svc_call(o, 4, &app, 8, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0x0100000000021000ULL, "base id by application id");
 
+    { /* ipc-local-stubs: 302 UpdateCachedList re-reads the manifest, 200 keeps the required add-on content ids */
+        char tmp[200]; snprintf(tmp, sizeof tmp, "%s/svc_aoc.XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp"); CHECK(mkdtemp(tmp) != NULL, "temp dir");
+        static char dd[220]; snprintf(dd, sizeof dd, "%s", tmp); g_cfg.data_dir = dd;
+        char mp[300]; snprintf(mp, sizeof mp, "%s/manifest.json", dd);
+        reset(NULL); g_aoc_loaded = 1;
+        svc_call(o, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "the cached list is empty");
+        const char *one = "{\"dlc\":[{\"title_id\":\"0100000000011001\",\"version\":0,\"dir\":\"d1\",\"romfs\":\"romfs.bin\"}]}";
+        FILE *f = fopen(mp, "wb"); fwrite(one, 1, strlen(one), f); fclose(f);
+        svc_call(o, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "...a manifest written later is not seen by the cache");
+        svc_call(o, 302, NULL, 0, &c); CHECK(c.result == 0, "302 UpdateCachedList");
+        svc_call(o, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 1, "...the list now has the DLC");
+        const char *two = "{\"dlc\":[{\"title_id\":\"0100000000011001\",\"version\":0,\"dir\":\"d1\",\"romfs\":\"romfs.bin\"},{\"title_id\":\"0100000000011002\",\"version\":0,\"dir\":\"d2\",\"romfs\":\"romfs.bin\"}]}";
+        f = fopen(mp, "wb"); fwrite(two, 1, strlen(two), f); fclose(f);
+        svc_call(o, 302, NULL, 0, &c); svc_call(o, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 2, "...and picks up a second one on the next update");
+        CHECK(aoc_data_id_romfs(0x0100000000011002ULL) != NULL, "...whose data id resolves");
+        uint64_t ids[3] = {0x0100000000011001ULL, 0x0100000000011002ULL, 0x0100000000011009ULL};
+        memset(&c, 0, sizeof c); svc_set_in_buf(&c, ids, sizeof ids); svc_call_c(o, 200, &c);
+        CHECK(c.result == 0 && g_aoc_required_n == 3 && g_aoc_required[1] == ids[1] && g_aoc_required[2] == ids[2], "200 SetRequiredAddOnContentsOnContentsAvailabilityTransition keeps the ids");
+        memset(&c, 0, sizeof c); svc_set_in_buf(&c, ids, 8); svc_call_c(o, 200, &c);
+        CHECK(g_aoc_required_n == 1, "...a later call replaces the list");
+        svc_call(o, 200, NULL, 0, &c); CHECK(c.result == 0 && g_aoc_required_n == 0, "...an empty request clears it");
+        CHECK(svc_find(o, 200)->status == IPC_IMPL && svc_find(o, 302)->status == IPC_IMPL && svc_find(o, 300)->status == IPC_STUB && svc_find(o, 100)->status == IPC_STUB, "200 and 302 are real; the e-shop and host setup rows stay documented defaults");
+        unlink(mp); rmdir(dd); g_cfg.data_dir = NULL;
+    }
     printf("{\"test\":\"svc_aoc\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

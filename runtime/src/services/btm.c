@@ -77,11 +77,12 @@ static void core_disconnect(IpcObject *s, IpcCall *c) { /* nothing is connected,
     (void)c;
     if (b->conn_w) event_signal_handle(b->conn_w);
 }
-/* Scan filter parameters (1: BleAdvertisePacketParameter, 2: GattAttributeUuid) are constants the system keeps per parameter id; their values are not
- * known here, so an all-zero filter is answered (documented stub: a scan with it would match nothing, which is what the host's scans find anyway). */
+/* Scan filter parameters (1: BleAdvertisePacketParameter, 8 bytes {u16 company id, u8 pattern[6]}; 2: GattAttributeUuid, 0x14 bytes {u32 size, u8 uuid[16]}) are
+ * constants the system keeps per parameter id; their values are not known here, so an all-zero filter of the documented size is answered (documented default: a scan with
+ * it would match nothing, which is what the host's scans find anyway). */
 static void core_filter_param(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_zero(c, c->cmd == 1 ? 0x10 : 0x14); /* [unverified sizes] */
+    ipc_out_zero(c, c->cmd == 1 ? 8 : 0x14);
 }
 static void core_unpair(IpcObject *s, IpcCall *c) { /* 23 / 24: nothing is paired, so there is nothing to remove */
     (void)s;

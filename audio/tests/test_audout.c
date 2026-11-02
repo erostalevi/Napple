@@ -90,6 +90,44 @@ static void t_mono_and_surround(void) {
     CHECK(napple_audout_open(48000, 3, NULL, &o, &rate, &ch) == NAPPLE_AUDIO_E_INVALID, "3 channels rejected");
 }
 
+/* SetAudioOutVolume / GetAudioOutVolume: the stream gain scales what reaches the mix, is clamped to 0..1 and does not change what is released or counted. */
+static void t_volume(void) {
+    static int16_t a[2 * 100];
+    for (int k = 0; k < 100; k++) a[2 * k] = a[2 * k + 1] = 16384; /* 0.5 */
+    napple_audout *o;
+    CHECK(napple_audout_open(0, 0, NULL, &o, NULL, NULL) == 0, "open");
+    napple_audout_set_manual(o, 1);
+    napple_audout_start(o);
+    CHECK(napple_audout_get_volume(o) == 1.0f, "default volume 1.0");
+    float lr[200];
+    napple_audout_append(o, 1, (uint64_t)(uintptr_t)a, sizeof a, 0);
+    napple_audout_pump(o, 100);
+    audout_peek(o, lr, 100);
+    CHECK(nearf(lr[0], 0.5f, 1e-6f) && nearf(lr[199], 0.5f, 1e-6f), "unit gain leaves the samples alone");
+    napple_audout_set_volume(o, 0.25f);
+    CHECK(napple_audout_get_volume(o) == 0.25f, "read back");
+    napple_audout_append(o, 2, (uint64_t)(uintptr_t)a, sizeof a, 0);
+    napple_audout_pump(o, 100);
+    audout_peek(o, lr, 100);
+    CHECK(nearf(lr[0], 0.125f, 1e-6f) && nearf(lr[1], 0.125f, 1e-6f) && nearf(lr[199], 0.125f, 1e-6f), "gain 0.25 scales both channels (%f)", lr[0]);
+    uint64_t tags[4];
+    CHECK(napple_audout_get_released(o, tags, 4) == 2 && napple_audout_played_samples(o) == 200, "gain does not change release or the played count");
+    napple_audout_set_volume(o, 0.f);
+    napple_audout_append(o, 3, (uint64_t)(uintptr_t)a, sizeof a, 0);
+    napple_audout_pump(o, 100);
+    audout_peek(o, lr, 100);
+    CHECK(lr[0] == 0.f && lr[150] == 0.f, "gain 0 is silence");
+    napple_audout_set_volume(o, 3.f);
+    CHECK(napple_audout_get_volume(o) == 1.0f, "above 1 clamps to 1");
+    napple_audout_set_volume(o, -2.f);
+    CHECK(napple_audout_get_volume(o) == 0.f, "below 0 clamps to 0");
+    napple_audout_set_volume(o, NAN);
+    CHECK(napple_audout_get_volume(o) == 0.f, "NaN is 0");
+    napple_audout_close(o);
+    napple_audout_set_volume(NULL, 0.5f);
+    CHECK(napple_audout_get_volume(NULL) == 0.f, "no stream: 0");
+}
+
 static int g_events;
 static void on_buf(void *u) {
     (void)u;
@@ -143,6 +181,7 @@ int main(void) {
     t_mono_and_surround();
     t_realtime_pacing();
     t_resample_44k();
+    t_volume();
     napple_audio_shutdown();
     printf("{\"test\":\"audout\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed ? 1 : 0;

@@ -33,6 +33,7 @@ struct napple_audout {
     uint64_t released[MAX_QUEUED];
     unsigned rcount;
     uint64_t played_frames; /* frames of guest data handed to the engine since open (silence is not counted) */
+    _Atomic float volume;   /* per-stream gain 0..1 (SetAudioOutVolume), applied to the converted samples */
     nae_source *out;
 };
 
@@ -72,6 +73,9 @@ static void consume(napple_audout *o, uint32_t frames) {
         uint64_t left = b->frames - b->done;
         uint32_t n = left < want ? (uint32_t)left : want;
         to_stereo((const int16_t *)(const void *)(b->data + b->done * o->channels * 2), o->channels, n, lr + 2 * produced);
+        float gain = atomic_load_explicit(&o->volume, memory_order_relaxed);
+        if (gain != 1.0f)
+            for (uint32_t k = 0; k < 2 * n; k++) lr[2 * produced + k] *= gain;
         b->done += n;
         o->played_frames += n;
         produced += n;
@@ -125,6 +129,7 @@ int napple_audout_open(uint32_t rate, uint32_t channels, const napple_audio_host
     o->rate = rate;
     o->channels = channels;
     atomic_store(&o->state, 1);
+    atomic_store(&o->volume, 1.0f);
     pthread_mutex_init(&o->lock, NULL);
     o->out = nae_source_create((int)rate);
     if (!o->out) {
@@ -143,6 +148,14 @@ int napple_audout_open(uint32_t rate, uint32_t channels, const napple_audio_host
     *out = o;
     return NAPPLE_AUDIO_OK;
 }
+
+void napple_audout_set_volume(napple_audout *o, float volume) {
+    if (!o) return;
+    if (!(volume > 0.f)) volume = 0.f; /* also NaN */
+    else if (volume > 1.f) volume = 1.f;
+    atomic_store(&o->volume, volume);
+}
+float napple_audout_get_volume(const napple_audout *o) { return o ? atomic_load(&o->volume) : 0.f; }
 
 void napple_audout_close(napple_audout *o) {
     if (!o) return;

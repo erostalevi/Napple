@@ -28,7 +28,8 @@ int main(void) {
     svc_call(core, 33, NULL, 0, &c); CHECK(c.nout_copy == 1, "AcquireBleMtuConfigEvent");
     svc_call(core, 35, NULL, 0, &c); CHECK(c.result != 0, "GetBleMtu needs a connection");
     svc_call(core, 36, NULL, 0, &c); svc_call(core, 37, NULL, 0, &c); CHECK(c.result == 0 && st->data_paths == 0, "data path register / unregister");
-    svc_call(core, 1, NULL, 0, &c); CHECK(c.out_size == 0x10, "GetBleScanFilterParameter: zero filter");
+    svc_call(core, 1, NULL, 0, &c); CHECK(c.out_size == 8, "GetBleScanFilterParameter: a zero 8-byte BleAdvertisePacketParameter (switchbrew size)");
+    svc_call(core, 2, NULL, 0, &c); CHECK(c.out_size == 0x14, "GetBleScanFilterParameter2: a zero 0x14-byte GattAttributeUuid");
     svc_call(core, 10, NULL, 0, &c); CHECK(c.out[0] == 0, "no smart-device results");
     printf("{\"test\":\"svc_btm\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;

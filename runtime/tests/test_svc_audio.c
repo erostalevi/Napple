@@ -54,7 +54,14 @@ int main(void) {
     svc_call(o, 11, NULL, 0, &c); CHECK(c.out[0] == 1, "FlushAudioOutBuffers reports a flush");
     svc_call(o, 11, NULL, 0, &c); CHECK(c.out[0] == 0, "second flush has nothing to do");
     svc_call(o, 10, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 580, "flush does not count as played");
+    svc_call(o, 13, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, float, 0) == 1.0f, "audout volume starts at 1.0");
     float vol = 0.25f; svc_call(o, 12, &vol, 4, &c); svc_call(o, 13, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.25f, "audout volume round trip");
+    CHECK(napple_audout_get_volume(((AudOut *)o->state)->o) == 0.25f, "...the stream's own gain in libnapple_audio is the same value");
+    vol = 7.0f; svc_call(o, 12, &vol, 4, &c); svc_call(o, 13, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 1.0f, "SetAudioOutVolume above 1 clamps to 1.0");
+    vol = -3.0f; svc_call(o, 12, &vol, 4, &c); svc_call(o, 13, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.0f, "...below 0 clamps to 0.0");
+    svc_call(o, 12, NULL, 0, &c); svc_call(o, 13, NULL, 0, &c); CHECK(SVC_OUT(&c, float, 0) == 0.0f, "...a request without a value changes nothing");
+    vol = 0.5f; svc_call(o, 12, &vol, 4, &c);
+    CHECK(svc_find(o, 12)->status == IPC_IMPL && svc_find(o, 13)->status == IPC_IMPL, "IAudioOut 12 and 13 are real now");
 
     /* audin: the first open installs the source named by NAPPLE_AUDIN_SOURCE and the buffers carry it */
     napple_audin_set_source(NULL, NULL);
