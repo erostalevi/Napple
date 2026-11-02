@@ -6,7 +6,7 @@ head: 964216f (code, tests and docs; the commit on top of it adds this file)
 env: mac
 date: 2026-11-02
 areas: [gfx]
-status: ready
+status: integrated
 ---
 
 # claude/gfx-multi-viewport-2026-11-02-r6: viewport arrays, viewport index / layer outputs, layered passes on Metal
@@ -155,3 +155,11 @@ status: ready
 - `.claude/skills/percent-analysis/verified.json`:
   - viewport arrays (`nvnCommandBufferSetViewports` / `SetScissors` / `SetDepthRanges` with first > 0) and layered rendering: tested;
   - the routing is not verified in a title, since no corpus title writes the viewport index or the layer.
+
+## Integration result
+- Date 2026-11-02, merged into main as f57e56f (branch head 62c42e6), third of batch r6. Its base (`claude/leftovers-a32-viewport-docs-2026-11-02-r5`) was already on main. Outcome: **Clean**: one mechanical doc conflict in `docs/architecture/gfx.md` (main's r5 integration had reworded the same viewport-swizzle sentence: the branch's text kept, which drops the now-false "multi-viewport rasterization is not implemented", with main's "since 2026-11-02-r5"), plus one doc commit `integrate: gfx-multi-viewport row in the change archive` (3ee1dce, its Needs; check_docs reported the note as an orphan). No native ports (Metal throughout); the Maxwell translator is left portable on purpose. `TRANSLATOR_VERSION` 20 (main had 19).
+- `make -C gfx`, `make -C gfx adapter`, relinked `make -C runtime GFX=napple` (binary removed first): rc 0, no new warnings (the test build's `nvn_test.h` unused-static warnings are the shared header's, pre-existing).
+- `make -C gfx test`: **ALL TESTS PASSED**, `t_multi_viewport: ok (0 skipped)` under Metal API validation; the 4 known-open SKIPs unchanged (`t_clear_ds` 1, `t_clear_tex` 2, `t_feedback` 1).
+- LAS corpus `NAPPLE_SHADER_CORPUS=/Users/neto/NappleWork/shader-corpus/las gfx/build/tests/t_xlate`: `5767 programs, 5767 translated, 5767 compile with Metal`; `0 write the viewport index, 0 the layer` (5 min).
+- Four-title boots on the main tree (net-host-provider + error-applet-output + this), `MTL_DEBUG_LAYER=1`, `NAPPLE_INPUT_SCRIPT=25:A,40:A,55:A,70:A`, 60 s (ACNH 90 s), run lock, private save copies: SMO, LAS, MK8D, ACNH rc 0, `missing_ipc []`, `unsupported_svcs []`, stubbed only `nvdrv:13`, 0 skipped draws, 0 unimplemented calls, no failed assertion / validation error; frames SMO 2868, LAS 3573, MK8D 3564, ACNH 2678 (warm shader cache; other sessions shared the machine).
+- Still untested (as declared): software-tessellator draws with a viewport-index / layer writer, layered passes with a depth attachment; no title writes the viewport index or layer, so the routing is tested, not verified in a title.

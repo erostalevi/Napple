@@ -6,7 +6,7 @@ base: claude/leftovers-a32-viewport-docs-2026-11-02-r5 (per-viewport swizzles; l
 env: mac
 model: claude-opus-5-5
 depends_on: [leftovers-a32-viewport-docs]
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_cfe1eb24-e8f8-4de9-9612-8b8e842af693 (reused)
 launched_at: 2026-11-02
@@ -32,3 +32,4 @@ NVN exposes 16 viewports and scissors; shaders select one with the ViewportIndex
 Read `orchestrations/ENV-MAC.md` (shared title data read-only, locks, local-only, never ask).
 
 ## Result
+Integrated 2026-11-02 into main as f57e56f (head 62c42e6), outcome **Clean** (gfx.md doc conflict resolved mechanically, change-archive row added). `make -C gfx test` ALL PASSED incl. `t_multi_viewport` under the debug layer; LAS corpus 5767/5767/5767; four-title debug-layer boots clean. No title writes ViewportIndex / Layer. Details: [integrator file](../integrators/claude-gfx-multi-viewport-2026-11-02-r6.md).
