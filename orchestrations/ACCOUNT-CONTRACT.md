@@ -53,3 +53,10 @@ Applies to every user-chosen name: account `display_name`, profile `nickname`, a
   email is in `NAPPLE_ADMIN_EMAILS`; admin endpoints `POST /admin/grants {account_id|email, grant}` / `DELETE ...` (admin JWT required) and a CLI
   subcommand of the server binary (`napple-account admin grant <email> reserved_prefix`). Rejected names return 422 `{reason: "reserved_name"}` with a
   human message; existing names are re-checked when renamed. Tests cover every rule above, including look-alikes.
+
+## Where the user sees it (user decision 2026-11-02)
+Account and cloud-save UI lives **in game, in the settings panel** — the in-game overlay (`frontend/src/overlay.m` on macOS, `frontend/src/ios/panel_ios.m`
+later on iOS) gets a new **Account** tab: sign in (email code / passkey), the linked Napple profile (nickname, icon, switch profile), devices (approve a
+new device, revoke), cloud saves for the running game (status, last sync, version history / restore, conflict choice, sync on/off), and online options
+(room server, online server, presence visibility). **Not in Napple Studio.** The client core (cloud-saves-client) exposes a small C API the overlay calls
+(state query + async actions + change callbacks); the CLI stays for scripting.

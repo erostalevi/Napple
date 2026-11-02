@@ -27,3 +27,6 @@
 
 ## Integration note for napple-social-cloud (r9)
 - Apply the reserved-name rule (ACCOUNT-CONTRACT.md "Reserved names") to any user-visible free text it accepts (presence mode text, labels); it could not be messaged (cloud).
+
+## Next UI item (after r8 lands): account-overlay-ui (macOS)
+- New Account tab in the in-game overlay (`frontend/src/overlay.m`), per ACCOUNT-CONTRACT.md "Where the user sees it"; iOS panel later (iOS parked).
