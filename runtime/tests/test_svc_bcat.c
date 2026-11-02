@@ -175,6 +175,14 @@ int main(void) {
     svc_call(bs, 10100, NULL, 0, &c); IpcObject *pg3 = c.out_objects[0];
     memset(&c, 0, sizeof c); svc_set_out_buf(&c, big, sizeof big); svc_call_c(pg3, 1, &c); memcpy(&res, big + 4, 4);
     CHECK(res == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "no provider: the sync fails offline");
+    { /* ipc-depth-cloud r9: 20101 is the 10101 sync with an explicit application id (no provider here: the sync fails offline like 10100) */
+        svc_call(root, 0, NULL, 0, &c); IpcObject *b2 = c.out_objects[0];
+        uint8_t in20101[8 + BCAT_NAME_SIZE] = {0}; memcpy(in20101 + 8, "news", 4);
+        svc_call(b2, 20101, in20101, sizeof in20101, &c); CHECK(c.result == 0 && c.nout_objects == 1 && !strcmp(c.out_objects[0]->iface, "IDeliveryCacheProgressService"), "20101 returns a progress service");
+        IpcObject *pg4 = c.out_objects[0]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, big, sizeof big); svc_call_c(pg4, 1, &c); memcpy(&res, big + 4, 4);
+        CHECK(res == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "...whose result matches 10100 without a provider");
+        CHECK(svc_find(b2, 20101)->status == IPC_IMPL, "20101 is a real row");
+    }
     printf("{\"test\":\"svc_bcat\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }
