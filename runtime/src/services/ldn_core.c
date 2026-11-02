@@ -237,3 +237,35 @@ int ldn_decode_channel(const uint8_t *in, size_t n, uint16_t *band_mhz, uint16_t
     }
     return *band_mhz && *channel ? 0 : -1;
 }
+
+int ldn_afq_push(LdnActionQueue *q, const uint8_t src[6], const uint8_t bssid[6], uint16_t band, uint16_t channel, const void *data, size_t n) {
+    if (!data || !n || n > LDN_ACTION_FRAME_MAX) return -1;
+    if (q->count >= LDN_AF_QUEUE_MAX) {
+        q->dropped++;
+        return -2;
+    }
+    LdnActionFrame *f = &q->f[(q->head + q->count++) % LDN_AF_QUEUE_MAX];
+    memcpy(f->src, src, 6);
+    memcpy(f->bssid, bssid, 6);
+    f->band = band;
+    f->channel = channel;
+    f->size = (uint32_t)n;
+    memcpy(f->data, data, n);
+    return 0;
+}
+int ldn_afq_pop(LdnActionQueue *q, LdnActionFrame *out) {
+    if (!q->count) return -1;
+    *out = q->f[q->head];
+    q->head = (q->head + 1) % LDN_AF_QUEUE_MAX;
+    q->count--;
+    return 0;
+}
+void ldn_afq_clear(LdnActionQueue *q) { q->head = q->count = 0; }
+void ldn_action_recv_encode(const LdnActionFrame *f, uint32_t size, uint8_t out[LDN_ACTION_RECV_OUT_SIZE]) {
+    memset(out, 0, LDN_ACTION_RECV_OUT_SIZE);
+    memcpy(out, f->src, 6);
+    memcpy(out + 6, f->bssid, 6);
+    memcpy(out + 0xc, &f->band, 2);
+    memcpy(out + 0xe, &f->channel, 2);
+    memcpy(out + 0x10, &size, 4);
+}

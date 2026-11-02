@@ -8,16 +8,18 @@
 #include "online_provider.h"
 #include <pthread.h>
 #include <stdlib.h>
+#include <time.h>
 #include "sys_default.h"
 
 /* The provider's LDN table when it can carry local wireless (ONLINE_CAP_LDN), else NULL: the NullProvider answers apply. */
+int ldn_push_action_frame(uint64_t local_communication_id, const uint8_t src[6], const uint8_t bssid[6], uint16_t band_mhz, uint16_t channel, const void *data, size_t n);
 static const OnlineProvider *ldn_provider(void) {
     const OnlineProvider *p = online_provider();
     return online_has(p, ONLINE_CAP_LDN) ? p : NULL;
 }
 
 struct LdnMonitor;
-typedef struct {
+typedef struct Ldn {
     LdnState state;
     uint32_t event_w;
     LdnConfig cfg;
@@ -31,6 +33,8 @@ typedef struct {
     uint64_t frames_sent;             /* SendActionFrame calls that went out */
     struct LdnMonitor *monitor;       /* the IClientProcessMonitor that holds this client (RegisterClient), or NULL */
     int orphan;                       /* the service object was closed while a monitor still held it */
+    LdnActionQueue afq;               /* received action frames (503), guarded by g_af_mu */
+    struct Ldn *af_next;              /* the registry of live objects ldn_push_action_frame walks */
 } Ldn;
 static LdnState *st(IpcObject *s) { return &((Ldn *)s->state)->state; }
 static void notify(IpcObject *s) {
@@ -317,6 +321,45 @@ static void clients_forget(Ldn *l) {
         if (g_clients[i].ldn == l) g_clients[i].ldn = NULL;
     pthread_mutex_unlock(&g_clients_mu);
 }
+/* Action-frame delivery. The provider side (the room / lan layer) calls ldn_push_action_frame when a type-0x21 frame reaches this node; the frame is queued on every
+ * live local-communication object that enabled action frames (500) for that LocalCommunicationId (0 = every object), and a blocked 503 is woken. */
+static pthread_mutex_t g_af_mu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_af_cv = PTHREAD_COND_INITIALIZER;
+static Ldn *g_af_list;
+static void af_register(Ldn *l) {
+    pthread_mutex_lock(&g_af_mu);
+    l->af_next = g_af_list;
+    g_af_list = l;
+    pthread_mutex_unlock(&g_af_mu);
+}
+static void af_unregister(Ldn *l) {
+    pthread_mutex_lock(&g_af_mu);
+    for (Ldn **p = &g_af_list; *p; p = &(*p)->af_next)
+        if (*p == l) {
+            *p = l->af_next;
+            break;
+        }
+    pthread_mutex_unlock(&g_af_mu);
+}
+/* Returns how many objects queued the frame (0 when nobody listens or the frame is empty / too large). */
+int ldn_push_action_frame(uint64_t local_communication_id, const uint8_t src[6], const uint8_t bssid[6], uint16_t band_mhz, uint16_t channel, const void *data, size_t n) {
+    int queued = 0;
+    pthread_mutex_lock(&g_af_mu);
+    for (Ldn *l = g_af_list; l; l = l->af_next) {
+        uint64_t id;
+        memcpy(&id, l->action_frame_settings, 8);
+        if (!l->action_frame || (local_communication_id && id && id != local_communication_id)) continue;
+        if (ldn_afq_push(&l->afq, src, bssid, band_mhz, channel, data, n) == 0) queued++;
+    }
+    if (queued) pthread_cond_broadcast(&g_af_cv);
+    pthread_mutex_unlock(&g_af_mu);
+    return queued;
+}
+static void af_clear(Ldn *l) {
+    pthread_mutex_lock(&g_af_mu);
+    ldn_afq_clear(&l->afq);
+    pthread_mutex_unlock(&g_af_mu);
+}
 static void l_initialize(IpcObject *s, IpcCall *c) {
     Ldn *l = s->state;
     int fresh = l->state == LDN_NONE;
@@ -326,6 +369,7 @@ static void l_initialize(IpcObject *s, IpcCall *c) {
     l->protocol = LDN_PROTOCOL_NX;
     l->operation_mode = 0; /* Stable */
     l->action_frame = 0;
+    af_clear(l);
     l->home_band = l->home_channel = 0;
     l->tx_power = -1;
     if (c->has_pid && c->pid) clients_add(c->pid, l);
@@ -370,20 +414,28 @@ static void l_enable_action_frame(IpcObject *s, IpcCall *c) {
         c->result = r;
         return;
     }
+    pthread_mutex_lock(&g_af_mu);
     memcpy(l->action_frame_settings, c->in, LDN_ACTION_FRAME_SETTINGS_SIZE);
+    ldn_afq_clear(&l->afq);
     l->action_frame = 1;
+    pthread_mutex_unlock(&g_af_mu);
 }
 static void l_disable_action_frame(IpcObject *s, IpcCall *c) {
     Ldn *l = s->state;
     if (l->state != LDN_INITIALIZED) c->result = LDN_R_INVALID_STATE;
-    else l->action_frame = 0;
+    else {
+        pthread_mutex_lock(&g_af_mu);
+        l->action_frame = 0;
+        ldn_afq_clear(&l->afq);
+        pthread_cond_broadcast(&g_af_cv);
+        pthread_mutex_unlock(&g_af_mu);
+    }
 }
 /* 502 SendActionFrame(type-0x21 frame; MacAddress destination at 0, MacAddress bssid at 6, channel argument at 0xC (ldn_decode_channel), MessageFlagSet at
  * 0x10 [offsets unverified: the page lists the fields in this order, not their offsets]): State AccessPointCreated / Station / StationConnected,
  * ChannelNumber non-zero. The frame goes out over the radio and nobody answers: the OnlineProvider has no action-frame hook, so neither the NullProvider
- * nor NAPPLE_NET=host carries it to another node (an online path needs a provider ldn_send_action_frame / ldn_recv_action_frame pair). Sending into the
+ * nor NAPPLE_NET=host carries it to another node (the receive side is ldn_push_action_frame, below; a send hook is still missing). Sending into the
  * air succeeds, blocking (flag bit0 clear) or not. The buffer limit is lp2p SendToOtherGroup's 0x400 bytes [unverified for ldn]. */
-#define LDN_ACTION_FRAME_MAX 0x400u
 static void l_send_action_frame(IpcObject *s, IpcCall *c) {
     Ldn *l = s->state;
     if (!ldn_state_in(l->state, LDN_STATES(LDN_AP_CREATED, LDN_STATION_OPENED, LDN_STATION_CONNECTED))) {
@@ -398,11 +450,48 @@ static void l_send_action_frame(IpcObject *s, IpcCall *c) {
     }
     l->frames_sent++;
 }
-/* 503 RecvActionFrame: EnableActionFrame must come first (invalid state otherwise). Nothing ever arrives (no provider hook, see 502); the console's answer
- * to a non-blocking receive with nothing queued is not documented, and a blocking one would wait forever, which a service handler cannot do. */
+/* 503 RecvActionFrame(u32 MessageFlagSet; bit 0 set = do not block, as in 502) -> {src mac, bssid, band, channel, u32 size} (ldn_action_recv_encode) + the frame in output
+ * buffer 0. EnableActionFrame must come first (invalid state otherwise). The oldest queued frame is handed out; a frame longer than the buffer is cut and the size says
+ * how many bytes were written. With nothing queued a non-blocking call answers "network not available" (the console's answer is undocumented); a blocking call waits
+ * up to LDN_RECV_WAIT_MS for a push and then answers the same, since a service handler cannot wait forever. */
+#define LDN_RECV_WAIT_MS 200
 static void l_recv_action_frame(IpcObject *s, IpcCall *c) {
     Ldn *l = s->state;
-    c->result = l->action_frame ? HZ_R_LDN_NETWORK_NOT_AVAILABLE : LDN_R_INVALID_STATE;
+    if (!l->action_frame) {
+        c->result = LDN_R_INVALID_STATE;
+        return;
+    }
+    int nonblock = c->in_size >= 4 && (IPC_IN(c, uint32_t, 0) & 1u);
+    LdnActionFrame *f = malloc(sizeof *f);
+    if (!f) {
+        c->result = LDN_R_INVALID_STATE;
+        return;
+    }
+    int got;
+    pthread_mutex_lock(&g_af_mu);
+    got = ldn_afq_pop(&l->afq, f);
+    if (got && !nonblock) {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_nsec += LDN_RECV_WAIT_MS * 1000000L;
+        ts.tv_sec += ts.tv_nsec / 1000000000L;
+        ts.tv_nsec %= 1000000000L;
+        while (!l->afq.count && l->action_frame && pthread_cond_timedwait(&g_af_cv, &g_af_mu, &ts) == 0) {
+        }
+        got = ldn_afq_pop(&l->afq, f);
+    }
+    pthread_mutex_unlock(&g_af_mu);
+    if (got) {
+        free(f);
+        c->result = HZ_R_LDN_NETWORK_NOT_AVAILABLE;
+        return;
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    uint32_t n = b ? (uint32_t)ipc_write_buf(c, b, f->data, f->size) : 0;
+    uint8_t out[LDN_ACTION_RECV_OUT_SIZE];
+    ldn_action_recv_encode(f, n, out);
+    free(f);
+    ipc_out(c, out, sizeof out);
 }
 /* 505 SetHomeChannel(channel argument, ldn_decode_channel): State Station, band 2.4 or 5 GHz, ChannelNumber non-zero; kept. */
 static void l_set_home_channel(IpcObject *s, IpcCall *c) {
@@ -464,7 +553,7 @@ static const IpcCmd local_cmds[] = {
     {500, "EnableActionFrame", l_enable_action_frame, IPC_IMPL},
     {501, "DisableActionFrame", l_disable_action_frame, IPC_IMPL},
     {502, "SendActionFrame", l_send_action_frame, IPC_IMPL},
-    {503, "RecvActionFrame", l_recv_action_frame, IPC_STUB}, /* the "nothing received" answer is undocumented; blocking mode cannot be honoured */
+    {503, "RecvActionFrame", l_recv_action_frame, IPC_IMPL},
     {505, "SetHomeChannel", l_set_home_channel, IPC_IMPL},
     {600, "SetTxPower", l_set_tx_power, IPC_IMPL},
     {601, "ResetTxPower", l_reset_tx_power, IPC_IMPL},
@@ -474,6 +563,7 @@ static void ldn_teardown(Ldn *l) {
     IpcObject o = {.state = l};
     drop_network(&o);
     watch(&o, 0); /* no notification may reach the freed state */
+    af_unregister(l);
     free(l);
 }
 /* An IClientProcessMonitor that registered this client holds a reference to it (switchbrew: the object "is then incref'd and written into the
@@ -490,6 +580,7 @@ static void ldn_local_destroy(IpcObject *o) {
 static void ldn_create_local(IpcObject *s, IpcCall *c) {
     (void)s;
     Ldn *l = calloc(1, sizeof *l);
+    af_register(l);
     ipc_out_object(c, IPC_OBJECT("IUserLocalCommunicationService", local_cmds, l, ldn_local_destroy));
 }
 /* ldn:u 1 CreateClientProcessMonitor [18.0.0+] -> IClientProcessMonitor { 0 RegisterClient(PID, u64 pid_placeholder) }; sdknso uses the pair at the end of
