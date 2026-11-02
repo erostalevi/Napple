@@ -6,7 +6,7 @@ head: 99a5555
 env: mac
 date: 2026-11-02
 areas: [crates/napple-online, runtime/services (offline.c nifm_ip row only), runtime/tests]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/online-race-2026-11-02-r7: the MK8D joiner reaches NAT traversal with the host; not yet the race lobby
@@ -162,3 +162,20 @@ Further two-instance runs (same job setup as below):
 
 ## Needs from other areas
 - None blocking from other sessions for this step. prepo's second buffer to the provider would make the error code visible without a local patch.
+
+## Integration result
+- Date 2026-11-02, merged into main as 7edc80f. Landed head **ab1ebba** (handed off at 41b7a7d, then c22b6a3, f3ac8ef, ab1ebba: docs only after
+  41b7a7d); online-race is final for this round. It contains online-pia (landed before). No conflicts. Outcome: **Clean**.
+- No native ports. `cargo test -p napple-online`: 36 passed. `make -C runtime GFX=napple test-net-online`: 51/0 and 42/0. `make -C runtime GFX=napple
+  test test-services test-ipc-reference`: rc 0 (111 / 1325 / missing 0) with the three updated nifm expectations.
+- Two MK8D instances through a local napple-online (How to test 2; server 127.0.0.1:8757, NAT check base 14025, 95 s, B 5 s after A, one job under the
+  run lock). On ab1ebba: both `matched into gathering 1`, the joiner's `MatchMaking (21) method 41` and `NATTraversal (3) method 3` (host and joiner),
+  then the joiner leaves (MatchMakingExt 1), rejoins, retries (three rounds) and ends with **2618-0502** at 37 s; the host shows no error. Matches
+  the file. **Flaky on this machine (recorded honestly):** of 9 pair runs today on online-pia / online-race / main trees, 5 ended with **both**
+  instances at 2618-0201 about 50 s in, with no GetSessionURLs / NAT traversal at all (the joiner leaves at 27 s); the others reached NAT traversal
+  (joiner 2618-0502 or 2618-0521). Both outcomes appeared on the same binary (main with cloud saves linked: one 0201 run, one passing run), so it is
+  timing, not a build difference; the run lock was busy with other sessions' game runs at the time.
+- Four-title 45 s headless boots, offline and `NAPPLE_NET=host`: SMO, LAS, MK8D, ACNH rc 0, notify-running, `missing_ipc []`, `unsupported_svcs []`,
+  stubbed only `nvdrv:13`.
+- Open: the joiner's 2618-0502 (next step: a NAPPLE_WATCH on MK8D's Pia connect-job state field [job+0x40], in the steering list), the 2618-0201
+  timing variant above, sfdnsres hostent byte order, prepo second buffer.
