@@ -61,6 +61,22 @@ Further two-instance runs (same job setup as below):
      direct one fails.
   3. Read the joiner's Pia packets after the probes (none are sent: the decision is local).
 
+## Update (third round: disassembly of the joiner path)
+- **Error reporting path (game side).** The joiner's error play report is raised from the game's UI-level handler (guest stack: sdk+0x167540 →
+  main+0x38aa0c → main+0x498a04 → 0x498314, a struct copy of the error info). That code only forwards a Pia failure; it does not decide it.
+- **Pia side, located but not traced to the failing condition.** The connect jobs sit at main 0x932xxx–0x933014 (`InetConnectStationJob`:
+  TestCurrentAddress / ResolveCurrentAddress / PrepareNatTraversal / WaitForNatTraversalStarted / WaitForNatTraversalCompleted /
+  TryCurrentAddress, and the `...ByRelay` variants) and 0x99dd..–0x99e5.. (`ConnectStationJob::ConnectionFailed` ×4 call sites, SendConnectionRequest
+  at 0x933014 / 0x9709f4 / 0x99ddc4). The state function at 0x9328f0–0x932abc handles 15000 ms timeouts and a retry counter
+  (`[x19+0x15c]`), and sets error code 0x644a (25674) on exhaustion. The joiner fails after ~150 ms, so a different branch (a
+  `ConnectionFailed` site) fires: the next step is to hook those call sites (NAPPLE_PCPROF or a guest breakpoint on 0x99df54 / 0x99e294 /
+  0x99e420 / 0x99e580 / 0x932aa8 / 0x93285c / 0x932f60) to see which one, and read the registers that feed its compare.
+- **Experiment, no effect (reverted):** not relaying the server's InitiateProbe to a station that has itself just asked to probe the caller.
+- Tool added for this: `scratchpad xref.py` style string-xref (adrp+add) over an `llvm-objdump` of `mkelf.py`'s ELF; see
+  `napple-online-r7/` notes. Not committed.
+- Blocking condition, as far as known: after a *successful* probe exchange the joiner's `InetConnectStationJob` reports failure without
+  sending `SendConnectionRequest`, i.e. before its own connection step, from a path that does not wait for a timeout.
+
 ## Files
 - `runtime/src/services/offline.c`: `nifm_ip` only.
 - `runtime/tests/test_net_host_sock.c`, `runtime/tests/test_svc_online.c`: the host-order expectations.
