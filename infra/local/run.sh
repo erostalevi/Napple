@@ -118,20 +118,26 @@ else
   for b in "${account_cmd[0]}" "${social_cmd[0]}" "${online_cmd[0]}" "${room_cmd[0]}"; do [ -x "$b" ] || { echo "missing binary $b" >&2; exit 1; }; done
 fi
 
+# Service credentials (docs/guides/deploy-servers.md#service-tokens): ONE value is napple-account's NAPPLE_INTERNAL_TOKEN and napple-social's
+# NAPPLE_ACCOUNT_SERVICE_TOKEN (social reads other profiles' tiers); another is napple-social's and napple-online's NAPPLE_SOCIAL_SERVICE_TOKEN
+# (encounters, stats). Random per start unless given in the environment.
+internal_token="${NAPPLE_INTERNAL_TOKEN:-$(openssl rand -hex 24)}"
+social_token="${NAPPLE_SOCIAL_SERVICE_TOKEN:-$(openssl rand -hex 24)}"
 # account first (social fetches its JWKS, online its keys), with the contract names plus the pre-r12 aliases (ignored once unused).
 NAPPLE_ACCOUNT_BIND="127.0.0.1:$ACCOUNT_PORT" NAPPLE_ACCOUNT_DATA_DIR="$state/data/account" NAPPLE_ACCOUNT_PUBLIC_BASE="http://127.0.0.1:$ACCOUNT_PORT" \
 NAPPLE_MAIL_PROVIDER="${NAPPLE_MAIL_PROVIDER:-dev}" NAPPLE_MAIL_FROM="${NAPPLE_MAIL_FROM:-no-reply@napple.lat}" \
-NAPPLE_ADMIN_EMAILS="${NAPPLE_ADMIN_EMAILS:-}" NAPPLE_PHOTO_DIR="$state/data/account/photos" \
+NAPPLE_ADMIN_EMAILS="${NAPPLE_ADMIN_EMAILS:-}" NAPPLE_PHOTO_DIR="$state/data/account/photos" NAPPLE_INTERNAL_TOKEN="$internal_token" \
 NAPPLE_ACCOUNT_ENV=development NAPPLE_ACCOUNT_HTTP="127.0.0.1:$ACCOUNT_PORT" NAPPLE_ACCOUNT_DATA="$state/data/account" NAPPLE_ACCOUNT_MAILER=dev \
 RUST_LOG="${RUST_LOG:-info}" \
   nohup "${account_cmd[@]}" >"$state/logs/account.log" 2>&1 &
 echo $! > "$state/account.pid"
 NAPPLE_SOCIAL_BIND="127.0.0.1:$SOCIAL_PORT" NAPPLE_SOCIAL_DATA_DIR="$state/data/social" NAPPLE_ACCOUNT_URL="http://127.0.0.1:$ACCOUNT_PORT" \
+NAPPLE_ACCOUNT_SERVICE_TOKEN="$internal_token" NAPPLE_SOCIAL_SERVICE_TOKEN="$social_token" \
   nohup "${social_cmd[@]}" >"$state/logs/social.log" 2>&1 &
 echo $! > "$state/social.pid"
 NAPPLE_ACCOUNT_URL="http://127.0.0.1:$ACCOUNT_PORT" NAPPLE_SOCIAL_URL="http://127.0.0.1:$SOCIAL_PORT" \
 NAPPLE_ONLINE_HTTP="127.0.0.1:$ONLINE_HTTP_PORT" NAPPLE_ONLINE_PUBLIC_HOST=127.0.0.1 NAPPLE_ONLINE_DATA="$state/data/online" \
-NAPPLE_ONLINE_VERBOSE="${NAPPLE_ONLINE_VERBOSE:-0}" \
+NAPPLE_ONLINE_VERBOSE="${NAPPLE_ONLINE_VERBOSE:-0}" NAPPLE_SOCIAL_SERVICE_TOKEN="$social_token" \
   nohup "${online_cmd[@]}" >"$state/logs/online.log" 2>&1 &
 echo $! > "$state/online.pid"
 NAPPLE_ROOM_LISTEN="127.0.0.1:$ROOM_PORT" NAPPLE_ROOM_HTTP="127.0.0.1:$ROOM_HTTP_PORT" NAPPLE_ROOM_DATA="$state/data/room" RUST_LOG="${RUST_LOG:-info}" \

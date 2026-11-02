@@ -34,7 +34,14 @@ cd /opt/napple
 # State dirs of the services added after the first boot (uid 10001, like online and room).
 install -d -o 10001 -g 10001 -m 0750 /var/lib/napple/account /var/lib/napple/social
 echo '$bundle' | base64 -d | tar -xzf -
-echo '$env_file' | base64 -d > .env.new && mv .env.new .env && chmod 600 .env
+echo '$env_file' | base64 -d > .env.new
+# Service credentials shared between the containers: generated once on the instance, kept in /opt/napple/.service-tokens (0600), never in git or the workflow.
+# NAPPLE_INTERNAL_TOKEN is napple-account's and (as NAPPLE_ACCOUNT_SERVICE_TOKEN) napple-social's; NAPPLE_SOCIAL_SERVICE_TOKEN is napple-social's and napple-online's.
+if [ ! -s .service-tokens ]; then
+  ( umask 077; printf 'NAPPLE_INTERNAL_TOKEN=%s\nNAPPLE_SOCIAL_SERVICE_TOKEN=%s\n' "\$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" "\$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')" > .service-tokens )
+fi
+cat .service-tokens >> .env.new
+mv .env.new .env && chmod 600 .env
 aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $registry
 docker compose -f compose.yml -f compose.aws.yml pull
 docker compose -f compose.yml -f compose.aws.yml up -d --remove-orphans

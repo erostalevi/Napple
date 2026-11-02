@@ -15,6 +15,11 @@
 
 	# napple-account (/account/v1/*, prefix kept) and napple-social (/social/v1/*, prefix kept; reverse_proxy forwards the WebSocket upgrade of
 	# /social/v1/stream as is). social answers /social/v1/healthz itself; account has /healthz at its root, exposed as /account/healthz.
+	# Service-to-service routes (napple-social and napple-online reach them over the compose network with a shared token) are never public.
+	@internal path /account/v1/internal/* /social/v1/internal/*
+	handle @internal {
+		respond 404
+	}
 	handle_path /account/healthz {
 		rewrite * /healthz
 		reverse_proxy account:8082

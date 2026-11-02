@@ -31,6 +31,7 @@ services:
       NAPPLE_ONLINE_NATCHECK_BASE: "10025"
       NAPPLE_ACCOUNT_URL: http://account:8082
       NAPPLE_SOCIAL_URL: http://social:8083
+      NAPPLE_SOCIAL_SERVICE_TOKEN: ${NAPPLE_SOCIAL_SERVICE_TOKEN:-}
     ports:
       - "10025:10025/udp"
       - "10125:10125/udp"
@@ -62,6 +63,9 @@ services:
       NAPPLE_ACCOUNT_S3_BUCKET: ${NAPPLE_SAVES_BUCKET:-}
       NAPPLE_ACCOUNT_S3_REGION: ${AWS_REGION:-us-east-1}
       NAPPLE_ADMIN_EMAILS: ${NAPPLE_ADMIN_EMAILS:-}
+      # Service credential for napple-social's tier lookups (/account/v1/internal/*, header x-napple-internal). Social gets the SAME value as
+      # NAPPLE_ACCOUNT_SERVICE_TOKEN below. Written to .env by infra/scripts/roll.sh (>= 16 chars); empty = the internal routes do not exist.
+      NAPPLE_INTERNAL_TOKEN: ${NAPPLE_INTERNAL_TOKEN:-}
       # Same values under the names napple-account read before round r12 (ignored once it only reads the names above).
       NAPPLE_ACCOUNT_ENV: ${NAPPLE_ACCOUNT_ENV:-production}
       NAPPLE_ACCOUNT_HTTP: 0.0.0.0:8082
@@ -82,6 +86,8 @@ services:
       NAPPLE_SOCIAL_DATA_DIR: /var/lib/napple/social
       NAPPLE_SOCIAL_TRUST_PROXY: "1"
       NAPPLE_ACCOUNT_URL: http://account:8082
+      NAPPLE_ACCOUNT_SERVICE_TOKEN: ${NAPPLE_INTERNAL_TOKEN:-}
+      NAPPLE_SOCIAL_SERVICE_TOKEN: ${NAPPLE_SOCIAL_SERVICE_TOKEN:-}
       NAPPLE_SOCIAL_LOG: ${NAPPLE_SOCIAL_LOG:-info}
     volumes:
       - social-data:/var/lib/napple/social
