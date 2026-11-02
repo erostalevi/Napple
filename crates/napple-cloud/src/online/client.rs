@@ -500,10 +500,13 @@ impl Client {
         }
         let (mut friends, mut requests, mut blocks, mut recent, mut stats) = (vec![], vec![], vec![], vec![], vec![]);
         if !cur_id.is_empty() {
-            if cur["friend_code"] == "" {
-                let m = self.soc("GET", "/me", None);
-                if m.ok() {
-                    cur["friend_code"] = json!(s(&m.body, &["friend_code"]));
+            // napple-social keeps its own friend codes (NP-dddd-dddd-dddd) and only those are accepted by its friend requests and search, so the code
+            // the overlay shows for sharing is social's when it answers; the account's profile.friend_code is the fallback.
+            let m = self.soc("GET", "/me", None);
+            if m.ok() {
+                let code = s(&m.body, &["friend_code"]);
+                if !code.is_empty() {
+                    cur["friend_code"] = json!(code);
                 }
             }
             for f in list(&self.soc("GET", "/friends", None).body, "friends") {

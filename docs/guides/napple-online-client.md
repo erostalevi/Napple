@@ -43,3 +43,7 @@ approve_device wraps the account key to the pending device (`/keys/requests`, `/
 ## Tests
 `cargo test -p napple-cloud online` (credentials, concurrent refresh, sign-in flow against a fake server) and
 `make -C runtime test-online` (the table against a fake account+social server in C).
+
+## Wiring (integrated, batch r12)
+- `runtime/src/app.m` (windowed Mac runs): `register_online_ui()` calls `napple_online_runtime_start(NULL,NULL,NULL,NULL)`, hands the table to `napple_frontend_set_online_ui()` and pumps `napple_online_ui_pump()` from a 0.1 s main-run-loop timer. Without `CLOUD=1` the weak defaults in app.m return NULL and the overlay keeps its stub. Headless runs do not start the client until the friend service asks for a token (lazy start in `online_ui.c`).
+- `frontend/src/overlay_online.m`: the shell registers the six social sub-tabs (`napple_online_social_init`, host toast = the game view toast, text input = the software keyboard bar awaited with a nested run loop) and keeps its own change callback on the table so `napple_online_social_changed` raises the friend-request toasts while the overlay is closed. Invite toasts (`napple_online_social_invite_event`) still need a feed from the client (no invite event in the table yet).

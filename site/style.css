@@ -125,3 +125,15 @@ a:focus-visible,.btn:focus-visible{outline:2px solid var(--pink);outline-offset:
 @media(prefers-reduced-motion:reduce){*{animation:none!important;scroll-behavior:auto!important}}
 .two>*,.shots>*{min-width:0}
 .note pre{white-space:pre-wrap;word-break:break-all}
+/* legal pages */
+.legal{max-width:760px;padding:48px 16px 24px}
+.legal h1{font-size:clamp(1.9rem,5vw,2.8rem);margin-bottom:16px}
+.legal h2{font-size:1.25rem;margin:32px 0 8px}
+.legal p,.legal li{color:var(--mute)}
+.legal li{margin:4px 0}
+.legal b{color:var(--ink)}
+.legal a{color:var(--pink)}
+.legal .tbl{overflow-x:auto;margin:12px 0}
+.legal table{border-collapse:collapse;width:100%;font-size:.92rem}
+.legal th,.legal td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top;color:var(--mute)}
+.legal th{background:var(--card);color:var(--ink)}

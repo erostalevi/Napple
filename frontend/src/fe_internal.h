@@ -57,6 +57,8 @@ NSView *fe_amiibo_page(NappleFE *fe);
 NSView *fe_camera_page(NappleFE *fe);
 void fe_simulators_install(void);
 /* textbar.m */
+/* The NappleFE behind a public handle (nil for NULL). */
+NappleFE *fe_from_handle(struct napple_frontend *f);
 void fe_textbar_show(NappleFE *fe, const napple_text_request *req, napple_text_done_fn done, void *user);
 BOOL fe_textbar_visible(NappleFE *fe);
 /* applet_sheets.m test aids (NAPPLE_SHEET_AUTO / NAPPLE_SHEET_SHOT), also used by the text bar */
