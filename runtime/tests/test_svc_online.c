@@ -157,7 +157,7 @@ int main(void) {
       svc_call(rq, 2, NULL, 0, &c); uint32_t ev0 = c.out_copy[0]; CHECK(!event_is_signaled(ev0), "request event clear before Submit");
       svc_call(rq, 4, NULL, 0, &c); CHECK(c.result == 0 && lb.net_connects == 1 && event_is_signaled(ev0), "Submit asks the provider to connect and signals");
       svc_call(rq, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == NIFM_STATE_ACCEPTED, "request is Accepted"); svc_call(rq, 1, NULL, 0, &c); CHECK(c.result == 0, "GetResult: success");
-      svc_call(gen, 21, NULL, 0, &c); CHECK(c.out[0] == 1, "IsAnyInternetRequestAccepted"); svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0x0a000002, "GetCurrentIpAddress from the provider");
+      svc_call(gen, 21, NULL, 0, &c); CHECK(c.out[0] == 1, "IsAnyInternetRequestAccepted"); svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == htonl(0x0a000002), "GetCurrentIpAddress from the provider (an in_addr, network order)");
       svc_call(gen, 18, NULL, 0, &c); CHECK(c.out_size == 4 && c.out[0] == 1 && c.out[1] == 3 && c.out[2] == 4, "connection status: wireless, strength 3, connected");
       svc_call(gen, 17, NULL, 0, &c); CHECK(c.out[0] == 1, "wireless communication enabled");
       svc_call(rq, 3, NULL, 0, &c); CHECK(lb.net_releases == 1, "Cancel releases the connection"); svc_call(gen, 21, NULL, 0, &c); CHECK(c.out[0] == 0, "no accepted request after Cancel");
@@ -218,7 +218,7 @@ int main(void) {
           snprintf(path, sizeof path, "%s/good.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset();
           const OnlineProvider *p = online_provider(); CHECK(p != online_null_provider() && !strcmp(p->name, "plugin-test") && online_has(p, ONLINE_CAP_NETWORK), "a provider module is loaded from NAPPLE_ONLINE_PROVIDER");
           OnlineNetInfo ni; CHECK(p->net_info(p->ctx, &ni) == 0 && ni.connected && ni.ip == 0x01020304, "and its entry points are called");
-          IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0]; svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0x01020304, "nifm reports the module's address");
+          IpcObject *nf = nifm_open(); svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0]; svc_call(gen, 12, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == htonl(0x01020304), "nifm reports the module's address (network order)");
           CHECK(ONLINE_FN(p, sock_open) == NULL, "entry points the module leaves NULL stay NULL");
           snprintf(path, sizeof path, "%s/badabi.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset(); CHECK(online_provider() == online_null_provider(), "a module with the wrong ABI version is rejected: NullProvider");
           snprintf(path, sizeof path, "%s/nosym.so", d); setenv("NAPPLE_ONLINE_PROVIDER", path, 1); online_provider_reset(); CHECK(online_provider() == online_null_provider(), "a module without the entry symbol is rejected");
