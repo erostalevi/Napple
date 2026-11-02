@@ -26,7 +26,7 @@ A community-run online service for Napple instances, never Nintendo:
   - a NEX game-server name resolves to the virtual address 100.78.78.100, which connects to the Napple server; every other Nintendo name gets EAI_NONAME;
   - the title's TLS to the server ends in the glue (plain for http://, real TLS to the server's own name for https://) and honours IoMode.
 
-**Verified on MK8D** (update v1376256, local server) with one ssl service change that is not in this branch (see "Needs from other areas"):
+**Verified on MK8D** (update v1376256, local server) from this branch's code alone (the ssl change MK8D needs is in the branch; see Files):
 - the account and token are issued;
 - the game server resolves to the Napple server;
 - WebSocket + PRUDP Lite login works: Authentication with the Napple token, the ticket, secure CONNECT, Register, Utility, Ranking;
@@ -41,6 +41,10 @@ Competition and SimpleSearchObject methods are not implemented.
 - New: `crates/napple-online/` (Cargo.toml, src/{lib,main,accounts,crypto,http,kerberos,matchmaking,nex,prudp,rmc,server,session}.rs).
 - New: `runtime/src/net/net_online.h`, `net_online.c`, `net_online_http.c`; `runtime/tests/test_net_online_client.c`.
 - New: `docs/guides/napple-online.md`, `docs/archive/changes/2026-11-02-claude-napple-online-2026-11-02-r7.md`, this file.
+- Changed by orchestrator decision (net-host-provider is frozen): the **ssl functions** of `runtime/src/services/offline.c` only
+  (`ssl_set_io_mode`, `ssl_handshake`, `ssl_read`, `ssl_write`). They hand IoMode to the provider's `tls_set_io_mode` and answer a would-block read
+  or write with `HZ_R_SSL_WOULD_BLOCK` (2123-0204, new in `hz_result.h`). Test `runtime/tests/test_net_online_ssl.c` (7dde717). Nothing in the
+  nifm rows (mk8d-lan-session's).
 - Changed (owned): `runtime/src/services/account.c` (IManagerForApplication 2/3/4 from the provider's `account_id_token`, IAsyncContext; the old
   generic error when the provider has no accounts).
 - Shared, append-only: `runtime/src/services/online_provider.h`:
@@ -63,10 +67,11 @@ Competition and SimpleSearchObject methods are not implemented.
 | — Secure CONNECT (forged ticket refused) and Register | tested | (part of the 31) |
 | — full login + two clients matched into one room over PRUDP in process | tested | (part of the 31) |
 | Acceptance 3: with `NAPPLE_ONLINE_SERVER`, MK8D gets Napple tokens and its game-server name goes to the Napple server | verified | run log: `online: napple: local user linked to Napple account …`, `ID token issued (279 bytes) for title 0100152000022000`, `redirected name g2b309e01-lp1.s.n.srv.nintendo.net`, `port 443 -> 127.0.0.1:8737 (http)` (copy in the shared notes, `napple-online-r7/runtime-log-mk8d-login.txt`) |
-| Acceptance 4: MK8D connects, completes login, reaches the online menu | verified **with the ssl patch below applied locally** (not committed) | server log `Authentication (10) method 2 -> ok`, `connected to the secure server`, `SecureConnection (11) method 1 -> ok`; screenshot `napple-online-r7/mk8d-online-menu-after-merge.png` (frame 1800) |
+| Acceptance 4: MK8D connects, completes login, reaches the online menu | verified (branch head, nothing applied locally) | server log `account … connected to the secure server` (verbose runs: `Authentication (10) method 2 -> ok`, `SecureConnection (11) method 1 -> ok`); screenshot `napple-online-r7/mk8d-online-menu-branch-head.png` (frame 1800) |
+| ssl non-blocking (IoMode, ResultWouldBlock) | tested + verified | `test_net_online_ssl` 42 checks, 0 failed; MK8D run above |
 | Acceptance 4 stretch: two instances in one room | not done | the single-instance Worldwide path already fails with 2618-0562 (see Findings) |
 | Acceptance 5: without `NAPPLE_ONLINE_SERVER` = r6 | tested + verified | `test_net_online_client` checks NAPPLE_NET=host is the bare host provider; `make -C runtime test test-services test-ipc-reference` exit 0 (ipc_reference 111 fixtures, missing 0); four titles 30 s each, without and with `NAPPLE_NET=host` (no server): SMO 1757/1755 frames, LAS 1758/1774, ACNH 853/881, MK8D 1764/1772, rc 0, no guest Break |
-| Client glue unit test | tested | `make -C runtime test-net-online` → 45 checks, 0 failed (fake server on localhost) |
+| Client glue unit test | tested | `make -C runtime test-net-online` → test_net_online_client 45/0, test_net_online_ssl 42/0 |
 | Server env-var contract, /healthz, stdout logs | verified | `NAPPLE_ONLINE_HTTP=127.0.0.1:8738 NAPPLE_ONLINE_DATA=… target/release/napple-online serve`: `/healthz` 200, account created, only `accounts.json` + `server.key` in the data dir |
 | Server builds on Linux | proposed | no Linux target on this Mac; the crate uses only std, serde/serde_json, sha2 and one `#[cfg(unix)]` permission call |
 
@@ -116,13 +121,13 @@ Competition and SimpleSearchObject methods are not implemented.
   - `cargo test -p napple-online` → 31 passed;
   - `cargo build --release -p napple-online` → `target/release/napple-online`;
   - `make -C runtime` → no new warnings;
-  - `make -C runtime test-net-online` → 45/0;
+  - `make -C runtime test-net-online` → 45/0 and 42/0;
   - `make -C runtime test test-services test-ipc-reference` → exit 0.
 - No Linux-only calls. The server crate is portable on purpose (it is meant to run in a Linux container).
 
 ## How to test
 1. Unit tests: as above.
-2. Local server + MK8D (needs the ssl patch below until it lands):
+2. Local server + MK8D. Run `make -C runtime` first: the test targets rebuild objects but do not relink `napple-runtime`.
    ```bash
    target/release/napple-online serve -v
    NAPPLE_NET=host NAPPLE_ONLINE_SERVER=http://127.0.0.1:8737 NAPPLE_ONLINE_DEBUG=1 \
@@ -131,7 +136,7 @@ Competition and SimpleSearchObject methods are not implemented.
    ```
    - Passing: the server prints `Authentication (10) method 2 -> ok`, `SecureConnection (11) method 1 -> ok`, Utility 7 ×2, Ranking 4; the frame
      1800 shows Worldwide / Regional / Friends / Tournaments.
-   - Without the ssl patch: the client sends one SYN and then blocks in Read.
+   - A stale binary without the ssl change: one SYN, then "Connecting…" forever.
    - A fresh save stops at the first-boot "Select a Mii" screen.
 3. Regression guard: without `NAPPLE_ONLINE_SERVER` the log has no `napple:` lines and `NAPPLE_NET=host` behaves as r6.
 4. Human: two Macs with `NAPPLE_ONLINE_SERVER=http://<lan server>:8737` once 2618-0562 is solved.
@@ -139,17 +144,12 @@ Competition and SimpleSearchObject methods are not implemented.
 ## Fix policy hints
 - Safe: error/log wording, the server's default ports, adding answers for more MatchmakeExtension / DataStore methods.
 - Design decisions:
-  - the ssl IoMode change belongs to whoever owns `offline.c` ssl;
   - whether to route the glue through `net_host_redirect_lookup` instead of the wrapper's own DNS override (it cannot express the port rewrite
     today).
 
 ## Needs from other areas
-1. **ssl (offline.c, net-host-provider's area), required for any NEX title.**
-   - ISslConnection SetIoMode should hand the mode to the provider's new `tls_set_io_mode`, also right after `tls_new` in DoHandshake.
-   - Read/Write should answer `HZ_RESULT(HZ_MOD_SSL, 204)` (ResultWouldBlock) when the provider returns -1/`HZ_EAGAIN`.
-   - Patch: shared notes `napple-online-r7/ssl-io-mode-wouldblock.patch` (9 lines), verified on MK8D. A request was sent to net-host-provider.
-2. sfdnsres: `sfdns_serialize_hostent` IPv4 byte order (MK8D reads it reversed).
-3. nifm: `GetCurrentIpAddress` byte order; `GetCurrentNetworkProfile` / `GetCurrentIpConfigInfo` real answers under the host provider.
-4. prepo: hand both buffers to the provider's `report` hook (the event payload is in the second one).
-5. infra (napple-infra): napple-online needs only `NAPPLE_ONLINE_HTTP` (TCP, behind Caddy with WebSocket), `NAPPLE_ONLINE_DATA`, optional
+1. sfdnsres: `sfdns_serialize_hostent` IPv4 byte order (MK8D reads it reversed).
+2. nifm: `GetCurrentIpAddress` byte order; `GetCurrentNetworkProfile` / `GetCurrentIpConfigInfo` real answers under the host provider.
+3. prepo: hand both buffers to the provider's `report` hook (the event payload is in the second one).
+4. infra (napple-infra): napple-online needs only `NAPPLE_ONLINE_HTTP` (TCP, behind Caddy with WebSocket), `NAPPLE_ONLINE_DATA`, optional
    `NAPPLE_ONLINE_PUBLIC_HOST`; no UDP ports.

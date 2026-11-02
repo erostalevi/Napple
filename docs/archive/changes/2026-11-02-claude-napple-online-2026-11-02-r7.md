@@ -20,7 +20,7 @@ Branch `claude/napple-online-2026-11-02-r7`, Mac session. Integrator file: `inte
 - `runtime/tests/test_net_online_client.c` + Makefile rule `test-net-online` (part of `test-services`).
 
 ## Verified on MK8D (update v1376256)
-With a local server, the glue and two fixes outside this branch (bsd Poll timeout; ssl IoMode / ResultWouldBlock, see the integrator file), the
+With a local server and the glue (plus net-host-provider's bsd Poll timeout fix, merged), the
 title does the following:
 - gets a Napple account and token;
 - resolves its game server to the Napple server;
@@ -35,4 +35,6 @@ It then shows "A communication error has occurred.", so the race lobby is not re
   NEX needs no UDP ports (it runs in the WebSocket). Client: `NAPPLE_ONLINE_SERVER=default` is `https://pretend.napple.lat` (opt-in).
 - Gate: `cargo test -p napple-online` 31/0; `make -C runtime test test-services test-ipc-reference` exit 0 (test_net_online_client 45/0).
 - Four titles boot 30 s with and without `NAPPLE_NET=host`, no regression.
-- Needs from other areas (ssl IoMode / ResultWouldBlock, sfdnsres and nifm byte order, prepo's second buffer): see the integrator file.
+- ssl (orchestrator decision, net-host-provider frozen): the ssl functions of `offline.c` hand IoMode to the provider and answer would-block with
+  ResultWouldBlock (test `test_net_online_ssl`). MK8D's login is verified from the branch alone.
+- Needs from other areas (sfdnsres and nifm byte order, prepo's second buffer): see the integrator file.

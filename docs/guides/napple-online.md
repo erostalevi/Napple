@@ -122,7 +122,7 @@ two clients matched into one room over PRUDP, in process.
 | 1. Trace MK8D's online path | verified (table above) |
 | 2. Server unit tests | tested (`cargo test -p napple-online`) |
 | 3. Client: Napple tokens, game-server name redirected | verified on MK8D (run log) |
-| 4. MK8D connects, logs in, reaches the online menu | verified on MK8D, **with one ssl service change that is not in this branch** (IoMode handed to the provider, would-block answered as ResultWouldBlock; patch in the integrator file). The bsd Poll timeout fix it also needs landed with net-host-provider |
+| 4. MK8D connects, logs in, reaches the online menu | verified on MK8D (needs the ssl IoMode / ResultWouldBlock change of this branch and the bsd Poll timeout fix of net-host-provider) |
 | 4. Worldwide matchmaking / two instances in one room | not reached: after AutoMatchmakeWithParam_Postpone the title shows "A communication error has occurred." (play report: error 2618-0562, `SessionKeepFailed`, a Pia error) before Pia opens any socket |
 | 5. Without `NAPPLE_ONLINE_SERVER`: unchanged | tested (unit test; runtime tests) |
 
