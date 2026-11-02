@@ -179,7 +179,43 @@ int main(void) {
     memcpy(&er, out, 4); CHECK(er == WEB_EXIT_ERROR && g_open_calls == before, "offline missing document: error exit");
     o = hdr(b, 2, WEB_SHIM_OFFLINE); o = tlv(b, o, WEB_TLV_DOCUMENT_PATH, "manual/p2.html\0", 15); kind = WEB_DOC_LEGAL_INFO; o = tlv(b, o, WEB_TLV_DOCUMENT_KIND, &kind, 4);
     la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); run(la, out, &n);
-    memcpy(&er, out, 4); CHECK(er == WEB_EXIT_ERROR, "legal information kind: error exit");
+    memcpy(&er, out, 4); CHECK(er == WEB_EXIT_ERROR, "legal information kind without a legal root: error exit");
+    /* legal information under its root (the title's LegalInformation content, extracted) */
+    { applet_web_set_legal_root(root);
+      la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); g_open_ret = WEB_EXIT_BACK_BUTTON; r = run(la, out, &n); memcpy(&er, out, 4);
+      snprintf(exp, sizeof exp, "file://%s/manual/p2.html", root);
+      CHECK(r == 0 && er == WEB_EXIT_BACK_BUTTON && !strcmp(g_open_url, exp), "legal information: resolved under the legal root (%s)", g_open_url);
+      applet_web_set_legal_root(NULL); }
+    /* system data pages: a firmware system data archive (RomFS image <sysdata>/<id>.bin) is extracted once and served like an offline document */
+    { char sd[] = "/tmp/napple_websd_XXXXXX"; CHECK(mkdtemp(sd) != NULL, "mkdtemp sysdata");
+      /* RomFS: root dir {child dir "pages" {file "index.html" = "<p>legal</p>"}, file "top.txt" = "t"} */
+      uint8_t img[0x200] = {0}; uint64_t hd[10] = {0x50, 0x50, 0, 0x50, 0, 0x50, 0, 0xA0, 0, 0x100};
+      uint8_t *dm = img + 0x50, *fm = img + 0xA0, *fd = img + 0x100; uint32_t none = 0xFFFFFFFFu;
+      /* dir entries: root at 0 (child dir 0x18, child file 0x30 of the file table: top.txt), "pages" at 0x18 (child file 0) */
+      uint32_t root_e[6] = {0, none, 0x18, 0x30, none, 0}; memcpy(dm, root_e, 24);
+      uint32_t pages_e[6] = {0, none, none, 0, none, 5}; memcpy(dm + 0x18, pages_e, 24); memcpy(dm + 0x30, "pages", 5);
+      uint32_t f0a[2] = {0x18, none}; uint64_t f0b[2] = {0, 12}; uint32_t f0c[2] = {none, 10};
+      memcpy(fm, f0a, 8); memcpy(fm + 8, f0b, 16); memcpy(fm + 24, f0c, 8); memcpy(fm + 32, "index.html", 10);
+      uint32_t f1a[2] = {0, none}; uint64_t f1b[2] = {12, 1}; uint32_t f1c[2] = {none, 7};
+      memcpy(fm + 0x30, f1a, 8); memcpy(fm + 0x30 + 8, f1b, 16); memcpy(fm + 0x30 + 24, f1c, 8); memcpy(fm + 0x30 + 32, "top.txt", 7);
+      hd[4] = 0x38; hd[8] = 0x30 + 32 + 8; memcpy(img, hd, sizeof hd); memcpy(fd, "<p>legal</p>t", 13);
+      char bin[0x400]; snprintf(bin, sizeof bin, "%s/0100000000000804.bin", sd); FILE *bf = fopen(bin, "wb"); fwrite(img, 1, 0x100 + 13, bf); fclose(bf);
+      char ex[0x400]; snprintf(ex, sizeof ex, "%s/x", sd);
+      CHECK(web_romfs_extract(bin, ex) == 2, "RomFS extract: two files");
+      char f[0x500]; snprintf(f, sizeof f, "%s/pages/index.html", ex); FILE *rf = fopen(f, "rb"); char got[32] = ""; if (rf) { (void)!fread(got, 1, sizeof got - 1, rf); fclose(rf); }
+      CHECK(!strcmp(got, "<p>legal</p>"), "RomFS extract: nested file content (%s)", got);
+      CHECK(web_romfs_extract("/nonexistent.bin", ex) == -1, "RomFS extract: missing image");
+      char cache[0x400]; snprintf(cache, sizeof cache, "%s/cache", sd); applet_web_set_sysdata(sd, cache);
+      uint64_t sid = 0x0100000000000804ull; kind = WEB_DOC_SYSTEM_DATA;
+      o = hdr(b, 3, WEB_SHIM_OFFLINE); o = tlv(b, o, WEB_TLV_DOCUMENT_PATH, "pages/index.html\0", 17); o = tlv(b, o, WEB_TLV_DOCUMENT_KIND, &kind, 4); o = tlv(b, o, WEB_TLV_SYSTEM_DATA_ID, &sid, 8);
+      la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); r = run(la, out, &n); memcpy(&er, out, 4);
+      snprintf(exp, sizeof exp, "file://%s/0100000000000804/pages/index.html", cache);
+      CHECK(r == 0 && er == WEB_EXIT_BACK_BUTTON && !strcmp(g_open_url, exp), "system data page: extracted and opened (%s)", g_open_url);
+      sid = 0x0100000000000999ull; o = hdr(b, 3, WEB_SHIM_OFFLINE); o = tlv(b, o, WEB_TLV_DOCUMENT_PATH, "pages/index.html\0", 17); o = tlv(b, o, WEB_TLV_DOCUMENT_KIND, &kind, 4); o = tlv(b, o, WEB_TLV_SYSTEM_DATA_ID, &sid, 8);
+      la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); run(la, out, &n); memcpy(&er, out, 4);
+      CHECK(er == WEB_EXIT_ERROR, "system data page of a missing archive: error exit");
+      applet_web_set_sysdata(NULL, NULL);
+      { char cmd[0x500]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", sd); (void)!system(cmd); } }
     /* a real HtmlDocument tree (SMO / MK8D layout): html-document/<name>.htdocs/html/<RegionLang>/index.html, paths relative to html-document/ */
     { char real[] = "/tmp/napple_webreal_XXXXXX"; CHECK(mkdtemp(real) != NULL, "mkdtemp real");
       const char *dirs[] = {"html-document", "html-document/htmlcontents.htdocs", "html-document/htmlcontents.htdocs/html", "html-document/htmlcontents.htdocs/html/USen",

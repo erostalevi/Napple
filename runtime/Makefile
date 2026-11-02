@@ -123,6 +123,10 @@ $(HOST_BUILD)/test_light_event: tests/host/test_light_event.c $(HOST_KERNEL) $(H
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_light_event.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
 HOST_TESTS += $(HOST_BUILD)/test_light_event
+$(HOST_BUILD)/test_input_script: tests/host/test_input_script.c src/input_script.c $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) -I../input/include tests/host/test_input_script.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_input_script
 # media-services (2026-10-26): the media engines through nvdrv's own ioctl handlers (also runs under tools/linux-check on Linux)
 $(HOST_BUILD)/test_nvdrv_media: tests/test_svc_nvdrv_media.c src/services/nvdrv.c src/ipc.c $(HOST_KERNEL) $(HOST_MEDIA) $(HOST_HDRS) $(wildcard tests/*vectors.h)
 	@mkdir -p $(dir $@)

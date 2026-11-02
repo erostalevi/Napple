@@ -280,9 +280,9 @@ int main(void) {
         CHECK(AS()->game_play_recording_initialized && AS()->game_play_recording_flushes == 2, "game play recording calls are counted");
         svc_call(af, 65, NULL, 0, &c); CHECK(c.out[0] == 0, "game play recording is not supported");
         svc_call(af, 60, &one, 1, &c); CHECK(AS()->media_playback_state == 1, "SetMediaPlaybackStateForApplication");
-        svc_call(af, 91, NULL, 0, &c); CHECK(AS()->copyright_frame_buffer_initialized, "InitializeApplicationCopyrightFrameBuffer");
-        { uint8_t blob[64] = {0}; IpcCall c3; memset(&c3, 0, sizeof c3); svc_set_in_buf(&c3, blob, sizeof blob); svc_call_c(af, 92, &c3); CHECK(AS()->copyright_image_size == 64, "SetApplicationCopyrightImage"); }
-        svc_call(af, 120, NULL, 0, &c); uint32_t gpu = c.out_copy[0]; svc_call(af, 130, NULL, 0, &c); uint32_t fr = c.out_copy[0]; svc_call(af, 210, NULL, 0, &c); uint32_t e210 = c.out_copy[0];
+        svc_call(af, 100, NULL, 0, &c); CHECK(AS()->copyright_frame_buffer_initialized, "InitializeApplicationCopyrightFrameBuffer");
+        { uint8_t blob[64] = {0}; IpcCall c3; memset(&c3, 0, sizeof c3); svc_set_in_buf(&c3, blob, sizeof blob); svc_call_c(af, 101, &c3); CHECK(AS()->copyright_image_size == 64, "SetApplicationCopyrightImage"); }
+        svc_call(af, 130, NULL, 0, &c); uint32_t gpu = c.out_copy[0]; svc_call(af, 140, NULL, 0, &c); uint32_t fr = c.out_copy[0]; svc_call(af, 210, NULL, 0, &c); uint32_t e210 = c.out_copy[0];
         CHECK(!event_is_signaled(gpu) && !event_is_signaled(fr) && !event_is_signaled(e210), "system events start clear");
         applet_signal_gpu_error(); CHECK(event_is_signaled(gpu) && !event_is_signaled(fr), "applet_signal_gpu_error wakes the GPU error event only");
         applet_signal_friend_invitation(); CHECK(event_is_signaled(fr), "applet_signal_friend_invitation wakes the invitation event");
