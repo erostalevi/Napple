@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: [overlay-account]
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: none
 launched_at: none
@@ -29,3 +29,4 @@ Start when overlay-account's shell and `napple_online_ui.h` exist on its branch/
 Shared title data read-only; game runs under `lockf -k /Users/neto/NappleWork/.run.lock` (<=120 s, private --save-root); local only, never push; never ask the user; never commit credentials or Nintendo material. Test-first, small commits.
 
 ## Result
+Outcome: Small fixes + mechanical conflicts (frontend/Makefile .PHONY, napple_online_ui.h add/add). Merged at 2e795f6. Details: [integrator result](../integrators/claude-overlay-social-2026-11-03-r12.md).

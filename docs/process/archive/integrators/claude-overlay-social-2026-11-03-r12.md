@@ -6,7 +6,7 @@ head: ed7e776
 env: mac
 date: 2026-11-03
 areas: [frontend/overlay]
-status: ready-with-caveats
+status: integrated
 ---
 
 # overlay-social: friends, requests, add/search, recent, blocked, stats sub-tabs + toasts
@@ -50,3 +50,9 @@ Layout/size tweaks safe. Hooking into the shell is the main integration step.
 
 ## Needs from other areas
 overlay-account: call the three hooks above (or tell me the extension points); client-core: invite events and presence-based `joinable_token`.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at 2e795f6. Outcome: Small fixes + mechanical conflicts (frontend/Makefile .PHONY, napple_online_ui.h add/add).
+- integrate: fixes: (1) test_online_social uses the real shell sub-tab registry (duplicate napple_online_register_subtab); (2) REQUIRED wiring: overlay_online.m calls napple_online_social_init (host toast -> game view, text input -> keyboard bar via nested run loop; the blocking guest-thread API would deadlock on the main thread), keeps a persistent change callback feeding napple_online_social_changed, social test added to make test, shell test checks Account + six sub-tabs; (3) runtime/src/app.m installs the client-core table (napple_online_runtime_start + napple_frontend_set_online_ui + 0.1 s main-thread pump) with weak defaults for CLOUD=0; verified windowed (Online tab in LAS shows the real signed-out screen even with NAPPLE_ONLINE_STUB_SIGNED_IN=1); (4) guide documents the wiring
+- Tests: make -C frontend test: settings 77/0 window 13/0 online-ui 55/0 online-social 28/0; runtime test/test-services/test-ipc-reference/test-online 0 failed; eight boots rc 0 missing_ipc [] except one SMO plain SIGSEGV at sdk+0x1fe608 (2.6 s, taken under concurrent make load; 5 clean reruns); CLOUD=0 runtime links
+- Corrections to instructions: invite toasts (napple_online_social_invite_event) have no feed from client-core yet; Needs 'overlay-account shell call the hooks' done by the integrator
