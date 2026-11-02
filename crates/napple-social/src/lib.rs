@@ -15,6 +15,7 @@ pub mod hub;
 pub mod names;
 pub mod ratelimit;
 pub mod stream;
+pub mod visibility;
 
 use std::net::SocketAddr;
 use std::ops::Deref;
