@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r5
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_936fd989-d4c6-4f34-ab50-b47f38dba7ca (reused)
 launched_at: 2026-11-02
@@ -37,3 +37,6 @@ Experiment patch `/private/tmp/claude-502/-Users-neto-napple/e4353971-a4ef-41e2-
 Read `orchestrations/ENV-MAC.md` (shared title data rebuilt after r4 — read-only, use private copies; locks; local-only; never ask). Final planned round (snapshot 2026-11-02-8389280, 98.9%).
 
 ## Result
+
+Integrated 2026-11-02: **Clean**, merged into main as add77a1 (branch head 469e0f3). Runtime service tests green (nifm_audit 144, applet_am 70, offline 70, vi 123, ipc_reference missing 0). MK8D update Online Play offline **verified**: one `CreateLibraryApplet 0xf` per attempt, no retry loop, rc 0. Open decisions (author): la version in GetAppletInfo's CommonArguments [unverified], whether to push netConnect's 4-byte `{exit code}` storage; fs.c rows 15/16/606/618 not done (no layout confirmed).
+Integrator file: `docs/process/archive/integrators/claude-nifm-netconnect-2026-11-02-r5.md`.

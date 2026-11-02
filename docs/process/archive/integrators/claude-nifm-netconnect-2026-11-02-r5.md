@@ -6,7 +6,7 @@ head: see `git log -1` (code at 5e7c1eb; docs commit on top)
 env: mac
 date: 2026-11-02
 areas: [runtime/services/nifm, runtime/services/applet_lib_core, runtime/services/vi]
-status: ready
+status: integrated
 ---
 
 # claude/nifm-netconnect-2026-11-02-r5: nifm Cancel semantics + the real NetConnect output (MK8D Online Play shows the console's flow)
@@ -94,3 +94,10 @@ status: ready
 
 ## Needs from other areas
 - None.
+
+## Integration result
+- Date 2026-11-02, merged into main as add77a1 (branch head 469e0f3: work 5e7c1eb + the integrator-file commit), first of batch r5; no conflicts. Outcome: **Clean**. No `integrate:` fixes, no native ports (pure service logic, nothing platform-specific).
+- `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0; `svc_nifm_audit` 144/0, `svc_applet_am` 70/0, `svc_offline` 70/0, `svc_vi` 123/0; `ipc_reference` 111 fixtures, app_reachable 1325, missing 0.
+- MK8D update Online Play offline (`NAPPLE_INPUT_SCRIPT=15:A,19:DOWN,20.5:DOWN,22:A,32:A NAPPLE_TRACE_IPC=all`, headless 55 s, private save copy, run lock): rc 0, `missing_ipc []`, stubbed only `nvdrv:13`; two attempts (Submit 23.3 s / 33.2 s), each one Submit, Cancel, GetAppletInfo, `CreateLibraryApplet id 0xf mode 0`, PopOutData; 2 applets total, no retry loop. **verified**.
+- Correction to "How to integrate": `make -C runtime` needs `audio`, `input`, `frontend` built and `make -C gfx adapter` (for `gfx/build/obj/adapter/gfx_napple.o`) in a fresh worktree; `make -C gfx` alone does not build the adapter object.
+- Main-level checks after the whole batch (four-title boots, test-a32, gfx tests) are recorded in the r5 results commit.
