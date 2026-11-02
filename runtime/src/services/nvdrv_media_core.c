@@ -561,10 +561,81 @@ static void nvjpg_mcu(uint32_t mode, uint32_t *mw, uint32_t *mh) {
     *mw = mode == NVJPG_CHROMA_420 || mode == NVJPG_CHROMA_422H ? 16 : 8;
     *mh = mode == NVJPG_CHROMA_420 || mode == NVJPG_CHROMA_422V ? 16 : 8;
 }
-/* Decode. The decoder half of the structure carries the driver's parse of the file (Huffman minimum codes, quantisers, block layout); the bitstream buffer is
- * the JPEG the driver parsed, bitstream_offset its entropy-coded data. Napple decodes the file itself from its SOI (at or before bitstream_offset) with
- * jpeg_core, and honours the output controls: output_type, power2_downscale, chroma_subsample, alpha, strides. A buffer with no SOI in front of the scan
- * (headers dropped by the driver) is refused with BAD_MAGIC: rebuilding a file from the hardware tables is not done (docs/reference/nvdrv-layouts.md). */
+/* Header-less decode: the decoder half of nvjpg_drv_pic_param_s as the driver programs it, with no JFIF markers in the bitstream buffer. Layout facts from
+ * [ogd nvjpg_drv.h]; where that header leaves the table semantics open Napple fixes them as follows (docs/reference/nvdrv-layouts.md):
+ *   frame      pdma_pic_info width_in_8x8 / height_in_8x8 minus the pad fields = the picture size (zero: the MCU grid's size); dec_frame_size = the MCU grid, which
+ *              must be ceil(size / MCU size); dec_frame_param.stream_chroma_mode picks components and sampling (the MCU size), restart_interval is in MCUs.
+ *   per comp   dec_block_ctl[c]: quant = quantiser table, dc_idx / ac_idx = Huffman table slot, hblock / vblock = sampling factors (must agree with the chroma mode;
+ *              both 0 = take the chroma mode's).
+ *   quantiser  dec_quant[i][t]: the 8-bit factor of table t, i in zigzag order (a DQT payload); 16-bit tables do not exist in the hardware.
+ *   Huffman    slot s (0..2): dec_huff_mincode[2 * s + ac][len - 1] = {idx: index of the first code of that length in the table's symbol list, val: its code}, and
+ *              dec_huff_symbol[s][pos] = {val: the symbol}, DC symbols at pos 0..11, AC at 12..173 (<= 12 DC / 162 AC symbols; the ac/comp/off fields are written
+ *              by drivers but not read). A code count follows from the idx steps; mincode is checked against the canonical code of those counts. A slot without
+ *              entries falls back to the one named by the component's own index.
+ * The entropy-coded segment (RSTn markers kept, no EOI needed) is at bitstream_offset, bitstream_size long (0: to the end of the buffer). */
+static int nvjpg_huff(const uint8_t *pic, int ac, int slot, uint8_t bits[17], uint8_t vals[256]) { /* 1 loaded, 0 absent, -1 malformed */
+    const uint8_t *mc = pic + NVJPG_PIC_DEC_HUFF_MINCODE + (size_t)(2 * slot + ac) * 64, *sym = pic + NVJPG_PIC_DEC_HUFF_SYMBOL + (size_t)slot * 174 * 4;
+    int any = 0;
+    for (int l = 0; l < 16; l++) any |= rd32(mc + l * 4) != 0;
+    if (!any) return 0;
+    int base = ac ? 12 : 0, cap = ac ? 162 : 12, total = 0;
+    for (int i = 0; i < cap; i++)
+        if (rd32(sym + (size_t)(base + i) * 4) != 0 || (!ac && !i)) total = i + 1;
+    unsigned idx[17], first[16];
+    for (int l = 0; l < 16; l++) {
+        uint32_t w = rd32(mc + l * 4);
+        idx[l] = (w >> 7) & 0xff, first[l] = w >> 15;
+    }
+    idx[16] = (unsigned)total;
+    uint32_t code = 0;
+    memset(bits, 0, 17);
+    for (int l = 0; l < 16; l++) {
+        if (idx[l + 1] < idx[l] || idx[l + 1] > (unsigned)total || (!l && idx[0])) return -1;
+        unsigned cnt = idx[l + 1] - idx[l];
+        if (cnt && first[l] != code) return -1;
+        if (cnt > 255 || code + cnt > (1u << (l + 1))) return -1;
+        bits[l + 1] = (uint8_t)cnt;
+        code = (code + cnt) << 1;
+    }
+    for (int i = 0; i < total; i++) vals[i] = (uint8_t)((rd32(sym + (size_t)(base + i) * 4) >> 11) & 0xff);
+    return total ? 1 : 0;
+}
+static int nvjpg_raw_params(const uint8_t *pic, uint32_t smode, JpegRawParams *rp, int *pw, int *ph) {
+    static const int sf[5][3] = {{0x11, 0, 0}, {0x22, 0x11, 0x11}, {0x21, 0x11, 0x11}, {0x12, 0x11, 0x11}, {0x11, 0x11, 0x11}};
+    uint32_t fs = rd32(pic + NVJPG_PIC_DEC_FRAME_SIZE), param = rd32(pic + NVJPG_PIC_DEC_FRAME_PARAM), info = rd32(pic + NVJPG_PIC_PDMA_PIC_INFO);
+    uint32_t info1 = rd32(pic + NVJPG_PIC_PDMA_PIC_INFO1), mcuw = fs & 0xfff, mcuh = (fs >> 16) & 0xfff, mw, mh;
+    if (smode > NVJPG_CHROMA_444 || !mcuw || !mcuh) return -1;
+    nvjpg_mcu(smode, &mw, &mh);
+    int w = (int)(((info >> 6) & 0xfff) * 8) - (int)((info1 >> 21) & 15), h = (int)(((info >> 18) & 0xfff) * 8) - (int)((info1 >> 25) & 15);
+    if (!((info >> 6) & 0xfff) || !((info >> 18) & 0xfff)) w = (int)(mcuw * mw), h = (int)(mcuh * mh);
+    if (w < 1 || h < 1 || (uint32_t)w > mcuw * mw || (uint32_t)w + mw <= mcuw * mw || (uint32_t)h > mcuh * mh || (uint32_t)h + mh <= mcuh * mh) return -1;
+    memset(rp, 0, sizeof *rp);
+    rp->width = w, rp->height = h, rp->ncomp = smode == NVJPG_CHROMA_MONO ? 1 : 3, rp->restart_interval = (int)((param >> 3) & 0xffff);
+    for (int c = 0; c < rp->ncomp; c++) {
+        uint32_t bc = rd32(pic + NVJPG_PIC_DEC_BLOCK_CTL + (size_t)c * 4), hb = (bc >> 8) & 15, vb = (bc >> 12) & 15;
+        if ((hb || vb) && (int)(hb << 4 | vb) != sf[smode][c]) return -1;
+        rp->h[c] = sf[smode][c] >> 4 ? sf[smode][c] >> 4 : 1, rp->v[c] = sf[smode][c] & 15 ? sf[smode][c] & 15 : 1;
+        rp->tq[c] = (int)((bc >> 4) & 3), rp->dc_t[c] = (int)((bc >> 2) & 3), rp->ac_t[c] = (int)(bc & 3);
+        if (rp->dc_t[c] > 2 || rp->ac_t[c] > 2) return -1;
+    }
+    for (int t = 0; t < 4; t++)
+        for (int i = 0; i < 64; i++) rp->q[t][i] = pic[NVJPG_PIC_DEC_QUANT + i * 4 + t];
+    for (int c = 0; c < rp->ncomp; c++)
+        for (int ac = 0; ac < 2; ac++) {
+            int *sel = ac ? &rp->ac_t[c] : &rp->dc_t[c], r;
+            if ((r = nvjpg_huff(pic, ac, *sel, rp->huff[ac][*sel].bits, rp->huff[ac][*sel].vals)) < 0) return -1;
+            if (!r) { /* fall back to the slot of the component's own index */
+                if (c > 2 || (r = nvjpg_huff(pic, ac, c, rp->huff[ac][c].bits, rp->huff[ac][c].vals)) < 0) return -1;
+                if (r) *sel = c;
+            }
+        }
+    *pw = w, *ph = h;
+    return 0;
+}
+/* Decode. A buffer holding a JPEG file (its SOI at or before bitstream_offset): jpeg_core decodes the file itself and the picture parameters only steer the
+ * output. A buffer with no SOI is the driver's header-less form (nvjpg_raw_params above): the tables come from the structure and jpeg_core decodes the entropy
+ * segment alone, to the same pixels. Both honour the output controls: output_type, power2_downscale, chroma_subsample, alpha, strides. No SOI and no programmed
+ * frame size: BAD_MAGIC. */
 static void nvjpg_decode(MediaEngine *e, const uint8_t *pic) {
     size_t bs_avail = 0, o_avail = 0, u_avail = 0, v_avail = 0;
     uint8_t *bs = surf(e, e->reg[NVJPG_SET_BITSTREAM], &bs_avail), *out = surf(e, e->reg[NVJPG_SET_CUR_PIC], &o_avail);
@@ -583,13 +654,22 @@ static void nvjpg_decode(MediaEngine *e, const uint8_t *pic) {
             soi = i;
             break;
         }
-    if (soi == (size_t)-1) {
-        nvjpg_status(e, 0, 0, 0, NVJPG_ERR_BAD_MAGIC);
-        return;
-    }
     int w = 0, h = 0, jerr = 0;
     JpegInfo ji;
-    uint8_t *rgba = napjpeg_info(bs + soi, end - soi, &ji) == JPEGCORE_OK ? napjpeg_decode_rgba(bs + soi, end - soi, &w, &h, &jerr) : NULL;
+    uint8_t *rgba = NULL;
+    if (soi != (size_t)-1) {
+        rgba = napjpeg_info(bs + soi, end - soi, &ji) == JPEGCORE_OK ? napjpeg_decode_rgba(bs + soi, end - soi, &w, &h, &jerr) : NULL;
+        ji.ncomp = rgba ? ji.ncomp : 0;
+    } else {
+        JpegRawParams rp;
+        memset(&rp, 0, sizeof rp);
+        if (!(rd32(pic + NVJPG_PIC_DEC_FRAME_SIZE) & 0x0fff0fff)) {
+            nvjpg_status(e, 0, 0, 0, NVJPG_ERR_BAD_MAGIC);
+            return;
+        }
+        if (nvjpg_raw_params(pic, smode, &rp, &w, &h) == 0) rgba = napjpeg_decode_raw_rgba(&rp, bs + boff, end - boff, &w, &h, &jerr);
+        ji.ncomp = rp.ncomp;
+    }
     if (!rgba) {
         nvjpg_status(e, 0, 0, 0, NVJPG_ERR_INVALID_INPUT);
         return;

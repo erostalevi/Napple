@@ -51,3 +51,21 @@ void napjpeg_std_huff(JpegHuffCode dc[2], JpegHuffCode ac[2]);
 /* DHT payload of a JpegHuffCode built from canonical code lengths (what napjpeg_std_huff makes): bits[1..16] counts and the symbols in code order. Returns the
  * number of symbols, or -1 when the codes are not canonical. */
 int napjpeg_huff_to_dht(const JpegHuffCode *h, uint8_t bits[17], uint8_t vals[256]);
+
+/* ---- header-less decode (NVJPG) ----
+ * The Tegra NVJPG engine is not fed JFIF markers: the driver programs the frame geometry, the quantisation tables, the Huffman tables and the restart interval
+ * through the engine's pic-setup / table structures and points the engine at the entropy-coded segment alone. JpegRawParams is that programmed state; tables are
+ * stored exactly as DQT / DHT carry them (quantisation values in zigzag order, Huffman code counts for lengths 1..16 in bits[1..16] followed by the symbols).
+ * `scan` is the entropy-coded data as it appears between SOS and EOI: byte-stuffed (FF 00) and, when restart_interval != 0, with RSTn markers between intervals.
+ * The output is bit-for-bit what napjpeg_decode_rgba gives for the same data wrapped in headers (both run the same MCU decoder). */
+typedef struct {
+    int width, height, ncomp; /* ncomp 1 (grey) or 3 (Y, Cb, Cr) */
+    int h[3], v[3];           /* sampling factors, 1..2 */
+    int tq[3], dc_t[3], ac_t[3]; /* quantisation table / DC / AC Huffman table selector (0..3) per component */
+    int restart_interval;     /* MCUs between restart markers, 0 = none */
+    uint16_t q[4][64];        /* zigzag order */
+    struct { uint8_t bits[17], vals[256]; } huff[2][4]; /* [0] DC, [1] AC; a table with all-zero counts is absent */
+} JpegRawParams;
+/* Same contract as napjpeg_decode_rgba. JPEGCORE_BAD for parameters that no JPEG could have (size, sampling, selectors, an over-subscribed code, a table a
+ * component uses that is absent), JPEGCORE_UNSUPPORTED never (the engine only does baseline). */
+uint8_t *napjpeg_decode_raw_rgba(const JpegRawParams *p, const uint8_t *scan, size_t n, int *width, int *height, int *err);

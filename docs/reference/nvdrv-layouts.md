@@ -137,7 +137,8 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
 | VIC | 0x100 / 0x101 | slot 0 input luma / chroma | trace (VIC 4.0; clceb6 moved slots to 0x480) | trace |
 | VIC config | +0x20 output surface u64 | format, block kind, block height, width − 1, height − 1 | trace + emulator layout (clceb6's VIC 4.2 config differs) | trace |
 | NVJPG 0xC0 | 0x1C0–0x1C7 | control params, picture index, in drv pic setup, out status, bitstream, cur pic, chroma U, chroma V; app id 1 decode / 2 encode | ogd cle7d0 | verified (**fixed**: the engine used NVDEC's words 0x101–0x104/0x109 and an invented 6-word setup) |
-| NVJPG pic | 0x1240 B | `nvjpg_drv_pic_param_s` with the encoder half: enc ctl / restart / quant factors (1<<15)/q / Huffman {length, value} at 0x000–0x6FF, PDMA 0x700, strides 0x708/0x70C, bitstream offset/size 0x720/0x724, decoder frame size/param 0x740/0x744, block ctl, Huffman mincode/symbol, output info 0x1120, quant 0x1140 | ogd `nvjpg_drv.h` | verified (new) |
+| NVJPG pic | 0x1240 B | `nvjpg_drv_pic_param_s` with the encoder half: enc ctl / restart / quant factors (1<<15)/q / Huffman {length, value} at 0x000–0x6FF, PDMA 0x700, strides 0x708/0x70C, bitstream offset/size 0x720/0x724, decoder frame size/param 0x740/0x744, block ctl, Huffman mincode/symbol, output info 0x1120, quant 0x1140 | ogd `nvjpg_drv.h` | verified (new); decoder half **read for header-less decode** (2026-11-03, tested: round trips through the ioctl path, not traced from a title) |
+| NVJPG decoder tables | in the pic | frame size (MCU grid) 0x740, frame param 0x744 (stream chroma mode, restart interval), block ctl[c] 0x748 (ac_idx b0-1, dc_idx b2-3, quant b4-5, hblock b8-11, vblock b12-15), quant `[i][t]` 0x1140, Huffman mincode `[2*slot+ac][len-1]` 0x760 and symbol `[slot][pos]` 0x8e0 | fields: ogd `nvjpg_drv.h`; **table semantics are Napple's reading** (below) | tested |
 | NVJPG status | 0x20 B | decode `{bytes_offset, mcu_x, mcu_y, cycle_count, error_status, reserved[12]}`; encode `{bitstream_size, …}`; errors 0x30000001–4 | ogd `nvjpg_drv.h`, clc9d1 | verified (new) |
 | MSENC 0x21 | 0x100–0x11F, 0x140–0x152, 0x1C0–0x1D9 | reference pictures, VP8/VP9 buffers, control params, picture index, RC data, in drv pic setup 0x1C4, out enc status 0x1C6, out bitstream 0x1C7, cur pic 0x1CD, chroma U/V 0x1D0/0x1D1 | ogd clc5b7 | verified (**fixed**: the engine read 0x101–0x104, which are IN_REF_PIC1..4_LUMA, and 0x109) |
 | MSENC setup | 512 B | `nvenc_h264_drv_pic_setup_s`: magic, input surface cfg +0x24 (u16 width−1, height−1, pitch, chroma pitch; memory_mode bits 8–9), rate control +0x70 (framerate +0x18, nal_bitrate +0x24), pic_control +0xC8 (pic_type at +0xE0 bits 2–3) | ogd `nvenc_drv.h` | verified (new; replaces the invented 8-word setup) |
@@ -147,8 +148,19 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
 
 - **NVJPG decode** reads the JPEG file the bitstream buffer holds (its SOI at or before `bitstream_offset`) with jpeg_core and honours output type
   (YUV planar / semi-planar, YUY2, RGBA, BGRA, ABGR, ARGB), power-of-two downscale, chroma subsample, alpha and strides. A buffer with only the
-  entropy-coded data (no SOI in front) is refused with BAD_MAGIC: rebuilding a file from the hardware Huffman mincode/symbol tables would rest on an
-  interpretation of those fields that no public source states.
+  entropy-coded data (no SOI in front) is the driver's header-less form and is decoded from the tables in the structure (next bullet); with no frame
+  size programmed either, it is refused with BAD_MAGIC.
+- **NVJPG header-less decode** (2026-11-03, `nvjpg_raw_params` in nvdrv_media_core.c, `napjpeg_decode_raw_rgba` in jpeg_core.c): the output surface is the
+  one the headered path produces, byte for byte (both run the same MCU decoder). ogd pins the field positions; where it leaves the semantics open, Napple
+  reads them as follows and the tests build the structure that way (nothing here was traced from a title; a real stream could differ in these points):
+  picture size = `width_in_8x8 * 8 - width_pad` (and for the height) from the PDMA words, else the MCU grid; `dec_frame_size` = the MCU grid and must be
+  `ceil(size / MCU size)`; `stream_chroma_mode` gives components and MCU size (0 mono, 1 4:2:0, 2 4:2:2H, 3 4:2:2V, 4 4:4:4); `restart_interval` is in MCUs;
+  `dec_block_ctl[c]` gives the quantiser table, the Huffman slot (0..2) and the sampling factors (must agree with the chroma mode, 0/0 = the mode's);
+  `dec_quant[i][t]` is table t's 8-bit factor i in zigzag order; Huffman slot s: `dec_huff_mincode[2s+ac][len-1] = {idx (first symbol index of that code
+  length), val (first code)}`, `dec_huff_symbol[s][pos].val` the symbols, DC at pos 0..11 and AC at 12..173 (at most 12 DC / 162 AC symbols); the code
+  counts are the idx steps (the last length's from the symbol list) and the mincode values are checked against the canonical codes of those counts; the
+  `ac`/`comp`/`off` fields are not read. A slot without entries falls back to the component's own index. The entropy segment (RSTn kept) is at
+  `bitstream_offset`, `bitstream_size` long (0: to the end of the buffer). Bad tables, an inconsistent geometry or a slot above 2: INVALID_INPUT.
 - **NVJPG encode** produces what the hardware does: the entropy-coded segment only (with RSTn markers), from the caller's quantiser factors and Huffman
   codes, written at `bitstream_offset`. The 176-entry AC tables are read as 16 runs × 11 sizes (index = run × 11 + size; 162 entries used, matching the
   header's comment). Width/height come from the PDMA 8×8 counts minus the pad fields; memory_mode 0 = semi-planar, 1 = planar (the convention
