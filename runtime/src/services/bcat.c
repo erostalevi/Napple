@@ -211,6 +211,11 @@ typedef struct {
 } BcatNotifier;
 static BcatNotifier *g_notifiers[BCAT_MAX_NOTIFIERS];
 static void storage_synced(void) { /* every sync request: a changed storage wakes the notifiers */
+    int any = 0;
+    pthread_mutex_lock(&g_bcat_mu);
+    for (int i = 0; i < BCAT_MAX_NOTIFIERS; i++) any |= g_notifiers[i] != NULL;
+    pthread_mutex_unlock(&g_bcat_mu);
+    if (!any) return; /* nobody watches: skip reading the cache (the plain layout hashes every file) */
     uint64_t fp = bcat_storage_fingerprint(bcat_provider());
     pthread_mutex_lock(&g_bcat_mu);
     for (int i = 0; i < BCAT_MAX_NOTIFIERS; i++) {
