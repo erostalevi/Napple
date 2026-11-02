@@ -252,3 +252,13 @@ test-net-room: $(ROOM_TESTS)
 	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
 test-services: $(ROOM_TESTS)
 .PHONY: test-net-room
+
+# napple-online (2026-11-02-r7): the Napple online client glue (NAPPLE_ONLINE_SERVER) against a fake server on localhost. Part of `make test-services`;
+# alone: `make test-net-online`
+NETONLINE_TESTS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_net_online_*.c))
+$(BUILD)/tests/test_net_online_%: tests/test_net_online_%.c tests/check.h tests/svc_test.h src/net/net_online.h $(BUILD)/tests/stubs.o $(OBJ)
+	$(CC) $(CFLAGS) $< $(BUILD)/tests/stubs.o $(filter-out $(call svc_included,$<),$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
+test-net-online: $(NETONLINE_TESTS)
+	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
+test-services: $(NETONLINE_TESTS)
+.PHONY: test-net-online
