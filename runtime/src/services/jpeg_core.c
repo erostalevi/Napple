@@ -444,10 +444,7 @@ static const uint8_t ac_c_vals[162] = {
     0xb5, 0xb6, 0xb7, 0xb8, 0xb9, 0xba, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xd2, 0xd3, 0xd4, 0xd5, 0xd6, 0xd7, 0xd8, 0xd9, 0xda,
     0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea, 0xf2, 0xf3, 0xf4, 0xf5, 0xf6, 0xf7, 0xf8, 0xf9, 0xfa};
 
-typedef struct {
-    uint16_t code[256];
-    uint8_t len[256];
-} HuffEnc;
+typedef JpegHuffCode HuffEnc; /* jpeg_core.h */
 static void henc_build(HuffEnc *e, const uint8_t bits[17], const uint8_t *vals) {
     int code = 0, k = 0;
     memset(e, 0, sizeof *e);
@@ -516,6 +513,7 @@ static void encode_block(Out *o, const float px[64], const uint16_t *qt, int *pr
     int diff = qv[0] - *pred;
     *pred = qv[0];
     int s = bitsize(diff);
+    if (!dc->len[s] || s > 11) o->fail = 1; /* a table without this category (only a caller-given table can lack one) */
     out_bits(o, dc->code[s], dc->len[s]);
     if (s) out_bits(o, (unsigned)(diff < 0 ? diff - 1 : diff), s);
     int run = 0;
@@ -526,15 +524,20 @@ static void encode_block(Out *o, const float px[64], const uint16_t *qt, int *pr
             continue;
         }
         while (run > 15) {
+            if (!ac->len[0xf0]) o->fail = 1;
             out_bits(o, ac->code[0xf0], ac->len[0xf0]);
             run -= 16;
         }
         int sz = bitsize(v), rs = (run << 4) | sz;
+        if (!ac->len[rs] || sz > 10) o->fail = 1;
         out_bits(o, ac->code[rs], ac->len[rs]);
         out_bits(o, (unsigned)(v < 0 ? v - 1 : v), sz);
         run = 0;
     }
-    if (run) out_bits(o, ac->code[0], ac->len[0]);
+    if (run) {
+        if (!ac->len[0]) o->fail = 1;
+        out_bits(o, ac->code[0], ac->len[0]);
+    }
 }
 uint8_t *napjpeg_encode_rgba(const uint8_t *rgba, int w, int h, int stride, int quality, int sub, size_t *out_size) {
     if (!rgba || w <= 0 || h <= 0 || w > JPEGCORE_MAX_DIM || h > JPEGCORE_MAX_DIM || stride < w * 4) return NULL;
@@ -646,4 +649,83 @@ int napjpeg_decode_into(const uint8_t *data, size_t size, int *width, int *heigh
     *width = dw;
     *height = dh;
     return JPEGCORE_OK;
+}
+
+/* ---- scan-only encode (jpeg_core.h) ---- */
+void napjpeg_std_huff(JpegHuffCode dc[2], JpegHuffCode ac[2]) {
+    henc_build(&dc[0], dc_l_bits, dc_vals);
+    henc_build(&dc[1], dc_c_bits, dc_vals);
+    henc_build(&ac[0], ac_l_bits, ac_l_vals);
+    henc_build(&ac[1], ac_c_bits, ac_c_vals);
+}
+int napjpeg_huff_to_dht(const JpegHuffCode *h, uint8_t bits[17], uint8_t vals[256]) {
+    int n = 0, code = 0;
+    memset(bits, 0, 17);
+    for (int l = 1; l <= 16; l++) { /* canonical order: by length, then by code value */
+        for (;;) {
+            int found = -1;
+            for (int s = 0; s < 256; s++)
+                if (h->len[s] == l && h->code[s] == code) found = s;
+            if (found < 0) break;
+            vals[n++] = (uint8_t)found;
+            bits[l]++;
+            code++;
+        }
+        code <<= 1;
+    }
+    for (int s = 0; s < 256; s++) /* every coded symbol must have been reached */
+        if (h->len[s]) {
+            int seen = 0;
+            for (int i = 0; i < n; i++) seen |= vals[i] == s;
+            if (!seen) return -1;
+        }
+    return n;
+}
+static float scan_px(const uint8_t *plane, int stride, int step, int x, int y, int w, int h) {
+    if (x >= w) x = w - 1;
+    if (y >= h) y = h - 1;
+    return (float)plane[(size_t)y * stride + (size_t)x * step] - 128.0f;
+}
+uint8_t *napjpeg_encode_scan(const JpegScanParams *p, size_t *out_size) {
+    if (!p || !p->y || !p->u || (!p->uv_interleaved && !p->v) || p->width <= 0 || p->height <= 0 || p->width > JPEGCORE_MAX_DIM || p->height > JPEGCORE_MAX_DIM ||
+        p->chroma < JPEGSCAN_444 || p->chroma > JPEGSCAN_420 || p->y_stride < p->width || p->restart_interval < 0)
+        return NULL;
+    for (int t = 0; t < 2; t++)
+        for (int i = 0; i < 64; i++)
+            if (!p->qt[t][i]) return NULL;
+    dct_init();
+    int hs = p->chroma == JPEGSCAN_422H || p->chroma == JPEGSCAN_420 ? 2 : 1, vs = p->chroma == JPEGSCAN_422V || p->chroma == JPEGSCAN_420 ? 2 : 1;
+    int cw = (p->width + hs - 1) / hs, ch = (p->height + vs - 1) / vs, step = p->uv_interleaved ? 2 : 1;
+    if (p->uv_stride < cw * step) return NULL;
+    int mw = 8 * hs, mh = 8 * vs, mcus_x = (p->width + mw - 1) / mw, mcus_y = (p->height + mh - 1) / mh;
+    Out o = {0};
+    int pred[3] = {0, 0, 0}, mcu = 0, rst = 0;
+    for (int my = 0; my < mcus_y && !o.fail; my++)
+        for (int mx = 0; mx < mcus_x && !o.fail; mx++, mcu++) {
+            if (p->restart_interval && mcu && mcu % p->restart_interval == 0) { /* pad to a byte with 1s, RSTn, predictions restart */
+                if (o.nb) out_bits(&o, 0x7f, 8 - o.nb);
+                out_byte(&o, 0xff);
+                out_byte(&o, 0xd0 + (rst++ & 7));
+                pred[0] = pred[1] = pred[2] = 0;
+            }
+            float blk[64];
+            for (int by = 0; by < vs; by++)
+                for (int bx = 0; bx < hs; bx++) {
+                    for (int i = 0; i < 64; i++)
+                        blk[i] = scan_px(p->y, p->y_stride, 1, mx * mw + bx * 8 + (i & 7), my * mh + by * 8 + (i >> 3), p->width, p->height);
+                    encode_block(&o, blk, p->qt[0], &pred[0], &p->dc[0], &p->ac[0]);
+                }
+            for (int c = 0; c < 2; c++) {
+                const uint8_t *pl = p->uv_interleaved ? p->u + c : c ? p->v : p->u;
+                for (int i = 0; i < 64; i++) blk[i] = scan_px(pl, p->uv_stride, step, mx * 8 + (i & 7), my * 8 + (i >> 3), cw, ch);
+                encode_block(&o, blk, p->qt[1], &pred[1 + c], &p->dc[1], &p->ac[1]);
+            }
+        }
+    if (o.nb) out_bits(&o, 0x7f, 8 - o.nb);
+    if (o.fail || !o.n) {
+        free(o.buf);
+        return NULL;
+    }
+    *out_size = o.n;
+    return o.buf;
 }

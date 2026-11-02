@@ -251,7 +251,7 @@ have_key:
 }
 static void nvdec_execute(MediaEngine *e) {
     int codec = (int)e->reg[NVM_SET_APPLICATION_ID];
-    uint32_t status[8] = {0};
+    uint32_t status[NVDEC_STATUS_WORDS] = {0}; /* nvdec_status_s: mbs correct, mbs in error, cycles, error_status, HEVC/VP9 union, slice header error */
     if (e->dec && e->dec_codec != codec) {
         e->backend->close(e->dec);
         e->dec = NULL;
@@ -263,8 +263,8 @@ static void nvdec_execute(MediaEngine *e) {
     }
     if (!e->dec) {
         fail(e, 1); /* codec not supported by the backend */
-        status[3] = 1;
-        status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
+        status[NVDEC_STATUS_W_ERROR] = 1;
+        status_write(e, NVDEC_SET_STATUS_OFFSET, status, NVDEC_STATUS_WORDS);
         return;
     }
     size_t pic_avail = 0, bs_avail = 0, luma_avail = 0, chroma_avail = 0;
@@ -285,8 +285,10 @@ static void nvdec_execute(MediaEngine *e) {
     if (!creg) creg = e->reg[NVDEC_SET_DISPLAY_BUF_CHROMA_OFFSET];
     uint8_t *luma = surf(e, lreg, &luma_avail), *chroma = surf(e, creg, &chroma_avail);
     size_t bs_len = bs_avail;
-    static const int len_word_h264 = NVDEC_PIC_STREAM_LEN_WORD_H264, len_word_other = NVDEC_PIC_STREAM_LEN_WORD_VP9;
-    int lw = codec == DEC_CODEC_H264 ? len_word_h264 : len_word_other;
+    int lw = codec == DEC_CODEC_H264 ? NVDEC_PIC_STREAM_LEN_WORD_H264
+             : codec == DEC_CODEC_VP8 ? NVDEC_PIC_STREAM_LEN_WORD_VP8
+             : codec == DEC_CODEC_H265 ? NVDEC_PIC_STREAM_LEN_WORD_H265
+                                       : NVDEC_PIC_STREAM_LEN_WORD_VP9;
     if (pic && pic_avail >= (size_t)(lw + 1) * 4) {
         uint32_t l = rd32(pic + (size_t)lw * 4);
         if (l && l <= bs_avail) bs_len = l;
@@ -300,14 +302,14 @@ static void nvdec_execute(MediaEngine *e) {
                         e->reg[NVDEC_SET_DRV_PIC_SETUP_OFFSET]);
         }
         fail(e, 2);
-        status[3] = 2;
-        status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
+        status[NVDEC_STATUS_W_ERROR] = 2;
+        status_write(e, NVDEC_SET_STATUS_OFFSET, status, NVDEC_STATUS_WORDS);
         return;
     }
     if (e->backend->configure && !nvdec_configure(e, codec, bs, bs_len, pic, pic_avail)) {
         fail(e, 4); /* the backend refused the parameter sets */
-        status[3] = 4;
-        status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
+        status[NVDEC_STATUS_W_ERROR] = 4;
+        status_write(e, NVDEC_SET_STATUS_OFFSET, status, NVDEC_STATUS_WORDS);
         return;
     }
     DecodeRequest rq = {codec, pic, pic_avail, bs, bs_len, idx, luma, chroma, luma_avail, chroma_avail, 0, 0};
@@ -316,13 +318,20 @@ static void nvdec_execute(MediaEngine *e) {
         rq.chroma_pitch = rd32(pic + NVDEC_H264_W_PITCH_CHROMA * 4);
         if (rq.luma_pitch > 0x10000) rq.luma_pitch = 0;
         if (rq.chroma_pitch > 0x10000) rq.chroma_pitch = 0;
-    } else if (codec == DEC_CODEC_VP9 && pic && pic_avail >= (NVDEC_VP9_W_PITCH_CHROMA + 1) * 4) {
-        Vp9Header vh; /* proposed words, guarded: only a plausible pitch (>= the key frame's width, multiple of 16) is used */
-        uint32_t lp = rd32(pic + NVDEC_VP9_W_PITCH_LUMA * 4), cp = rd32(pic + NVDEC_VP9_W_PITCH_CHROMA * 4);
-        int known = !vp9_parse_header(bs, bs_len, &vh) && vh.key_frame && vh.width ? vh.width : e->vp9_width;
+    } else if (codec == DEC_CODEC_VP9 && pic && pic_avail >= (NVDEC_VP9_W_STRIDES + 1) * 4) {
+        /* nvdec_vp9_pic_s: word 24 = width | height << 16, word 25 = luma stride | chroma stride << 16 (u16 each). The guard stays: a stride below the
+         * picture width, above 0x10000 or not a multiple of 16 is ignored (packed rows), so a stream that leaves the words 0 still decodes. */
+        Vp9Header vh;
+        uint32_t sz = rd32(pic + NVDEC_VP9_W_SIZE * 4), st = rd32(pic + NVDEC_VP9_W_STRIDES * 4), lp = st & 0xffff, cp = st >> 16;
+        int known = (int)(sz & 0xffff);
+        if (!known) known = !vp9_parse_header(bs, bs_len, &vh) && vh.key_frame && vh.width ? vh.width : e->vp9_width;
         if (known) e->vp9_width = known;
-        if (known && lp >= (uint32_t)known && lp <= 0x10000 && !(lp & 15)) rq.luma_pitch = lp;
-        if (known && cp >= (uint32_t)known && cp <= 0x10000 && !(cp & 15)) rq.chroma_pitch = cp;
+        if (known && lp >= (uint32_t)known && !(lp & 15)) rq.luma_pitch = lp;
+        if (known && cp >= (uint32_t)known && !(cp & 15)) rq.chroma_pitch = cp;
+    } else if (codec == DEC_CODEC_VP8 && pic && pic_avail >= (NVDEC_VP8_W_STRIDE_CHROMA + 1) * 4) { /* nvdec_vp8_pic_s FrameStride[2], same guard */
+        uint32_t w8 = rd32(pic + NVDEC_VP8_W_SIZE * 4) & 0xffff, lp = rd32(pic + NVDEC_VP8_W_STRIDE_LUMA * 4), cp = rd32(pic + NVDEC_VP8_W_STRIDE_CHROMA * 4);
+        if (w8 && lp >= w8 && lp <= 0x10000 && !(lp & 15)) rq.luma_pitch = lp;
+        if (w8 && cp >= w8 && cp <= 0x10000 && !(cp & 15)) rq.chroma_pitch = cp;
     }
     DecodeResult rs = {0};
     if (media_write_prepare) {
@@ -357,16 +366,20 @@ static void nvdec_execute(MediaEngine *e) {
     }
     if (rc < 0) {
         fail(e, 3);
-        status[3] = 3;
+        status[NVDEC_STATUS_W_ERROR] = 3;
     } else if (rc == 0) {
         e->st.frames++;
         pitch_hint_set(lreg, rq.luma_pitch >= (uint32_t)rs.width ? rq.luma_pitch : (uint32_t)rs.width);
         pitch_hint_set(creg, rq.chroma_pitch >= (uint32_t)rs.width ? rq.chroma_pitch : (uint32_t)rs.width);
-        status[0] = (uint32_t)(((rs.width + 15) / 16) * ((rs.height + 15) / 16)); /* macroblocks correct */
-        status[4] = (uint32_t)rs.width;
-        status[5] = (uint32_t)rs.height;
+        status[0] = (uint32_t)(((rs.width + 15) / 16) * ((rs.height + 15) / 16)); /* macroblocks correctly decoded */
+        if (codec == DEC_CODEC_VP9 || codec == DEC_CODEC_H265) { /* the HEVC / VP9 statistics: every 8x8 block intra on a key frame, inter otherwise */
+            uint32_t blocks = (uint32_t)(((rs.width + 7) / 8) * ((rs.height + 7) / 8));
+            Vp9Header vh;
+            int key = codec == DEC_CODEC_VP9 ? !vp9_parse_header(bs, bs_len, &vh) && vh.key_frame : 1;
+            status[key ? NVDEC_STATUS_W_INTRA_CNT : NVDEC_STATUS_W_INTER_CNT] = blocks;
+        }
     }
-    status_write(e, NVDEC_SET_STATUS_OFFSET, status, 8);
+    status_write(e, NVDEC_SET_STATUS_OFFSET, status, NVDEC_STATUS_WORDS);
 }
 
 /* ---- VIC: NV12 -> RGBA/BGRA/NV12, pitch linear or block linear ---- */
@@ -532,148 +545,279 @@ static void vic_execute(MediaEngine *e) {
     vic_dump(e->seq, e->st.frames, luma, chroma, ip, w, h);
 }
 
-/* ---- NVJPG ---- */
-static void nvjpg_encode(MediaEngine *e, const uint8_t *setup, const uint8_t *in, size_t in_avail, uint8_t *out, size_t out_avail) {
-    uint32_t status[4] = {0};
-    uint32_t in_size = rd32(setup), out_cap = rd32(setup + 4), fmt = rd32(setup + 16), w = rd32(setup + 28), h = rd32(setup + 32), pitch = rd32(setup + 36),
-             quality = rd32(setup + 40), sub = rd32(setup + 44);
-    uint32_t p = pitch ? pitch : w * 4;
-    int err = 0;
-    if (fmt != NVJPG_FMT_RGBA) err = 5;
-    else if (!w || !h || w > JPEGCORE_MAX_DIM || h > JPEGCORE_MAX_DIM || p < w * 4 || p > 0x100000 || in_avail < (size_t)p * (h - 1) + (size_t)w * 4 ||
-             (in_size && in_size < (size_t)p * (h - 1) + (size_t)w * 4))
-        err = 4;
-    size_t n = 0;
-    if (!err) {
-        if (!quality || quality > 100) quality = 85;
-        uint8_t *jpg = napjpeg_encode_rgba(in, (int)w, (int)h, (int)p, (int)quality, sub != 0, &n);
-        if (!jpg) err = 3;
-        else {
-            size_t cap = out_cap && out_cap < out_avail ? out_cap : out_avail;
-            if (n > cap) err = JPEGCORE_TOO_SMALL;
-            else {
-                if (media_write_prepare) media_write_prepare(out, n);
-                memcpy(out, jpg, n);
-            }
-            free(jpg);
-        }
-    }
-    if (err) {
-        fail(e, (uint32_t)err);
-        status[0] = (uint32_t)err;
-    } else {
-        e->st.frames++;
-        status[1] = w, status[2] = h, status[3] = (uint32_t)n;
-    }
-    status_write(e, NVJPG_SET_STATUS_OFFSET, status, 4);
+/* ---- NVJPG: nvjpg_drv_pic_param_s at SET_IN_DRV_PIC_SETUP, application id 1 decode / 2 encode (nvdrv_media_regs.h) ---- */
+static uint16_t rd16(const uint8_t *p) {
+    uint16_t v;
+    memcpy(&v, p, 2);
+    return v;
 }
-static void nvjpg_execute(MediaEngine *e) {
-    size_t setup_avail, in_avail, out_avail, chroma_avail;
-    uint8_t *setup = surf(e, e->reg[NVJPG_SET_DRV_PIC_SETUP_OFFSET], &setup_avail), *in = surf(e, e->reg[NVJPG_SET_IN_BUF_BASE_OFFSET], &in_avail);
-    uint8_t *out = surf(e, e->reg[NVJPG_SET_OUT_LUMA_OFFSET], &out_avail), *chroma = surf(e, e->reg[NVJPG_SET_OUT_CHROMA_OFFSET], &chroma_avail);
-    uint32_t status[4] = {0};
-    if (!setup || setup_avail < NVJPG_SETUP_WORDS * 4 || !in || !out) {
-        fail(e, 2);
-        status[0] = 100;
-        status_write(e, NVJPG_SET_STATUS_OFFSET, status, 4);
+static void nvjpg_status(MediaEngine *e, uint32_t w0, uint32_t mcu_x, uint32_t mcu_y, uint32_t err) {
+    uint32_t st[NVJPG_STATUS_BYTES / 4] = {w0, mcu_x, mcu_y, 0 /* cycle_count */, err};
+    if (err) fail(e, err);
+    status_write(e, NVJPG_SET_OUT_STATUS, st, NVJPG_STATUS_BYTES / 4);
+}
+/* MCU size of a decoder chroma mode (NVJPG_CHROMA_*). */
+static void nvjpg_mcu(uint32_t mode, uint32_t *mw, uint32_t *mh) {
+    *mw = mode == NVJPG_CHROMA_420 || mode == NVJPG_CHROMA_422H ? 16 : 8;
+    *mh = mode == NVJPG_CHROMA_420 || mode == NVJPG_CHROMA_422V ? 16 : 8;
+}
+/* Decode. The decoder half of the structure carries the driver's parse of the file (Huffman minimum codes, quantisers, block layout); the bitstream buffer is
+ * the JPEG the driver parsed, bitstream_offset its entropy-coded data. Napple decodes the file itself from its SOI (at or before bitstream_offset) with
+ * jpeg_core, and honours the output controls: output_type, power2_downscale, chroma_subsample, alpha, strides. A buffer with no SOI in front of the scan
+ * (headers dropped by the driver) is refused with BAD_MAGIC: rebuilding a file from the hardware tables is not done (docs/reference/nvdrv-layouts.md). */
+static void nvjpg_decode(MediaEngine *e, const uint8_t *pic) {
+    size_t bs_avail = 0, o_avail = 0, u_avail = 0, v_avail = 0;
+    uint8_t *bs = surf(e, e->reg[NVJPG_SET_BITSTREAM], &bs_avail), *out = surf(e, e->reg[NVJPG_SET_CUR_PIC], &o_avail);
+    uint8_t *pu = surf(e, e->reg[NVJPG_SET_CUR_PIC_CHROMA_U], &u_avail), *pv = surf(e, e->reg[NVJPG_SET_CUR_PIC_CHROMA_V], &v_avail);
+    uint32_t boff = rd32(pic + NVJPG_PIC_BITSTREAM_OFFSET), bsize = rd32(pic + NVJPG_PIC_BITSTREAM_SIZE), param = rd32(pic + NVJPG_PIC_DEC_FRAME_PARAM);
+    uint32_t smode = (param >> 19) & 7, otype = (param >> 23) & 7, down = (param >> 26) & 3, sub = (param >> 28) & 3;
+    uint32_t ls = rd32(pic + NVJPG_PIC_LUMA_STRIDE), cs = rd32(pic + NVJPG_PIC_CHROMA_STRIDE);
+    uint8_t alpha = pic[NVJPG_PIC_DEC_OUTPUT_INFO + 3];
+    if (!bs || !out || boff >= bs_avail) {
+        nvjpg_status(e, 0, 0, 0, NVJPG_ERR_INVALID_INPUT);
         return;
     }
-    if (setup_avail >= NVJPG_SETUP_WORDS_ENC * 4 && rd32(setup + 24) == NVJPG_MODE_ENCODE) {
-        nvjpg_encode(e, setup, in, in_avail, out, out_avail);
+    size_t end = bsize && (uint64_t)boff + bsize <= bs_avail ? (size_t)boff + bsize : bs_avail, soi = (size_t)-1;
+    for (size_t i = 0; i + 1 < end && i <= boff; i++)
+        if (bs[i] == 0xff && bs[i + 1] == 0xd8) {
+            soi = i;
+            break;
+        }
+    if (soi == (size_t)-1) {
+        nvjpg_status(e, 0, 0, 0, NVJPG_ERR_BAD_MAGIC);
         return;
     }
-    uint32_t in_size = rd32(setup), out_cap = rd32(setup + 4), ow = rd32(setup + 8), oh = rd32(setup + 12), fmt = rd32(setup + 16), pitch = rd32(setup + 20);
-    if (!in_size || in_size > in_avail) in_size = (uint32_t)in_avail;
-    int w = 0, h = 0, err = 0;
-    uint8_t *rgba = napjpeg_decode_rgba(in, in_size, &w, &h, &err);
+    int w = 0, h = 0, jerr = 0;
+    JpegInfo ji;
+    uint8_t *rgba = napjpeg_info(bs + soi, end - soi, &ji) == JPEGCORE_OK ? napjpeg_decode_rgba(bs + soi, end - soi, &w, &h, &jerr) : NULL;
     if (!rgba) {
-        fail(e, (uint32_t)err);
-        status[0] = (uint32_t)err ? (uint32_t)err : 1;
-        status_write(e, NVJPG_SET_STATUS_OFFSET, status, 4);
+        nvjpg_status(e, 0, 0, 0, NVJPG_ERR_INVALID_INPUT);
         return;
     }
-    if (ow && oh && ((int)ow != w || (int)oh != h)) {
-        uint8_t *s = napjpeg_scale_rgba(rgba, w, h, (int)ow, (int)oh);
+    if (ji.ncomp == 1) smode = NVJPG_CHROMA_MONO;
+    uint32_t mw, mh;
+    nvjpg_mcu(smode, &mw, &mh);
+    uint32_t mcu_x = ((uint32_t)w + mw - 1) / mw, mcu_y = ((uint32_t)h + mh - 1) / mh;
+    if (down) { /* power2_downscale: 1/2, 1/4, 1/8 */
+        int dw = (w + (1 << down) - 1) >> down, dh = (h + (1 << down) - 1) >> down;
+        uint8_t *sc = napjpeg_scale_rgba(rgba, w, h, dw, dh);
         free(rgba);
-        rgba = s;
-        w = (int)ow;
-        h = (int)oh;
+        rgba = sc;
+        w = dw;
+        h = dh;
         if (!rgba) {
-            fail(e, 3);
+            nvjpg_status(e, 0, mcu_x, mcu_y, NVJPG_ERR_HWERR);
             return;
         }
     }
-    size_t cap = out_cap && out_cap < out_avail ? out_cap : out_avail, written = 0;
-    if (fmt == NVJPG_FMT_RGBA) {
-        uint32_t p = pitch ? pitch : (uint32_t)w * 4;
-        if (p < (uint32_t)w * 4 || cap < (size_t)p * (size_t)h) {
-            err = 4;
-        } else {
-            for (int y = 0; y < h; y++) memcpy(out + (size_t)y * p, rgba + (size_t)y * w * 4, (size_t)w * 4);
-            written = (size_t)p * h;
-        }
-    } else if (fmt == NVJPG_FMT_NV12) {
-        uint32_t p = pitch ? pitch : (uint32_t)w;
-        size_t csz = (size_t)p * ((h + 1) / 2);
-        if (!chroma || p < (uint32_t)w || cap < (size_t)p * h || chroma_avail < csz) {
-            err = 4;
-        } else {
+    uint32_t err = 0;
+    if (otype >= NVJPG_OUT_RGBA && otype <= NVJPG_OUT_ARGB) { /* packed 32-bit pixels in byte order R,G,B,A / B,G,R,A / A,B,G,R / A,R,G,B */
+        static const uint8_t order[4][4] = {{0, 1, 2, 3}, {2, 1, 0, 3}, {3, 2, 1, 0}, {3, 0, 1, 2}};
+        const uint8_t *ord = order[otype - NVJPG_OUT_RGBA];
+        size_t pitch = ls ? ls : (size_t)w * 4;
+        if (pitch < (size_t)w * 4 || o_avail < pitch * (size_t)(h - 1) + (size_t)w * 4) err = NVJPG_ERR_INVALID_INPUT;
+        else {
+            if (media_write_prepare) media_write_prepare(out, pitch * (size_t)h);
             for (int y = 0; y < h; y++)
                 for (int x = 0; x < w; x++) {
-                    const uint8_t *s = rgba + ((size_t)y * w + x) * 4;
-                    out[(size_t)y * p + x] = clamp8((int)(0.299f * s[0] + 0.587f * s[1] + 0.114f * s[2] + 0.5f));
+                    uint8_t px[4], *s0 = rgba + ((size_t)y * w + x) * 4, *d = out + (size_t)y * pitch + (size_t)x * 4;
+                    memcpy(px, s0, 3);
+                    px[3] = alpha ? alpha : 0xff;
+                    for (int k = 0; k < 4; k++) d[k] = px[ord[k]];
                 }
-            for (int y = 0; y < (h + 1) / 2; y++)
-                for (int x = 0; x < (w + 1) / 2; x++) { /* chroma from the top-left sample of each 2x2 block averaged */
+        }
+    } else if (otype == NVJPG_OUT_YUV || otype == NVJPG_OUT_YUY2) {
+        uint32_t cm = sub == 1 ? NVJPG_CHROMA_420 : sub == 2 ? NVJPG_CHROMA_422H : smode > NVJPG_CHROMA_444 ? NVJPG_CHROMA_444 : smode;
+        if (otype == NVJPG_OUT_YUY2) cm = NVJPG_CHROMA_422H;
+        int hs = cm == NVJPG_CHROMA_420 || cm == NVJPG_CHROMA_422H ? 2 : 1, vs = cm == NVJPG_CHROMA_420 || cm == NVJPG_CHROMA_422V ? 2 : 1;
+        int cw = (w + hs - 1) / hs, ch = (h + vs - 1) / vs;
+        /* JFIF full-range BT.601 */
+#define NVJ_Y(p) clamp8((int)(0.299f * (p)[0] + 0.587f * (p)[1] + 0.114f * (p)[2] + 0.5f))
+        if (otype == NVJPG_OUT_YUY2) { /* Y0 U Y1 V */
+            size_t pitch = ls ? ls : (size_t)cw * 4;
+            if (pitch < (size_t)cw * 4 || o_avail < pitch * (size_t)h) err = NVJPG_ERR_INVALID_INPUT;
+            for (int y = 0; !err && y < h; y++)
+                for (int x = 0; x < cw; x++) {
+                    const uint8_t *a0 = rgba + ((size_t)y * w + 2 * x) * 4, *a1 = 2 * x + 1 < w ? a0 + 4 : a0;
+                    int r = (a0[0] + a1[0]) / 2, g = (a0[1] + a1[1]) / 2, b = (a0[2] + a1[2]) / 2;
+                    uint8_t *d = out + (size_t)y * pitch + (size_t)x * 4;
+                    d[0] = NVJ_Y(a0);
+                    d[1] = clamp8((int)(-0.168736f * r - 0.331264f * g + 0.5f * b + 128.5f));
+                    d[2] = NVJ_Y(a1);
+                    d[3] = clamp8((int)(0.5f * r - 0.418688f * g - 0.081312f * b + 128.5f));
+                }
+        } else {
+            size_t yp = ls ? ls : (size_t)w, planar = pv != NULL, step = planar ? 1 : 2, cp = cs ? cs : (size_t)cw * step;
+            if (yp < (size_t)w || o_avail < yp * (size_t)(h - 1) + (size_t)w) err = NVJPG_ERR_INVALID_INPUT;
+            else if (cm != NVJPG_CHROMA_MONO && (!pu || cp < (size_t)cw * step || u_avail < cp * (size_t)(ch - 1) + (size_t)cw * step ||
+                                                 (planar && v_avail < cp * (size_t)(ch - 1) + (size_t)cw)))
+                err = NVJPG_ERR_INVALID_INPUT;
+            for (int y = 0; !err && y < h; y++)
+                for (int x = 0; x < w; x++) out[(size_t)y * yp + x] = NVJ_Y(rgba + ((size_t)y * w + x) * 4);
+            for (int y = 0; !err && cm != NVJPG_CHROMA_MONO && y < ch; y++)
+                for (int x = 0; x < cw; x++) { /* the average of the block of samples each chroma sample covers */
                     int r = 0, g = 0, b = 0, n = 0;
-                    for (int dy = 0; dy < 2; dy++)
-                        for (int dx = 0; dx < 2; dx++) {
-                            int yy = 2 * y + dy, xx = 2 * x + dx;
+                    for (int dy = 0; dy < vs; dy++)
+                        for (int dx = 0; dx < hs; dx++) {
+                            int yy = y * vs + dy, xx = x * hs + dx;
                             if (yy >= h || xx >= w) continue;
-                            const uint8_t *s = rgba + ((size_t)yy * w + xx) * 4;
-                            r += s[0], g += s[1], b += s[2], n++;
+                            const uint8_t *q = rgba + ((size_t)yy * w + xx) * 4;
+                            r += q[0], g += q[1], b += q[2], n++;
                         }
                     r /= n, g /= n, b /= n;
-                    chroma[(size_t)y * p + 2 * x] = clamp8((int)(-0.168736f * r - 0.331264f * g + 0.5f * b + 128.5f));
-                    chroma[(size_t)y * p + 2 * x + 1] = clamp8((int)(0.5f * r - 0.418688f * g - 0.081312f * b + 128.5f));
+                    uint8_t U = clamp8((int)(-0.168736f * r - 0.331264f * g + 0.5f * b + 128.5f)), V = clamp8((int)(0.5f * r - 0.418688f * g - 0.081312f * b + 128.5f));
+                    if (planar) {
+                        pu[(size_t)y * cp + x] = U;
+                        pv[(size_t)y * cp + x] = V;
+                    } else {
+                        pu[(size_t)y * cp + 2 * x] = U;
+                        pu[(size_t)y * cp + 2 * x + 1] = V;
+                    }
                 }
-            written = (size_t)p * h + csz;
         }
+#undef NVJ_Y
     } else {
-        err = 5;
+        err = NVJPG_ERR_INVALID_INPUT; /* output types 6, 7 are not defined */
     }
     free(rgba);
-    if (err) {
-        fail(e, (uint32_t)err);
-        status[0] = (uint32_t)err;
-    } else {
-        e->st.frames++;
-        status[1] = (uint32_t)w;
-        status[2] = (uint32_t)h;
-        status[3] = (uint32_t)written;
+    if (!err) e->st.frames++;
+    nvjpg_status(e, (uint32_t)(end > boff ? end - boff : 0), mcu_x, mcu_y, err);
+}
+/* Encode: YUV from CUR_PIC (+ chroma) with the caller's quantisers and Huffman codes; the entropy-coded data alone goes to the bitstream buffer at
+ * bitstream_offset (the driver writes the headers in front). Width / height: pdma width_in_8x8 / height_in_8x8 minus the pad fields; chroma format from
+ * ENC_TOP_CTL; memory_mode 0 semi-planar (interleaved UV in CHROMA_U), 1 planar (the nvenc_drv.h convention of the same field). The AC tables have 176 entries:
+ * 16 runs x 11 sizes, index = run * 11 + size (162 used: sizes 1..10 plus EOB 0x00 and ZRL 0xF0), DC tables 12 entries indexed by category. */
+static void nvjpg_encode(MediaEngine *e, const uint8_t *pic) {
+    size_t y_avail = 0, u_avail = 0, v_avail = 0, o_avail = 0;
+    uint8_t *py = surf(e, e->reg[NVJPG_SET_CUR_PIC], &y_avail), *pu = surf(e, e->reg[NVJPG_SET_CUR_PIC_CHROMA_U], &u_avail);
+    uint8_t *pv = surf(e, e->reg[NVJPG_SET_CUR_PIC_CHROMA_V], &v_avail), *out = surf(e, e->reg[NVJPG_SET_BITSTREAM], &o_avail);
+    uint32_t top = rd32(pic + NVJPG_PIC_ENC_TOP_CTL), info = rd32(pic + NVJPG_PIC_PDMA_PIC_INFO), info1 = rd32(pic + NVJPG_PIC_PDMA_PIC_INFO1);
+    uint32_t chroma = top & 3, mcu_w = (top >> 2) & 0xfff, mcu_h = (top >> 14) & 0xfff;
+    int hs = chroma == JPEGSCAN_422H || chroma == JPEGSCAN_420 ? 2 : 1, vs = chroma == JPEGSCAN_422V || chroma == JPEGSCAN_420 ? 2 : 1;
+    int w = (int)(((info >> 6) & 0xfff) * 8) - (int)((info1 >> 21) & 15), h = (int)(((info >> 18) & 0xfff) * 8) - (int)((info1 >> 25) & 15);
+    if (!((info >> 6) & 0xfff)) w = (int)mcu_w * 8 * hs, h = (int)mcu_h * 8 * vs;
+    uint32_t mem = (info1 >> 29) & 7, boff = rd32(pic + NVJPG_PIC_BITSTREAM_OFFSET), bcap = rd32(pic + NVJPG_PIC_BITSTREAM_SIZE);
+    JpegScanParams sp;
+    memset(&sp, 0, sizeof sp);
+    sp.width = w;
+    sp.height = h;
+    sp.chroma = (int)chroma;
+    sp.y = py;
+    sp.u = pu;
+    sp.v = pv;
+    sp.uv_interleaved = mem == 0;
+    sp.y_stride = (int)(rd32(pic + NVJPG_PIC_LUMA_STRIDE) ? rd32(pic + NVJPG_PIC_LUMA_STRIDE) : (uint32_t)w);
+    int cw = (w + hs - 1) / hs, ch = (h + vs - 1) / vs;
+    sp.uv_stride = (int)(rd32(pic + NVJPG_PIC_CHROMA_STRIDE) ? rd32(pic + NVJPG_PIC_CHROMA_STRIDE) : (uint32_t)(cw * (sp.uv_interleaved ? 2 : 1)));
+    sp.restart_interval = (int)(rd32(pic + NVJPG_PIC_ENC_RST_INTERVAL) & 0xffff);
+    uint32_t mcus_x = w > 0 ? (uint32_t)((w + 8 * hs - 1) / (8 * hs)) : 0, mcus_y = h > 0 ? (uint32_t)((h + 8 * vs - 1) / (8 * vs)) : 0, err = 0;
+    for (int t = 0; t < 2 && !err; t++)
+        for (int i = 0; i < 64; i++) {
+            uint32_t f = rd16(pic + NVJPG_PIC_ENC_QUANT + (size_t)t * 128 + (size_t)i * 2), q = f ? (32768u + f / 2) / f : 0;
+            if (!q) err = NVJPG_ERR_INVALID_INPUT;
+            sp.qt[t][i] = (uint16_t)(q > 255 ? 255 : q);
+        }
+    static const unsigned base[4] = {0, 12, 188, 200}; /* hfDcLuma[12], hfAcLuma[176], hfDcChroma[12], hfAcChroma[176] */
+    for (int t = 0; t < 2; t++) {
+        const uint8_t *dc = pic + NVJPG_PIC_ENC_HUFF + (size_t)base[2 * t] * 4, *ac = pic + NVJPG_PIC_ENC_HUFF + (size_t)base[2 * t + 1] * 4;
+        for (int c = 0; c < 12; c++) {
+            sp.dc[t].len[c] = (uint8_t)(rd16(dc + c * 4) & 31);
+            sp.dc[t].code[c] = rd16(dc + c * 4 + 2);
+        }
+        for (int run = 0; run < 16; run++)
+            for (int size = 0; size <= 10; size++) {
+                if (!size && run != 0 && run != 15) continue;
+                const uint8_t *it = ac + (size_t)(run * 11 + size) * 4;
+                sp.ac[t].len[(run << 4) | size] = (uint8_t)(rd16(it) & 31);
+                sp.ac[t].code[(run << 4) | size] = rd16(it + 2);
+            }
     }
-    status_write(e, NVJPG_SET_STATUS_OFFSET, status, 4);
+    size_t need_y = w > 0 && h > 0 ? (size_t)sp.y_stride * (size_t)(h - 1) + (size_t)w : 0;
+    size_t need_c = ch > 0 ? (size_t)sp.uv_stride * (size_t)(ch - 1) + (size_t)cw * (sp.uv_interleaved ? 2 : 1) : 0;
+    if (!err && (w <= 0 || h <= 0 || !py || !pu || !out || (!sp.uv_interleaved && mem != 1) || (mem == 1 && !pv) || y_avail < need_y || u_avail < need_c ||
+                 (mem == 1 && v_avail < need_c) || boff >= o_avail || sp.y_stride < w))
+        err = NVJPG_ERR_INVALID_INPUT;
+    size_t n = 0;
+    uint8_t *data = err ? NULL : napjpeg_encode_scan(&sp, &n);
+    if (!err && !data) err = NVJPG_ERR_INVALID_INPUT;
+    size_t cap = o_avail - (err ? 0 : boff);
+    if (!err && bcap && bcap < cap) cap = bcap;
+    if (!err && n > cap) err = NVJPG_ERR_INVALID_INPUT; /* the bitstream buffer is too small */
+    if (!err) {
+        if (media_write_prepare) media_write_prepare(out + boff, n);
+        memcpy(out + boff, data, n);
+        e->st.frames++;
+    }
+    free(data);
+    nvjpg_status(e, err ? 0 : (uint32_t)n, mcus_x, mcus_y, err);
+}
+static void nvjpg_execute(MediaEngine *e) {
+    size_t avail = 0;
+    const uint8_t *pic = surf(e, e->reg[NVJPG_SET_IN_DRV_PIC_SETUP], &avail);
+    int enc = e->reg[NVM_SET_APPLICATION_ID] == NVJPG_APP_ENCODER;
+    if (!pic || avail < (enc ? (size_t)NVJPG_PIC_BITSTREAM_SIZE + 4 : (size_t)NVJPG_PIC_BYTES)) {
+        nvjpg_status(e, 0, 0, 0, NVJPG_ERR_INVALID_INPUT);
+        return;
+    }
+    if (enc) nvjpg_encode(e, pic);
+    else nvjpg_decode(e, pic);
 }
 
-/* ---- MSENC: one NV12 frame per execute through the EncoderBackend ---- */
+/* ---- MSENC: one NV12 frame per execute through the EncoderBackend (nvenc_h264_drv_pic_setup_s in, nvenc_pic_stat_s out) ---- */
+static void msenc_status(MediaEngine *e, uint32_t err, size_t bytes, int idr) {
+    uint8_t st[MSENC_STAT_BYTES] = {0};
+    wr32(st + MSENC_STAT_PICTURE_INDEX, e->reg[MSENC_SET_PICTURE_INDEX]);
+    wr32(st + MSENC_STAT_ERROR, err ? (1u | (err << 2)) : 0); /* b0-1 error_status, b2-31 ucode_error_status (Napple's code) */
+    wr32(st + MSENC_STAT_TOTAL_BITS, (uint32_t)(bytes * 8));
+    uint16_t pt = idr ? MSENC_PIC_TYPE_IDR : MSENC_PIC_TYPE_P, slices = bytes ? 1 : 0;
+    memcpy(st + MSENC_STAT_PIC_TYPE, &pt, 2);
+    memcpy(st + MSENC_STAT_NUM_SLICES, &slices, 2);
+    wr32(st + MSENC_STAT_LAST_VALID_BYTE, bytes ? (uint32_t)(bytes - 1) : 0);
+    size_t avail;
+    uint8_t *p = surf(e, e->reg[MSENC_SET_OUT_ENC_STATUS], &avail);
+    if (p && avail >= MSENC_STAT_BYTES) memcpy(p, st, MSENC_STAT_BYTES);
+}
 static void msenc_execute(MediaEngine *e) {
-    uint32_t status[4] = {0};
-    size_t su_avail, l_avail, c_avail, o_avail;
-    uint8_t *su = surf(e, e->reg[MSENC_SET_SETUP_OFFSET], &su_avail), *luma = surf(e, e->reg[MSENC_SET_IN_LUMA_OFFSET], &l_avail),
-            *chroma = surf(e, e->reg[MSENC_SET_IN_CHROMA_OFFSET], &c_avail), *out = surf(e, e->reg[MSENC_SET_OUT_BITSTREAM_OFFSET], &o_avail);
-    if (!su && !e->reg[MSENC_SET_SETUP_OFFSET]) { /* nothing configured: accepted and counted, no bitstream */
-        status_write(e, MSENC_SET_STATUS_OFFSET, status, 4);
+    size_t su_avail, l_avail, c_avail, v_avail, o_avail;
+    uint8_t *su = surf(e, e->reg[MSENC_SET_IN_DRV_PIC_SETUP], &su_avail), *luma = surf(e, e->reg[MSENC_SET_IN_CUR_PIC], &l_avail),
+            *chroma = surf(e, e->reg[MSENC_SET_IN_CUR_PIC_CHROMA_U], &c_avail), *cv = surf(e, e->reg[MSENC_SET_IN_CUR_PIC_CHROMA_V], &v_avail),
+            *out = surf(e, e->reg[MSENC_SET_OUT_BITSTREAM], &o_avail);
+    if (!su && !e->reg[MSENC_SET_IN_DRV_PIC_SETUP]) { /* nothing configured: accepted and counted, no bitstream */
+        msenc_status(e, 0, 0, 0);
         return;
     }
     uint32_t err = 0;
-    if (!su || su_avail < MSENC_SETUP_WORDS * 4 || !luma || !chroma || !out) err = MSENC_ERR_ADDRESS;
-    uint32_t w = 0, h = 0, lp = 0, cp = 0, br = 0, fps = 0, flags = 0, cap = 0;
+    if (!su || su_avail < MSENC_PIC_BYTES || !luma || !chroma || !out) err = MSENC_ERR_ADDRESS;
+    uint32_t w = 0, h = 0, lp = 0, cp = 0, br = 0, fps = 0, planar = 0;
+    int idr = 0;
+    uint8_t *nv12c = NULL;
     if (!err) {
-        w = rd32(su), h = rd32(su + 4), lp = rd32(su + 8), cp = rd32(su + 12), br = rd32(su + 16), fps = rd32(su + 20), flags = rd32(su + 24), cap = rd32(su + 28);
-        size_t lpe = lp ? lp : w, cpe = cp ? cp : w;
-        if (!w || !h || (w & 1) || (h & 1) || w > 8192 || h > 8192 || lpe < w || cpe < w || lpe > 0x10000 || cpe > 0x10000 ||
-            l_avail < lpe * (h - 1) + w || c_avail < cpe * (h / 2 - 1) + w)
+        const uint8_t *cfg = su + MSENC_PIC_INPUT_CFG;
+        w = (uint32_t)rd16(cfg + MSENC_CFG_WIDTH_M1) + 1, h = (uint32_t)rd16(cfg + MSENC_CFG_HEIGHT_M1) + 1;
+        lp = rd16(cfg + MSENC_CFG_PITCH), cp = rd16(cfg + MSENC_CFG_PITCH_CHROMA), planar = (rd32(cfg + MSENC_CFG_FLAGS) >> 8) & 3;
+        int32_t f = (int32_t)rd32(su + MSENC_PIC_RC_FRAMERATE), b = (int32_t)rd32(su + MSENC_PIC_RC_NAL_BITRATE);
+        fps = f > 0 && f <= 240 ? (uint32_t)f : 0;
+        br = b > 0 ? (uint32_t)b : 0;
+        idr = ((su[MSENC_PIC_PIC_TYPE_BYTE] >> 2) & 3) == MSENC_PIC_TYPE_IDR;
+        size_t lpe = lp ? lp : w, cpe = cp ? cp : (planar == 1 ? (w + 1) / 2 : w);
+        if ((w & 1) || (h & 1) || w > 4096 || h > 4096 || lpe < w || lpe > 0x10000 || cpe > 0x10000 || l_avail < lpe * (h - 1) + w || planar > 1 ||
+            (planar == 0 && (cpe < w || c_avail < cpe * (h / 2 - 1) + w)) ||
+            (planar == 1 && (!cv || cpe < w / 2 || c_avail < cpe * (h / 2 - 1) + w / 2 || v_avail < cpe * (h / 2 - 1) + w / 2)))
             err = MSENC_ERR_PARAMS;
+        if (!err && planar == 1) { /* planar input: interleave U and V for the NV12 backend */
+            nv12c = malloc((size_t)w * (h / 2));
+            if (!nv12c) err = MSENC_ERR_FAILED;
+            for (uint32_t y = 0; !err && y < h / 2; y++)
+                for (uint32_t x = 0; x < w / 2; x++) {
+                    nv12c[(size_t)y * w + 2 * x] = chroma[(size_t)y * cpe + x];
+                    nv12c[(size_t)y * w + 2 * x + 1] = cv[(size_t)y * cpe + x];
+                }
+            if (!err) {
+                chroma = nv12c;
+                c_avail = (size_t)w * (h / 2);
+                cp = w;
+            }
+        }
     }
     if (!err && !e->enc) {
         e->enc = e->encoder->open(DEC_CODEC_H264);
@@ -681,21 +825,17 @@ static void msenc_execute(MediaEngine *e) {
     }
     EncodeResult rs = {0};
     if (!err) {
-        EncodeRequest rq = {DEC_CODEC_H264, (int)w, (int)h, luma, chroma, l_avail, c_avail, lp, cp, br, fps, (int)(flags & 1), out, cap && cap < o_avail ? cap : o_avail};
+        EncodeRequest rq = {DEC_CODEC_H264, (int)w, (int)h, luma, chroma, l_avail, c_avail, lp, cp, br, fps, idr, out, o_avail};
         if (media_write_prepare) media_write_prepare(out, rq.out_cap);
         if (e->encoder->encode(e->enc, &rq, &rs) < 0 || rs.size > rq.out_cap) err = MSENC_ERR_FAILED;
     }
-    if (err) {
-        fail(e, err);
-        status[0] = err;
-    } else {
+    free(nv12c);
+    if (err) fail(e, err);
+    else {
         e->st.frames++;
         e->enc_frames++;
-        status[1] = (uint32_t)rs.size;
-        status[2] = rs.idr ? 1 : 0;
-        status[3] = e->enc_frames;
     }
-    status_write(e, MSENC_SET_STATUS_OFFSET, status, 4);
+    msenc_status(e, err, err ? 0 : rs.size, !err && rs.idr);
 }
 
 static void execute(MediaEngine *e) {
@@ -716,14 +856,15 @@ static int known_reg(const MediaEngine *e, uint32_t off) {
     if (off < 0x100 || off > 0x1ff) return 0;
     switch (e->class_id) {
         case MEDIA_CLASS_NVDEC:
-            return off <= NVDEC_SET_DISPLAY_BUF_CHROMA_OFFSET ||
-                   (off >= NVDEC_SET_PICTURE_LUMA_OFFSET0 && off < NVDEC_SET_PICTURE_LUMA_OFFSET0 + NVDEC_PIC_SLOTS) ||
-                   (off >= NVDEC_SET_PICTURE_CHROMA_OFFSET0 && off < NVDEC_SET_PICTURE_CHROMA_OFFSET0 + NVDEC_PIC_SLOTS) || off == NVDEC_SET_UNNAMED_0x140;
+            return off <= NVDEC_SET_EXTERNAL_MVBUFFER_OFFSET || off == NVDEC_H264_SET_MBHIST_BUF_OFFSET || off == NVDEC_VP8_SET_PROB_DATA_OFFSET ||
+                   off == NVDEC_VP8_SET_HEADER_PARTITION_BUF_BASE_OFFSET || (off >= NVDEC_VP9_SET_PROB_TAB_BUF_OFFSET && off <= NVDEC_VP9_SET_FILTER_BUFFER_OFFSET);
         case MEDIA_CLASS_VIC:
             return off == VIC_SET_INPUT0_LUMA_OFFSET || off == VIC_SET_INPUT0_CHROMA_OFFSET || off == VIC_SET_CONTROL_PARAMS || off == VIC_SET_CONFIG_STRUCT_OFFSET ||
-                   off == VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET || off == VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET || (off >= 0x1c2 && off <= 0x1cf);
-        case MEDIA_CLASS_NVJPG: return off <= NVJPG_SET_OUT_CHROMA_OFFSET || off == NVJPG_SET_STATUS_OFFSET;
-        default: return off >= MSENC_SET_SETUP_OFFSET && off <= MSENC_SET_OUT_BITSTREAM_OFFSET ? 1 : off == MSENC_SET_STATUS_OFFSET;
+                   off == VIC_SET_OUTPUT_SURFACE_LUMA_OFFSET || off == VIC_SET_OUTPUT_SURFACE_CHROMA_OFFSET || (off >= VIC_SET_CONFIG_STRUCT_OFFSET && off <= 0x1cf);
+        case MEDIA_CLASS_NVJPG: return off >= NVJPG_SET_CONTROL_PARAMS && off <= NVJPG_SET_CUR_PIC_CHROMA_V;
+        default: /* MSENC: the reference pictures and the 0x1c0 block of clc5b7 */
+            return (off >= MSENC_SET_IN_REF_PIC0_LUMA && off < MSENC_SET_IN_REF_PIC0_LUMA + 32) || (off >= 0x140 && off <= 0x152) ||
+                   (off >= MSENC_SET_CONTROL_PARAMS && off <= 0x1d9);
     }
 }
 static void write_reg(MediaEngine *e, uint32_t off, uint32_t v) {
@@ -833,7 +974,7 @@ int media_engine_run(MediaEngine *e, const uint32_t *w, uint32_t n) {
     return run(e, w, n, 0);
 }
 
-/* ---- /dev/nvdisp-disp0 ----------------------------------------------------------------------------------------------------------------- */
+/* ---- /dev/nvdisp-disp0: tegra_dc_ext (see nvdrv_media_core.h for the layouts and the source) ------------------------------------------ */
 void nvdisp_init(NvDisp *d, uint64_t now_ns, int docked) {
     memset(d, 0, sizeof *d);
     d->docked = docked ? 1 : 0;
@@ -841,52 +982,128 @@ void nvdisp_init(NvDisp *d, uint64_t now_ns, int docked) {
     d->height = docked ? 1080 : 720;
     d->refresh_mhz = 60000;
     d->t0_ns = now_ns;
+    d->nvmap_fd = -1;
+    d->winmask = 1; /* window A drives the head */
 }
 uint64_t nvdisp_vblank_count(const NvDisp *d, uint64_t now_ns) {
     uint64_t el = now_ns > d->t0_ns ? now_ns - d->t0_ns : 0, sec = el / 1000000000u, rem = el % 1000000000u;
     return (sec * d->refresh_mhz + rem * d->refresh_mhz / 1000000000u) / 1000u;
 }
 static uint64_t vblank_time(const NvDisp *d, uint64_t count) { return d->t0_ns + count * 1000000000000ull / d->refresh_mhz; }
+/* Vertical total of the CEA-861 timing of the mode (720p: 750 lines, 1080p: 1125): the scanline counter runs over it once per frame. */
+static uint32_t disp_vtotal(const NvDisp *d) { return d->height == 720 ? 750 : d->height == 1080 ? 1125 : d->height + d->height / 24; }
 static void put32(uint8_t *p, uint32_t v) { memcpy(p, &v, 4); }
-static void put64(uint8_t *p, uint64_t v) { memcpy(p, &v, 8); }
+static uint16_t get16(const uint8_t *p) {
+    uint16_t v;
+    memcpy(&v, p, 2);
+    return v;
+}
 int nvdisp_ioctl(NvDisp *d, unsigned nr, uint8_t *data, unsigned size, uint64_t now_ns) {
-    uint64_t n;
     switch (nr) {
-        case NVDISP_GET_MODE:
-            if (size < 32) return NVDISP_BAD_PARAMETER;
-            memset(data, 0, 32);
-            put32(data, d->width);
-            put32(data + 4, d->height);
-            put32(data + 8, d->refresh_mhz);
-            put32(data + 12, 32);
-            put32(data + 16, d->docked);
+        case NVDISP_SET_NVMAP_FD:
+            if (size < NVDISP_SZ_S32) return NVDISP_BAD_PARAMETER;
+            d->nvmap_fd = (int32_t)rd32(data);
             return NVDISP_OK;
-        case NVDISP_GET_VBLANK:
-            if (size < 16) return NVDISP_BAD_PARAMETER;
-            n = nvdisp_vblank_count(d, now_ns);
-            put64(data, n);
-            put64(data + 8, vblank_time(d, n));
+        case NVDISP_GET_WINDOW: /* claim window n of the head (the driver's -EBUSY when another client holds it) */
+        case NVDISP_PUT_WINDOW: {
+            if (size < NVDISP_SZ_S32) return NVDISP_BAD_PARAMETER;
+            uint32_t n = rd32(data);
+            if (n >= NVDISP_WINDOWS) return NVDISP_BAD_PARAMETER;
+            int owned = (d->windows >> n) & 1;
+            if (nr == NVDISP_GET_WINDOW ? owned : !owned) return NVDISP_INVALID_STATE;
+            d->windows ^= 1u << n;
             return NVDISP_OK;
-        case NVDISP_WAIT_VBLANK:
-            if (size < 24) return NVDISP_BAD_PARAMETER;
-            n = nvdisp_vblank_count(d, now_ns) + 1;
-            if (n <= d->last_wait) n = d->last_wait + 1;
-            d->last_wait = n;
-            put64(data + 8, n);
-            put64(data + 16, vblank_time(d, n));
+        }
+        case NVDISP_GET_CURSOR:
+        case NVDISP_PUT_CURSOR:
+            if (nr == NVDISP_GET_CURSOR ? d->cursor_owned : !d->cursor_owned) return NVDISP_INVALID_STATE;
+            d->cursor_owned = nr == NVDISP_GET_CURSOR;
             return NVDISP_OK;
-        case NVDISP_GET_SYNCPT:
-            if (size < 8) return NVDISP_BAD_PARAMETER;
-            put32(data, d->syncpt);
-            put32(data + 4, (uint32_t)(d->last_wait > nvdisp_vblank_count(d, now_ns) ? d->last_wait : nvdisp_vblank_count(d, now_ns)));
+        case NVDISP_SET_CURSOR_IMAGE: /* {fg rgb, bg rgb, pad, buff_id, flags (size), x, y, alpha, colorfmt}: only the cursor's owner */
+            if (size < NVDISP_SZ_CURSOR_IMAGE) return NVDISP_BAD_PARAMETER;
+            if (!d->cursor_owned) return NVDISP_INVALID_STATE;
+            if ((rd32(data + 12) & 7) > 4) return NVDISP_BAD_PARAMETER; /* SIZE field: 0 none, 1 32x32 .. 4 256x256 */
+            memcpy(d->cursor_fg, data, 3);
+            memcpy(d->cursor_bg, data + 3, 3);
+            d->cursor_buff_id = rd32(data + 8);
+            d->cursor_image_flags = rd32(data + 12);
+            d->cursor_x = (int16_t)get16(data + 16);
+            d->cursor_y = (int16_t)get16(data + 18);
+            d->cursor_alpha = rd32(data + 20);
+            d->cursor_colorfmt = rd32(data + 24);
             return NVDISP_OK;
-        case NVDISP_GET_STATUS:
-            if (size < 16) return NVDISP_BAD_PARAMETER;
-            put32(data, 1);
-            put32(data + 4, 1);
-            put32(data + 8, d->docked);
-            put32(data + 12, 1);
+        case NVDISP_SET_CURSOR: /* {s16 x, s16 y, u32 flags (bit0 visible)} */
+            if (size < NVDISP_SZ_CURSOR) return NVDISP_BAD_PARAMETER;
+            if (!d->cursor_owned) return NVDISP_INVALID_STATE;
+            d->cursor_x = (int16_t)get16(data);
+            d->cursor_y = (int16_t)get16(data + 2);
+            d->cursor_flags = rd32(data + 4);
             return NVDISP_OK;
+        case NVDISP_CURSOR_CLIP:
+            if (size < NVDISP_SZ_S32) return NVDISP_BAD_PARAMETER;
+            if (!d->cursor_owned) return NVDISP_INVALID_STATE;
+            d->cursor_clip = (int32_t)rd32(data);
+            return NVDISP_OK;
+        case NVDISP_SET_CSC: { /* {u32 win_index, u16 yof, kyrgb, kur, kvr, kug, kvg, kub, kvb} */
+            if (size < NVDISP_SZ_CSC) return NVDISP_BAD_PARAMETER;
+            uint32_t w = rd32(data);
+            if (w >= NVDISP_WINDOWS) return NVDISP_BAD_PARAMETER;
+            for (unsigned i = 0; i < 8; i++) d->csc[w][i] = get16(data + 4 + 2 * i);
+            return NVDISP_OK;
+        }
+        case NVDISP_GET_STATUS: /* nr 9 twice: GET_VBLANK_SYNCPT is the 4-byte form, GET_STATUS the 16-byte one */
+            if (size == NVDISP_SZ_S32) {
+                put32(data, d->syncpt);
+                return NVDISP_OK;
+            }
+            if (size < NVDISP_SZ_STATUS) return NVDISP_BAD_PARAMETER;
+            memset(data, 0, NVDISP_SZ_STATUS);
+            put32(data, NVDISP_STATUS_ENABLED); /* the head is always on: the host presents every frame */
+            return NVDISP_OK;
+        case NVDISP_SET_LUT: { /* {win_index, flags, start, len, u64 r, g, b}: the tables live in guest memory and are not read (no scanout here) */
+            if (size < NVDISP_SZ_LUT) return NVDISP_BAD_PARAMETER;
+            uint32_t w = rd32(data), start = rd32(data + 8), len = rd32(data + 12);
+            if (w >= NVDISP_WINDOWS || start > 256 || len > 256 - start) return NVDISP_BAD_PARAMETER;
+            d->lut_flags[w] = rd32(data + 4);
+            d->lut_start[w] = start;
+            d->lut_len[w] = len;
+            return NVDISP_OK;
+        }
+        case NVDISP_SET_CMU:
+        case NVDISP_SET_CMU_ALIGNED:
+            if (size < NVDISP_SZ_CMU) return NVDISP_BAD_PARAMETER;
+            memcpy(&d->cmu, data, NVDISP_SZ_CMU);
+            d->cmu_custom = 1;
+            return NVDISP_OK;
+        case NVDISP_GET_CMU:        /* the CMU in effect: the custom one once set, else disabled (enable 0, tables 0) */
+        case NVDISP_GET_CUSTOM_CMU: /* the one the client set (zero before) */
+        case NVDISP_GET_CMU_ADBRGB:
+            if (size < NVDISP_SZ_CMU) return NVDISP_BAD_PARAMETER;
+            if (d->cmu_custom) memcpy(data, &d->cmu, NVDISP_SZ_CMU);
+            else memset(data, 0, NVDISP_SZ_CMU);
+            return NVDISP_OK;
+        case NVDISP_SET_VBLANK: /* {u8 enable, u8 reserved[3] (must be 0)} */
+            if (size < NVDISP_SZ_SET_VBLANK) return NVDISP_BAD_PARAMETER;
+            if (data[1] || data[2] || data[3]) return NVDISP_BAD_PARAMETER;
+            d->vblank_enabled = data[0] != 0;
+            return NVDISP_OK;
+        case NVDISP_GET_WINMASK:
+            if (size < NVDISP_SZ_S32) return NVDISP_BAD_PARAMETER;
+            put32(data, d->winmask);
+            return NVDISP_OK;
+        case NVDISP_SET_WINMASK:
+            if (size < NVDISP_SZ_S32) return NVDISP_BAD_PARAMETER;
+            if (rd32(data) & ~((1u << NVDISP_WINDOWS) - 1)) return NVDISP_BAD_PARAMETER;
+            d->winmask = rd32(data);
+            return NVDISP_OK;
+        case NVDISP_GET_SCANLINE: { /* the line the raster is on now: position inside the current frame scaled to the vertical total */
+            if (size < NVDISP_SZ_S32) return NVDISP_BAD_PARAMETER;
+            uint64_t n = nvdisp_vblank_count(d, now_ns), t0 = vblank_time(d, n), period = 1000000000000ull / d->refresh_mhz;
+            uint64_t in = now_ns > t0 ? now_ns - t0 : 0;
+            uint32_t line = (uint32_t)(in * disp_vtotal(d) / period);
+            put32(data, line < disp_vtotal(d) ? line : disp_vtotal(d) - 1);
+            return NVDISP_OK;
+        }
         default: return NVDISP_NOT_IMPLEMENTED;
     }
 }
