@@ -21,8 +21,8 @@
  },
  "gpu_fixed/texture views / sparse": {
   "status": "partial",
-  "note": "gfx-shader-views r2: ACNH cube view of a 2D texture now copy-backed (verified on title, warnings gone), integer 2D/2D-array views declared texture2d<uint|int> (t_int_tex), sparse remap re-uploads changed tiles (t_sparse). Still: integer views of 3D/cube/MS targets keep the float declaration (Metal validation error), faces 1-5 of a cube-of-2D replicate face 0 (choice); no title uses sparse or integer views",
-  "date": "2026-11-01"
+  "note": "gfx-replay-gaps r3 e896f51: integer views of 3D / cube / 2D-MS now declared texture3d/texturecube/texture2d_ms<uint|int> (t_int_tex 4-6). Still: integer 1D / 1D-array / cube-array / 2D-MS-array views fall back to the float declaration (maxwell_translate.c:3283-3285, Metal validation error), cube-of-2D faces 1-5 replicate face 0 (choice); sparse remap t_sparse; no title uses sparse or integer views",
+  "date": "2026-11-02"
  },
  "gpu_fixed/indirect draw/dispatch": {
   "status": "impl",
@@ -351,8 +351,8 @@
  },
  "gpu_fixed/depth/stencil formats": {
   "status": "partial",
-  "note": "mtl_replay.m:2497-2500: CopyTextureToBuffer of a 24-bit depth texture (formats 0x33/0x35, D24/D24S8 held as Depth32Float) is refused ('reading back a 24-bit depth texture ... not implemented', since 9d8faf6); stencil sampling only for 2D/2D-array (maxwell_translate.c:3200). Uploads, rendering and t_stencil_sample fine. Missed by earlier runs",
-  "date": "2026-11-01"
+  "note": "gfx-replay-gaps r3 e896f51: D24/D24S8 texture->buffer readback now packs NVN words (copy_d24_from_tex, mtl_replay.m; t_d24_readback 0/64 words differ), the r2 refusal is gone. Refused branch left: stencil sampling of cube / cube-array / 3D textures fails in the translator (maxwell_translate.c:3289 'only 2D and 2D array stencil views exist'); no title reads back D24 in the scenes reached",
+  "date": "2026-11-02"
  },
  "input/GameCube / Palma / NES styles": {
   "status": "impl",
@@ -421,8 +421,8 @@
  },
  "applets/web / offline web": {
   "status": "partial",
-  "note": "sched-applets r1 4b4e7c3: real HtmlDocument layout resolved (html-document/ prefix) and SMO's manual opened the HOME-menu way (NAPPLE_OPEN_MANUAL) in the web sheet; no title opens the applet itself. Refused branch: offline document kinds other than HTML page (legal information / system data, firmware romfs) -> exit reason error (applet_web_core.c:306)",
-  "date": "2026-11-01"
+  "note": "am-depth-applets r3 f1b103b: legal-information and system-data offline kinds resolve (applet_web_core.c; system data 0100000000000804 legallines page verified in the web sheet over a running SMO; test_svc_applet_web 219). Refused branch left: a title's own LegalInformation (CNMT content type 5) is not extracted by napple-build (crates/napple-build/src/html.rs only does HtmlDocument), so title legal pages answer not found",
+  "date": "2026-11-02"
  },
  "applets/mii edit": {
   "status": "impl",
@@ -435,34 +435,34 @@
   "date": "2026-10-24"
  },
  "nvn/nvnCommandBufferBindSeparateTexture": {
-  "status": "stub",
-  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
-  "date": "2026-11-01"
+  "status": "partial",
+  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateSampler": {
-  "status": "stub",
-  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
-  "date": "2026-11-01"
+  "status": "partial",
+  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateTextures": {
-  "status": "stub",
-  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
-  "date": "2026-11-01"
+  "status": "partial",
+  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateSamplers": {
-  "status": "stub",
-  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
-  "date": "2026-11-01"
+  "status": "partial",
+  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateTexturesDeferred": {
-  "status": "stub",
-  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
-  "date": "2026-11-01"
+  "status": "partial",
+  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferBindSeparateSamplersDeferred": {
-  "status": "stub",
-  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
-  "date": "2026-11-01"
+  "status": "partial",
+  "note": "gfx-replay-gaps r3 e896f51: replay keeps BindSeparate* (+Deferred) per stage, translator pairs a bindless TEX handle built as (cbuf word | cbuf word) (pair_detect, maxwell_translate.c), bind_stage ORs the words (mtl_replay.m); t_sep_sampler. Guessed layout: GLSLC's c2 table offsets SEP_TEX_C2_BASE 0x120 / SEP_SAMP_C2_BASE 0x520 (shader/maxwell.h) are a hypothesis no title confirms; separate textures get no depth/stencil/integer slot masks; no title of the four binds them",
+  "date": "2026-11-02"
  },
  "nvn/nvnCommandBufferSetViewportSwizzles": {
   "status": "stub",
