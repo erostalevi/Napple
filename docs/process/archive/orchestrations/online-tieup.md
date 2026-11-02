@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-opus-5-5
 depends_on: [account-auth-ses, account-profiles, social-tiers, online-identity, client-core, overlay-account, overlay-social, mk8d-online-race, infra-online, legal-pages]
-status: planned
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: none
 launched_at: none
@@ -29,3 +29,5 @@ Start after the other r12 items are integrated on main. Implement and run the De
 Shared title data read-only; game runs under `lockf -k /Users/neto/NappleWork/.run.lock` (<=120 s, private --save-root); local only, never push; never ask the user; never commit credentials or Nintendo material. Test-first, small commits.
 
 ## Result
+
+Integrated clean 2026-11-03, merge 656d82c; 60/60 local e2e re-run on the Mac. Details: [integrator result](../integrators/claude-online-tieup-2026-11-03-r12.md).

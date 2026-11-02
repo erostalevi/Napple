@@ -6,7 +6,7 @@ head: f886c7b45934471d322912d12a0600e56281b16e
 env: mac
 date: 2026-11-03
 areas: [crates/napple-cloud, runtime/src/net, tools/e2e/online, infra/local]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/online-tieup-2026-11-03-r12: Napple Online end to end
@@ -62,3 +62,11 @@ Endpoint-shape issues are small edits in crates/napple-cloud/src/online/client.r
 
 ## Needs from other areas
 mk8d-online-race: login name with profile; overlay-social: icon-0 avatar; napple-social: apply tier changes at once (or lower the TTL).
+
+## Integration result
+Date 2026-11-03 (rolling r12). Merged as 656d82c. Outcome: Clean (no code fixes); one docs fix: `integrate: link the online-e2e guide from the guides index` (check_docs orphan).
+No native ports; nothing to port. Tests: cargo build/test -j2 --workspace --locked all green (napple-cloud 25); make -C runtime GFX=napple test test-services test-ipc-reference test-net-online test-online 0 failed;
+make -C frontend test 0 failed; local stack (NAPPLE_SOCIAL_PROFILE_TTL_SECS=2) + online_e2e.py 60/60, stack stopped; four-title boots (SMO, MK8D update, LAS, ACNH update) plain and NAPPLE_NET=host under the 3-slot game lock,
+private save root and empty NAPPLE_HOME: rc 0, missing_ipc [], unsupported_svcs [], last_stage notify-running, no online dir created; check_docs only archive orphans; gen_support OK.
+Corrections: the scratch worktree needs `make -C gfx adapter` (and audio/input/frontend built) before runtime tests link; the data dir for boots is games/<id>/<build dir> (the one holding manifest.json).
+Live run on pretend.napple.lat and the in-game MK8D race were not re-run.
