@@ -45,6 +45,14 @@ def state(home):
     return json.loads(cli(home, "state"))
 
 def mail_code(email):
+    if os.environ.get("E2E_CODE_DIR"):  # live: whoever reads the mailbox drops the code into $E2E_CODE_DIR/<address> (the newest wins; the file is consumed)
+        f = os.path.join(os.environ["E2E_CODE_DIR"], email)
+        print("WAITING-CODE " + email, flush=True)
+        for _ in range(240):
+            if os.path.exists(f):
+                c = open(f).read().strip(); os.remove(f); return c
+            time.sleep(1)
+        return ""
     if os.environ.get("E2E_CODE_CMD"):
         for _ in range(30):
             out = subprocess.run(os.environ["E2E_CODE_CMD"], shell=True, input=email, capture_output=True, text=True).stdout.strip()
@@ -81,8 +89,8 @@ def http(method, url, token, profile=None, body=None):
 def main():
     tag = str(int(time.time()))[-6:]
     base = os.environ.get("E2E_EMAIL_BASE", "tieup")  # live: local part before +tag@domain
-    dom = os.environ.get("E2E_EMAIL_DOMAIN", "example.com")
-    def addr(n): return f"{base}+{n}{tag}@{dom}" if LIVE else f"{n}{tag}@{dom}"
+    dom = os.environ.get("E2E_EMAIL_DOMAIN", "napple.lat" if LIVE else "example.com")
+    def addr(n): return f"{base}-{n}{tag}@{dom}"
     users = {}
     for n in ("a", "b", "c"):
         users[n] = dict(email=addr(n), nick=f"Tieup{n.upper()}{tag}", pw="correct horse battery 1", home=os.path.join(TMP, "home-" + n))
@@ -184,6 +192,12 @@ def main():
     # 7 logout / delete
     rc, js = act(A2, "logout")
     check("logout on device 2", rc == 0 and not state(A2).get("signed_in"))
+    # 8 account deletion (throwaway accounts: also the cleanup)
+    for n, u in users.items():
+        rc, js = act(u["home"], "delete_account", password=u["pw"])
+        check(f"delete_account {n}", rc == 0 and not state(u["home"]).get("signed_in"), js)
+    rc, js = act(A["home"], "login", email=A["email"], password=A["pw"])
+    check("deleted account can no longer sign in", rc != 0, js)
     print("\n=== %d/%d passed ===" % (sum(1 for r in rows if r[1]), len(rows)))
     open(os.path.join(TMP, "results.json"), "w").write(json.dumps(rows))
 

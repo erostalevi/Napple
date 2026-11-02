@@ -728,7 +728,9 @@ impl Client {
             }
             "revoke_device" => self.acc("DELETE", &format!("/devices/{}", a("device_id")), None).result(),
             "delete_account" => {
-                let r = self.acc("DELETE", "/me", Some(&json!({"password": a("password")})));
+                // napple-account wants the account's own address as the confirmation (the overlay's password field is not used by the server)
+                let email = self.creds.load().ok().flatten().map(|c| c.email).unwrap_or_default();
+                let r = self.acc("DELETE", "/me", Some(&json!({"confirm_email": email})));
                 if r.ok() {
                     return self.act("logout", &json!({}));
                 }
