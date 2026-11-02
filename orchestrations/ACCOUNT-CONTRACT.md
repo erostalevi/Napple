@@ -35,7 +35,13 @@ SQLite (WAL) in the instance data volume for accounts/devices/tokens/profiles/sa
 block public access, lifecycle: abort incomplete uploads after 1 day, delete noncurrent objects after 7 days). Email via Amazon SES (domain `napple.lat`,
 DKIM in Route 53, sender `no-reply@napple.lat`).
 
-## Plans and billing (user decision 2026-11-02, revised: free tier has no limits on online play)
+## Launch mode (user decision 2026-11-02): paid plans are OFF
+Until the user announces the paid plan, **every account gets every feature for free** (the Plus column below, with Plus limits). Server config
+`NAPPLE_PLANS_ENABLED=false` (the default) makes `plan.name = "free-launch"` with all feature flags on and Plus limits; no 402 is ever returned for plan
+reasons, no upgrade prompts are shown, billing endpoints return 503. The engine below is built and tested but dormant; turning it on is a config change
+(`NAPPLE_PLANS_ENABLED=true` + Stripe secrets) plus a grace period for existing users (config `NAPPLE_PLANS_GRACE_DAYS`, default 90).
+
+## Plans and billing (dormant; user decision 2026-11-02, revised: free tier has no limits on online play)
 Principles: online play and everything social are free and unlimited; Plus sells storage, history, sync and convenience — never access, never
 gameplay advantage, never data hostage. All limits and feature flags come from server config (env/JSON), not code.
 
