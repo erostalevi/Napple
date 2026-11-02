@@ -51,6 +51,7 @@ enum {
 #define HZ_R_HID_NOT_CONNECTED HZ_RESULT(HZ_MOD_HID, 7)                                /* [unverified] */
 #define HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE HZ_RESULT(HZ_MOD_FRIENDS, 15) /* [unverified] */
 #define HZ_R_SSL_NOT_CONNECTED HZ_RESULT(HZ_MOD_SSL, 205)                              /* [unverified] */
+#define HZ_R_SSL_WOULD_BLOCK HZ_RESULT(HZ_MOD_SSL, 204) /* a non-blocking connection has nothing to read or write yet (MK8D's NEX loop waits for it) */
 
 /* BSD errno values as the Horizon socket service reports them (FreeBSD numbering). */
 enum {
