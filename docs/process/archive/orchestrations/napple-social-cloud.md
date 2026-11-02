@@ -6,7 +6,7 @@ base: origin/claude/napple-social-cloud-2026-11-02-r9 rebased by the orchestrato
 env: linux-cloud
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: cloud (task_7708c053)
 launched_at: 2026-11-02
@@ -18,3 +18,5 @@ launched_at: 2026-11-02
 - `cargo test -p napple-social` on macOS, `cargo build --workspace --locked`; apply the reserved-name rule (ACCOUNT-CONTRACT.md) to any user-visible free text it accepts (presence mode text, labels): small fix or follow-up; verify JWT checks against the napple-account branch's JWKS shape.
 
 ## Result
+Integrated 2026-11-02 into main as 31448dd (head 73aa820), outcome **Small fix** (reserved-name rules on presence labels and invite messages).
+46 crate tests on macOS; JWT/JWKS + profiles verified live against napple-account. Details: [integrator file](../integrators/claude-napple-social-cloud-2026-11-02-r9.md).

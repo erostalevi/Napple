@@ -1,3 +1,10 @@
+---
+branch: claude/napple-social-cloud-2026-11-02-r9
+orchestration: napple-social-cloud
+env: linux-cloud
+status: integrated
+---
+
 # Integrator note: napple-social (claude-napple-social-cloud-2026-11-02-r9)
 
 Branch `claude/napple-social-cloud-2026-11-02-r9`, from `main` @ `57431a7`. Linux cloud session. Not merged, not deployed.
@@ -101,3 +108,22 @@ Authenticated calls need a napple-account access token and `X-Napple-Profile: <p
   token expiry, and hands invite `join_token`s to the napple-room / napple-online client. The `join_token` content is defined by those services.
 - **Studio / launcher UI**: show the friend code, friend list with presence, requests, blocks, privacy toggles and incoming invites.
 - **Docs**: the two index lines above.
+
+## Integration result
+- Date 2026-11-02, merged into main as 31448dd (head 73aa820, rebased by the orchestrator onto local main 21e785e). Conflicts: `Cargo.toml` members and
+  `Cargo.lock` (main's side + `cargo build`: only napple-social's packages added). Outcome: **Small fix** (1) plus doc commits.
+- Small fix `integrate: napple-social applies the reserved-name rules …` (the orchestration's Acceptance): `src/names.rs` is a copy of
+  napple-account's `names.rs` (header says to change both together; a copy rather than a dependency so the service builds and deploys without the
+  account crate) plus `check_text`. Presence `title_name` and `mode` get the full name rules (`napple` anywhere incl. look-alikes, the `nap-` prefix,
+  invisible characters); an invite `message` gets the `napple` word and invisible-character rules only (the `nap-` prefix rule is for names; a message
+  such as "nap time?" stays allowed). Rejections are 422 `reserved_name`; `unicode-normalization` added. Tests: presence (5 refused, 3 allowed) and
+  invite cases; the names unit tests come with the copy. Social accounts carry no grants, so even the owner cannot put "napple" in these texts.
+  **Decision for a human:** whether the prefix rule should also cover invite messages, and whether free text should honour account grants.
+- Docs: guides index row, round r9 in the change archive (range to r9), the 422 row in the guide's error table. The "no online service" sentence in
+  `network-providers.md` got an exception line when napple-online landed.
+- `cargo test -p napple-social --locked` on macOS: 46 passed (40 + 6 names unit tests); clippy clean on the crate; `cargo fmt --check` clean.
+- **JWT / JWKS / profiles against the real napple-account** (release binaries, dev mailer): a token from email sign-in is accepted (`/me` 200) through
+  `/account/v1/.well-known/jwks.json` (OKP Ed25519, `kid`, `EdDSA`) and `/account/v1/profiles` (`{"profiles":[{"profile_id","nickname","icon_id"}]}`);
+  a garbage token 401; presence `Online race` 200, `N4pple cup` 422, `nap-crew` 422. The file's assumptions about napple-account hold.
+- Not done: deployment (infra has no social service yet), the runtime `friend:u` provider (online-friends, r10), napple-account calling
+  `DELETE /social/v1/me` on profile deletion, `NAPPLE_SOCIAL_*` in `docs/reference/environment-variables.md`.
