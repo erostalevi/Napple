@@ -1,0 +1,199 @@
+# Deploy the Napple game servers (pretend.napple.lat) and the napple.lat DNS
+
+**Goal:** once AWS credentials are in the repository's secrets, every push to `main` that touches the servers or `infra/` deploys
+`napple-online` (accounts/tokens + NEX game server) and `napple-room` (LDN / LAN Play relay) to one small AWS instance behind
+`https://pretend.napple.lat`, and keeps the `napple.lat` records pointing at the GitHub Pages landing page. Until the secrets exist the workflow
+skips with a notice and nothing is deployed.
+
+Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.github/workflows/deploy-servers.yml`, `site/CNAME`.
+`app.napple.lat` is deliberately **not** built (no hosted upload of games or keys); it falls under the wildcard record.
+
+## What runs where
+
+```
+                         Route 53 zone napple.lat (created by you, looked up by the stack)
+   napple.lat  A/AAAA ─┐  www  CNAME ─┐  *  CNAME ─┐                    pretend  A ──> Elastic IP
+                       └──────────────┴────────────┴─> <owner>.github.io (site/ + /docs/)      │
+                                                                                               v
+   EC2 t4g.small, Amazon Linux 2023, Docker Compose  (/opt/napple, state on an EBS volume at /var/lib/napple)
+     caddy  :80/:443 tcp, :443 udp ── TLS (automatic certificate for pretend.napple.lat)
+        ├─ /room/*  -> room:8081    (napple-room status API, prefix stripped)
+        └─ /*       -> online:8080  (napple-online account/token API, /healthz)
+     online :60000-60001/udp  NEX/PRUDP authentication + secure servers (published directly; the security group opens 60000-60010)
+     room   :31415/tcp+udp    room protocol (published directly)
+   Logs: CloudWatch group /napple/servers. Shell: SSM Session Manager (no SSH port).
+```
+
+## DNS records
+
+| Name | Type | Value | Notes |
+|---|---|---|---|
+| `pretend.napple.lat` | A | the Elastic IP | the game servers |
+| `napple.lat` | A | 185.199.108.153, .109.153, .110.153, .111.153 | GitHub Pages; GitHub redirects the apex to `www` |
+| `napple.lat` | AAAA | 2606:50c0:8000::153, 8001::153, 8002::153, 8003::153 | GitHub Pages |
+| `www.napple.lat` | CNAME | `<owner>.github.io` | the Pages custom domain (`site/CNAME`) |
+| `*.napple.lat` | CNAME | `<owner>.github.io` | everything else, `app` included (variable `wildcard_to_pages`) |
+| `_github-pages-challenge-<owner>.napple.lat` | TXT | from GitHub | only when the repository variable `NAPPLE_PAGES_VERIFICATION_TXT` is set |
+
+The hosted zone itself is never created or destroyed by the stack: it is looked up by name (`data "aws_route53_zone"`). Existing records with the
+same name and type make the apply fail rather than being taken over, unless the repository variable `NAPPLE_DNS_ALLOW_OVERWRITE` is `true`.
+
+**The wildcard and GitHub Pages.** GitHub only serves the one custom domain set in the repository (`www.napple.lat`); a request for
+`app.napple.lat` reaching GitHub gets GitHub's "site not found" page, not the landing page. Worse, a wildcard pointing at `github.io` lets *any*
+GitHub user claim `something.napple.lat` for their own Pages site unless the domain is **verified** in your account. So verify `napple.lat` first
+(step 2 below). If you'd rather not, set `wildcard_to_pages = false` in `infra/terraform/variables.tf`, and unknown names stop resolving.
+
+## Server contract
+
+The Dockerfiles, compose file, Caddy config and `infra/local/run.sh` assume these binary names, env vars and ports. A server that picks
+different names only needs those few files changed.
+
+| Binary | Env var | Container default | Meaning |
+|---|---|---|---|
+| `napple-online` | `NAPPLE_ONLINE_HTTP` | `0.0.0.0:8080` | plain-HTTP account/token API, `GET /healthz` -> 200 (Caddy terminates TLS) |
+| | `NAPPLE_ONLINE_NEX_AUTH` | `0.0.0.0:60000` | NEX/PRUDP authentication server, UDP |
+| | `NAPPLE_ONLINE_NEX_SECURE` | `0.0.0.0:60001` | NEX/PRUDP secure server, UDP |
+| | `NAPPLE_ONLINE_PUBLIC_HOST` | `pretend.napple.lat` | host name clients reach |
+| | `NAPPLE_ONLINE_PUBLIC_IP` | the Elastic IP | address put in the station URLs handed to clients |
+| | `NAPPLE_ONLINE_DATA` | `/var/lib/napple/online` | accounts and state (persistent volume) |
+| `napple-room` | `NAPPLE_ROOM_LISTEN` | `0.0.0.0:31415` | room protocol, TCP (31415/udp is opened too) |
+| | `NAPPLE_ROOM_HTTP` | `0.0.0.0:8081` | plain-HTTP `GET /healthz` -> 200 (served as `/room/healthz`) |
+| | `NAPPLE_ROOM_DATA` | `/var/lib/napple/room` | optional state |
+
+Both are built with `cargo build --release --locked -p <crate> --bin <crate>` from the workspace root on Linux (arm64 and amd64). They need no
+system library beyond libc (no OpenSSL), run as uid 10001 in a read-only container, log to stdout/stderr and exit on SIGTERM.
+Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=pretend.napple.lat:31415`.
+
+## One-time setup
+
+1. **Hosted zone.** In Route 53 > Hosted zones, check that a public zone `napple.lat` exists (a domain registered through Route 53 gets one
+   automatically) and that the registrar's name servers are the zone's four NS values. The workflow's summary prints them after each apply.
+2. **GitHub Pages domain.**
+   - Account (or organisation) Settings > Pages > *Add a domain* `napple.lat`. GitHub shows a TXT record: put its value in the repository variable
+     `NAPPLE_PAGES_VERIFICATION_TXT` (the stack creates the record), or add the record by hand, then press *Verify*.
+   - Repository Settings > Pages > Custom domain: `www.napple.lat`, then *Enforce HTTPS* once the certificate is issued. With Actions-based Pages
+     (`pages.yml`) this setting is what counts; `site/CNAME` documents it and is used if the site is ever published from a branch.
+3. **AWS credentials**, one of:
+   - **OIDC role (preferred, no long-lived key).** In IAM > Identity providers, add an OpenID Connect provider `https://token.actions.githubusercontent.com`
+     with audience `sts.amazonaws.com`. Create a role (for example `napple-github-deploy`) with the trust policy
+     [`infra/aws/github-oidc-trust.json`](../../infra/aws/github-oidc-trust.json) (replace `<ACCOUNT_ID>`; it only trusts workflow runs on `main`
+     of `erostalevi/napple`), and attach [`infra/aws/deploy-policy.json`](../../infra/aws/deploy-policy.json) as an inline or customer-managed policy.
+     Add the role ARN as the repository **secret** `AWS_DEPLOY_ROLE_ARN`.
+   - **Access keys.** An IAM user with the same policy and an access key; repository secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+   ```bash
+   aws iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com --client-id-list sts.amazonaws.com
+   ```
+   ```bash
+   aws iam create-role --role-name napple-github-deploy --assume-role-policy-document file://trust.json
+   ```
+   ```bash
+   aws iam put-role-policy --role-name napple-github-deploy --policy-name napple-deploy --policy-document file://infra/aws/deploy-policy.json
+   ```
+   (`trust.json` = `infra/aws/github-oidc-trust.json` with your account id filled in.)
+4. **Optional repository variables** (Settings > Secrets and variables > Actions > Variables): `NAPPLE_AWS_REGION` (default `us-east-1`),
+   `NAPPLE_INSTANCE_TYPE` (default `t4g.small`), `NAPPLE_ARCHITECTURE` (`arm64` default, `x86_64` for t3/m6i types), `NAPPLE_PAGES_VERIFICATION_TXT`,
+   `NAPPLE_DNS_ALLOW_OVERWRITE`.
+5. **Bootstrap the state**: Actions > deploy-servers > *Run workflow* on `main`, mode `bootstrap`. This creates the S3 state bucket
+   `napple-tfstate-<account>-<region>` (versioned, encrypted, private, TLS only) and the DynamoDB lock table `napple-tflock`, then moves its own
+   state into the bucket. Running it again is safe.
+6. **First deploy**: *Run workflow* with mode `plan` to read the plan, then mode `apply` (or push to `main`). The first apply takes about 10 minutes:
+   the instance boots, the images are built on an arm64 runner, Caddy gets its certificate once `pretend.napple.lat` resolves, and the smoke test
+   retries for up to 5 minutes.
+
+## What a deploy does
+
+| Job | What |
+|---|---|
+| guard | Looks for `AWS_DEPLOY_ROLE_ARN` or both access-key secrets, and for `crates/napple-online` + `crates/napple-room` in the commit. Missing: a notice in the run summary and every other job is skipped (the run is green). `apply` and `bootstrap` only run on `main`. |
+| infra | `tofu fmt -check`, `validate`, the offline mocked plan tests, then `infra/scripts/tofu-servers.sh plan|apply` against the S3 state. |
+| images | One native build per image (`ubuntu-24.04-arm` for arm64), pushed to ECR as `<repo>:<commit sha>` (immutable tags; a commit already pushed is skipped). |
+| roll | `infra/scripts/roll.sh`: through SSM `send-command`, writes `compose.yml`, `compose.aws.yml`, `Caddyfile` and `.env` into `/opt/napple` on the instance, `docker compose pull && up -d`, prunes week-old images. Then `infra/scripts/smoke.sh https://pretend.napple.lat` checks `/healthz` and `/room/healthz`. |
+
+The workflow has one concurrency group and never cancels a running deploy.
+
+## Rollback and destroy
+
+- **Roll back the servers**: *Run workflow*, mode `apply`, `image_tag` = the commit SHA of a good deploy (ECR keeps the newest 30 images per
+  repository). No build happens; the instance is rolled to those images.
+- **Roll back infrastructure**: revert the commit on `main`; the push re-applies the previous configuration. The state bucket keeps 90 days of state
+  versions in case a state itself has to be restored.
+- **Replace the instance** (new AMI, broken host): from a machine with the deploy credentials, run
+  `tofu apply -replace=aws_instance.servers` in `infra/terraform` (same `-backend-config` flags as `infra/scripts/tofu-servers.sh`), then run the
+  workflow with mode `apply` so the new instance gets the containers. Accounts, room state and certificates are on the separate data volume and survive.
+- **Destroy everything**: in `infra/terraform`, `tofu destroy` with the same backend flags (set `ecr_force_delete = true` first if the repositories
+  still hold images). This deletes the data volume, so the accounts go with it. The zone and its other records stay. The bootstrap stack has
+  `prevent_destroy` on the bucket and table: remove those lines to delete them on purpose.
+- Disable deploys without deleting anything: remove the AWS secrets (the workflow goes back to skipping).
+
+## Costs (us-east-1, on-demand, rough)
+
+| Item | Per month |
+|---|---|
+| t4g.small (2 vCPU, 2 GB) | about $12.3 |
+| EBS gp3, 16 GB root + 10 GB data | about $2.1 |
+| Public IPv4 address (the Elastic IP) | about $3.7 |
+| Route 53 hosted zone (+ queries) | $0.50 + cents |
+| ECR (a few hundred MB of images), CloudWatch logs (14-30 days), S3 state, DynamoDB lock | under $1 at low traffic |
+| Data transfer out | first 100 GB/month free, then about $0.09/GB |
+| **Total** | **about $19/month** for a quiet server; traffic is the variable part |
+
+`t4g.micro` (1 GB) halves the instance price but leaves little room for Caddy plus two servers; raise the type before raising anything else.
+
+## Security notes
+
+- **No game data on the server, ever.** The images contain only the two server binaries (the Dockerfiles copy nothing but `Cargo.toml`,
+  `Cargo.lock` and `crates/` into the build stage, and only the binary into the final image). No game files, keys, firmware or title data are
+  uploaded, and the servers never ask clients for any. `app.napple.lat` (hosted uploads) was rejected for this reason.
+- Credentials live only in GitHub secrets (or are short-lived, through OIDC). Nothing in `infra/` holds a credential; the instance uses its role.
+- The OIDC trust policy only accepts runs on `main` of this repository. The deploy policy is scoped to `napple-*` names where AWS allows it.
+- Instance: no SSH port (Session Manager), IMDSv2 only, encrypted volumes, unattended security updates. Containers: the servers run as uid 10001; Caddy runs as
+  root in its container with only `NET_BIND_SERVICE` kept, read-only root filesystems, all other capabilities dropped, `no-new-privileges`.
+- The internet-facing parsers are the NEX/PRUDP and room protocol code: they take untrusted UDP/TCP input, so they want fuzzing and per-peer
+  rate limits (the server crates' job).
+- Verify `napple.lat` in GitHub before the wildcard goes live (see [DNS records](#dns-records)).
+
+## Local test stack
+
+No AWS and no Docker needed:
+
+```bash
+infra/local/run.sh
+```
+
+It builds both crates (debug; `--release` for release), starts them on 127.0.0.1 with a throwaway data dir under `$TMPDIR/napple-local-stack`,
+waits for `/healthz`, and prints the env for a Napple runtime (`NAPPLE_NET=host`, `NAPPLE_ONLINE_SERVER=http://127.0.0.1:18080`,
+`NAPPLE_ROOM=127.0.0.1:31415`). `infra/local/run.sh stop` stops both and deletes the data (`KEEP_DATA=1` keeps it); `status`, `logs` and `env` do what
+they say. `--bin-dir DIR` runs prebuilt binaries; `--stub` runs `infra/local/stub-server.py`, a stand-in that answers `/healthz` and echoes UDP/TCP,
+for testing the plumbing without the crates.
+
+With Docker installed, the production stack runs locally too (Caddy uses its internal CA for `localhost`):
+
+```bash
+cd infra/docker && NAPPLE_DOMAIN=localhost docker compose -f compose.yml -f compose.build.yml up --build
+```
+
+## Checks without AWS
+
+```bash
+cd infra/terraform && tofu init -backend=false && tofu validate && tofu test
+```
+```bash
+cd infra/terraform/bootstrap && tofu init -backend=false && tofu validate && tofu test
+```
+```bash
+actionlint .github/workflows/deploy-servers.yml && shellcheck -x infra/scripts/*.sh infra/local/run.sh
+```
+
+The `tofu test` files plan both stacks against a mocked AWS provider: no credentials, no AWS call. The deploy scripts refuse to run outside
+GitHub Actions unless `NAPPLE_DEPLOY_ALLOW_LOCAL=1` is set.
+
+## Troubleshooting
+
+| Symptom | Look at |
+|---|---|
+| Run is green but did nothing | The run summary: the guard's notice says which secret or crate is missing. |
+| `State bucket ... not found` | Run mode `bootstrap` once. |
+| Apply fails with "record already exists" | A record was made by hand: delete it, or set `NAPPLE_DNS_ALLOW_OVERWRITE=true`. |
+| Roll waits for SSM forever | The instance has no route out (check the route table) or the SSM agent is down: EC2 > the instance > Get system log; `/var/log/napple-bootstrap.log` from a Session Manager shell. |
+| Smoke test fails on a first deploy | DNS not delegated yet (check the registrar's name servers) or the ACME challenge failed: CloudWatch `/napple/servers`, the caddy stream. |
+| `docker compose` errors on the instance | `aws ssm start-session --target <instance id>`, then `cd /opt/napple && sudo docker compose -f compose.yml -f compose.aws.yml logs`. |

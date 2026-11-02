@@ -21,6 +21,7 @@ the repository front page is the [README](../README.md) and the title status is 
 1. [Parallel-session workflow](process/README.md).
 2. [Change archive](archive/changes/README.md): the dated notes of every round.
 3. [Tooling](reference/tooling.md) (REA, Ghidra) and the CI workflows in `.github/workflows/`.
+4. [Deploy the game servers](guides/deploy-servers.md) (`pretend.napple.lat` on AWS, the `napple.lat` DNS, the local test stack).
 
 ## Contents
 
