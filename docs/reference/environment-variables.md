@@ -294,3 +294,16 @@ reads them. `NAPPLE_PACING_FIXED` and `NAPPLE_PACING_GAME` (gfx pacing) and `NAP
 | `NAPPLE_LDN_PEERS` | comma-separated IPv4 addresses; unset = none | Extra addresses a scan probes, for networks that drop broadcasts. | `runtime/src/net/net_host_ldn.c` |
 | `NAPPLE_LDN_SCAN_MS` | 1..5000; default 150 | How long a scan waits for hosts to answer. | `runtime/src/net/net_host_ldn.c` |
 | `NAPPLE_NET_LOG` | `1`; unset = off | Host provider: one `net:` line per socket call (socket, bind, connect, setsockopt, send, recv) with arguments and result, never payload bytes. | `runtime/src/net/net_host_sock.c` |
+
+### Napple rooms (net-rooms 2026-11-02-r7)
+
+LDN local wireless and LAN play between Napple instances over the internet, through a `napple-room` server ([online rooms](../guides/online-rooms.md)). Needs `NAPPLE_NET=host`.
+
+| Variable | Values / default | Effect | Defined in |
+|---|---|---|---|
+| `NAPPLE_ROOM` | `<host>[:<port>][/<room>]`, or `default[/<room>]` for the public server `pretend.napple.lat:31415`; port default 31415, room default `lobby`; unset = off | Joins that room on a napple-room server when the host provider starts. nifm then reports the room's virtual interface (wired, `10.13.x.y/16` by default, connected only while joined); guest sockets bound to it and traffic to virtual addresses / broadcasts go through the room; LDN networks are hosted and found in the room instead of the LAN. Unset: the host provider behaves as without rooms. | `runtime/src/net/net_room.c` |
+| `NAPPLE_ROOM_PASSWORD` | string (up to 64 bytes); unset = none | The room's password. The first member of a room sets it; later members must give the same one. | `runtime/src/net/net_room.c` |
+| `NAPPLE_ROOM_NICK` | string (up to 32 bytes); default the login name | The name other members see (room log, LDN node list). | `runtime/src/net/net_room.c` |
+| `NAPPLE_VLAN` | `on` (default), `off`, or an IPv4 address | `off`: join the room for LDN only and keep the Mac's own interface for nifm and sockets (LDN hosting then fails: node addresses must be virtual). An address asks the server for that virtual address (kept when free, else another one). | `runtime/src/net/net_room.c` |
+| `NAPPLE_ROOM_LISTEN`, `NAPPLE_ROOM_HTTP`, `NAPPLE_ROOM_SUBNET`, `NAPPLE_ROOM_MAX_MEMBERS`, `NAPPLE_ROOM_MAX_ROOMS`, `NAPPLE_ROOM_MAX_CLIENTS`, `NAPPLE_ROOM_RATE_KBPS`, `NAPPLE_ROOM_RATE_PPS`, `NAPPLE_ROOM_KEEPALIVE`, `NAPPLE_ROOM_QUIET`, `NAPPLE_ROOM_DATA` | see the guide | The `napple-room` **server's** configuration (TCP listen address, HTTP health listener, subnet, limits); flags of the same name override them. Table in [online rooms](../guides/online-rooms.md#running-a-server). | `crates/napple-room/src/main.rs` |
+| `NAPPLE_ROOM_SERVER_BIN` | path | `runtime/tests/test_net_room` only: the napple-room binary to start (default `../target/debug/napple-room`, then `release`). | `runtime/tests/test_net_room.c` |
