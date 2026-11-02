@@ -161,6 +161,11 @@ $(HOST_BUILD)/test_threads_preempt: tests/host/test_threads_preempt.c $(HOST_KER
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_threads_preempt.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
 HOST_TESTS += $(HOST_BUILD)/test_threads_preempt
+# core-ordering-kernel (2026-11-02): svcGetInfo 19 / 27, svcExitProcess after nnMain returned (includes kernel.c; its own fake modules)
+$(HOST_BUILD)/test_kernel_exit: tests/host/test_kernel_exit.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_exit.c src/ipc.c $(filter-out src/kernel.c,$(HOST_KERNEL)) -o $@
+HOST_TESTS += $(HOST_BUILD)/test_kernel_exit
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 
@@ -188,6 +193,14 @@ test-a32: $(BUILD)/tests/a32/difftest $(BUILD)/napple-runtime
 	python3 tests/a32jit/progtest.py
 	../tools/check_a32_no_interp.sh $(BUILD)/napple-runtime
 .PHONY: test-a32
+# Memory ordering of the lifted exclusives and lda / stl (core-ordering-kernel, 2026-11-02): runs first in `make test-a32`
+$(BUILD)/tests/a32/excltest: tests/a32jit/excltest.c src/a32jit/a32lift.c $(A32_TEST_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O2 -DNAPPLE_A32_INTERP -Isrc/a32 -o $@ tests/a32jit/excltest.c src/a32jit/a32lift.c $(A32_TEST_SRC)
+test-a32-order: $(BUILD)/tests/a32/excltest
+	$(BUILD)/tests/a32/excltest
+test-a32: test-a32-order
+.PHONY: test-a32-order
 
 # Fuzz drivers for the untrusted-input C parsers (tests/fuzz/HOWTO.md): `make fuzz-build`, `make fuzz-smoke`, `make fuzz-run FUZZ_SECONDS=300`
 -include tests/fuzz/fuzz.mk
