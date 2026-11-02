@@ -53,6 +53,7 @@ OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer
 void net_online_free(OnlineProvider *p);
 
 /* ---- accounts and tokens (net_online_http.c) ---- */
+#define NET_ONLINE_IDENTITY_SECRET "napple-account" /* NetOnlineAccount.secret of a Napple Account identity (no server secret: the access token proves it) */
 typedef struct {
     uint64_t pid;     /* the Napple account id (the NEX principal id) */
     char secret[65];  /* hex; proves the account to the server */
@@ -63,6 +64,9 @@ int net_online_http(const OnlineProvider *host, const NetOnlineServer *srv, cons
 int net_online_kv(const char *text, const char *key, char *out, size_t n);
 /* The account of user `uid` on the server: loaded from state_dir, else created on the server (and saved). 0 = ok. */
 int net_online_account(const OnlineProvider *host, const NetOnlineServer *srv, const char *state_dir, const uint8_t uid[16], NetOnlineAccount *out);
+/* The game-visible principal id of a Napple profile (what napple-online's identity::principal_id computes). */
+uint64_t net_online_principal_id(const char *profile_id);
+int net_online_account_is_identity(const NetOnlineAccount *a);
 /* A Napple-issued ID token for that account and the running title. Returns the token length (0 = failure). */
 size_t net_online_token(const OnlineProvider *host, const NetOnlineServer *srv, const NetOnlineAccount *a, uint64_t title_id, char *out, size_t n);
 /* The general request: any method, extra header lines ("Name: value\r\n" each, or NULL), a body of type ctype (or NULL). Returns the HTTP status (or

@@ -124,7 +124,7 @@ fi
 internal_token="${NAPPLE_INTERNAL_TOKEN:-$(openssl rand -hex 24)}"
 social_token="${NAPPLE_SOCIAL_SERVICE_TOKEN:-$(openssl rand -hex 24)}"
 # account first (social fetches its JWKS, online its keys), with the contract names plus the pre-r12 aliases (ignored once unused).
-NAPPLE_ACCOUNT_BIND="127.0.0.1:$ACCOUNT_PORT" NAPPLE_ACCOUNT_DATA_DIR="$state/data/account" NAPPLE_ACCOUNT_PUBLIC_BASE="http://127.0.0.1:$ACCOUNT_PORT" \
+NAPPLE_ACCOUNT_BIND="127.0.0.1:$ACCOUNT_PORT" NAPPLE_ACCOUNT_DATA_DIR="$state/data/account" NAPPLE_ACCOUNT_PUBLIC_BASE="http://127.0.0.1:$ACCOUNT_PORT/account/v1" \
 NAPPLE_MAIL_PROVIDER="${NAPPLE_MAIL_PROVIDER:-dev}" NAPPLE_MAIL_FROM="${NAPPLE_MAIL_FROM:-no-reply@napple.lat}" \
 NAPPLE_ADMIN_EMAILS="${NAPPLE_ADMIN_EMAILS:-}" NAPPLE_PHOTO_DIR="$state/data/account/photos" NAPPLE_INTERNAL_TOKEN="$internal_token" \
 NAPPLE_ACCOUNT_ENV=development NAPPLE_ACCOUNT_HTTP="127.0.0.1:$ACCOUNT_PORT" NAPPLE_ACCOUNT_DATA="$state/data/account" NAPPLE_ACCOUNT_MAILER=dev \

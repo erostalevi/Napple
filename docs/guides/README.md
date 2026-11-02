@@ -20,6 +20,7 @@ Background on how the pieces fit: [architecture](../architecture/overview.md); p
 | [cloud-saves.md](cloud-saves.md) | End-to-end encrypted cloud saves with a Napple Account (`crates/napple-cloud`, `napple account` / `napple saves`): devices, approval and recovery, sync rules, conflicts, wire details, environment variables. |
 | [napple-social.md](napple-social.md) | The Napple friends and presence service (`crates/napple-social`): API, WebSocket events, privacy, data model, running it. |
 | [napple-online-client.md](napple-online-client.md) | The Mac-side Napple Online client (`crates/napple-cloud` online module + `runtime/src/online`): shared credentials, profile map, the overlay function table. |
+| [online-e2e.md](online-e2e.md) | Napple Online end-to-end: the scripted 60-check run (sign-up, second device, cloud save, friends, tiers, delete) locally and live, overlay screenshots. |
 | [hardware-simulators.md](hardware-simulators.md) | NFC / amiibo (virtual amiibo, picker contract, optional dumps) and the IR camera simulator, and how the in-game overlay wires them. |
 | [studio.md](studio.md) | Napple Studio: the panes, building for a Mac, iPhone/iPad devices and Simulators, signing modes, bundle ids, the free/paid memory-limit rule, debug flags. |
 | [ios-device-candidate.md](ios-device-candidate.md) | Which iPhone/iPad fits which games: Simulator profiling method, memory figures, picks. |

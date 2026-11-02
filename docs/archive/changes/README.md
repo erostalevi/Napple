@@ -257,3 +257,4 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | [2026-11-03-claude-legal-pages-r12](2026-11-03-claude-legal-pages-r12.md) | legal pages: terms, privacy and report policy (v1). |
 | [2026-11-03-claude-overlay-social-r12](2026-11-03-claude-overlay-social-r12.md) | overlay social sub-tabs: friends, requests, search, block/report, recent players, stats. |
 | [2026-11-03-infra-online-r12](2026-11-03-infra-online-r12.md) | infra: napple-account and napple-social in the deploy stack, SES/S3, service tokens. |
+| [2026-11-03-claude-online-tieup-2026-11-03-r12](2026-11-03-claude-online-tieup-2026-11-03-r12.md) | Online end-to-end: scripted account/second-device/cloud-save/friends/tier run, local and live; integration fixes. |
