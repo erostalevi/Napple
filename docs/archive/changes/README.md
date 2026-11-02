@@ -150,7 +150,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 - [2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
 - [2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
 
-## Unattended rounds (2026-10-27-b7 to 2026-11-02-r8)
+## Unattended rounds (2026-10-27-b7 to 2026-11-02-r9)
 Hand-off files of these rounds (orchestrations and integrator files) are in the [process archive](../../process/archive/README.md).
 
 ### Batch 2026-10-27-b7 (notes not listed above)
@@ -222,3 +222,8 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 |---|---|
 | [2026-11-02-claude-napple-account-2026-11-02-r8](2026-11-02-claude-napple-account-2026-11-02-r8.md) | napple-account: the Napple Account server (email magic link + passkeys, devices, Ed25519 JWT + JWKS, E2E save-key exchange, profiles with reserved names and admin grants, cloud-save metadata with presigned S3 URLs); no billing. |
 | [2026-11-02-claude-cloud-saves-client-2026-11-02-r8](2026-11-02-claude-cloud-saves-client-2026-11-02-r8.md) | cloud-saves-client: end-to-end encrypted cloud saves (crates/napple-cloud: Keychain store, HPKE key wrap, 24-word recovery, deterministic AES-256-GCM blobs, sync engine, runtime FFI), runtime pull-before-mount / push-after-commit hooks, `napple account` / `napple saves` CLI. |
+
+### Round 2026-11-02-r9
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-napple-social-cloud-2026-11-02-r9](2026-11-02-claude-napple-social-cloud-2026-11-02-r9.md) | napple-social: friends, presence and invites service for Napple players (REST + WebSocket, SQLite). |

@@ -3,7 +3,7 @@
 Hand-off files of the unattended parallel rounds, moved here once their branch landed (`/napple-integrate`). Each round has an orchestration file per
 work item (`orchestrations/<name>.md`: goal, owned paths, acceptance, written by `/napple-orchestrate`) and the integrator file its session wrote
 (`integrators/<branch>.md`: what was done, evidence, how to integrate and test). The workflow is in the [process README](../README.md); the
-matching change notes are listed in the [change archive](../../archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r8).
+matching change notes are listed in the [change archive](../../archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r9).
 
 They are kept as written: paths, line numbers and statuses are those of the time, and links inside them are not checked.
 
