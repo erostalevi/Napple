@@ -119,6 +119,10 @@ run "online_suite" {
     condition     = local.ses_identity == "arn:aws:ses:us-east-1:123456789012:identity/napple.lat" && local.ses_configset == "arn:aws:ses:us-east-1:123456789012:configuration-set/napple-transactional"
     error_message = "SES permissions must name the napple.lat identity and the napple-transactional configuration set"
   }
+  assert {
+    condition     = aws_instance.servers.metadata_options[0].http_tokens == "required" && aws_instance.servers.metadata_options[0].http_put_response_hop_limit == 2
+    error_message = "IMDSv2 only, with hop limit 2 so the account container can read the instance role"
+  }
 }
 
 run "cost_defaults" {
