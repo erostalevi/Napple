@@ -6,7 +6,7 @@ head: e8d7ba7 (note commit follows)
 env: mac
 date: 2026-11-02
 areas: [runtime/services, docs]
-status: ready
+status: integrated
 ---
 
 # claude/nvjpg-headerless-redo-2026-11-03-r11: NVJPG header-less decode on the real nvjpg_drv_pic_param_s layout
@@ -41,3 +41,10 @@ docs/reference/nvdrv-layouts.md, docs/architecture/runtime-services.md, docs/arc
 
 ## How to integrate
 git merge --no-ff claude/nvjpg-headerless-redo-2026-11-03-r11 (fast to merge: only the files above), then make -C runtime GFX=napple test-services.
+
+## Integration result
+2026-11-02, Clean (no `integrate:` fixes, no native ports; the C was left as is). Merged into main on top of 7bc0e36 with no conflicts.
+Merged tree: make -C runtime GFX=napple test test-services test-ipc-reference rc 0 (ipc_reference missing 0, 111 fixtures); test_svc_nvdrv_media 315/0, test_svc_jpeg_raw 64/0, test_svc_caps_e2e 22/0; test-risk-title 158/0, 0 skipped;
+cargo build/test --workspace --locked 449 passed, 0 failed; eight boots (SMO, MK8D newest build, LAS 60 s, ACNH 90 s; NAPPLE_NET unset and =host; lock, private save root) rc 0, missing_ipc [], unsupported_svcs [], crashes [];
+MK8D NVDEC/VIC preview (b5c39b5b, 110 s): main and branch both class 0xf0 120 executes / 119 frames / 0 errors, class 0x5d 120 / 119 / 0; check_docs only the archive-orphan complaints; gen_support --check OK.
+Correction to the file: the runtime binary must be rebuilt (`make -C runtime GFX=napple`) in a fresh worktree before boots; the `test-*` targets do not produce it.
