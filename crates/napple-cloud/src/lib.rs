@@ -26,3 +26,4 @@ pub mod stub;
 mod tests_e2e;
 
 pub use error::{Error, Result};
+pub mod online;

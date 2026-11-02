@@ -1,10 +1,11 @@
-/* The in-game overlay: a floating glass panel pinned to the top right (full height, with margins) (NSGlassEffectView on macOS 26, a vibrant material before) with four tabs:
-   Audio/Video, FPS/Speed, Controls and Game/System. Toggled with F1, Cmd+, or the controller's Home / Guide button.
+/* The in-game overlay: a floating glass panel pinned to the top right (full height, with margins) (NSGlassEffectView on macOS 26, a vibrant material before) with five tabs:
+   Audio/Video, FPS/Speed, Controls, Game/System and Online (overlay_online.m). Toggled with F1, Cmd+, or the controller's Home / Guide button.
    Game input keeps flowing while the panel is open (settings.panel_passthrough); a panel opened with the controller takes the pad instead and is
    navigated with it (see FENav below). */
 #include <stdlib.h>
 #include <string.h>
 #include "fe_internal.h"
+#include "overlay_online.h"
 #if __has_include(<MetalFX/MetalFX.h>)
 #import <MetalFX/MetalFX.h>
 #endif
@@ -818,7 +819,7 @@ static const CGFloat kPanelW = 400;
 @end
 
 static void show_page(NappleFE *fe) {
-    NSView *(*makers[])(NappleFE *) = {av_page, fps_page, controls_page, system_page};
+    NSView *(*makers[])(NappleFE *) = {av_page, fps_page, controls_page, system_page, fe_online_page};
     for (NSView *v in [g_content.subviews copy]) [v removeFromSuperview];
     [g_pad_timer invalidate];
     g_pad_timer = nil;
@@ -840,7 +841,7 @@ void fe_overlay_refresh(NappleFE *fe) {
     if (g_content) show_page(fe);
 }
 void fe_overlay_select_tab(int i) {
-    if (g_seg && i >= 0 && i < 4) {
+    if (g_seg && i >= 0 && i < 5) {
         g_sel = i;
         g_seg.selectedSegment = i;
     }
@@ -932,7 +933,7 @@ NSView *fe_build_overlay(NappleFE *fe) {
     [hdr addSubview:close];
     [root addSubview:hdr];
 
-    g_seg = [NSSegmentedControl segmentedControlWithLabels:@[ @"Audio/Video", @"FPS/Speed", @"Controls", @"Game/System" ]
+    g_seg = [NSSegmentedControl segmentedControlWithLabels:@[ @"Audio/Video", @"FPS/Speed", @"Controls", @"Game/System", @"Online" ]
                                               trackingMode:NSSegmentSwitchTrackingSelectOne
                                                     target:nil
                                                     action:nil];
@@ -1023,7 +1024,7 @@ static void nav_activate(void) {
     else if ([c isKindOfClass:NSButton.class]) [(NSButton *)c performClick:nil];
 }
 static void nav_tab(int d) {
-    NSInteger n = (g_sel + d + 4) % 4;
+    NSInteger n = (g_sel + d + 5) % 5;
     g_sel = n;
     g_seg.selectedSegment = n;
     show_page(g_nav_fe);

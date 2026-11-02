@@ -226,6 +226,7 @@ int net_social_config(const NetOnlineServer *online, NetSocialConfig *out) {
     if ((v = getenv(NET_ONLINE_ENV_TOKEN)) && *v) snprintf(out->token, sizeof out->token, "%s", v);
     if ((v = getenv(NET_ONLINE_ENV_TOKEN_FILE)) && *v) snprintf(out->token_file, sizeof out->token_file, "%s", v);
     if ((v = getenv(NET_ONLINE_ENV_PROFILE)) && *v) snprintf(out->profile, sizeof out->profile, "%s", v);
+    if (!out->profile[0]) napple_account_profile_id(out->profile, sizeof out->profile); /* the local user's mapped Napple profile (src/online/) */
     out->poll_ms = (v = getenv(NET_ONLINE_ENV_SOCIAL_POLL)) && atoi(v) >= 500 ? atoi(v) : 5000;
     snprintf(out->online_key, sizeof out->online_key, "%s", online->key);
     out->title_id = strtoull(g_cfg.title_id, NULL, 16);
@@ -235,6 +236,10 @@ int net_social_config(const NetOnlineServer *online, NetSocialConfig *out) {
 }
 
 __attribute__((weak)) size_t napple_account_access_token(char *out, size_t n) {
+    (void)out, (void)n;
+    return 0;
+}
+__attribute__((weak)) size_t napple_account_profile_id(char *out, size_t n) {
     (void)out, (void)n;
     return 0;
 }
