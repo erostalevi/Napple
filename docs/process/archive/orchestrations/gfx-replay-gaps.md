@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r3
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_cfe1eb24-e8f8-4de9-9612-8b8e842af693 (reused)
 launched_at: 2026-11-01
@@ -37,3 +37,5 @@ Close gpu_fixed/depth/stencil formats, the 6 nvn/nvnCommandBufferBindSeparate* s
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask). Shared title data in `/Users/neto/NappleWork/games/` predates the rewriter ordering fix (acnh-race-atomics, being integrated); rebuilt data for it is in `/Users/neto/NappleWork/games-r3/` — use either; never overwrite either.
 
 ## Result
+Integrated 2026-11-02: Clean (ready-with-caveats), merged into main as 95f9519 (branch head b1b8556), after nvn-object-layouts (no conflict; `docs/architecture/gfx.md` auto-merged). `make -C gfx test` ALL TESTS PASSED (`t_d24_readback`, `t_sep_sampler`, `t_int_tex`, `t_xlate`, `t_obj_canary` ok); LAS corpus 5767 / 5767 / 5767; four-title boots with `MTL_DEBUG_LAYER=1` rc 0, 0 skipped draws, no validation errors or warnings. Caveat stands: no title binds separate handles, so the c2 table offsets (0x120 / 0x520) stay a hypothesis; all three features are *tested*, not *verified* on a title. verified.json flips proposed by the author are left to /percent-analysis (tested, not verified).
+Integrator file: `docs/process/archive/integrators/claude-gfx-replay-gaps-2026-11-01-r3.md`.

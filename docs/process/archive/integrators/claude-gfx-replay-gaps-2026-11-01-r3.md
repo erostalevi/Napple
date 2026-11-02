@@ -6,7 +6,7 @@ head: 4c74e0f  # last work commit; the integrator-file commit sits on top
 env: mac
 date: 2026-11-01
 areas: [gfx/replay, gfx/shader, docs]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/gfx-replay-gaps-2026-11-01-r3: D24 readback, separate texture/sampler binds, integer 3D/cube/MS views
@@ -69,3 +69,12 @@ I don't own `.claude/skills/percent-analysis/verified.json`, so these are propos
 
 ## Needs from other areas
 - None.
+
+## Integration result
+- Date: 2026-11-02. Merged into main as 95f9519 (integ/gfx-replay-gaps, branch head b1b8556; file `head: 4c74e0f` + the commit adding this file). Outcome: **Clean** (no conflicts; `docs/architecture/gfx.md` auto-merged next to nvn-object-layouts' section 14; `TRANSLATOR_VERSION` 17 unchallenged). Landed last of the r3 batch, after nvn-object-layouts.
+- `integrate:` fixes: none. Native ports: none (Metal replay and the portable Maxwell translator, left alone on purpose).
+- Build (scratch worktree): gfx lib adapter, audio, input, frontend, runtime (GFX=napple) rc 0.
+- Tests: `make -C gfx test` ALL TESTS PASSED: `t_d24_readback` (DEPTH24 and DEPTH24_STENCIL8: 0 of 64 words differ), `t_sep_sampler` (log line with c2[0x120] | c2[0x520]), `t_int_tex` (3D 5 6 7 8, cube 9 a b c, MS sample 2 1 2 3 4), `t_xlate` ok, `t_obj_canary` ok; pre-existing KNOWN skips only. Runtime `test`, `test-services`, `test-host`, `test-ipc-reference` (111 / missing 0), `audio test` rc 0.
+- LAS corpus: `NAPPLE_SHADER_CORPUS=/Users/neto/NappleWork/shader-corpus/las gfx/build/tests/t_xlate` -> 5767 programs, 5767 translated, 5767 compile with Metal (3 min 53 s).
+- Boots (merged runtime with nvn-object-layouts, rebuilt data `/Users/neto/NappleWork/games-integ/`, default versions, 60 s headless, `MTL_DEBUG_LAYER=1`, A at 25 / 40 / 55 s, private save roots, `.run.lock`): LAS 3534 frames, SMO 3264, MK8D update 3566, ACNH update 1780; all rc 0, `skipped draws 0`, `unimplemented calls 0`, no Metal validation error, no gfx warning lines.
+- Not covered: any of the three features in a title (none uses them in the reached scenes); the separate-handle c2 offsets remain unconfirmed (caveat). The author's verified.json proposals are not applied here (features are tested, not verified on a title).
