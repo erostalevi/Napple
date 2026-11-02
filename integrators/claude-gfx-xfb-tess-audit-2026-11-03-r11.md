@@ -2,7 +2,7 @@
 branch: claude/gfx-xfb-tess-audit-2026-11-03-r11
 orchestration: gfx-xfb-tess-audit
 base: 281f4d3483540816dea22517d4d3d9a263adfb67
-head: pending
+head: da821a7
 env: mac
 date: 2026-11-03
 areas: [gfx]
