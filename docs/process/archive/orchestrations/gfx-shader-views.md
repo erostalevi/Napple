@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r2
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_cfe1eb24-e8f8-4de9-9612-8b8e842af693 (reused gfx-stages-live r1 session)
 launched_at: 2026-11-01
@@ -38,3 +38,5 @@ gfx-nvn-api's paths (`gfx/src/nvnapi/`, `api_cmd.c`, `api_device.c`, `api_progra
 Read `orchestrations/ENV-MAC.md` first. RomFS dumps are ~6 GB each: extract one title at a time and delete the dump after; cap parallel Metal compiles at 3 cores.
 
 ## Result
+Integrated 2026-11-01: Small fix, merged into main as 51e0221 (branch head 0181f47). The integrator applied the int_slot_masks hook (mtl_replay.m + mtl_stages.inc) after gfx-nvn-api landed; `t_int_tex` now runs (0 skipped) and `make -C gfx test` passes. Four-title 60 s boots: 0 skipped draws, no warnings (ACNH dummy-texture line gone).
+Integrator file: `docs/process/archive/integrators/claude-gfx-shader-views-2026-11-01-r2.md`.

@@ -6,7 +6,7 @@ head: c7ad49d  # last work commit; the integrator-file commit sits on top
 env: mac
 date: 2026-11-01
 areas: [gfx/shader, gfx/tex, gfx/memory, tools/gpu, docs]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/gfx-shader-views-2026-11-01-r2: full shader corpus of the four titles, integer textures, ACNH cube view, sparse remap, MK8D archive
@@ -110,3 +110,14 @@ status: ready-with-caveats
 
 ## Needs from other areas
 - gfx-nvn-api (`mtl_replay.m`, `mtl_stages.inc`): the `int_slot_masks` hook above.
+
+## Integration result
+- Date: 2026-11-01. Merged into main as 51e0221 (integ/gfx-shader-views 1b509cd, branch head 0181f47), after gfx-nvn-api. Outcome: **Small fix** (merge itself had no conflicts).
+- Plain merge first: `make -C gfx test` ALL TESTS PASSED (`t_cube_view`, `t_sparse`, `t_xlate` ok; `t_int_tex` 1 skipped as designed), `python3 -I tools/gpu/test_scan_stages.py` OK.
+- `integrate:` fix (1): 1b509cd applied the `int_slot_masks` hook from "How to integrate" verbatim (`gfx/src/mtl_replay.m` before `fill_pipe_key` + two calls in it; one line in `mtl_stages.inc` `stage_key_masks`) and removed the `NAPPLE_TEST_INT_TEX_SLOTS` guard from `t_int_tex.c`. Then `make -C gfx test` ALL TESTS PASSED with `t_int_tex: ok (0 skipped)` (RGBA8UI view 1 2 3 4, RGBA8I view ffffffff ffffff80 7f 1, RG32UI view of BC1 8410f800 e4e4e4e4 0 1) under the Metal debug layer of `make test`.
+- `TRANSLATOR_VERSION` 16 kept (main had 15; gfx-nvn-api does not change translator output, the hook only changes keys).
+- Native ports: none (Metal; the translator is portable on purpose; `scan_stages.py` stays Python).
+- Runtime: `make -C runtime test` + `test-services` rc 0, all suites `"failed":0`.
+- Four-title boots (runtime binary, 60 s headless, private copied `--save-root`, under `.run.lock`): SMO, MK8D, LAS, ACNH rc 0, `notify-running`, 0 skipped draws, no warnings at all (ACNH's "type 5 but type 2 ... dummy texture" line is gone; `copy-backed texture views in use (... type 2 -> 5 ...)`), no validation lines, no archive-save failure lines.
+- Not re-run here: the four corpus runs (`NAPPLE_SHADER_CORPUS`, up to 25 min each) and the 110 s MK8D race (over the 120 s-per-run budget of this batch with lock waits); author-verified.
+- Corrections to this file's instructions: none; the hook patch applied as written.
