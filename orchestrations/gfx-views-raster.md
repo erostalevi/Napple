@@ -17,6 +17,8 @@ launched_at: 2026-11-02
 ## Owned paths
 `gfx/src/shader/`, `gfx/src/{mtl_tex.m,mtl_replay.m,mtl_shader.m,api_cmd.c,api_state.c}`, `gfx/tests/`, `docs/architecture/gfx.md` (append), own change note.
 
+Ownership extension approved by the orchestrator (2026-11-02): appended edits to `gfx/src/mtl_priv.h` (pipe_key fields), `gfx/src/mtl_stages.inc` (`stage_key_masks`), `gfx/src/obj.h` (two opcodes before `OP_COUNT`, enum only).
+
 ## Do not touch
 `gfx/src/obj.h` layouts (keep new state in the command stream; `NVN_MIN_*` + `t_obj_canary` must stay green), `gfx/src/nvnapi/`, `runtime/`, `orchestrations/`.
 
