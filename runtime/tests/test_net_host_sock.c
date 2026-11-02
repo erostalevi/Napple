@@ -31,6 +31,12 @@ static void *blocked_recv(void *arg) {
     return NULL;
 }
 
+static int test_redirect(const char *name, char *out, size_t n) { /* the shape napple-online's server hook has */
+    if (!strcmp(name, "conntest.nintendowifi.net")) return snprintf(out, n, "127.0.0.1"), 1;
+    if (!strcmp(name, "nintendo.com")) return snprintf(out, n, "www.nintendo.com"), 1;
+    return 0;
+}
+
 int main(void) {
     (void)svc_call;
     /* ---- selection: unset / offline / unknown keep the NullProvider; host picks the built-in one ---- */
@@ -131,6 +137,19 @@ int main(void) {
     OnlineResolved res; CHECK(p->dns_resolve(c0, "localhost", NULL, 2, &res) == 0 && res.count >= 1 && res.addrs[0].family == 2 && res.addrs[0].addr[0] == 127, "resolve localhost (IPv4)");
     CHECK(p->dns_resolve(c0, "localhost", "80", 0, &res) == 0 && res.addrs[0].port == 80, "resolve localhost with a service: the port");
     CHECK(p->dns_resolve(c0, "napple-test.invalid", NULL, 0, &res) == HZ_EAI_NONAME, "an .invalid name: EAI_NONAME");
+    /* the console vendor's online-service domains never resolve (EAI_NONAME, like an offline resolver); look-alikes are not caught */
+    const char *blocked[] = {"nintendo.net", "conntest.nintendowifi.net", "ACCOUNTS.Nintendo.COM.", "x-%.nintendo.net", "a.b.nintendo.co.jp", "nintendo.eu",
+                             "www.nintendo-europe.com", "nintendoswitch.com", "api.nintendoswitch.com"};
+    for (size_t i = 0; i < sizeof blocked / sizeof *blocked; i++)
+        CHECK(nh_dns_blocked(blocked[i]) && p->dns_resolve(c0, blocked[i], "443", 0, &res) == HZ_EAI_NONAME && res.count == 0, "%s: refused, host not found", blocked[i]);
+    CHECK(!nh_dns_blocked("notnintendo.net") && !nh_dns_blocked("nintendo.net.example.org") && !nh_dns_blocked("nintendo") && !nh_dns_blocked("localhost") &&
+          !nh_dns_blocked(""), "look-alike and unrelated names are not blocked");
+    CHECK(net_host_redirect_lookup == NULL, "no redirect hook by default");
+    net_host_redirect_lookup = test_redirect;
+    CHECK(p->dns_resolve(c0, "conntest.nintendowifi.net", "80", 2, &res) == 0 && res.addrs[0].addr[0] == 127 && res.addrs[0].port == 80, "a redirected name resolves to its target");
+    CHECK(p->dns_resolve(c0, "nintendo.com", NULL, 2, &res) == HZ_EAI_NONAME, "a redirect to another blocked name is refused");
+    CHECK(p->dns_resolve(c0, "accounts.nintendo.net", NULL, 2, &res) == HZ_EAI_NONAME, "a name the hook leaves alone stays blocked");
+    net_host_redirect_lookup = NULL;
     OnlineAddr l1 = lo(0); char hn[256] = {0}; CHECK(p->dns_reverse(c0, &l1, hn, sizeof hn) == 0 && hn[0], "reverse 127.0.0.1 -> '%s'", hn);
     OnlineNetInfo ni; CHECK(p->net_info(c0, &ni) == 0, "nifm net_info");
     int rc = p->dns_resolve(c0, "example.com", NULL, 2, &res);
