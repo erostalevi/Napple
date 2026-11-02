@@ -2,7 +2,7 @@
 branch: claude/ipc-risk-mac-checks-2026-11-03-r11
 orchestration: ipc-risk-mac-checks
 base: 281f4d3483540816dea22517d4d3d9a263adfb67
-head: HEADPLACEHOLDER
+head: 23fefed (this file's own commit follows)
 env: mac
 date: 2026-11-03
 areas: [runtime/tests, tools/golden]
