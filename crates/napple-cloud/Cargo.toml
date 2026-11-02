@@ -1,0 +1,43 @@
+[package]
+name = "napple-cloud"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Napple Account client: Keychain secrets, E2E-encrypted cloud saves (HPKE key exchange, deterministic AES-256-GCM save blobs), sync engine and runtime FFI"
+
+[lib]
+# rlib for napple-cli, staticlib for the native runtime (runtime/Makefile links target/<profile>/libnapple_cloud.a)
+crate-type = ["rlib", "staticlib"]
+
+[features]
+# napple-cloud-stub: a local in-memory implementation of orchestrations/ACCOUNT-CONTRACT.md for tests and offline development
+stub = ["dep:tiny_http"]
+
+[dependencies]
+aes-gcm = "0.10"
+hkdf = "0.12"
+hmac = "0.12"
+sha2 = "0.10"
+hpke = { version = "0.13", default-features = false, features = ["alloc", "x25519"] }
+rand_core = { version = "0.9", features = ["os_rng"] }
+argon2 = "0.5"
+bip39 = "2"
+zstd = { version = "0.13", default-features = false }
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+libc = "0.2"
+tiny_http = { version = "0.12", optional = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
+
+[dev-dependencies]
+tiny_http = "0.12"
+
+[[bin]]
+name = "napple-cloud-stub"
+path = "src/bin/stub.rs"
+required-features = ["stub"]
