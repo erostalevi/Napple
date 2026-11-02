@@ -99,6 +99,14 @@ int main(void) {
     as = p->sock_accept(c0, ls, NULL, &err); CHECK(as >= 0, "accept");
     OnlinePollFd rp[2] = {{as, ONLINE_POLLIN, 0}, {-1, ONLINE_POLLIN, 0}}; t0 = nh_now_ms();
     CHECK(p->sock_poll(c0, rp, 2, 120, &err) == 0 && nh_now_ms() - t0 >= 100, "poll with nothing to read times out");
+    { /* Poll with nothing pollable waits out its timeout (titles back off with Poll(0, t)); offline it still answers at once */
+        OnlinePollFd neg = {-1, ONLINE_POLLIN, 0};
+        t0 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 0, 120, &err) == 0 && nh_now_ms() - t0 >= 100, "bsd poll of zero descriptors waits for the timeout");
+        t0 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 1, 120, &err) == 0 && nh_now_ms() - t0 >= 100, "bsd poll of only negative descriptors waits too");
+        t0 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 0, 0, &err) == 0 && nh_now_ms() - t0 < 50, "timeout 0 returns at once");
+        IpcObject *bp = bsd_open(); static Call k; memset(&k, 0, sizeof k); k.in[0] = 0; k.in[1] = 120; k.c.in = (const uint8_t *)k.in; k.c.in_size = 8;
+        t0 = nh_now_ms(); svc_call_c(bp, 6, &k.c); CHECK(ri(&k.c, 0) == 0 && nh_now_ms() - t0 >= 100, "bsd:u Poll(nfds 0, 120 ms) without buffers waits");
+    }
     OnlinePollFd bad = {400, ONLINE_POLLIN, 0}; CHECK(p->sock_poll(c0, &bad, 1, 0, &err) == 1 && bad.revents == ONLINE_POLLNVAL, "poll on an unknown handle: POLLNVAL");
     p->sock_close(c0, as, &err); p->sock_close(c0, ns, &err); p->sock_close(c0, ls, &err);
 
@@ -172,6 +180,7 @@ int main(void) {
     /* ---- back to offline: the previous answers ---- */
     unsetenv("NAPPLE_NET"); online_provider_reset(); bsdg_reset(bsd_g()); online_null_reset();
     r = bs(b0, 2, 2, 1, 0, NULL, 0, NULL, 0, NULL, 0); r = bs(b0, 14, 0, 0, 0, sa, 16, NULL, 0, NULL, 0); CHECK(ri(r, 0) == -1 && ri(r, 1) == HZ_ENETDOWN, "variable unset again: Connect is ENETDOWN as before");
+    { OnlinePollFd neg = {-1, 1, 0}; int64_t t1 = nh_now_ms(); CHECK(bsdg_poll(bsd_g(), &neg, 0, 200, &err) == 0 && nh_now_ms() - t1 < 50, "offline: Poll of nothing still answers at once"); }
     printf("%d checks, %d failed\n", g_checked, g_failed);
     return g_failed != 0;
 }
