@@ -120,6 +120,23 @@ Pia's NAT check servers `nncs1-%.n.n.srv.nintendo.net` / `nncs2-%...` (blocked),
 `cargo test -p napple-online` runs the unit tests, including a full login (SYN → CONNECT → token login → ticket → secure CONNECT → Register) and
 two clients matched into one room over PRUDP, in process.
 
+## Friends (napple-social)
+With a Napple Account token the online wrapper also serves `friend:u` from [napple-social](napple-social.md) (online-friends, r10):
+
+| Variable | Meaning |
+|---|---|
+| `NAPPLE_ACCOUNT_TOKEN_FILE` / `NAPPLE_ACCOUNT_TOKEN` | a napple-account access token (Studio / napple-cloud can provide it through `napple_account_access_token()`) |
+| `NAPPLE_ACCOUNT_URL` | the napple-account server (for the profile list) |
+| `NAPPLE_SOCIAL_URL` | the napple-social server |
+| `NAPPLE_SOCIAL_PROFILE` | the profile to act as (default: the account's first profile) |
+| `NAPPLE_SOCIAL_POLL_MS` | friend-list poll interval (default 5000) |
+| `NAPPLE_FRIEND_LOG=1` | log every friend:u call |
+
+Friends who play on the same napple-online server appear under their NEX pid, so game-server lookups by friend work; the runtime reports its
+friends' pids to napple-online (`POST /napple/v1/friends`), which answers GetPlayingSession from them. Presence is "playing <title>" with a join
+token `np1:<server key>:<pid>:<app data>`. MK8D status: a friend shows as online / joinable and the Friends menu opens, but its friend list stays
+empty (open). Not done: friend requests sent from a game, profile images.
+
 ## Status (2026-11-02, r7)
 
 | Phase | Status |

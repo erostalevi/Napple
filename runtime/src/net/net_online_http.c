@@ -4,6 +4,9 @@
  *
  *   POST /napple/v1/account  uid=<32 hex>                          -> pid=<u64> secret=<hex>
  *   POST /napple/v1/token    pid=<u64>&secret=<hex>&title=<16 hex>  -> token=<token> expires=<unix seconds>
+ *   POST /napple/v1/friends  pid=<u64>&secret=<hex>&friends=<u64>,...  -> friends=<count> (the friends napple-social knows on this server)
+ *
+ * net_online_request is the general form (any method, extra headers, JSON bodies, chunked answers): the napple-social client uses it.
  *
  * Credentials are kept per server and per local user in <state dir>/<host_port>/<uid hex>.txt (the same two lines). */
 #include "net_online.h"
@@ -58,8 +61,26 @@ static int64_t conn_read(Conn *c, void *buf, size_t n) {
     return c->tls ? c->p->tls_read(c->p->ctx, c->tls, buf, n, &err) : c->p->sock_recv(c->p->ctx, c->h, buf, n, 0, NULL, &err);
 }
 
-int net_online_http(const OnlineProvider *p, const NetOnlineServer *srv, const char *path, const char *body, char *out, size_t n) {
-    if (n) out[0] = 0;
+/* De-chunks a "Transfer-Encoding: chunked" body in place. Returns the new length. */
+static size_t dechunk(char *b, size_t n) {
+    size_t r = 0, w = 0;
+    while (r < n) {
+        char *end;
+        unsigned long len = strtoul(b + r, &end, 16);
+        char *eol = strstr(b + r, "\r\n");
+        if (end == b + r || !eol) break;
+        r = (size_t)(eol - b) + 2;
+        if (!len || r + len > n) break;
+        memmove(b + w, b + r, len);
+        w += len, r += len + 2;
+    }
+    b[w] = 0;
+    return w;
+}
+
+int net_online_request(const OnlineProvider *p, const NetOnlineServer *srv, const char *method, const char *path, const char *headers, const char *ctype,
+                       const char *body, char **out) {
+    *out = NULL;
     OnlineResolved r;
     char port[8];
     snprintf(port, sizeof port, "%u", srv->port);
@@ -75,7 +96,7 @@ int net_online_http(const OnlineProvider *p, const NetOnlineServer *srv, const c
     p->sock_setsockopt(p->ctx, c.h, G_SOL_SOCKET, G_SO_RCVTIMEO, &tv, sizeof tv, &err);
     p->sock_setsockopt(p->ctx, c.h, G_SOL_SOCKET, G_SO_SNDTIMEO, &tv, sizeof tv, &err);
     int status = -1;
-    char *resp = NULL;
+    char *resp = NULL, *head = NULL;
     if (p->sock_connect(p->ctx, c.h, &a, &err)) goto done;
     if (srv->tls) {
         uint32_t result = 0;
@@ -85,20 +106,26 @@ int net_online_http(const OnlineProvider *p, const NetOnlineServer *srv, const c
             goto done;
         }
     }
-    char head[1024];
-    size_t blen = body ? strlen(body) : 0;
-    int hl = body ? snprintf(head, sizeof head,
-                             "POST %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: napple-runtime\r\nConnection: close\r\n"
-                             "Content-Type: application/x-www-form-urlencoded\r\nContent-Length: %zu\r\n\r\n",
-                             path, srv->host, blen)
-                  : snprintf(head, sizeof head, "GET %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: napple-runtime\r\nConnection: close\r\n\r\n", path, srv->host);
-    if (hl <= 0 || (size_t)hl >= sizeof head) goto done;
+    size_t blen = body ? strlen(body) : 0, hcap = 1024 + strlen(path) + (headers ? strlen(headers) : 0);
+    head = malloc(hcap);
+    if (!head) goto done;
+    int hl = snprintf(head, hcap, "%s %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: napple-runtime\r\nConnection: close\r\n%s", method, path, srv->host,
+                      headers ? headers : "");
+    if (body && hl > 0 && (size_t)hl < hcap) hl += snprintf(head + hl, hcap - (size_t)hl, "Content-Type: %s\r\nContent-Length: %zu\r\n", ctype, blen);
+    else if (hl > 0 && (size_t)hl < hcap && (!strcmp(method, "POST") || !strcmp(method, "PUT"))) hl += snprintf(head + hl, hcap - (size_t)hl, "Content-Length: 0\r\n");
+    if (hl > 0 && (size_t)hl < hcap) hl += snprintf(head + hl, hcap - (size_t)hl, "\r\n");
+    if (hl <= 0 || (size_t)hl >= hcap) goto done;
     if (conn_write(&c, head, (size_t)hl) < 0 || (blen && conn_write(&c, body, blen) < 0)) goto done;
-    size_t cap = 16384, len = 0;
+    size_t cap = 16384, len = 0, max = 4u << 20;
     resp = malloc(cap + 1);
     if (!resp) goto done;
     for (;;) {
-        if (len == cap) break;
+        if (len == cap) {
+            if (cap >= max) break;
+            char *g = realloc(resp, cap * 2 + 1);
+            if (!g) break;
+            resp = g, cap *= 2;
+        }
         int64_t got = conn_read(&c, resp + len, cap - len);
         if (got <= 0) break;
         len += (size_t)got;
@@ -108,12 +135,31 @@ int net_online_http(const OnlineProvider *p, const NetOnlineServer *srv, const c
     if (sscanf(resp, "HTTP/1.%*d %d", &code) != 1) goto done;
     status = code;
     char *b = strstr(resp, "\r\n\r\n");
-    if (b && n) snprintf(out, n, "%s", b + 4);
+    if (b) {
+        *b = 0;
+        int chunked = strcasestr(resp, "\r\ntransfer-encoding: chunked") != NULL;
+        b += 4;
+        size_t blen2 = len - (size_t)(b - resp);
+        memmove(resp, b, blen2 + 1);
+        if (chunked) dechunk(resp, blen2);
+        *out = resp;
+        resp = NULL;
+    }
 done:
     free(resp);
+    free(head);
     if (c.tls) p->tls_free(p->ctx, c.tls);
     p->sock_close(p->ctx, c.h, &err);
     return status;
+}
+
+int net_online_http(const OnlineProvider *p, const NetOnlineServer *srv, const char *path, const char *body, char *out, size_t n) {
+    if (n) out[0] = 0;
+    char *resp = NULL;
+    int st = net_online_request(p, srv, body ? "POST" : "GET", path, NULL, "application/x-www-form-urlencoded", body, &resp);
+    if (resp && n) snprintf(out, n, "%s", resp);
+    free(resp);
+    return st;
 }
 
 static void hex(const uint8_t *b, size_t n, char *out) {
@@ -176,4 +222,15 @@ size_t net_online_token(const OnlineProvider *p, const NetOnlineServer *srv, con
     if (st != 200) return 0;
     if (net_online_kv(resp, "token", out, n)) return 0;
     return strlen(out);
+}
+
+int net_online_report_friends(const OnlineProvider *p, const NetOnlineServer *srv, const NetOnlineAccount *a, const uint64_t *pids, uint32_t n) {
+    size_t cap = 160 + (size_t)n * 21;
+    char *body = malloc(cap), resp[256];
+    if (!body) return -1;
+    int w = snprintf(body, cap, "pid=%llu&secret=%s&friends=", (unsigned long long)a->pid, a->secret);
+    for (uint32_t i = 0; i < n && w > 0 && (size_t)w < cap; i++) w += snprintf(body + w, cap - (size_t)w, "%s%llu", i ? "," : "", (unsigned long long)pids[i]);
+    int st = net_online_http(p, srv, "/napple/v1/friends", body, resp, sizeof resp);
+    free(body);
+    return st == 200 ? 0 : -1;
 }

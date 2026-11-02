@@ -622,7 +622,11 @@ impl Server {
                 })
             }
             31 | 60 => {
-                let Ok(pids) = r.list(|r| r.pid()) else { return bad };
+                let Ok(mut pids) = r.list(|r| r.pid()) else { return bad };
+                if pids.is_empty() {
+                    // An empty list asks for the caller's friends (MK8D's Friends mode): the ones its client reported from napple-social.
+                    pids = self.accounts.friends(me.pid);
+                }
                 let w = self.world.lock().unwrap();
                 let mut found = vec![];
                 for p in pids {
@@ -640,6 +644,10 @@ impl Server {
                 })
             }
             10 | 13 | 16 | 24 => ok(|w| {
+                w.u32(0);
+            }),
+            // 65 (no arguments): MK8D's Friends screen reads the user's favourite tournaments ("GetCompeFavorite"). No tournaments here: an empty list.
+            65 => ok(|w| {
                 w.u32(0);
             }),
             45 => ok(|w| {
@@ -826,6 +834,12 @@ impl Server {
             }
             1 | 2 | 3 | 7 | 8 => ok(|_| {}),
             9 | 12 | 13 | 14 => ok(empty_result),
+            // 18: MK8D's Friends (and Tournament) screen downloads the popular tournaments with it (one 14-byte parameter structure ending in a
+            // count, 100). This server runs no tournaments: an empty list. NotImplemented or a RankingResult end the screen with "a communication
+            // error" (report: OtherFinalizeError, DownloadCompePopular).
+            18 => ok(|w| {
+                w.u32(0);
+            }),
             10 => ok(|w| {
                 w.u32(0);
             }),
