@@ -201,3 +201,8 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 |---|---|
 | [2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5](2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5.md) | Interpreter `lda` / `stl` seq_cst with the alignment fault, per-viewport swizzles, these archive indexes. |
 | [2026-11-02-claude-nifm-netconnect-2026-11-02-r5](2026-11-02-claude-nifm-netconnect-2026-11-02-r5.md) | nifm Cancel keeps a rejected request's result, GetAppletInfo storages, the real NetConnect output (MK8D Online Play: one applet per attempt), vi ConvertScalingMode. |
+
+### Round 2026-11-02-r7
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-napple-infra-2026-11-02-r7](2026-11-02-claude-napple-infra-2026-11-02-r7.md) | AWS auto-deploy of the game servers to `pretend.napple.lat` (OpenTofu, Docker + Caddy, a workflow that skips without secrets), `napple.lat` DNS to GitHub Pages, the native local test stack. |
