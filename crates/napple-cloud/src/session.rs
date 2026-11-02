@@ -13,6 +13,8 @@ pub struct Session {
     pub store: Box<dyn SecretStore>,
     pub api: Api,
     cfg: std::sync::Mutex<AccountConfig>,
+    /// Signed in through Napple Online (the shared <NAPPLE_HOME>/online/credentials.json): refreshes go through that client's cross-process lock.
+    shared: Option<crate::online::client::Client>,
 }
 
 /// macos | ios | cli (contract `device.platform`). The CLI, Studio and built games on a Mac share one device identity, so a Mac is "macos".
@@ -60,6 +62,9 @@ impl Session {
     }
 
     pub fn open_ns(support: &Path, ns: &str) -> Result<Session> {
+        if let Some(s) = Self::open_shared(support, ns)? {
+            return Ok(s);
+        }
         let dir = StateDir::new(support, ns);
         let cfg = dir.load_account()?.ok_or(Error::NotSignedIn)?;
         let store = store::open(ns, &dir.root)?;
@@ -67,7 +72,33 @@ impl Session {
             return Err(Error::NotSignedIn);
         }
         let api = Api::new(&cfg.server);
-        Ok(Session { dir, store, api, cfg: std::sync::Mutex::new(cfg) })
+        Ok(Session { dir, store, api, cfg: std::sync::Mutex::new(cfg), shared: None })
+    }
+
+    /// The sign-in of Napple Online (shared credentials of every Napple game on this Mac), if there is one. Cloud saves use the same account,
+    /// device and save key; `NAPPLE_HOME` (default: the support dir) holds `online/credentials.json`.
+    pub fn open_shared(support: &Path, ns: &str) -> Result<Option<Session>> {
+        use crate::online::{client::Client, creds::CredStore};
+        let home = std::env::var("NAPPLE_HOME").ok().filter(|h| !h.is_empty()).map(std::path::PathBuf::from).unwrap_or_else(|| support.to_path_buf());
+        let cs = CredStore::open(&home);
+        let Some(c) = cs.load()?.filter(|c| !c.refresh_token_enc.is_empty()) else { return Ok(None) };
+        let dir = StateDir::new(support, ns);
+        let cfg = AccountConfig {
+            server: c.server.clone(),
+            account_id: c.account_id.clone(),
+            device_id: c.device_id.clone(),
+            device_name: default_device_name(),
+            email: c.email.clone(),
+            ..Default::default()
+        };
+        let cfg = dir.load_account()?.filter(|o| o.account_id == cfg.account_id).map(|mut o| {
+            o.device_id = cfg.device_id.clone();
+            o.server = cfg.server.clone();
+            o
+        }).unwrap_or(cfg);
+        let api = Api::new(&c.server);
+        let store: Box<dyn SecretStore> = Box::new(shared_store(CredStore::open(&home)));
+        Ok(Some(Session { dir, store, api, cfg: std::sync::Mutex::new(cfg), shared: Some(Client::new(home, &c.server, &c.server)) }))
     }
 
     /// Step 2 of the email sign-in: registers this device (new X25519 key) and stores the tokens.
@@ -105,7 +136,7 @@ impl Session {
             ..Default::default()
         };
         dir.save_account(&cfg)?;
-        let s = Session { dir, store, api, cfg: std::sync::Mutex::new(cfg) };
+        let s = Session { dir, store, api, cfg: std::sync::Mutex::new(cfg), shared: None };
         if let Ok(me) = s.me() {
             s.update_cfg(|c| {
                 if c.account_id.is_empty() {
@@ -115,6 +146,10 @@ impl Session {
             })?;
         }
         Ok(s)
+    }
+
+    pub fn is_shared(&self) -> bool {
+        self.shared.is_some()
     }
 
     pub fn cfg(&self) -> AccountConfig {
@@ -146,6 +181,11 @@ impl Session {
 
     /// Exchanges the refresh token (rotated: the server returns a new one, stored at once).
     pub fn refresh(&self) -> Result<String> {
+        if let Some(c) = &self.shared {
+            let t = c.refresh()?;
+            self.store.set(store::ACCESS_TOKEN, json!({"token": t, "exp": now() + 840}).to_string().as_bytes())?;
+            return Ok(t);
+        }
         let rt = self.store.get(store::REFRESH_TOKEN)?.ok_or(Error::NotSignedIn)?;
         let rt = String::from_utf8_lossy(&rt).to_string();
         let v = self.api.call("POST", "/auth/refresh", None, Some(&json!({ "refresh_token": rt })))?;
@@ -201,7 +241,7 @@ impl Session {
 
     fn grant(&self, device_id: &str, pubkey: &[u8], key: &[u8; 32]) -> Result<()> {
         let w = keys::wrap_account_key(key, pubkey)?;
-        self.call("POST", "/keys/grant", Some(&json!({"device_id": device_id, "wrapped_account_key": b64(&w)})))?;
+        self.call("POST", "/keys/grant", Some(&json!({"device_id": device_id, "wrapped_account_key": b64(&w), "key_id": b64(&crate::util::sha256(key)[..12])})))?;
         Ok(())
     }
 
@@ -311,5 +351,59 @@ impl Session {
         }
         store::wipe(self.store.as_ref())?;
         self.dir.clear_account()
+    }
+}
+
+/// The secret store view of the shared Napple Online credentials: the refresh token, device key and account save key live in the wrapped
+/// credentials file; access tokens stay in memory.
+fn shared_store(cs: crate::online::creds::CredStore) -> SharedStore {
+    SharedStore { cs, access: std::sync::Mutex::new(None) }
+}
+
+struct SharedStore {
+    cs: crate::online::creds::CredStore,
+    access: std::sync::Mutex<Option<Vec<u8>>>,
+}
+
+impl SecretStore for SharedStore {
+    fn get(&self, name: &str) -> Result<Option<Vec<u8>>> {
+        if name == store::ACCESS_TOKEN {
+            return Ok(self.access.lock().unwrap().clone());
+        }
+        let Some(c) = self.cs.load()? else { return Ok(None) };
+        let enc = match name {
+            store::REFRESH_TOKEN => &c.refresh_token_enc,
+            store::DEVICE_KEY => &c.device_key_enc,
+            store::ACCOUNT_KEY => &c.account_key_enc,
+            _ => return Ok(None),
+        };
+        if enc.is_empty() { Ok(None) } else { Ok(Some(self.cs.open_sealed(enc)?)) }
+    }
+    fn set(&self, name: &str, value: &[u8]) -> Result<()> {
+        if name == store::ACCESS_TOKEN {
+            *self.access.lock().unwrap() = Some(value.to_vec());
+            return Ok(());
+        }
+        let enc = self.cs.seal(value)?;
+        self.cs.update(|c| {
+            if let Some(c) = c.as_mut() {
+                match name {
+                    store::REFRESH_TOKEN => c.refresh_token_enc = enc,
+                    store::DEVICE_KEY => c.device_key_enc = enc,
+                    store::ACCOUNT_KEY => c.account_key_enc = enc,
+                    _ => {}
+                }
+            }
+            Ok(())
+        })
+    }
+    fn delete(&self, name: &str) -> Result<()> {
+        if name == store::ACCESS_TOKEN {
+            *self.access.lock().unwrap() = None;
+        }
+        Ok(()) // signing out of the shared credentials is the online client's logout
+    }
+    fn describe(&self) -> String {
+        format!("shared Napple Online credentials in {}", self.cs.dir().display())
     }
 }

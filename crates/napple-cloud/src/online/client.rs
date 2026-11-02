@@ -370,10 +370,15 @@ impl Client {
         };
         match key_state {
             "bootstrap" => {
+                // never make a second key for an account that has other devices (their key would differ): wait for an approval instead
+                let others = list(&self.acc("GET", "/devices", None).body, "devices").iter().filter(|d| s(d, &["device_id", "id"]) != c.device_id).count();
+                if others > 0 {
+                    return;
+                }
                 let k: [u8; 32] = random();
                 if let Ok(pk) = keys::device_public(&sk) {
                     if let Ok(w) = keys::wrap_account_key(&k, &pk) {
-                        let r = self.acc("POST", "/keys/grant", Some(&json!({"device_id": c.device_id, "wrapped_account_key": b64(&w)})));
+                        let r = self.acc("POST", "/keys/grant", Some(&json!({"device_id": c.device_id, "wrapped_account_key": b64(&w), "key_id": key_id(&k)})));
                         if r.ok() {
                             self.store_account_key(&k);
                         }
@@ -667,7 +672,13 @@ impl Client {
                 if !(1..=5).contains(&t) {
                     return invalid("tier 1..5");
                 }
-                self.acc("PATCH", &format!("/profiles/{}", a("profile_id")), Some(&json!({"tier": t}))).result()
+                let r = self.acc("PATCH", &format!("/profiles/{}", a("profile_id")), Some(&json!({"tier": t})));
+                if r.ok() {
+                    // napple-social learns a tier from the owner's own calls (or after its snapshot TTL): make one now so the change applies at once
+                    let _ = self.authed("GET", &format!("{}/me", self.social), Some(a("profile_id")), Body::None);
+                    self.refresh_state();
+                }
+                r.result()
             }
             "friend_request" => {
                 let q = a("code");
@@ -713,7 +724,7 @@ impl Client {
                 let Some(r) = list(&reqs.body, "requests").iter().find(|r| s(r, &["device_id", "id"]) == a("device_id")) else { return invalid("no such pending device") };
                 let Some(pk) = unb64(s(r, &["pubkey"])) else { return invalid("device has no public key") };
                 let Ok(w) = keys::wrap_account_key(&key, &pk) else { return invalid("bad device public key") };
-                self.acc("POST", "/keys/grant", Some(&json!({"device_id": a("device_id"), "wrapped_account_key": b64(&w)}))).result()
+                self.acc("POST", "/keys/grant", Some(&json!({"device_id": a("device_id"), "wrapped_account_key": b64(&w), "key_id": key_id(&key)}))).result()
             }
             "revoke_device" => self.acc("DELETE", &format!("/devices/{}", a("device_id")), None).result(),
             "delete_account" => {
@@ -726,6 +737,11 @@ impl Client {
             _ => invalid("unknown action"),
         }
     }
+}
+
+/// The fingerprint the server pins for the account's save key (a second, different key is then refused with 409 key_mismatch).
+fn key_id(k: &[u8; 32]) -> String {
+    b64(&crate::util::sha256(k)[..12])
 }
 
 fn clone_body<'a>(b: &Body<'a>) -> Body<'a> {
