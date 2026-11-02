@@ -9,7 +9,7 @@
  *  5. index 1: viewport 1's swizzle, the right half;   6. a program that writes no index: viewport 0's, the left half;
  *  7. index 1 with viewport 1 = x <-> y: a horizontal half;   8. index 0 with viewport 0 = x = -x and viewport 1 identity: the right half.
  *  9. the same through a geometry program that forwards the triangle and writes viewport index 1 (the GS pass-through applies it): the right half.
- * Only viewport 0's rectangle reaches Metal (the replay sets one viewport), so viewports 0 and 1 share the rectangle here.
+ * Viewports 0 and 1 share the rectangle here, so only the swizzle tells them apart (t_multi_viewport tests the rectangles, scissors and depth ranges).
  * Headless Metal (MTL_DEBUG_LAYER=1 in make test), no game data. */
 #include "nvn_harness.h"
 

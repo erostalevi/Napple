@@ -115,6 +115,8 @@ typedef struct {
                           * feedback capture, before the flip / depth conversions): 3 bits per output component x, y, z, w (bits 0, 3, 6, 9), each an
                           * NVN_VIEWPORT_SWIZZLE_* (source component << 1 | negate), stored XOR VP_SWIZZLE_IDENTITY so that 0 is the identity */
     uint16_t vp_swizzle_vp[15]; /* the same for viewports 1-15: a program that writes the viewport index (attribute 0x68) gets the swizzle of the viewport it selects */
+    uint8_t layered;            /* vertex / tess eval: the pass is layered (renderTargetArrayLength set): the layer the program writes (0x64) becomes
+                                 * [[render_target_array_index]]; otherwise it is dropped (a single-image target ignores it, and Metal rejects the output there) */
 } ShaderKey;
 #define VP_SWIZZLE_IDENTITY (0u | 2u << 3 | 4u << 6 | 6u << 9)
 
@@ -181,6 +183,8 @@ typedef struct {
     uint16_t gs_max_vertices;
     uint8_t gs_out_topology, tess_domain, tess_out_vertices;
     bool uses_stage_out;      /* the program writes the stage-out buffer */
+    bool writes_layer, writes_vp_index; /* vertex / tess eval / geometry: stores the layer (0x64; geometry: slot 0 .y) / viewport index (0x68; slot 0 .z):
+                                         * [[render_target_array_index]] / [[viewport_array_index]] of the rasterized output */
     bool uses_xfb;
     char error[256];
 } ShaderInfo;

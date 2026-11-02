@@ -226,10 +226,13 @@ static uint64_t i_vmnmx(int d, int a, int b, int c_, int asel, int asg, int bsel
 /* ---- Corpus mode: NAPPLE_SHADER_CORPUS=<dir> (tools/gpu/scan_stages.py extract writes <tag>_<digest>_<vs|ps|gs|tcs|tes|cs>.bin + .ctl, one directory per
  * title or all in one): every program is translated with its stage's key (geometry / tess fields from the SPH) and compiled by Metal with the options the
  * runtime uses (MSL 3.1 when the program needs it), at most 3 compiles at a time. Prints per tag: programs, translated, compiled, and the failures
- * grouped by message (NAPPLE_SHADER_CORPUS_LIST=1 names every failing file). The corpus is game data: it lives outside the repository. */
+ * grouped by message (NAPPLE_SHADER_CORPUS_LIST=1 names every failing file). NAPPLE_SHADER_CORPUS_XLATE_ONLY=1 translates without compiling (the
+ * compile column then counts 0; for quick scans such as which programs write the viewport index / layer). The corpus is game data: it lives outside the
+ * repository. */
 typedef struct {
     char tag[32];
     int total, ok, comp;
+    int vpi, layer; /* programs that write the viewport index / layer (ShaderInfo.writes_vp_index / writes_layer) */
 } corpus_tag;
 static void corpus_file(const char *path, const char *name, corpus_tag *t, NSMutableDictionary<NSString *, NSNumber *> *fails, int list) {
     FILE *f = fopen(path, "rb");
@@ -267,12 +270,14 @@ static void corpus_file(const char *path, const char *name, corpus_tag *t, NSMut
         ck.tess_out_vertices = 3;
         ck.tess_domain = TESS_DOMAIN_TRIANGLE;
     }
+    ck.layered = 1; /* a program that writes the layer declares [[render_target_array_index]] (as in a layered pass) */
     ShaderInfo *r = maxwell_translate(buf, len, stage, &ck);
     free(buf);
     NSString *why = nil;
-    int ok = r && r->msl, comp = 0;
+    int ok = r && r->msl, comp = 0, vpi = r && r->writes_vp_index, layer = r && r->writes_layer;
     if (!ok) why = [NSString stringWithFormat:@"translate: %s", r ? r->error : "no result"];
-    else {
+    else if (getenv("NAPPLE_SHADER_CORPUS_XLATE_ONLY")) {
+    } else {
         NSError *e = nil;
         MTLCompileOptions *o = [MTLCompileOptions new];
         o.languageVersion = r->needs_msl31 ? MTLLanguageVersion3_1 : MTLLanguageVersion3_0;
@@ -293,6 +298,9 @@ static void corpus_file(const char *path, const char *name, corpus_tag *t, NSMut
         t->total++;
         t->ok += ok;
         t->comp += comp;
+        t->vpi += vpi;
+        t->layer += layer;
+        if ((vpi || layer) && (list || t->vpi + t->layer <= 8)) printf("  %s writes%s%s\n", name, vpi ? " the viewport index" : "", layer ? " the layer" : "");
         if (why) {
             /* group by message with the program-specific numbers removed */
             NSRegularExpression *rx = [NSRegularExpression regularExpressionWithPattern:@"(0x[0-9a-fA-F]+|\\b[0-9]+\\b)" options:0 error:nil];
@@ -334,6 +342,7 @@ static void corpus_run(const char *dir) {
     int total = 0, ok = 0, comp = 0;
     for (int i = 0; i < ntag; i++) {
         printf("corpus %s: %d programs, %d translated, %d compile with Metal\n", tags[i].tag, tags[i].total, tags[i].ok, tags[i].comp);
+        printf("corpus %s: %d write the viewport index, %d the layer\n", tags[i].tag, tags[i].vpi, tags[i].layer);
         total += tags[i].total;
         ok += tags[i].ok;
         comp += tags[i].comp;
@@ -342,7 +351,7 @@ static void corpus_run(const char *dir) {
     for (NSString *k in keys) printf("  %5d x %.300s\n", fails[k].intValue, k.UTF8String);
     printf("corpus: %d shaders, %d translated, %d compile with Metal\n", total, ok, comp);
     CHECK(total == 0 || ok * 100 >= total * 95, "translation rate below 95%%");
-    CHECK(comp == ok, "%d translated shaders failed Metal compilation", ok - comp);
+    CHECK(comp == ok || getenv("NAPPLE_SHADER_CORPUS_XLATE_ONLY"), "%d translated shaders failed Metal compilation", ok - comp);
 }
 #endif
 
