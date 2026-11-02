@@ -5,14 +5,19 @@
  *  3. RG32UI view of a BC1 texture (one 4x4 block; a copy): the block's two words, then (0, 1);
  *  4. a 3D RGBA8UI texture (TEX.3D): texture3d<uint> through IntTex3D;
  *  5. a CUBEMAP view of a 2D RGBA8UI texture (TEX.CUBE; a copy-backed cube): texturecube<uint> through IntTexCube;
- *  6. a 4x RGBA8UI render target a draw filled with (1, 2, 3, 4), read by TLD.MS sample 2: texture2d_ms<uint> through IntTex2DMS.
+ *  6. a 4x RGBA8UI render target a draw filled with (1, 2, 3, 4), read by TLD.MS sample 2: texture2d_ms<uint> through IntTex2DMS;
+ *  7. a 1D RGBA8UI texture (TEX.1D): texture1d<uint> through IntTex1D;
+ *  8. a 1D array RGBA8UI texture, each layer uploaded with its own bytes, layer 2 (TEX.1D.ARRAY): texture1d_array<uint> through IntTex1DArray;
+ *  9. a cube array RGBA8UI texture, each layer-face its own bytes, cube 1 face -Y (TEX.CUBE.ARRAY): texturecube_array<uint> through IntTexCubeArray;
+ * 10. a 4x RGBA8UI 2D multisample array, layer 1 filled by a draw with (5, 6, 7, 8), read by TLD.MS.ARRAY sample 3: texture2d_ms_array<uint>.
  * Before integer slots, these bindings were declared texture2d<float> (the format view read as converted floats, the BC1 integer view fell back to the
  * texture's own format). The replay fills the slot masks (int_slot_masks in mtl_replay.m). Headless Metal (MTL_DEBUG_LAYER=1 in make test), no game data. */
 #include "nvn_harness.h"
 
 #define W 8
 enum { OFF_VB = 0x0, OFF_SH = 0x1000, OFF_T8 = 0x100000, OFF_T8I = 0x108000, OFF_TBC = 0x110000, OFF_T3 = 0x118000, OFF_TC = 0x120000, OFF_TMS = 0x128000,
-       OFF_RT = 0x160000, OFF_TP = 0x180000, OFF_SP = 0x190000, OFF_RB = H_READBACK };
+       OFF_T1 = 0x130000, OFF_T1A = 0x134000, OFF_TCA = 0x138000, OFF_TMSA = 0x140000, OFF_RT = 0x160000, OFF_TP = 0x180000, OFF_SP = 0x190000,
+       OFF_STG = 0x1c0000, OFF_RB = H_READBACK };
 #define TEX_LZ_T(d, a, b, index, target) ((ins_tex2d_lz(d, a, b, index) & ~(3ull << 29)) | ((uint64_t)(target) << 29)) /* target 2 = 3D, 3 = cube */
 #define TLD_MS(d, a, b, index) (0xdc38000000000000ull | (uint64_t)(d) | ((uint64_t)(a) << 8) | ((uint64_t)(b) << 20) | (1ull << 29) | (0xfull << 31) | ((uint64_t)(index) << 36) | (1ull << 50) | PT_BITS)
 
@@ -171,5 +176,101 @@ int main(void) {
     t = texel(3, 3);
     printf("4x RGBA8UI sample 2: %x %x %x %x\n", t[0], t[1], t[2], t[3]);
     CHECK(t[0] == 1 && t[1] == 2 && t[2] == 3 && t[3] == 4, "multisampled RGBA8UI read by sample (TLD.MS): %x %x %x %x", t[0], t[1], t[2], t[3]);
+    /* 7-10: 1D, 1D array, cube array, multisample array. Staging words for the per-layer uploads are written before any of them is used. */
+    uint32_t *stg = (uint32_t *)(h.mem + OFF_STG);
+    for (int l = 0; l < 12; l++)
+        for (int i = 0; i < 16; i++) stg[l * 16 + i] = 0x20202020u + 0x01010101u * (uint32_t)l + 0x00010203u;
+    for (int i = 0; i < 0x1000; i += 4) memcpy(h.mem + OFF_T1 + i, "\x0d\x0e\x0f\x10", 4);
+    L(nvnTextureBuilderSetDefaults)(&tb);
+    L(nvnTextureBuilderSetTarget)(&tb, NVN_TEXTURE_TARGET_1D); L(nvnTextureBuilderSetFormat)(&tb, NVN_FORMAT_RGBA8UI);
+    L(nvnTextureBuilderSetSize1D)(&tb, 8); L(nvnTextureBuilderSetStorage)(&tb, h.pool, OFF_T1);
+    NVNtexture *t1 = calloc(1, sizeof(NVNtexture));
+    CHECK(L(nvnTextureInitialize)(t1, &tb), "1D RGBA8UI texture");
+    L(nvnTextureBuilderSetTarget)(&tb, NVN_TEXTURE_TARGET_1D_ARRAY); L(nvnTextureBuilderSetSize2D)(&tb, 4, 3); L(nvnTextureBuilderSetStorage)(&tb, h.pool, OFF_T1A);
+    NVNtexture *t1a = calloc(1, sizeof(NVNtexture));
+    CHECK(L(nvnTextureInitialize)(t1a, &tb), "1D array RGBA8UI texture");
+    L(nvnTextureBuilderSetTarget)(&tb, NVN_TEXTURE_TARGET_CUBEMAP_ARRAY); L(nvnTextureBuilderSetSize3D)(&tb, 4, 4, 12); L(nvnTextureBuilderSetStorage)(&tb, h.pool, OFF_TCA);
+    NVNtexture *tca = calloc(1, sizeof(NVNtexture));
+    CHECK(L(nvnTextureInitialize)(tca, &tb), "cube array RGBA8UI texture");
+    L(nvnTextureBuilderSetDefaults)(&tb);
+    L(nvnTextureBuilderSetTarget)(&tb, NVN_TEXTURE_TARGET_2D_MULTISAMPLE_ARRAY); L(nvnTextureBuilderSetFormat)(&tb, NVN_FORMAT_RGBA8UI);
+    L(nvnTextureBuilderSetSize3D)(&tb, W, W, 2); L(nvnTextureBuilderSetSamples)(&tb, 4); L(nvnTextureBuilderSetFlags)(&tb, NVN_TEXTURE_FLAGS_COMPRESSIBLE);
+    L(nvnTextureBuilderSetStorage)(&tb, h.pool, OFF_TMSA);
+    NVNtexture *tmsa = calloc(1, sizeof(NVNtexture));
+    CHECK(L(nvnTextureInitialize)(tmsa, &tb), "4x RGBA8UI 2D multisample array");
+    h_begin(&h);
+    for (int l = 0; l < 3; l++) {
+        NVNcopyRegion r = {0, l, 0, 4, 1, 1}; /* 1D arrays: the layer is the y coordinate */
+        L(nvnCommandBufferCopyBufferToTexture)(h.cb, (NVNbufferAddress)(uintptr_t)(stg + l * 16), t1a, NULL, &r, 0);
+    }
+    for (int l = 0; l < 12; l++) {
+        NVNcopyRegion r = {0, 0, l, 4, 4, 1};
+        L(nvnCommandBufferCopyBufferToTexture)(h.cb, (NVNbufferAddress)(uintptr_t)(stg + l * 16), tca, NULL, &r, 0);
+    }
+    h_submit(&h);
+    L(nvnTexturePoolRegisterTexture)(tp, 306, t1, NULL);
+    L(nvnTexturePoolRegisterTexture)(tp, 307, t1a, NULL);
+    L(nvnTexturePoolRegisterTexture)(tp, 308, tca, NULL);
+    L(nvnTexturePoolRegisterTexture)(tp, 309, tmsa, NULL);
+    const uint64_t t1d = ins_tex2d_lz(0, 4, 4, 8) & ~(3ull << 29);
+    uint64_t g7[] = {ins_mov32i(4, 0x3f000000), t1d, ins_exit()};
+    uint64_t g8[] = {ins_mov32i(4, 2), ins_mov32i(5, 0x3f000000), t1d | (1ull << 28), ins_exit()};
+    uint64_t g9[] = {ins_mov32i(4, 1), ins_mov32i(5, 0x3dcccccd), ins_mov32i(6, 0xbf800000), ins_mov32i(7, 0x3e4ccccd), TEX_LZ_T(0, 4, 4, 8, 3) | (1ull << 28), ins_exit()};
+    uint64_t g10[] = {ins_mov32i(4, 1), ins_mov32i(5, 3), ins_mov32i(6, 3), ins_mov32i(7, 3), TLD_MS(0, 4, 7, 8) | (1ull << 28), ins_exit()};
+    const uint64_t *gs[4] = {g7, g8, g9, g10};
+    const int gn[4] = {3, 4, 6, 6};
+    NVNprogram *pq[4];
+    static uint8_t c4[8][0x880];
+    for (int k = 0; k < 4; k++) {
+        build_shader(h.mem + OFF_SH + 0xa000 + 0x2000 * k, c4[2 * k], 0, vs_i, 3, 0);
+        build_shader(h.mem + OFF_SH + 0xb000 + 0x2000 * k, c4[2 * k + 1], 1, gs[k], gn[k], 0xf);
+        pq[k] = calloc(1, sizeof(NVNprogram));
+        L(nvnProgramInitialize)(pq[k], h.dev);
+        NVNshaderData d4[2] = {{(NVNbufferAddress)(uintptr_t)(h.mem + OFF_SH + 0xa000 + 0x2000 * k), c4[2 * k]},
+                               {(NVNbufferAddress)(uintptr_t)(h.mem + OFF_SH + 0xb000 + 0x2000 * k), c4[2 * k + 1]}};
+        CHECK(L(nvnProgramSetShaders)(pq[k], 2, d4), "shaders %d", k + 7);
+    }
+    /* 7 */
+    run(pq[0], rt, L(nvnDeviceGetTextureHandle)(h.dev, 306, 5));
+    t = texel(3, 3);
+    printf("1D RGBA8UI: %x %x %x %x\n", t[0], t[1], t[2], t[3]);
+    CHECK(t[0] == 0xd && t[1] == 0xe && t[2] == 0xf && t[3] == 0x10, "1D RGBA8UI texture read as integers: %x %x %x %x", t[0], t[1], t[2], t[3]);
+    /* 8: layer 2's bytes are 0x22 + (0, 1, 2, 3) */
+    run(pq[1], rt, L(nvnDeviceGetTextureHandle)(h.dev, 307, 5));
+    t = texel(3, 3);
+    printf("1D array RGBA8UI layer 2: %x %x %x %x\n", t[0], t[1], t[2], t[3]);
+    CHECK(t[0] == 0x25 && t[1] == 0x24 && t[2] == 0x23 && t[3] == 0x22, "1D array RGBA8UI layer 2 read as integers: %x %x %x %x", t[0], t[1], t[2], t[3]);
+    /* 9: cube 1, face -Y (3) = layer-face 9 */
+    run(pq[2], rt, L(nvnDeviceGetTextureHandle)(h.dev, 308, 5));
+    t = texel(3, 3);
+    printf("cube array RGBA8UI cube 1 face -Y: %x %x %x %x\n", t[0], t[1], t[2], t[3]);
+    CHECK(t[0] == 0x2c && t[1] == 0x2b && t[2] == 0x2a && t[3] == 0x29, "cube array RGBA8UI layer-face 9 read as integers: %x %x %x %x", t[0], t[1], t[2], t[3]);
+    /* 10: layer 1 of the 4x array filled with (5, 6, 7, 8) by a draw */
+    uint64_t fw2[] = {ins_mov32i(0, 5), ins_mov32i(1, 6), ins_mov32i(2, 7), ins_mov32i(3, 8), ins_exit()};
+    static uint8_t cw2[2][0x880];
+    build_shader(h.mem + OFF_SH + 0x14000, cw2[0], 0, vs_i, 3, 0);
+    build_shader(h.mem + OFF_SH + 0x15000, cw2[1], 1, fw2, 5, 0xf);
+    NVNprogram *pw2 = calloc(1, sizeof(NVNprogram));
+    L(nvnProgramInitialize)(pw2, h.dev);
+    NVNshaderData dw2[2] = {{(NVNbufferAddress)(uintptr_t)(h.mem + OFF_SH + 0x14000), cw2[0]}, {(NVNbufferAddress)(uintptr_t)(h.mem + OFF_SH + 0x15000), cw2[1]}};
+    CHECK(L(nvnProgramSetShaders)(pw2, 2, dw2), "writer 2 shaders");
+    NVNtextureView l1; L(nvnTextureViewSetDefaults)(&l1); L(nvnTextureViewSetTarget)(&l1, NVN_TEXTURE_TARGET_2D_MULTISAMPLE); L(nvnTextureViewSetLayers)(&l1, 1, 1);
+    h_begin(&h);
+    L(nvnMultisampleStateSetSamples)(&ms, 4);
+    L(nvnCommandBufferBindMultisampleState)(h.cb, &ms);
+    {
+        const NVNtexture *rts[1] = {tmsa};
+        const NVNtextureView *rvs[1] = {&l1};
+        draw(pw2, tmsa, 0);
+        L(nvnCommandBufferSetRenderTargets)(h.cb, 1, rts, rvs, NULL, NULL);
+        L(nvnCommandBufferDrawArrays)(h.cb, NVN_DRAW_PRIMITIVE_TRIANGLES, 0, 3);
+    }
+    L(nvnMultisampleStateSetSamples)(&ms, 0);
+    L(nvnCommandBufferBindMultisampleState)(h.cb, &ms);
+    h_submit(&h);
+    run(pq[3], rt, L(nvnDeviceGetTextureHandle)(h.dev, 309, 5));
+    t = texel(3, 3);
+    printf("4x RGBA8UI array layer 1 sample 3: %x %x %x %x\n", t[0], t[1], t[2], t[3]);
+    CHECK(t[0] == 5 && t[1] == 6 && t[2] == 7 && t[3] == 8, "multisampled array RGBA8UI read by layer and sample (TLD.MS.ARRAY): %x %x %x %x", t[0], t[1], t[2], t[3]);
     return h_finish("t_int_tex", &h);
 }
