@@ -2,7 +2,7 @@
 branch: claude/napple-online-2026-11-02-r7
 orchestration: napple-online
 base: c44af84
-head: HEAD_AT_HANDOFF
+head: baa4314
 env: mac
 date: 2026-11-02
 areas: [crates/napple-online, runtime/net, runtime/services (account.c, online_provider.h)]
