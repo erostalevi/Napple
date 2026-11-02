@@ -254,3 +254,6 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | [2026-11-03-claude-online-identity-2026-11-03-r12](2026-11-03-claude-online-identity-2026-11-03-r12.md) | napple-online: account JWT logins (JWKS), ghost aliases, 30-day match log with admin report lookup, encounters/stats reported to napple-social. |
 | [2026-11-03-claude-client-core-2026-11-03-r12](2026-11-03-claude-client-core-2026-11-03-r12.md) | Napple Online client core: shared credentials, auth/profile/social client, profile mapping, overlay table, friend-service hooks. |
 | [2026-11-03-overlay-account-r12](2026-11-03-overlay-account-r12.md) | overlay Online tab: UI API header, tab shell, account/profile screens, canned-data stub. |
+| [2026-11-03-claude-legal-pages-r12](2026-11-03-claude-legal-pages-r12.md) | legal pages: terms, privacy and report policy (v1). |
+| [2026-11-03-claude-overlay-social-r12](2026-11-03-claude-overlay-social-r12.md) | overlay social sub-tabs: friends, requests, search, block/report, recent players, stats. |
+| [2026-11-03-infra-online-r12](2026-11-03-infra-online-r12.md) | infra: napple-account and napple-social in the deploy stack, SES/S3, service tokens. |
