@@ -2,7 +2,7 @@
 branch: claude/ipc-reference-audit-2026-11-02-r4
 orchestration: ipc-reference-audit
 base: ed33737
-head: PLACEHOLDER
+head: c474059
 env: mac
 date: 2026-11-02
 areas: [runtime/services]
