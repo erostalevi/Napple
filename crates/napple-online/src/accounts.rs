@@ -8,6 +8,7 @@
 use crate::crypto::{base64, base64_decode, ct_eq, hex, hmac_sha256, random_bytes, sha256, unhex};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// How long an ID token is valid.
@@ -51,6 +52,9 @@ pub struct Accounts {
     dir: Option<PathBuf>,
     key: Vec<u8>,
     store: Mutex<Store>,
+    /// Each account's friends (their pids) as its client last reported them (POST /napple/v1/friends; the client learns them from
+    /// napple-social). Kept in memory: a client reports again after every restart of either side.
+    friends: Mutex<HashMap<u64, Vec<u64>>>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -84,7 +88,7 @@ impl Accounts {
                 store = serde_json::from_str(&s).map_err(|e| AccountError::Io(e.to_string()))?;
             }
         }
-        Ok(Accounts { dir: dir.map(|d| d.to_path_buf()), key, store: Mutex::new(store) })
+        Ok(Accounts { dir: dir.map(|d| d.to_path_buf()), key, store: Mutex::new(store), friends: Mutex::new(HashMap::new()) })
     }
 
     /// The server's secret key (tokens, and the key the secure server's tickets are sealed with).
@@ -121,6 +125,20 @@ impl Accounts {
 
     pub fn get(&self, pid: u64) -> Option<Account> {
         self.store.lock().unwrap().accounts.iter().find(|a| a.pid == pid).cloned()
+    }
+
+    /// Replaces the friend list `pid` reported (at most 300 pids, the account itself left out).
+    pub fn set_friends(&self, pid: u64, mut friends: Vec<u64>) {
+        friends.retain(|&f| f != pid && f != 0);
+        friends.sort_unstable();
+        friends.dedup();
+        friends.truncate(300);
+        self.friends.lock().unwrap().insert(pid, friends);
+    }
+
+    /// The friends `pid` reported (empty when it never did).
+    pub fn friends(&self, pid: u64) -> Vec<u64> {
+        self.friends.lock().unwrap().get(&pid).cloned().unwrap_or_default()
     }
 
     /// Checks pid + secret.

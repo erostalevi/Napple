@@ -2,6 +2,7 @@
 //!
 //!   POST /napple/v1/account  uid=<32 hex>                          -> pid=<u64>\nsecret=<hex>\n
 //!   POST /napple/v1/token    pid=<u64>&secret=<hex>&title=<16 hex>  -> token=<token>\nexpires=<unix seconds>\n
+//!   POST /napple/v1/friends  pid=<u64>&secret=<hex>&friends=<u64>,<u64>,...  -> ok (the account's friends, for "my friends" lookups)
 //!   GET  /napple/v1/info                                            -> service=napple-online\nversion=<v>\n
 //!   GET  /healthz                                                   -> ok
 //!   GET  <any path> with Upgrade: websocket                         -> the NEX game server (PRUDP Lite inside binary messages)
@@ -137,6 +138,17 @@ pub fn handle_api(acc: &Accounts, req: &HttpRequest) -> (u16, &'static str, Stri
                     let now = now_secs();
                     let t = acc.issue_token(pid, &title, now);
                     (200, "OK", format!("token={t}\nexpires={}\n", now + crate::accounts::TOKEN_LIFETIME_SECS))
+                }
+                Err(_) => (401, "Unauthorized", "error=unknown account or wrong secret\n".into()),
+            }
+        }
+        ("POST", "/napple/v1/friends") => {
+            let pid = form.get("pid").and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+            match acc.authenticate(pid, form.get("secret").map(|s| s.as_str()).unwrap_or("")) {
+                Ok(_) => {
+                    let list = form.get("friends").map(|s| s.split(',').filter_map(|v| v.trim().parse::<u64>().ok()).collect()).unwrap_or_default();
+                    acc.set_friends(pid, list);
+                    (200, "OK", format!("friends={}\n", acc.friends(pid).len()))
                 }
                 Err(_) => (401, "Unauthorized", "error=unknown account or wrong secret\n".into()),
             }
