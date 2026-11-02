@@ -6,10 +6,10 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_1c5d6eda-4aa5-433b-bacf-41b0c083ab39
+launched_at: 2026-11-03
 ---
 
 # online-identity: napple-online: accept account JWTs, ghost alias, match log, encounters/stats reporting

@@ -6,10 +6,10 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_b04e99f2-21b0-4c6f-bf32-02e8a8c6db5d
+launched_at: 2026-11-03
 ---
 
 # overlay-account: overlay Online tab: shell, account screens, profile editor, tier picker, devices; defines the UI API header

@@ -6,10 +6,10 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_18b9540d-679c-457c-888c-59bbb9416a32
+launched_at: 2026-11-03
 ---
 
 # legal-pages: terms, privacy policy, age rule, report policy (static pages on napple.lat + docs)

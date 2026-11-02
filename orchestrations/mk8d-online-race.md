@@ -6,10 +6,10 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_758b1292-20b6-4197-8b16-da4452d4fb81
+launched_at: 2026-11-03
 ---
 
 # mk8d-online-race: MK8D full online: race joiner, pair flakiness, Friends list, Wireless Play

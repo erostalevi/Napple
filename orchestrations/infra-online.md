@@ -6,10 +6,10 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_2cca500c-4401-46cd-a061-3a3602c54337
+launched_at: 2026-11-03
 ---
 
 # infra-online: deploy social, Caddy routes, SES permissions, photo storage, env wiring

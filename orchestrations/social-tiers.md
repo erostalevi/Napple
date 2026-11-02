@@ -6,10 +6,10 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_b7088465-f863-4480-9dbd-bd47ff08ac82
+launched_at: 2026-11-03
 ---
 
 # social-tiers: napple-social: five visibility tiers, search, request rules, recent players, block/report, per-title presence and stats
