@@ -2144,7 +2144,9 @@ static int prepare_draw(uint32_t prim) {
     if (p->fs) bind_stage(ST_FS, p->fs, g_re, 0, NULL);
     if (mtl_tex_alias_pending()) {
         /* A copy-backed texture view (mtl_tex_view) is stale: the copy needs an encoder of its own. Close the pass (the clears it folded in are stored), let
-         * pass_begin encode the copies and reopen it loading the attachments, then set the draw's state again. */
+         * pass_begin encode the copies and reopen it loading the attachments, then set the draw's state again (layered again if it was: the pipeline
+         * may write the layer). */
+        g_want_layered = P.layered;
         pass_end();
         if (!pass_begin()) return 0;
         vis_draw();
