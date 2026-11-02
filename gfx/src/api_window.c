@@ -16,7 +16,7 @@ void gfx_api_link_window(void) {}
 #define MAX_WIN_TEX 4
 
 NVN(nvnWindowBuilderSetDevice, void, NVNwindowBuilder *b, NVNdevice *d) { WB(b)->dev = d; }
-NVN(nvnWindowBuilderSetDefaults, void, NVNwindowBuilder *b) {
+NVN(nvnWindowBuilderSetDefaults, void, NVNwindowBuilder *b) { OBJTRACE(OT_WINDOW_B, b, 1);
     NVNdevice *d = WB(b)->dev;
     memset(b, 0, sizeof(win_builder_t));
     WB(b)->dev = d;
@@ -38,7 +38,7 @@ NVN(nvnWindowBuilderGetDevice, const NVNdevice *, const NVNwindowBuilder *b) { r
 NVN(nvnWindowBuilderGetNumTextures, int, const NVNwindowBuilder *b) { return CWB(b)->ntex; }
 NVN(nvnWindowBuilderGetTexture, const NVNtexture *, const NVNwindowBuilder *b, int i) { return (i >= 0 && i < CWB(b)->ntex) ? CWB(b)->tex[i] : NULL; }
 
-NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
+NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) { OBJTRACE(OT_WINDOW, w, 1);
     win_t *o = WN(w);
     const win_builder_t *s = CWB(b);
     memset(o, 0, sizeof *o);
@@ -57,7 +57,7 @@ NVN(nvnWindowInitialize, NVNboolean, NVNwindow *w, const NVNwindowBuilder *b) {
     for (int i = 0; i < s->ntex; i++) { const tex_t *t = (const tex_t *)s->tex[i]; LOGI("window texture %d: mem %p size %llu %ux%u format %#x flags %#x pool %p", i, (void *)t->s.mem, (unsigned long long)t->s.size, (unsigned)t->s.d.width, (unsigned)t->s.d.height, (unsigned)t->s.d.format, (unsigned)t->s.d.flags, (const void *)t->pool); }
     return 1;
 }
-NVN(nvnWindowFinalize, void, NVNwindow *w) { GFX_BLOCKING(); gfx_mtl_finish(); WN(w)->magic = 0; }
+NVN(nvnWindowFinalize, void, NVNwindow *w) { OBJTRACE(OT_WINDOW, w, 0); GFX_BLOCKING(); gfx_mtl_finish(); WN(w)->magic = 0; }
 NVN(nvnWindowSetDebugLabel, void, NVNwindow *w, const char *l) { (void)w; (void)l; }
 NVN(nvnWindowGetNativeWindow, NVNnativeWindow, const NVNwindow *w) { return CWN(w)->native; }
 NVN(nvnWindowGetPresentInterval, int, const NVNwindow *w) { return CWN(w)->interval; }
