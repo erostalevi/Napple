@@ -172,6 +172,18 @@ int main(void) {
         printf("test_net_room: no napple-room server binary (cargo build -p napple-room, or set NAPPLE_ROOM_SERVER_BIN): FAIL\n");
         return 1;
     }
+    /* NAPPLE_ROOM forms */
+    char h[256], rm[65];
+    uint16_t pt = 0;
+    CHECK(nr_parse_room("default", h, sizeof h, &pt, rm, sizeof rm) == 0 && !strcmp(h, "pretend.napple.lat") && pt == 31415 && !rm[0], "default = pretend.napple.lat:31415");
+    CHECK(nr_parse_room("default/friday", h, sizeof h, &pt, rm, sizeof rm) == 0 && !strcmp(h, "pretend.napple.lat") && pt == 31415 && !strcmp(rm, "friday"),
+          "default/friday");
+    CHECK(nr_parse_room("example.net:4000/x y", h, sizeof h, &pt, rm, sizeof rm) == 0 && !strcmp(h, "example.net") && pt == 4000 && !strcmp(rm, "x y"),
+          "host:port/room");
+    CHECK(nr_parse_room("[::1]:5000/r", h, sizeof h, &pt, rm, sizeof rm) == 0 && !strcmp(h, "::1") && pt == 5000 && !strcmp(rm, "r"), "[v6]:port/room");
+    CHECK(nr_parse_room("host:0", h, sizeof h, &pt, rm, sizeof rm) != 0 && nr_parse_room("", h, sizeof h, &pt, rm, sizeof rm) != 0, "malformed refused");
+    CHECK(nr_parse_room("defaults.example", h, sizeof h, &pt, rm, sizeof rm) == 0 && !strcmp(h, "defaults.example"), "only 'default' itself is the shortcut");
+
     int port = 41000 + (int)(getpid() % 9000);
     pid_t srv = start_server(bin, port);
     CHECK(srv > 0, "server started (%s)", bin);

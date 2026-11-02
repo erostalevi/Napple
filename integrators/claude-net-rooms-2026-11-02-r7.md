@@ -47,6 +47,10 @@ status: ready-with-caveats
 | Acceptance 4: without `NAPPLE_ROOM`, behaviour as r6 | tested + verified | r6 tests unchanged and green (`test_net_host_ldn`, `_sock`, `_tls`); boots below; with no room configured every hook returns "not handled" |
 | Acceptance 5: `make test test-services test-ipc-reference` | tested | exit 0; 80 test binaries; `ipc_reference` 111 fixtures, missing 0 (after the second r6 merge) |
 | Acceptance 5: four-title boots, no regression | verified | SMO, LAS, MK8D, ACNH, 45 s each, offline and `NAPPLE_NET=host`: rc 0, last stage notify-running, `unsupported_svcs []` |
+| Deployment contract (orchestrator / napple-infra request) | verified on macOS | `cargo build --release --locked -p napple-room --bin napple-room` ok, links only libSystem; `NAPPLE_ROOM_LISTEN=127.0.0.1:31415 NAPPLE_ROOM_HTTP=127.0.0.1:8081 NAPPLE_ROOM_DATA=/nonexistent napple-room`: `curl /healthz` = `ok`, `curl /rooms` = `{"version":1,"clients":0,"rooms":[]}`, `napple-room health` rc 0, `health 127.0.0.1:1` rc 1, logs on stdout, `kill -TERM` = exit 0, bad env value = exit 2 with usage |
+| HTTP `/healthz`, `/rooms` | tested | `cargo test -p napple-room` `http_health_and_room_list` (14 tests in all) |
+| `NAPPLE_ROOM=default[/<room>]` = pretend.napple.lat:31415 | tested (parser) | `test_net_room` checks `nr_parse_room` forms (45 + 28 checks); never connected to the real server |
+| Server on Linux | unbuilt | no Linux target or container runtime on this Mac. The crate is std-only and has no `cfg(target_os)`; the only FFI is libc `signal` / `_exit` (present on glibc and musl). Build it in the napple-infra image first |
 | Server CLI `serve` / `list` | verified | ran `napple-room serve --listen 127.0.0.1:31499` for the title runs; server log shows joins and leaves |
 | Room reconnect after a server loss | untested | code path only (`net_room.c` worker: redial every 3 s with the previous address) |
 
@@ -111,6 +115,20 @@ Everything was compiled and run on this Mac. Never exercised by a test:
   - nifm in a room reports "connected" only while joined.
   - The room client is process-wide (one console per process). The r6 provider's per-instance LDN state is bypassed while a room is configured.
   - `test_net_room` forks B before A starts its room client (a fork after would inherit A's connection).
+
+## Deployment contract (napple-infra, pretend.napple.lat)
+This matches the contract in the shared notes file `napple-infra-server-contract.md`, with no renames:
+- Binary `napple-room`.
+- `NAPPLE_ROOM_LISTEN` (TCP 31415, `proto::DEFAULT_PORT`).
+- `NAPPLE_ROOM_HTTP` (plain HTTP, `GET /healthz` = `200 ok`, `GET /rooms` = JSON).
+- `NAPPLE_ROOM_DATA` is accepted and unused: rooms are memory-only, so the server needs no writable volume.
+- Extra knobs: `NAPPLE_ROOM_SUBNET`, `_MAX_MEMBERS`, `_MAX_ROOMS`, `_MAX_CLIENTS`, `_RATE_KBPS`, `_RATE_PPS`, `_KEEPALIVE`, `_QUIET`. Each has a flag of
+  the same name that wins.
+- **UDP is not used**: 31415/udp can stay closed until a UDP fast path exists.
+- Container healthcheck without curl: `napple-room health` (exit 0 / 1). Logs go to stdout. SIGTERM / SIGINT exit 0. Runs fine as uid 10001 on a
+  read-only root filesystem (it writes nothing).
+- Client: `NAPPLE_ROOM=default` (or `default/<room>`) means `pretend.napple.lat:31415`, still opt-in. `NAPPLE_ROOM=pretend.napple.lat:31415` works
+  too.
 
 ## How to integrate
 - Merge order: after net-host-provider (r6), which is merged in at 80a8880. If r6 gets more commits, merge them and re-run the tests.

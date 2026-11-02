@@ -22,6 +22,7 @@
 
 #define NR_PROTO_VERSION 1u
 #define NR_DEFAULT_PORT 31415
+#define NR_DEFAULT_SERVER "pretend.napple.lat" /* NAPPLE_ROOM=default[/<room>] */
 
 enum { NR_T_HELLO = 1, NR_T_WELCOME, NR_T_ERROR, NR_T_PING, NR_T_PONG, NR_T_MEMBER_JOIN, NR_T_MEMBER_LEAVE, NR_T_PACKET, NR_T_LDN_ADVERTISE, NR_T_LDN_SCAN,
        NR_T_LDN_SCAN_RESULT, NR_T_LIST, NR_T_LIST_RESULT };
@@ -37,6 +38,8 @@ int net_room_start(void);
 /* The same with explicit settings (tests). server "host[:port]". */
 int net_room_start_with(const char *server, const char *room, const char *password, const char *nick, int vlan);
 void net_room_stop(void);
+/* Parses NAPPLE_ROOM: "<host>[:<port>][/<room>]", "[v6]:<port>/<room>", or "default[/<room>]" (NR_DEFAULT_SERVER). 0 ok, -1 malformed. */
+int nr_parse_room(const char *s, char *host, size_t hn, uint16_t *port, char *room, size_t rn);
 int net_room_configured(void); /* NAPPLE_ROOM given (or start_with called) */
 int net_room_up(void);         /* joined right now */
 int net_room_vlan_on(void);    /* joined and the virtual LAN is enabled (NAPPLE_VLAN not "off") */

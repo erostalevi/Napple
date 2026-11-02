@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 #[derive(Clone, Debug)]
 pub struct Config {
     pub listen: SocketAddr,
+    /// Plain-HTTP listener for `GET /healthz` and `GET /rooms` (None = off).
+    pub http: Option<SocketAddr>,
     /// Virtual LAN subnet (network, prefix length).
     pub subnet: (u32, u8),
     pub max_members: usize,
@@ -41,6 +43,7 @@ impl Default for Config {
     fn default() -> Self {
         Config {
             listen: SocketAddr::from(([0, 0, 0, 0], proto::DEFAULT_PORT)),
+            http: None,
             subnet: (0x0a0d_0000, 16),
             max_members: 16,
             max_rooms: 256,
@@ -97,12 +100,14 @@ struct Shared {
 
 pub struct Server {
     listener: TcpListener,
+    http: Option<TcpListener>,
     shared: Arc<Shared>,
 }
 
 /// A running server (see `Server::spawn`). Dropping it does not stop the server; call `shutdown`.
 pub struct Handle {
     addr: SocketAddr,
+    http_addr: Option<SocketAddr>,
     shared: Arc<Shared>,
     thread: Option<thread::JoinHandle<()>>,
 }
@@ -110,6 +115,10 @@ pub struct Handle {
 impl Handle {
     pub fn addr(&self) -> SocketAddr {
         self.addr
+    }
+    /// Where the health / rooms HTTP listener is, when configured.
+    pub fn http_addr(&self) -> Option<SocketAddr> {
+        self.http_addr
     }
     pub fn stats(&self) -> &Stats {
         &self.shared.stats
@@ -138,7 +147,7 @@ impl Handle {
 macro_rules! log {
     ($sh:expr, $($a:tt)*) => {
         if !$sh.cfg.quiet {
-            eprintln!("[napple-room] {}", format!($($a)*));
+            println!("[napple-room] {}", format!($($a)*));
         }
     };
 }
@@ -146,7 +155,11 @@ macro_rules! log {
 impl Server {
     pub fn bind(cfg: Config) -> io::Result<Server> {
         let listener = TcpListener::bind(cfg.listen)?;
-        Ok(Server { listener, shared: Arc::new(Shared { cfg, state: Mutex::new(State::default()), stats: Stats::default(), stop: AtomicBool::new(false) }) })
+        let http = match cfg.http {
+            Some(a) => Some(TcpListener::bind(a)?),
+            None => None,
+        };
+        Ok(Server { listener, http, shared: Arc::new(Shared { cfg, state: Mutex::new(State::default()), stats: Stats::default(), stop: AtomicBool::new(false) }) })
     }
 
     pub fn local_addr(&self) -> io::Result<SocketAddr> {
@@ -156,6 +169,11 @@ impl Server {
     /// Serves on the calling thread until `stop` is set by a `Handle`.
     pub fn run(self) {
         let sh = self.shared;
+        if let Some(h) = self.http {
+            log!(sh, "health and room list on http://{}/healthz, /rooms", h.local_addr().map(|a| a.to_string()).unwrap_or_default());
+            let sh2 = sh.clone();
+            let _ = thread::Builder::new().name("napple-room-http".into()).spawn(move || http_loop(sh2, h));
+        }
         log!(sh, "listening on {} (subnet {}/{}, {} members per room)", self.listener.local_addr().map(|a| a.to_string()).unwrap_or_default(),
             proto::ip_str(sh.cfg.subnet.0), sh.cfg.subnet.1, sh.cfg.max_members);
         for conn in self.listener.incoming() {
@@ -170,9 +188,85 @@ impl Server {
 
     pub fn spawn(self) -> io::Result<Handle> {
         let addr = self.listener.local_addr()?;
+        let http_addr = self.http.as_ref().and_then(|h| h.local_addr().ok());
         let shared = self.shared.clone();
         let thread = thread::Builder::new().name("napple-room-accept".into()).spawn(move || self.run())?;
-        Ok(Handle { addr, shared, thread: Some(thread) })
+        Ok(Handle { addr, http_addr, shared, thread: Some(thread) })
+    }
+}
+
+// ---- HTTP: health and the room list (plain HTTP/1.0, one request per connection; a reverse proxy terminates TLS in front) -------------------
+fn json_str(s: &str) -> String {
+    let mut o = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => o.push_str("\\\""),
+            '\\' => o.push_str("\\\\"),
+            c if (c as u32) < 0x20 => o.push_str(&format!("\\u{:04x}", c as u32)),
+            c => o.push(c),
+        }
+    }
+    o.push('"');
+    o
+}
+fn http_reply(sh: &Shared, path: &str) -> (&'static str, &'static str, String) {
+    match path {
+        "/healthz" | "/health" => ("200 OK", "text/plain", "ok\n".into()),
+        "/rooms" => {
+            let st = sh.state.lock().unwrap();
+            let mut rooms: Vec<String> = st
+                .rooms
+                .iter()
+                .map(|(n, r)| {
+                    format!(
+                        "{{\"name\":{},\"members\":{},\"max_members\":{},\"password\":{}}}",
+                        json_str(n),
+                        r.members.len(),
+                        sh.cfg.max_members,
+                        !r.password.is_empty()
+                    )
+                })
+                .collect();
+            let clients = st.clients;
+            drop(st);
+            rooms.sort();
+            ("200 OK", "application/json", format!("{{\"version\":{},\"clients\":{},\"rooms\":[{}]}}\n", proto::VERSION, clients, rooms.join(",")))
+        }
+        _ => ("404 Not Found", "text/plain", "not found\n".into()),
+    }
+}
+fn http_loop(sh: Arc<Shared>, l: TcpListener) {
+    for conn in l.incoming() {
+        if sh.stop.load(Ordering::SeqCst) {
+            break;
+        }
+        let Ok(mut s) = conn else { continue };
+        let sh2 = sh.clone();
+        let _ = thread::Builder::new().name("napple-room-http-conn".into()).spawn(move || {
+            let _ = s.set_read_timeout(Some(Duration::from_secs(5)));
+            let mut buf = [0u8; 2048];
+            let mut n = 0;
+            while n < buf.len() {
+                match io::Read::read(&mut s, &mut buf[n..]) {
+                    Ok(0) | Err(_) => break,
+                    Ok(k) => n += k,
+                }
+                if buf[..n].windows(4).any(|w| w == b"\r\n\r\n") || buf[..n].windows(2).any(|w| w == b"\n\n") {
+                    break;
+                }
+            }
+            let line = String::from_utf8_lossy(&buf[..n]);
+            let mut parts = line.split_whitespace();
+            let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or("/"));
+            let path = path.split('?').next().unwrap_or("/");
+            let (status, ctype, body) =
+                if method == "GET" || method == "HEAD" { http_reply(&sh2, path) } else { ("405 Method Not Allowed", "text/plain", "GET only\n".into()) };
+            let head = format!("HTTP/1.0 {status}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len());
+            let _ = s.write_all(head.as_bytes());
+            if method != "HEAD" {
+                let _ = s.write_all(body.as_bytes());
+            }
+        });
     }
 }
 

@@ -308,3 +308,28 @@ fn keepalive_and_ping() {
     wait_census(&h, (1, 1));
     h.shutdown();
 }
+
+fn http_get(addr: std::net::SocketAddr, path: &str) -> String {
+    use std::io::Read;
+    let mut s = TcpStream::connect(addr).unwrap();
+    s.write_all(format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n").as_bytes()).unwrap();
+    s.set_read_timeout(Some(T)).unwrap();
+    let mut out = String::new();
+    s.read_to_string(&mut out).unwrap();
+    out
+}
+
+#[test]
+fn http_health_and_room_list() {
+    let h = server(|c| c.http = Some("127.0.0.1:0".parse().unwrap()));
+    let http = h.http_addr().unwrap();
+    let r = http_get(http, "/healthz");
+    assert!(r.starts_with("HTTP/1.0 200") && r.ends_with("\r\n\r\nok\n"), "{r}");
+    let _a = join(&h, "friday", "pw", "a");
+    let _b = join(&h, "friday", "pw", "b");
+    let r = http_get(http, "/rooms");
+    assert!(r.starts_with("HTTP/1.0 200") && r.contains("application/json"), "{r}");
+    assert!(r.contains(r#""rooms":[{"name":"friday","members":2,"max_members":16,"password":true}]"#), "{r}");
+    assert!(http_get(http, "/nope").starts_with("HTTP/1.0 404"));
+    h.shutdown();
+}

@@ -77,9 +77,10 @@ static size_t pstr(uint8_t *p, const char *s) {
 }
 
 /* ---- configuration ------------------------------------------------------------------------------------------------------------------------------------ */
-static int parse_server(const char *s, char *host, size_t hn, uint16_t *port, char *room, size_t rn) {
+int nr_parse_room(const char *s, char *host, size_t hn, uint16_t *port, char *room, size_t rn) {
     char buf[512];
-    snprintf(buf, sizeof buf, "%s", s);
+    if (!strcmp(s, "default") || !strncmp(s, "default/", 8)) snprintf(buf, sizeof buf, "%s%s", NR_DEFAULT_SERVER, s + 7); /* the public Napple server */
+    else snprintf(buf, sizeof buf, "%s", s);
     char *slash = NULL;
     char *hp = buf;
     if (*hp == '[') { /* [v6]:port/room */
@@ -532,7 +533,7 @@ int net_room_start_with(const char *server, const char *room, const char *passwo
     }
     R.started = 1;
     R.start_result = -1;
-    if (server && parse_server(server, R.host, sizeof R.host, &R.port, R.room, sizeof R.room) == 0) {
+    if (server && nr_parse_room(server, R.host, sizeof R.host, &R.port, R.room, sizeof R.room) == 0) {
         if (room) snprintf(R.room, sizeof R.room, "%s", room);
         snprintf(R.password, sizeof R.password, "%s", password ? password : "");
         const char *u = nick && *nick ? nick : getenv("USER");

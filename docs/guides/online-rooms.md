@@ -20,7 +20,8 @@ talks to, imitates or needs any Nintendo service: the runtime puts the LDN and L
      runtime/build/napple-runtime <data-dir>
    ```
 
-   `NAPPLE_ROOM` is `<host>[:<port>][/<room>]`; the port defaults to 31415 and the room to `lobby`. The first player in a room sets its password;
+   `NAPPLE_ROOM` is `<host>[:<port>][/<room>]`; the port defaults to 31415 and the room to `lobby`. `NAPPLE_ROOM=default` (or `default/<room>`)
+   means the public Napple room server, `pretend.napple.lat:31415`. Rooms stay opt-in: nothing connects anywhere without `NAPPLE_ROOM`. The first player in a room sets its password;
    the others must give the same one. The log shows `net: room: joined 'friday' on rooms.example.net:31415 as 10.13.0.2 ...` and a line for every
    member who joins or leaves.
 3. In the game, use Wireless Play or LAN Play as on a console. One player creates a room (LDN) or a LAN session; the others see it in their lists.
@@ -32,26 +33,49 @@ The variables are listed in [environment variables](../reference/environment-var
 ## Running a server
 
 ```bash
-cargo build --release -p napple-room
-target/release/napple-room --listen 0.0.0.0:31415
+cargo build --release --locked -p napple-room --bin napple-room
+NAPPLE_ROOM_LISTEN=0.0.0.0:31415 NAPPLE_ROOM_HTTP=0.0.0.0:8081 target/release/napple-room
 ```
 
-Options (defaults in brackets): `--listen ADDR` [0.0.0.0:31415], `--subnet CIDR` [10.13.0.0/16; the virtual LAN; `.1` is kept for a gateway],
-`--max-members N` [16 per room], `--max-rooms N` [256], `--max-clients N` [1024 connections], `--rate-kbps N` [2048 relayed KiB/s per member],
-`--rate-pps N` [4000 relayed packets/s per member], `--keepalive SECS` [30: a member silent that long is dropped; clients ping every 5 s], `--quiet`.
+The server builds from std alone (no system libraries beyond libc), on macOS and Linux. It is configured by environment variables; each one also
+has a flag of the same name (`--listen`, `--http`, `--subnet`, ...), and the flag wins:
 
-`napple-room list HOST[:PORT]` prints the rooms of a server (name, members, whether a password is set).
+| Variable | Default | Meaning |
+|---|---|---|
+| `NAPPLE_ROOM_LISTEN` | `0.0.0.0:31415` | The room protocol, **TCP** only. No UDP port is used yet. |
+| `NAPPLE_ROOM_HTTP` | off | Plain-HTTP listener: `GET /healthz` gives `200 ok`; `GET /rooms` gives JSON `{"version", "clients", "rooms": [{"name", "members", "max_members", "password"}]}`. Put TLS in front with a reverse proxy if it is public. |
+| `NAPPLE_ROOM_SUBNET` | `10.13.0.0/16` | The virtual LAN of each room (`.1` is kept for a gateway). |
+| `NAPPLE_ROOM_MAX_MEMBERS` | 16 | Members per room (2-254). |
+| `NAPPLE_ROOM_MAX_ROOMS` | 256 | Rooms on the server. |
+| `NAPPLE_ROOM_MAX_CLIENTS` | 1024 | Open connections. |
+| `NAPPLE_ROOM_RATE_KBPS` | 2048 | Relayed KiB/s per member (burst a quarter of it). |
+| `NAPPLE_ROOM_RATE_PPS` | 4000 | Relayed packets/s per member. |
+| `NAPPLE_ROOM_KEEPALIVE` | 30 | Seconds of silence before a member is dropped (clients ping every 5 s; at least 5). |
+| `NAPPLE_ROOM_QUIET` | 0 | `1` turns the log off. |
+| `NAPPLE_ROOM_DATA` | — | Accepted and unused: rooms live in memory only, nothing is written to disk. |
+
+A bad value stops the server at start with status 2. Logs go to stdout, one line per join or leave. SIGTERM or SIGINT exits with status 0.
+
+Other commands:
+
+- `napple-room health [HOST[:PORT]]` asks the room service for its room list and exits 0 when it answers, 1 otherwise. The default address is
+  `127.0.0.1` on the configured listen port, so a container healthcheck can run `napple-room health` with no curl in the image. The HTTP
+  `/healthz` serves load balancers.
+- `napple-room list HOST[:PORT]` prints the rooms of a server (name, members, whether a password is set).
 
 Deployment notes:
 
-- One TCP port. Open it in the firewall (and forward it on the router if the server is at home). Players only make outgoing connections, so they need
-  no port forwarding.
-- The server is a single process with no state on disk: rooms live while they have members. Run it under launchd / systemd with restart on failure.
+- Open the TCP port in the firewall (and forward it on the router if the server is at home). Players only make outgoing connections, so they need no
+  port forwarding.
+- The server is a single stateless process: rooms live while they have members. It runs as any unprivileged user from a read-only filesystem.
+  Restart it on failure (launchd, systemd or the container runtime).
 - Bandwidth: everything a member sends is relayed through the server, once per recipient for broadcasts. Mario Kart LAN races are some tens of KiB/s
   per player; plan for the rate limits above times the members.
 - Latency adds the trip to the server: pick a server close to all players.
 - The server never reads the relayed data, but anyone who knows a room's name (and its password) can join it. Use a password for private games.
-  Traffic is not encrypted.
+  The room protocol is not encrypted.
+- The public deployment at `pretend.napple.lat` runs this binary in a container with `NAPPLE_ROOM_LISTEN=0.0.0.0:31415` and
+  `NAPPLE_ROOM_HTTP=0.0.0.0:8081` (served as `https://pretend.napple.lat/room/healthz` behind the proxy). See the napple-infra hand-off.
 
 ## How it works
 
@@ -85,8 +109,8 @@ Without `NAPPLE_ROOM`, none of this runs and the host provider behaves exactly a
 
 ## Status (2026-11-02)
 
-- Server: `cargo test -p napple-room` (13 tests: room life cycle, passwords, addresses, unicast / broadcast relay, spoofing, LDN advertise / scan /
-  relay, limits, rate limit, keepalive).
+- Server: `cargo test -p napple-room` (14 tests: room life cycle, passwords, addresses, unicast / broadcast relay, spoofing, LDN advertise / scan /
+  relay, limits, rate limit, keepalive, HTTP health and room list).
 - Runtime: `make -C runtime test-net-room` runs a real server and two consoles (two processes) through the provider: nifm, UDP on the same port from
   both, broadcast, unicast, implicit bind, connected UDP, TCP with 100 kB both ways, LDN scan / join / nodes / advertise / leave / destroy, a member
   quitting.
@@ -98,7 +122,7 @@ Without `NAPPLE_ROOM`, none of this runs and the host provider behaves exactly a
 
 ## Not done yet
 
-- No UDP transport to the server (TCP only: a lost packet delays the ones behind it).
+- No UDP transport to the server (TCP only: a lost packet delays the ones behind it). The deployment opens 31415/udp in case one is added.
 - No NAT traversal or direct peer-to-peer path: everything goes through the server.
 - No room browser in Napple Studio: rooms are joined with environment variables.
 - TCP between virtual addresses supports connect / accept / data / half-close. TCP to one's own virtual address, IP options and multicast are not
