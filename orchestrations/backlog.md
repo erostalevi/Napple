@@ -30,3 +30,8 @@
 
 ## Next UI item (after r8 lands): account-overlay-ui (macOS)
 - New Account tab in the in-game overlay (`frontend/src/overlay.m`), per ACCOUNT-CONTRACT.md "Where the user sees it"; iOS panel later (iOS parked).
+
+## iOS idea (user, 2026-11-02, NOT to build yet): disk-backed "swap" for iOS memory
+- Back large, rarely-touched regions (guest heap, RomFS/caches, staging) with mmap'd temp files (MAP_SHARED), unlinked right after creation so the space
+  vanishes at exit/crash/jetsam. Dirty file-backed pages can be written back and evicted, unlike anonymous memory (verify phys_footprint accounting on
+  device first). Hot per-frame data and in-use GPU textures stay in RAM. Combine with increased-memory-limit + extended-VA entitlements and cache budgets.
