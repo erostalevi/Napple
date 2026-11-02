@@ -6,7 +6,7 @@ head: 87dee72 (code at aee2856; the integrator-file commit follows)
 env: mac
 date: 2026-11-01
 areas: [gfx]
-status: ready
+status: integrated
 ---
 
 # claude/nvn-object-layouts-2026-11-01-r3: guest-visible NVN objects within the smallest size the titles give them
@@ -74,3 +74,11 @@ status: ready
 ## Needs from other areas
 - None for layouts.
 - Optional, for the runtime/a32 owner: a hook giving gfx the 32-bit guest stack range would let `objtrace` recognise MK8D's temporaries.
+
+## Integration result
+- Date: 2026-11-02. Merged into main as 45c59f4 (integ/nvn-object-layouts, branch head 94e5409; file `head: 87dee72` + the commit adding this file). Outcome: **Clean** (no conflicts; landed after acnh-race-atomics, ipc-local-stubs, am-depth-applets and before gfx-replay-gaps).
+- `integrate:` fixes: none. Native ports: none (gfx stays Metal; `api_objtrace.c` is portable C diagnostics, left alone).
+- Build (scratch worktree): gfx lib adapter, audio, input, frontend, runtime (GFX=napple) rc 0.
+- Tests: `make -C gfx test` ALL TESTS PASSED, `t_obj_canary: ok (0 skipped)`, `t_nvn_ext_prog: ok (0 skipped)`; SKIPs are the pre-existing KNOWN t_clear_ds / t_clear_tex / t_feedback. Runtime `test`, `test-services`, `test-host`, `test-ipc-reference` (111 / missing 0), `audio test` rc 0.
+- Boots (How to test 2; merged runtime, rebuilt data `/Users/neto/NappleWork/games-integ/`, default versions, 90 s headless, private save roots, `.run.lock`): LAS 5280 frames, SMO 5361, MK8D update 5328, ACNH update 2680; all rc 0, `skipped draws 0`, `unimplemented calls 0`, `program hash` lines 0, no crash.
+- Not covered: the `NAPPLE_GFX_OBJTRACE=1` path (diagnostic, off by default).

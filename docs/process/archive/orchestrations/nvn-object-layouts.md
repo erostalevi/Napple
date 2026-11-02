@@ -6,7 +6,7 @@ base: orchestrate/2026-11-01-r3
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_c89e1641-2d09-4870-9b87-c73343780cea (reused)
 launched_at: 2026-11-01
@@ -36,3 +36,5 @@ A host struct larger than the SDK's reserved size silently corrupts guest memory
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask). Shared title data in `/Users/neto/NappleWork/games/` predates the rewriter ordering fix (acnh-race-atomics, being integrated); rebuilt data for it is in `/Users/neto/NappleWork/games-r3/` — use either; never overwrite either.
 
 ## Result
+Integrated 2026-11-02: Clean, merged into main as 45c59f4 (branch head 94e5409). `make -C gfx test` ALL TESTS PASSED (`t_obj_canary` ok, `t_nvn_ext_prog` ok; only the pre-existing KNOWN skips); runtime suites green. Four-title 90 s headless boots on the rebuilt data: rc 0, 0 skipped draws, 0 unimplemented NVN calls, 0 "program hash" lines. Landed before gfx-replay-gaps as planned. Follow-ups: optional a32 guest-stack range hook for objtrace (MK8D temporaries); the one non-reproducing SMO SIGBUS seen by the author (sdk+0x203bcc) for the memory/kernel owners.
+Integrator file: `docs/process/archive/integrators/claude-nvn-object-layouts-2026-11-01-r3.md`.
