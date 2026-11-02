@@ -2070,6 +2070,26 @@ static void *open_manual_thread(void *arg) {
     LOG("applet", "manual: %s, exit reason %u, last page %s", r ? "could not be shown" : "shown", why, last);
     return NULL;
 }
+/* Debug/test aid: NAPPLE_OPEN_WEB_DOC=<seconds>:<kind 1 html | 2 legal | 3 system data>:<system data id, hex>:<document path> opens that offline
+ * document after that many seconds, through the offline web applet (as a title or the HOME menu would). */
+static void *open_web_doc_thread(void *arg) {
+    char spec[0x300];
+    snprintf(spec, sizeof spec, "%s", (const char *)arg);
+    unsigned secs = 0, kind = 0;
+    unsigned long long id = 0;
+    char path[0x200] = "";
+    if (sscanf(spec, "%u:%u:%llx:%511[^\n]", &secs, &kind, &id, path) < 4) {
+        LOG("applet", "NAPPLE_OPEN_WEB_DOC: expected <seconds>:<kind>:<id hex>:<path>, got \"%s\"", spec);
+        return NULL;
+    }
+    sleep(secs);
+    char last[WEB_URL_MAX] = "";
+    uint32_t why = 0;
+    LOG("applet", "web document: opening kind %u id %#llx path %s", kind, id, path);
+    int r = applet_web_open_document(kind, id, path, &why, last, sizeof last);
+    LOG("applet", "web document: %s, exit reason %u, last page %s", r ? "could not be shown" : "shown", why, last);
+    return NULL;
+}
 void service_register_applet(void) {
     ipc_register_service("appletOE", oe_open);
     /* The portable web / offline web (0x13, 0x17) and album (0x15) applets answer through the handler table (libapplet_run_registered). Their
@@ -2080,6 +2100,15 @@ void service_register_applet(void) {
         char html[1300];
         snprintf(html, sizeof html, "%s/html", g_cfg.data_dir);
         if (!getenv("NAPPLE_HTML_ROOT") && access(html, R_OK) == 0) applet_web_set_html_root(html);
+        /* legal information extracted next to it by the build (<data-dir>/legal), and the firmware system data archives (<data-dir>/../sysdata, the
+         * layout fs.c serves them from) for system data pages, extracted on first use under $TMPDIR/napple-web-sysdata */
+        char legal[1300], sys[1300], cache[1100];
+        snprintf(legal, sizeof legal, "%s/legal", g_cfg.data_dir);
+        if (!getenv("NAPPLE_LEGAL_ROOT") && access(legal, R_OK) == 0) applet_web_set_legal_root(legal);
+        snprintf(sys, sizeof sys, "%s/sysdata", g_cfg.data_dir);
+        if (access(sys, R_OK) != 0) snprintf(sys, sizeof sys, "%s/../sysdata", g_cfg.data_dir);
+        snprintf(cache, sizeof cache, "%s/napple-web-sysdata", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
+        applet_web_set_sysdata(getenv("NAPPLE_SYSDATA_DIR") ? getenv("NAPPLE_SYSDATA_DIR") : sys, cache);
     }
     const char *d = getenv("NAPPLE_DEBUG_LAUNCH_APPLET");
     const char *man = getenv("NAPPLE_OPEN_MANUAL");
@@ -2087,6 +2116,15 @@ void service_register_applet(void) {
     d = NULL; /* only the host image launches */
     man = NULL;
 #endif
+    const char *wdoc = getenv("NAPPLE_OPEN_WEB_DOC");
+#ifdef NAPPLE_LIB
+    wdoc = NULL;
+#endif
+    if (wdoc && *wdoc) {
+        pthread_t t;
+        pthread_create(&t, NULL, open_web_doc_thread, (void *)wdoc);
+        pthread_detach(t);
+    }
     if (man && *man) {
         pthread_t t;
         pthread_create(&t, NULL, open_manual_thread, (void *)man);

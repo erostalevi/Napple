@@ -68,6 +68,9 @@ void web_args_parse(const uint8_t *data, size_t size, WebArgs *a) {
             case WEB_TLV_DOCUMENT_KIND:
                 if (len >= 4) memcpy(&a->document_kind, p, 4), a->has_document_kind = 1;
                 break;
+            case WEB_TLV_SYSTEM_DATA_ID:
+                if (len >= 8) memcpy(&a->system_data_id, p, 8), a->has_system_data_id = 1;
+                break;
             case WEB_TLV_APPLICATION_ID:
                 if (len >= 8) memcpy(&a->application_id, p, 8);
                 break;
@@ -218,16 +221,20 @@ int applet_web_open_manual(const char *lang, uint32_t *exit_reason, char *last_u
     const char *root = applet_web_html_root();
     char rel[0x200];
     if (!root || web_manual_path(root, lang, rel, sizeof rel)) return -1;
-    /* The same storages the HOME menu's offline applet gets: CommonArguments, then WebArgs {shim offline; document kind HTML page; document path}. */
+    return applet_web_open_document(WEB_DOC_HTML_PAGE, 0, rel, exit_reason, last_url, cap);
+}
+int applet_web_open_document(uint32_t kind, uint64_t system_data_id, const char *doc_path, uint32_t *exit_reason, char *last_url, size_t cap) {
+    /* The same storages the HOME menu's offline applet gets: CommonArguments, then WebArgs {shim offline; document kind; document path; system data id} */
     uint8_t common[0x20] = {0}, args[0x400] = {0};
-    uint16_t entries = 2;
-    uint32_t shim = WEB_SHIM_OFFLINE, kind = WEB_DOC_HTML_PAGE;
+    uint16_t entries = kind == WEB_DOC_SYSTEM_DATA ? 3 : 2;
+    uint32_t shim = WEB_SHIM_OFFLINE;
     memcpy(args, &entries, 2);
     memcpy(args + 4, &shim, 4);
     size_t off = tlv_put(args, 8, WEB_TLV_DOCUMENT_KIND, &kind, 4);
     char docpath[0x100] = {0}; /* the SDK's document path field: 0xC00 bytes there, this tree's paths fit in 0x100 */
-    snprintf(docpath, sizeof docpath, "%s", rel);
+    snprintf(docpath, sizeof docpath, "%s", doc_path ? doc_path : "");
     off = tlv_put(args, off, WEB_TLV_DOCUMENT_PATH, docpath, sizeof docpath);
+    if (kind == WEB_DOC_SYSTEM_DATA) off = tlv_put(args, off, WEB_TLV_SYSTEM_DATA_ID, &system_data_id, 8);
     LibAppletCall call;
     memset(&call, 0, sizeof call);
     call.applet_id = LIBAPPLET_ID_OFFLINE_WEB;
@@ -277,8 +284,106 @@ void web_return_encode(uint32_t exit_reason, const char *last_url, uint8_t out[W
     memcpy(out + 0x1008, &n, 8);
 }
 
+/* ---- RomFS (system data archives) -------------------------------------------------------------------------------------------------------------
+ * Level-3 RomFS layout: a 0x50-byte header of u64 {header size, dir hash offset/size, dir meta offset/size, file hash offset/size, file meta
+ * offset/size, file data offset}; a directory entry {u32 parent, sibling, child dir, child file, hash next, name length; name}; a file entry
+ * {u32 parent, sibling; u64 data offset, size; u32 hash next, name length; name}. Offsets of entries are relative to their table, 0xFFFFFFFF = none. */
+#define ROMFS_NONE 0xFFFFFFFFu
+typedef struct {
+    FILE *f;
+    uint64_t dmeta, dmeta_size, fmeta, fmeta_size, fdata;
+    const char *out;
+    int files, depth;
+} RomfsWalk;
+static int romfs_read(FILE *f, uint64_t off, void *dst, size_t n) { return fseeko(f, (off_t)off, SEEK_SET) == 0 && fread(dst, 1, n, f) == n ? 0 : -1; }
+static int romfs_name_ok(const char *n) { return *n && !strchr(n, '/') && !strchr(n, '\\') && strcmp(n, ".") && strcmp(n, ".."); }
+static int romfs_copy_out(RomfsWalk *w, uint64_t off, uint64_t size, const char *path) {
+    FILE *o = fopen(path, "wb");
+    if (!o) return -1;
+    char buf[1 << 16];
+    for (uint64_t done = 0; done < size;) {
+        size_t n = size - done > sizeof buf ? sizeof buf : (size_t)(size - done);
+        if (romfs_read(w->f, w->fdata + off + done, buf, n) || fwrite(buf, 1, n, o) != n) {
+            fclose(o);
+            return -1;
+        }
+        done += n;
+    }
+    return fclose(o);
+}
+static int romfs_dir(RomfsWalk *w, uint32_t off, const char *host) {
+    if (++w->depth > 64 || (uint64_t)off + 24 > w->dmeta_size) return -1;
+    uint32_t e[6];
+    if (romfs_read(w->f, w->dmeta + off, e, sizeof e)) return -1;
+    for (uint32_t fo = e[3], guard = 0; fo != ROMFS_NONE && guard < 1000000; guard++) {
+        uint8_t fe[32];
+        if ((uint64_t)fo + 32 > w->fmeta_size || romfs_read(w->f, w->fmeta + fo, fe, sizeof fe)) return -1;
+        uint32_t sib, nl;
+        uint64_t doff, dsz;
+        memcpy(&sib, fe + 4, 4), memcpy(&doff, fe + 8, 8), memcpy(&dsz, fe + 16, 8), memcpy(&nl, fe + 28, 4);
+        char name[0x301] = "", path[0x800];
+        if (nl > 0x300 || romfs_read(w->f, w->fmeta + fo + 32, name, nl)) return -1;
+        name[nl] = 0;
+        if (romfs_name_ok(name) && snprintf(path, sizeof path, "%s/%s", host, name) < (int)sizeof path) {
+            if (romfs_copy_out(w, doff, dsz, path)) return -1;
+            w->files++;
+        }
+        fo = sib;
+    }
+    for (uint32_t d = e[2], guard = 0; d != ROMFS_NONE && guard < 100000; guard++) {
+        uint32_t de[6];
+        if ((uint64_t)d + 24 > w->dmeta_size || romfs_read(w->f, w->dmeta + d, de, sizeof de)) return -1;
+        char name[0x301] = "", path[0x800];
+        if (de[5] > 0x300 || romfs_read(w->f, w->dmeta + d + 24, name, de[5])) return -1;
+        name[de[5]] = 0;
+        if (romfs_name_ok(name) && snprintf(path, sizeof path, "%s/%s", host, name) < (int)sizeof path) {
+            mkdir(path, 0755);
+            if (romfs_dir(w, d, path)) return -1;
+        }
+        d = de[1];
+    }
+    w->depth--;
+    return 0;
+}
+int web_romfs_extract(const char *romfs_bin, const char *out_dir) {
+    RomfsWalk w = {0};
+    uint64_t h[10];
+    w.f = fopen(romfs_bin, "rb");
+    if (!w.f) return -1;
+    int r = -1;
+    if (!romfs_read(w.f, 0, h, sizeof h) && h[0] == 0x50) {
+        w.dmeta = h[3], w.dmeta_size = h[4], w.fmeta = h[7], w.fmeta_size = h[8], w.fdata = h[9], w.out = out_dir;
+        mkdir(out_dir, 0755);
+        if (!romfs_dir(&w, 0, out_dir)) r = w.files;
+    }
+    fclose(w.f);
+    return r;
+}
+
+static char g_legal_root[0x400], g_sysdata_dir[0x400], g_sysdata_cache[0x400];
+void applet_web_set_legal_root(const char *dir) { snprintf(g_legal_root, sizeof g_legal_root, "%s", dir ? dir : ""); }
+void applet_web_set_sysdata(const char *sysdata_dir, const char *cache_dir) {
+    snprintf(g_sysdata_dir, sizeof g_sysdata_dir, "%s", sysdata_dir ? sysdata_dir : "");
+    snprintf(g_sysdata_cache, sizeof g_sysdata_cache, "%s", cache_dir ? cache_dir : "");
+}
+int web_system_data_root(uint64_t id, char *out, size_t cap) {
+    const char *dir = g_sysdata_dir[0] ? g_sysdata_dir : getenv("NAPPLE_SYSDATA_DIR");
+    if (!dir || !g_sysdata_cache[0]) return -1;
+    char bin[0x500], done[0x500];
+    snprintf(bin, sizeof bin, "%s/%016llx.bin", dir, (unsigned long long)id);
+    if ((size_t)snprintf(out, cap, "%s/%016llx", g_sysdata_cache, (unsigned long long)id) >= cap) return -1;
+    snprintf(done, sizeof done, "%s/.extracted", out);
+    if (access(done, R_OK) == 0) return 0;
+    mkdir(g_sysdata_cache, 0755);
+    if (web_romfs_extract(bin, out) < 0) return -1;
+    FILE *m = fopen(done, "w"); /* the copy is complete: later opens reuse it */
+    if (m) fclose(m);
+    return 0;
+}
+
 static char g_html_root[0x400];
-const char *applet_web_html_root(void) { return g_html_root[0] ? g_html_root : getenv("NAPPLE_HTML_ROOT"); }
+static char g_open_root[0x500]; /* while a page is open: the root it was resolved under (the frontend grants the web view read access to it) */
+const char *applet_web_html_root(void) { return g_open_root[0] ? g_open_root : g_html_root[0] ? g_html_root : getenv("NAPPLE_HTML_ROOT"); }
 void applet_web_set_html_root(const char *dir) {
     if (dir) snprintf(g_html_root, sizeof g_html_root, "%s", dir);
     else g_html_root[0] = 0;
@@ -292,7 +397,7 @@ int applet_web_handler(LibAppletCall *call) {
     WebArgs *a = calloc(1, sizeof *a);
     if (!a) return 0;
     if (in) web_args_parse(in->data, in->size, a);
-    char url[WEB_URL_MAX + 16] = "", last[WEB_URL_MAX] = "";
+    char url[WEB_URL_MAX + 16] = "", last[WEB_URL_MAX] = "", read_root[0x500] = "";
     uint32_t reason = WEB_EXIT_BACK_BUTTON;
     int offline = call->applet_id == LIBAPPLET_ID_OFFLINE_WEB || a->shim_kind == WEB_SHIM_OFFLINE;
     int ok = 1;
@@ -300,16 +405,26 @@ int applet_web_handler(LibAppletCall *call) {
     else if (offline) {
         const char *root = g_html_root[0] ? g_html_root : getenv("NAPPLE_HTML_ROOT");
         char path[0x400];
-        if (a->document_kind == WEB_DOC_HTML_PAGE || !a->has_document_kind) {
-            if (a->has_document_path && root && web_offline_resolve(root, a->document_path, path, sizeof path) == 0) web_file_url(path, url, sizeof url);
-            else ok = 0;
-        } else ok = 0; /* legal information / system data pages live in firmware romfs: not available */
+        const char *legal = g_legal_root[0] ? g_legal_root : getenv("NAPPLE_LEGAL_ROOT");
+        char sys[0x500];
+        if (a->document_kind == WEB_DOC_LEGAL_INFO) root = legal; /* the title's LegalInformation content */
+        else if (a->document_kind == WEB_DOC_SYSTEM_DATA)          /* a page of a firmware system data archive */
+            root = a->has_system_data_id && web_system_data_root(a->system_data_id, sys, sizeof sys) == 0 ? sys : NULL;
+        else if (a->has_document_kind && a->document_kind != WEB_DOC_HTML_PAGE) root = NULL;
+        if (a->has_document_path && root && web_offline_resolve(root, a->document_path, path, sizeof path) == 0) {
+            web_file_url(path, url, sizeof url);
+            snprintf(read_root, sizeof read_root, "%s", root);
+        } else ok = 0;
     } else if (a->has_url) snprintf(url, sizeof url, "%s", a->url);
     else ok = 0;
     if (ok) {
         int r = applet_web_script(getenv("NAPPLE_WEB_ANSWER"));
         if (r != -2) snprintf(last, sizeof last, "%s", url); /* scripted: leaves on the page it opened */
-        else r = applet_ui_open_web(url, offline, last, sizeof last);
+        else {
+            snprintf(g_open_root, sizeof g_open_root, "%s", read_root);
+            r = applet_ui_open_web(url, offline, last, sizeof last);
+            g_open_root[0] = 0;
+        }
         if (r == -2) { /* no frontend: the user leaves at once, on the page it opened */
             snprintf(last, sizeof last, "%s", url);
             reason = WEB_EXIT_REQUESTED;

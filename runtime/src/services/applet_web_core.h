@@ -32,8 +32,8 @@ typedef struct {
     unsigned entries;
     char url[WEB_URL_MAX], callback_url[WEB_URL_MAX], document_path[0x100];
     uint32_t document_kind;
-    uint64_t application_id;
-    int has_url, has_callback, has_document_path, has_document_kind, screenshot_enabled;
+    uint64_t application_id, system_data_id;
+    int has_url, has_callback, has_document_path, has_document_kind, has_system_data_id, screenshot_enabled;
 } WebArgs;
 /* Parses the storage; a truncated entry stops the walk (valid stays 1 when the header was readable). */
 void web_args_parse(const uint8_t *data, size_t size, WebArgs *a);
@@ -51,6 +51,18 @@ const char *web_manual_lang(const char *code);
 /* Opens the running title's manual the way the HOME menu does (the offline applet with an OfflineHtmlPage of the manual), through
  * applet_web_handler and so the frontend's web sheet or NAPPLE_WEB_ANSWER. Fills the exit reason and the page left on. 0 shown, -1 none / error. */
 int applet_web_open_manual(const char *lang, uint32_t *exit_reason, char *last_url, size_t cap);
+/* Any offline document the same way (kind WEB_DOC_*; system_data_id for WEB_DOC_SYSTEM_DATA). 0 shown, -1 none / error. */
+int applet_web_open_document(uint32_t kind, uint64_t system_data_id, const char *doc_path, uint32_t *exit_reason, char *last_url, size_t cap);
+/* Extracts every file of a RomFS image (a system data archive as the build writes it: <data-dir>/../sysdata/<id>.bin) under out_dir, keeping the
+ * tree. Names with "/", "\\" or ".." components are skipped. Returns the number of files written, -1 when the image cannot be read or parsed. */
+int web_romfs_extract(const char *romfs_bin, const char *out_dir);
+/* Roots of the other offline document kinds. Legal information: the title's LegalInformation content extracted on the host (NAPPLE_LEGAL_ROOT, or
+ * <data-dir>/legal when the build wrote it). System data: the directory holding <id>.bin system data archives (NAPPLE_SYSDATA_DIR, or the data
+ * directory's sysdata/); a page of a system data archive is served from a copy extracted once under cache_dir/<id>/. NULL = none. */
+void applet_web_set_legal_root(const char *dir);
+void applet_web_set_sysdata(const char *sysdata_dir, const char *cache_dir);
+/* The host directory a system data archive's pages are served from (extracting it when needed). 0 ok, -1 no archive / unreadable. */
+int web_system_data_root(uint64_t id, char *out, size_t cap);
 /* "file://" URL for a resolved host path (no escaping beyond spaces -> %20). */
 void web_file_url(const char *path, char *out, size_t cap);
 
@@ -59,7 +71,7 @@ void web_return_encode(uint32_t exit_reason, const char *last_url, uint8_t out[W
 
 /* Root of the title's offline HTML documents on the host (NAPPLE_HTML_ROOT in the registered handler when unset). NULL = none. */
 void applet_web_set_html_root(const char *dir);
-const char *applet_web_html_root(void); /* the root in effect (NAPPLE_HTML_ROOT when none was set), NULL = none */
+const char *applet_web_html_root(void); /* the root in effect (NAPPLE_HTML_ROOT when none was set; while a page is open, the root it came from), NULL = none */
 /* Registers the handlers for 0x13 and 0x17 through libapplet_register_handler. 0 ok. */
 int applet_web_register(void);
 /* The handler itself (also used directly by tests). Answers with WebCommonReturnValue. */
