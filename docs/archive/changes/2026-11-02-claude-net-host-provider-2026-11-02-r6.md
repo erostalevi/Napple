@@ -30,6 +30,8 @@ reports, nsd and network accounts keep their offline answers (NULL entry points)
 - Verified here (Mac, macOS stack): sockets, DNS (localhost and a public name), nifm (the Mac's address), TLS (throw-away local CA, public server against
   the host trust store), LDN between provider instances and through `ldn:u`, the bsd / ssl / ldn / nifm handlers routing to it. `make -C runtime test
   test-services test-ipc-reference` green.
-- Title boots: see the integrator file (four titles 60 s with and without `NAPPLE_NET=host`, MK8D Online Play).
+- Title boots (verified): SMO, LAS, MK8D, ACNH 60 s with and without `NAPPLE_NET=host`: rc 0, no missing IPC. SMO and ACNH's nifm requests are accepted in
+  host mode. MK8D Online Play in host mode reaches the account ID token check (refused: no Nintendo account), shows the error applet and then aborts
+  (svcBreak) because the error applet gives no output data: an applet-area gap, listed in the integrator file. Offline, unchanged.
 - `offline.c` (after merging main once nifm-netconnect had landed): ssl ImportServerPki keeps the certificate; DoHandshake hands the context's CAs and an
   explicit SetVerifyOption to the provider. Verified through the ssl handlers against the local test server.
