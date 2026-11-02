@@ -1,0 +1,2233 @@
+{
+ "date": "2026-11-01",
+ "commit": "4bf94be",
+ "dirty_files": 2,
+ "measured_percent": 98.6,
+ "todo_markers": 43,
+ "final_percent": 98.2,
+ "range": [
+  98.2,
+  98.2
+ ],
+ "unverified_total": 0,
+ "priorities": [
+  {
+   "item": "depth/stencil formats",
+   "domain": "gpu_fixed",
+   "importance": 2,
+   "effort": "S",
+   "why": "D24/D24S8 is the usual depth format; CopyTextureToBuffer of it is refused, so depth readbacks (screen-space effects, picking, captures) get nothing",
+   "where": "gfx/src/mtl_replay.m:2497 (copy_d24 to buffer)",
+   "id": "gpu_fixed/depth/stencil formats",
+   "score": 16.0,
+   "gain_pts": 0.14,
+   "rank": 1
+  },
+  {
+   "item": "obj.h guest-visible host layouts vs SDK reserved sizes",
+   "domain": "nvn",
+   "importance": 3,
+   "effort": "M",
+   "why": "a host struct larger than the SDK's reserved object size silently corrupts the neighbouring guest object (the ACNH program-hash bug was one); affects every title on older SDKs",
+   "where": "gfx/src/obj.h, gfx/src/api_*.c static asserts",
+   "id": "nvn/obj.h guest-visible host layouts vs SDK reserved sizes",
+   "score": 12.0,
+   "gain_pts": null,
+   "rank": 2
+  },
+  {
+   "item": "nvnCommandBufferBindTexturesDeferred",
+   "domain": "nvn",
+   "importance": 1,
+   "effort": "S",
+   "why": "7 entry points with inferred signatures (Deferred binds, GetSubtileSize, GetViewOffset, WaitForError) never called by a title; needs a caller or a header",
+   "where": "gfx/src/nvnapi/nvn_protos_ext.h",
+   "id": "nvn/nvnCommandBufferBindTexturesDeferred",
+   "score": 12.0,
+   "gain_pts": 0.01,
+   "rank": 3
+  },
+  {
+   "item": "IAudioOut SetAudioOutVolume per-stream gain",
+   "domain": "ipc_depth",
+   "importance": 2,
+   "effort": "S",
+   "why": "audout volume (row 12) is a stub; titles using audout for music/voice cannot change volume",
+   "where": "audio/src (gain), runtime/src/services/audio.c",
+   "id": "ipc_depth/IAudioOut SetAudioOutVolume per-stream gain",
+   "score": 10.0,
+   "gain_pts": null,
+   "rank": 4
+  },
+  {
+   "item": "svcGetInfo ids 19/27 refused",
+   "domain": "kernel",
+   "importance": 1,
+   "effort": "S",
+   "why": "InitialProcessIdRange / IoRegionHint return InvalidEnum; rare but a refused svc branch",
+   "where": "runtime/src/kernel.c:440 (kernel.c partly in flight)",
+   "id": "kernel/svcGetInfo ids 19/27 refused",
+   "score": 10.0,
+   "gain_pts": null,
+   "rank": 5
+  },
+  {
+   "item": "ExitProcess clean-exit summary",
+   "domain": "kernel",
+   "importance": 1,
+   "effort": "S",
+   "why": "titles on the 2-callback nn::init::Start end in svcExitProcess, which reports fail",
+   "where": "runtime/src/kernel.c:334 (in flight file)",
+   "id": "kernel/ExitProcess clean-exit summary",
+   "score": 10.0,
+   "gain_pts": null,
+   "rank": 6
+  },
+  {
+   "item": "guest job-system collision (WaitForAddress/SignalToAddress semantics)",
+   "domain": "kernel",
+   "importance": 3,
+   "effort": "M",
+   "why": "address-arbiter semantics are what every SDK sync primitive builds on; a divergence races worker joins (ACNH base); IN FLIGHT r3",
+   "where": "runtime/src/kernel.c sync svcs, threads.c",
+   "id": "kernel/guest job-system collision (WaitForAddress/SignalToAddress semantics)",
+   "score": 10.0,
+   "gain_pts": null,
+   "rank": 7
+  },
+  {
+   "item": "nvnCommandBufferBindSeparateTextures",
+   "domain": "nvn",
+   "importance": 2,
+   "effort": "M",
+   "why": "NVN separate texture/sampler mode (6 entry points incl. Deferred) is recorded but ignored by the replay: engines that decouple samplers sample the wrong/no texture",
+   "where": "gfx/src/mtl_replay.m:3275, gfx/src/shader (combined handle from two cbuf words)",
+   "id": "nvn/nvnCommandBufferBindSeparateTextures",
+   "score": 8.0,
+   "gain_pts": 0.01,
+   "rank": 8
+  },
+  {
+   "item": "transform feedback",
+   "domain": "gpu_fixed",
+   "importance": 2,
+   "effort": "M",
+   "why": "XFB layouts self-authored; needs a title or real GLSLC program with XFB (none in the material)",
+   "where": "gfx/src/mtl_stages.inc, shader/control.c",
+   "id": "gpu_fixed/transform feedback",
+   "score": 5.33,
+   "gain_pts": 0.1,
+   "rank": 9
+  },
+  {
+   "item": "tessellation",
+   "domain": "gpu_fixed",
+   "importance": 2,
+   "effort": "M",
+   "why": "tess parameters self-authored; needs a real tess program (none in the material)",
+   "where": "gfx/src/mtl_stages.inc",
+   "id": "gpu_fixed/tessellation",
+   "score": 5.33,
+   "gain_pts": 0.1,
+   "rank": 10
+  },
+  {
+   "item": "NCA2 / NCA0",
+   "domain": "content",
+   "importance": 1,
+   "effort": "S",
+   "why": "pre-release container versions; all retail NCAs in the material are NCA3",
+   "where": "crates/napple-core nca.rs",
+   "id": "content/NCA2 / NCA0",
+   "score": 5.0,
+   "gain_pts": 0.04,
+   "rank": 11
+  },
+  {
+   "item": "/dev/nvhost-nvdec, vic, nvjpg, msenc",
+   "domain": "nvdrv",
+   "importance": 2,
+   "effort": "S",
+   "why": "NVJPG/MSENC/VP9-on-NVDEC tested only; no title opens them",
+   "where": "runtime/src/services/nvdrv_media_core.c",
+   "id": "nvdrv//dev/nvhost-nvdec, vic, nvjpg, msenc",
+   "score": 4.0,
+   "gain_pts": 0.1,
+   "rank": 12
+  },
+  {
+   "item": "nvnCommandBufferSetViewportSwizzles",
+   "domain": "nvn",
+   "importance": 1,
+   "effort": "M",
+   "why": "viewport swizzle (single-pass cube / layered rendering) ignored",
+   "where": "gfx/src/api_cmd.c:832, translator key",
+   "id": "nvn/nvnCommandBufferSetViewportSwizzles",
+   "score": 4.0,
+   "gain_pts": 0.01,
+   "rank": 13
+  },
+  {
+   "item": "nvnCommandBufferSetProgramSubroutines",
+   "domain": "nvn",
+   "importance": 1,
+   "effort": "M",
+   "why": "subroutine uniforms and linkage dropped (with nvnProgramSetSubroutineLinkage)",
+   "where": "gfx/src/api_cmd.c:880, api_program.c",
+   "id": "nvn/nvnCommandBufferSetProgramSubroutines",
+   "score": 4.0,
+   "gain_pts": 0.01,
+   "rank": 14
+  },
+  {
+   "item": "nvnCommandBufferSetProvokingVertexMode",
+   "domain": "nvn",
+   "importance": 1,
+   "effort": "M",
+   "why": "mode recorded, not applied; needs a ShaderKey bit for flat inputs",
+   "where": "gfx/src/api_state.c, gfx/src/shader",
+   "id": "nvn/nvnCommandBufferSetProvokingVertexMode",
+   "score": 4.0,
+   "gain_pts": 0.01,
+   "rank": 15
+  },
+  {
+   "item": "local-service documented-default stubs to real behaviour",
+   "domain": "ipc_depth",
+   "importance": 2,
+   "effort": "M",
+   "why": "~100 stub rows of local services (fsp-srv OpenFileSystemWithId family, acc, aoc, vi, caps album session, pdm, time, lm) answer a default where the console has real data",
+   "where": "runtime/src/services/{fs,account,misc,vi,caps,pdm,time,lm}.c, sys_default.h",
+   "id": "ipc_depth/local-service documented-default stubs to real behaviour",
+   "score": 3.33,
+   "gain_pts": null,
+   "rank": 16
+  },
+  {
+   "item": "am applet interfaces without reference fixtures",
+   "domain": "ipc_depth",
+   "importance": 2,
+   "effort": "M",
+   "why": "applet.c/applet_ae.c (183 rows) are the busiest app interfaces; with no fixture, a missing id is a runtime_fail nobody can see",
+   "where": "runtime/tests/ipc_reference/, runtime/src/services/applet*.c",
+   "id": "ipc_depth/am applet interfaces without reference fixtures",
+   "score": 3.33,
+   "gain_pts": null,
+   "rank": 17
+  },
+  {
+   "item": "texture views / sparse",
+   "domain": "gpu_fixed",
+   "importance": 1,
+   "effort": "M",
+   "why": "integer views of 3D / cube / MS targets keep the float declaration (Metal validation error)",
+   "where": "gfx/src/shader/maxwell_translate.c, gfx/src/mtl_tex.m",
+   "id": "gpu_fixed/texture views / sparse",
+   "score": 2.67,
+   "gain_pts": 0.05,
+   "rank": 18
+  },
+  {
+   "item": "web / offline web",
+   "domain": "applets",
+   "importance": 1,
+   "effort": "S",
+   "why": "offline document kinds legal-information / system-data (firmware romfs) refused",
+   "where": "runtime/src/services/applet_web_core.c:306",
+   "id": "applets/web / offline web",
+   "score": 2.0,
+   "gain_pts": 0.04,
+   "rank": 19
+  },
+  {
+   "item": "/dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)",
+   "domain": "nvdrv",
+   "importance": 1,
+   "effort": "S",
+   "why": "proposed layouts; need hardware traces",
+   "where": "runtime/src/services/nvdrv_nodes_core.c",
+   "id": "nvdrv//dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)",
+   "score": 2.0,
+   "gain_pts": 0.05,
+   "rank": 20
+  },
+  {
+   "item": "/dev/nvdisp-disp0",
+   "domain": "nvdrv",
+   "importance": 1,
+   "effort": "S",
+   "why": "unit-tested only; no title opens it",
+   "where": "nvdrv_media_core.c",
+   "id": "nvdrv//dev/nvdisp-disp0",
+   "score": 2.0,
+   "gain_pts": 0.05,
+   "rank": 21
+  },
+  {
+   "item": "IR camera (irs)",
+   "domain": "input",
+   "importance": 1,
+   "effort": "M",
+   "why": "processor layouts need a real Joy-Con IR trace (unreachable on the Mac)",
+   "where": "runtime/src/services/irs.c",
+   "id": "input/IR camera (irs)",
+   "score": 1.67,
+   "gain_pts": 0.05,
+   "rank": 22
+  },
+  {
+   "item": "JPEG (nvjpg / caps)",
+   "domain": "media",
+   "importance": 1,
+   "effort": "S",
+   "why": "NVJPG register path synthetic only",
+   "where": "runtime/src/services/jpeg_core.c",
+   "id": "media/JPEG (nvjpg / caps)",
+   "score": 1.0,
+   "gain_pts": 0.03,
+   "rank": 23
+  },
+  {
+   "item": "offline network service stubs (friend, nifm, ssl, bsd, nsd, npns, bcat, ldn)",
+   "domain": "ipc_depth",
+   "importance": 1,
+   "effort": "L",
+   "why": "~200 documented offline defaults; real host networking is a design decision, not a gap to close blindly",
+   "where": "runtime/src/services/offline.c, sys_default.h",
+   "id": "ipc_depth/offline network service stubs (friend, nifm, ssl, bsd, nsd, npns, bcat, ldn)",
+   "score": 0.62,
+   "gain_pts": null,
+   "rank": 24
+  }
+ ],
+ "judgement_notes": "Measurement change: scan.py now measures IPC depth against runtime/tests/ipc_reference (99 fixtures, 1116 app-reachable ids; runner compiled from runtime/tests/test_ipc_reference.c so scan and make test bind rows identically) with the standard status weights (impl 1, stub 0.5, missing 0) plus unfixtured tables row by row; the old impl/(impl+stub) row ratio (81%) penalised turning runtime_fail ids into documented defaults and could not see missing ids. Weights unchanged. scan.py also lists commits since the previous snapshot's commit (the date-only --since printed none). New honest findings: 24-bit depth readback refused (depth/stencil formats -> partial), NVN separate texture/sampler binds ignored by the replay, viewport swizzles / subroutines no-ops (stub), 7 inferred-signature r2 entry points + provoking vertex + conservative raster partial. Rule kept: verified on a title => impl (swkbd); synthetic only => impl only with trusted semantics and no refused branch (MSAA now impl; texture views and web stay partial for refused branches). Unreachable on this Mac: XFB/tess title evidence, nvjpg/msenc/nvdisp/nvhost-gpu, IR camera, NCA0/2.",
+ "schema": 2,
+ "saved_at": "2026-11-01T22:47:04",
+ "domains": [
+  {
+   "key": "cpu_rewrite",
+   "title": "CPU: AOT A64 rewrite",
+   "weight": 14,
+   "ratio": 1.0,
+   "points": 14.0,
+   "counts": {
+    "core": [
+     11,
+     11
+    ],
+    "common": [
+     1,
+     1
+    ],
+    "rare": [
+     1,
+     1
+    ]
+   },
+   "extra": {},
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 1.0,
+   "judged_points": 14.0,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "loader",
+   "title": "Loader: NSO/NRO/modules/relocs",
+   "weight": 5,
+   "ratio": 1.0,
+   "points": 5.0,
+   "counts": {
+    "core": [
+     3,
+     3
+    ],
+    "common": [
+     2,
+     2
+    ],
+    "rare": [
+     0,
+     0
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 1.0,
+   "judged_points": 5.0,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "kernel",
+   "title": "Kernel: Horizon svcs + scheduling",
+   "weight": 10,
+   "ratio": 1.0,
+   "points": 10.0,
+   "counts": {
+    "core": [
+     39,
+     39
+    ],
+    "common": [
+     14,
+     14
+    ],
+    "rare": [
+     11,
+     11
+    ]
+   },
+   "extra": {
+    "registered": 71
+   },
+   "adjust": -0.02,
+   "adjust_reason": "ACNH base job-system collision still open (lead: svcWaitForAddress/SignalToAddress semantics; in flight r3 acnh-race-atomics); svcGetInfo ids 19/27 refused (kernel.c:440); ExitProcess writes a fail summary (kernel.c:334)",
+   "judged_ratio": 0.98,
+   "judged_points": 9.8,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "ipc",
+   "title": "IPC: HLE services (coverage)",
+   "weight": 10,
+   "ratio": 1.0,
+   "points": 10.0,
+   "counts": {
+    "core": [
+     22,
+     22
+    ],
+    "common": [
+     19,
+     19
+    ],
+    "rare": [
+     12,
+     12
+    ]
+   },
+   "extra": {
+    "cmd_impl": 1332,
+    "cmd_stub": 305,
+    "per_file": {
+     "account.c": [
+      21,
+      15
+     ],
+     "account_core.c": [
+      0,
+      0
+     ],
+     "amiibo_core.c": [
+      0,
+      0
+     ],
+     "amiibo_crypto_core.c": [
+      0,
+      0
+     ],
+     "amiibo_lib_core.c": [
+      0,
+      0
+     ],
+     "aoc_core.c": [
+      0,
+      0
+     ],
+     "apm.c": [
+      6,
+      0
+     ],
+     "apm_core.c": [
+      0,
+      0
+     ],
+     "applet.c": [
+      149,
+      0
+     ],
+     "applet_ae.c": [
+      35,
+      0
+     ],
+     "applet_album_core.c": [
+      0,
+      0
+     ],
+     "applet_core.c": [
+      0,
+      0
+     ],
+     "applet_lib_core.c": [
+      0,
+      0
+     ],
+     "applet_web_core.c": [
+      0,
+      0
+     ],
+     "audin.c": [
+      17,
+      0
+     ],
+     "audin_core.c": [
+      0,
+      0
+     ],
+     "audio.c": [
+      97,
+      2
+     ],
+     "audrec.c": [
+      13,
+      0
+     ],
+     "audrec_core.c": [
+      0,
+      0
+     ],
+     "bcat.c": [
+      29,
+      13
+     ],
+     "bcat_core.c": [
+      0,
+      0
+     ],
+     "bsd_core.c": [
+      0,
+      0
+     ],
+     "btm.c": [
+      31,
+      2
+     ],
+     "caps.c": [
+      27,
+      9
+     ],
+     "caps_core.c": [
+      0,
+      0
+     ],
+     "caps_dc.c": [
+      1,
+      0
+     ],
+     "codec_headers_core.c": [
+      0,
+      0
+     ],
+     "decoder_null_core.c": [
+      0,
+      0
+     ],
+     "decoder_vt.c": [
+      0,
+      0
+     ],
+     "ectx.c": [
+      2,
+      0
+     ],
+     "fgm.c": [
+      5,
+      0
+     ],
+     "fs.c": [
+      59,
+      46
+     ],
+     "hid.c": [
+      150,
+      0
+     ],
+     "hid_core.c": [
+      0,
+      0
+     ],
+     "hidbus.c": [
+      14,
+      0
+     ],
+     "hidbus_core.c": [
+      0,
+      0
+     ],
+     "host_info.c": [
+      0,
+      0
+     ],
+     "irs.c": [
+      18,
+      0
+     ],
+     "irs_core.c": [
+      0,
+      0
+     ],
+     "jpeg_core.c": [
+      0,
+      0
+     ],
+     "lbl.c": [
+      28,
+      0
+     ],
+     "lbl_core.c": [
+      0,
+      0
+     ],
+     "ldn.c": [
+      30,
+      11
+     ],
+     "ldn_core.c": [
+      0,
+      0
+     ],
+     "lm.c": [
+      3,
+      3
+     ],
+     "media_gfx_glue.c": [
+      0,
+      0
+     ],
+     "mii.c": [
+      28,
+      0
+     ],
+     "mii_core.c": [
+      0,
+      0
+     ],
+     "mii_img.c": [
+      17,
+      0
+     ],
+     "mii_img_core.c": [
+      0,
+      0
+     ],
+     "misc.c": [
+      60,
+      7
+     ],
+     "movie_audio_core.c": [
+      0,
+      0
+     ],
+     "ncm.c": [
+      47,
+      0
+     ],
+     "ncm_core.c": [
+      0,
+      0
+     ],
+     "nfp_core.c": [
+      0,
+      0
+     ],
+     "ngc.c": [
+      4,
+      2
+     ],
+     "ngc_core.c": [
+      0,
+      0
+     ],
+     "ns.c": [
+      33,
+      0
+     ],
+     "ns_core.c": [
+      0,
+      0
+     ],
+     "nvdrv.c": [
+      13,
+      1
+     ],
+     "nvdrv_media_core.c": [
+      0,
+      0
+     ],
+     "nvdrv_nodes_core.c": [
+      0,
+      0
+     ],
+     "offline.c": [
+      198,
+      150
+     ],
+     "offline_core.c": [
+      0,
+      0
+     ],
+     "offline_state_core.c": [
+      0,
+      0
+     ],
+     "olsc.c": [
+      23,
+      6
+     ],
+     "online_core.c": [
+      0,
+      0
+     ],
+     "ovln.c": [
+      2,
+      1
+     ],
+     "pdm.c": [
+      8,
+      5
+     ],
+     "pdm_core.c": [
+      0,
+      0
+     ],
+     "pl.c": [
+      7,
+      0
+     ],
+     "psm.c": [
+      23,
+      0
+     ],
+     "psm_core.c": [
+      0,
+      0
+     ],
+     "push.c": [
+      19,
+      16
+     ],
+     "romfs_map.c": [
+      0,
+      0
+     ],
+     "services.c": [
+      0,
+      0
+     ],
+     "setfd.c": [
+      6,
+      0
+     ],
+     "setfd_core.c": [
+      0,
+      0
+     ],
+     "settings.c": [
+      20,
+      0
+     ],
+     "settings_core.c": [
+      0,
+      0
+     ],
+     "sfdnsres.c": [
+      14,
+      7
+     ],
+     "sfdnsres_core.c": [
+      0,
+      0
+     ],
+     "spsm.c": [
+      6,
+      0
+     ],
+     "sysconfig_core.c": [
+      0,
+      0
+     ],
+     "time.c": [
+      35,
+      4
+     ],
+     "time_core.c": [
+      0,
+      0
+     ],
+     "vi.c": [
+      32,
+      5
+     ],
+     "vi_core.c": [
+      0,
+      0
+     ]
+    },
+    "offline_stub_services": [
+     "bsd:u",
+     "friend:u",
+     "nfc:user",
+     "nfp:user",
+     "nifm:u",
+     "nsd",
+     "prepo",
+     "ssl"
+    ]
+   },
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 1.0,
+   "judged_points": 10.0,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "ipc_depth",
+   "title": "IPC: command depth (impl vs stub)",
+   "weight": 5,
+   "ratio": 0.8939,
+   "points": 4.47,
+   "counts": {
+    "core": [
+     0,
+     0
+    ],
+    "common": [
+     0,
+     0
+    ],
+    "rare": [
+     0,
+     0
+    ]
+   },
+   "extra": {
+    "method": "reference (tests/ipc_reference app-reachable ids; impl 1, stub 0.5, missing 0) + unfixtured tables row by row",
+    "fixtures": 99,
+    "app_reachable": 1116,
+    "ref_impl": 812,
+    "ref_stub": 304,
+    "ref_missing": 0,
+    "unfixtured_impl": 321,
+    "unfixtured_stub": 1,
+    "unfixtured_by_file": {
+     "ipc.c": [
+      2,
+      0
+     ],
+     "ro.c": [
+      6,
+      0
+     ],
+     "services/applet.c": [
+      148,
+      0
+     ],
+     "services/applet_ae.c": [
+      35,
+      0
+     ],
+     "services/caps_dc.c": [
+      1,
+      0
+     ],
+     "services/mii.c": [
+      26,
+      0
+     ],
+     "services/ns.c": [
+      25,
+      0
+     ],
+     "services/nvdrv.c": [
+      13,
+      1
+     ],
+     "services/offline.c": [
+      61,
+      0
+     ],
+     "services/vi.c": [
+      4,
+      0
+     ]
+    },
+    "most_stubbed_interfaces": [
+     [
+      "IFriendService",
+      50,
+      59
+     ],
+     [
+      "fsp-srv",
+      41,
+      70
+     ],
+     [
+      "IGeneralService",
+      30,
+      40
+     ],
+     [
+      "ISslConnection",
+      23,
+      38
+     ],
+     [
+      "IBcatService",
+      13,
+      24
+     ],
+     [
+      "bsd:u",
+      12,
+      43
+     ],
+     [
+      "IRequest",
+      11,
+      26
+     ],
+     [
+      "IUserLocalCommunicationService",
+      10,
+      39
+     ],
+     [
+      "npns:u",
+      10,
+      21
+     ],
+     [
+      "acc:u0",
+      9,
+      21
+     ],
+     [
+      "ISslContext",
+      7,
+      14
+     ],
+     [
+      "aoc:u",
+      7,
+      17
+     ]
+    ],
+    "impl": 1133,
+    "stub": 305,
+    "missing": 0,
+    "row_ratio_old": 0.8137
+   },
+   "adjust": -0.02,
+   "adjust_reason": "new reference measure (1116 app-reachable ids, 304 documented-default stubs at 0.5); some IPC_IMPL hid rows only store state (six-axis no samples, gestures, Palma instant); am tables (applet*.c, 183 rows) have no fixtures so missing ids there are invisible",
+   "judged_ratio": 0.8739,
+   "judged_points": 4.37,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "nvn",
+   "title": "GPU: NVN API surface",
+   "weight": 12,
+   "ratio": 0.987,
+   "points": 11.84,
+   "counts": {
+    "core": [
+     518,
+     537
+    ],
+    "common": [
+     0,
+     0
+    ],
+    "rare": [
+     0,
+     0
+    ]
+   },
+   "extra": {
+    "catalog": 537,
+    "defined": 537,
+    "stub_like": 0,
+    "missing_by_object": {}
+   },
+   "adjust": -0.005,
+   "adjust_reason": "guest-visible host layouts in gfx/src/obj.h not audited against the SDK reserved sizes (prog_t overran ACNH's 0x88-byte NVNprogram until 30e67b4)",
+   "judged_ratio": 0.982,
+   "judged_points": 11.78,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "shader",
+   "title": "GPU: Maxwell shader ISA",
+   "weight": 12,
+   "ratio": 1.0,
+   "points": 12.0,
+   "counts": {
+    "core": [
+     74,
+     74
+    ],
+    "common": [
+     35,
+     35
+    ],
+    "rare": [
+     42,
+     42
+    ]
+   },
+   "extra": {
+    "explicit_failures": [
+     "%s of size %d (only 32-bit integer forms are translated)",
+     "%s op %d (CAS and float forms are not translated)",
+     "%s type %d",
+     "%u transform feedback entries (maximum %d)",
+     "IMAD32I.CC is not supported",
+     "IMADSP carry/high forms (.CC/.HI)",
+     "IMADSP operand selector %d",
+     "OUT: geometry shader output outside a geometry shader (stage %d)",
+     "VABSDIFF4 combine op %d",
+     "VABSDIFF4 with a lane selector (only the four-byte word form is translated)",
+     "VMNMX.CC is not supported",
+     "atoms 64-bit",
+     "atoms op %d (CAS and float forms are not translated)",
+     "bad transform feedback entry %d (buffer %u, %u components at %#x, offset %u, stride %u)",
+     "bindless texture handle is not a constant buffer load",
+     "capture_void is for a vertex (or software-tessellated tess eval) shader with stage_out / transform feedback",
+     "cbuf %d clashes with gmem",
+     "cset",
+     "csetp test %d",
+     "depth comparison on a stencil texture binding",
+     "double precision is disabled (NAPPLE_F64=off)",
+     "geometry shader declares %u output vertices (the hardware maximum is 1024)",
+     "geometry shader input primitive of %u vertices",
+     "geometry shader output topology %u",
+     "geometry shader without ShaderKey.gs_max_vertices",
+     "half-precision (.F16) result from a %s texture binding (the value is an integer)",
+     "imad carry/saturate forms (.CC/.X/.SAT)",
+     "indexed attribute load outside the vertex and fragment stages",
+     "isoline tessellation needs the software tessellator (ShaderKey.tess_soft): Metal has quad and triangle patches only",
+     "mufu %d",
+     "prmt mode %d",
+     "shared memory (LDS/STS) outside a compute shader",
+     "shared memory atomic outside a compute shader",
+     "shared memory of %u bytes exceeds Metal's 32 KB threadgroup limit",
+     "stencil sampling of a texture of type %d (only 2D and 2D array stencil views exist)",
+     "surface access (opcode %03x: SUATOM.CAS, SUCLAMP-class helpers and other variants) is not translated",
+     "tess control needs ShaderKey.tess_in_vertices in 1..32",
+     "tess_soft is for a tess evaluation shader",
+     "tessellation domain %u",
+     "tessellation needs ShaderKey.tess_out_vertices in 1..32",
+     "texs info %d",
+     "texture gather of target %d",
+     "texture gather offset on target %d",
+     "texture gather with per-texel offsets on target %d",
+     "texture gather with reserved offset mode",
+     "tld of a cube texture",
+     "tld.ms of a texture that is not 2D",
+     "tld4s with both a depth reference and offsets",
+     "tlds info %d",
+     "too many bindless texture handles",
+     "too many textures",
+     "transform feedback / stage-out from a tessellation evaluation shader needs the software tessellator (ShaderKey.tess_soft)",
+     "transform feedback / stage-out requested for a %s shader",
+     "transform feedback from a geometry shader is captured by the replay from gs_vtx / gs_idx (same record layout), not in the shader",
+     "txd of a 1D texture (Metal has no 1D gradients)",
+     "txd with offsets",
+     "unknown instruction %016llx at %#x",
+     "vote mode %d"
+    ]
+   },
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 1.0,
+   "judged_points": 12.0,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "gpu_fixed",
+   "title": "GPU: formats + pipeline features",
+   "weight": 8,
+   "ratio": 0.9524,
+   "points": 7.62,
+   "counts": {
+    "core": [
+     8,
+     9
+    ],
+    "common": [
+     5,
+     7
+    ],
+    "rare": [
+     0,
+     1
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 0.9524,
+   "judged_points": 7.62,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "nvdrv",
+   "title": "GPU: nvdrv / host1x devices",
+   "weight": 2,
+   "ratio": 0.9,
+   "points": 1.8,
+   "counts": {
+    "core": [
+     2,
+     2
+    ],
+    "common": [
+     0,
+     1
+    ],
+    "rare": [
+     0,
+     2
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": -0.01,
+   "adjust_reason": "nvdrv_nodes_core.c GPU-node layouts PROPOSED, need real hardware traces (unreachable on the Mac)",
+   "judged_ratio": 0.89,
+   "judged_points": 1.78,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "audio",
+   "title": "Audio: audren/audout/opus",
+   "weight": 7,
+   "ratio": 1.0,
+   "points": 7.0,
+   "counts": {
+    "core": [
+     7,
+     7
+    ],
+    "common": [
+     6,
+     6
+    ],
+    "rare": [
+     3,
+     3
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 1.0,
+   "judged_points": 7.0,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "input",
+   "title": "Input: hid / npad",
+   "weight": 5,
+   "ratio": 0.99,
+   "points": 4.95,
+   "counts": {
+    "core": [
+     6,
+     6
+    ],
+    "common": [
+     2,
+     2
+    ],
+    "rare": [
+     2,
+     3
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 0.99,
+   "judged_points": 4.95,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "content",
+   "title": "Content: containers, crypto, updates, DLC",
+   "weight": 5,
+   "ratio": 0.9929,
+   "points": 4.96,
+   "counts": {
+    "core": [
+     10,
+     10
+    ],
+    "common": [
+     1,
+     1
+    ],
+    "rare": [
+     2,
+     3
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 0.9929,
+   "judged_points": 4.96,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "fs_runtime",
+   "title": "FS: saves + storage",
+   "weight": 2,
+   "ratio": 1.0,
+   "points": 2.0,
+   "counts": {
+    "core": [
+     2,
+     2
+    ],
+    "common": [
+     3,
+     3
+    ],
+    "rare": [
+     2,
+     2
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": 0.0,
+   "adjust_reason": "",
+   "judged_ratio": 1.0,
+   "judged_points": 2.0,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "applets",
+   "title": "Library applets",
+   "weight": 2,
+   "ratio": 0.9808,
+   "points": 1.96,
+   "counts": {
+    "core": [
+     2,
+     2
+    ],
+    "common": [
+     2,
+     2
+    ],
+    "rare": [
+     2,
+     3
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": -0.01,
+   "adjust_reason": "swkbd verified on LAS and the web sheet on SMO's manual, but controller / error / player-select / album sheets are still driven by scripted answers only",
+   "judged_ratio": 0.9708,
+   "judged_points": 1.94,
+   "unverified": 0,
+   "uncertainty": 0.0
+  },
+  {
+   "key": "media",
+   "title": "Video / media decode",
+   "weight": 1,
+   "ratio": 0.9722,
+   "points": 0.97,
+   "counts": {
+    "core": [
+     2,
+     2
+    ],
+    "common": [
+     1,
+     1
+    ],
+    "rare": [
+     0,
+     1
+    ]
+   },
+   "extra": {
+    "probe": true
+   },
+   "adjust": -0.005,
+   "adjust_reason": "movie AAC/VP8/ARGB host decoders tested on encoder-made streams only (no title uses them); format-2 output metadata proposed; HE-AAC untested (sweep-media-r2)",
+   "judged_ratio": 0.9672,
+   "judged_points": 0.97,
+   "unverified": 0,
+   "uncertainty": 0.0
+  }
+ ],
+ "items": {
+  "cpu_rewrite": {
+   "svc": "impl",
+   "tpidr_r": "impl",
+   "tpidr_w": "impl",
+   "tpidrro_r": "impl",
+   "cntpct": "impl",
+   "cntvct": "impl",
+   "cntfrq": "impl",
+   "x18": "impl",
+   "exclusive monitor windows (LDXR/STXR)": "impl",
+   "jump tables / computed branches": "impl",
+   "4K->16K page granularity": "impl",
+   "per-site verification": "impl",
+   "code memory / JIT (CreateCodeMemory)": "impl"
+  },
+  "loader": {
+   "NSO segments (LZ4)": "impl",
+   "MOD0 / dynamic relocations": "impl",
+   "multi-module (rtld, sdk, subsdkN)": "impl",
+   "NRO runtime loading (ro:1)": "impl",
+   "host overrides of guest imports": "impl"
+  },
+  "kernel": {
+   "0x01 SetHeapSize": "impl",
+   "0x02 SetMemoryPermission": "impl",
+   "0x03 SetMemoryAttribute": "impl",
+   "0x04 MapMemory": "impl",
+   "0x05 UnmapMemory": "impl",
+   "0x06 QueryMemory": "impl",
+   "0x07 ExitProcess": "impl",
+   "0x08 CreateThread": "impl",
+   "0x09 StartThread": "impl",
+   "0x0A ExitThread": "impl",
+   "0x0B SleepThread": "impl",
+   "0x0C GetThreadPriority": "impl",
+   "0x0D SetThreadPriority": "impl",
+   "0x0E GetThreadCoreMask": "impl",
+   "0x0F SetThreadCoreMask": "impl",
+   "0x10 GetCurrentProcessorNumber": "impl",
+   "0x11 SignalEvent": "impl",
+   "0x12 ClearEvent": "impl",
+   "0x13 MapSharedMemory": "impl",
+   "0x14 UnmapSharedMemory": "impl",
+   "0x15 CreateTransferMemory": "impl",
+   "0x16 CloseHandle": "impl",
+   "0x17 ResetSignal": "impl",
+   "0x18 WaitSynchronization": "impl",
+   "0x19 CancelSynchronization": "impl",
+   "0x1A ArbitrateLock": "impl",
+   "0x1B ArbitrateUnlock": "impl",
+   "0x1C WaitProcessWideKeyAtomic": "impl",
+   "0x1D SignalProcessWideKey": "impl",
+   "0x1E GetSystemTick": "impl",
+   "0x1F ConnectToNamedPort": "impl",
+   "0x21 SendSyncRequest": "impl",
+   "0x24 GetProcessId": "impl",
+   "0x25 GetThreadId": "impl",
+   "0x26 Break": "impl",
+   "0x27 OutputDebugString": "impl",
+   "0x29 GetInfo": "impl",
+   "0x34 WaitForAddress": "impl",
+   "0x35 SignalToAddress": "impl",
+   "0x22 SendSyncRequestWithUserBuffer": "impl",
+   "0x28 ReturnFromException": "impl",
+   "0x2A FlushEntireDataCache": "impl",
+   "0x2B FlushDataCache": "impl",
+   "0x2C MapPhysicalMemory": "impl",
+   "0x2D UnmapPhysicalMemory": "impl",
+   "0x30 GetResourceLimitLimitValue": "impl",
+   "0x31 GetResourceLimitCurrentValue": "impl",
+   "0x32 SetThreadActivity": "impl",
+   "0x36 SynchronizePreemptionState": "impl",
+   "0x37 GetResourceLimitPeakValue": "impl",
+   "0x45 CreateEvent": "impl",
+   "0x51 MapTransferMemory": "impl",
+   "0x52 UnmapTransferMemory": "impl",
+   "0x20 SendSyncRequestLight": "impl",
+   "0x23 SendAsyncRequestWithUserBuffer": "impl",
+   "0x2E GetDebugFutureThreadInfo": "impl",
+   "0x2F GetLastThreadInfo": "impl",
+   "0x33 GetThreadContext3": "impl",
+   "0x40 CreateSession": "impl",
+   "0x41 AcceptSession": "impl",
+   "0x43 ReplyAndReceive": "impl",
+   "0x4B CreateCodeMemory": "impl",
+   "0x4C ControlCodeMemory": "impl",
+   "0x50 CreateSharedMemory": "impl"
+  },
+  "ipc": {
+   "sm:": "impl",
+   "fsp-srv": "impl",
+   "appletOE": "impl",
+   "hid": "impl",
+   "vi": "impl",
+   "nvdrv": "impl",
+   "set": "impl",
+   "set:sys": "impl",
+   "time": "impl",
+   "acc:u0": "impl",
+   "apm": "impl",
+   "audren:u": "impl",
+   "audout:u": "impl",
+   "pl:u": "impl",
+   "lm": "impl",
+   "pctl": "impl",
+   "aoc:u": "impl",
+   "nifm:u": "impl",
+   "friend:u": "impl",
+   "prepo": "impl",
+   "csrng": "impl",
+   "hwopus": "impl",
+   "bsd:u": "impl",
+   "ssl": "impl",
+   "nsd": "impl",
+   "sfdnsres": "impl",
+   "nfp:user": "impl",
+   "mii:u": "impl",
+   "caps:su": "impl",
+   "caps:u": "impl",
+   "ldn:u": "impl",
+   "psm": "impl",
+   "lbl": "impl",
+   "irs": "impl",
+   "bcat:u": "impl",
+   "audin:u": "impl",
+   "ro:1 / ldr:ro": "impl",
+   "mm:u": "impl",
+   "ncm": "impl",
+   "ns:am2 / ns:ec": "impl",
+   "spsm": "impl",
+   "audrec:u": "impl",
+   "hidbus": "impl",
+   "olsc:u": "impl",
+   "ectx:aw": "impl",
+   "pdm:qry": "impl",
+   "fgm": "impl",
+   "nfc:user": "impl",
+   "set:fd": "impl",
+   "btm:u": "impl",
+   "ovln:snd": "impl",
+   "es": "impl",
+   "ns:vm": "impl"
+  },
+  "ipc_depth": {},
+  "nvn": {
+   "nvnDeviceBuilderSetDefaults": "impl",
+   "nvnDeviceBuilderSetFlags": "impl",
+   "nvnDeviceBuilderGetFlags": "impl",
+   "nvnDeviceInitialize": "impl",
+   "nvnDeviceFinalize": "impl",
+   "nvnDeviceSetDebugLabel": "impl",
+   "nvnDeviceGetProcAddress": "impl",
+   "nvnDeviceGetInteger": "impl",
+   "nvnDeviceGetCurrentTimestampInNanoseconds": "impl",
+   "nvnDeviceSetIntermediateShaderCache": "impl",
+   "nvnDeviceGetTextureHandle": "impl",
+   "nvnDeviceGetTexelFetchHandle": "impl",
+   "nvnDeviceGetImageHandle": "impl",
+   "nvnDeviceInstallDebugCallback": "impl",
+   "nvnDeviceGenerateDebugDomainId": "impl",
+   "nvnDeviceSetWindowOriginMode": "impl",
+   "nvnDeviceSetDepthMode": "impl",
+   "nvnDeviceRegisterFastClearColor": "impl",
+   "nvnDeviceRegisterFastClearColori": "impl",
+   "nvnDeviceRegisterFastClearColorui": "impl",
+   "nvnDeviceRegisterFastClearDepth": "impl",
+   "nvnDeviceGetWindowOriginMode": "impl",
+   "nvnDeviceGetDepthMode": "impl",
+   "nvnDeviceGetTimestampInNanoseconds": "impl",
+   "nvnDeviceApplyDeferredFinalizes": "impl",
+   "nvnDeviceFinalizeCommandHandle": "impl",
+   "nvnDeviceWalkDebugDatabase": "impl",
+   "nvnDeviceGetSeparateTextureHandle": "impl",
+   "nvnDeviceGetSeparateSamplerHandle": "impl",
+   "nvnDeviceIsExternalDebuggerAttached": "impl",
+   "nvnQueueGetError": "impl",
+   "nvnQueueGetTotalCommandMemoryUsed": "impl",
+   "nvnQueueGetTotalControlMemoryUsed": "impl",
+   "nvnQueueGetTotalComputeMemoryUsed": "impl",
+   "nvnQueueResetMemoryUsageCounts": "impl",
+   "nvnQueueBuilderSetDevice": "impl",
+   "nvnQueueBuilderSetDefaults": "impl",
+   "nvnQueueBuilderSetFlags": "impl",
+   "nvnQueueBuilderSetCommandMemorySize": "impl",
+   "nvnQueueBuilderSetComputeMemorySize": "impl",
+   "nvnQueueBuilderSetControlMemorySize": "impl",
+   "nvnQueueBuilderGetQueueMemorySize": "impl",
+   "nvnQueueBuilderSetQueueMemory": "impl",
+   "nvnQueueBuilderSetCommandFlushThreshold": "impl",
+   "nvnQueueBuilderSetQueuePriority": "impl",
+   "nvnQueueBuilderGetQueuePriority": "impl",
+   "nvnQueueBuilderGetDevice": "impl",
+   "nvnQueueBuilderGetFlags": "impl",
+   "nvnQueueBuilderGetCommandMemorySize": "impl",
+   "nvnQueueBuilderGetComputeMemorySize": "impl",
+   "nvnQueueBuilderGetControlMemorySize": "impl",
+   "nvnQueueBuilderGetCommandFlushThreshold": "impl",
+   "nvnQueueBuilderGetMemorySize": "impl",
+   "nvnQueueBuilderGetMemory": "impl",
+   "nvnQueueInitialize": "impl",
+   "nvnQueueFinalize": "impl",
+   "nvnQueueSetDebugLabel": "impl",
+   "nvnQueueSubmitCommands": "impl",
+   "nvnQueueFlush": "impl",
+   "nvnQueueFinish": "impl",
+   "nvnQueuePresentTexture": "impl",
+   "nvnQueueAcquireTexture": "impl",
+   "nvnWindowBuilderSetDevice": "impl",
+   "nvnWindowBuilderSetDefaults": "impl",
+   "nvnWindowBuilderSetNativeWindow": "impl",
+   "nvnWindowBuilderSetTextures": "impl",
+   "nvnWindowBuilderSetPresentInterval": "impl",
+   "nvnWindowBuilderSetNumActiveTextures": "impl",
+   "nvnWindowBuilderGetDevice": "impl",
+   "nvnWindowBuilderGetNumTextures": "impl",
+   "nvnWindowBuilderGetTexture": "impl",
+   "nvnWindowBuilderGetNativeWindow": "impl",
+   "nvnWindowBuilderGetPresentInterval": "impl",
+   "nvnWindowBuilderGetNumActiveTextures": "impl",
+   "nvnWindowInitialize": "impl",
+   "nvnWindowFinalize": "impl",
+   "nvnWindowSetDebugLabel": "impl",
+   "nvnWindowAcquireTexture": "impl",
+   "nvnWindowGetNativeWindow": "impl",
+   "nvnWindowGetPresentInterval": "impl",
+   "nvnWindowSetPresentInterval": "impl",
+   "nvnWindowSetCrop": "impl",
+   "nvnWindowGetCrop": "impl",
+   "nvnWindowSetNumActiveTextures": "impl",
+   "nvnWindowGetNumActiveTextures": "impl",
+   "nvnWindowGetNumTextures": "impl",
+   "nvnProgramInitialize": "impl",
+   "nvnProgramFinalize": "impl",
+   "nvnProgramSetDebugLabel": "impl",
+   "nvnProgramSetShaders": "impl",
+   "nvnProgramSetShadersExt": "impl",
+   "nvnProgramSetSampleShading": "impl",
+   "nvnMemoryPoolBuilderSetDevice": "impl",
+   "nvnMemoryPoolBuilderSetDefaults": "impl",
+   "nvnMemoryPoolBuilderSetStorage": "impl",
+   "nvnMemoryPoolBuilderSetFlags": "impl",
+   "nvnMemoryPoolBuilderGetDevice": "impl",
+   "nvnMemoryPoolBuilderGetMemory": "impl",
+   "nvnMemoryPoolBuilderGetSize": "impl",
+   "nvnMemoryPoolBuilderGetFlags": "impl",
+   "nvnMemoryPoolInitialize": "impl",
+   "nvnMemoryPoolSetDebugLabel": "impl",
+   "nvnMemoryPoolFinalize": "impl",
+   "nvnMemoryPoolMap": "impl",
+   "nvnMemoryPoolFlushMappedRange": "impl",
+   "nvnMemoryPoolInvalidateMappedRange": "impl",
+   "nvnMemoryPoolGetBufferAddress": "impl",
+   "nvnMemoryPoolMapVirtual": "impl",
+   "nvnMemoryPoolGetSize": "impl",
+   "nvnMemoryPoolGetFlags": "impl",
+   "nvnTexturePoolInitialize": "impl",
+   "nvnTexturePoolSetDebugLabel": "impl",
+   "nvnTexturePoolFinalize": "impl",
+   "nvnTexturePoolRegisterTexture": "impl",
+   "nvnTexturePoolRegisterImage": "impl",
+   "nvnTexturePoolGetMemoryPool": "impl",
+   "nvnTexturePoolGetMemoryOffset": "impl",
+   "nvnTexturePoolGetSize": "impl",
+   "nvnSamplerPoolInitialize": "impl",
+   "nvnSamplerPoolSetDebugLabel": "impl",
+   "nvnSamplerPoolFinalize": "impl",
+   "nvnSamplerPoolRegisterSampler": "impl",
+   "nvnSamplerPoolRegisterSamplerBuilder": "impl",
+   "nvnSamplerPoolGetMemoryPool": "impl",
+   "nvnSamplerPoolGetMemoryOffset": "impl",
+   "nvnSamplerPoolGetSize": "impl",
+   "nvnBufferBuilderSetDevice": "impl",
+   "nvnBufferBuilderSetDefaults": "impl",
+   "nvnBufferBuilderSetStorage": "impl",
+   "nvnBufferBuilderGetDevice": "impl",
+   "nvnBufferBuilderGetMemoryPool": "impl",
+   "nvnBufferBuilderGetMemoryOffset": "impl",
+   "nvnBufferBuilderGetSize": "impl",
+   "nvnBufferInitialize": "impl",
+   "nvnBufferSetDebugLabel": "impl",
+   "nvnBufferFinalize": "impl",
+   "nvnBufferMap": "impl",
+   "nvnBufferGetAddress": "impl",
+   "nvnBufferFlushMappedRange": "impl",
+   "nvnBufferInvalidateMappedRange": "impl",
+   "nvnBufferGetMemoryPool": "impl",
+   "nvnBufferGetMemoryOffset": "impl",
+   "nvnBufferGetSize": "impl",
+   "nvnBufferGetDebugID": "impl",
+   "nvnTextureBuilderSetDevice": "impl",
+   "nvnTextureBuilderSetDefaults": "impl",
+   "nvnTextureBuilderSetFlags": "impl",
+   "nvnTextureBuilderSetTarget": "impl",
+   "nvnTextureBuilderSetWidth": "impl",
+   "nvnTextureBuilderSetHeight": "impl",
+   "nvnTextureBuilderSetDepth": "impl",
+   "nvnTextureBuilderSetSize1D": "impl",
+   "nvnTextureBuilderSetSize2D": "impl",
+   "nvnTextureBuilderSetSize3D": "impl",
+   "nvnTextureBuilderSetLevels": "impl",
+   "nvnTextureBuilderSetFormat": "impl",
+   "nvnTextureBuilderSetSamples": "impl",
+   "nvnTextureBuilderSetSwizzle": "impl",
+   "nvnTextureBuilderSetDepthStencilMode": "impl",
+   "nvnTextureBuilderGetStorageSize": "impl",
+   "nvnTextureBuilderGetStorageAlignment": "impl",
+   "nvnTextureBuilderSetStorage": "impl",
+   "nvnTextureBuilderSetPackagedTextureData": "impl",
+   "nvnTextureBuilderSetPackagedTextureLayout": "impl",
+   "nvnTextureBuilderSetStride": "impl",
+   "nvnTextureBuilderSetGLTextureName": "impl",
+   "nvnTextureBuilderGetStorageClass": "impl",
+   "nvnTextureBuilderGetDevice": "impl",
+   "nvnTextureBuilderGetFlags": "impl",
+   "nvnTextureBuilderGetTarget": "impl",
+   "nvnTextureBuilderGetWidth": "impl",
+   "nvnTextureBuilderGetHeight": "impl",
+   "nvnTextureBuilderGetDepth": "impl",
+   "nvnTextureBuilderGetLevels": "impl",
+   "nvnTextureBuilderGetFormat": "impl",
+   "nvnTextureBuilderGetSamples": "impl",
+   "nvnTextureBuilderGetSwizzle": "impl",
+   "nvnTextureBuilderGetDepthStencilMode": "impl",
+   "nvnTextureBuilderGetPackagedTextureData": "impl",
+   "nvnTextureBuilderGetPackagedTextureLayout": "impl",
+   "nvnTextureBuilderGetStride": "impl",
+   "nvnTextureBuilderGetSparseTileLayout": "impl",
+   "nvnTextureBuilderGetGLTextureName": "impl",
+   "nvnTextureBuilderGetZCullStorageSize": "impl",
+   "nvnTextureBuilderGetMemoryPool": "impl",
+   "nvnTextureBuilderGetMemoryOffset": "impl",
+   "nvnTextureBuilderGetRawStorageClass": "impl",
+   "nvnTextureViewSetDefaults": "impl",
+   "nvnTextureViewSetLevels": "impl",
+   "nvnTextureViewSetLayers": "impl",
+   "nvnTextureViewSetFormat": "impl",
+   "nvnTextureViewSetSwizzle": "impl",
+   "nvnTextureViewSetDepthStencilMode": "impl",
+   "nvnTextureViewSetTarget": "impl",
+   "nvnTextureViewGetLevels": "impl",
+   "nvnTextureViewGetLayers": "impl",
+   "nvnTextureViewGetFormat": "impl",
+   "nvnTextureViewGetSwizzle": "impl",
+   "nvnTextureViewGetDepthStencilMode": "impl",
+   "nvnTextureViewGetTarget": "impl",
+   "nvnTextureViewCompare": "impl",
+   "nvnTextureInitialize": "impl",
+   "nvnTextureGetZCullStorageSize": "impl",
+   "nvnTextureFinalize": "impl",
+   "nvnTextureSetDebugLabel": "impl",
+   "nvnTextureGetStorageClass": "impl",
+   "nvnTextureGetViewOffset": "impl",
+   "nvnTextureGetFlags": "impl",
+   "nvnTextureGetTarget": "impl",
+   "nvnTextureGetWidth": "impl",
+   "nvnTextureGetHeight": "impl",
+   "nvnTextureGetDepth": "impl",
+   "nvnTextureGetLevels": "impl",
+   "nvnTextureGetFormat": "impl",
+   "nvnTextureGetSamples": "impl",
+   "nvnTextureGetSwizzle": "impl",
+   "nvnTextureGetDepthStencilMode": "impl",
+   "nvnTextureGetStride": "impl",
+   "nvnTextureGetTextureAddress": "impl",
+   "nvnTextureGetSparseTileLayout": "impl",
+   "nvnTextureWriteTexels": "impl",
+   "nvnTextureWriteTexelsStrided": "impl",
+   "nvnTextureReadTexels": "impl",
+   "nvnTextureReadTexelsStrided": "impl",
+   "nvnTextureFlushTexels": "impl",
+   "nvnTextureInvalidateTexels": "impl",
+   "nvnTextureGetMemoryPool": "impl",
+   "nvnTextureGetMemoryOffset": "impl",
+   "nvnTextureGetStorageSize": "impl",
+   "nvnTextureCompare": "impl",
+   "nvnTextureGetDebugID": "impl",
+   "nvnTextureGetRawStorageClass": "impl",
+   "nvnSamplerBuilderSetDevice": "impl",
+   "nvnSamplerBuilderSetDefaults": "impl",
+   "nvnSamplerBuilderSetMinMagFilter": "impl",
+   "nvnSamplerBuilderSetWrapMode": "impl",
+   "nvnSamplerBuilderSetLodClamp": "impl",
+   "nvnSamplerBuilderSetLodBias": "impl",
+   "nvnSamplerBuilderSetCompare": "impl",
+   "nvnSamplerBuilderSetBorderColor": "impl",
+   "nvnSamplerBuilderSetBorderColori": "impl",
+   "nvnSamplerBuilderSetBorderColorui": "impl",
+   "nvnSamplerBuilderSetMaxAnisotropy": "impl",
+   "nvnSamplerBuilderSetReductionFilter": "impl",
+   "nvnSamplerBuilderSetLodSnap": "impl",
+   "nvnSamplerBuilderGetDevice": "impl",
+   "nvnSamplerBuilderGetMinMagFilter": "impl",
+   "nvnSamplerBuilderGetWrapMode": "impl",
+   "nvnSamplerBuilderGetLodClamp": "impl",
+   "nvnSamplerBuilderGetLodBias": "impl",
+   "nvnSamplerBuilderGetCompare": "impl",
+   "nvnSamplerBuilderGetBorderColor": "impl",
+   "nvnSamplerBuilderGetBorderColori": "impl",
+   "nvnSamplerBuilderGetBorderColorui": "impl",
+   "nvnSamplerBuilderGetMaxAnisotropy": "impl",
+   "nvnSamplerBuilderGetReductionFilter": "impl",
+   "nvnSamplerBuilderGetLodSnap": "impl",
+   "nvnSamplerInitialize": "impl",
+   "nvnSamplerFinalize": "impl",
+   "nvnSamplerSetDebugLabel": "impl",
+   "nvnSamplerGetMinMagFilter": "impl",
+   "nvnSamplerGetWrapMode": "impl",
+   "nvnSamplerGetLodClamp": "impl",
+   "nvnSamplerGetLodBias": "impl",
+   "nvnSamplerGetCompare": "impl",
+   "nvnSamplerGetBorderColor": "impl",
+   "nvnSamplerGetBorderColori": "impl",
+   "nvnSamplerGetBorderColorui": "impl",
+   "nvnSamplerGetMaxAnisotropy": "impl",
+   "nvnSamplerGetReductionFilter": "impl",
+   "nvnSamplerCompare": "impl",
+   "nvnSamplerGetDebugID": "impl",
+   "nvnBlendStateSetDefaults": "impl",
+   "nvnBlendStateSetBlendTarget": "impl",
+   "nvnBlendStateSetBlendFunc": "impl",
+   "nvnBlendStateSetBlendEquation": "impl",
+   "nvnBlendStateSetAdvancedMode": "impl",
+   "nvnBlendStateSetAdvancedOverlap": "impl",
+   "nvnBlendStateSetAdvancedPremultipliedSrc": "impl",
+   "nvnBlendStateSetAdvancedNormalizedDst": "impl",
+   "nvnBlendStateGetBlendTarget": "impl",
+   "nvnBlendStateGetBlendFunc": "impl",
+   "nvnBlendStateGetBlendEquation": "impl",
+   "nvnBlendStateGetAdvancedMode": "impl",
+   "nvnBlendStateGetAdvancedOverlap": "impl",
+   "nvnBlendStateGetAdvancedPremultipliedSrc": "impl",
+   "nvnBlendStateGetAdvancedNormalizedDst": "impl",
+   "nvnColorStateSetDefaults": "impl",
+   "nvnColorStateSetBlendEnable": "impl",
+   "nvnColorStateSetLogicOp": "impl",
+   "nvnColorStateSetAlphaTest": "impl",
+   "nvnColorStateGetBlendEnable": "impl",
+   "nvnColorStateGetLogicOp": "impl",
+   "nvnColorStateGetAlphaTest": "impl",
+   "nvnChannelMaskStateSetDefaults": "impl",
+   "nvnChannelMaskStateSetChannelMask": "impl",
+   "nvnChannelMaskStateGetChannelMask": "impl",
+   "nvnMultisampleStateSetDefaults": "impl",
+   "nvnMultisampleStateSetMultisampleEnable": "impl",
+   "nvnMultisampleStateSetSamples": "impl",
+   "nvnMultisampleStateSetAlphaToCoverageEnable": "impl",
+   "nvnMultisampleStateSetAlphaToCoverageDither": "impl",
+   "nvnMultisampleStateGetMultisampleEnable": "impl",
+   "nvnMultisampleStateGetSamples": "impl",
+   "nvnMultisampleStateGetAlphaToCoverageEnable": "impl",
+   "nvnMultisampleStateGetAlphaToCoverageDither": "impl",
+   "nvnMultisampleStateSetRasterSamples": "impl",
+   "nvnMultisampleStateGetRasterSamples": "impl",
+   "nvnMultisampleStateSetCoverageModulationMode": "impl",
+   "nvnMultisampleStateGetCoverageModulationMode": "impl",
+   "nvnMultisampleStateSetCoverageToColorEnable": "impl",
+   "nvnMultisampleStateGetCoverageToColorEnable": "impl",
+   "nvnMultisampleStateSetCoverageToColorOutput": "impl",
+   "nvnMultisampleStateGetCoverageToColorOutput": "impl",
+   "nvnMultisampleStateSetSampleLocationsEnable": "impl",
+   "nvnMultisampleStateGetSampleLocationsEnable": "impl",
+   "nvnMultisampleStateGetSampleLocationsGrid": "impl",
+   "nvnMultisampleStateSetSampleLocationsGridEnable": "impl",
+   "nvnMultisampleStateGetSampleLocationsGridEnable": "impl",
+   "nvnMultisampleStateSetSampleLocations": "impl",
+   "nvnPolygonStateSetDefaults": "impl",
+   "nvnPolygonStateSetCullFace": "impl",
+   "nvnPolygonStateSetFrontFace": "impl",
+   "nvnPolygonStateSetPolygonMode": "impl",
+   "nvnPolygonStateSetPolygonOffsetEnables": "impl",
+   "nvnPolygonStateGetCullFace": "impl",
+   "nvnPolygonStateGetFrontFace": "impl",
+   "nvnPolygonStateGetPolygonMode": "impl",
+   "nvnPolygonStateGetPolygonOffsetEnables": "impl",
+   "nvnDepthStencilStateSetDefaults": "impl",
+   "nvnDepthStencilStateSetDepthTestEnable": "impl",
+   "nvnDepthStencilStateSetDepthWriteEnable": "impl",
+   "nvnDepthStencilStateSetDepthFunc": "impl",
+   "nvnDepthStencilStateSetStencilTestEnable": "impl",
+   "nvnDepthStencilStateSetStencilFunc": "impl",
+   "nvnDepthStencilStateSetStencilOp": "impl",
+   "nvnDepthStencilStateGetDepthTestEnable": "impl",
+   "nvnDepthStencilStateGetDepthWriteEnable": "impl",
+   "nvnDepthStencilStateGetDepthFunc": "impl",
+   "nvnDepthStencilStateGetStencilTestEnable": "impl",
+   "nvnDepthStencilStateGetStencilFunc": "impl",
+   "nvnDepthStencilStateGetStencilOp": "impl",
+   "nvnVertexAttribStateSetDefaults": "impl",
+   "nvnVertexAttribStateSetFormat": "impl",
+   "nvnVertexAttribStateSetStreamIndex": "impl",
+   "nvnVertexAttribStateGetFormat": "impl",
+   "nvnVertexAttribStateGetStreamIndex": "impl",
+   "nvnVertexStreamStateSetDefaults": "impl",
+   "nvnVertexStreamStateSetStride": "impl",
+   "nvnVertexStreamStateSetDivisor": "impl",
+   "nvnVertexStreamStateGetStride": "impl",
+   "nvnVertexStreamStateGetDivisor": "impl",
+   "nvnCommandBufferInitialize": "impl",
+   "nvnCommandBufferFinalize": "impl",
+   "nvnCommandBufferSetDebugLabel": "impl",
+   "nvnCommandBufferSetMemoryCallback": "impl",
+   "nvnCommandBufferSetMemoryCallbackData": "impl",
+   "nvnCommandBufferSetCommandMemoryCallbackEnabled": "impl",
+   "nvnCommandBufferAddCommandMemory": "impl",
+   "nvnCommandBufferAddControlMemory": "impl",
+   "nvnCommandBufferGetCommandMemorySize": "impl",
+   "nvnCommandBufferGetCommandMemoryUsed": "impl",
+   "nvnCommandBufferGetCommandMemoryFree": "impl",
+   "nvnCommandBufferGetControlMemorySize": "impl",
+   "nvnCommandBufferGetControlMemoryUsed": "impl",
+   "nvnCommandBufferGetControlMemoryFree": "impl",
+   "nvnCommandBufferBeginRecording": "impl",
+   "nvnCommandBufferEndRecording": "impl",
+   "nvnCommandBufferCallCommands": "impl",
+   "nvnCommandBufferCopyCommands": "impl",
+   "nvnCommandBufferBindBlendState": "impl",
+   "nvnCommandBufferBindChannelMaskState": "impl",
+   "nvnCommandBufferBindColorState": "impl",
+   "nvnCommandBufferBindMultisampleState": "impl",
+   "nvnCommandBufferBindPolygonState": "impl",
+   "nvnCommandBufferBindDepthStencilState": "impl",
+   "nvnCommandBufferBindVertexAttribState": "impl",
+   "nvnCommandBufferBindVertexStreamState": "impl",
+   "nvnCommandBufferBindProgram": "impl",
+   "nvnCommandBufferBindVertexBuffer": "impl",
+   "nvnCommandBufferBindVertexBuffers": "impl",
+   "nvnCommandBufferBindUniformBuffer": "impl",
+   "nvnCommandBufferBindUniformBuffers": "impl",
+   "nvnCommandBufferBindTransformFeedbackBuffer": "impl",
+   "nvnCommandBufferBindTransformFeedbackBuffers": "impl",
+   "nvnCommandBufferBindStorageBuffer": "impl",
+   "nvnCommandBufferBindStorageBuffers": "impl",
+   "nvnCommandBufferBindTexture": "impl",
+   "nvnCommandBufferBindTextures": "impl",
+   "nvnCommandBufferBindImage": "impl",
+   "nvnCommandBufferBindImages": "impl",
+   "nvnCommandBufferSetPatchSize": "impl",
+   "nvnCommandBufferSetInnerTessellationLevels": "impl",
+   "nvnCommandBufferSetOuterTessellationLevels": "impl",
+   "nvnCommandBufferSetPrimitiveRestart": "impl",
+   "nvnCommandBufferBeginTransformFeedback": "impl",
+   "nvnCommandBufferEndTransformFeedback": "impl",
+   "nvnCommandBufferPauseTransformFeedback": "impl",
+   "nvnCommandBufferResumeTransformFeedback": "impl",
+   "nvnCommandBufferDrawTransformFeedback": "impl",
+   "nvnCommandBufferDrawArrays": "impl",
+   "nvnCommandBufferDrawElements": "impl",
+   "nvnCommandBufferDrawElementsBaseVertex": "impl",
+   "nvnCommandBufferDrawArraysInstanced": "impl",
+   "nvnCommandBufferDrawElementsInstanced": "impl",
+   "nvnCommandBufferDrawArraysIndirect": "impl",
+   "nvnCommandBufferDrawElementsIndirect": "impl",
+   "nvnCommandBufferMultiDrawArraysIndirectCount": "impl",
+   "nvnCommandBufferMultiDrawElementsIndirectCount": "impl",
+   "nvnCommandBufferClearColor": "impl",
+   "nvnCommandBufferClearColori": "impl",
+   "nvnCommandBufferClearColorui": "impl",
+   "nvnCommandBufferClearDepthStencil": "impl",
+   "nvnCommandBufferDispatchCompute": "impl",
+   "nvnCommandBufferDispatchComputeIndirect": "impl",
+   "nvnCommandBufferSetViewport": "impl",
+   "nvnCommandBufferSetViewports": "impl",
+   "nvnCommandBufferSetViewportSwizzles": "stub",
+   "nvnCommandBufferSetScissor": "impl",
+   "nvnCommandBufferSetScissors": "impl",
+   "nvnCommandBufferSetDepthRange": "impl",
+   "nvnCommandBufferSetDepthBounds": "impl",
+   "nvnCommandBufferSetDepthRanges": "impl",
+   "nvnCommandBufferSetTiledCacheAction": "impl",
+   "nvnCommandBufferSetTiledCacheTileSize": "impl",
+   "nvnCommandBufferBindSeparateTexture": "stub",
+   "nvnCommandBufferBindSeparateSampler": "stub",
+   "nvnCommandBufferBindSeparateTextures": "stub",
+   "nvnCommandBufferBindSeparateSamplers": "stub",
+   "nvnCommandBufferSetStencilValueMask": "impl",
+   "nvnCommandBufferSetStencilMask": "impl",
+   "nvnCommandBufferSetStencilRef": "impl",
+   "nvnCommandBufferSetBlendColor": "impl",
+   "nvnCommandBufferSetPointSize": "impl",
+   "nvnCommandBufferSetLineWidth": "impl",
+   "nvnCommandBufferSetPolygonOffsetClamp": "impl",
+   "nvnCommandBufferSetAlphaRef": "impl",
+   "nvnCommandBufferSetSampleMask": "impl",
+   "nvnCommandBufferSetRasterizerDiscard": "impl",
+   "nvnCommandBufferSetDepthClamp": "impl",
+   "nvnCommandBufferSetConservativeRasterEnable": "partial",
+   "nvnCommandBufferSetConservativeRasterDilate": "partial",
+   "nvnCommandBufferSetSubpixelPrecisionBias": "impl",
+   "nvnCommandBufferCopyBufferToTexture": "impl",
+   "nvnCommandBufferCopyTextureToBuffer": "impl",
+   "nvnCommandBufferCopyTextureToTexture": "impl",
+   "nvnCommandBufferCopyBufferToBuffer": "impl",
+   "nvnCommandBufferClearBuffer": "impl",
+   "nvnCommandBufferClearTexture": "impl",
+   "nvnCommandBufferClearTexturei": "impl",
+   "nvnCommandBufferClearTextureui": "impl",
+   "nvnCommandBufferUpdateUniformBuffer": "impl",
+   "nvnCommandBufferReportCounter": "impl",
+   "nvnCommandBufferResetCounter": "impl",
+   "nvnCommandBufferReportValue": "impl",
+   "nvnCommandBufferSetRenderEnable": "impl",
+   "nvnCommandBufferSetRenderEnableConditional": "impl",
+   "nvnCommandBufferSetRenderTargets": "impl",
+   "nvnCommandBufferDiscardColor": "impl",
+   "nvnCommandBufferDiscardDepthStencil": "impl",
+   "nvnCommandBufferDownsample": "impl",
+   "nvnCommandBufferTiledDownsample": "impl",
+   "nvnCommandBufferDownsampleTextureView": "impl",
+   "nvnCommandBufferTiledDownsampleTextureView": "impl",
+   "nvnCommandBufferBarrier": "impl",
+   "nvnCommandBufferWaitSync": "impl",
+   "nvnCommandBufferFenceSync": "impl",
+   "nvnCommandBufferSetTexturePool": "impl",
+   "nvnCommandBufferSetSamplerPool": "impl",
+   "nvnCommandBufferSetShaderScratchMemory": "impl",
+   "nvnCommandBufferSaveZCullData": "impl",
+   "nvnCommandBufferRestoreZCullData": "impl",
+   "nvnCommandBufferSetCopyRowStride": "impl",
+   "nvnCommandBufferSetCopyImageStride": "impl",
+   "nvnCommandBufferGetCopyRowStride": "impl",
+   "nvnCommandBufferGetCopyImageStride": "impl",
+   "nvnCommandBufferDrawTexture": "impl",
+   "nvnProgramSetSubroutineLinkage": "stub",
+   "nvnCommandBufferSetProgramSubroutines": "stub",
+   "nvnCommandBufferBindCoverageModulationTable": "impl",
+   "nvnCommandBufferResolveDepthBuffer": "impl",
+   "nvnCommandBufferSetColorReductionEnable": "impl",
+   "nvnCommandBufferSetColorReductionThresholds": "impl",
+   "nvnCommandBufferPushDebugGroupStatic": "impl",
+   "nvnCommandBufferPushDebugGroupDynamic": "impl",
+   "nvnCommandBufferPushDebugGroup": "impl",
+   "nvnCommandBufferPopDebugGroup": "impl",
+   "nvnCommandBufferPopDebugGroupId": "impl",
+   "nvnCommandBufferInsertDebugMarkerStatic": "impl",
+   "nvnCommandBufferInsertDebugMarkerDynamic": "impl",
+   "nvnCommandBufferInsertDebugMarker": "impl",
+   "nvnCommandBufferGetMemoryCallback": "impl",
+   "nvnCommandBufferGetMemoryCallbackData": "impl",
+   "nvnCommandBufferIsRecording": "impl",
+   "nvnSyncInitialize": "impl",
+   "nvnSyncFinalize": "impl",
+   "nvnSyncSetDebugLabel": "impl",
+   "nvnQueueFenceSync": "impl",
+   "nvnSyncWait": "impl",
+   "nvnQueueWaitSync": "impl",
+   "nvnSyncInitializeFromFencedGLSync": "impl",
+   "nvnSyncCreateGLSync": "impl",
+   "nvnEventBuilderSetDefaults": "impl",
+   "nvnEventBuilderSetStorage": "impl",
+   "nvnEventBuilderGetStorage": "impl",
+   "nvnEventBuilderGetMemoryPool": "impl",
+   "nvnEventBuilderGetMemoryOffset": "impl",
+   "nvnEventInitialize": "impl",
+   "nvnEventFinalize": "impl",
+   "nvnEventGetValue": "impl",
+   "nvnEventSignal": "impl",
+   "nvnEventGetMemoryPool": "impl",
+   "nvnEventGetMemoryOffset": "impl",
+   "nvnCommandBufferWaitEvent": "impl",
+   "nvnCommandBufferSignalEvent": "impl",
+   "nvnCommandBufferSetStencilCullCriteria": "impl",
+   "nvnCommandBufferInsertCheckpointStatic": "impl",
+   "nvnCommandBufferInsertCheckpointDynamic": "impl",
+   "nvnDeviceSetAutomaticCheckpointsEnable": "impl",
+   "nvnDeviceSetAutomaticCheckpointsSamplingInterval": "impl",
+   "nvnDeviceSetAutomaticCheckpointsByDebugGroup": "impl",
+   "nvnDeviceSetCheckpointCallStacksEnable": "impl",
+   "nvnDeviceSetCheckpointMaxCallStacksDepth": "impl",
+   "nvnCommandBufferBindUniformBuffersDeferred": "partial",
+   "nvnCommandBufferBindStorageBuffersDeferred": "partial",
+   "nvnCommandBufferBindTexturesDeferred": "partial",
+   "nvnCommandBufferBindImagesDeferred": "partial",
+   "nvnCommandBufferBindSeparateTexturesDeferred": "stub",
+   "nvnCommandBufferBindSeparateSamplersDeferred": "stub",
+   "nvnCommandBufferOverrideSubtileSize": "impl",
+   "nvnProgramGetSubtileSize": "partial",
+   "nvnCommandBufferSetControlMemoryCallbackEnabled": "impl",
+   "nvnCommandBufferSetProvokingVertexMode": "partial",
+   "nvnCommandBufferSetZCullZF32CompressionEnable": "impl",
+   "nvnDeviceSetAutomaticCheckpointsMask": "impl",
+   "nvnDeviceWaitForError": "partial",
+   "nvnTextureBuilderGetViewOffset": "partial"
+  },
+  "shader": {
+   "ALD": "impl",
+   "AST": "impl",
+   "IPA": "impl",
+   "MOV": "impl",
+   "MOV32I": "impl",
+   "FADD": "impl",
+   "FADD32I": "impl",
+   "FMUL": "impl",
+   "FMUL32I": "impl",
+   "FFMA": "impl",
+   "FFMA32I": "impl",
+   "FMNMX": "impl",
+   "FSETP": "impl",
+   "FSET": "impl",
+   "FCMP": "impl",
+   "MUFU": "impl",
+   "RRO": "impl",
+   "F2F": "impl",
+   "F2I": "impl",
+   "I2F": "impl",
+   "I2I": "impl",
+   "IADD": "impl",
+   "IADD3": "impl",
+   "IADD32I": "impl",
+   "ISCADD": "impl",
+   "ISETP": "impl",
+   "ISET": "impl",
+   "IMNMX": "impl",
+   "SHL": "impl",
+   "SHR": "impl",
+   "LOP": "impl",
+   "LOP3": "impl",
+   "LOP32I": "impl",
+   "BFE": "impl",
+   "BFI": "impl",
+   "XMAD": "impl",
+   "SEL": "impl",
+   "PSETP": "impl",
+   "PSET": "impl",
+   "TEX": "impl",
+   "TEXS": "impl",
+   "TLD": "impl",
+   "TLDS": "impl",
+   "TLD4": "impl",
+   "TLD4S": "impl",
+   "TXQ": "impl",
+   "TMML": "impl",
+   "LDC": "impl",
+   "LDG": "impl",
+   "STG": "impl",
+   "LDL": "impl",
+   "STL": "impl",
+   "LDS": "impl",
+   "STS": "impl",
+   "EXIT": "impl",
+   "KIL": "impl",
+   "BRA": "impl",
+   "SSY": "impl",
+   "SYNC": "impl",
+   "PBK": "impl",
+   "BRK": "impl",
+   "S2R": "impl",
+   "HADD2": "impl",
+   "HMUL2": "impl",
+   "HFMA2": "impl",
+   "HSETP2": "impl",
+   "PRMT": "impl",
+   "FLO": "impl",
+   "POPC": "impl",
+   "SHF": "impl",
+   "DEPBAR": "impl",
+   "NOP": "impl",
+   "MEMBAR": "impl",
+   "BAR": "impl",
+   "CONT": "impl",
+   "PCNT": "impl",
+   "BRX": "impl",
+   "CSET": "impl",
+   "CSETP": "impl",
+   "P2R": "impl",
+   "R2P": "impl",
+   "IMUL": "impl",
+   "IMUL32I": "impl",
+   "IMAD": "impl",
+   "ICMP": "impl",
+   "ISCADD32I": "impl",
+   "SHFL": "impl",
+   "VOTE": "impl",
+   "ATOM": "impl",
+   "ATOMS": "impl",
+   "RED": "impl",
+   "FSWZADD": "impl",
+   "TXD": "impl",
+   "HSET2": "impl",
+   "HADD2_32I": "impl",
+   "HMUL2_32I": "impl",
+   "HFMA2_32I": "impl",
+   "LEA": "impl",
+   "OUT": "impl",
+   "SUST": "impl",
+   "SULD": "impl",
+   "SUATOM": "impl",
+   "AL2P": "impl",
+   "DADD": "impl",
+   "DMUL": "impl",
+   "DFMA": "impl",
+   "DSETP": "impl",
+   "DMNMX": "impl",
+   "CS2R": "impl",
+   "VMAD": "impl",
+   "VADD": "impl",
+   "VSET": "impl",
+   "VSETP": "impl",
+   "VMNMX": "impl",
+   "VABSDIFF": "impl",
+   "VABSDIFF4": "impl",
+   "VSHL": "impl",
+   "VSHR": "impl",
+   "IDE": "impl",
+   "IDP": "impl",
+   "IMADSP": "impl",
+   "JMP": "impl",
+   "JMX": "impl",
+   "CAL": "impl",
+   "JCAL": "impl",
+   "RET": "impl",
+   "PRET": "impl",
+   "PEXIT": "impl",
+   "LONGJMP": "impl",
+   "PLONGJMP": "impl",
+   "B2R": "impl",
+   "R2B": "impl",
+   "CCTL": "impl",
+   "CCTLL": "impl",
+   "BPT": "impl",
+   "RAM": "impl",
+   "SAM": "impl",
+   "RTT": "impl",
+   "FCHK": "impl",
+   "PIXLD": "impl",
+   "ISBERD": "impl",
+   "LEPC": "impl",
+   "GETCRSPTR": "impl",
+   "SETCRSPTR": "impl",
+   "GETLMEMBASE": "impl",
+   "SETLMEMBASE": "impl",
+   "STP": "impl",
+   "SURED": "impl",
+   "TXA": "impl",
+   "DSET": "impl",
+   "IMAD32I": "impl"
+  },
+  "gpu_fixed": {
+   "RGBA8 / BGRA8 (+sRGB)": "impl",
+   "BC1-BC3": "impl",
+   "BC4/BC5": "impl",
+   "BC6H/BC7": "impl",
+   "ASTC (all block sizes)": "impl",
+   "depth/stencil formats": "partial",
+   "float formats (RGBA16F/32F, R11G11B10F)": "impl",
+   "block-linear swizzle": "impl",
+   "transform feedback": "partial",
+   "geometry shaders": "impl",
+   "tessellation": "partial",
+   "compute dispatch": "impl",
+   "queries / counters (occlusion, timestamp)": "impl",
+   "indirect draw/dispatch": "impl",
+   "MSAA / resolve": "impl",
+   "texture views / sparse": "partial",
+   "shader cache (persisted MSL/pipelines)": "impl"
+  },
+  "nvdrv": {
+   "/dev/nvmap": "impl",
+   "/dev/nvhost-ctrl": "impl",
+   "/dev/nvhost-nvdec, vic, nvjpg, msenc": "partial",
+   "/dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)": "partial",
+   "/dev/nvdisp-disp0": "partial"
+  },
+  "audio": {
+   "audren voices PCM16": "impl",
+   "ADPCM": "impl",
+   "final mix / submix": "impl",
+   "splitter": "impl",
+   "delay": "impl",
+   "reverb": "impl",
+   "I3DL2 reverb": "impl",
+   "aux send/return": "impl",
+   "biquad filter": "impl",
+   "limiter / light limiter": "impl",
+   "compressor": "impl",
+   "capture effect": "impl",
+   "performance metrics": "impl",
+   "audout": "impl",
+   "audin (microphone)": "impl",
+   "hwopus multistream": "impl"
+  },
+  "input": {
+   "Pro / FullKey": "impl",
+   "Handheld": "impl",
+   "Joy-Con dual / left / right": "impl",
+   "GameCube / Palma / NES styles": "impl",
+   "six-axis motion": "impl",
+   "touchscreen": "impl",
+   "mouse / keyboard (HID)": "impl",
+   "vibration": "impl",
+   "npad assignment / hold type / multi-player": "impl",
+   "gesture / debugpad": "impl",
+   "IR camera (irs)": "partial"
+  },
+  "content": {
+   "XCI (HFS0)": "impl",
+   "NSP (PFS0)": "impl",
+   "NCA3 + AES-XTS header": "impl",
+   "NCA2 / NCA0": "partial",
+   "titlekey (rights id) crypto": "impl",
+   "personalized tickets": "impl",
+   "NSZ / XCZ (zstd)": "impl",
+   "BKTR update patching": "impl",
+   "CNMT metadata": "impl",
+   "NACP control data": "impl",
+   "NPDM / ACID / ACI0": "impl",
+   "RomFS (IVFC)": "impl",
+   "IVFC hash-tree verification": "impl",
+   "DLC (AddOnContent) mounting": "impl"
+  },
+  "fs_runtime": {
+   "RomFS as IStorage": "impl",
+   "transactional save data": "impl",
+   "cache storage": "impl",
+   "bcat storage": "impl",
+   "temporary storage": "impl",
+   "sdcard": "impl",
+   "save data extra data / size queries": "impl"
+  },
+  "applets": {
+   "swkbd (software keyboard)": "impl",
+   "controller applet": "impl",
+   "error applet": "impl",
+   "player select (profile)": "impl",
+   "web / offline web": "partial",
+   "mii edit": "impl",
+   "photo viewer / album": "impl"
+  },
+  "media": {
+   "VP9 (host decoder)": "impl",
+   "H.264": "impl",
+   "Vorbis/Opus movie audio": "impl",
+   "JPEG (nvjpg / caps)": "partial"
+  }
+ }
+}

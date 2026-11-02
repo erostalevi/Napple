@@ -282,6 +282,97 @@ def m_ipc():
     return items, {"cmd_impl": impl, "cmd_stub": stub, "per_file": per_file, "offline_stub_services": offline}
 
 
+# IPC depth against the reference lists (runtime/tests/ipc_reference/*.txt, switchbrew/libnx ids with an app_reachable flag). The binding of
+# command tables to interface names is the runner's (runtime/tests/test_ipc_reference.c), compiled here with a small wrapper that also dumps
+# every table and binding, so the scan and `make test` can never disagree on which row answers which command.
+IPCREF_WRAPPER = r'''
+#define main ipcref_main
+#include "%s"
+#undef main
+int main(int argc, char **argv) {
+    int rc = ipcref_main(argc, argv);
+    for (unsigned t = 0; t < ntables; t++) {
+        unsigned st = 0;
+        for (unsigned r = 0; r < tables[t].nrows; r++) st += tables[t].rows[r].stub != 0;
+        printf("@TABLE\t%%u\t%%s\t%%s\t%%u\t%%u\n", t, tables[t].file, tables[t].ident, tables[t].nrows - st, st);
+    }
+    for (unsigned b = 0; b < nbinds; b++) printf("@BIND\t%%s\t%%u\n", binds[b].iface, binds[b].table);
+    printf("@RC\t%%d\n", rc);
+    return 0;
+}
+'''
+
+
+def m_ipc_depth(fallback_impl, fallback_stub):
+    """Reference-based depth: every app-reachable id of a fixture scores impl 1 / stub 0.5 / missing 0 (STATUS_W, as every other
+    catalog); command tables bound to no fixture (e.g. the am applet interfaces) still count row by row. Falls back to the old
+    row ratio (impl / all rows) when the runner cannot be compiled."""
+    import tempfile
+    rt = P / "runtime"
+    src, fixdir = rt / "tests/test_ipc_reference.c", rt / "tests/ipc_reference"
+    fb = {"method": "rows (reference runner unavailable)", "impl": fallback_impl, "stub": fallback_stub}
+    if not src.is_file() or not fixdir.is_dir():
+        return fallback_impl / max(1, fallback_impl + fallback_stub), fb
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            w = Path(tmp) / "ipcref_scan.c"
+            w.write_text(IPCREF_WRAPPER % str(src))
+            exe = Path(tmp) / "ipcref_scan"
+            subprocess.run(["cc", "-O1", "-w", "-o", str(exe), str(w)], check=True, capture_output=True, timeout=120)
+            out = subprocess.run([str(exe), str(rt)], capture_output=True, text=True, timeout=120).stdout
+    except Exception:
+        return fallback_impl / max(1, fallback_impl + fallback_stub), fb
+    rx = re.compile(r"^(\S+)\s+\d+ ids .*\|\s*(\d+) app-reachable:\s+(\d+) with rows \((\d+) impl, (\d+) stub\), missing (\d+)")
+    ifaces, tables, binds = {}, {}, []
+    for line in out.splitlines():
+        m = rx.match(line)
+        if m:
+            name, app, _, impl, stub, miss = m.group(1), *map(int, m.groups()[1:])
+            ifaces[name] = {"app": app, "impl": impl, "stub": stub, "missing": miss}
+        elif line.startswith("@TABLE\t"):
+            _, t, f, ident, impl, stub = line.split("\t")
+            tables[int(t)] = {"file": f, "ident": ident, "impl": int(impl), "stub": int(stub)}
+        elif line.startswith("@BIND\t"):
+            _, iface, t = line.split("\t")
+            binds.append((iface, int(t)))
+    if not ifaces or not tables:
+        return fallback_impl / max(1, fallback_impl + fallback_stub), fb
+    covered_names, covered_tables = set(), set()
+    for f in fixdir.glob("*.txt"):
+        for line in read(f).splitlines():
+            if not line.startswith("#"):
+                continue
+            m = re.match(r"#\s*interface\s+(\S+)", line) or re.match(r"#\s*alias\s+(\S+)", line)
+            if m:
+                covered_names.add(m.group(1))
+            m = re.match(r"#\s*table\s+(\S+):(\w+)", line)
+            if m:
+                covered_tables |= {t for t, d in tables.items() if d["file"] == m.group(1) and d["ident"] == m.group(2)}
+    covered_tables |= {t for iface, t in binds if iface in covered_names}
+    bound = {t for _, t in binds} | covered_tables
+    unfixtured = [d for t, d in tables.items() if t not in covered_tables and t in bound]
+    app = sum(v["app"] for v in ifaces.values())
+    impl = sum(v["impl"] for v in ifaces.values())
+    stub = sum(v["stub"] for v in ifaces.values())
+    miss = sum(v["missing"] for v in ifaces.values())
+    u_impl, u_stub = sum(d["impl"] for d in unfixtured), sum(d["stub"] for d in unfixtured)
+    tot = app + u_impl + u_stub
+    got = impl * STATUS_W["impl"] + stub * STATUS_W["stub"] + u_impl * STATUS_W["impl"] + u_stub * STATUS_W["stub"]
+    by_file = {}
+    for d in unfixtured:
+        by_file.setdefault(d["file"], [0, 0])
+        by_file[d["file"]][0] += d["impl"]
+        by_file[d["file"]][1] += d["stub"]
+    most_stubbed = sorted(((n, v["stub"] + v["missing"], v["app"]) for n, v in ifaces.items() if v["stub"] + v["missing"]),
+                          key=lambda x: -x[1])[:12]
+    return got / max(1, tot), {
+        "method": "reference (tests/ipc_reference app-reachable ids; impl 1, stub 0.5, missing 0) + unfixtured tables row by row",
+        "fixtures": len(ifaces), "app_reachable": app, "ref_impl": impl, "ref_stub": stub, "ref_missing": miss,
+        "unfixtured_impl": u_impl, "unfixtured_stub": u_stub, "unfixtured_by_file": dict(sorted(by_file.items())),
+        "most_stubbed_interfaces": most_stubbed, "impl": impl + u_impl, "stub": stub + u_stub, "missing": miss,
+        "row_ratio_old": round(fallback_impl / max(1, fallback_impl + fallback_stub), 4)}
+
+
 def m_nvn():
     names = [l.strip() for l in read(P / "gfx/src/nvnapi/names.txt").splitlines() if l.strip()]
     src = "".join(read(f) for f in files_under(["gfx/src"]))
@@ -381,11 +472,11 @@ def run(notes_limit):
             if v:
                 i["status"], i["verified"] = v["status"], f"{v.get('date', '?')}: {v.get('note', '')}"
     ipc_extra = measured["ipc"][1]
-    depth = ipc_extra["cmd_impl"] / max(1, ipc_extra["cmd_impl"] + ipc_extra["cmd_stub"])
+    depth, depth_extra = m_ipc_depth(ipc_extra["cmd_impl"], ipc_extra["cmd_stub"])
     domains, overall = [], 0.0
     for key, title, w in DOMAINS:
         if key == "ipc_depth":
-            ratio, items, extra = depth, [], {"impl": ipc_extra["cmd_impl"], "stub": ipc_extra["cmd_stub"]}
+            ratio, items, extra = depth, [], depth_extra
         else:
             items, extra = measured[key]
             ratio = score(items)
@@ -410,7 +501,10 @@ def run(notes_limit):
         "previous": {"date": prev["date"], "measured_percent": prev["measured_percent"],
                      "final_percent": prev.get("final_percent"),
                      "domains": {d["key"]: d.get("judged_points", d["points"]) for d in prev["domains"]}} if prev else None,
-        "commits_since_previous": git("log", "--oneline", f"--since={since}" if since else "-15").splitlines()[:40],
+        # The previous snapshot's commit is the exact baseline (a date-only --since is read by git as that day at the current time of day).
+        "commits_since_previous": (git("log", "--oneline", f"{prev['commit']}..HEAD") if prev and prev.get("commit")
+                                   and git("cat-file", "-t", prev["commit"]).strip() == "commit"
+                                   else git("log", "--oneline", f"--since={since}T00:00" if since else "-15")).splitlines()[:40],
         "notes": recent_notes(notes_limit, since),
     }
 
@@ -448,8 +542,15 @@ def report(r):
                     continue
                 out.append(f"- {d['key']}/{i['name']}: {i['hits']} hits, first {i['first']}")
     ipc = next(d for d in r["domains"] if d["key"] == "ipc")["extra"]
+    dep = next(d for d in r["domains"] if d["key"] == "ipc_depth")["extra"]
     out += ["", "## IPC detail", f"commands impl/stub per file: {ipc['per_file']}",
-            f"offline-stubbed network services: {ipc['offline_stub_services']}"]
+            f"offline-stubbed network services: {ipc['offline_stub_services']}",
+            f"depth method: {dep.get('method', 'rows')}"]
+    if "app_reachable" in dep:
+        out += [f"reference: {dep['fixtures']} fixtures, {dep['app_reachable']} app-reachable ids: {dep['ref_impl']} impl, "
+                f"{dep['ref_stub']} stub, {dep['ref_missing']} missing; unfixtured tables {dep['unfixtured_impl']} impl / "
+                f"{dep['unfixtured_stub']} stub {dep['unfixtured_by_file']}; old row ratio {dep['row_ratio_old']:.0%}",
+                f"most stubbed interfaces (stub+missing, of app-reachable): {dep['most_stubbed_interfaces']}"]
     sh = next(d for d in r["domains"] if d["key"] == "shader")["extra"]
     out += ["", "## Shader translator explicit failure paths", ", ".join(sh["explicit_failures"]) or "(none)"]
     out += ["", f"TODO/FIXME/not-implemented markers in sources: {r['todo_markers']}", "",

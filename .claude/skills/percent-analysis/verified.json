@@ -15,13 +15,13 @@
   "date": "2026-11-01"
  },
  "gpu_fixed/MSAA / resolve": {
-  "status": "partial",
-  "note": "gfx-msaa-views 550afc8: sample shading per-sample positions fixed (8e26ad2, t_sample_shading 0 skipped), ResolveDepthBuffer documented complete, 4x depth -> 4x RGBA8 copy views; still refused: mtl_replay.m:2582 copy of MS/depth/3D with different size/format, :2749 Downsample integer between formats / arrays, :2810 Downsample depth<->float. No title uses MSAA",
+  "status": "impl",
+  "note": "gfx-nvn-api r2 438ae83: generic copy pass xcopy_draw (mtl_replay.m:2594) replaces the refused Downsample/copy branches (depth<->colour, MS pairs of another format/size/count, 3D with format/size change, int<->float); t_msaa_copy 7 readback cases under MTL_DEBUG_LAYER; only Stencil8-only and 3D depth copies return 0 (mtl_replay.m:2667/2678, not NVN-reachable shapes). No title uses MSAA: impl by the trusted-semantics rule (NVN copy/Downsample API semantics, values checked), no documented branch refused",
   "date": "2026-11-01"
  },
  "gpu_fixed/texture views / sparse": {
   "status": "partial",
-  "note": "mtl_tex.m copy-backed views verified on ACNH (3D LUT as 2D); still falls back: ACNH cube view (type 5) of a type-2 texture -> whole texture + dummy texture warning, multi-channel integer views (translator declares sampled textures float), sparse residency changes after upload unseen (fully-resident fallback, t_sparse)",
+  "note": "gfx-shader-views r2: ACNH cube view of a 2D texture now copy-backed (verified on title, warnings gone), integer 2D/2D-array views declared texture2d<uint|int> (t_int_tex), sparse remap re-uploads changed tiles (t_sparse). Still: integer views of 3D/cube/MS targets keep the float declaration (Metal validation error), faces 1-5 of a cube-of-2D replicate face 0 (choice); no title uses sparse or integer views",
   "date": "2026-11-01"
  },
  "gpu_fixed/indirect draw/dispatch": {
@@ -350,9 +350,9 @@
   "date": "2026-10-26"
  },
  "gpu_fixed/depth/stencil formats": {
-  "status": "impl",
-  "note": "stencil_slots wired (mtl_replay.m:1120, a6a7099) and t_stencil_sample reads stencil view as uint in a fragment program (afd9e63); only 2D/2D-array stencil views",
-  "date": "2026-10-27"
+  "status": "partial",
+  "note": "mtl_replay.m:2497-2500: CopyTextureToBuffer of a 24-bit depth texture (formats 0x33/0x35, D24/D24S8 held as Depth32Float) is refused ('reading back a 24-bit depth texture ... not implemented', since 9d8faf6); stencil sampling only for 2D/2D-array (maxwell_translate.c:3200). Uploads, rendering and t_stencil_sample fine. Missed by earlier runs",
+  "date": "2026-11-01"
  },
  "input/GameCube / Palma / NES styles": {
   "status": "impl",
@@ -370,9 +370,9 @@
   "date": "2026-11-01"
  },
  "applets/swkbd (software keyboard)": {
-  "status": "partial",
-  "note": "applet.c frontend_text_input + sheet; inline calls pass empty header/sub (applet.c ~1462); no guest drove it",
-  "date": "2026-10-27"
+  "status": "impl",
+  "note": "sched-applets r1 4b4e7c3/af25c01: verified on LAS (normal mode, new-file name: CreateLibraryApplet 0x11 mode 0, scripted 'Napple' entered and read back as initial text of the next call); inline mode (applet.c:1358-1485, libnx/switchbrew swkbd inline layout) tested by test_svc_applet*, no refused branch",
+  "date": "2026-11-01"
  },
  "media/Vorbis/Opus movie audio": {
   "status": "impl",
@@ -421,8 +421,8 @@
  },
  "applets/web / offline web": {
   "status": "partial",
-  "note": "applet_web_register wired (applet.c:1871) + WebKit sheet window; HtmlDocument extraction at build (853463f) but never run on a real title's html/ layout",
-  "date": "2026-10-27"
+  "note": "sched-applets r1 4b4e7c3: real HtmlDocument layout resolved (html-document/ prefix) and SMO's manual opened the HOME-menu way (NAPPLE_OPEN_MANUAL) in the web sheet; no title opens the applet itself. Refused branch: offline document kinds other than HTML page (legal information / system data, firmware romfs) -> exit reason error (applet_web_core.c:306)",
+  "date": "2026-11-01"
  },
  "applets/mii edit": {
   "status": "impl",
@@ -433,5 +433,100 @@
   "status": "impl",
   "note": "runtime/src/ro.c:128-132 registers ldr:ro and ro:1; main.c:191",
   "date": "2026-10-24"
+ },
+ "nvn/nvnCommandBufferBindSeparateTexture": {
+  "status": "stub",
+  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindSeparateSampler": {
+  "status": "stub",
+  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindSeparateTextures": {
+  "status": "stub",
+  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindSeparateSamplers": {
+  "status": "stub",
+  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindSeparateTexturesDeferred": {
+  "status": "stub",
+  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindSeparateSamplersDeferred": {
+  "status": "stub",
+  "note": "mtl_replay.m:3275-3284 OP_BIND_SEPTEX/OP_BIND_SEPSAMP recorded (api_cmd.c:742-753) but the replay ignores them ('separate texture/sampler binding is not supported yet', since 5b356de); no title of the four binds separate handles",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferSetViewportSwizzles": {
+  "status": "stub",
+  "note": "api_cmd.c:832 body is (void) casts: viewport swizzle (single-pass cube/layered rendering) not applied; Metal needs it in the vertex/GS output (translator key)",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferSetProgramSubroutines": {
+  "status": "stub",
+  "note": "api_cmd.c:880 no-op: subroutine uniforms never reach the shader",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnProgramSetSubroutineLinkage": {
+  "status": "stub",
+  "note": "api_program.c: returns 1 and drops the linkage; subroutine programs would run with default selections",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferSetConservativeRasterEnable": {
+  "status": "partial",
+  "note": "api_cmd.c:829-830 no-op: Metal on Apple GPUs has no conservative rasterization (platform limit; would need a GS-style dilation emulation)",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferSetConservativeRasterDilate": {
+  "status": "partial",
+  "note": "api_cmd.c:829-830 no-op: Metal on Apple GPUs has no conservative rasterization (platform limit; would need a GS-style dilation emulation)",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferSetProvokingVertexMode": {
+  "status": "partial",
+  "note": "gfx-nvn-api r2 6c0d0a9: mode recorded and reported once, not applied (needs a translator ShaderKey bit for flat inputs); signature inferred; no title sets a non-default mode",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindUniformBuffersDeferred": {
+  "status": "partial",
+  "note": "gfx-nvn-api r2 6c0d0a9: parameter list inferred from neighbouring entry points (no public header), t_nvn_ext self-consistency only; titles resolve the name but never call it in the material: self-authored layout -> partial",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindStorageBuffersDeferred": {
+  "status": "partial",
+  "note": "gfx-nvn-api r2 6c0d0a9: parameter list inferred from neighbouring entry points (no public header), t_nvn_ext self-consistency only; titles resolve the name but never call it in the material: self-authored layout -> partial",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindTexturesDeferred": {
+  "status": "partial",
+  "note": "gfx-nvn-api r2 6c0d0a9: parameter list inferred from neighbouring entry points (no public header), t_nvn_ext self-consistency only; titles resolve the name but never call it in the material: self-authored layout -> partial",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnCommandBufferBindImagesDeferred": {
+  "status": "partial",
+  "note": "gfx-nvn-api r2 6c0d0a9: parameter list inferred from neighbouring entry points (no public header), t_nvn_ext self-consistency only; titles resolve the name but never call it in the material: self-authored layout -> partial",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnProgramGetSubtileSize": {
+  "status": "partial",
+  "note": "gfx-nvn-api r2 6c0d0a9: parameter list inferred from neighbouring entry points (no public header), t_nvn_ext self-consistency only; titles resolve the name but never call it in the material: self-authored layout -> partial",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnTextureBuilderGetViewOffset": {
+  "status": "partial",
+  "note": "gfx-nvn-api r2 6c0d0a9: parameter list inferred from neighbouring entry points (no public header), t_nvn_ext self-consistency only; titles resolve the name but never call it in the material: self-authored layout -> partial",
+  "date": "2026-11-01"
+ },
+ "nvn/nvnDeviceWaitForError": {
+  "status": "partial",
+  "note": "gfx-nvn-api r2 6c0d0a9: parameter list inferred from neighbouring entry points (no public header), t_nvn_ext self-consistency only; titles resolve the name but never call it in the material: self-authored layout -> partial",
+  "date": "2026-11-01"
  }
 }
