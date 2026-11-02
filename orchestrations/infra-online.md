@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: launched
+status: handed-off
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_2cca500c-4401-46cd-a061-3a3602c54337
 launched_at: 2026-11-03

@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: [overlay-account]
-status: planned
+status: handed-off
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: none
 launched_at: none
