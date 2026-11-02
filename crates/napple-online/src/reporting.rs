@@ -1,8 +1,8 @@
-//! Reports to napple-social after a match, with the service credential (`NAPPLE_SOCIAL_SERVICE_TOKEN`, sent as the bearer plus
-//! `X-Napple-Service: napple-online`):
+//! Reports to napple-social after a match, with the service credential (`NAPPLE_SOCIAL_SERVICE_TOKEN`, sent as the value of the
+//! `X-Napple-Service` header, which is what napple-social compares):
 //! * `POST {social}/social/v1/encounters {profile_ids, title_id, match_id}`: everyone who shared the lobby. This is also the "shared
 //!   lobby" proof napple-social needs for tier-3 friend requests. Ghost (tier 5) players are never listed: no trace.
-//! * `POST {social}/social/v1/stats {profile_id, title_id, deltas}` per non-ghost participant (`matches_played`, `play_seconds`); the
+//! * `POST {social}/social/v1/internal/stats {profile_id, title_id, deltas}` per non-ghost participant (`matches_played`, `play_seconds`); the
 //!   `profile_id` field is how the service credential says whose stats these are.
 //! Jobs that fail (network, 5xx, 429) stay in a bounded outbox and are retried on the next flush.
 
@@ -50,7 +50,7 @@ impl Reporter {
         }
         for id in &ids {
             let secs: u64 = visible.iter().filter(|e| &e.who.profile_id == id).map(|e| e.left.unwrap_or(m.ended.unwrap_or(e.joined)).saturating_sub(e.joined)).sum();
-            push("/social/v1/stats", json!({"profile_id": id, "title_id": m.title_id, "deltas": {"matches_played": 1, "play_seconds": secs}}));
+            push("/social/v1/internal/stats", json!({"profile_id": id, "title_id": m.title_id, "deltas": {"matches_played": 1, "play_seconds": secs}}));
         }
     }
 
@@ -60,7 +60,7 @@ impl Reporter {
         let mut keep = vec![];
         for mut j in jobs {
             let url = format!("{}{}", self.social_url, j.path);
-            let r = self.up.request("POST", &url, Some(&self.token), &[("X-Napple-Service", "napple-online")], Some(&j.body));
+            let r = self.up.request("POST", &url, None, &[("X-Napple-Service", self.token.as_str())], Some(&j.body));
             let retry = match r {
                 Ok((s, _)) if (200..300).contains(&s) => false,
                 Ok((s, _)) if (400..500).contains(&s) && s != 408 && s != 429 => {
@@ -103,8 +103,9 @@ mod tests {
         assert_eq!(posts.len(), 3);
         let (url, bearer, headers, body) = &posts[0];
         assert_eq!(url, "http://social/social/v1/encounters");
-        assert_eq!(bearer.as_deref(), Some("svc"));
-        assert!(headers.contains(&("X-Napple-Service".into(), "napple-online".into())));
+        assert_eq!(bearer.as_deref(), None);
+        assert!(headers.contains(&("X-Napple-Service".into(), "svc".into())), "napple-social compares the header value with its token");
+        assert_eq!(posts[1].0, "http://social/social/v1/internal/stats");
         assert_eq!(body["profile_ids"], json!(["p1", "p2"]));
         assert_eq!(body["match_id"], "m1");
         assert_eq!(posts[1].3["profile_id"], "p1");
