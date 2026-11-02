@@ -19,6 +19,7 @@ typedef struct {
     LdnState state;
     uint32_t event_w;
     LdnConfig cfg;
+    int watching; /* registered for the provider's change notifications */
 } Ldn;
 static LdnState *st(IpcObject *s) { return &((Ldn *)s->state)->state; }
 static void notify(IpcObject *s) {
@@ -31,7 +32,35 @@ static void apply(IpcObject *s, IpcCall *c, LdnOp op) {
     else notify(s);
 }
 
+/* The provider reports network changes (a station joined or left, the host went away) through ldn_set_notify: the state change event fires. */
+static void provider_changed(void *arg) {
+    Ldn *l = arg;
+    uint32_t w = __atomic_load_n(&l->event_w, __ATOMIC_ACQUIRE);
+    if (w) event_signal_handle(w);
+}
+static void watch(IpcObject *s, int on) {
+    Ldn *l = s->state;
+    const OnlineProvider *p = ldn_provider();
+    void (*set)(void *, void (*)(void *), void *) = p ? ONLINE_FN(p, ldn_set_notify) : NULL;
+    if (!on && !l->watching) return; /* never clears another object's registration */
+    if (set) set(p->ctx, on ? provider_changed : NULL, on ? l : NULL);
+    l->watching = on;
+}
+/* A station whose host went away (the provider no longer has the network) is back to StationOpened, as on the console; the reason stays readable. */
+static void sync_state(IpcObject *s) {
+    if (*st(s) != LDN_STATION_CONNECTED) return;
+    const OnlineProvider *p = ldn_provider();
+    uint32_t (*get)(void *, OnlineLdnNetwork *, uint16_t *) = p ? ONLINE_FN(p, ldn_get_network) : NULL;
+    OnlineLdnNetwork net;
+    uint16_t reason;
+    if (get && get(p->ctx, &net, &reason) != 0) {
+        watch(s, 0);
+        ldn_apply(st(s), LDN_OP_DISCONNECT);
+    }
+}
+
 static void l_get_state(IpcObject *s, IpcCall *c) {
+    sync_state(s);
     uint32_t v = (uint32_t)*st(s);
     IPC_OUT(c, v);
 }
@@ -41,6 +70,7 @@ static uint32_t current_network(IpcObject *s, OnlineLdnNetwork *net, uint16_t *r
     uint32_t (*get)(void *, OnlineLdnNetwork *, uint16_t *) = p ? ONLINE_FN(p, ldn_get_network) : NULL;
     uint16_t dummy;
     memset(net, 0, sizeof *net);
+    sync_state(s);
     if (!get || !ldn_state_has_network(*st(s))) return ldn_network_query(*st(s));
     return get(p->ctx, net, reason ? reason : &dummy);
 }
@@ -53,6 +83,11 @@ static void l_network_info(IpcObject *s, IpcCall *c) { /* 1 GetNetworkInfo -> Ne
     }
     uint8_t info[LDN_NETINFO_SIZE];
     ldn_net_encode(&net, info);
+    const OnlineProvider *p = ldn_provider();
+    int (*nodes)(void *, OnlineLdnNode *, uint32_t, uint32_t *) = p ? ONLINE_FN(p, ldn_get_nodes) : NULL;
+    OnlineLdnNode nd[ONLINE_LDN_MAX_NODES];
+    int n = nodes ? nodes(p->ctx, nd, ONLINE_LDN_MAX_NODES, NULL) : -1;
+    if (n >= 0) ldn_net_encode_nodes(info, nd, (unsigned)n); /* every node as the provider knows it, instead of the host alone */
     const IpcBuf *b = ipc_out_buf(c, 0);
     if (b) ipc_write_buf(c, b, info, sizeof info);
 }
@@ -117,7 +152,7 @@ static void l_set_advertise(IpcObject *s, IpcCall *c) { /* 206(buffer advertise 
     uint32_t r = ldn_set_advertise(l->state, &l->cfg, p, p ? n : 0);
     const OnlineProvider *pr = ldn_provider();
     uint32_t (*adv)(void *, const void *, uint32_t) = pr ? ONLINE_FN(pr, ldn_set_advertise) : NULL;
-    if (!r && adv) r = adv(pr->ctx, l->cfg.advertise, l->cfg.advertise_len);
+    if (!r && adv && l->state == LDN_AP_CREATED) r = adv(pr->ctx, l->cfg.advertise, l->cfg.advertise_len); /* before CreateNetwork it is only stored */
     if (r) c->result = r;
 }
 static void l_set_accept_policy(IpcObject *s, IpcCall *c) { /* 207(u8 policy) */
@@ -140,7 +175,7 @@ static void l_clear_filter(IpcObject *s, IpcCall *c) { /* 209 */
 static void l_state_event(IpcObject *s, IpcCall *c) {
     Ldn *l = s->state;
     uint32_t r = 0, w = event_create(&r);
-    if (!l->event_w) l->event_w = w;
+    if (!l->event_w) __atomic_store_n(&l->event_w, w, __ATOMIC_RELEASE);
     ipc_out_copy_handle(c, r);
 }
 /* 102/103 Scan(...) -> s16 count, NetworkInfo array in buffer 0. The filter argument is not read: the provider filters by the title's local communication id. */
@@ -179,6 +214,7 @@ static void l_open_ap(IpcObject *s, IpcCall *c) { apply(s, c, LDN_OP_OPEN_AP); }
 /* Leaving a state that holds a network ends it at the provider too. */
 static void drop_network(IpcObject *s) {
     if (!ldn_state_has_network(*st(s))) return;
+    watch(s, 0);
     const OnlineProvider *p = ldn_provider();
     void (*destroy)(void *) = p ? ONLINE_FN(p, ldn_destroy) : NULL;
     void (*disc)(void *) = p ? ONLINE_FN(p, ldn_disconnect) : NULL;
@@ -194,6 +230,8 @@ static void l_create(IpcObject *s, IpcCall *c) {
     Ldn *l = s->state;
     OnlineLdnNetwork cfg;
     ldn_create_decode(c->in, c->in_size, &cfg);
+    cfg.advertise_len = l->cfg.advertise_len; /* advertise data set while the access point was only opened */
+    memcpy(cfg.advertise, l->cfg.advertise, l->cfg.advertise_len);
     LdnState probe = l->state;
     uint32_t r = ldn_apply(&probe, LDN_OP_CREATE_NETWORK);
     const OnlineProvider *p = ldn_provider();
@@ -205,6 +243,7 @@ static void l_create(IpcObject *s, IpcCall *c) {
     }
     l->cfg.local_communication_id = cfg.local_communication_id;
     l->state = probe;
+    watch(s, 1);
     notify(s);
 }
 static void l_destroy(IpcObject *s, IpcCall *c) {
@@ -229,6 +268,7 @@ static void l_connect(IpcObject *s, IpcCall *c) {
         const uint8_t *raw = b && b->size ? ipc_buf_ptr(b) : NULL;
         r = raw && ldn_net_decode(raw, (size_t)b->size, &net) == 0 ? connect(p->ctx, &net) : HZ_R_LDN_NETWORK_NOT_AVAILABLE;
         r = ldn_connect_done(&l->state, r);
+        if (!r) watch(s, 1);
     }
     if (r) {
         c->result = r;
@@ -241,7 +281,10 @@ static void l_disconnect(IpcObject *s, IpcCall *c) {
     apply(s, c, LDN_OP_DISCONNECT);
 }
 static void l_initialize(IpcObject *s, IpcCall *c) { apply(s, c, LDN_OP_INITIALIZE); }
-static void l_finalize(IpcObject *s, IpcCall *c) { apply(s, c, LDN_OP_FINALIZE); }
+static void l_finalize(IpcObject *s, IpcCall *c) {
+    drop_network(s); /* Finalize from any state ends a hosted or joined network too */
+    apply(s, c, LDN_OP_FINALIZE);
+}
 
 static const IpcCmd local_cmds[] = {
     {0, "GetState", l_get_state, IPC_IMPL},
@@ -284,10 +327,16 @@ static const IpcCmd local_cmds[] = {
     {600, "SetTxPower", sysd_ok, IPC_STUB},
     {601, "ResetTxPower", sysd_ok, IPC_STUB},
 };
+/* Closing the service object ends a network it still hosts or joined, and stops the provider's notifications to it. */
+static void ldn_local_destroy(IpcObject *o) {
+    drop_network(o);
+    watch(o, 0); /* no notification may reach the freed state */
+    free(o->state);
+}
 static void ldn_create_local(IpcObject *s, IpcCall *c) {
     (void)s;
     Ldn *l = calloc(1, sizeof *l);
-    ipc_out_object(c, IPC_OBJECT("IUserLocalCommunicationService", local_cmds, l, NULL));
+    ipc_out_object(c, IPC_OBJECT("IUserLocalCommunicationService", local_cmds, l, ldn_local_destroy));
 }
 static const IpcCmd ldn_cmds[] = {{0, "CreateUserLocalCommunicationService", ldn_create_local, IPC_IMPL}, {1, "CreateClientProcessMonitor", sysd_err_ldn, IPC_STUB}};
 static IpcObject *ldn_open(void) { return IPC_OBJECT("ldn:u", ldn_cmds, NULL, NULL); }

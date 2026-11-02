@@ -1738,11 +1738,16 @@ typedef struct SslCtx {
     uint32_t refs, nconn, options[8], next_pki;
     uint64_t pki[8]; /* ids handed out by ImportServerPki / ImportClientPki and not yet removed */
     unsigned npki;
+    uint8_t *ca[8]; /* ImportServerPki: the certificate of pki[i] (NULL for client PKI), handed to the provider as a trusted CA at the handshake */
+    uint32_t ca_n[8];
 } SslCtx;                     /* shared by the context object and its connections (refcounted so a connection can outlive its context object) */
 static uint32_t ssl_contexts; /* live ISslContext objects, for GetContextCount */
 static uint32_t ssl_interface_version;
 static void ssl_ctx_unref(SslCtx *x) {
-    if (x && --x->refs == 0) free(x);
+    if (x && --x->refs == 0) {
+        for (unsigned i = 0; i < x->npki; i++) free(x->ca[i]);
+        free(x);
+    }
 }
 typedef struct {
     SslCtx *ctx;
@@ -1751,6 +1756,7 @@ typedef struct {
     uint32_t verify, io_mode, cache_mode, io_timeout, renegotiation_mode;
     void *conn;
     int established;
+    int verify_set; /* SetVerifyOption was called: the provider gets that option instead of its own default (every check) */
 } SslConn;
 static void ssl_conn_destroy(IpcObject *o) {
     SslConn *k = o->state;
@@ -1784,7 +1790,7 @@ static void ssl_set_host(IpcObject *s, IpcCall *c) {
 }
 static void ssl_set_verify(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
-    if (c->in_size >= 4) k->verify = IPC_IN(c, uint32_t, 0);
+    if (c->in_size >= 4) k->verify = IPC_IN(c, uint32_t, 0), k->verify_set = 1;
 }
 static void ssl_set_io_mode(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
@@ -1839,10 +1845,18 @@ static void ssl_handshake(IpcObject *s, IpcCall *c) {
         c->result = HZ_R_SSL_NOT_CONNECTED; /* no socket can be connected, so no handshake can run */
         return;
     }
+    int fresh = !k->conn;
     if (!k->conn) k->conn = mk(p->ctx, h);
     if (!k->conn) {
         c->result = HZ_R_SSL_NOT_CONNECTED;
         return;
+    }
+    if (fresh) { /* the context's imported server CAs and the guest's verify option (providers without these entry points keep their own policy) */
+        int (*ca)(void *, void *, const void *, size_t) = ONLINE_FN(p, tls_add_ca);
+        int (*vf)(void *, void *, uint32_t) = ONLINE_FN(p, tls_set_verify);
+        for (unsigned i = 0; ca && k->ctx && i < k->ctx->npki; i++)
+            if (k->ctx->ca[i]) ca(p->ctx, k->conn, k->ctx->ca[i], k->ctx->ca_n[i]);
+        if (vf && k->verify_set) vf(p->ctx, k->conn, k->verify);
     }
     if (sh && k->host[0]) sh(p->ctx, k->conn, k->host);
     uint32_t res = 0;
@@ -1969,15 +1983,29 @@ static void ssl_conn_count(IpcObject *s, IpcCall *c) {
 static void ssl_import_pki(IpcObject *s, IpcCall *c) {
     SslCtx *x = ssl_x(s);
     uint64_t id = ++x->next_pki;
-    if (x->npki < 8) x->pki[x->npki++] = id;
+    if (x->npki < 8) x->ca[x->npki] = NULL, x->ca_n[x->npki] = 0, x->pki[x->npki++] = id;
     IPC_OUT(c, id);
+}
+/* 4 ImportServerPki(u32 format: 0 PEM, 1 DER; buffer certificate) -> u64 id: the certificate is kept (at most 64 KiB) so a provider can trust it as a CA. */
+static void ssl_import_server_pki(IpcObject *s, IpcCall *c) {
+    SslCtx *x = ssl_x(s);
+    unsigned slot = x->npki;
+    ssl_import_pki(s, c);
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const void *p = b && b->size && b->size <= 0x10000 ? ipc_buf_ptr(b) : NULL;
+    if (slot < 8 && x->npki == slot + 1 && p && (x->ca[slot] = malloc((size_t)b->size))) {
+        memcpy(x->ca[slot], p, (size_t)b->size);
+        x->ca_n[slot] = (uint32_t)b->size;
+    }
 }
 static void ssl_remove_pki(IpcObject *s, IpcCall *c) {
     SslCtx *x = ssl_x(s);
     uint64_t id = c->in_size >= 8 ? IPC_IN(c, uint64_t, 0) : 0;
     for (unsigned i = 0; i < x->npki; i++)
         if (x->pki[i] == id) {
-            x->pki[i] = x->pki[--x->npki];
+            free(x->ca[i]);
+            --x->npki;
+            x->pki[i] = x->pki[x->npki], x->ca[i] = x->ca[x->npki], x->ca_n[i] = x->ca_n[x->npki];
             return;
         }
 }
@@ -1990,7 +2018,7 @@ static const IpcCmd ssl_context_cmds[] = {
     {1, "GetOption", ssl_get_option, IPC_IMPL},
     {2, "CreateConnection", ssl_create_connection, IPC_IMPL},
     {3, "GetConnectionCount", ssl_conn_count, IPC_IMPL},
-    {4, "ImportServerPki", ssl_import_pki, IPC_IMPL},
+    {4, "ImportServerPki", ssl_import_server_pki, IPC_IMPL},
     {5, "ImportClientPki", ssl_import_pki, IPC_IMPL},
     {6, "RemoveServerPki", ssl_remove_pki, IPC_IMPL},
     {7, "RemoveClientPki", ssl_remove_pki, IPC_IMPL},
