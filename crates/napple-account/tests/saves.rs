@@ -24,7 +24,7 @@ async fn profiles_crud_limit_and_token_claims() {
                 "POST",
                 "/profiles",
                 Some(&a.access),
-                Some(json!({"nickname": format!("Player {i}"), "icon_id": i})),
+                Some(json!({"nickname": format!("Player_{i}"), "icon_id": i})),
             )
             .await;
         assert_eq!(s, StatusCode::CREATED, "{p}");

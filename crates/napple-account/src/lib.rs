@@ -15,9 +15,12 @@ pub mod keys;
 pub mod log;
 pub mod mailer;
 pub mod names;
+pub mod nicknames;
 pub mod outbound;
 pub mod pages;
 pub mod passkey;
+pub mod photos;
+pub mod profiles;
 pub mod retention;
 pub mod saves;
 pub mod signin;
@@ -46,6 +49,7 @@ pub fn build_app(
     jwt: jwt::JwtKeys,
     deps: Deps,
 ) -> AppState {
+    let photos = photos::default_store(&cfg.data_dir, &deps.out);
     Arc::new(App {
         cfg,
         db: Mutex::new(conn),
@@ -54,6 +58,7 @@ pub fn build_app(
         mailer: deps.mailer,
         blobs: deps.blobs,
         dev_blobs: deps.dev_blobs,
+        photos,
         out: deps.out,
         limiter: RateLimiter::default(),
         code_key: util::random_bytes::<32>(),

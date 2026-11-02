@@ -85,6 +85,8 @@ pub struct App {
     /// Set when the dev filesystem backend is in use (enables `/dev-blobs/`).
     pub dev_blobs: Option<Arc<FsBlobStore>>,
     pub out: Arc<dyn Outbound>,
+    /// Profile photos (NAPPLE_PHOTO_DIR / NAPPLE_PHOTO_BUCKET); separate from the E2E save blobs.
+    pub photos: Arc<dyn crate::photos::PhotoStore>,
     pub limiter: RateLimiter,
     /// HMAC key for stored email codes (per process: a restart only voids codes still in flight).
     pub code_key: [u8; 32],
@@ -192,7 +194,7 @@ pub fn limit(app: &App, bucket: &str, key: &str, limit: u32, window: i64) -> Api
 }
 
 pub fn router(app: AppState) -> Router {
-    use crate::{account, admin, keys, pages, passkey, saves, signin};
+    use crate::{account, admin, keys, pages, passkey, photos, profiles, saves, signin};
     let api = Router::new()
         .route("/healthz", get(pages::healthz))
         .route("/.well-known/jwks.json", get(pages::jwks))
@@ -221,14 +223,21 @@ pub fn router(app: AppState) -> Router {
         .route("/passkeys/{id}", delete(passkey::remove))
         .route(
             "/profiles",
-            get(account::list_profiles).post(account::create_profile),
+            get(profiles::list_profiles).post(profiles::create_profile),
         )
         .route(
             "/profiles/{id}",
-            get(account::get_profile)
-                .patch(account::patch_profile)
-                .delete(account::delete_profile),
+            get(profiles::get_profile)
+                .patch(profiles::patch_profile)
+                .delete(profiles::delete_profile),
         )
+        .route("/internal/profiles", get(profiles::internal_search))
+        .route(
+            "/internal/profiles/by-code/{code}",
+            get(profiles::internal_by_code),
+        )
+        .route("/internal/profiles/{id}", get(profiles::internal_get))
+        .route("/internal/profiles/{id}/photo", get(photos::internal_get))
         .route("/devices", get(account::list_devices))
         .route("/devices/{id}", delete(account::revoke_device))
         .route("/keys/requests", get(keys::requests))
@@ -258,7 +267,13 @@ pub fn router(app: AppState) -> Router {
         )
         .layer(DefaultBodyLimit::max(64 * 1024));
 
-    let mut api = api;
+    let mut api = api.route(
+        "/profiles/{id}/photo",
+        post(photos::upload)
+            .get(photos::get)
+            .delete(photos::delete)
+            .layer(DefaultBodyLimit::max(photos::MAX_BYTES + 256 * 1024)),
+    );
     if app.dev_blobs.is_some() {
         let max = app.cfg.max_version_bytes as usize + 1;
         api = api.route(
