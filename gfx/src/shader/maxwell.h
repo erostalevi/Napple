@@ -104,8 +104,9 @@ typedef struct {
     bool tess_soft;      /* tess eval: a plain vertex function over the replay's software tessellator output (`device const float4 *tess_uv [[buffer(TESS_UV_BUFFER_INDEX)]]`,
                           * vertex id -> (u, v, w, patch id as uint)) instead of a post-tessellation one: allows isolines, stage_out / transform feedback and capture_void */
     uint32_t tex_uint_slots; /* binding slots (numbered as depth_slots) whose bound texture or view is an unsigned / signed integer colour format: declared
-                              * `texture2d<uint|int> tN_i` (2D or 2D array) and read through the IntTex wrapper, all four channels as raw integer bits (what the
-                              * hardware writes to the registers for integer formats). Other targets keep the float declaration. stencil_slots win. */
+                              * `texture2d<uint|int> tN_i` (2D, 2D array, 3D, cube, 2D multisample: texture2d_array / texture3d / texturecube / texture2d_ms)
+                              * and read through the IntTex wrappers, all four channels as raw integer bits (what the hardware writes to the registers for integer
+                              * formats). Cube arrays, multisample arrays and depth comparison keep the float declaration. stencil_slots win. */
     uint32_t tex_sint_slots;
 } ShaderKey;
 
@@ -115,11 +116,21 @@ typedef struct {
     bool shadow, is_array, is_image, bindless, depth;
     bool stencil; /* bound as a stencil view (ShaderKey.stencil_slots): the Metal texture must be a uint stencil view, not a float or depth texture */
     uint8_t int_kind; /* IMGKIND_UINT / IMGKIND_INT: an integer colour texture (ShaderKey.tex_uint_slots / tex_sint_slots); IMGKIND_FLOAT otherwise */
+    bool separate;    /* a separate texture / sampler pair: the handle is (word at bindless_cbuf / bindless_offset) | (word at sep_cbuf / sep_offset), each word
+                       * from c2 (the driver's handle tables: combined, separate texture, separate sampler) or a user uniform buffer */
+    uint32_t sep_cbuf, sep_offset;
     uint32_t bindless_cbuf, bindless_offset;
 } ShaderTexture;
 
 enum { IMGACC_READ = 1, IMGACC_WRITE = 2 };
 enum { IMGKIND_FLOAT = 0, IMGKIND_INT = 1, IMGKIND_UINT = 2 };
+/* c2 byte offsets of the separate handle tables (nvnCommandBufferBindSeparateTexture / Sampler), 8 bytes per binding like the combined table at 0x20.
+ * HYPOTHESIS: no title on hand binds separate handles, so GLSLC's real placement is unconfirmed; the tables follow the 32 combined slots
+ * (0x20 + 8 * 32 = 0x120) for the 128 separate textures, then the separate samplers. The replay logs the offsets a shader uses (calibration). */
+#define SEP_TEX_C2_BASE 0x120
+#define SEP_TEX_C2_COUNT 128
+#define SEP_SAMP_C2_BASE (SEP_TEX_C2_BASE + 8 * SEP_TEX_C2_COUNT)
+#define SEP_SAMP_C2_COUNT 32
 #define IMAGE_TEXTURE_BASE 64 /* Metal texture index of image slot 0 (sampled textures use 0..62) */
 #define MAX_IMAGES 8
 typedef struct {

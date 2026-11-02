@@ -72,6 +72,8 @@ typedef struct {
     uint32_t smem_need;       // highest statically addressed shared byte + 1
     uint32_t cbuf_need[18];   // highest constant vec4 index + 1 per cbuf
     int reg_cb[256];          // register -> (cbuf << 24 | byte offset) it was last loaded from (-1 = unknown): resolves bindless (.B) texture handles
+    int reg_cb2[256];         // ... the second word when the register is (cbuf word) | (cbuf word): a separate texture / sampler handle pair (-1 = none)
+    int sp_n, sp_a[64], sp_b[64], sp_slot[64]; // separate handle pairs (index 16384 + n in tex_slot): the two words' (cbuf << 24 | offset)
     int bl_n, bl_cb[64], bl_off[64], bl_slot[64];   // bindless handles read from user uniform buffers (index 8192 + n in tex_slot)
     uint64_t gs_slots;      // geometry / tess control: record slots stored (STAGE_SLOT bits); tess control: patch slots in patch_slots
     uint64_t patch_slots;
@@ -181,6 +183,7 @@ static void set_reg(Ctx *c, int r, const char *expr) {
     if (r == RZ) return;
     c->reg_used[r] = 1;
     c->reg_cb[r] = -1;
+    c->reg_cb2[r] = -1;
     sp(&c->body, "    r%d = %s;\n", r, expr);
 }
 
@@ -788,7 +791,62 @@ static uint32_t bindless_index(Ctx *c, int cb, int off) {
     c->bl_off[c->bl_n] = off;
     return 8192u + (uint32_t)c->bl_n++;
 }
+/* A separate texture / sampler handle: the register is (word a) | (word b), each (cbuf << 24 | byte offset). Pseudo index 16384 + n. */
+static uint32_t separate_index(Ctx *c, int a, int b) {
+    for (int i = 0; i < c->sp_n; i++)
+        if (c->sp_a[i] == a && c->sp_b[i] == b) return 16384u + (uint32_t)i;
+    if (c->sp_n >= 64) {
+        fail(c, "too many separate texture / sampler pairs");
+        return 16384u;
+    }
+    c->sp_a[c->sp_n] = a;
+    c->sp_b[c->sp_n] = b;
+    c->sp_slot[c->sp_n] = 0;
+    return 16384u + (uint32_t)c->sp_n++;
+}
+/* The bindless index of a handle register: a separate pair, one constant buffer word, or -1 (fail logged by the caller). */
+static int64_t handle_index(Ctx *c, int r) {
+    if (r == RZ) return -1;
+    if (c->reg_cb[r] >= 0 && c->reg_cb2[r] >= 0) return separate_index(c, c->reg_cb[r], c->reg_cb2[r]);
+    if (c->reg_cb[r] >= 0) return bindless_index(c, c->reg_cb[r] >> 24, c->reg_cb[r] & 0xffffff);
+    return -1;
+}
+
 static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
+    if (index >= 16384) { /* separate texture / sampler pair */
+        int n = (int)(index - 16384);
+        if (n >= c->sp_n) return 0;
+        if (c->sp_slot[n]) {
+            int s = c->sp_slot[n] - 1;
+            if (type >= 0 && c->tex_weak[s]) {
+                ShaderTexture *t = &c->info->tex[s];
+                t->type = (uint8_t)type;
+                t->shadow = shadow;
+                t->is_array = array;
+                c->tex_weak[s] = false;
+            }
+            return s;
+        }
+        bool weak = type < 0;
+        int s = c->info->ntex++;
+        if (s >= 63) {
+            fail(c, "too many textures");
+            return 0;
+        }
+        c->sp_slot[n] = s + 1;
+        c->tex_weak[s] = weak;
+        ShaderTexture *t = &c->info->tex[s];
+        t->bindless = true;
+        t->separate = true;
+        t->bindless_cbuf = (uint32_t)(c->sp_a[n] >> 24);
+        t->bindless_offset = (uint32_t)(c->sp_a[n] & 0xffffff);
+        t->sep_cbuf = (uint32_t)(c->sp_b[n] >> 24);
+        t->sep_offset = (uint32_t)(c->sp_b[n] & 0xffffff);
+        t->type = (uint8_t)(weak ? TEXTYPE_2D : type);
+        t->shadow = shadow;
+        t->is_array = array;
+        return s;
+    }
     if (index >= 8192) {
         int n = (int)(index - 8192);
         if (n >= c->bl_n) return 0;
@@ -1075,12 +1133,12 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     uint32_t index = (uint32_t)bits(w, 36, 13);
     if (bindless) {
-        int v = b == RZ ? -1 : c->reg_cb[b];
+        int64_t v = handle_index(c, b);
         if (v < 0) {
             fail(c, "bindless texture handle is not a constant buffer load");
             return;
         }
-        index = bindless_index(c, v >> 24, v & 0xffffff);
+        index = (uint32_t)v;
     }
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), dc = bits(w, 50, 1), aoffi = bindless ? bits(w, 36, 1) : bits(w, 54, 1);
@@ -1139,12 +1197,12 @@ static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     uint32_t index = (uint32_t)bits(w, 36, 13);
     if (bindless) {
-        int v = b == RZ ? -1 : c->reg_cb[b];
+        int64_t v = handle_index(c, b);
         if (v < 0) {
             fail(c, "bindless texture handle is not a constant buffer load");
             return;
         }
-        index = bindless_index(c, v >> 24, v & 0xffffff);
+        index = (uint32_t)v;
     }
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), dc = !tmml && bits(w, 50, 1);
@@ -1475,6 +1533,31 @@ static const char *video_cmp(int op, char *buf) {
 // ------------------------------------------------------------------ instruction translation
 #include "surface.inc"
 
+/* Separate texture / sampler handles (nvnCommandBufferBindSeparate*): GLSLC combines the texture word and the sampler word with an OR (or an add: the
+ * fields do not overlap) before a bindless TEX. Detected before the instruction is emitted (its destination may be one of the sources): LOP.OR / IADD
+ * without negation or carry / LOP3 with an OR table, both sources single constant buffer words (a register loaded from one, or the cbuf operand). */
+static int cb_word_of_reg(const Ctx *c, int r) { return r != RZ && c->reg_cb[r] >= 0 && c->reg_cb2[r] < 0 ? c->reg_cb[r] : -1; }
+static int pair_detect(const Ctx *c, uint64_t w, int *wa, int *wb) {
+    uint64_t top = w & 0xfff8000000000000ull;
+    int a = (int)((w >> 8) & 0xff), d = (int)(w & 0xff);
+    int bw = -1, ok = 0;
+    if (top == 0x5c40000000000000ull || top == 0x4c40000000000000ull) {   /* LOP */
+        ok = ((w >> 41) & 3) == 1 && !((w >> 39) & 3) && ((w >> 48) & 7) == 7;
+    } else if (top == 0x5c10000000000000ull || top == 0x4c10000000000000ull) {   /* IADD */
+        ok = !((w >> 48) & 3) && !((w >> 43) & 1) && !((w >> 47) & 1) && !((w >> 50) & 1);
+    } else if (top == 0x5be0000000000000ull) {   /* LOP3, register form */
+        uint32_t lut = (uint32_t)((w >> 28) & 0xff);
+        ok = lut == 0xfc || (lut == 0xfe && ((w >> 39) & 0xff) == RZ);
+    }
+    if (!ok || d == RZ) return -1;
+    if ((w >> 60) == 0x4) bw = (int)(((w >> 34) & 0x1f) << 24) | (int)(((w >> 20) & 0x3fff) * 4);   /* cbuf operand */
+    else bw = cb_word_of_reg(c, (int)((w >> 20) & 0xff));
+    if ((w >> 60) == 0x4 && ((w >> 34) & 0x1f) < 2) return -1;
+    *wa = cb_word_of_reg(c, a);
+    *wb = bw;
+    return *wa >= 0 && *wb >= 0 ? d : -1;
+}
+
 static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     char t[2048], u[2048];
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
@@ -1490,6 +1573,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     }
     bool guarded = !(pr == PT && !prn);
     if (pr == PT && prn) return;   // @!pt: never executes
+    int pair_wa = -1, pair_wb = -1, pair_d = guarded ? -1 : pair_detect(c, w, &pair_wa, &pair_wb);
     if (guarded) sp(&c->body, "  if (%s) {\n", P(pr, prn));
 
 #define OPM(val, mask) ((w & (uint64_t)(mask)) == (uint64_t)(val))
@@ -3000,6 +3084,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         fail(c, "unknown instruction %016llx at %#x", (unsigned long long)w, pc);
     }
     (void)op13;
+    if (pair_d >= 0) {
+        c->reg_cb[pair_d] = pair_wa;
+        c->reg_cb2[pair_d] = pair_wb;
+    }
     if (guarded) sp(&c->body, "  }\n");
 }
 
@@ -3090,7 +3178,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     ShaderInfo *info = calloc(1, sizeof *info);
     info->stage = stage;
     Ctx *c = calloc(1, sizeof *c);
-    if (c) memset(c->reg_cb, 0xff, sizeof c->reg_cb);
+    if (c) memset(c->reg_cb, 0xff, sizeof c->reg_cb), memset(c->reg_cb2, 0xff, sizeof c->reg_cb2);
     c->info = info;
     c->key = key;
     c->stage = stage;
@@ -3192,7 +3280,8 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         ShaderTexture *t = &info->tex[i];
         if (t->int_kind) {
             /* integer colour textures: 2D / 2D array through the IntTex wrapper; other targets, and depth comparison, keep the float declaration */
-            if ((t->type == TEXTYPE_2D || t->type == TEXTYPE_2D_ARRAY) && !t->shadow) c->uses_itex = true;
+            if ((t->type == TEXTYPE_2D || t->type == TEXTYPE_2D_ARRAY || t->type == TEXTYPE_3D || t->type == TEXTYPE_CUBE || t->type == TEXTYPE_2D_MS) && !t->shadow)
+                c->uses_itex = true;
             else t->int_kind = IMGKIND_FLOAT;
             continue;
         }
@@ -3318,7 +3407,9 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (c->uses_itex) {
         /* Integer colour textures (ShaderKey.tex_uint_slots / tex_sint_slots): Metal cannot filter an integer texture and the registers receive the texel's
          * integer bits, so, as for stencil views, the shader's texture name is a wrapper with the float-texture member functions: `read` and `sample` (a
-         * nearest read of level 0 at the coordinate) return all four channels as raw bits (sign-extended for int), `gather` the x channel of the 2x2 quad. */
+         * nearest read of level 0 at the coordinate) return all four channels as raw bits (sign-extended for int), `gather` the x channel of the 2x2 quad.
+         * 3D: nearest texel of the normalised coordinate; cube: the face and texel the direction selects (GL / Metal face convention); 2D multisample:
+         * read by sample index (one level). */
         sp(&s,
            "template <typename T> struct IntTex2D { texture2d<T> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
@@ -3339,6 +3430,33 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "  template <typename... A> float4 sample(sampler, float2 uv, uint layer, A...) const { return as_type<float4>(at(int2(floor(uv * float2(t.get_width(), t.get_height()))), layer)); }\n"
            "  template <typename... A> float4 gather(sampler, float2 uv, uint layer, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
            "    return as_type<float4>(uint4(at(b + int2(0, 1), layer).x, at(b + int2(1, 1), layer).x, at(b + int2(1, 0), layer).x, at(b, layer).x)); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex3D { texture3d<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_depth(uint l = 0u) const { return t.get_depth(l); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float3 calculate_clamped_lod(sampler, float3) const { return float3(0.0f); } float3 calculate_unclamped_lod(sampler, float3) const { return float3(0.0f); }\n"
+           "  float4 read(uint3 c, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, l))); }\n"
+           "  template <typename... A> float4 sample(sampler, float3 uvw, A...) const { int3 sz = int3(t.get_width(), t.get_height(), t.get_depth());\n"
+           "    return as_type<float4>(uint4(t.read(uint3(clamp(int3(floor(uvw * float3(sz))), int3(0), sz - 1))))); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTexCube { texturecube<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float2 calculate_clamped_lod(sampler, float3) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float3) const { return float2(0.0f); }\n"
+           "  uint4 at(float3 d, int2 o = int2(0)) const { float3 a = abs(d); uint f; float2 uv;\n"
+           "    if (a.x >= a.y && a.x >= a.z) { f = d.x >= 0.0f ? 0u : 1u; uv = float2(d.x >= 0.0f ? -d.z : d.z, -d.y) / a.x; }\n"
+           "    else if (a.y >= a.z) { f = d.y >= 0.0f ? 2u : 3u; uv = float2(d.x, d.y >= 0.0f ? d.z : -d.z) / a.y; }\n"
+           "    else { f = d.z >= 0.0f ? 4u : 5u; uv = float2(d.z >= 0.0f ? d.x : -d.x, -d.y) / a.z; }\n"
+           "    int s = int(t.get_width()); int2 p = clamp(int2(floor((uv * 0.5f + 0.5f) * float(s))) + o, int2(0), int2(s - 1));\n"
+           "    return uint4(t.read(uint2(p), f)); }\n"
+           "  template <typename... A> float4 sample(sampler, float3 d, A...) const { return as_type<float4>(at(d)); }\n"
+           "  template <typename... A> float4 gather(sampler, float3 d, A...) const {\n"
+           "    return as_type<float4>(uint4(at(d, int2(0, 1)).x, at(d, int2(1, 1)).x, at(d, int2(1, 0)).x, at(d).x)); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex2DMS { texture2d_ms<T> t;\n"
+           "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return t.get_height(); }\n"
+           "  uint get_num_samples() const { return t.get_num_samples(); } uint get_num_mip_levels() const { return 1u; }\n"
+           "  float4 read(uint2 c, uint smp) const { return as_type<float4>(uint4(t.read(c, smp))); } };\n");
     }
     if (c->uses_idp)
         sp(&s,
@@ -3536,8 +3654,11 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (c->uses_lmb) sp(&s, "  uint lmb = 0u;\n");
     for (int i = 0; i < info->ntex; i++)
         if (info->tex[i].stencil) sp(&s, "  const StencilTex%s t%d = {t%d_u};\n", info->tex[i].type == TEXTYPE_2D_ARRAY ? "2DArray" : "2D", i, i);
-        else if (info->tex[i].int_kind)
-            sp(&s, "  const IntTex%s<%s> t%d = {t%d_i};\n", info->tex[i].type == TEXTYPE_2D_ARRAY ? "2DArray" : "2D", info->tex[i].int_kind == IMGKIND_INT ? "int" : "uint", i, i);
+        else if (info->tex[i].int_kind) {
+            int ty = info->tex[i].type;
+            const char *wn = ty == TEXTYPE_2D_ARRAY ? "2DArray" : ty == TEXTYPE_3D ? "3D" : ty == TEXTYPE_CUBE ? "Cube" : ty == TEXTYPE_2D_MS ? "2DMS" : "2D";
+            sp(&s, "  const IntTex%s<%s> t%d = {t%d_i};\n", wn, info->tex[i].int_kind == IMGKIND_INT ? "int" : "uint", i, i);
+        }
     if (any_branch) {
         sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0; uint cal[16]; uint cal_n = 0;\n");
         if (c->uses_ljs) sp(&s, "  uint ljs[16]; uint ljs_n = 0;\n");
