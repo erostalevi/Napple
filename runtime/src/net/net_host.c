@@ -191,4 +191,8 @@ void net_host_instance_free(OnlineProvider *p) {
     free(p);
 }
 
-__attribute__((constructor)) static void nh_register(void) { online_builtin_host = net_host_provider; }
+/* Only when nothing registered first: a wrapper around this provider (net_online.c) may register from its own constructor, and Darwin runs constructors
+ * in link order, not by priority. */
+__attribute__((constructor)) static void nh_register(void) {
+    if (!online_builtin_host) online_builtin_host = net_host_provider;
+}

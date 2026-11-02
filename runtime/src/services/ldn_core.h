@@ -44,7 +44,8 @@ typedef struct {
     uint32_t controller_restriction;
     uint64_t local_communication_id; /* the title's id: from CreateNetwork's NetworkConfig, or a scan's filter */
 } LdnConfig;
-/* The calls below are only legal while an access point has created its network (state AP_CREATED); otherwise they return the invalid-state result. */
+/* The calls below are legal once an access point is opened, before or after CreateNetwork (states AP_OPENED, AP_CREATED; the console accepts
+ * SetAdvertiseData before CreateNetwork, which then uses it); otherwise they return the invalid-state result. */
 uint32_t ldn_set_advertise(LdnState state, LdnConfig *cfg, const void *data, uint32_t n); /* n > LDN_ADVERTISE_MAX: invalid size */
 uint32_t ldn_set_accept_policy(LdnState state, LdnConfig *cfg, uint32_t policy);
 uint32_t ldn_filter_add(LdnState state, LdnConfig *cfg, const uint8_t mac[6]);

@@ -52,21 +52,23 @@ uint32_t ldn_apply(LdnState *s, LdnOp op) {
 #define R_INVALID_ARG HZ_RESULT(HZ_MOD_LDN, 4)     /* [unverified] */
 #define R_FILTER_FULL HZ_RESULT(HZ_MOD_LDN, 12)    /* [unverified] */
 #define R_NODE_NOT_FOUND HZ_RESULT(HZ_MOD_LDN, 24) /* [unverified] */
+/* The access point's configuration can be set once it is opened, before CreateNetwork too (MK8D sets its advertise data first); CreateNetwork uses it. */
+static int ap_open(LdnState s) { return s == LDN_AP_OPENED || s == LDN_AP_CREATED; }
 uint32_t ldn_set_advertise(LdnState state, LdnConfig *cfg, const void *data, uint32_t n) {
-    if (state != LDN_AP_CREATED) return R_INVALID_STATE;
+    if (!ap_open(state)) return R_INVALID_STATE;
     if (n > LDN_ADVERTISE_MAX) return R_INVALID_SIZE;
     if (n) memcpy(cfg->advertise, data, n);
     cfg->advertise_len = (uint16_t)n;
     return 0;
 }
 uint32_t ldn_set_accept_policy(LdnState state, LdnConfig *cfg, uint32_t policy) {
-    if (state != LDN_AP_CREATED) return R_INVALID_STATE;
+    if (!ap_open(state)) return R_INVALID_STATE;
     if (policy > 3) return R_INVALID_ARG;
     cfg->accept_policy = policy;
     return 0;
 }
 uint32_t ldn_filter_add(LdnState state, LdnConfig *cfg, const uint8_t mac[6]) {
-    if (state != LDN_AP_CREATED) return R_INVALID_STATE;
+    if (!ap_open(state)) return R_INVALID_STATE;
     for (unsigned i = 0; i < cfg->nfilter; i++)
         if (!memcmp(cfg->filter[i], mac, 6)) return 0;
     if (cfg->nfilter >= LDN_FILTER_MAX) return R_FILTER_FULL;
@@ -74,7 +76,7 @@ uint32_t ldn_filter_add(LdnState state, LdnConfig *cfg, const uint8_t mac[6]) {
     return 0;
 }
 uint32_t ldn_filter_clear(LdnState state, LdnConfig *cfg) {
-    if (state != LDN_AP_CREATED) return R_INVALID_STATE;
+    if (!ap_open(state)) return R_INVALID_STATE;
     cfg->nfilter = 0;
     return 0;
 }

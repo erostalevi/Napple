@@ -34,7 +34,10 @@ int main(void) {
     svc_call(a, 1, NULL, 0, &c); CHECK(c.result == HZ_R_LDN_NETWORK_NOT_AVAILABLE, "GetNetworkInfo: no network");
     svc_call(a, 401, NULL, 0, &c); svc_call(a, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == LDN_NONE, "Finalize");
     LdnConfig cfg; memset(&cfg, 0, sizeof cfg); uint8_t mac[6] = {1, 2, 3, 4, 5, 6}, adv[8] = {9};
-    CHECK(ldn_set_advertise(LDN_INITIALIZED, &cfg, adv, 8) != 0, "SetAdvertiseData needs a created network");
+    CHECK(ldn_set_advertise(LDN_INITIALIZED, &cfg, adv, 8) != 0, "SetAdvertiseData needs an opened access point");
+    CHECK(ldn_set_advertise(LDN_AP_OPENED, &cfg, adv, 4) == 0 && cfg.advertise_len == 4, "SetAdvertiseData before CreateNetwork is stored (as on the console)");
+    CHECK(ldn_set_accept_policy(LDN_AP_OPENED, &cfg, 1) == 0 && ldn_filter_clear(LDN_AP_OPENED, &cfg) == 0 && ldn_set_accept_policy(LDN_STATION_OPENED, &cfg, 1) != 0,
+          "accept policy and filters too, but not from a station");
     CHECK(ldn_set_advertise(LDN_AP_CREATED, &cfg, adv, 8) == 0 && cfg.advertise_len == 8 && cfg.advertise[0] == 9, "SetAdvertiseData stores the data");
     CHECK(ldn_set_advertise(LDN_AP_CREATED, &cfg, adv, LDN_ADVERTISE_MAX + 1) != 0 && cfg.advertise_len == 8, "oversized advertise data is refused, old data kept");
     CHECK(ldn_set_accept_policy(LDN_AP_CREATED, &cfg, 2) == 0 && cfg.accept_policy == 2 && ldn_set_accept_policy(LDN_AP_CREATED, &cfg, 9) != 0 && cfg.accept_policy == 2, "accept policy range");

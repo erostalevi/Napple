@@ -131,6 +131,10 @@ int main(void) {
     create[0x78 + 0x12] = 8;
     uint16_t ver = 3;
     memcpy(create + 0x78 + 0x14, &ver, 2);
+    memset(&c, 0, sizeof c); /* MK8D's order: SetAdvertiseData while the access point is only opened, then CreateNetwork */
+    svc_set_in_buf(&c, "PRE-CREATE", 10);
+    svc_call_c(ha, 206, &c);
+    CHECK(c.result == 0, "ldn SetAdvertiseData before CreateNetwork is accepted");
     svc_call(ha, 202, create, sizeof create, &c);
     CHECK(c.result == 0, "ldn CreateNetwork through the provider");
     event_clear_handle(ev_a);
@@ -147,6 +151,7 @@ int main(void) {
     svc_set_out_buf(&c, infos, sizeof infos);
     svc_call_c(hb, 102, &c);
     CHECK(c.result == 0 && SVC_OUT(&c, int16_t, 0) == 1 && !memcmp(infos[0] + 0x27, "napple-", 7), "ldn Scan: one NetworkInfo with the host's ssid");
+    CHECK(infos[0][0x268] == 10 && !memcmp(infos[0] + 0x26a, "PRE-CREATE", 10), "the advertise data set before CreateNetwork is what the station sees");
     memset(&c, 0, sizeof c);
     svc_set_in_buf(&c, infos[0], LDN_NETINFO_SIZE);
     svc_call_c(hb, 302, &c);

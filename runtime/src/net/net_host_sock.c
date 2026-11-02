@@ -20,6 +20,20 @@
 
 void log_line(const char *tag, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
+/* NAPPLE_NET_LOG=1: one line per socket call with its arguments and result (never payload bytes). */
+static int net_log = -1;
+#define NHLOG(...)                                                                                                                                             \
+    do {                                                                                                                                                       \
+        if (net_log < 0) net_log = getenv("NAPPLE_NET_LOG") && *getenv("NAPPLE_NET_LOG") == '1';                                                            \
+        if (net_log) log_line("net", __VA_ARGS__);                                                                                                             \
+    } while (0)
+static const char *addr_str(const OnlineAddr *a, char *b, size_t n) {
+    if (!a) return "-";
+    if (a->family == 28) snprintf(b, n, "[v6]:%u", a->port);
+    else snprintf(b, n, "%u.%u.%u.%u:%u", a->addr[0], a->addr[1], a->addr[2], a->addr[3], a->port);
+    return b;
+}
+
 #define NH_MAX_SOCKS 512
 #define NH_SLICE_MS 50
 #define NH_CONNECT_MS 75000 /* a blocking connect gives up like the host's own TCP stack would */
@@ -29,7 +43,6 @@ struct NhSock {
     int refs;    /* table reference + one per call in flight (under tab_lock) */
     int closing; /* closed by the guest: waits end, the host descriptor closes with the last reference */
     int rcvtimeo_ms, sndtimeo_ms; /* 0 = none */
-    OnlineAddr trace_to, trace_from; /* NAPPLE_NET_TRACE: the last destination / source logged */
 };
 static NhSock *tab[NH_MAX_SOCKS];
 static pthread_mutex_t tab_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -56,26 +69,6 @@ void nh_sock_put(NhSock *s) {
 }
 int nh_sock_fd(const NhSock *s) { return s->fd; }
 int nh_sock_nonblocking(const NhSock *s) { return s->nb; }
-
-/* NAPPLE_NET_TRACE=1: one log line per bind / connect / sendto destination / option (addresses and ports), for finding out what a title's network mode does. */
-static int trace_on(void) {
-    static int v = -1;
-    if (v < 0) {
-        const char *e = getenv("NAPPLE_NET_TRACE");
-        v = e && *e && *e != '0';
-    }
-    return v;
-}
-static const char *addr_str(const OnlineAddr *a, char *b, size_t n) {
-    if (!a) snprintf(b, n, "-");
-    else if (a->family == BSD_AF_INET6) snprintf(b, n, "[v6]:%u", a->port);
-    else snprintf(b, n, "%u.%u.%u.%u:%u", a->addr[0], a->addr[1], a->addr[2], a->addr[3], a->port);
-    return b;
-}
-#define TRACE(...)                                                                                                                                             \
-    do {                                                                                                                                                       \
-        if (trace_on()) log_line("net", __VA_ARGS__);                                                                                                          \
-    } while (0)
 
 static int closing(NhSock *s) { return __atomic_load_n(&s->closing, __ATOMIC_ACQUIRE); }
 
@@ -155,6 +148,7 @@ int nh_sock_open(void *ctx, int domain, int type, int protocol, int *err) {
     int nb = (type & BSD_SOCK_NONBLOCK) != 0;
     type &= ~(BSD_SOCK_NONBLOCK | BSD_SOCK_CLOEXEC);
     int hd = domain == BSD_AF_INET ? AF_INET : domain == BSD_AF_INET6 ? AF_INET6 : -1;
+    NHLOG("socket(domain %d, type %d, protocol %d)", domain, type, protocol);
     if (hd < 0) return fail(err, HZ_EAFNOSUPPORT);
     int ht = type == BSD_SOCK_STREAM ? SOCK_STREAM : type == BSD_SOCK_DGRAM ? SOCK_DGRAM : type == BSD_SOCK_RAW ? SOCK_RAW : -1;
     if (ht < 0) return fail(err, HZ_EPROTONOSUPPORT);
@@ -205,8 +199,8 @@ int nh_sock_bind(void *ctx, int h, const OnlineAddr *a, int *err) {
     } else if ((e = nh_addr_to_host(a, &ss, &len))) *err = e;
     else if (bind(s->fd, (struct sockaddr *)&ss, len) == 0) r = 0;
     else *err = nh_errno(errno);
-    char tb[64];
-    TRACE("sock %d (%s) bind %s -> %s", h, s->type == SOCK_STREAM ? "tcp" : "udp", addr_str(a, tb, sizeof tb), r ? "error" : "ok");
+    char ab[64];
+    NHLOG("bind(%d, %s) = %d errno %d", h, addr_str(a, ab, sizeof ab), r, r ? *err : 0);
     nh_sock_put(s);
     return r;
 }
@@ -276,8 +270,8 @@ int nh_sock_connect(void *ctx, int h, const OnlineAddr *a, int *err) {
         else if (so) *err = nh_errno(so);
         else r = 0;
     }
-    char tb[64];
-    TRACE("sock %d connect %s -> %s (err %d)", h, addr_str(a, tb, sizeof tb), r ? "error" : "ok", r ? *err : 0);
+    char ab[64];
+    NHLOG("connect(%d, %s) = %d errno %d", h, addr_str(a, ab, sizeof ab), r, r ? *err : 0);
     nh_sock_put(s);
     return r;
 }
@@ -292,6 +286,8 @@ int64_t nh_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, con
     if (!s) return fail(err, HZ_EBADF);
     int64_t vr;
     if (nr_sock_send(h, s->fd, s->type, buf, n, to, &vr, err)) { /* rooms: a datagram for the virtual LAN */
+        char ab[64];
+        NHLOG("send(%d, %zu bytes, flags %#x, to %s) = %lld errno %d (room)", h, n, flags, addr_str(to, ab, sizeof ab), (long long)vr, vr < 0 ? *err : 0);
         nh_sock_put(s);
         return vr;
     }
@@ -303,11 +299,6 @@ int64_t nh_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, con
             nh_sock_put(s);
             return fail(err, e);
         }
-    }
-    if (trace_on() && to && to->family && memcmp(&s->trace_to, to, sizeof *to)) {
-        char tb[64];
-        s->trace_to = *to;
-        TRACE("sock %d sendto %s (%zu bytes)", h, addr_str(to, tb, sizeof tb), n);
     }
     int dontwait = s->nb || (flags & BSD_MSG_DONTWAIT);
     int hflags = flags & (MSG_OOB | MSG_DONTROUTE | MSG_EOR);
@@ -328,7 +319,6 @@ int64_t nh_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, con
         if (errno != EAGAIN || dontwait) {
             if (done) r = (int64_t)done;
             else *err = nh_errno(errno);
-            TRACE("sock %d send of %zu bytes failed: host errno %d", h, n, errno);
             break;
         }
         int w = nh_sock_wait(s, POLLOUT, s->sndtimeo_ms ? s->sndtimeo_ms : -1);
@@ -338,6 +328,8 @@ int64_t nh_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, con
             break;
         }
     }
+    char ab[64];
+    NHLOG("send(%d, %zu bytes, flags %#x, to %s) = %lld errno %d", h, n, flags, addr_str(len ? to : NULL, ab, sizeof ab), (long long)r, r < 0 ? *err : 0);
     nh_sock_put(s);
     return r;
 }
@@ -359,14 +351,7 @@ int64_t nh_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, OnlineAdd
         ssize_t k = vlan ? nr_sock_recvfrom(h, s->fd, (uint8_t *)buf + done, n - done, hflags, from ? (struct sockaddr *)&ss : NULL, from ? &len : NULL)
                          : recvfrom(s->fd, (uint8_t *)buf + done, n - done, hflags, from ? (struct sockaddr *)&ss : NULL, from ? &len : NULL);
         if (k >= 0) {
-            if (from && len) {
-                nh_addr_from_host((struct sockaddr *)&ss, from);
-                if (trace_on() && from->family && memcmp(&s->trace_from, from, sizeof *from)) {
-                    char tb[64];
-                    s->trace_from = *from;
-                    TRACE("sock %d recvfrom %s (%zd bytes)", h, addr_str(from, tb, sizeof tb), k);
-                }
-            }
+            if (from && len) nh_addr_from_host((struct sockaddr *)&ss, from);
             done += (size_t)k;
             if (!waitall || k == 0 || done >= n) {
                 r = (int64_t)done;
@@ -378,7 +363,6 @@ int64_t nh_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, OnlineAdd
         if (errno != EAGAIN || dontwait) {
             if (done) r = (int64_t)done;
             else *err = nh_errno(errno);
-            if (errno != EAGAIN) TRACE("sock %d receive failed: host errno %d", h, errno);
             break;
         }
         int w = nh_sock_wait(s, POLLIN, s->rcvtimeo_ms ? s->rcvtimeo_ms : -1);
@@ -388,6 +372,8 @@ int64_t nh_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, OnlineAdd
             break;
         }
     }
+    char ab[64];
+    NHLOG("recv(%d, %zu bytes, flags %#x) = %lld errno %d from %s", h, n, flags, (long long)r, r < 0 ? *err : 0, addr_str(r >= 0 ? from : NULL, ab, sizeof ab));
     nh_sock_put(s);
     return r;
 }
@@ -497,11 +483,6 @@ int nh_sock_setsockopt(void *ctx, int h, int level, int opt, const void *val, si
     (void)ctx;
     WITH(s, h, err)
     int hl, ho, r = 0;
-    if (trace_on()) {
-        int v = 0;
-        if (val && n >= 4) memcpy(&v, val, 4);
-        TRACE("sock %d setsockopt level 0x%x name 0x%x value %d (%zu bytes)", h, level, opt, v, n);
-    }
     switch (map_opt(level, opt, &hl, &ho)) {
         case OPT_LOCAL:
             if (!val || n < 8) r = fail(err, HZ_EINVAL);
@@ -515,6 +496,9 @@ int nh_sock_setsockopt(void *ctx, int h, int level, int opt, const void *val, si
             if (setsockopt(s->fd, hl, ho, val, (socklen_t)n) != 0) r = fail_host(err);
             break;
     }
+    int v32 = 0;
+    if (val && n >= 4) memcpy(&v32, val, 4);
+    NHLOG("setsockopt(%d, level %#x, name %#x, %zu bytes, first word %d) = %d errno %d", h, level, opt, n, v32, r, r ? *err : 0);
     nh_sock_put(s);
     return r;
 }

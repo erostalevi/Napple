@@ -951,8 +951,10 @@ static void bsd_poll(IpcObject *s, IpcCall *c) {
     const uint8_t *raw = in && in->size >= 8 ? ipc_buf_ptr(in) : NULL;
     unsigned n = raw ? (unsigned)(in->size / 8) : 0;
     if (c->in_size >= 4 && IPC_IN(c, uint32_t, 0) < n) n = IPC_IN(c, uint32_t, 0);
-    if (!raw || !n) {
-        bsd_reply(c, 0, 0);
+    if (!raw || !n) { /* Poll(0, timeout): waits out the timeout with a provider that has sockets (bsdg_poll), answers at once offline */
+        OnlinePollFd none;
+        int r = bsdg_poll(bsd_g(), &none, 0, bsd_in32(c, 4, 0), &err);
+        bsd_reply(c, r < 0 ? -1 : 0, r < 0 ? err : 0);
         return;
     }
     if (n > BSD_MAX_FDS) n = BSD_MAX_FDS;

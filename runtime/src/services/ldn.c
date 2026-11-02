@@ -152,7 +152,7 @@ static void l_set_advertise(IpcObject *s, IpcCall *c) { /* 206(buffer advertise 
     uint32_t r = ldn_set_advertise(l->state, &l->cfg, p, p ? n : 0);
     const OnlineProvider *pr = ldn_provider();
     uint32_t (*adv)(void *, const void *, uint32_t) = pr ? ONLINE_FN(pr, ldn_set_advertise) : NULL;
-    if (!r && adv) r = adv(pr->ctx, l->cfg.advertise, l->cfg.advertise_len);
+    if (!r && adv && l->state == LDN_AP_CREATED) r = adv(pr->ctx, l->cfg.advertise, l->cfg.advertise_len); /* before CreateNetwork it is only stored */
     if (r) c->result = r;
 }
 static void l_set_accept_policy(IpcObject *s, IpcCall *c) { /* 207(u8 policy) */
@@ -230,6 +230,8 @@ static void l_create(IpcObject *s, IpcCall *c) {
     Ldn *l = s->state;
     OnlineLdnNetwork cfg;
     ldn_create_decode(c->in, c->in_size, &cfg);
+    cfg.advertise_len = l->cfg.advertise_len; /* advertise data set while the access point was only opened */
+    memcpy(cfg.advertise, l->cfg.advertise, l->cfg.advertise_len);
     LdnState probe = l->state;
     uint32_t r = ldn_apply(&probe, LDN_OP_CREATE_NETWORK);
     const OnlineProvider *p = ldn_provider();
