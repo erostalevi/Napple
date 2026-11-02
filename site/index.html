@@ -130,13 +130,13 @@
 
   <section id="status" class="sec">
     <h2>Where it stands</h2>
-    <p class="sub">Napple is early and moving fast. Link's Awakening plays perfectly and Super Mario Odyssey plays at 60 fps on a Mac; on an iPhone 16 Pro Max Link's Awakening also runs at 60 fps, while Super Mario Odyssey still runs out of memory after about a minute. Coverage below is an estimate of the Switch platform surface (scanner estimate, 2026-11-02), not per-game compatibility.</p>
+    <p class="sub">Napple is early and moving fast. Link's Awakening plays perfectly and Super Mario Odyssey plays at 60 fps on a Mac; on an iPhone 16 Pro Max Link's Awakening also runs at 60 fps, while Super Mario Odyssey still runs out of memory after about a minute. Coverage below is an estimate of the Switch platform surface (scanner estimate, 2026-11-02), not per-game compatibility; Napple Online is a product feature and only counts where it closes platform gaps.</p>
     <div class="cov" id="cov">
       <div class="row"><span>CPU · AOT A64 rewrite</span><i style="--v:100"></i><b>100%</b></div>
       <div class="row"><span>Loader · NSO / NRO / relocations</span><i style="--v:100"></i><b>100%</b></div>
       <div class="row"><span>Kernel · svcs + scheduling</span><i style="--v:100"></i><b>100%</b></div>
       <div class="row"><span>IPC · HLE service coverage</span><i style="--v:100"></i><b>100%</b></div>
-      <div class="row"><span>IPC · command depth</span><i style="--v:99"></i><b>99%</b></div>
+      <div class="row"><span>IPC · command depth</span><i style="--v:98"></i><b>98%</b></div>
       <div class="row"><span>GPU · Maxwell shader ISA</span><i style="--v:100"></i><b>100%</b></div>
       <div class="row"><span>GPU · NVN API surface</span><i style="--v:99"></i><b>99%</b></div>
       <div class="row"><span>GPU · formats + pipeline</span><i style="--v:98"></i><b>98%</b></div>
@@ -147,7 +147,7 @@
       <div class="row"><span>Saves + storage</span><i style="--v:100"></i><b>100%</b></div>
       <div class="row"><span>Library applets</span><i style="--v:100"></i><b>100%</b></div>
       <div class="row"><span>Video / media decode</span><i style="--v:97"></i><b>97%</b></div>
-      <div class="row total"><span>Overall</span><i style="--v:99"></i><b>≈ 99.4%</b></div>
+      <div class="row total"><span>Overall</span><i style="--v:99"></i><b>≈ 99.3%</b></div>
     </div>
   </section>
 
@@ -158,6 +158,14 @@
     <div class="online" id="online-grid">
       <p class="fine">The per-game table is in the <a href="docs/reference/online-support/">documentation</a> (data: <a href="online.json">online.json</a>).</p>
     </div>
+    <ul class="fine" id="online-features">
+      <li><b>Account.</b> Sign up with an email, a password and an emailed code. One sign-in is shared by every Napple game on your Mac.</li>
+      <li><b>Profiles and visibility.</b> Up to 8 profiles per account, each with a visibility tier from Public to Ghost that decides who can find you, add you or see you playing.</li>
+      <li><b>Friends.</b> Friend codes, requests, friend list, presence, recent players, blocking and reports.</li>
+      <li><b>Cloud saves.</b> End-to-end encrypted: the server only ever holds ciphertext, and a recovery code is your way back.</li>
+      <li><b>In-game Online tab.</b> Everything above from the settings overlay while a game runs.</li>
+    </ul>
+    <p class="fine"><b>Not done yet.</b> In Mario Kart 8 Deluxe a race starts in a two-instance run, but Wireless Play still crashes after joining and the Friends menu list is still empty. Sign-up email is in Amazon SES sandbox until production access is granted, so only pre-verified addresses get the code for now. See <a href="terms.html">Terms</a>, <a href="privacy.html">Privacy</a> and <a href="report.html">Reports</a>.</p>
     <p class="fine" id="online-meta"></p>
     <dl class="online-modes" id="online-modes" hidden></dl>
   </section>

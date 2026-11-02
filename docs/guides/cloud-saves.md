@@ -20,8 +20,8 @@ napple saves list                    # cloud + local saves and their sync status
 - **Playing**: launch the game as usual. Before the game opens its save, the runtime downloads the newest cloud version (bounded by 8 s; offline
   or slow = the game starts from the local save). After the game commits its save the runtime uploads it in the background (5 s after the
   last commit, never on the game thread), and again on a clean exit (at most 10 s).
-- **Account UI**: the in-game settings panel gets an Account tab in a later round; until then the CLI is the interface. The sync core
-  (`crates/napple-cloud`: `session`, `sync`) has no CLI code in it, so that UI can call it directly (or through a C API added next to `ffi.rs`).
+- **Account UI**: the in-game settings overlay has an Online tab (sign-in, profiles, friends; see [the client guide](napple-online-client.md)); the CLI does the same
+  and both use the sync core (`crates/napple-cloud`: `session`, `sync`) and the same shared sign-in.
 - **Conflicts** (both devices played from the same version): nothing is lost. The cloud version becomes current, this device's save is
   kept as a **restore point** (`napple saves history <title>`), and the frontend is told (event `conflict`). `napple saves restore <title> <file>`
   brings it back (it then becomes the newest cloud version).

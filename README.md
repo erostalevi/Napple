@@ -49,10 +49,11 @@ Per-game knowledge lives only in **data** (signatures, patch tables), never in p
 ## Highlights
 
 - **Native speed.** Guest code executes directly on the CPU; there is no interpreter or recompiler at run time.
-- **Horizon kernel + HLE services.** Threads, scheduling, memory, sessions and IPC, plus a broad set of system services, with offline answers for the online ones.
+- **Horizon kernel + HLE services.** Threads, scheduling, memory, sessions and IPC, plus a broad set of system services, with offline answers for the online ones, or Napple Online when you are signed in.
 - **NVN → Metal.** A GPU layer with a Maxwell shader-ISA translator, NVN pipeline and format support, MSAA, indirect draws, query objects and more.
 - **Audio and input.** Audio renderer (reverb, delay, compressor, limiter, Opus) over Core Audio; GameController input with rumble, keyboard and mouse mapping.
 - **Saves, updates and DLC.** Save data lives in `~/Library/Application Support/Napple/<titleId>`. Base game, updates and DLC packs are merged in any container, in any order.
+- **Napple Online (optional).** Account, profiles with visibility tiers, friends, end-to-end encrypted cloud saves and an in-game Online tab, see [Napple Online](#napple-online).
 - **Napple Studio.** A small SwiftUI app: drop a game on the window, watch the pipeline run, install the result.
 - **Compatibility matrix.** Every game and every pipeline stage is tracked with evidence, see [`COMPATIBILITY.md`](COMPATIBILITY.md).
 
@@ -100,7 +101,7 @@ The table below is an **estimate of how much of the Switch platform surface the 
 | Loader: NSO / NRO / modules / relocations | 100% |
 | Kernel: svcs + scheduling | 100% |
 | IPC: HLE service coverage | 100% |
-| IPC: command depth (implemented vs. stubbed) | 99% |
+| IPC: command depth (implemented vs. stubbed) | 98% |
 | GPU: Maxwell shader ISA | 100% |
 | GPU: NVN API surface | 99% |
 | GPU: formats + pipeline features | 98% |
@@ -111,9 +112,24 @@ The table below is an **estimate of how much of the Switch platform surface the 
 | Saves + storage | 100% |
 | Library applets | 100% |
 | Video / media decode | 97% |
-| **Overall** | **≈ 99.4%** (2026-11-02, %Analysis; every row at 97% or above) |
+| **Overall** | **≈ 99.3%** (2026-11-02, %Analysis, commit 2da952e; every row at 92% or above, only generic Switch coverage counts) |
 
-Coverage is not compatibility: a long tail of command depth, shader corner cases and GPU behaviour is exactly what real games trip over first.
+Napple Online below is a product feature, not Switch platform surface: it moves this score only where it closed catalog gaps (friend / nifm / ldn / bcat / account command rows), and the score is held back by what is not proven on a title yet (Wireless Play join, an empty in-game Friends list). Coverage is not compatibility: a long tail of command depth, shader corner cases and GPU behaviour is exactly what real games trip over first.
+
+## Napple Online
+
+Napple Online is an optional service run by Napple at `pretend.napple.lat` (account and social servers are live there). It is for **Napple players only**: it never involves Nintendo's accounts or servers. Nothing is required: signed out, a game plays exactly as before.
+
+- **Account.** Create a Napple Account with an email, a password and an emailed 6-digit code (terms and 13+ confirmed at sign-up). One sign-in is shared by every Napple game on the Mac, and by the CLI (`napple account`).
+- **Profiles.** An account holds up to 8 profiles (nickname, icon, photo, bio). A signed-in Mac plays as its profile: the game sees that profile as the online identity.
+- **Visibility tiers.** Each profile has a tier from 1 to 5: Public, Friends (searchable), Friends (hidden), Private and Ghost. The tier decides who can find it by search or friend code, send a friend request, see its card, presence and stats, and whether it leaves any trace in lobbies or recent players. A block hides both ways at every tier.
+- **Friends.** Friend codes, friend requests, a friend list, presence ("playing X, joinable"), recent players, blocking and reports, through `napple-social` ([guide](docs/guides/napple-social.md)).
+- **Cloud saves.** End-to-end encrypted: saves are encrypted on your device before upload and the server only holds ciphertext; a 24-word recovery code is the way back if every device is lost. A second Mac or an iPhone joins by approval ([guide](docs/guides/cloud-saves.md)).
+- **In-game Online tab.** The settings overlay has an Online tab for sign-in, profiles, tier, friends, requests, search, recent, blocked and stats, driven by the same client core as the CLI ([client guide](docs/guides/napple-online-client.md)).
+- **Napple to Napple play.** LAN Play and local wireless go through a Napple room; matchmaking runs on `napple-online` ([rooms](docs/guides/online-rooms.md), [server](docs/guides/napple-online.md)). Terms, privacy and report policy: [`docs/legal/`](docs/legal/README.md).
+- **Verified.** A scripted 60-check end-to-end run (sign-up, second device, cloud save, friends, every tier, delete) passes locally and against the live servers ([guide](docs/guides/online-e2e.md)).
+
+**Not done yet.** Mario Kart 8 Deluxe: a race starts in a two-instance local run, but Wireless Play (local wireless through a room) still crashes right after joining, and the Friends menu list is still empty (a friend does show as joinable). Sign-up email goes out through Amazon SES, which is still in sandbox: production access is pending, so on the live servers only pre-verified addresses receive the code for now. The other titles are untested online.
 
 ## Download
 
