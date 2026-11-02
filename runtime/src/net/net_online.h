@@ -20,6 +20,10 @@
 #define NET_ONLINE_NAME "napple-online over host"
 /* The address redirected names resolve to (100.64.0.0/10, shared address space: never a real peer of a title). Host byte order. */
 #define NET_ONLINE_VIRTUAL_IP 0x644e4e64u /* 100.78.78.100: a palindrome, so it reads the same in either byte order (sfdnsres hostents come out byte-swapped) */
+/* The NAT check's secondary server (nncs2) gets its own virtual address; its ports map to the Napple server's NAT check ports + 1000. */
+#define NET_ONLINE_VIRTUAL_IP2 0x644f4f64u /* 100.79.79.100 */
+#define NET_ONLINE_NATCHECK_PORT 10025     /* the NAT check's primary port; the secondary is + 100, the mapping tests use 33334 / 33335 */
+#define NET_ONLINE_NATCHECK_SECONDARY 1000 /* the secondary server's ports on the Napple server: the primary's + this */
 
 typedef struct {
     int tls;         /* 1 = https */
@@ -33,11 +37,13 @@ int net_online_parse_server(const char *url, NetOnlineServer *out);
 
 /* ---- name policy (pure) ---- */
 enum { NET_ONLINE_NAME_PASS = 0, NET_ONLINE_NAME_REDIRECT = 1, NET_ONLINE_NAME_BLOCK = 2 };
-/* What happens to a DNS name: a NEX game server name is redirected, any other Nintendo name (or a name with an unfilled '%' template) is blocked,
- * everything else resolves through the host. */
+/* What happens to a DNS name: a NEX game server name and the NAT check servers (nncs1 / nncs2) are redirected, any other Nintendo name (or a name with
+ * an unfilled '%' template) is blocked, everything else resolves through the host. */
 int net_online_name_policy(const char *name);
 /* nsd: fills the environment template ('%' -> "lp1"). 0 = ok. */
 int net_online_nsd(const char *in, char *out, size_t n);
+/* The virtual address a redirected name resolves to: NET_ONLINE_VIRTUAL_IP2 for the NAT check's secondary server, else NET_ONLINE_VIRTUAL_IP. */
+uint32_t net_online_redirect_ip(const char *name);
 
 /* ---- the provider ---- */
 /* The table NAPPLE_NET=host selects: the host provider wrapped for the server in NAPPLE_ONLINE_SERVER, or the host provider itself when unset. */

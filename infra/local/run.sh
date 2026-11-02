@@ -5,7 +5,7 @@
 #   infra/local/run.sh stop | status | env | logs
 # --bin-dir DIR  use napple-online / napple-room binaries from DIR instead of building
 # --stub         use infra/local/stub-server.py instead of the real binaries (tests the plumbing before the crates exist)
-# Ports (env): ONLINE_HTTP_PORT=18080 NEX_AUTH_PORT=60000 NEX_SECURE_PORT=60001 ROOM_PORT=31415 ROOM_HTTP_PORT=18081
+# Ports (env): ONLINE_HTTP_PORT=18080 ROOM_PORT=31415 ROOM_HTTP_PORT=18081
 # State: $NAPPLE_LOCAL_STACK_DIR (default $TMPDIR/napple-local-stack): data/, logs/, *.pid. `stop` removes the data dir unless KEEP_DATA=1.
 set -euo pipefail
 
@@ -14,8 +14,6 @@ root="$(cd "$here/../.." && pwd)"
 state="${NAPPLE_LOCAL_STACK_DIR:-${TMPDIR:-/tmp}/napple-local-stack}"
 state="${state%/}"
 ONLINE_HTTP_PORT="${ONLINE_HTTP_PORT:-18080}"
-NEX_AUTH_PORT="${NEX_AUTH_PORT:-60000}"
-NEX_SECURE_PORT="${NEX_SECURE_PORT:-60001}"
 ROOM_PORT="${ROOM_PORT:-31415}"
 ROOM_HTTP_PORT="${ROOM_HTTP_PORT:-18081}"
 
@@ -65,6 +63,7 @@ wait_healthy() {
   echo "$name not healthy after 20 s: $url" >&2; return 1
 }
 
+# cargo on PATH, else the rustup toolchain's (Homebrew's rustup installs no proxies: its toolchain dir must be on PATH for rustc too).
 find_cargo() {
   if command -v cargo >/dev/null 2>&1; then command -v cargo
   elif command -v rustup >/dev/null 2>&1; then rustup which cargo
@@ -97,19 +96,20 @@ else
       [ -f "$root/crates/$c/Cargo.toml" ] || { echo "crates/$c is not in this checkout: merge its branch, or use --bin-dir DIR / --stub" >&2; exit 1; }
     done
     cargo="$(find_cargo)"
+    PATH="$(dirname "$cargo"):$PATH"
     if [ "$build" = 1 ]; then
       flags=(); [ "$profile" = release ] && flags=(--release)
       (cd "$root" && "$cargo" build ${flags[@]+"${flags[@]}"} -p napple-online -p napple-room)
     fi
     bin_dir="${CARGO_TARGET_DIR:-$root/target}/$profile"
   fi
-  online_cmd=("$bin_dir/napple-online")
-  room_cmd=("$bin_dir/napple-room")
+  online_cmd=("$bin_dir/napple-online" serve)
+  room_cmd=("$bin_dir/napple-room" serve)
   for b in "${online_cmd[0]}" "${room_cmd[0]}"; do [ -x "$b" ] || { echo "missing binary $b" >&2; exit 1; }; done
 fi
 
-NAPPLE_ONLINE_HTTP="127.0.0.1:$ONLINE_HTTP_PORT" NAPPLE_ONLINE_NEX_AUTH="127.0.0.1:$NEX_AUTH_PORT" NAPPLE_ONLINE_NEX_SECURE="127.0.0.1:$NEX_SECURE_PORT" \
-NAPPLE_ONLINE_PUBLIC_HOST=127.0.0.1 NAPPLE_ONLINE_PUBLIC_IP=127.0.0.1 NAPPLE_ONLINE_DATA="$state/data/online" RUST_LOG="${RUST_LOG:-info}" \
+NAPPLE_ONLINE_HTTP="127.0.0.1:$ONLINE_HTTP_PORT" NAPPLE_ONLINE_PUBLIC_HOST=127.0.0.1 NAPPLE_ONLINE_DATA="$state/data/online" \
+NAPPLE_ONLINE_VERBOSE="${NAPPLE_ONLINE_VERBOSE:-0}" \
   nohup "${online_cmd[@]}" >"$state/logs/online.log" 2>&1 &
 echo $! > "$state/online.pid"
 NAPPLE_ROOM_LISTEN="127.0.0.1:$ROOM_PORT" NAPPLE_ROOM_HTTP="127.0.0.1:$ROOM_HTTP_PORT" NAPPLE_ROOM_DATA="$state/data/room" RUST_LOG="${RUST_LOG:-info}" \

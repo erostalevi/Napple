@@ -13,6 +13,7 @@
 #include <strings.h>
 
 void log_line(const char *tag, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
+void ipc_trace_guest(unsigned n) __attribute__((weak)); /* ipc.c: the guest call stack of the request being served (debug aid) */
 
 /* ---- configuration and name policy ---- */
 
@@ -59,6 +60,16 @@ static int is_game_server(const char *s, size_t n) {
     if (s[9] != '-') return 0;
     return ends_with(s, n, "srv.nintendo.net");
 }
+/* Pia's NAT check servers: nncs1-<env>.n.n.srv.nintendo.net (primary) and nncs2-... (secondary); also the nncsN.<platform>.<env> form. */
+static int nat_check_server(const char *s, size_t n) {
+    if (n < 6 || strncasecmp(s, "nncs", 4) || (s[4] != '1' && s[4] != '2') || (s[5] != '-' && s[5] != '.')) return 0;
+    return ends_with(s, n, "n.n.srv.nintendo.net") ? s[4] - '0' : 0;
+}
+uint32_t net_online_redirect_ip(const char *name) {
+    size_t n = name ? strlen(name) : 0;
+    while (n && name[n - 1] == '.') n--;
+    return n && nat_check_server(name, n) == 2 ? NET_ONLINE_VIRTUAL_IP2 : NET_ONLINE_VIRTUAL_IP;
+}
 int net_online_name_policy(const char *name) {
     if (!name || !*name) return NET_ONLINE_NAME_PASS;
     size_t n = strlen(name);
@@ -67,7 +78,7 @@ int net_online_name_policy(const char *name) {
     for (size_t i = 0; i < sizeof nintendo_domains / sizeof nintendo_domains[0] && !nintendo; i++) nintendo = ends_with(name, n, nintendo_domains[i]);
     if (!nintendo) return memchr(name, '%', n) ? NET_ONLINE_NAME_BLOCK : NET_ONLINE_NAME_PASS;
     if (memchr(name, '%', n)) return NET_ONLINE_NAME_BLOCK;
-    return is_game_server(name, n) ? NET_ONLINE_NAME_REDIRECT : NET_ONLINE_NAME_BLOCK;
+    return is_game_server(name, n) || nat_check_server(name, n) ? NET_ONLINE_NAME_REDIRECT : NET_ONLINE_NAME_BLOCK;
 }
 int net_online_nsd(const char *in, char *out, size_t n) {
     size_t o = 0;
@@ -157,10 +168,22 @@ static int is_redirected(NetOnline *o, int h, uint16_t *port) {
     pthread_mutex_unlock(&o->mu);
     return i >= 0;
 }
+/* 1 = the primary virtual address (game servers, NAT check primary), 2 = the NAT check's secondary server, 0 = not ours. */
 static int is_virtual(const OnlineAddr *a) {
     uint32_t ip = (uint32_t)a->addr[0] << 24 | (uint32_t)a->addr[1] << 16 | (uint32_t)a->addr[2] << 8 | a->addr[3];
-    return a->family == BSD_AF_INET && ip == NET_ONLINE_VIRTUAL_IP;
+    if (a->family != BSD_AF_INET) return 0;
+    return ip == NET_ONLINE_VIRTUAL_IP ? 1 : ip == NET_ONLINE_VIRTUAL_IP2 ? 2 : 0;
 }
+static void set_ip(OnlineAddr *a, uint32_t ip, uint16_t port) {
+    memset(a, 0, sizeof *a);
+    a->family = BSD_AF_INET;
+    a->port = port;
+    a->addr[0] = ip >> 24, a->addr[1] = ip >> 16 & 255, a->addr[2] = ip >> 8 & 255, a->addr[3] = ip & 255;
+}
+static int nat_check_port(uint16_t p) { return p == NET_ONLINE_NATCHECK_PORT || p == NET_ONLINE_NATCHECK_PORT + 100 || p == 33334 || p == 33335; }
+/* Where a virtual address and port really are: the NAT check ports go to the server's NAT check (the secondary server's to its ports + 1000);
+ * anything else to the server's HTTP / WebSocket port. */
+static uint16_t real_port(NetOnline *o, int v, uint16_t port);
 /* The Napple server's real address (resolved once through the host). 0 = ok. */
 static int server_address(NetOnline *o, OnlineAddr *out) {
     pthread_mutex_lock(&o->mu);
@@ -184,10 +207,27 @@ static int server_address(NetOnline *o, OnlineAddr *out) {
     return 0;
 }
 
+/* NAPPLE_ONLINE_NATCHECK_BASE: the server's NAT check runs on other ports (all shifted by base - 10025), e.g. beside another server on one Mac. */
+static int natcheck_shift(void) {
+    static int shift = -100000;
+    if (shift == -100000) {
+        const char *e = getenv("NAPPLE_ONLINE_NATCHECK_BASE");
+        int b = e && *e ? atoi(e) : NET_ONLINE_NATCHECK_PORT;
+        shift = b > 0 && b < 65535 ? b - NET_ONLINE_NATCHECK_PORT : 0;
+    }
+    return shift;
+}
+static uint16_t real_port(NetOnline *o, int v, uint16_t port) {
+    if (nat_check_port(port)) return (uint16_t)(port + natcheck_shift() + (v == 2 ? NET_ONLINE_NATCHECK_SECONDARY : 0));
+    return o->srv.port;
+}
+
 /* ---- sfdnsres / nsd ---- */
 
 static int no_dns_resolve(void *ctx, const char *host, const char *service, int family, OnlineResolved *out) {
     NetOnline *o = no_of(ctx);
+    char filled[256];
+    if (host && strchr(host, '%') && net_online_nsd(host, filled, sizeof filled) == 0) host = filled; /* the console's resolver fills nsd templates itself */
     NO_DBG("resolve '%s' service '%s' family %d -> policy %d", host ? host : "", service ? service : "", family, net_online_name_policy(host));
     switch (net_online_name_policy(host)) {
         case NET_ONLINE_NAME_BLOCK:
@@ -199,10 +239,7 @@ static int no_dns_resolve(void *ctx, const char *host, const char *service, int 
             memset(out, 0, sizeof *out);
             if (family == BSD_AF_INET6) return HZ_EAI_NONAME; /* the virtual address is IPv4 */
             out->count = 1;
-            out->addrs[0].family = BSD_AF_INET;
-            out->addrs[0].port = service ? (uint16_t)atoi(service) : 0;
-            uint32_t ip = NET_ONLINE_VIRTUAL_IP;
-            out->addrs[0].addr[0] = ip >> 24, out->addrs[0].addr[1] = ip >> 16 & 255, out->addrs[0].addr[2] = ip >> 8 & 255, out->addrs[0].addr[3] = ip & 255;
+            set_ip(&out->addrs[0], net_online_redirect_ip(host), service ? (uint16_t)atoi(service) : 0);
             snprintf(out->canonname, sizeof out->canonname, "%s", host);
             return 0;
         }
@@ -230,11 +267,17 @@ static int no_sock_connect(void *ctx, int h, const OnlineAddr *a, int *err) {
     NetOnline *o = no_of(ctx);
     char ab[64];
     NO_DBG("connect socket %d to %s%s", h, addr_str(a, ab, sizeof ab), is_virtual(a) ? " (the Napple server)" : "");
-    if (!is_virtual(a)) return o->host->sock_connect(o->host->ctx, h, a, err);
+    int v = is_virtual(a);
+    if (!v) return o->host->sock_connect(o->host->ctx, h, a, err);
     OnlineAddr real;
     if (server_address(o, &real)) {
         *err = HZ_ECONNREFUSED;
         return -1;
+    }
+    real.port = real_port(o, v, a->port);
+    if (nat_check_port(a->port)) { /* a connected NAT check socket: no TLS, no port bookkeeping */
+        log_once(o, "NAT check ->", o->srv.host);
+        return o->host->sock_connect(o->host->ctx, h, &real, err);
     }
     pthread_mutex_lock(&o->mu);
     if (redirected_index(o, h) < 0 && o->nredirected < NO_MAX_REDIRECTED) {
@@ -255,27 +298,48 @@ static int no_sock_connect(void *ctx, int h, const OnlineAddr *a, int *err) {
 static int64_t no_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, const OnlineAddr *to, int *err) {
     NetOnline *o = no_of(ctx);
     OnlineAddr real;
-    if (to && is_virtual(to)) {
+    int v = to ? is_virtual(to) : 0;
+    if (v) {
         if (server_address(o, &real)) {
             *err = HZ_ENETUNREACH;
             return -1;
         }
-        log_once(o, "datagram to", "the virtual address (sent to the server)");
+        real.port = real_port(o, v, to->port);
+        char ab[64];
+        NO_DBG("datagram socket %d to %s -> server port %u", h, addr_str(to, ab, sizeof ab), real.port);
+        log_once(o, nat_check_port(to->port) ? "NAT check ->" : "datagram ->", o->srv.host);
         to = &real;
     }
     return o->host->sock_send(o->host->ctx, h, buf, n, flags, to, err);
+}
+/* Datagrams from the server's NAT check ports come back from the virtual address the title sent to. Only those ports: a peer on the same address
+ * (two instances on one Mac) keeps its own address. */
+static int64_t no_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, OnlineAddr *from, int *err) {
+    NetOnline *o = no_of(ctx);
+    int64_t r = o->host->sock_recv(o->host->ctx, h, buf, n, flags, from, err);
+    OnlineAddr srv;
+    if (r >= 0 && from && from->family == BSD_AF_INET && o->server_resolved && server_address(o, &srv) == 0 && !memcmp(from->addr, srv.addr, 4)) {
+        uint16_t p = (uint16_t)(from->port - natcheck_shift()), q = from->port;
+        if (nat_check_port(p)) set_ip(from, NET_ONLINE_VIRTUAL_IP, p);
+        else if (nat_check_port((uint16_t)(p - NET_ONLINE_NATCHECK_SECONDARY))) set_ip(from, NET_ONLINE_VIRTUAL_IP2, (uint16_t)(p - NET_ONLINE_NATCHECK_SECONDARY));
+        else return r;
+        if (r >= 16) memcpy((uint8_t *)buf + 12, from->addr, 4); /* the reply's "server address" field: the server the title knows */
+        NO_DBG("datagram socket %d from the NAT check (server port %u)", h, q);
+    }
+    return r;
 }
 static int no_sock_getpeername(void *ctx, int h, OnlineAddr *out, int *err) {
     NetOnline *o = no_of(ctx);
     int rc = o->host->sock_getpeername(o->host->ctx, h, out, err);
     uint16_t port;
-    if (rc == 0 && is_redirected(o, h, &port)) {
-        uint32_t ip = NET_ONLINE_VIRTUAL_IP;
-        memset(out, 0, sizeof *out);
-        out->family = BSD_AF_INET;
-        out->port = port;
-        out->addr[0] = ip >> 24, out->addr[1] = ip >> 16 & 255, out->addr[2] = ip >> 8 & 255, out->addr[3] = ip & 255;
-    }
+    if (rc == 0 && is_redirected(o, h, &port)) set_ip(out, NET_ONLINE_VIRTUAL_IP, port);
+    return rc;
+}
+static int no_sock_bind(void *ctx, int h, const OnlineAddr *a, int *err) {
+    NetOnline *o = no_of(ctx);
+    int rc = o->host->sock_bind(o->host->ctx, h, a, err);
+    char ab[64];
+    NO_DBG("bind socket %d to %s: rc %d errno %d", h, addr_str(a, ab, sizeof ab), rc, rc ? *err : 0);
     return rc;
 }
 static int no_sock_set_nonblock(void *ctx, int h, int on, int *err) {
@@ -475,6 +539,7 @@ static void no_report(void *ctx, const void *record, size_t n) {
     for (size_t i = 0; i < m; i++) snprintf(hex + 2 * i, 3, "%02x", ((const uint8_t *)record)[i]);
     hex[2 * m] = 0;
     log_line("online", "napple debug: play report (%zu bytes, dropped): %s", n, hex);
+    if (ipc_trace_guest) ipc_trace_guest(32); /* who reported it: an error report names the title's code path */
 }
 
 /* ---- construction ---- */
@@ -497,9 +562,11 @@ OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer
     t->nsd_resolve = no_nsd_resolve;
     t->sock_connect = no_sock_connect;
     t->sock_send = no_sock_send;
+    t->sock_recv = no_sock_recv;
     t->sock_getpeername = no_sock_getpeername;
     t->sock_close = no_sock_close;
     t->sock_set_nonblock = no_sock_set_nonblock;
+    t->sock_bind = no_sock_bind;
     t->tls_new = no_tls_new;
     t->tls_free = no_tls_free;
     t->tls_set_host = no_tls_set_host;
