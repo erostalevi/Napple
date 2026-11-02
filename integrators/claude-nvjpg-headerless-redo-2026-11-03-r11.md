@@ -2,7 +2,7 @@
 branch: claude/nvjpg-headerless-redo-2026-11-03-r11
 orchestration: nvjpg-headerless
 base: 35fa084
-head: HEADPLACEHOLDER
+head: e8d7ba7 (note commit follows)
 env: mac
 date: 2026-11-02
 areas: [runtime/services, docs]
