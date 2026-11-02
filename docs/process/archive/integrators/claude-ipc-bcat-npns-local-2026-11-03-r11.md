@@ -26,3 +26,9 @@ make -C runtime GFX=napple test test-services test-ipc-reference
 - 90300/90301 no longer return the no-network error offline.
 - Receive (npns 3/4) does not pop the queue yet; the queue is observable via statistics/events only.
 - Global state in `bcat_core.c` / `push.c` is unsynchronised (assumes the single service thread, as the existing provider code does).
+
+## Integration result
+- Date: 2026-11-03 (batch r11 integrator run, local main, unpushed)
+- Merged commit: 2a11c87
+- Outcome: Small fix + semantic conflict resolution
+- Landed by cherry-picking its two code commits (cd6c6cc, a10e5ab) onto main (see ipc-domain-reuse for why a plain merge is not workable). Conflicts, resolved keeping both behaviours: bcat.c command table (main already had 20101/20300/20301/20400/20401/90200 real from round 10; its 7 stub rows were dropped in favour of the branch's 20410/20500/30210/30300/90202/90300/90301 implementations); push.c includes and npns:u table (branch's local state serves 5/103/104/111/151/153, round-10 daemon state keeps 7/152/101/102/120/154; npns_local_set_state now fires the round-10 state-change event list and npns_local_reset also clears it) and test_svc_push.c (both test blocks kept). Fix commit: test_svc_local_r10_bcat.c / _npns.c asserted those rows stay stubs; now assert IMPL. Previously never-compiled code builds clean; test_svc_bcat 227/0, test_svc_push 88/0. Layouts (timer u64 id + u32 seconds, push log 0x18, usage 0x10, stats 0x10, JID buffer) remain the author's unverified guesses.
