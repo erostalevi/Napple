@@ -6,7 +6,7 @@ head: 16b6c22
 env: mac
 date: 2026-11-03
 areas: [crates/napple-online]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/online-identity-2026-11-03-r12: napple-online accepts account JWTs, ghost alias, match log, social reporting
@@ -54,3 +54,9 @@ Safe to fix: env/URL typos. Design decision: if social's service-credential shap
 - napple-social: accept the service credential on `/encounters` and `/stats` (with `profile_id`), as above.
 - client core (runtime): send the account JWT as the NEX token and `<profile_uuid>/<title_id>` as the login name.
 - mk8d-online-race: friend list for friend-join no longer arrives via `/napple/v1/friends` in account mode.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at a089f3f. Outcome: Small fixes + mechanical conflict (changes index).
+- integrate: fixes: napple-online reports to napple-social with X-Napple-Service = service token (not 'napple-online') and POST /social/v1/internal/stats (was /stats); unit + hub_server tests and guide updated
+- Native ports: none (Rust only). Tests: cargo test --workspace: 547 passed, 0 failed, 2 ignored; gen_support OK
+- Corrections to instructions: cargo needs PATH=/opt/homebrew/opt/rustup/bin; used a shared CARGO_TARGET_DIR.
