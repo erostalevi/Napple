@@ -125,7 +125,7 @@ fn account_jwt_login_ghost_matchlog_and_reporting() {
     let posts = up.posts.lock().unwrap();
     assert!(posts.iter().all(|(_, b)| !b.to_string().contains(P2)), "the ghost leaves no trace in social");
     assert_eq!(posts.len(), 1, "one stats post for the single visible player; no encounter with only one");
-    assert_eq!(posts[0].0, "http://social/social/v1/stats");
+    assert_eq!(posts[0].0, "http://social/social/v1/internal/stats");
     // the next session gets a new alias, and the closed match stays resolvable
     assert!(!hub.known(p2));
     assert_eq!(hub.log.resolve(&alias, None).len(), 1);
