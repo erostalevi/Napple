@@ -2,7 +2,7 @@
 branch: claude/account-profiles-2026-11-03-r12
 orchestration: account-profiles
 base: ac6692c
-head: HEAD_PLACEHOLDER
+head: 9617793
 env: mac
 date: 2026-11-03
 areas: [napple-account, napple-visibility]
