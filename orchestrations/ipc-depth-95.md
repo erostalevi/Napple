@@ -6,10 +6,10 @@ base: orchestrate/2026-11-02-r10 (main after mk8d-lan-session); merge main again
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_a3121690-1a9f-4389-a496-a7b6c07862df (fresh)
+launched_at: 2026-11-02
 ---
 
 # ipc-depth-95: IPC command depth from 91% to at least 98% (user target: every sub-item 98-99%, overall ~99.5%)

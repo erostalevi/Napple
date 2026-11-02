@@ -6,10 +6,10 @@ base: claude/online-pia-2026-11-02-r7 + merge of claude/napple-social-cloud-2026
 env: mac
 model: claude-opus-5-5
 depends_on: [online-pia, napple-social-cloud, napple-account]
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_b78f9b91-eea8-4eb8-9fed-7afbb16c9902 (fresh)
+launched_at: 2026-11-02
 ---
 
 # online-friends: the game's friend service (friend:u) shows Napple friends and presence; games invite through Napple
