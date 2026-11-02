@@ -31,19 +31,21 @@ in the JWKS), `napple-account retention` (one cleanup pass), `napple-account adm
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `NAPPLE_ACCOUNT_HTTP` | `127.0.0.1:8082` | listen address (container: `0.0.0.0:8082`, plain HTTP behind Caddy) |
-| `NAPPLE_ACCOUNT_DATA` | `./napple-account-data` | SQLite (`account.sqlite3`, WAL), `jwt-keys.json` (0600), dev blobs |
+| `NAPPLE_ACCOUNT_BIND` (old name `_HTTP`) | `127.0.0.1:8082` | listen address (container: `0.0.0.0:8082`, plain HTTP behind Caddy) |
+| `NAPPLE_ACCOUNT_DATA_DIR` (old name `_DATA`) | `./napple-account-data` | SQLite (`account.sqlite3`, WAL), `jwt-keys.json` (0600), dev blobs |
 | `NAPPLE_ACCOUNT_ENV` | (dev) | `production` refuses the dev mailer and the filesystem blob store |
 | `NAPPLE_ACCOUNT_PUBLIC_BASE` | `https://pretend.napple.lat/account/v1` | used in links, URLs, the JWT `iss` |
 | `NAPPLE_ACCOUNT_ISSUER` | = public base | JWT `iss` override |
-| `NAPPLE_ACCOUNT_LINK_BASE` | `<public base>/auth/email/link` | where the magic link points (a universal-link page) |
-| `NAPPLE_ACCOUNT_RP_ID` / `_RP_NAME` | `napple.lat` / `Napple` | WebAuthn relying party |
-| `NAPPLE_ACCOUNT_WEBAUTHN_ORIGINS` | `https://pretend.napple.lat,https://napple.lat` | accepted `clientData.origin` values |
 | `NAPPLE_ACCOUNT_CORS_ORIGINS` | `https://napple.lat,https://pretend.napple.lat,https://www.napple.lat` | browser origins allowed by CORS |
 | `NAPPLE_ACCOUNT_TRUST_PROXY` | off | `1`: client IP = last `X-Forwarded-For` hop (set behind Caddy) |
 | `NAPPLE_ACCOUNT_JWT_SEED` | (key file) | optional base64 32-byte Ed25519 seed instead of `jwt-keys.json` |
-| `NAPPLE_ACCOUNT_MAILER` | `dev` | `ses` for Amazon SES v2 |
-| `NAPPLE_ACCOUNT_MAIL_FROM` / `_SES_REGION` | `Napple <no-reply@napple.lat>` / `AWS_REGION` | SES sender and region |
+| `NAPPLE_MAIL_PROVIDER` (old `NAPPLE_ACCOUNT_MAILER`) | `dev` | `dev` prints the mail, `ses` Amazon SES v2, `smtp` an SMTP relay; production refuses `dev` |
+| `NAPPLE_MAIL_FROM` | `no-reply@napple.lat` | sender address (must be a verified SES identity for `ses`) |
+| `NAPPLE_SES_REGION` / `NAPPLE_SES_CONFIG_SET` | `AWS_REGION` or `us-east-1` / `napple-transactional` | SES region and configuration set (bounce/complaint tracking) |
+| `NAPPLE_SMTP_URL` | (unset) | `smtp://[user:pass@]host[:25]` plain, `smtp+starttls://…[:587]`, `smtps://…[:465]` (user/password percent-encoded; AUTH PLAIN) |
+| `NAPPLE_ACCOUNT_ARGON_M_KIB` | `65536` | Argon2id memory (64 MiB, t=3, p=1). Lower only for tests |
+| `NAPPLE_ACCOUNT_CODE_MAILS_PER_EMAIL_HOUR` / `_PER_IP_HOUR` | `5` / `20` | limits on mails that carry a code |
+| `NAPPLE_ACCOUNT_LOGIN_FAIL_LIMIT` | `10` | failed logins per 15 min before a 15 min lock |
 | `NAPPLE_ACCOUNT_S3_BUCKET` | (unset = filesystem) | bucket for save ciphertext, e.g. `napple-saves-<aws-account-id>` |
 | `NAPPLE_ACCOUNT_S3_REGION` | `AWS_REGION` or `us-east-1` | |
 | `NAPPLE_ACCOUNT_S3_ENDPOINT` | (AWS) | S3-compatible endpoint, path-style (MinIO, tests) |
@@ -53,15 +55,15 @@ in the JWKS), `napple-account retention` (one cleanup pass), `napple-account adm
 | `NAPPLE_ADMIN_EMAILS` | (none) | comma-separated bootstrap admin emails (see "Reserved names and grants") |
 | `NAPPLE_ACCOUNT_MAX_VERSION_BYTES` | `64MiB` | per save version |
 | `NAPPLE_ACCOUNT_ACCESS_TTL` / `_REFRESH_TTL` / `_EMAIL_CODE_TTL` | `900` / `2592000` / `600` s | |
-| `NAPPLE_ACCOUNT_AUTH_IP_PER_MIN` / `_EMAIL_PER_15MIN` | `30` / `5` | rate limits |
+| `NAPPLE_ACCOUNT_AUTH_IP_PER_MIN` | `30` | per-IP limit on every auth endpoint |
 
 Health: `GET /healthz` and `GET /account/v1/healthz` -> `200 ok napple-account`. Logs are one line each on
 stdout/stderr; SIGTERM shuts down gracefully.
 
 ## API
 
-JSON over HTTPS, prefix `/account/v1`. Every endpoint except the auth start/finish ones, `healthz`, the JWKS,
-and the HTML page needs `Authorization: Bearer <access token>`. Binary fields are base64url
+JSON over HTTPS, prefix `/account/v1`. Every endpoint except the `/auth/*` ones (signup, verify, login, reset, refresh), `healthz` and the JWKS
+needs `Authorization: Bearer <access token>`. Binary fields are base64url
 without padding (standard base64 and padding are accepted on input). Times are unix seconds. Errors are
 `{"error": "<code>", "message": "...", ...}`; some add `error_code`, `reason`, `field`, `head`.
 
@@ -72,16 +74,15 @@ Signing in again with the same device public key is the same device (it keeps it
 
 | Endpoint | Body -> answer |
 |---|---|
-| `POST /auth/email/start` | `{email}` -> `202 {sent, expires_in}`; mails a 6-digit code and a link `<link base>#email=…&token=…` (10 min, single use). Same answer whether or not the account exists. |
-| `POST /auth/email/finish` | `{email, code \| token, device}` -> tokens (below), creating the account (and its first profile) on first use |
-| `GET /auth/email/link` | HTML landing page: hands the fragment to `napple://auth/email#…` (the token never reaches a server log) |
-| `POST /auth/passkey/register/begin` (auth) | -> `{challenge_id, publicKey: PublicKeyCredentialCreationOptions}` (resident key + UV required, `attestation: none`, ES256/EdDSA) |
-| `POST /auth/passkey/register/finish` (auth) | `{challenge_id, name?, credential: PublicKeyCredential JSON}` -> `201 {credential_id, name}` |
-| `POST /auth/passkey/login/begin` | -> `{challenge_id, publicKey: PublicKeyCredentialRequestOptions}` (discoverable: empty `allowCredentials`) |
-| `POST /auth/passkey/login/finish` | `{challenge_id, credential, device}` -> tokens |
+| `POST /auth/signup` | `{email, password, nickname, age_ok: true, terms_ok: true, device}` -> `202 {sent, expires_in}`. Creates an **unverified** account and mails a 6-digit code (HTML + text). `age_ok` (13+) and `terms_ok` are required (`400 terms_required`); both are stored with the terms version and time. Password: >= 10 characters, not in the bundled common-password list, not the email (`400 weak_password`); stored as Argon2id (m=64 MiB, t=3, p=1). Nickname: 3-20 of `[A-Za-z0-9_.-]`, reserved-name rules (`400 bad_nickname` / `reserved_nickname`), unique case-insensitively (`409 nickname_taken`). An address that already has a verified account gets the same 202 and no mail. Re-posting for an unverified address replaces the pending data and sends a new code. |
+| `POST /auth/verify` | `{email, code}` -> tokens (below) with `new_account: true`; the account becomes usable, its **first profile** is created from the signup nickname and the signup device signs in. Codes: single use, 10 min, 5 attempts, then `400 invalid_code` (same answer for wrong, expired, unknown). |
+| `POST /auth/login` | `{email, password, device}` -> tokens. Unknown address, wrong password: the same `401 invalid_credentials` (a dummy hash is checked, so timing matches). Right password but unverified: `403 {reason: "unverified"}` and a fresh code is mailed. 10 failures in 15 min lock the address (known or not) for 15 min: `429 locked` with `retry_after`. |
+| `POST /auth/password/reset/start` | `{email}` -> always `202` (mail only if a verified account exists) |
+| `POST /auth/password/reset/finish` | `{email, code, new_password}` -> `200 {reset: true}`; the same password policy; lifts a lockout and **ends every session of every device** |
 | `POST /auth/refresh` | `{refresh_token}` -> new tokens (rotation) |
 | `POST /auth/logout` (auth) | ends this device's sessions (`204`); the device and its key stay |
-| `GET /passkeys`, `DELETE /passkeys/{credential_id}` | manage passkeys |
+
+Mail: every code goes out as multipart text + HTML (`crates/napple-account/templates/code_email.{html,txt}`; values are HTML-escaped). Per address at most 5 code mails per hour and per IP 20 (`429 rate_limited`), applied before anything else so the answer never depends on the account. If the provider says the address is permanently undeliverable (SES suppression list / bounce, SMTP 5xx on the recipient) it is recorded in `mail_suppressions` and never mailed again; the caller still gets the usual 202. With the `ses` provider the account-level suppression list and the configuration set `napple-transactional` handle bounces and complaints at AWS.
 
 Tokens: `{access_token, token_type: "Bearer", expires_in: 900, refresh_token, refresh_expires_in, account_id, device_id, key_state: "granted" | "pending" | "bootstrap", new_account}`.
 
@@ -185,19 +186,21 @@ From the server host: `napple-account admin grant owner@napple.lat owner_napple`
 
 ## Security model
 
-- **No passwords.** Sign-in is an emailed one-time code / link (10 min, single use, 5 attempts per code, at most
-  20 guesses per address per hour, codes stored as HMAC, link tokens as SHA-256) or a passkey (user verification
-  required, origin + RP ID + challenge + counter checked, ES256/EdDSA, pure-Rust verifier in `src/webauthn.rs`).
+- **Passwords.** Argon2id (m=64 MiB, t=3, p=1, PHC string with per-hash salt) on a blocking thread; policy: >= 10
+  characters, not in the bundled common list, not the email. No passkeys and no magic links (removed in r12).
+  Email ownership is proved with a code (10 min, single use, 5 attempts per code, at most 20 guesses per address
+  per hour, stored as HMAC with a per-process key: a restart voids codes in flight).
+- **No enumeration.** Signup, reset start, login and reset finish answer identically for known and unknown
+  addresses (status, body, and roughly the time); the failed-login lockout is keyed by the typed address either way.
 - **Tokens.** 15-minute Ed25519 JWTs, 30-day rotated refresh tokens stored hashed, reuse detection, per-device
   session epochs so logout and revoke take effect at once on this server.
 - **End-to-end saves.** The server never sees the account save key, the recovery code, or save plaintext. It
   stores public keys, wrapped keys, the recovery blob, and ciphertext with its size and hash.
-- **Abuse limits.** Per-IP limit on every auth endpoint (30/min), per-email limits on start (5/15 min) and finish;
+- **Abuse limits.** Per-IP limit on every auth endpoint (30/min), 5 code mails/hour per address and 20/hour per IP, 10 failed logins/15 min per address (15 min lock);
   64 KiB JSON bodies, 64 MiB per save version, a per-account quota (10 GiB default), uploads pinned to
   `application/octet-stream` with their length and SHA-256.
 - **Names.** Reserved-name rules against impersonating Napple; admin-only grants for the exceptions.
-- **Web.** CORS limited to the napple.lat origins; HTML pages set `no-referrer`; the link token lives in the URL
-  fragment. Constant-time compares for codes, tokens, signatures and challenges.
+- **Web.** CORS limited to the napple.lat origins. Constant-time compares for codes, tokens, signatures and challenges.
 - **Logs.** No tokens, codes, keys, signatures, presigned query strings or email addresses (account ids only).
   The dev mailer is the exception by design and `NAPPLE_ACCOUNT_ENV=production` refuses it.
 - **Never game content.** Only save ciphertext is accepted, with size limits and the save content type; there is
@@ -208,7 +211,7 @@ From the server host: `napple-account admin grant owner@napple.lat owner_napple`
 | Threat | Mitigation | Residual risk |
 |---|---|---|
 | Stolen email inbox | the attacker can sign in and appears as a **pending device**; they get no save key unless a user approves them on an existing device | users may approve without looking: clients must show the device name, platform and time, and ask for confirmation |
-| Phishing site relays codes | codes are short-lived and single use; passkeys are origin-bound and cannot be phished | email codes can still be relayed in real time; recommend passkeys |
+| Phishing site relays codes or the password | codes are short-lived and single use; Napple never asks for them outside its own window | a phished password plus a relayed code works in real time |
 | Stolen refresh token | rotation + reuse detection ends the device's sessions | a thief who uses it first holds the session until the user revokes the device |
 | Stolen access token | 15-minute lifetime; revoke/logout end it here immediately | other services (napple-online) accept it until `exp` |
 | Lost or stolen device | `DELETE /devices/{id}` signs it out and drops its wrapped key | the device may still have the account key in memory/Keychain; rotating the account key (re-encrypting every save) is a client feature, not done yet |
@@ -217,18 +220,18 @@ From the server host: `napple-account admin grant owner@napple.lat owner_napple`
 | Brute force | per-code attempts, per-email and per-IP limits | distributed brute force of 6-digit codes is bounded by 20 guesses/hour/address (~0.05%/day) |
 | Two first devices race to create the account key | the first `POST /keys/grant` pins `key_id`; the second gets `409 key_mismatch` and must fetch the granted key instead | |
 | Impersonating Napple staff by name | reserved-name rules with look-alike normalisation; grants only from admins | a look-alike missing from the confusables table; names other players see should still carry the account's grants as a badge in the UI |
-| Admin account takeover | admins are few, named by email in config; grants only change names | a stolen admin email inbox can mint grants: admins should use passkeys |
+| Admin account takeover | admins are few, named by email in config; grants only change names | a stolen admin email inbox can mint grants: admins should use a strong unique password |
 | Using the bucket as free file hosting | per-version max size, quotas, content type pinned in the signed URL, short URL lifetimes | ciphertext cannot be inspected, by design |
 
 ## Data retention and deletion
 
 - **Account deletion** (`DELETE /me` with the email typed as confirmation): queues every save object for
   deletion and deletes it right away, then removes the account and, through foreign keys, all devices, tokens,
-  passkeys, profiles, grants and save metadata. Signing up again with the same email creates a new account.
+  profiles, grants and save metadata. Signing up again with the same email creates a new account.
   Objects that S3 could not delete at that moment stay in the deletion queue (object keys only, no personal
   data) and are retried every hour.
-- **Hourly retention job**: pending uploads older than a day (and their objects), expired codes, ceremonies and
-  refresh tokens, the deletion queue.
+- **Hourly retention job**: pending uploads older than a day (and their objects), expired codes, stale lockouts, unconfirmed
+  signups older than a day (with their pending password hash) and refresh tokens, the deletion queue.
 - **Versions**: the newest `NAPPLE_SAVE_VERSIONS` per (title, profile); older ones are deleted on the next commit.
 - **S3 bucket** (napple-infra): SSE-S3, block public access, versioning with "delete noncurrent versions after 7
   days" and "abort incomplete multipart uploads after 1 day". Deleted saves are therefore gone from S3 within 7 days.
@@ -240,7 +243,7 @@ From the server host: `napple-account admin grant owner@napple.lat owner_napple`
   (rustls + ring, bundled SQLite). Read-only container, uid 10001, writes only under `NAPPLE_ACCOUNT_DATA`.
 - Caddy: `handle /account/* { reverse_proxy account:8082 }` **without** stripping the prefix, ahead of the catch-all
   that goes to napple-online; set `NAPPLE_ACCOUNT_TRUST_PROXY=1`.
-- Env: `NAPPLE_ACCOUNT_ENV=production`, `NAPPLE_ACCOUNT_MAILER=ses`, `NAPPLE_ACCOUNT_S3_BUCKET=napple-saves-<aws-account-id>`,
+- Env: `NAPPLE_ACCOUNT_ENV=production`, `NAPPLE_MAIL_PROVIDER=ses`, `NAPPLE_MAIL_FROM=no-reply@napple.lat`, `NAPPLE_ACCOUNT_S3_BUCKET=napple-saves-<aws-account-id>`,
   `AWS_REGION`, `NAPPLE_ADMIN_EMAILS`. Instance role: `s3:PutObject`, `s3:GetObject` (also
   authorizes HEAD) and `s3:DeleteObject` on `arn:aws:s3:::napple-saves-*/saves/*` and `ses:SendEmail` from `no-reply@napple.lat`.
   IMDSv2 hop limit 2 for containers.
@@ -252,11 +255,13 @@ Start the server as in "Run it locally" with `NAPPLE_ACCOUNT_PUBLIC_BASE=http://
 
 ```bash
 API=http://127.0.0.1:8082/account/v1
-curl -s -X POST $API/auth/email/start -H 'content-type: application/json' -d '{"email":"me@example.com"}'
-# the dev mailer prints "Your Napple sign-in code is NNNNNN" in the server's output
 PUB=$(head -c 32 /dev/urandom | base64 | tr '+/' '-_' | tr -d '=')
-curl -s -X POST $API/auth/email/finish -H 'content-type: application/json' \
-  -d "{\"email\":\"me@example.com\",\"code\":\"NNNNNN\",\"device\":{\"name\":\"My Mac\",\"platform\":\"macos\",\"pubkey\":\"$PUB\"}}"
+DEV="{\"name\":\"My Mac\",\"platform\":\"macos\",\"pubkey\":\"$PUB\"}"
+curl -s -X POST $API/auth/signup -H 'content-type: application/json' \
+  -d "{\"email\":\"me@example.com\",\"password\":\"correct horse battery\",\"nickname\":\"Me_Myself\",\"age_ok\":true,\"terms_ok\":true,\"device\":$DEV}"
+# the dev mailer prints the message with the 6-digit code on its own line in the server's output
+curl -s -X POST $API/auth/verify -H 'content-type: application/json' -d '{"email":"me@example.com","code":"NNNNNN"}'
+# later, on another device:  POST /auth/login {email, password, device}
 AT=<access_token from the answer>
 curl -s $API/me -H "authorization: Bearer $AT"
 P=$(curl -s $API/profiles -H "authorization: Bearer $AT" | python3 -c 'import json,sys;print(json.load(sys.stdin)["profiles"][0]["profile_id"])')
