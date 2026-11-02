@@ -54,6 +54,8 @@ typedef struct {
     uint8_t sample_shading;           /* the bound program asks for sample shading (p_bind_program.sample_shading) */
     float tess_outer[4], tess_inner[2];
     bufrange xfb[MAX_XFB_BUFFERS];    /* transform feedback buffer bindings */
+    uint8_t provoking_last;           /* SetProvokingVertexMode LAST: flat outputs from each primitive's last vertex (pv_last_indices) */
+    uint8_t vp_swz[16][4];            /* SetViewportSwizzles: NVNviewportSwizzle of the x, y, z, w outputs per viewport (identity 0, 2, 4, 6) */
 } nstate;
 
 static nstate S;
@@ -210,7 +212,10 @@ static void state_reset(void) {
     S.poly = (poly_st){NVN_FACE_NONE, NVN_FRONT_FACE_CCW, NVN_POLYGON_MODE_FILL, 0};
     S.ds = (ds_st){0, 1, NVN_DEPTH_FUNC_LESS, 0, NVN_STENCIL_FUNC_ALWAYS, NVN_STENCIL_FUNC_ALWAYS, 1, 1, 1, 1, 1, 1};
     S.stencil_wmask[0] = S.stencil_wmask[1] = S.stencil_rmask[0] = S.stencil_rmask[1] = 0xff;
-    for (int i = 0; i < 16; i++) { S.dr[i][1] = 1.0f; }
+    for (int i = 0; i < 16; i++) {
+        S.dr[i][1] = 1.0f;
+        for (int k = 0; k < 4; k++) S.vp_swz[i][k] = (uint8_t)(2 * k); /* NVN_VIEWPORT_SWIZZLE_POSITIVE_X, _Y, _Z, _W */
+    }
     S.render_enable = 1;
     S.patch_size = 3;
     for (int i = 0; i < 4; i++) S.tess_outer[i] = 1.0f;
@@ -1145,8 +1150,47 @@ static void int_slot_masks(int stage, uint32_t *umask, uint32_t *smask) {
     }
 }
 
+/* ShaderKey.sep_*_slots: the textures bound with BindSeparateTexture(s) (separate texture binding k = bit k), classified as ds_slot_masks and
+ * int_slot_masks classify combined bindings: stencil views / uint copies, depth, then integer colour formats. */
+static void sep_slot_masks(int stage, uint32_t *depth, uint32_t *stencil, uint32_t *umask, uint32_t *smask) {
+    *depth = *stencil = *umask = *smask = 0;
+    gdpool *tp = (gdpool *)htab_get(S.texpool);
+    if (!tp) return;
+    for (int k = 0; k < 32; k++) {
+        uint64_t h = S.septex[stage][k];
+        uint32_t tic = (uint32_t)(h & 0xfffff);
+        if (!h || tic >= (uint32_t)tp->n || !tp->tex[tic].s.valid) continue;
+        const dtex *e = &tp->tex[tic];
+        MTLPixelFormat pf;
+        int dep, st;
+        mtl_tex_format_info(&e->s, &pf, &dep, &st);
+        int stencil_view = st && (e->view.set_ds ? e->view.ds_mode : e->s.ds_mode) == 1;
+        int ik = mtl_tex_int_kind(&e->s, &e->view, 1);
+        if (pf == MTLPixelFormatStencil8 || stencil_view || mtl_tex_samples_as_uint(&e->s, &e->view, 1)) *stencil |= 1u << k;
+        else if (mtl_tex_samples_as_depth(&e->s, &e->view, 1)) *depth |= 1u << k;
+        else if (ik == IMGKIND_UINT) *umask |= 1u << k;
+        else if (ik == IMGKIND_INT) *smask |= 1u << k;
+    }
+}
+/* ShaderKey.vp_swizzle of viewport 0 (a program that writes the viewport index gets viewport 0's swizzle for every viewport: reported once) */
+static uint16_t vp_swizzle_key(void) {
+    uint32_t v = 0;
+    for (int i = 0; i < 4; i++) v |= (uint32_t)(S.vp_swz[0][i] & 7) << (3 * i);
+    v ^= VP_SWIZZLE_IDENTITY;
+    if (v) {
+        static int other;
+        for (int i = 1; i < 16 && !other; i++) other = memcmp(S.vp_swz[i], S.vp_swz[0], 4) != 0;
+        LOG_ONCE(NAPPLE_LOG_INFO, "viewport swizzles in use (first: viewport 0 %u %u %u %u%s)", S.vp_swz[0][0], S.vp_swz[0][1], S.vp_swz[0][2], S.vp_swz[0][3],
+                 other ? "; viewports 1-15 have other swizzles: a program that selects them gets viewport 0's" : "");
+    }
+    return (uint16_t)v;
+}
+
 static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     memset(k, 0, sizeof *k);
+    sep_slot_masks(ST_VS, &k->sep_depth[0], &k->sep_stencil[0], &k->sep_uint[0], &k->sep_sint[0]);
+    sep_slot_masks(ST_FS, &k->sep_depth[1], &k->sep_stencil[1], &k->sep_uint[1], &k->sep_sint[1]);
+    k->vp_swizzle = vp_swizzle_key();
     int_slot_masks(ST_VS, &k->tex_uint[0], &k->tex_sint[0]);
     int_slot_masks(ST_FS, &k->tex_uint[1], &k->tex_sint[1]);
     ds_slot_masks(ST_VS, &k->depth_slots[0], &k->stencil_slots[0]);
@@ -2102,6 +2146,75 @@ static uint32_t expanded_max(uint32_t mode, uint32_t count) {
 }
 static MTLPrimitiveType expanded_type(uint32_t mode) { return mode == 2 ? MTLPrimitiveTypeLineStrip : MTLPrimitiveTypeTriangle; }
 
+/* Provoking vertex LAST (SetProvokingVertexMode 1). Metal takes flat-shaded outputs from the FIRST vertex of each primitive (lists, strips, lines), so
+ * each primitive is re-emitted as a list with its last vertex first: triangles rotated (c, a, b), which keeps the winding; lines reversed; strips, loops,
+ * fans, quads and quad strips split into their primitives (the GL last-vertex convention: strip triangle i -> vertex i + 2, fan -> i + 2, quad -> its
+ * fourth vertex). Polygons keep their first vertex (GL uses it in both conventions). `seq` is the draw's vertex (or raw index) sequence; with primitive
+ * restart each run between restart indices is assembled on its own. Returns the number of list indices written to `out` (pv_last_max of them at most). */
+static uint32_t pv_last_max(uint32_t mode, uint32_t count) {
+    switch (mode) {
+        case 1: case 4: return count;
+        case 2: case 3: return 2 * count;
+        case 5: case 6: return 3 * count;
+        case 7: return count / 4 * 6 + 6;
+        case 8: return count / 2 * 6 + 6;
+        default: return 0;
+    }
+}
+static uint32_t pv_last_run(uint32_t mode, const uint32_t *v, uint32_t c, uint32_t *out) {
+    uint32_t n = 0;
+#define PV2(a, b) (out[n++] = (a), out[n++] = (b))
+#define PV3(a, b, d) (out[n++] = (a), out[n++] = (b), out[n++] = (d))
+    switch (mode) {
+        case 1: for (uint32_t i = 0; i + 1 < c; i += 2) PV2(v[i + 1], v[i]); break;
+        case 2: for (uint32_t i = 0; i + 1 < c; i++) PV2(v[i + 1], v[i]); if (c > 1) PV2(v[0], v[c - 1]); break;
+        case 3: for (uint32_t i = 0; i + 1 < c; i++) PV2(v[i + 1], v[i]); break;
+        case 4: for (uint32_t i = 0; i + 2 < c; i += 3) PV3(v[i + 2], v[i], v[i + 1]); break;
+        case 5: /* odd strip triangles are (i + 1, i, i + 2) in winding order */
+            for (uint32_t i = 0; i + 2 < c; i++)
+                if (i & 1) PV3(v[i + 2], v[i + 1], v[i]);
+                else PV3(v[i + 2], v[i], v[i + 1]);
+            break;
+        case 6: for (uint32_t i = 1; i + 1 < c; i++) PV3(v[i + 1], v[0], v[i]); break;
+        case 7: for (uint32_t i = 0; i + 3 < c; i += 4) { PV3(v[i + 3], v[i], v[i + 1]); PV3(v[i + 3], v[i + 1], v[i + 2]); } break;
+        case 8: /* quad i: (2i, 2i + 1, 2i + 3, 2i + 2), last vertex 2i + 3 */
+            for (uint32_t i = 0; i + 3 < c; i += 2) { PV3(v[i + 3], v[i], v[i + 1]); PV3(v[i + 3], v[i + 2], v[i]); }
+            break;
+    }
+#undef PV2
+#undef PV3
+    return n;
+}
+static uint32_t pv_last_indices(uint32_t mode, const uint32_t *seq, uint32_t count, int restart, uint32_t ridx, uint32_t *out) {
+    uint32_t n = 0, s0 = 0;
+    for (uint32_t i = 0; i <= count; i++)
+        if (i == count || (restart && seq[i] == ridx)) {
+            n += pv_last_run(mode, seq + s0, i - s0, out + n);
+            s0 = i + 1;
+        }
+    return n;
+}
+static int pv_last_applies(uint32_t mode) { return S.provoking_last && mode >= 1 && mode <= 8; }
+/* Draws `count` vertices of `seq` (raw indices for an indexed draw: base_vertex still applies) as the rotated list. */
+static void pv_last_draw(uint32_t mode, const uint32_t *seq, uint32_t count, int restart, int32_t base_vertex, uint32_t instances, uint32_t base_instance) {
+    uint32_t cap = pv_last_max(mode, count);
+    if (!cap) return;
+    id<MTLBuffer> rb;
+    uint32_t ro;
+    uint32_t *out = ring_alloc(&g_ring, cap * 4, 4, &rb, &ro);
+    uint32_t n = pv_last_indices(mode, seq, count, restart, S.prim_restart_idx, out);
+    LOG_ONCE(NAPPLE_LOG_INFO, "provoking vertex LAST in use (first: primitive %u, %u vertices -> %u list indices)", mode, count, n);
+    if (!n) return;
+    [g_re drawIndexedPrimitives:mode <= 3 ? MTLPrimitiveTypeLine : MTLPrimitiveTypeTriangle
+                     indexCount:n
+                      indexType:MTLIndexTypeUInt32
+                    indexBuffer:rb
+              indexBufferOffset:ro
+                  instanceCount:instances
+                     baseVertex:base_vertex
+                   baseInstance:base_instance];
+}
+
 static id<MTLComputeCommandEncoder> compute_encoder(void);
 #include "mtl_stages.inc"
 
@@ -2122,6 +2235,14 @@ static void do_draw_arrays(const p_draw_arrays *d) {
     if (!prepare_draw(d->mode)) return;
     if (g_drawlog_verbose)
         fprintf(stderr, "    drawArrays mode %u first %u count %u instances %u base %u\n", d->mode, d->first, d->count, d->instances, d->base_instance);
+    if (pv_last_applies(d->mode)) {
+        uint32_t *seq = malloc((size_t)d->count * 4 + 4);
+        if (!seq) return;
+        for (uint32_t i = 0; i < d->count; i++) seq[i] = d->first + i;
+        pv_last_draw(d->mode, seq, d->count, 0, 0, d->instances, d->base_instance);
+        free(seq);
+        return;
+    }
     if (native) {
         [g_re drawPrimitives:pt vertexStart:d->first vertexCount:d->count instanceCount:d->instances baseInstance:d->base_instance];
         return;
@@ -2189,6 +2310,15 @@ static void do_draw_elements(const p_draw_elems *d) {
     id<MTLBuffer> rb;
     uint32_t ro;
     MTLIndexType it = isz == 4 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16;
+    if (pv_last_applies(d->mode)) {
+        uint32_t *seq = malloc((size_t)d->count * 4 + 4);
+        if (!seq) return;
+        const uint8_t *src = (const uint8_t *)(uintptr_t)d->idx_addr;
+        for (uint32_t i = 0; i < d->count; i++) seq[i] = isz == 1 ? src[i] : isz == 2 ? ((const uint16_t *)src)[i] : ((const uint32_t *)src)[i];
+        pv_last_draw(d->mode, seq, d->count, S.prim_restart_en, d->base_vertex, d->instances, d->base_instance);
+        free(seq);
+        return;
+    }
     if (!native) {
         /* read the indices, expand per primitive type through a scratch index list */
         uint32_t cap = expanded_max(d->mode, d->count);
@@ -2242,6 +2372,8 @@ static void do_draw_elements(const p_draw_elems *d) {
 static void do_draw_indirect(const p_draw_ind *d, int indexed) {
     int native;
     MTLPrimitiveType pt = prim_native(d->mode, &native);
+    if (pv_last_applies(d->mode))
+        LOG_ONCE(NAPPLE_LOG_INFO, "provoking vertex LAST is not applied to indirect draws (primitive %u): flat outputs come from the first vertex", d->mode);
     if (xfb_capturing() || stage_draw_needed(d->mode)) {
         /* The stage passes assemble primitives on the CPU, so the arguments are read at encode time (as do_dispatch reads indirect dispatch counts):
          * right when the game wrote them before the submit, wrong for arguments another GPU pass of this submission produces (logged once). */
@@ -2439,6 +2571,12 @@ static void copy_region_dims(const GfxTex *t, const int32_t r[6], uint32_t lv, u
     *w = r[3] > 0 ? (uint32_t)r[3] : mw;
     *h = r[4] > 0 ? (uint32_t)r[4] : mh;
     *d = r[5] > 0 ? (uint32_t)r[5] : 1;
+    if (t->tex.textureType == MTLTextureType1DArray) { /* 1D arrays: the region's y / height are layers (as in GL), each layer one row of the buffer */
+        *z = *y;
+        *d = r[4] > 0 ? (uint32_t)r[4] : (uint32_t)t->tex.arrayLength;
+        *y = 0;
+        *h = 1;
+    }
 }
 /* Upload of 24-bit depth data into the 32-bit float depth texture that stands in for DEPTH24 (0x33, depth in the low 24 bits of a 32-bit word) and DEPTH24_STENCIL8
  * (0x35, depth in the high 24 bits, stencil in the low 8: the Maxwell Z24S8 layout): the words are converted on the CPU and blitted into the depth (and
@@ -3395,6 +3533,13 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
             for (uint32_t i = 0; i < r->n && r->first + i < 16; i++) memcpy(S.vp[r->first + i], f + 4 * i, 16);
             break;
         }
+        case OP_VP_SWIZZLE: {
+            const p_range *r = (const p_range *)pl;
+            const uint8_t *v = (const uint8_t *)(r + 1);
+            for (uint32_t i = 0; i < r->n && r->first + i < 16; i++) memcpy(S.vp_swz[r->first + i], v + 4 * i, 4);
+            break;
+        }
+        case OP_PROVOKING: S.provoking_last = *(const uint32_t *)pl == 1; break;
         case OP_SCISSORS: {
             const p_range *r = (const p_range *)pl;
             const int32_t *f = (const int32_t *)(r + 1);

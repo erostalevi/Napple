@@ -929,6 +929,41 @@ int main(void) {
                 CHECK(HAS(im, "texture2d_ms<uint> t0_i") && HAS(im, "const IntTex2DMS<uint> t0 = {t0_i};"), "integer multisampled binding: texture2d_ms<uint>");
                 MSL_COMPILES(im->msl, "uint 2D MS");
                 maxwell_free(im);
+                /* the remaining targets: 1D, 1D array, cube array (TEX, TLD4 and TMML), 2D multisample array (TLD.MS) */
+                const uint64_t t1 = ins_tex2d_lz(0, 4, 8, 8) & ~(3ull << 29), t1a = t1 | (1ull << 28), tca = tc | (1ull << 28), tmsa = tms | (1ull << 28);
+                const uint64_t g_ca = 0xc838000000000000ull | (4ull << 8) | (8ull << 20) | (3ull << 29) | (1ull << 28) | (0xfull << 31) | (8ull << 36) | PT_BITS;
+                const uint64_t mm_c = 0xdf58000000000000ull | (4ull << 8) | (3ull << 29) | (3ull << 31) | (8ull << 36) | PT_BITS;
+                static const struct { const char *name, *decl, *wrap; int sint; } want[] = {
+                    {"uint 1D", "texture1d<uint> t0_i", "const IntTex1D<uint> t0 = {t0_i};", 0},
+                    {"int 1D array", "texture1d_array<int> t0_i", "const IntTex1DArray<int> t0 = {t0_i};", 1},
+                    {"uint cube array", "texturecube_array<uint> t0_i", "const IntTexCubeArray<uint> t0 = {t0_i};", 0},
+                    {"uint 2D MS array", "texture2d_ms_array<uint> t0_i", "const IntTex2DMSArray<uint> t0 = {t0_i};", 0},
+                    {"uint cube array gather", "texturecube_array<uint> t0_i", "IntTexCubeArray<uint>", 0},
+                    {"int cube TMML", "texturecube<int> t0_i", "IntTexCube<int>", 1},
+                };
+                const uint64_t op[] = {t1, t1a, tca, tmsa, g_ca, mm_c};
+                for (int k = 0; k < 6; k++) {
+                    ik.tex_uint_slots = want[k].sint ? 0 : 1;
+                    ik.tex_sint_slots = want[k].sint ? 1 : 0;
+                    XL_OK(ix, STAGE_FRAGMENT, ik, 0xf, "integer target", op[k], ins_exit());
+                    CHECK(HAS(ix, want[k].decl) && HAS(ix, want[k].wrap), "%s: %s + %s", want[k].name, want[k].decl, want[k].wrap);
+                    maxwell_free(ix);
+                }
+            }
+            /* stencil views of cube / cube array depth-stencil textures (ShaderKey.stencil_slots): texturecube<uint> + StencilTexCube, cube array likewise */
+            {
+                ShaderKey sk = {0};
+                sk.depth_slots = sk.stencil_slots = 1;
+                const uint64_t tc = ins_tex2d_lz(0, 4, 8, 8) | (3ull << 29), tca = tc | (1ull << 28);
+                const uint64_t g_c = 0xc838000000000000ull | (4ull << 8) | (8ull << 20) | (3ull << 29) | (0xfull << 31) | (8ull << 36) | PT_BITS;
+                XL_OK(sc, STAGE_FRAGMENT, sk, 0xf, "stencil cube", tc, ins_exit());
+                CHECK(HAS(sc, "texturecube<uint> t0_u") && HAS(sc, "const StencilTexCube t0 = {t0_u};"), "stencil cube binding: texturecube<uint> + StencilTexCube");
+                maxwell_free(sc);
+                XL_OK(sa, STAGE_FRAGMENT, sk, 0xf, "stencil cube array", tca, ins_exit());
+                CHECK(HAS(sa, "texturecube_array<uint> t0_u") && HAS(sa, "const StencilTexCubeArray t0 = {t0_u};"), "stencil cube array binding");
+                maxwell_free(sa);
+                XL_OK(sg, STAGE_FRAGMENT, sk, 0xf, "stencil cube gather", g_c, ins_exit());
+                maxwell_free(sg);
             }
             /* separate texture / sampler handles: LDC c2 texture word, LDC c2 sampler word, OR, TEX.B */
             {

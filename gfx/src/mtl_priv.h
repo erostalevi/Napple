@@ -118,6 +118,10 @@ typedef struct pipe_key {
     uint32_t img_int[2], img_uint[2]; /* per stage (vs, fs): image bindings whose texture is signed / unsigned integer (ShaderKey.image_*_mask) */
     uint32_t tex_uint[2], tex_sint[2]; /* per stage (vs, fs): sampled bindings (depth_slots numbering) whose texture / view is an unsigned / signed integer colour
                                         * format (ShaderKey.tex_uint_slots / tex_sint_slots; mtl_tex_int_slot_masks) */
+    uint32_t sep_depth[2], sep_stencil[2], sep_uint[2], sep_sint[2]; /* per stage (vs, fs): the same four masks for separate textures, numbered by separate
+                                        * texture binding (ShaderKey.sep_*_slots; sep_slot_masks in mtl_replay.m) */
+    uint16_t vp_swizzle;               /* ShaderKey.vp_swizzle: viewport 0's SetViewportSwizzles, XOR VP_SWIZZLE_IDENTITY (0 = identity) */
+    uint16_t pad_vp;
 } pipe_key;
 @interface GfxPipe : NSObject { @public id<MTLRenderPipelineState> ps; GfxShader *vs, *fs; int state; int claimed; /* build started (atomic 0 -> 1) */ } @end
 blend_st mtl_blend_resolve(blend_st b);         /* advanced blend modes -> plain factors (logs the ones it approximates) */
