@@ -66,6 +66,31 @@ static void q_last_play_time(IpcObject *s, IpcCall *c) {
     }
     IPC_OUT(c, n);
 }
+/* 18 QueryApplicationPlayStatisticsForSystem(u8 flag; type-5 u64 application ids; type-6 ApplicationPlayStatistics[]) -> s32 entries, and
+ * 19 ...ByUserAccountIdForSystem (u8 flag, pad, Uid; same buffers). ApplicationPlayStatistics (0x18, libnx layout): u64 application id, u64 play time in
+ * nanoseconds, u64 launch count. One entry per requested id, as 17 does: the running title has one launch and the time since start (the same source as
+ * 4 / 5); every other id has never been played (zero play time and launches). The user is not told apart: one user plays on this host. */
+static void q_app_stats_system(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *in = ipc_in_buf(c, 0), *out = ipc_out_buf(c, 0);
+    const uint64_t *ids = in ? ipc_buf_ptr(in) : NULL;
+    int32_t n = 0;
+    if (ids && out) {
+        uint64_t want = in->size / 8, cap = out->size / 0x18;
+        if (want > cap) want = cap;
+        if (want > 256) want = 256;
+        uint64_t ent[256][3];
+        uint64_t ticks = since_start();
+        for (uint64_t i = 0; i < want; i++) {
+            ent[i][0] = ids[i];
+            ent[i][1] = ids[i] == g_program_id ? ticks / 192 * 10000 + ticks % 192 * 10000 / 192 : 0; /* 19.2 MHz ticks -> ns */
+            ent[i][2] = ids[i] == g_program_id ? 1 : 0;
+        }
+        if (want) ipc_write_buf(c, out, ent, want * 0x18);
+        n = (int32_t)want;
+    }
+    IPC_OUT(c, n);
+}
 /* Event history: this host keeps no play log (only the running title's statistics above are tracked), which is how a console that was just
  * reset answers: zero events returned, an empty available range {0, 0, 0}. Documented no-ops rather than stubs. */
 static const IpcCmd pdm_cmds[] = {
@@ -80,6 +105,8 @@ static const IpcCmd pdm_cmds[] = {
     {11, "QueryAccountPlayEvent", q_count_0, IPC_IMPL},
     {12, "GetAvailableAccountPlayEventRange", q_range_0, IPC_IMPL},
     {17, "QueryLastPlayTime", q_last_play_time, IPC_IMPL},
+    {18, "QueryApplicationPlayStatisticsForSystem", q_app_stats_system, IPC_IMPL},
+    {19, "QueryApplicationPlayStatisticsByUserAccountIdForSystem", q_app_stats_system, IPC_IMPL},
 };
 static IpcObject *pdm_open(void) { return IPC_OBJECT("pdm:qry", pdm_cmds, NULL, NULL); }
 void service_register_pdm(void) { ipc_register_service("pdm:qry", pdm_open); }
