@@ -41,7 +41,7 @@ cargo test -p napple-social
 | `NAPPLE_SOCIAL_INVITES_PER_HOUR` | `120` | Invites sent per profile per hour. |
 | `NAPPLE_SOCIAL_TRUST_PROXY` | off | `1`: take the client IP from the **last** `X-Forwarded-For` entry (set behind a load balancer that appends it). |
 | `NAPPLE_SOCIAL_SERVICE_TOKEN` | unset | Credential napple-online sends as `X-Napple-Service` to `/encounters` and `/internal/*`. Unset: those endpoints answer 401. |
-| `NAPPLE_ACCOUNT_SERVICE_TOKEN` | unset | Credential napple-social sends (`X-Napple-Service`) to `GET ${NAPPLE_ACCOUNT_URL}/account/v1/internal/profiles/{id}` to learn other profiles' current tier. Unset: tiers come only from each owner's own calls. |
+| `NAPPLE_ACCOUNT_SERVICE_TOKEN` | unset | Credential napple-social sends (header `x-napple-internal`; the same value as napple-account's `NAPPLE_INTERNAL_TOKEN`) to `GET ${NAPPLE_ACCOUNT_URL}/account/v1/internal/profiles/{id}` to learn other profiles' current tier. Unset: tiers come only from each owner's own calls. |
 | `NAPPLE_SOCIAL_PROFILE_TTL_SECS` | `10` | How long a profile snapshot (tier, nickname, photo) is trusted before the directory is asked again. A failed lookup keeps the last snapshot. |
 | `NAPPLE_SOCIAL_SEARCHES_PER_MIN` | `30` | `GET /search` per profile per minute. |
 | `NAPPLE_SOCIAL_REPORTS_PER_HOUR` | `10` | Reports filed per profile per hour. |
@@ -193,7 +193,7 @@ sweeper, server). Tests: `tests/auth.rs`, `tests/friends.rs`, `tests/presence.rs
 ## Visibility tiers, search, lobbies, recent players, reports, stats (round 12)
 
 Every profile has a tier 1..5 owned by napple-account (`tier` in its profile JSON). Social keeps a snapshot (refreshed by the owner's own calls and by
-the service-credential directory lookup, TTL above) and applies the table of `orchestrations/ONLINE-CONTRACT.md` in `src/visibility.rs`
+the service-credential directory lookup, TTL above) and applies the table of `orchestrations/ONLINE-CONTRACT.md` in `src/visibility.rs` (a thin adapter over `crates/napple-visibility`)
 (`can_view(viewer, tier, kind)`; a private copy of the names `crates/napple-visibility` will own). A profile a viewer may not see answers exactly like a missing
 one (404), and **a block hides both ways** at every tier.
 
@@ -232,7 +232,7 @@ Service endpoints (header `X-Napple-Service`, constant-time compare):
 | `POST /internal/stats` | `{profile_id, title_id, deltas}` | the title's counters |
 | `GET /internal/reports` | | latest 200 reports with the real profile and account on both sides (moderation) |
 
-Profile source: `GET /account/v1/profiles` (caller's token) for the acting profile, and `GET /account/v1/internal/profiles/{id}` with `X-Napple-Service` for
+Profile source: `GET /account/v1/profiles` (caller's token) for the acting profile, and `GET /account/v1/internal/profiles/{id}` with `x-napple-internal` for
 others. Tables added in schema 2: `stats`, `encounters`, `lobbies`, `reports` (and `tier`, `photo`, `synced_ms` on `profiles`); code in `src/social.rs`, tests in `tests/tiers.rs`.
 
 ## Operating notes

@@ -435,14 +435,14 @@ impl Auth {
         })
     }
 
-    /// Looks one profile up with the service credential (`GET /account/v1/internal/profiles/{id}`). `None` when no
+    /// Looks one profile up with the service credential (`GET /account/v1/internal/profiles/{id}`, header `x-napple-internal` = napple-account's `NAPPLE_INTERNAL_TOKEN`). `None` when no
     /// credential is configured or the lookup fails: callers keep their last snapshot.
     pub async fn directory_lookup(&self, profile_id: &str, now_ms: i64) -> Option<ProfileInfo> {
         let token = self.service_token.as_deref()?;
         let resp = self
             .http
             .get(format!("{}/{}", self.directory_url, profile_id))
-            .header("X-Napple-Service", token)
+            .header("x-napple-internal", token)
             .send()
             .await
             .map_err(|e| tracing::warn!(error = %e, "directory lookup failed"))
@@ -506,8 +506,10 @@ pub fn parse_profiles(v: &Value) -> Vec<ProfileInfo> {
                     .and_then(Value::as_i64)
                     .filter(|t| (1..=5).contains(t))
                     .unwrap_or(1),
+                // napple-account sends `photo: {url, updated_at}` (or null); older shapes send a plain string.
                 photo: it
                     .get("photo")
+                    .and_then(|p| p.get("url").or(Some(p)))
                     .or_else(|| it.get("photo_ref"))
                     .and_then(Value::as_str)
                     .filter(|p| !p.is_empty() && p.len() <= 256)
@@ -520,6 +522,23 @@ pub fn parse_profiles(v: &Value) -> Vec<ProfileInfo> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn napple_account_profile_shape_parses_with_photo_object_and_tier() {
+        // Exactly what napple-account's `Row::internal_json` / `GET /profiles` items look like.
+        let v = serde_json::json!({"profiles": [{
+            "profile_id": "0197f1c2-8a3b-7c4d-9e5f-0123456789ab", "nickname": "Racer_X", "icon_id": 7,
+            "photo": {"url": "/account/v1/profiles/0197f1c2-8a3b-7c4d-9e5f-0123456789ab/photo", "updated_at": 5},
+            "tier": 3, "friend_code": "NP-000000000000"
+        }, {
+            "profile_id": "0197f1c2-8a3b-7c4d-9e5f-0123456789ac", "nickname": "NoPic", "icon_id": 1, "photo": null, "tier": 5
+        }]});
+        let p = parse_profiles(&v);
+        assert_eq!(p.len(), 2);
+        assert_eq!((p[0].tier, p[0].icon_id.as_str()), (3, "7"));
+        assert!(p[0].photo.as_deref().unwrap().ends_with("/photo"));
+        assert_eq!((p[1].tier, p[1].photo.clone()), (5, None));
+    }
+
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
     use serde_json::json;

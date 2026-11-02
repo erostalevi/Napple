@@ -94,7 +94,7 @@ async fn directory(
 ) -> Result<axum::Json<Value>, StatusCode> {
     m.directory_hits.fetch_add(1, Ordering::SeqCst);
     if headers
-        .get("x-napple-service")
+        .get("x-napple-internal")
         .and_then(|v| v.to_str().ok())
         != Some(ACCOUNT_SERVICE_TOKEN)
     {

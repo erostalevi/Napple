@@ -1,7 +1,7 @@
-//! The five visibility tiers of orchestrations/ONLINE-CONTRACT.md as pure functions.
-//!
-//! This is a private copy of the rules that `crates/napple-visibility` (item account-profiles) will own; the names
-//! (`Tier`, `Kind`, `can_view`) match so swapping is a one-line `use` change.
+//! The five visibility tiers of orchestrations/ONLINE-CONTRACT.md. The rules live in `crates/napple-visibility` (shared with
+//! napple-account); this module keeps napple-social's small API (`Tier`, `Kind`, `Viewer`, `can_view`) and delegates to it.
+
+use napple_visibility as nv;
 
 /// Per-profile visibility tier (1 Public .. 5 Ghost).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -16,16 +16,34 @@ pub enum Tier {
 impl Tier {
     /// Unknown values fall back to the default (Public is the account default; clamping to Ghost would hide people on a bad row).
     pub fn from_i64(n: i64) -> Tier {
-        match n {
-            2 => Tier::FriendsSearchable,
-            3 => Tier::FriendsHidden,
-            4 => Tier::Private,
-            5 => Tier::Ghost,
-            _ => Tier::Public,
-        }
+        nv::Tier::from_i64(n).map(Tier::from).unwrap_or(Tier::Public)
     }
     pub fn as_i64(self) -> i64 {
         self as i64
+    }
+}
+
+impl From<nv::Tier> for Tier {
+    fn from(t: nv::Tier) -> Tier {
+        match t {
+            nv::Tier::Public => Tier::Public,
+            nv::Tier::FriendsSearchable => Tier::FriendsSearchable,
+            nv::Tier::FriendsHidden => Tier::FriendsHidden,
+            nv::Tier::Private => Tier::Private,
+            nv::Tier::Ghost => Tier::Ghost,
+        }
+    }
+}
+
+impl From<Tier> for nv::Tier {
+    fn from(t: Tier) -> nv::Tier {
+        match t {
+            Tier::Public => nv::Tier::Public,
+            Tier::FriendsSearchable => nv::Tier::FriendsSearchable,
+            Tier::FriendsHidden => nv::Tier::FriendsHidden,
+            Tier::Private => nv::Tier::Private,
+            Tier::Ghost => nv::Tier::Ghost,
+        }
     }
 }
 
@@ -46,6 +64,19 @@ pub enum Kind {
     Recent,
 }
 
+impl From<Kind> for nv::ViewKind {
+    fn from(k: Kind) -> nv::ViewKind {
+        match k {
+            Kind::Search => nv::ViewKind::Search,
+            Kind::FriendRequest => nv::ViewKind::FriendRequest,
+            Kind::Card => nv::ViewKind::NicknameAndPhoto,
+            Kind::Details => nv::ViewKind::Profile,
+            Kind::LobbyReal => nv::ViewKind::LobbyIdentity,
+            Kind::Recent => nv::ViewKind::RecentPlayers,
+        }
+    }
+}
+
 /// How the viewer relates to the target. Block checks are made by the caller (`blocked` wins over everything).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Viewer {
@@ -62,29 +93,18 @@ pub fn can_view(v: Viewer, target: Tier, kind: Kind) -> bool {
         // Your own data is always yours; you are never in your own search or request inbox.
         return !matches!(kind, Kind::Search | Kind::FriendRequest);
     }
-    if v.blocked {
-        return false;
-    }
-    let ghost = target == Tier::Ghost;
-    match kind {
-        Kind::Search => matches!(target, Tier::Public | Tier::FriendsSearchable),
-        Kind::FriendRequest => match target {
-            Tier::Public | Tier::FriendsSearchable => true,
-            Tier::FriendsHidden => v.shared_lobby,
-            Tier::Private | Tier::Ghost => false,
-        },
-        Kind::Card => match target {
-            Tier::Public | Tier::FriendsSearchable => true,
-            Tier::FriendsHidden | Tier::Private => v.is_friend,
-            Tier::Ghost => false,
-        },
-        Kind::Details => match target {
-            Tier::Public => true,
-            Tier::FriendsSearchable | Tier::FriendsHidden | Tier::Private => v.is_friend,
-            Tier::Ghost => false,
-        },
-        Kind::LobbyReal | Kind::Recent => !ghost,
-    }
+    let viewer = nv::Viewer {
+        profile_id: None,
+        same_account: false,
+        is_friend: v.is_friend,
+        shared_lobby: v.shared_lobby,
+        blocked: v.blocked,
+    };
+    let target = nv::TargetProfile {
+        profile_id: String::new(),
+        tier: target.into(),
+    };
+    nv::can_view(&viewer, &target, kind.into())
 }
 
 #[cfg(test)]
