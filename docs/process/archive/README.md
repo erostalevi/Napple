@@ -91,3 +91,4 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | Item | Orchestration | Integrator file | Goal |
 |---|---|---|---|
 | nvdrv-public-layouts | [nvdrv-public-layouts.md](orchestrations/nvdrv-public-layouts.md) | [claude-nvdrv-public-layouts-2026-11-02-r10.md](integrators/claude-nvdrv-public-layouts-2026-11-02-r10.md) | GPU / nvdisp / host1x media layouts on public sources |
+| online-support-table | [online-support-table.md](orchestrations/online-support-table.md) | [claude-online-support-table-2026-11-02-r10.md](integrators/claude-online-support-table-2026-11-02-r10.md) | generated per-game online support table (README block, reference page, landing page) |

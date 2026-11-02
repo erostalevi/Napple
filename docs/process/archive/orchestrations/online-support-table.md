@@ -6,7 +6,7 @@ base: origin/claude/online-support-table-2026-11-02-r10 rebased by the orchestra
 env: linux-cloud
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: cloud (task_a28d9729)
 launched_at: 2026-11-02
@@ -18,3 +18,5 @@ launched_at: 2026-11-02
 - python3 tools/support/gen_support.py --check, tools/check_docs.py; README online block + site section render; update compat/online.json with the latest MK8D online results at integration time (LAN Play works, online matchmaking works, race pending, friends pending).
 
 ## Result
+Integrated 2026-11-02 into main as 0b1f565 (head 076b6c8), outcome **Clean**; MK8D rows updated with the verified results; generator and docs checks OK.
+Details: [integrator file](../integrators/claude-online-support-table-2026-11-02-r10.md).

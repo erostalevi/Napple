@@ -1,3 +1,10 @@
+---
+branch: claude/online-support-table-2026-11-02-r10
+orchestration: online-support-table
+env: linux-cloud
+status: integrated
+---
+
 # Integrator note: claude/online-support-table-2026-11-02-r10
 
 Base: `main` at `d0d4be9`. One commit. Docs, data, generator and landing page only; no runtime, Rust or Swift code.
@@ -34,3 +41,14 @@ Base: `main` at `d0d4be9`. One commit. Docs, data, generator and landing page on
 `python3 -I tools/support/gen_support.py --check` OK, `python3 tools/check_docs.py` OK (210 files), `python3 -I tools/support/test_gen_support.py`
 9 OK. Landing page checked in headless Chromium at 1280 and 390 px: 4 cards, no horizontal scroll, no console errors (served locally).
 Not verified: the GitHub Pages / mkdocs build itself (mkdocs not installed here).
+
+## Integration result
+- Date 2026-11-02, merged into main as 0b1f565 (head 076b6c8, rebased by the orchestrator). Conflict: `docs/archive/changes/README.md` r10 heading (kept
+  one heading, both rows). Outcome: **Clean** plus two commits:
+  - `compat/online.json` MK8D rows set to the results verified during this integration (orchestrator's list): LAN Play **works** (two instances in the
+    same napple-room room's character select; the old note said "in one race", which was not verified), online matchmaking **works** (login, menu,
+    two instances in one gathering), online race **partial** (open: host at the course vote, joiner 2618-0502 after NAT traversal), friends **partial**
+    (friend joinable, Friends-menu list empty: online-friends' result), local wireless **broken**. Outputs regenerated with `gen_support.py`.
+  - A `docs/index.md` row for `reference/online-support.md` (the file's optional follow-up). Not done: the mkdocs `nav:` entry.
+- `python3 -I tools/support/gen_support.py --check`: OK; `python3 -I tools/support/test_gen_support.py`: OK (9); `tools/check_docs.py`: OK.
+- Not verified here: the landing page rendering in a browser, the GitHub Pages / mkdocs build. SMO / ACNH rows are the author's (decisions listed above).
