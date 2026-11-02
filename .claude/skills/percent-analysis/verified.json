@@ -36,13 +36,13 @@
  },
  "nvdrv//dev/nvhost-nvdec, vic, nvjpg, msenc": {
   "status": "partial",
-  "note": "nvdrv_media_core.c (f557b4a): NVDEC + VIC verified on MK8D (0 errors, THI INCR_SYNCPT + VIC 0x1c1 / NVDEC 0x140 now known); NVJPG / MSENC / VP9-on-NVDEC / RGB+block-linear VIC output tested only, no title opens them",
-  "date": "2026-11-01"
+  "note": "r10 52637d5: NVDEC (clc5b0), NVJPG (cle7d0), MSENC (clc5b7) now on public open-gpu-doc layouts, MK8D NVDEC+VIC re-verified (329 decodes, 0 errors); still partial: VIC slot/config struct is trace-matched (no public VIC 4.0 header), NVJPG refuses a header-less scan (BAD_MAGIC), no title drives NVJPG/MSENC",
+  "date": "2026-11-02"
  },
  "media/JPEG (nvjpg / caps)": {
   "status": "partial",
-  "note": "caps path: test_svc_caps_e2e (f557b4a) round-trips real MK8D/SMO frames through caps:su -> caps:u -> caps:dc and ImageIO (31-47 dB); NVJPG engine register path synthetic only and no title of the four opens caps or nvjpg",
-  "date": "2026-11-01"
+  "note": "caps path round-trips real frames (f557b4a); NVJPG engine now on public cle7d0 layout (r10) but header-less scans are refused and no title uses it: partial",
+  "date": "2026-11-02"
  },
  "media/H.264": {
   "status": "impl",
@@ -386,13 +386,13 @@
  },
  "nvdrv//dev/nvhost-gpu, as-gpu, ctrl-gpu (only if NVN is bypassed)": {
   "status": "partial",
-  "note": "runtime/src/services/nvdrv_nodes_core.c: state-tracked ioctls, layouts PROPOSED; verifying them needs real Switch hardware traces or a title that bypasses NVN (none of the four opens these nodes): unreachable on this Mac",
-  "date": "2026-11-01"
+  "note": "r10 52637d5: libnx/nvgpu layouts fixed and tested (216/0), but still partial: nvdrv.c:643 not yet routed to nvgpu_chan_ioctl_typed (SET/GET_USER_DATA 'G' 0x14/0x15 NotImplemented), switchbrew-only ioctls (as-gpu REMAP, ctrl-gpu PMU/time correlation, SET_TIMESLICE) refused; no title bypasses NVN",
+  "date": "2026-11-02"
  },
  "nvdrv//dev/nvdisp-disp0": {
-  "status": "partial",
-  "note": "nvdrv_media_core.c nvdisp vblank ioctls: unit-tested only; media-live open notes show none of the four titles opens nvdisp",
-  "date": "2026-11-01"
+  "status": "impl",
+  "note": "nvdrv-public-layouts r10 c6f2597 (52637d5): tegra_dc_ext surface (SET_NVMAP_FD, windows, cursor, CSC, LUT, CMU, vblank, winmask, scanline) replaces invented ioctls, struct sizes/offsets/commands pinned by test_svc_nvdrv_media 293/0 via nv_ioctl; no refused branch in the documented set. Caveat: Switch nvdisp assumed to follow the public L4T header; no title opens the node",
+  "date": "2026-11-02"
  },
  "content/NCA2 / NCA0": {
   "status": "partial",
