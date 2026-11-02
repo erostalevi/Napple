@@ -1,5 +1,5 @@
 locals {
-  images = toset(["napple-online", "napple-room"])
+  images = toset(["napple-online", "napple-room", "napple-account", "napple-social"])
 }
 
 resource "aws_ecr_repository" "image" {

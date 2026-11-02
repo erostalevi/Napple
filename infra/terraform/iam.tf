@@ -39,6 +39,24 @@ data "aws_iam_policy_document" "instance" {
     actions   = ["logs:CreateLogStream", "logs:PutLogEvents", "logs:DescribeLogStreams"]
     resources = ["${aws_cloudwatch_log_group.servers.arn}:*"]
   }
+  # Confirmation / reset code mail (napple-account, SES v2 SendEmail). Only from the domain identity, only through the transactional
+  # configuration set (bounces and complaints feed the suppression list). SendRawEmail is the same API family for multipart mail.
+  statement {
+    sid       = "SesSend"
+    actions   = ["ses:SendEmail", "ses:SendRawEmail"]
+    resources = [local.ses_identity, local.ses_configset]
+  }
+  # Profile photos and save blobs: object access only on the two private buckets.
+  statement {
+    sid       = "DataBucketObjects"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"]
+    resources = [for k, _ in local.data_buckets : "${aws_s3_bucket.data[k].arn}/*"]
+  }
+  statement {
+    sid       = "DataBucketList"
+    actions   = ["s3:ListBucket", "s3:GetBucketLocation"]
+    resources = [for k, _ in local.data_buckets : aws_s3_bucket.data[k].arn]
+  }
 }
 
 resource "aws_iam_role_policy" "instance" {

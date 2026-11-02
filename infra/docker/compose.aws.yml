@@ -13,6 +13,14 @@ services:
     logging: *awslogs
     volumes: !override
       - /var/lib/napple/online:/var/lib/napple/online
+  account:
+    logging: *awslogs
+    volumes: !override
+      - /var/lib/napple/account:/var/lib/napple/account
+  social:
+    logging: *awslogs
+    volumes: !override
+      - /var/lib/napple/social:/var/lib/napple/social
   room:
     logging: *awslogs
     volumes: !override

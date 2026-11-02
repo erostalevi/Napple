@@ -4,7 +4,8 @@
 It reads the same env vars as the real servers (docs/guides/deploy-servers.md#server-contract) and only proves the plumbing:
   online: HTTP on NAPPLE_ONLINE_HTTP (/healthz -> 200)
   room:   TCP on NAPPLE_ROOM_LISTEN (logs the connection, echoes bytes), HTTP on NAPPLE_ROOM_HTTP (/healthz -> 200)
-Usage: stub-server.py online|room
+  account: HTTP on NAPPLE_ACCOUNT_BIND (/healthz -> 200);  social: HTTP on NAPPLE_SOCIAL_BIND (/healthz -> 200)
+Usage: stub-server.py online|room|account|social
 """
 import http.server
 import os
@@ -26,7 +27,7 @@ def log(msg):
 
 class Health(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        ok = self.path in ("/healthz", "/")
+        ok = self.path in ("/healthz", "/social/v1/healthz", "/")
         body = (f"ok stub {sys.argv[1]}\n" if ok else "not found\n").encode()
         self.send_response(200 if ok else 404)
         self.send_header("Content-Type", "text/plain")
@@ -69,10 +70,14 @@ def serve_tcp_echo(a):
 
 
 def main():
-    if len(sys.argv) != 2 or sys.argv[1] not in ("online", "room"):
+    if len(sys.argv) != 2 or sys.argv[1] not in ("online", "room", "account", "social"):
         sys.exit(__doc__)
     if sys.argv[1] == "online":
         serve_http(addr("NAPPLE_ONLINE_HTTP", "0.0.0.0:8080"))
+    elif sys.argv[1] == "account":
+        serve_http(addr("NAPPLE_ACCOUNT_BIND", "0.0.0.0:8082"))
+    elif sys.argv[1] == "social":
+        serve_http(addr("NAPPLE_SOCIAL_BIND", "0.0.0.0:8083"))
     else:
         serve_tcp_echo(addr("NAPPLE_ROOM_LISTEN", "0.0.0.0:31415"))
         serve_http(addr("NAPPLE_ROOM_HTTP", "0.0.0.0:8081"))

@@ -1,5 +1,7 @@
-# Napple game servers behind Caddy: https://${NAPPLE_DOMAIN} -> napple-online (account/token API, and the NEX game server as PRUDP Lite over a
-# WebSocket upgrade on the same port; Caddy forwards upgrades and sets X-Forwarded-For), /room/* -> napple-room's status API.
+# Napple game servers behind Caddy: https://${NAPPLE_DOMAIN} -> napple-online (the NEX game server as PRUDP Lite over a WebSocket upgrade on
+# the same port, /healthz; Caddy forwards upgrades and sets X-Forwarded-For), /account/v1/* -> napple-account, /social/v1/* (incl. the
+# WebSocket /social/v1/stream) -> napple-social, /room/* -> napple-room's status API. napple-account also answers /account/healthz
+# (its root /healthz) through Caddy; napple-social has /social/v1/healthz. online reaches account and social over the compose network (JWKS, encounters, stats).
 # Published directly: the room port, and napple-online's Pia NAT-check UDP ports (10025, 10125, 33334, 33335 and the same + 1000, from
 # NAPPLE_ONLINE_NATCHECK_BASE; the security group opens the same list). Docker's DNAT keeps the client's address and port, and replies from
 # another of the published ports leave with that port, which the check relies on.
@@ -27,6 +29,8 @@ services:
       NAPPLE_ONLINE_VERBOSE: ${NAPPLE_ONLINE_VERBOSE:-0}
       NAPPLE_ONLINE_PUBLIC_IP: ${NAPPLE_PUBLIC_IP:-}
       NAPPLE_ONLINE_NATCHECK_BASE: "10025"
+      NAPPLE_ACCOUNT_URL: http://account:8082
+      NAPPLE_SOCIAL_URL: http://social:8083
     ports:
       - "10025:10025/udp"
       - "10125:10125/udp"
@@ -37,6 +41,52 @@ services:
     volumes:
       - online-data:/var/lib/napple/online
     expose: ["8080"]
+    depends_on: [account, social]
+
+  account:
+    <<: *hardening
+    image: ${NAPPLE_ACCOUNT_IMAGE:-napple-account:local}
+    environment:
+      NAPPLE_ACCOUNT_BIND: 0.0.0.0:8082
+      NAPPLE_ACCOUNT_DATA_DIR: /var/lib/napple/account
+      NAPPLE_ACCOUNT_PUBLIC_BASE: https://${NAPPLE_DOMAIN:-pretend.napple.lat}
+      NAPPLE_ACCOUNT_TRUST_PROXY: "1"
+      # Mail: the SES v2 API through the instance role (no keys). SES is in the sandbox until production access is granted: it only delivers
+      # to verified recipients. dev prints the codes instead (local Docker: NAPPLE_MAIL_PROVIDER=dev NAPPLE_ACCOUNT_ENV=development).
+      NAPPLE_MAIL_PROVIDER: ${NAPPLE_MAIL_PROVIDER:-ses}
+      NAPPLE_MAIL_FROM: ${NAPPLE_MAIL_FROM:-no-reply@napple.lat}
+      NAPPLE_SES_REGION: ${AWS_REGION:-us-east-1}
+      NAPPLE_SES_CONFIG_SET: ${NAPPLE_SES_CONFIG_SET:-napple-transactional}
+      # Photos and save blobs: private S3 buckets (empty = the data dir, local Docker).
+      NAPPLE_PHOTO_BUCKET: ${NAPPLE_PHOTO_BUCKET:-}
+      NAPPLE_ACCOUNT_S3_BUCKET: ${NAPPLE_SAVES_BUCKET:-}
+      NAPPLE_ACCOUNT_S3_REGION: ${AWS_REGION:-us-east-1}
+      NAPPLE_ADMIN_EMAILS: ${NAPPLE_ADMIN_EMAILS:-}
+      # Same values under the names napple-account read before round r12 (ignored once it only reads the names above).
+      NAPPLE_ACCOUNT_ENV: ${NAPPLE_ACCOUNT_ENV:-production}
+      NAPPLE_ACCOUNT_HTTP: 0.0.0.0:8082
+      NAPPLE_ACCOUNT_DATA: /var/lib/napple/account
+      NAPPLE_ACCOUNT_MAILER: ${NAPPLE_MAIL_PROVIDER:-ses}
+      NAPPLE_ACCOUNT_MAIL_FROM: ${NAPPLE_MAIL_FROM:-no-reply@napple.lat}
+      NAPPLE_ACCOUNT_SES_REGION: ${AWS_REGION:-us-east-1}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - account-data:/var/lib/napple/account
+    expose: ["8082"]
+
+  social:
+    <<: *hardening
+    image: ${NAPPLE_SOCIAL_IMAGE:-napple-social:local}
+    environment:
+      NAPPLE_SOCIAL_BIND: 0.0.0.0:8083
+      NAPPLE_SOCIAL_DATA_DIR: /var/lib/napple/social
+      NAPPLE_SOCIAL_TRUST_PROXY: "1"
+      NAPPLE_ACCOUNT_URL: http://account:8082
+      NAPPLE_SOCIAL_LOG: ${NAPPLE_SOCIAL_LOG:-info}
+    volumes:
+      - social-data:/var/lib/napple/social
+    expose: ["8083"]
+    depends_on: [account]
 
   room:
     <<: *hardening
@@ -67,7 +117,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
-    depends_on: [online, room]
+    depends_on: [online, room, account, social]
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:2019/config/"]
       interval: 30s
@@ -76,6 +126,8 @@ services:
 
 volumes:
   online-data:
+  account-data:
+  social-data:
   room-data:
   caddy-data:
   caddy-config:

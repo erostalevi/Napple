@@ -29,3 +29,13 @@ output "zone_name_servers" {
   description = "The zone's name servers: the registrar of napple.lat must list exactly these."
   value       = data.aws_route53_zone.main.name_servers
 }
+
+output "photo_bucket" {
+  description = "Private S3 bucket of profile photos (NAPPLE_PHOTO_BUCKET)."
+  value       = aws_s3_bucket.data["photos"].bucket
+}
+
+output "saves_bucket" {
+  description = "Private S3 bucket of cloud-save blobs (NAPPLE_ACCOUNT_S3_BUCKET)."
+  value       = aws_s3_bucket.data["saves"].bucket
+}

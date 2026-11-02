@@ -133,3 +133,9 @@ variable "vpc_cidr" {
   type        = string
   default     = "10.42.0.0/16"
 }
+
+variable "ses_config_set" {
+  description = "SES configuration set the account service sends through (NAPPLE_SES_CONFIG_SET); the instance role may only send with it."
+  type        = string
+  default     = "napple-transactional"
+}
