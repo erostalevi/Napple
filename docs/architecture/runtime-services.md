@@ -409,3 +409,15 @@ iterator, btm:u / IBtmUserCore. Rows added or renumbered in this round:
   switchbrew + 4/5; IBtmUserCore 19-21 renumbered (19 BleDisconnect, 20 BleGetConnectionState, 21 AcquireBlePairingEvent) and 1, 2, 22-37 added
   (1/2 scan filter parameters are `IPC_STUB` zeros; everything needing a connection fails "not connected").
 See `docs/archive/changes/2026-11-01-claude-ipc-depth-hid-2026-11-01-r2.md`.
+
+### am interfaces: reference and depth (am-depth-applets, 2026-11-01-r3)
+Switchbrew reference fixtures (`runtime/tests/ipc_reference/`) cover the application-facing am interfaces: `appletOE`, `IApplicationProxy`, `ICommonStateGetter`,
+`ISelfController`, `IWindowController`, `IAudioController`, `IDisplayController`, `ILibraryAppletCreator`, `ILibraryAppletAccessor`, `IStorageAccessor`,
+`IApplicationFunctions`, `IDebugFunctions` (the am `IStorage` shares its name with the fs fixture and is not listed separately). Ids marked `n` are debug-only,
+Switch 2 only, newer than 22.x, system-applet services or unnamed; every `y` id has a row (`test_ipc_reference`: missing 0). Rows were renumbered to the
+switchbrew / libnx ids (IApplicationFunctions copyright 100-102, GetPreviousProgramIndex 123, ExecuteProgram 120, GetGpuErrorDetectedSystemEvent 130,
+GetFriendInvitationStorageChannelEvent 140; ILibraryAppletAccessor PresetLibraryAppletGpuTimeSliceZero 60). Requests for things one runtime cannot do
+(another application or program, the movie maker, child applets) answer the am result 0x1480; empty storage channels answer 0x680; preference setters are
+no-ops (`IPC_STUB`). Offline web: document kinds legal information (`<data-dir>/legal`, `NAPPLE_LEGAL_ROOT`) and system data (firmware archive
+`<data-dir>/../sysdata/<id>.bin`, extracted once by `web_romfs_extract`); `NAPPLE_OPEN_WEB_DOC=<secs>:<kind>:<id>:<path>`. Scripted input:
+`NAPPLE_INPUT_SCRIPT` times and holds may be frames (`f600:A:f10`, or `NAPPLE_INPUT_SCRIPT_FRAMES=1`).
