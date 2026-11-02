@@ -11,6 +11,7 @@
 #include "nfp_core.h"
 #include "amiibo_lib_core.h"
 #include "install_id_core.h"
+#include "friend_core.h"
 #include <limits.h>
 #include <time.h>
 #include <stdio.h>
@@ -176,11 +177,13 @@ static void friend_list_records(IpcObject *s, IpcCall *c) {
     }
     IPC_OUT(c, written);
 }
+static void friend_presence_keep(const IpcCall *c, const void *rec, size_t n);
 static void friend_presence(IpcObject *s, IpcCall *c) {
     (void)s;
     const OnlineProvider *p = online_provider();
     void (*up)(void *, const void *, size_t) = ONLINE_FN(p, presence_update);
     const IpcBuf *b = ipc_in_buf(c, 0);
+    if (b && b->size && ipc_buf_ptr(b)) friend_presence_keep(c, ipc_buf_ptr(b), (size_t)b->size);
     if (up && b && b->size && ipc_buf_ptr(b)) up(p->ctx, ipc_buf_ptr(b), (size_t)b->size);
     else if (up) up(p->ctx, c->in, c->in_size);
 }
@@ -211,8 +214,370 @@ static void friend_play_history_key(IpcObject *s, IpcCall *c) {
     install_play_history_key(inst, user, c->in_size >= 4 && IPC_IN(c, uint32_t, 0) != 0, key);
     if (b && b->size) ipc_write_buf(c, b, key, b->size < sizeof key ? b->size : sizeof key);
 }
+/* ---- friend:u rows backed by the local friend store (friend_core.c) and the provider -----------------------------------------------------------------
+ * Three kinds of rows (the console's split, results [unverified]):
+ *  - local: the play history, in-person requests and the user's own presence live on the console; any valid local user may use them, no account needed.
+ *  - cache: the friend list cache needs a network service account linked to the user (OnlineProvider.account_info, ONLINE_CAP_ACCOUNT). Without one
+ *    (the NullProvider, NAPPLE_NET=host) the answer is the console's "no network service account" result, as before. With one the rows answer from
+ *    the provider's friend list (ONLINE_CAP_FRIENDS) or, without it, from an empty cache.
+ *  - sync: talks to the friend server; needs the account, ONLINE_CAP_FRIENDS and a connected interface (net_info), else "no network". */
+#define HZ_R_FRIENDS_INVALID_KEY HZ_RESULT(HZ_MOD_FRIENDS, 6)    /* [unverified] a registration key that is not one */
+#define HZ_R_FRIENDS_NOT_FOUND HZ_RESULT(HZ_MOD_FRIENDS, 3)      /* [unverified] a friend / invitation id the list does not hold */
+#define FRIEND_PROFILE_RECORD_MIN 0x40                            /* [unverified] {u64 account id @0, UTF-8 nickname @8 (33 bytes), u8 valid @0x30} */
+#define FRIEND_DETAIL_RECORD_SIZE 0x800                           /* [unverified] {u64 id @0, nickname @8, u8 presence @0x30, u8 valid @0x31} */
+#define FRIEND_SETTING_RECORD_SIZE 0x40                           /* [unverified] {u64 id @0, u8 new flag @8, u8 favorite @9, u8 valid @0xa} */
+typedef struct {
+    uint8_t online_play; /* first: DeclareOpen/CloseOnlinePlaySession write it */
+    uint32_t done_w;     /* writable side of the last completion event handed out (0 = none) */
+} FriendSvc;
+extern const uint8_t g_user_id[16];
+static FriendStore friend_store;
+static pthread_mutex_t friend_lock = PTHREAD_MUTEX_INITIALIZER;
+static void friend_uid(const IpcCall *c, uint32_t off, uint8_t out[16]) {
+    memset(out, 0, 16);
+    if (c->in_size >= off + 16) memcpy(out, c->in + off, 16);
+}
+static int friend_nsa(const uint8_t user[16], OnlineAccountInfo *ai) {
+    const OnlineProvider *p = online_provider();
+    int (*info)(void *, const uint8_t[16], OnlineAccountInfo *) = online_has(p, ONLINE_CAP_ACCOUNT) ? ONLINE_FN(p, account_info) : NULL;
+    memset(ai, 0, sizeof *ai);
+    return info && info(p->ctx, user, ai) == 0 && ai->linked;
+}
+static int friend_online(void) {
+    const OnlineProvider *p = online_provider();
+    return online_has(p, ONLINE_CAP_FRIENDS) && ONLINE_FN(p, friend_list) != NULL;
+}
+static int friend_net_up(void) {
+    const OnlineProvider *p = online_provider();
+    int (*f)(void *, OnlineNetInfo *) = ONLINE_FN(p, net_info);
+    OnlineNetInfo ni = {0};
+    return f && f(p->ctx, &ni) == 0 && ni.connected;
+}
+/* 1 when the call may go on; otherwise c->result holds the console's answer. */
+static int friend_gate_local(IpcCall *c, uint32_t off, uint8_t user[16]) {
+    static const uint8_t zero[16];
+    friend_uid(c, off, user);
+    if (!memcmp(user, zero, 16)) return c->result = HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE, 0;
+    return 1;
+}
+static int friend_gate_cache(IpcCall *c, uint32_t off, uint8_t user[16]) {
+    OnlineAccountInfo ai;
+    if (!friend_gate_local(c, off, user)) return 0;
+    if (!friend_nsa(user, &ai)) return c->result = HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE, 0;
+    return 1;
+}
+static int friend_gate_sync(IpcCall *c, uint32_t off, uint8_t user[16]) {
+    if (!friend_gate_cache(c, off, user)) return 0;
+    if (!friend_online() || !friend_net_up()) return c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, 0;
+    return 1;
+}
+/* A friend of the provider's list by account id (paged through friend_list). */
+static int friend_find(uint64_t id, OnlineFriend *out) {
+    if (!friend_online()) return 0;
+    const OnlineProvider *p = online_provider();
+    uint32_t (*list)(void *, uint32_t, OnlineFriend *, uint32_t) = ONLINE_FN(p, friend_list);
+    OnlineFriend f[32];
+    for (uint32_t off = 0, n; (n = list(p->ctx, off, f, 32)) > 0; off += n) {
+        for (uint32_t i = 0; i < n; i++)
+            if (f[i].id == id) return *out = f[i], 1;
+        if (n < 32 || off > 100000) break;
+    }
+    return 0;
+}
+static const uint8_t *friend_in(const IpcCall *c, int i, uint64_t need) {
+    const IpcBuf *b = ipc_in_buf(c, i);
+    return b && b->size >= need ? ipc_buf_ptr(b) : NULL;
+}
+static void friend_out(IpcCall *c, int i, const void *p, uint64_t n) {
+    const IpcBuf *b = ipc_out_buf(c, i);
+    if (b && b->size) ipc_write_buf(c, b, p, b->size < n ? b->size : n);
+}
+static uint64_t friend_out_cap(IpcCall *c, int i) {
+    const IpcBuf *b = ipc_out_buf(c, i);
+    return b ? b->size : 0;
+}
+
+/* 0 GetCompletionEvent: one event per call, signalled when a RequestSync* the object started is done (they complete at once). */
+static void friend_completion_event(IpcObject *s, IpcCall *c) {
+    FriendSvc *f = s->state;
+    uint32_t r = 0;
+    f->done_w = event_create(&r);
+    ipc_out_copy_handle(c, r);
+}
+/* Sync rows: the provider's list is live, so a sync has nothing to fetch beyond the gate (account + friend server + network). */
+static void friend_sync_uid(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    friend_gate_sync(c, 0, u);
+}
+/* 20104 RequestSyncFriendList(uid): the asynchronous form; completion is signalled on the object's event. */
+static void friend_request_sync(IpcObject *s, IpcCall *c) {
+    FriendSvc *f = s->state;
+    uint8_t u[16];
+    if (friend_gate_sync(c, 0, u) && f->done_w) event_signal_handle(f->done_w);
+}
+/* 10120 CheckFriendListAvailability / 10420 CheckBlockedUserListAvailability(uid): the cache exists exactly when an account is linked. */
+static void friend_check_cache(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    friend_gate_cache(c, 0, u);
+}
+/* 10500-10503 GetProfileList*(uid; in buffer of u64 account ids; out buffer of profile records): one record per id, zero (valid 0) for an account
+ * that is not a friend. The record size is the guest's (out size / ids), at least FRIEND_PROFILE_RECORD_MIN. Also 20500 / 20502 GetProfileExtraList. */
+static void friend_profile_list(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_cache(c, 0, u)) return;
+    const IpcBuf *ib = ipc_in_buf(c, 0);
+    uint64_t cap = friend_out_cap(c, 0);
+    uint32_t n = ib && ipc_buf_ptr(ib) ? (uint32_t)(ib->size / 8) : 0;
+    if (n > 64) n = 64;
+    if (!n || !cap) return;
+    uint64_t rs = cap / n;
+    if (rs < FRIEND_PROFILE_RECORD_MIN) return;
+    if (rs > 0x1000) rs = 0x1000;
+    uint8_t *out = calloc(n, rs);
+    if (!out) return;
+    const uint8_t *ids = ipc_buf_ptr(ib);
+    for (uint32_t i = 0; i < n; i++) {
+        uint64_t id;
+        OnlineFriend f;
+        memcpy(&id, ids + i * 8, 8);
+        if (!friend_find(id, &f)) continue;
+        uint8_t *r = out + i * rs;
+        memcpy(r, &f.id, 8);
+        memcpy(r + 8, f.name, sizeof f.name);
+        r[0x30] = 1;
+    }
+    friend_out(c, 0, out, (uint64_t)n * rs);
+    free(out);
+}
+/* 20102 GetFriendDetailedInfo / 20107 V2 (uid, u64 friend id @0x10): the friend's record from the provider, else "not found". */
+static void friend_detailed_info(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_cache(c, 0, u)) return;
+    uint64_t id = c->in_size >= 0x18 ? IPC_IN(c, uint64_t, 0x10) : 0;
+    OnlineFriend f;
+    if (!friend_find(id, &f)) {
+        c->result = HZ_R_FRIENDS_NOT_FOUND;
+        return;
+    }
+    static uint8_t r[FRIEND_DETAIL_RECORD_SIZE];
+    memset(r, 0, sizeof r);
+    memcpy(r, &f.id, 8);
+    memcpy(r + 8, f.name, sizeof f.name);
+    r[0x30] = f.presence;
+    r[0x31] = 1;
+    friend_out(c, 0, r, sizeof r);
+}
+/* 20110 / 20111 LoadFriendSetting(uid, u64 friend id @0x10): titles cannot change friend settings, so a friend's are the defaults (new until seen, not a
+ * favourite); not a friend = "not found". */
+static void friend_load_setting(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_cache(c, 0, u)) return;
+    uint64_t id = c->in_size >= 0x18 ? IPC_IN(c, uint64_t, 0x10) : 0;
+    OnlineFriend f;
+    if (!friend_find(id, &f)) {
+        c->result = HZ_R_FRIENDS_NOT_FOUND;
+        return;
+    }
+    uint8_t r[FRIEND_SETTING_RECORD_SIZE] = {0};
+    memcpy(r, &f.id, 8);
+    r[8] = 1, r[10] = 1;
+    friend_out(c, 0, r, sizeof r);
+}
+/* 20501 GetRelationship(uid, u64 account id @0x10) -> {u8 is_friend, is_request_pending, is_request_received, is_blocking, is_blocked, pad[3]} [unverified]:
+ * friend from the provider's list, pending from the in-person requests queued here; nobody is blocked (titles cannot block). */
+static void friend_relationship(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_cache(c, 0, u)) return;
+    uint64_t id = c->in_size >= 0x18 ? IPC_IN(c, uint64_t, 0x10) : 0;
+    OnlineFriend f;
+    uint8_t v[8] = {0}, other[16] = {0};
+    v[0] = (uint8_t)friend_find(id, &f);
+    memcpy(other, &id, 8); /* an in-person request names a user id; its first 8 bytes are matched against the account id [unverified] */
+    pthread_mutex_lock(&friend_lock);
+    FriendUser *fu = friend_user(&friend_store, u);
+    for (uint32_t i = 0; fu && i < fu->nfaced; i++)
+        if (!memcmp(fu->faced[i].other, other, 8)) v[1] = 1;
+    pthread_mutex_unlock(&friend_lock);
+    ipc_out(c, v, 8);
+}
+/* Lists the provider cannot fill (received requests, blocked users, invitations, NNID links): the account's cache holds none -> count 0. Calls:
+ * 20203 GetFriendRequestReceivedNotificationCount(uid), 22010 GetReceivedFriendInvitationCountCache(uid). */
+static void friend_count0_cached(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_cache(c, 0, u)) return;
+    uint32_t v = 0;
+    IPC_OUT(c, v);
+}
+/* {u32 offset, pad, uid} list calls with nothing in the cache: 20400 / 20402 GetBlockedUserList, 22000 / 22002 GetReceivedFriendInvitationList,
+ * 20301 GetNintendoNetworkIdInfo (no Nintendo Network ID is ever linked to a Napple user). */
+static void friend_list0_cached(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_cache(c, 8, u)) return;
+    uint32_t v = 0;
+    IPC_OUT(c, v);
+}
+/* 22001 / 22003 GetReceivedFriendInvitationDetailedInfo(uid, invitation id): no invitation was ever received, so every id is unknown. */
+static void friend_invitation_detail(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (friend_gate_cache(c, 0, u)) c->result = HZ_R_FRIENDS_NOT_FOUND;
+}
+/* 20201 / 20202 GetFriendRequestList({u32 offset, u32 type, uid} [unverified]) -> u32 count + records: type 0 = received (none: no provider hook), any
+ * other type = sent, the in-person requests queued here (FRIEND_FACED_RECORD_SIZE each, newest first). */
+static void friend_request_list(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_cache(c, 8, u)) return;
+    uint32_t off = IPC_IN(c, uint32_t, 0), type = IPC_IN(c, uint32_t, 4), n = 0;
+    uint32_t max = (uint32_t)(friend_out_cap(c, 0) / FRIEND_FACED_RECORD_SIZE);
+    if (max > FRIEND_FACED_MAX) max = FRIEND_FACED_MAX;
+    if (type && max) {
+        uint8_t *out = calloc(max, FRIEND_FACED_RECORD_SIZE);
+        pthread_mutex_lock(&friend_lock);
+        FriendUser *fu = friend_user(&friend_store, u);
+        if (fu && out) n = friend_faced_encode(fu, off, out, max);
+        pthread_mutex_unlock(&friend_lock);
+        if (n) friend_out(c, 0, out, (uint64_t)n * FRIEND_FACED_RECORD_SIZE);
+        free(out);
+    }
+    IPC_OUT(c, n);
+}
+/* 20300 GetFriendCandidateList(uid) -> u32 count + records: the distinct players of the play history (people met through local or online play). */
+static void friend_candidates(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_cache(c, 0, u)) return;
+    uint32_t n = 0, max = (uint32_t)(friend_out_cap(c, 0) / FRIEND_HISTORY_RECORD_SIZE);
+    if (max > FRIEND_HISTORY_MAX) max = FRIEND_HISTORY_MAX;
+    if (max) {
+        uint8_t *out = calloc(max, FRIEND_HISTORY_RECORD_SIZE);
+        pthread_mutex_lock(&friend_lock);
+        FriendUser *fu = friend_user(&friend_store, u);
+        if (fu && out) n = friend_candidates_encode(fu, out, max);
+        pthread_mutex_unlock(&friend_lock);
+        if (n) friend_out(c, 0, out, (uint64_t)n * FRIEND_HISTORY_RECORD_SIZE);
+        free(out);
+    }
+    IPC_OUT(c, n);
+}
+/* 20800 / 20802 LoadUserSetting(uid) -> buffer FriendsUserSetting (libnx), the friend code is this installation's code for the user. */
+static void friend_load_user_setting(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16], inst[16];
+    if (!friend_gate_cache(c, 0, u)) return;
+    static uint8_t out[FRIEND_USER_SETTING_SIZE];
+    install_id_get(g_cfg.save_root, inst);
+    pthread_mutex_lock(&friend_lock);
+    FriendUser *fu = friend_user(&friend_store, u);
+    if (fu) friend_user_setting_encode(fu, inst, out);
+    pthread_mutex_unlock(&friend_lock);
+    if (fu) friend_out(c, 0, out, sizeof out);
+}
+/* 10701 GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId(u32 local, u64 account id @8) -> buffer 0x40: the key of the local user whose linked
+ * account has that id; an id no local user is linked to gets the "no network service account" result. */
+static void friend_play_history_key_nsa(IpcObject *s, IpcCall *c) {
+    (void)s;
+    OnlineAccountInfo ai;
+    uint64_t id = c->in_size >= 16 ? IPC_IN(c, uint64_t, 8) : 0;
+    if (!id || !friend_nsa(g_user_id, &ai) || ai.id != id) {
+        c->result = HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE;
+        return;
+    }
+    uint8_t key[0x40], inst[16];
+    install_id_get(g_cfg.save_root, inst);
+    install_play_history_key(inst, g_user_id, c->in_size >= 4 && IPC_IN(c, uint32_t, 0) != 0, key);
+    friend_out(c, 0, key, sizeof key);
+}
+/* 10702 AddPlayHistory(uid; in buffers: registration key 0x40, InAppScreenName of the other player, own InAppScreenName): kept on the console. */
+static void friend_add_history(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_local(c, 0, u)) return;
+    const uint8_t *key = friend_in(c, 0, 0x40);
+    pthread_mutex_lock(&friend_lock);
+    FriendUser *fu = friend_user(&friend_store, u);
+    int r = fu ? friend_history_add(fu, key, friend_in(c, 1, FRIEND_SCREEN_NAME_SIZE), friend_in(c, 2, FRIEND_SCREEN_NAME_SIZE), g_program_id, time(NULL)) : -1;
+    pthread_mutex_unlock(&friend_lock);
+    if (r) c->result = HZ_R_FRIENDS_INVALID_KEY;
+}
+/* 10211 AddFacedFriendRequestForApplication(uid; in buffers: key 0x40, other's name, own name, [profile image]): queued until the next sync. */
+static void friend_add_faced(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_local(c, 0, u)) return;
+    const uint8_t *key = friend_in(c, 0, 0x40);
+    pthread_mutex_lock(&friend_lock);
+    FriendUser *fu = friend_user(&friend_store, u);
+    int r = fu ? friend_faced_add(fu, key, friend_in(c, 1, FRIEND_SCREEN_NAME_SIZE), friend_in(c, 2, FRIEND_SCREEN_NAME_SIZE), g_program_id, time(NULL)) : -1;
+    pthread_mutex_unlock(&friend_lock);
+    if (r == -1 || r == -2) c->result = HZ_R_FRIENDS_INVALID_KEY; /* -3: already queued, kept once */
+}
+/* 20700 / 20702 GetPlayHistoryList({u32 offset, pad, uid}) -> u32 count + records (newest first). */
+static void friend_history_list(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_local(c, 8, u)) return;
+    uint32_t off = IPC_IN(c, uint32_t, 0), n = 0, max = (uint32_t)(friend_out_cap(c, 0) / FRIEND_HISTORY_RECORD_SIZE);
+    if (max > FRIEND_HISTORY_MAX) max = FRIEND_HISTORY_MAX;
+    if (max) {
+        uint8_t *out = calloc(max, FRIEND_HISTORY_RECORD_SIZE);
+        pthread_mutex_lock(&friend_lock);
+        FriendUser *fu = friend_user(&friend_store, u);
+        if (fu && out) n = friend_history_encode(fu, off, out, max);
+        pthread_mutex_unlock(&friend_lock);
+        if (n) friend_out(c, 0, out, (uint64_t)n * FRIEND_HISTORY_RECORD_SIZE);
+        free(out);
+    }
+    IPC_OUT(c, n);
+}
+/* 20701 GetPlayHistoryStatistics(uid) -> {u64 total, u64 local, u64 online} [unverified]. */
+static void friend_history_stats_call(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_local(c, 0, u)) return;
+    uint64_t v[3] = {0};
+    pthread_mutex_lock(&friend_lock);
+    FriendUser *fu = friend_user(&friend_store, u);
+    if (fu) friend_history_stats(fu, v);
+    pthread_mutex_unlock(&friend_lock);
+    ipc_out(c, v, sizeof v);
+}
+/* 20600 / 20601 GetUserPresenceView(uid) -> buffer: the presence the title last set with UpdateUserPresence for this user (zero before). */
+static void friend_presence_view(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t u[16];
+    if (!friend_gate_local(c, 0, u)) return;
+    uint8_t v[FRIEND_PRESENCE_MAX] = {0};
+    pthread_mutex_lock(&friend_lock);
+    FriendUser *fu = friend_user(&friend_store, u);
+    if (fu) memcpy(v, fu->presence, sizeof v);
+    pthread_mutex_unlock(&friend_lock);
+    friend_out(c, 0, v, sizeof v);
+}
+/* UpdateUserPresence(uid; in buffer: the presence record): the console keeps the user's own presence (read back by GetUserPresenceView). */
+static void friend_presence_keep(const IpcCall *c, const void *rec, size_t n) {
+    uint8_t u[16];
+    friend_uid(c, 0, u);
+    pthread_mutex_lock(&friend_lock);
+    FriendUser *fu = friend_user(&friend_store, u);
+    if (fu) friend_presence_set(fu, rec, n);
+    pthread_mutex_unlock(&friend_lock);
+}
+/* 20900 RequestListSummaryOverlayNotification: asks the overlay process to show the friend summary; there is no overlay, so the request is done. */
+static void friend_overlay_request(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+}
 static const IpcCmd friend_service_cmds[] = {
-    {0, "GetCompletionEvent", ret_event, IPC_IMPL},
+    {0, "GetCompletionEvent", friend_completion_event, IPC_IMPL},
     {1, "Cancel", noop, IPC_IMPL},
     {10100, "GetFriendListIds", friend_list_ids, IPC_IMPL},
     {10101, "GetFriendList", friend_list_records, IPC_IMPL},
@@ -223,61 +588,61 @@ static const IpcCmd friend_service_cmds[] = {
     {10610, "UpdateUserPresence", friend_presence, IPC_IMPL},
     {10600, "DeclareOpenOnlinePlaySession", friend_declare_open, IPC_IMPL},
     {10601, "DeclareCloseOnlinePlaySession", friend_declare_close, IPC_IMPL},
-    {10102, "UpdateFriendInfo", sysd_ok, IPC_STUB},
+    {10102, "UpdateFriendInfo", friend_sync_uid, IPC_IMPL},
     {10110, "GetFriendProfileImage", sysd_err_friend, IPC_STUB},
     {10111, "GetFriendProfileImageWithImageSize", sysd_err_friend, IPC_STUB},
-    {10120, "CheckFriendListAvailability", sysd_err_friend, IPC_STUB},
-    {10121, "EnsureFriendListAvailable", sysd_err_friend, IPC_STUB},
+    {10120, "CheckFriendListAvailability", friend_check_cache, IPC_IMPL},
+    {10121, "EnsureFriendListAvailable", friend_sync_uid, IPC_IMPL},
     {10200, "SendFriendRequestForApplication", sysd_err_friend, IPC_STUB},
-    {10211, "AddFacedFriendRequestForApplication", sysd_ok, IPC_STUB},
-    {10420, "CheckBlockedUserListAvailability", sysd_err_friend, IPC_STUB},
-    {10421, "EnsureBlockedUserListAvailable", sysd_err_friend, IPC_STUB},
-    {10500, "GetProfileListLegacyV1", sysd_err_friend, IPC_STUB},
-    {10501, "GetProfileListLegacyV2", sysd_err_friend, IPC_STUB},
-    {10502, "GetProfileListV1", sysd_err_friend, IPC_STUB},
-    {10503, "GetProfileListV2", sysd_err_friend, IPC_STUB},
+    {10211, "AddFacedFriendRequestForApplication", friend_add_faced, IPC_IMPL},
+    {10420, "CheckBlockedUserListAvailability", friend_check_cache, IPC_IMPL},
+    {10421, "EnsureBlockedUserListAvailable", friend_sync_uid, IPC_IMPL},
+    {10500, "GetProfileListLegacyV1", friend_profile_list, IPC_IMPL},
+    {10501, "GetProfileListLegacyV2", friend_profile_list, IPC_IMPL},
+    {10502, "GetProfileListV1", friend_profile_list, IPC_IMPL},
+    {10503, "GetProfileListV2", friend_profile_list, IPC_IMPL},
     {10700, "GetPlayHistoryRegistrationKey", friend_play_history_key, IPC_IMPL},
-    {10701, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId", sysd_err_friend, IPC_STUB},
-    {10702, "AddPlayHistory", sysd_ok, IPC_STUB},
+    {10701, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId", friend_play_history_key_nsa, IPC_IMPL},
+    {10702, "AddPlayHistory", friend_add_history, IPC_IMPL},
     {11000, "GetProfileImageUrl", sysd_err_friend, IPC_STUB},
     {11001, "GetProfileImageUrlV2", sysd_err_friend, IPC_STUB},
-    {20102, "GetFriendDetailedInfo", sysd_err_friend, IPC_STUB},
-    {20103, "SyncFriendList", sysd_ok, IPC_STUB},
-    {20104, "RequestSyncFriendList", sysd_ok, IPC_STUB},
-    {20107, "GetFriendDetailedInfoV2", sysd_err_friend, IPC_STUB},
-    {20110, "LoadFriendSettingV1", sysd_err_friend, IPC_STUB},
-    {20111, "LoadFriendSettingV2", sysd_err_friend, IPC_STUB},
-    {20201, "GetFriendRequestListV1", sysd_err_friend, IPC_STUB},
-    {20202, "GetFriendRequestListV2", sysd_err_friend, IPC_STUB},
-    {20203, "GetFriendRequestReceivedNotificationCount", sysd_z4, IPC_STUB},
-    {20300, "GetFriendCandidateList", sysd_err_friend, IPC_STUB},
-    {20301, "GetNintendoNetworkIdInfo", sysd_err_friend, IPC_STUB},
-    {20400, "GetBlockedUserListV1", sysd_err_friend, IPC_STUB},
-    {20401, "SyncBlockedUserList", sysd_ok, IPC_STUB},
-    {20402, "GetBlockedUserListV2", sysd_err_friend, IPC_STUB},
-    {20500, "GetProfileExtraListV1", sysd_err_friend, IPC_STUB},
-    {20501, "GetRelationship", sysd_err_friend, IPC_STUB},
-    {20502, "GetProfileExtraListV2", sysd_err_friend, IPC_STUB},
-    {20600, "GetUserPresenceViewV1", sysd_err_friend, IPC_STUB},
-    {20601, "GetUserPresenceViewV2", sysd_err_friend, IPC_STUB},
-    {20700, "GetPlayHistoryListV1", sysd_err_friend, IPC_STUB},
-    {20701, "GetPlayHistoryStatistics", sysd_err_friend, IPC_STUB},
-    {20702, "GetPlayHistoryListV2", sysd_err_friend, IPC_STUB},
-    {20800, "LoadUserSettingV1", sysd_err_friend, IPC_STUB},
-    {20801, "SyncUserSetting", sysd_ok, IPC_STUB},
-    {20802, "LoadUserSettingV2", sysd_err_friend, IPC_STUB},
-    {20900, "RequestListSummaryOverlayNotification", sysd_ok, IPC_STUB},
+    {20102, "GetFriendDetailedInfo", friend_detailed_info, IPC_IMPL},
+    {20103, "SyncFriendList", friend_sync_uid, IPC_IMPL},
+    {20104, "RequestSyncFriendList", friend_request_sync, IPC_IMPL},
+    {20107, "GetFriendDetailedInfoV2", friend_detailed_info, IPC_IMPL},
+    {20110, "LoadFriendSettingV1", friend_load_setting, IPC_IMPL},
+    {20111, "LoadFriendSettingV2", friend_load_setting, IPC_IMPL},
+    {20201, "GetFriendRequestListV1", friend_request_list, IPC_IMPL},
+    {20202, "GetFriendRequestListV2", friend_request_list, IPC_IMPL},
+    {20203, "GetFriendRequestReceivedNotificationCount", friend_count0_cached, IPC_IMPL},
+    {20300, "GetFriendCandidateList", friend_candidates, IPC_IMPL},
+    {20301, "GetNintendoNetworkIdInfo", friend_list0_cached, IPC_IMPL},
+    {20400, "GetBlockedUserListV1", friend_list0_cached, IPC_IMPL},
+    {20401, "SyncBlockedUserList", friend_sync_uid, IPC_IMPL},
+    {20402, "GetBlockedUserListV2", friend_list0_cached, IPC_IMPL},
+    {20500, "GetProfileExtraListV1", friend_profile_list, IPC_IMPL},
+    {20501, "GetRelationship", friend_relationship, IPC_IMPL},
+    {20502, "GetProfileExtraListV2", friend_profile_list, IPC_IMPL},
+    {20600, "GetUserPresenceViewV1", friend_presence_view, IPC_IMPL},
+    {20601, "GetUserPresenceViewV2", friend_presence_view, IPC_IMPL},
+    {20700, "GetPlayHistoryListV1", friend_history_list, IPC_IMPL},
+    {20701, "GetPlayHistoryStatistics", friend_history_stats_call, IPC_IMPL},
+    {20702, "GetPlayHistoryListV2", friend_history_list, IPC_IMPL},
+    {20800, "LoadUserSettingV1", friend_load_user_setting, IPC_IMPL},
+    {20801, "SyncUserSetting", friend_sync_uid, IPC_IMPL},
+    {20802, "LoadUserSettingV2", friend_load_user_setting, IPC_IMPL},
+    {20900, "RequestListSummaryOverlayNotification", friend_overlay_request, IPC_IMPL},
     {21000, "GetExternalApplicationCatalog", sysd_err_friend, IPC_STUB},
-    {22000, "GetReceivedFriendInvitationListV1", sysd_err_friend, IPC_STUB},
-    {22001, "GetReceivedFriendInvitationDetailedInfoV1", sysd_err_friend, IPC_STUB},
-    {22002, "GetReceivedFriendInvitationListV2", sysd_err_friend, IPC_STUB},
-    {22003, "GetReceivedFriendInvitationDetailedInfoV2", sysd_err_friend, IPC_STUB},
-    {22010, "GetReceivedFriendInvitationCountCache", sysd_err_friend, IPC_STUB},
+    {22000, "GetReceivedFriendInvitationListV1", friend_list0_cached, IPC_IMPL},
+    {22001, "GetReceivedFriendInvitationDetailedInfoV1", friend_invitation_detail, IPC_IMPL},
+    {22002, "GetReceivedFriendInvitationListV2", friend_list0_cached, IPC_IMPL},
+    {22003, "GetReceivedFriendInvitationDetailedInfoV2", friend_invitation_detail, IPC_IMPL},
+    {22010, "GetReceivedFriendInvitationCountCache", friend_count0_cached, IPC_IMPL},
 };
 static void friend_service_destroy(IpcObject *o) { free(o->state); }
 static void friend_create_service(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, IPC_OBJECT("IFriendService", friend_service_cmds, calloc(1, 1), friend_service_destroy)); /* state: online_play flag */
+    ipc_out_object(c, IPC_OBJECT("IFriendService", friend_service_cmds, calloc(1, sizeof(FriendSvc)), friend_service_destroy));
 }
 static void friend_create_notification(IpcObject *s, IpcCall *c) {
     (void)s;
