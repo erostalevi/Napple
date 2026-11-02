@@ -15,6 +15,12 @@ SRC := $(wildcard src/*.c src/services/*.c) $(A32SRC) src/a32jit/a32jit.c
 MSRC := $(wildcard src/*.m)
 ASM := $(wildcard src/*.S)
 OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(SRC)) $(patsubst src/%.m,$(BUILD)/%.o,$(MSRC)) $(patsubst src/%.S,$(BUILD)/%.o,$(ASM))
+# net-host-provider (2026-11-02-r6): the built-in host network provider (NAPPLE_NET=host), src/net/
+NET_SRC := $(wildcard src/net/*.c)
+NET_MSRC := $(wildcard src/net/*.m)
+SRC += $(NET_SRC)
+MSRC += $(NET_MSRC)
+OBJ += $(patsubst src/%.c,$(BUILD)/%.o,$(NET_SRC)) $(patsubst src/%.m,$(BUILD)/%.o,$(NET_MSRC))
 # GFX=napple links the real graphics driver (gfx/libnapple_gfx.a + adapter) instead of the stub back end.
 GFX ?= napple
 ifeq ($(GFX),napple)
@@ -32,6 +38,7 @@ LDFLAGS ?= -Wl,-dead_strip -Wl,-x
 OPUS ?= /opt/homebrew/opt/opus/lib/libopus.a
 VPX ?= /opt/homebrew/opt/libvpx/lib/libvpx.a
 FRAMEWORKS += -framework VideoToolbox -framework CoreMedia -framework ImageIO -lcompression
+FRAMEWORKS += -framework Security -framework SystemConfiguration
 EXTRA_LIBS ?= -L$(ROOT)/frontend -lnapple_frontend -L$(ROOT)/input -lnapple_input -L$(ROOT)/audio -lnapple_audio $(OPUS) $(VPX) -framework CoreHaptics -framework IOKit
 
 all: $(BUILD)/napple-runtime
@@ -222,3 +229,13 @@ test-host: $(HOST_BUILD)/test_ipc_reference
 test-ipc-reference: $(BUILD)/tests/test_ipc_reference
 	./$< -v
 .PHONY: test-ipc-reference
+
+# net-host-provider (2026-11-02-r6): the host provider (NAPPLE_NET=host) against this Mac's own stack: localhost sockets, DNS (a public name is skipped
+# when offline), nifm, TLS with a throw-away local CA (/usr/bin/openssl), LDN between two provider instances. Part of `make test-services`; alone: `make test-net-host`
+NET_TESTS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_net_host_*.c))
+$(BUILD)/tests/test_net_host_%: tests/test_net_host_%.c tests/check.h tests/svc_test.h src/net/net_host.h $(BUILD)/tests/stubs.o $(OBJ)
+	$(CC) $(CFLAGS) $< $(BUILD)/tests/stubs.o $(filter-out $(call svc_included,$<),$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
+test-net-host: $(NET_TESTS)
+	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
+test-services: $(NET_TESTS)
+.PHONY: test-net-host
