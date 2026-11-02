@@ -149,6 +149,19 @@ int applet_swkbd_inline_request(AppletSwkbdInline *k, const uint8_t *req, size_t
 /* Encodes a reply {u32 type; u32 text bytes; utf8 text...} into a malloc'd interactive output. */
 int applet_swkbd_inline_reply(LibAppletCall *call, uint32_t type, const char *text);
 
+/* ---- network connection (NetConnect, 0x0f) -------------------------------------------------------------------------------------------------- */
+/* A title launches it when nifm hands back a failed network request (IRequest::GetAppletInfo gives the applet id, mode and the argument the title pushes
+ * after CommonArguments): on a console it tries to connect, shows the error and closes. This host has no network connection to offer, so the applet
+ * closes at once the way it does on a console that cannot connect: it finishes normally (GetResult success) and its output storage carries the
+ * "not connected" result, the one nifm's GetResult reports here offline (HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, 2110-1111) so the title's
+ * HandleNetworkRequestResult keeps the request failed and the game stays offline. Output { u32 result; u32 pad } (8 bytes). The output layout and
+ * the code are [unverified] against a console. */
+enum { LIBAPPLET_ID_NET_CONNECT = 0x0f };
+#define APPLET_NETCONNECT_OUT_SIZE 8u
+void applet_netconnect_encode(uint32_t result, uint8_t out[APPLET_NETCONNECT_OUT_SIZE]);
+int applet_netconnect_handler(LibAppletCall *call); /* always answers (1) */
+int applet_netconnect_register(void);               /* 0 ok, -1 table full */
+
 /* ---- error applet hook --------------------------------------------------------------------------------------------------------------------- */
 /* The frontend can surface the error message; the default is none (the runtime then falls back to the log line and the generic alert). */
 typedef void (*AppletErrorHook)(const AppletErrorInfo *e, const char *code_text, const char *description);
