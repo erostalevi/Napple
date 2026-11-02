@@ -238,6 +238,12 @@ int bsdg_poll(BsdGuest *g, OnlinePollFd *fds, unsigned n, int timeout_ms, int *e
         tmp[m] = (OnlinePollFd){h, fds[i].events, 0};
         src[m++] = (int)i;
     }
+    if (!m && !ready && timeout_ms != 0 && online_has(P_, ONLINE_CAP_SOCKETS)) {
+        /* nothing pollable (no descriptors, or only negative ones): a real stack still waits for the timeout, and titles back off in a Poll(0, t)
+         * loop that would otherwise spin. The provider waits (giving the core away); the NullProvider keeps answering at once, as offline always did. */
+        int r = poll(P_->ctx, tmp, 0, timeout_ms, err);
+        if (r < 0) return -1;
+    }
     if (m) {
         int r = poll(P_->ctx, tmp, m, timeout_ms, err);
         if (r < 0) return -1;
