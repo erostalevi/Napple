@@ -6,6 +6,7 @@
 #include "svc_common.h"
 #include "bcat_core.h"
 #include "hz_result.h"
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include "sys_default.h"
@@ -14,10 +15,6 @@ static void ret_s32_0(IpcObject *s, IpcCall *c) {
     (void)s;
     int32_t v = 0;
     IPC_OUT(c, v);
-}
-static void not_found(IpcObject *s, IpcCall *c) {
-    (void)s;
-    c->result = HZ_R_BCAT_NOT_FOUND;
 }
 static uint32_t bad_result(void) { return HZ_RESULT(HZ_MOD_BCAT, 2); } /* [unverified] invalid argument */
 static void bad_name(IpcCall *c) { c->result = bad_result(); }
@@ -193,6 +190,188 @@ static void make_storage(IpcObject *s, IpcCall *c) {
     ipc_out_object(c, IPC_OBJECT("IDeliveryCacheStorageService", storage_cmds, NULL, NULL));
 }
 
+/* ---- delivery task bookkeeping and storage notifications (ipc-depth-95 r10) ----
+ * Layouts from switchbrew "BCAT services": GetDeliveryCacheStorageUpdateNotifier(u64 ApplicationId) -> INotifierService { 0 GetEvent },
+ * RequestSuspendDeliveryTask(u64 ApplicationId) -> IDeliveryTaskSuspensionService { 0 GetEvent }, Register/UnregisterSystemApplicationDeliveryTask
+ * (u64 ApplicationId, no output), GetDeliveryList(u64 [3.0.0+], type-0x6 buffer) -> 8 bytes. The process has one delivery cache (the provider), so the
+ * application ids select nothing beyond it. */
+static pthread_mutex_t g_bcat_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint64_t in_app_id(IpcCall *c) { return c->in_size >= 8 ? IPC_IN(c, uint64_t, 0) : 0; }
+
+/* INotifierService: its event fires when a sync finds the delivery cache changed since the notifier last looked (bcat_storage_fingerprint before and after;
+ * the provider's data is already local, so a sync "downloads" exactly the difference). Without a provider nothing ever changes and the event never fires.
+ * Each GetEvent hands out a new handle on the notifier's event; a change seen while none is out is kept until the next GetEvent. */
+#define BCAT_MAX_NOTIFIERS 16
+#define BCAT_NOTIFIER_EVENTS 4
+typedef struct {
+    uint64_t app, seen;
+    uint32_t ev[BCAT_NOTIFIER_EVENTS];
+    unsigned nev;
+    int pending;
+} BcatNotifier;
+static BcatNotifier *g_notifiers[BCAT_MAX_NOTIFIERS];
+static void storage_synced(void) { /* every sync request: a changed storage wakes the notifiers */
+    uint64_t fp = bcat_storage_fingerprint(bcat_provider());
+    pthread_mutex_lock(&g_bcat_mu);
+    for (int i = 0; i < BCAT_MAX_NOTIFIERS; i++) {
+        BcatNotifier *n = g_notifiers[i];
+        if (!n || n->seen == fp) continue;
+        n->seen = fp;
+        if (!n->nev) n->pending = 1;
+        for (unsigned k = 0; k < n->nev; k++) event_signal_handle(n->ev[k]);
+    }
+    pthread_mutex_unlock(&g_bcat_mu);
+}
+static void notifier_get_event(IpcObject *s, IpcCall *c) {
+    BcatNotifier *n = s->state;
+    uint32_t r = 0, w = event_create(&r);
+    pthread_mutex_lock(&g_bcat_mu);
+    if (n->nev < BCAT_NOTIFIER_EVENTS) n->ev[n->nev++] = w;
+    if (n->pending) {
+        n->pending = 0;
+        event_signal_handle(w);
+    }
+    pthread_mutex_unlock(&g_bcat_mu);
+    ipc_out_copy_handle(c, r);
+}
+static const IpcCmd notifier_cmds[] = {{0, "GetEvent", notifier_get_event, IPC_IMPL}};
+static void notifier_destroy(IpcObject *o) {
+    pthread_mutex_lock(&g_bcat_mu);
+    for (int i = 0; i < BCAT_MAX_NOTIFIERS; i++)
+        if (g_notifiers[i] == o->state) g_notifiers[i] = NULL;
+    pthread_mutex_unlock(&g_bcat_mu);
+    free(o->state);
+}
+static void bcat_get_update_notifier(IpcObject *s, IpcCall *c) {
+    (void)s;
+    BcatNotifier *n = calloc(1, sizeof *n);
+    if (!n) {
+        c->result = bad_result();
+        return;
+    }
+    n->app = in_app_id(c);
+    n->seen = bcat_storage_fingerprint(bcat_provider());
+    pthread_mutex_lock(&g_bcat_mu);
+    int slot = -1;
+    for (int i = 0; i < BCAT_MAX_NOTIFIERS && slot < 0; i++)
+        if (!g_notifiers[i]) slot = i;
+    if (slot >= 0) g_notifiers[slot] = n;
+    pthread_mutex_unlock(&g_bcat_mu);
+    if (slot < 0) { /* [unverified] napple's bound: more live notifiers than a title has use for */
+        free(n);
+        c->result = bad_result();
+        return;
+    }
+    ipc_out_object(c, IPC_OBJECT("INotifierService", notifier_cmds, n, notifier_destroy));
+}
+
+/* IDeliveryTaskSuspensionService: while it is open the application's background delivery task is suspended (a count per application id, as several can be
+ * open). GetEvent is taken to report that the suspension is in effect [unverified meaning]: no background transfer ever runs here (offline nothing is
+ * fetched, a provider's data is local), so there is nothing to wait for and it is signalled at once. */
+#define BCAT_MAX_SUSPENDED 16
+static struct {
+    uint64_t app;
+    unsigned count;
+} g_suspended[BCAT_MAX_SUSPENDED];
+__attribute__((unused)) static unsigned bcat_suspend_count(uint64_t app) { /* the open suspensions of an application (tests, diagnostics) */
+    unsigned n = 0;
+    pthread_mutex_lock(&g_bcat_mu);
+    for (int i = 0; i < BCAT_MAX_SUSPENDED; i++)
+        if (g_suspended[i].count && g_suspended[i].app == app) n = g_suspended[i].count;
+    pthread_mutex_unlock(&g_bcat_mu);
+    return n;
+}
+static int suspend_change(uint64_t app, int delta) {
+    int ok = 0;
+    pthread_mutex_lock(&g_bcat_mu);
+    int slot = -1;
+    for (int i = 0; i < BCAT_MAX_SUSPENDED && slot < 0; i++)
+        if (g_suspended[i].count && g_suspended[i].app == app) slot = i;
+    if (slot < 0 && delta > 0)
+        for (int i = 0; i < BCAT_MAX_SUSPENDED && slot < 0; i++)
+            if (!g_suspended[i].count) slot = i, g_suspended[i].app = app;
+    if (slot >= 0) {
+        g_suspended[slot].count = (unsigned)((int)g_suspended[slot].count + delta);
+        ok = 1;
+    }
+    pthread_mutex_unlock(&g_bcat_mu);
+    return ok;
+}
+static void suspension_get_event(IpcObject *s, IpcCall *c) { svc_ret_event_signaled(s, c); }
+static const IpcCmd suspension_cmds[] = {{0, "GetEvent", suspension_get_event, IPC_IMPL}};
+static void suspension_destroy(IpcObject *o) {
+    suspend_change(*(uint64_t *)o->state, -1);
+    free(o->state);
+}
+static void bcat_request_suspend(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t *app = malloc(sizeof *app);
+    if (!app || !suspend_change(*app = in_app_id(c), 1)) {
+        free(app);
+        c->result = bad_result(); /* [unverified] napple's bound on applications suspended at once */
+        return;
+    }
+    ipc_out_object(c, IPC_OBJECT("IDeliveryTaskSuspensionService", suspension_cmds, app, suspension_destroy));
+}
+
+/* System-application delivery tasks: the registered application ids (Register is idempotent, Unregister of an id that is not registered succeeds). Nothing
+ * is ever scheduled for them (no network; the provider is not a server), and the task list's entry layout is not public, so they are only kept. */
+#define BCAT_MAX_SYSAPP_TASKS 32
+static uint64_t g_sysapp_tasks[BCAT_MAX_SYSAPP_TASKS];
+static unsigned g_nsysapp_tasks;
+static int bcat_sysapp_registered(uint64_t app) {
+    int found = 0;
+    pthread_mutex_lock(&g_bcat_mu);
+    for (unsigned i = 0; i < g_nsysapp_tasks; i++)
+        if (g_sysapp_tasks[i] == app) found = 1;
+    pthread_mutex_unlock(&g_bcat_mu);
+    return found;
+}
+static void bcat_register_sysapp_task(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t app = in_app_id(c);
+    if (bcat_sysapp_registered(app)) return;
+    pthread_mutex_lock(&g_bcat_mu);
+    if (g_nsysapp_tasks < BCAT_MAX_SYSAPP_TASKS) g_sysapp_tasks[g_nsysapp_tasks++] = app;
+    else c->result = bad_result(); /* [unverified] napple's bound */
+    pthread_mutex_unlock(&g_bcat_mu);
+}
+static void bcat_unregister_sysapp_task(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t app = in_app_id(c);
+    pthread_mutex_lock(&g_bcat_mu);
+    for (unsigned i = 0; i < g_nsysapp_tasks; i++)
+        if (g_sysapp_tasks[i] == app) g_sysapp_tasks[i--] = g_sysapp_tasks[--g_nsysapp_tasks];
+    pthread_mutex_unlock(&g_bcat_mu);
+}
+
+/* GetDeliveryList(u64 ApplicationId, type-0x6 buffer) -> u64: the delivery list (msgpack) the last sync downloaded, from the provider (list.msgpack). The
+ * output is taken to be the s64 size written [unverified: the page gives "4 bytes, 8 on 3.0.0+"]. A console that never synced (no provider, or a provider
+ * without a list) has no list: not found. */
+static void bcat_get_delivery_list(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const BcatProvider *p = bcat_provider();
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    size_t cap = b ? (size_t)b->size : 0;
+    uint8_t *tmp = cap ? malloc(cap) : NULL;
+    int64_t total = p && p->read_list ? p->read_list(p->ctx, tmp, tmp ? cap : 0) : -1;
+    if (total < 0) {
+        free(tmp);
+        c->result = HZ_R_BCAT_NOT_FOUND;
+        return;
+    }
+    uint64_t written = 0;
+    if (tmp && total) written = ipc_write_buf(c, b, tmp, (uint64_t)total < cap ? (uint64_t)total : cap);
+    free(tmp);
+    IPC_OUT(c, written);
+}
+
+/* A sync request: the progress object, then the storage-update check. */
+static void request_sync(IpcObject *s, IpcCall *c) {
+    make_progress(s, c);
+    storage_synced();
+}
+
 /* SetPassphrase(u64 application id; in buffer: passphrase, at most 0x40 characters plus the NUL): the passphrase only matters to a
  * delivery against the server, so it is validated and dropped. */
 static void bcat_set_passphrase(IpcObject *s, IpcCall *c) {
@@ -203,10 +382,10 @@ static void bcat_set_passphrase(IpcObject *s, IpcCall *c) {
 /* Background delivery tasks: nothing is ever scheduled (no network), so register/unregister/block/unblock have no effect to record, and the
  * task list is empty. Documented no-ops: the console with delivery disabled answers success to the same calls. */
 static const IpcCmd bcat_service_cmds[] = {
-    {10100, "RequestSyncDeliveryCache", make_progress, IPC_IMPL},
-    {10101, "RequestSyncDeliveryCacheWithDirectoryName", make_progress, IPC_IMPL},
+    {10100, "RequestSyncDeliveryCache", request_sync, IPC_IMPL},
+    {10101, "RequestSyncDeliveryCacheWithDirectoryName", request_sync, IPC_IMPL},
     {10200, "CancelSyncDeliveryCacheRequest", svc_noop, IPC_IMPL}, /* the sync already finished: nothing to cancel */
-    {20100, "RequestSyncDeliveryCacheWithApplicationId", make_progress, IPC_IMPL},
+    {20100, "RequestSyncDeliveryCacheWithApplicationId", request_sync, IPC_IMPL},
     {30100, "SetPassphrase", bcat_set_passphrase, IPC_IMPL},
     {30200, "RegisterDeliveryTask", svc_noop, IPC_IMPL},
     {30201, "UnregisterDeliveryTask", svc_noop, IPC_IMPL},
@@ -215,16 +394,17 @@ static const IpcCmd bcat_service_cmds[] = {
     {90100, "GetDeliveryTaskList", ret_s32_0, IPC_IMPL},
     {90201, "ClearDeliveryCacheStorage", svc_noop, IPC_IMPL}, /* nothing of ours to clear: a provider folder is the user's, never deleted */
     /* 20101 (u64 application id, DirectoryName): the same sync as 10101, from the provider; the console's system variant names the application explicitly */
-    {20101, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName", make_progress, IPC_IMPL},
-    {20300, "GetDeliveryCacheStorageUpdateNotifier", sysd_err_net, IPC_STUB},
-    {20301, "RequestSuspendDeliveryTask", sysd_err_net, IPC_STUB},
-    {20400, "RegisterSystemApplicationDeliveryTask", sysd_ok, IPC_STUB},
-    {20401, "UnregisterSystemApplicationDeliveryTask", sysd_ok, IPC_STUB},
+    {20101, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName", request_sync, IPC_IMPL},
+    {20300, "GetDeliveryCacheStorageUpdateNotifier", bcat_get_update_notifier, IPC_IMPL},
+    {20301, "RequestSuspendDeliveryTask", bcat_request_suspend, IPC_IMPL},
+    {20400, "RegisterSystemApplicationDeliveryTask", bcat_register_sysapp_task, IPC_IMPL},
+    {20401, "UnregisterSystemApplicationDeliveryTask", bcat_unregister_sysapp_task, IPC_IMPL},
+    /* No public layout (switchbrew lists names only) for 20410, 20500, 30210, 30300, 90202, 90300 and 90301: documented defaults. */
     {20410, "SetSystemApplicationDeliveryTaskTimer", sysd_ok, IPC_STUB},
     {20500, "StopBackgroundService", sysd_ok, IPC_STUB},
     {30210, "SetDeliveryTaskTimer", sysd_ok, IPC_STUB},
     {30300, "RegisterSystemApplicationDeliveryTasks", sysd_ok, IPC_STUB},
-    {90200, "GetDeliveryList", sysd_err_net, IPC_STUB},
+    {90200, "GetDeliveryList", bcat_get_delivery_list, IPC_IMPL},
     {90202, "ClearDeliveryTaskSubscriptionStatus", sysd_ok, IPC_STUB},
     {90300, "GetPushNotificationLog", sysd_err_net, IPC_STUB},
     {90301, "GetDeliveryCacheStorageUsage", sysd_err_net, IPC_STUB},
