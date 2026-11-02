@@ -628,7 +628,7 @@ static void test_nsd_prepo(void) {
       CHECK(u.result == 0 && url[0] == 0 && url[0xff] == 0, "nsd 5 GetSettingUrl: success, the empty Url of the lp1 settings"); }
     CHECK(svc_find(n, 5)->status == IPC_IMPL && svc_find(n, 64)->status == IPC_STUB, "nsd 5 real, 64 stays a documented default");
     IpcObject *pr = prepo_open();
-    CHECK(svc_find(pr, 50100)->status == IPC_STUB && svc_find(pr, 90100)->status == IPC_STUB, "prepo 50100 / 90100 stay documented defaults");
+    CHECK(svc_find(pr, 50100)->status == IPC_IMPL && svc_find(pr, 90100)->status == IPC_IMPL, "prepo 50100 / 90100 read the kept reports back (test_svc_prepo_r10.c)");
 }
 
 int main(void) {
