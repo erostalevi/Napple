@@ -109,11 +109,15 @@ impl Db {
         conn.execute_batch("PRAGMA foreign_keys=ON;")?;
         let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
         if v > SCHEMA_VERSION {
-            return Err(rusqlite::Error::InvalidParameterName(format!("database schema {v} is newer than this build ({SCHEMA_VERSION})")));
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "database schema {v} is newer than this build ({SCHEMA_VERSION})"
+            )));
         }
         conn.execute_batch(SCHEMA)?;
         conn.execute_batch(&format!("PRAGMA user_version={SCHEMA_VERSION};"))?;
-        Ok(Db { conn: Arc::new(Mutex::new(conn)) })
+        Ok(Db {
+            conn: Arc::new(Mutex::new(conn)),
+        })
     }
 
     /// Runs `f` on the connection in a blocking thread.
@@ -231,7 +235,11 @@ pub struct ProfileView {
 
 impl From<&ProfileRow> for ProfileView {
     fn from(p: &ProfileRow) -> Self {
-        ProfileView { profile_id: p.profile_id.clone(), nickname: p.nickname.clone(), icon_id: p.icon_id.clone() }
+        ProfileView {
+            profile_id: p.profile_id.clone(),
+            nickname: p.nickname.clone(),
+            icon_id: p.icon_id.clone(),
+        }
     }
 }
 
@@ -255,7 +263,15 @@ pub struct PresenceView {
 
 impl PresenceView {
     pub fn offline(last_seen_ms: Option<i64>) -> Self {
-        PresenceView { status: "offline".into(), title_id: None, title_name: None, mode: None, joinable: false, join_token: None, last_seen_ms }
+        PresenceView {
+            status: "offline".into(),
+            title_id: None,
+            title_name: None,
+            mode: None,
+            joinable: false,
+            join_token: None,
+            last_seen_ms,
+        }
     }
 
     /// Same live state, ignoring the heartbeat timestamp (used to decide whether friends need an update).
@@ -281,7 +297,12 @@ fn live_view(p: &PresenceRow) -> PresenceView {
 }
 
 /// The profile's real presence (what its own devices see).
-pub fn own_presence(profile: &ProfileRow, presence: Option<&PresenceRow>, now_ms: i64, timeout_ms: i64) -> PresenceView {
+pub fn own_presence(
+    profile: &ProfileRow,
+    presence: Option<&PresenceRow>,
+    now_ms: i64,
+    timeout_ms: i64,
+) -> PresenceView {
     match presence {
         Some(p) if now_ms - p.last_heartbeat_ms <= timeout_ms => live_view(p),
         _ => PresenceView::offline(profile.last_seen_ms),
@@ -290,7 +311,12 @@ pub fn own_presence(profile: &ProfileRow, presence: Option<&PresenceRow>, now_ms
 
 /// What a friend sees. Privacy: "nobody" hides everything including last seen; "appear offline" shows offline with the
 /// last time the profile was visibly online. Callers only use this for friends; non-friends never see presence.
-pub fn friend_presence(profile: &ProfileRow, presence: Option<&PresenceRow>, now_ms: i64, timeout_ms: i64) -> PresenceView {
+pub fn friend_presence(
+    profile: &ProfileRow,
+    presence: Option<&PresenceRow>,
+    now_ms: i64,
+    timeout_ms: i64,
+) -> PresenceView {
     if profile.presence_visibility != "friends" {
         return PresenceView::offline(None);
     }
@@ -341,21 +367,36 @@ pub struct BlockView {
 // ---------------------------------------------------------------- profiles
 
 pub fn profile(c: &Connection, id: &str) -> Result<Option<ProfileRow>, ApiError> {
-    Ok(c.query_row(&format!("SELECT {PROFILE_COLS} FROM profiles WHERE profile_id = ?1"), [id], profile_from).optional()?)
+    Ok(c.query_row(
+        &format!("SELECT {PROFILE_COLS} FROM profiles WHERE profile_id = ?1"),
+        [id],
+        profile_from,
+    )
+    .optional()?)
 }
 
 pub fn profile_by_code(c: &Connection, code: &str) -> Result<Option<ProfileRow>, ApiError> {
-    Ok(c.query_row(&format!("SELECT {PROFILE_COLS} FROM profiles WHERE friend_code = ?1"), [code], profile_from).optional()?)
+    Ok(c.query_row(
+        &format!("SELECT {PROFILE_COLS} FROM profiles WHERE friend_code = ?1"),
+        [code],
+        profile_from,
+    )
+    .optional()?)
 }
 
 pub fn must_profile(c: &Connection, id: &str) -> Result<ProfileRow, ApiError> {
-    profile(c, id)?.ok_or_else(|| ApiError::not_found("profile_not_found", "no such Napple profile"))
+    profile(c, id)?
+        .ok_or_else(|| ApiError::not_found("profile_not_found", "no such Napple profile"))
 }
 
 fn unused_code(c: &Connection) -> Result<String, ApiError> {
     for _ in 0..50 {
         let code = codes::generate();
-        let taken: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM profiles WHERE friend_code = ?1)", [&code], |r| r.get(0))?;
+        let taken: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM profiles WHERE friend_code = ?1)",
+            [&code],
+            |r| r.get(0),
+        )?;
         if !taken {
             return Ok(code);
         }
@@ -364,7 +405,14 @@ fn unused_code(c: &Connection) -> Result<String, ApiError> {
 }
 
 /// Registers the profile on first use (assigning a friend code) and refreshes its nickname/icon snapshot.
-pub fn ensure_profile(c: &Connection, account_id: &str, profile_id: &str, nickname: &str, icon_id: &str, now_ms: i64) -> Result<ProfileRow, ApiError> {
+pub fn ensure_profile(
+    c: &Connection,
+    account_id: &str,
+    profile_id: &str,
+    nickname: &str,
+    icon_id: &str,
+    now_ms: i64,
+) -> Result<ProfileRow, ApiError> {
     if let Some(p) = profile(c, profile_id)? {
         if p.nickname != nickname || p.icon_id != icon_id || p.account_id != account_id {
             c.execute(
@@ -386,11 +434,21 @@ pub fn ensure_profile(c: &Connection, account_id: &str, profile_id: &str, nickna
 
 pub fn regenerate_code(c: &Connection, profile_id: &str, now_ms: i64) -> Result<String, ApiError> {
     let code = unused_code(c)?;
-    c.execute("UPDATE profiles SET friend_code = ?2, updated_ms = ?3 WHERE profile_id = ?1", params![profile_id, code, now_ms])?;
+    c.execute(
+        "UPDATE profiles SET friend_code = ?2, updated_ms = ?3 WHERE profile_id = ?1",
+        params![profile_id, code, now_ms],
+    )?;
     Ok(code)
 }
 
-pub fn update_settings(c: &Connection, profile_id: &str, visibility: Option<&str>, appear_offline: Option<bool>, accept_requests: Option<bool>, now_ms: i64) -> Result<(), ApiError> {
+pub fn update_settings(
+    c: &Connection,
+    profile_id: &str,
+    visibility: Option<&str>,
+    appear_offline: Option<bool>,
+    accept_requests: Option<bool>,
+    now_ms: i64,
+) -> Result<(), ApiError> {
     c.execute(
         "UPDATE profiles SET presence_visibility = COALESCE(?2, presence_visibility), appear_offline = COALESCE(?3, appear_offline),
          accept_requests = COALESCE(?4, accept_requests), updated_ms = ?5 WHERE profile_id = ?1",
@@ -399,11 +457,19 @@ pub fn update_settings(c: &Connection, profile_id: &str, visibility: Option<&str
     Ok(())
 }
 
-pub fn set_last_seen(c: &Connection, profile_id: &str, at_ms: i64, visible: bool) -> Result<(), ApiError> {
+pub fn set_last_seen(
+    c: &Connection,
+    profile_id: &str,
+    at_ms: i64,
+    visible: bool,
+) -> Result<(), ApiError> {
     if visible {
         c.execute("UPDATE profiles SET last_seen_ms = ?2, visible_last_seen_ms = ?2 WHERE profile_id = ?1", params![profile_id, at_ms])?;
     } else {
-        c.execute("UPDATE profiles SET last_seen_ms = ?2 WHERE profile_id = ?1", params![profile_id, at_ms])?;
+        c.execute(
+            "UPDATE profiles SET last_seen_ms = ?2 WHERE profile_id = ?1",
+            params![profile_id, at_ms],
+        )?;
     }
     Ok(())
 }
@@ -422,7 +488,12 @@ fn ordered<'a>(a: &'a str, b: &'a str) -> (&'a str, &'a str) {
 
 pub fn friends_since(c: &Connection, a: &str, b: &str) -> Result<Option<i64>, ApiError> {
     let (x, y) = ordered(a, b);
-    Ok(c.query_row("SELECT created_ms FROM friendships WHERE profile_a = ?1 AND profile_b = ?2", [x, y], |r| r.get(0)).optional()?)
+    Ok(c.query_row(
+        "SELECT created_ms FROM friendships WHERE profile_a = ?1 AND profile_b = ?2",
+        [x, y],
+        |r| r.get(0),
+    )
+    .optional()?)
 }
 
 pub fn are_friends(c: &Connection, a: &str, b: &str) -> Result<bool, ApiError> {
@@ -430,18 +501,28 @@ pub fn are_friends(c: &Connection, a: &str, b: &str) -> Result<bool, ApiError> {
 }
 
 pub fn friend_count(c: &Connection, p: &str) -> Result<i64, ApiError> {
-    Ok(c.query_row("SELECT COUNT(*) FROM friendships WHERE profile_a = ?1 OR profile_b = ?1", [p], |r| r.get(0))?)
+    Ok(c.query_row(
+        "SELECT COUNT(*) FROM friendships WHERE profile_a = ?1 OR profile_b = ?1",
+        [p],
+        |r| r.get(0),
+    )?)
 }
 
 pub fn add_friendship(c: &Connection, a: &str, b: &str, now_ms: i64) -> Result<(), ApiError> {
     let (x, y) = ordered(a, b);
-    c.execute("INSERT OR IGNORE INTO friendships (profile_a, profile_b, created_ms) VALUES (?1, ?2, ?3)", params![x, y, now_ms])?;
+    c.execute(
+        "INSERT OR IGNORE INTO friendships (profile_a, profile_b, created_ms) VALUES (?1, ?2, ?3)",
+        params![x, y, now_ms],
+    )?;
     Ok(())
 }
 
 pub fn remove_friendship(c: &Connection, a: &str, b: &str) -> Result<bool, ApiError> {
     let (x, y) = ordered(a, b);
-    Ok(c.execute("DELETE FROM friendships WHERE profile_a = ?1 AND profile_b = ?2", [x, y])? > 0)
+    Ok(c.execute(
+        "DELETE FROM friendships WHERE profile_a = ?1 AND profile_b = ?2",
+        [x, y],
+    )? > 0)
 }
 
 /// `(friend_id, since_ms)` for every friend.
@@ -449,27 +530,48 @@ pub fn friend_ids(c: &Connection, p: &str) -> Result<Vec<(String, i64)>, ApiErro
     let mut st = c.prepare_cached(
         "SELECT profile_b, created_ms FROM friendships WHERE profile_a = ?1 UNION ALL SELECT profile_a, created_ms FROM friendships WHERE profile_b = ?1",
     )?;
-    let rows = st.query_map([p], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+    let rows = st
+        .query_map([p], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 // ---------------------------------------------------------------- blocks
 
 pub fn is_blocked(c: &Connection, blocker: &str, blocked: &str) -> Result<bool, ApiError> {
-    Ok(c.query_row("SELECT EXISTS(SELECT 1 FROM blocks WHERE blocker = ?1 AND blocked = ?2)", [blocker, blocked], |r| r.get(0))?)
+    Ok(c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM blocks WHERE blocker = ?1 AND blocked = ?2)",
+        [blocker, blocked],
+        |r| r.get(0),
+    )?)
 }
 
 pub fn block_count(c: &Connection, p: &str) -> Result<i64, ApiError> {
-    Ok(c.query_row("SELECT COUNT(*) FROM blocks WHERE blocker = ?1", [p], |r| r.get(0))?)
+    Ok(
+        c.query_row("SELECT COUNT(*) FROM blocks WHERE blocker = ?1", [p], |r| {
+            r.get(0)
+        })?,
+    )
 }
 
-pub fn add_block(c: &Connection, blocker: &str, blocked: &str, now_ms: i64) -> Result<(), ApiError> {
-    c.execute("INSERT OR IGNORE INTO blocks (blocker, blocked, created_ms) VALUES (?1, ?2, ?3)", params![blocker, blocked, now_ms])?;
+pub fn add_block(
+    c: &Connection,
+    blocker: &str,
+    blocked: &str,
+    now_ms: i64,
+) -> Result<(), ApiError> {
+    c.execute(
+        "INSERT OR IGNORE INTO blocks (blocker, blocked, created_ms) VALUES (?1, ?2, ?3)",
+        params![blocker, blocked, now_ms],
+    )?;
     Ok(())
 }
 
 pub fn remove_block(c: &Connection, blocker: &str, blocked: &str) -> Result<bool, ApiError> {
-    Ok(c.execute("DELETE FROM blocks WHERE blocker = ?1 AND blocked = ?2", [blocker, blocked])? > 0)
+    Ok(c.execute(
+        "DELETE FROM blocks WHERE blocker = ?1 AND blocked = ?2",
+        [blocker, blocked],
+    )? > 0)
 }
 
 pub fn blocks(c: &Connection, p: &str) -> Result<Vec<BlockView>, ApiError> {
@@ -478,7 +580,12 @@ pub fn blocks(c: &Connection, p: &str) -> Result<Vec<BlockView>, ApiError> {
         PROFILE_COLS.split(", ").map(|c| format!("p.{c}")).collect::<Vec<_>>().join(", ")
     ))?;
     let rows = st
-        .query_map([p], |r| Ok(BlockView { profile: ProfileView::from(&profile_from(r)?), blocked_at_ms: r.get(10)? }))?
+        .query_map([p], |r| {
+            Ok(BlockView {
+                profile: ProfileView::from(&profile_from(r)?),
+                blocked_at_ms: r.get(10)?,
+            })
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -486,14 +593,23 @@ pub fn blocks(c: &Connection, p: &str) -> Result<Vec<BlockView>, ApiError> {
 // ---------------------------------------------------------------- friend requests
 
 fn request_from(r: &Row) -> rusqlite::Result<RequestRow> {
-    Ok(RequestRow { request_id: r.get(0)?, from_profile: r.get(1)?, to_profile: r.get(2)?, created_ms: r.get(3)? })
+    Ok(RequestRow {
+        request_id: r.get(0)?,
+        from_profile: r.get(1)?,
+        to_profile: r.get(2)?,
+        created_ms: r.get(3)?,
+    })
 }
 
 pub fn request(c: &Connection, id: &str) -> Result<Option<RequestRow>, ApiError> {
     Ok(c.query_row("SELECT request_id, from_profile, to_profile, created_ms FROM friend_requests WHERE request_id = ?1", [id], request_from).optional()?)
 }
 
-pub fn request_between(c: &Connection, from: &str, to: &str) -> Result<Option<RequestRow>, ApiError> {
+pub fn request_between(
+    c: &Connection,
+    from: &str,
+    to: &str,
+) -> Result<Option<RequestRow>, ApiError> {
     Ok(c
         .query_row(
             "SELECT request_id, from_profile, to_profile, created_ms FROM friend_requests WHERE from_profile = ?1 AND to_profile = ?2",
@@ -503,7 +619,13 @@ pub fn request_between(c: &Connection, from: &str, to: &str) -> Result<Option<Re
         .optional()?)
 }
 
-pub fn insert_request(c: &Connection, id: &str, from: &str, to: &str, now_ms: i64) -> Result<(), ApiError> {
+pub fn insert_request(
+    c: &Connection,
+    id: &str,
+    from: &str,
+    to: &str,
+    now_ms: i64,
+) -> Result<(), ApiError> {
     c.execute("INSERT INTO friend_requests (request_id, from_profile, to_profile, created_ms) VALUES (?1, ?2, ?3, ?4)", params![id, from, to, now_ms])?;
     Ok(())
 }
@@ -514,15 +636,27 @@ pub fn delete_request(c: &Connection, id: &str) -> Result<(), ApiError> {
 }
 
 pub fn outgoing_request_count(c: &Connection, p: &str) -> Result<i64, ApiError> {
-    Ok(c.query_row("SELECT COUNT(*) FROM friend_requests WHERE from_profile = ?1", [p], |r| r.get(0))?)
+    Ok(c.query_row(
+        "SELECT COUNT(*) FROM friend_requests WHERE from_profile = ?1",
+        [p],
+        |r| r.get(0),
+    )?)
 }
 
 pub fn incoming_request_count(c: &Connection, p: &str) -> Result<i64, ApiError> {
-    Ok(c.query_row("SELECT COUNT(*) FROM friend_requests WHERE to_profile = ?1", [p], |r| r.get(0))?)
+    Ok(c.query_row(
+        "SELECT COUNT(*) FROM friend_requests WHERE to_profile = ?1",
+        [p],
+        |r| r.get(0),
+    )?)
 }
 
 /// Requests in both directions between two profiles.
-pub fn requests_between_pair(c: &Connection, a: &str, b: &str) -> Result<Vec<RequestRow>, ApiError> {
+pub fn requests_between_pair(
+    c: &Connection,
+    a: &str,
+    b: &str,
+) -> Result<Vec<RequestRow>, ApiError> {
     let mut v = Vec::new();
     v.extend(request_between(c, a, b)?);
     v.extend(request_between(c, b, a)?);
@@ -537,14 +671,21 @@ pub fn requests_for(c: &Connection, p: &str, outgoing: bool) -> Result<Vec<Reque
         "SELECT request_id, from_profile, to_profile, created_ms FROM friend_requests WHERE to_profile = ?1 ORDER BY created_ms"
     };
     let mut st = c.prepare_cached(sql)?;
-    let rows = st.query_map([p], request_from)?.collect::<Result<Vec<_>, _>>()?;
+    let rows = st
+        .query_map([p], request_from)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 pub fn request_view(c: &Connection, r: &RequestRow) -> Result<RequestView, ApiError> {
     let from = must_profile(c, &r.from_profile)?;
     let to = must_profile(c, &r.to_profile)?;
-    Ok(RequestView { request_id: r.request_id.clone(), from: (&from).into(), to: (&to).into(), created_at_ms: r.created_ms })
+    Ok(RequestView {
+        request_id: r.request_id.clone(),
+        from: (&from).into(),
+        to: (&to).into(),
+        created_at_ms: r.created_ms,
+    })
 }
 
 // ---------------------------------------------------------------- presence
@@ -586,9 +727,16 @@ pub fn delete_presence(c: &Connection, p: &str) -> Result<(), ApiError> {
 }
 
 /// Profiles whose last heartbeat is older than the timeout.
-pub fn expired_presence(c: &Connection, now_ms: i64, timeout_ms: i64) -> Result<Vec<String>, ApiError> {
-    let mut st = c.prepare_cached("SELECT profile_id FROM presence WHERE last_heartbeat_ms < ?1")?;
-    let rows = st.query_map([now_ms - timeout_ms], |r| r.get(0))?.collect::<Result<Vec<_>, _>>()?;
+pub fn expired_presence(
+    c: &Connection,
+    now_ms: i64,
+    timeout_ms: i64,
+) -> Result<Vec<String>, ApiError> {
+    let mut st =
+        c.prepare_cached("SELECT profile_id FROM presence WHERE last_heartbeat_ms < ?1")?;
+    let rows = st
+        .query_map([now_ms - timeout_ms], |r| r.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -612,13 +760,31 @@ fn invite_from(r: &Row) -> rusqlite::Result<InviteRow> {
 }
 
 pub fn invite(c: &Connection, id: &str) -> Result<Option<InviteRow>, ApiError> {
-    Ok(c.query_row(&format!("SELECT {INVITE_COLS} FROM invites WHERE invite_id = ?1"), [id], invite_from).optional()?)
+    Ok(c.query_row(
+        &format!("SELECT {INVITE_COLS} FROM invites WHERE invite_id = ?1"),
+        [id],
+        invite_from,
+    )
+    .optional()?)
 }
 
 pub fn insert_invite(c: &Connection, i: &InviteRow) -> Result<(), ApiError> {
     c.execute(
-        &format!("INSERT INTO invites ({INVITE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"),
-        params![i.invite_id, i.from_profile, i.to_profile, i.join_token, i.title_id, i.title_name, i.mode, i.message, i.created_ms, i.expires_ms],
+        &format!(
+            "INSERT INTO invites ({INVITE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)"
+        ),
+        params![
+            i.invite_id,
+            i.from_profile,
+            i.to_profile,
+            i.join_token,
+            i.title_id,
+            i.title_name,
+            i.mode,
+            i.message,
+            i.created_ms,
+            i.expires_ms
+        ],
     )?;
     Ok(())
 }
@@ -629,15 +795,32 @@ pub fn delete_invite(c: &Connection, id: &str) -> Result<(), ApiError> {
 }
 
 /// Live invites sent (`outgoing`) or received by `p`.
-pub fn invites_for(c: &Connection, p: &str, outgoing: bool, now_ms: i64) -> Result<Vec<InviteRow>, ApiError> {
-    let col = if outgoing { "from_profile" } else { "to_profile" };
-    let mut st = c.prepare_cached(&format!("SELECT {INVITE_COLS} FROM invites WHERE {col} = ?1 AND expires_ms > ?2 ORDER BY created_ms"))?;
-    let rows = st.query_map(params![p, now_ms], invite_from)?.collect::<Result<Vec<_>, _>>()?;
+pub fn invites_for(
+    c: &Connection,
+    p: &str,
+    outgoing: bool,
+    now_ms: i64,
+) -> Result<Vec<InviteRow>, ApiError> {
+    let col = if outgoing {
+        "from_profile"
+    } else {
+        "to_profile"
+    };
+    let mut st = c.prepare_cached(&format!(
+        "SELECT {INVITE_COLS} FROM invites WHERE {col} = ?1 AND expires_ms > ?2 ORDER BY created_ms"
+    ))?;
+    let rows = st
+        .query_map(params![p, now_ms], invite_from)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 pub fn outgoing_invite_count(c: &Connection, p: &str, now_ms: i64) -> Result<i64, ApiError> {
-    Ok(c.query_row("SELECT COUNT(*) FROM invites WHERE from_profile = ?1 AND expires_ms > ?2", params![p, now_ms], |r| r.get(0))?)
+    Ok(c.query_row(
+        "SELECT COUNT(*) FROM invites WHERE from_profile = ?1 AND expires_ms > ?2",
+        params![p, now_ms],
+        |r| r.get(0),
+    )?)
 }
 
 /// Invites in either direction between two profiles (live or not).
@@ -645,13 +828,19 @@ pub fn invites_between_pair(c: &Connection, a: &str, b: &str) -> Result<Vec<Invi
     let mut st = c.prepare_cached(&format!(
         "SELECT {INVITE_COLS} FROM invites WHERE (from_profile = ?1 AND to_profile = ?2) OR (from_profile = ?2 AND to_profile = ?1)"
     ))?;
-    let rows = st.query_map([a, b], invite_from)?.collect::<Result<Vec<_>, _>>()?;
+    let rows = st
+        .query_map([a, b], invite_from)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
 pub fn expired_invites(c: &Connection, now_ms: i64) -> Result<Vec<InviteRow>, ApiError> {
-    let mut st = c.prepare_cached(&format!("SELECT {INVITE_COLS} FROM invites WHERE expires_ms <= ?1"))?;
-    let rows = st.query_map([now_ms], invite_from)?.collect::<Result<Vec<_>, _>>()?;
+    let mut st = c.prepare_cached(&format!(
+        "SELECT {INVITE_COLS} FROM invites WHERE expires_ms <= ?1"
+    ))?;
+    let rows = st
+        .query_map([now_ms], invite_from)?
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
 
@@ -672,26 +861,46 @@ pub fn invite_view(c: &Connection, i: &InviteRow) -> Result<InviteView, ApiError
 }
 
 /// Every profile's friend view, as `viewer` sees them.
-pub fn friend_views(c: &Connection, viewer: &str, now_ms: i64, timeout_ms: i64) -> Result<Vec<FriendView>, ApiError> {
+pub fn friend_views(
+    c: &Connection,
+    viewer: &str,
+    now_ms: i64,
+    timeout_ms: i64,
+) -> Result<Vec<FriendView>, ApiError> {
     let mut out = Vec::new();
     for (fid, since) in friend_ids(c, viewer)? {
         out.push(friend_view(c, &fid, since, now_ms, timeout_ms)?);
     }
     // Online first, then by nickname.
     out.sort_by(|a, b| {
-        (a.presence.status == "offline", a.profile.nickname.to_lowercase(), a.profile.profile_id.clone()).cmp(&(
-            b.presence.status == "offline",
-            b.profile.nickname.to_lowercase(),
-            b.profile.profile_id.clone(),
-        ))
+        (
+            a.presence.status == "offline",
+            a.profile.nickname.to_lowercase(),
+            a.profile.profile_id.clone(),
+        )
+            .cmp(&(
+                b.presence.status == "offline",
+                b.profile.nickname.to_lowercase(),
+                b.profile.profile_id.clone(),
+            ))
     });
     Ok(out)
 }
 
-pub fn friend_view(c: &Connection, friend: &str, since_ms: i64, now_ms: i64, timeout_ms: i64) -> Result<FriendView, ApiError> {
+pub fn friend_view(
+    c: &Connection,
+    friend: &str,
+    since_ms: i64,
+    now_ms: i64,
+    timeout_ms: i64,
+) -> Result<FriendView, ApiError> {
     let p = must_profile(c, friend)?;
     let pr = presence(c, friend)?;
-    Ok(FriendView { profile: (&p).into(), friends_since_ms: since_ms, presence: friend_presence(&p, pr.as_ref(), now_ms, timeout_ms) })
+    Ok(FriendView {
+        profile: (&p).into(),
+        friends_since_ms: since_ms,
+        presence: friend_presence(&p, pr.as_ref(), now_ms, timeout_ms),
+    })
 }
 
 #[cfg(test)]
@@ -727,7 +936,9 @@ mod tests {
         let path = dir.path().join("s.sqlite3");
         let db = Db::open(&path).unwrap();
         let c = db.conn.lock().unwrap();
-        let mode: String = c.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+        let mode: String = c
+            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
     }
 
@@ -754,15 +965,27 @@ mod tests {
             online_since_ms: 0,
             last_heartbeat_ms: 1000,
         };
-        assert_eq!(friend_presence(&p, Some(&pr), 1000, 180_000).status, "playing");
+        assert_eq!(
+            friend_presence(&p, Some(&pr), 1000, 180_000).status,
+            "playing"
+        );
         assert!(friend_presence(&p, Some(&pr), 1000, 180_000).joinable);
-        assert_eq!(friend_presence(&p, Some(&pr), 182_000, 180_000).status, "offline");
+        assert_eq!(
+            friend_presence(&p, Some(&pr), 182_000, 180_000).status,
+            "offline"
+        );
         p.appear_offline = true;
         let v = friend_presence(&p, Some(&pr), 1000, 180_000);
-        assert_eq!((v.status.as_str(), v.last_seen_ms, v.join_token), ("offline", Some(500), None));
+        assert_eq!(
+            (v.status.as_str(), v.last_seen_ms, v.join_token),
+            ("offline", Some(500), None)
+        );
         assert_eq!(own_presence(&p, Some(&pr), 1000, 180_000).status, "playing");
         p.appear_offline = false;
         p.presence_visibility = "nobody".into();
-        assert_eq!(friend_presence(&p, Some(&pr), 1000, 180_000), PresenceView::offline(None));
+        assert_eq!(
+            friend_presence(&p, Some(&pr), 1000, 180_000),
+            PresenceView::offline(None)
+        );
     }
 }

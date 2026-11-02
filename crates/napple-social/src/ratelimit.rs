@@ -34,7 +34,10 @@ impl RateLimiter {
     /// Takes one token, or returns 429 with a Retry-After.
     pub fn check(&self, key: &str, now_ms: i64) -> Result<(), ApiError> {
         let mut map = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
-        let b = map.entry(key.to_string()).or_insert(Bucket { tokens: self.capacity, last_ms: now_ms });
+        let b = map.entry(key.to_string()).or_insert(Bucket {
+            tokens: self.capacity,
+            last_ms: now_ms,
+        });
         let elapsed = (now_ms - b.last_ms).max(0) as f64;
         b.tokens = (b.tokens + elapsed * self.refill_per_ms).min(self.capacity);
         b.last_ms = now_ms;

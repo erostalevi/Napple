@@ -4,7 +4,13 @@
 async fn main() {
     let filter = tracing_subscriber::EnvFilter::try_from_env("NAPPLE_SOCIAL_LOG")
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info,napple_social=info"));
-    tracing_subscriber::fmt().with_env_filter(filter).with_writer(std::io::stdout).with_target(false).init();
+    let ansi = std::io::IsTerminal::is_terminal(&std::io::stdout());
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stdout)
+        .with_ansi(ansi)
+        .with_target(false)
+        .init();
     let config = match napple_social::config::Config::from_env() {
         Ok(c) => c,
         Err(e) => {

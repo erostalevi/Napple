@@ -39,13 +39,22 @@ pub fn display(stored: &str) -> String {
     if stored.len() != 12 {
         return stored.to_string();
     }
-    format!("{PREFIX}-{}-{}-{}", &stored[0..4], &stored[4..8], &stored[8..12])
+    format!(
+        "{PREFIX}-{}-{}-{}",
+        &stored[0..4],
+        &stored[4..8],
+        &stored[8..12]
+    )
 }
 
 /// Any user input -> stored form, or None when it is not a valid Napple friend code.
 pub fn parse(input: &str) -> Option<String> {
     let s = input.trim();
-    let s = if s.len() >= 2 && s[..2].eq_ignore_ascii_case(PREFIX) { &s[2..] } else { s };
+    let s = if s.len() >= 2 && s[..2].eq_ignore_ascii_case(PREFIX) {
+        &s[2..]
+    } else {
+        s
+    };
     let mut digits = Vec::with_capacity(12);
     for ch in s.chars() {
         match ch {
@@ -79,7 +88,10 @@ mod tests {
             assert_eq!(parse(&shown).as_deref(), Some(c.as_str()));
             assert_eq!(parse(&c).as_deref(), Some(c.as_str()));
             assert_eq!(parse(&shown.to_lowercase()).as_deref(), Some(c.as_str()));
-            assert_eq!(parse(&format!(" {} {} {} ", &c[..4], &c[4..8], &c[8..])).as_deref(), Some(c.as_str()));
+            assert_eq!(
+                parse(&format!(" {} {} {} ", &c[..4], &c[4..8], &c[8..])).as_deref(),
+                Some(c.as_str())
+            );
         }
     }
 

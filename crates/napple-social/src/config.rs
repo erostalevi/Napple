@@ -63,16 +63,32 @@ impl Config {
     }
 
     pub fn from_lookup(get: impl Fn(&str) -> Option<String>) -> Result<Self, String> {
-        let get = |k: &str| get(k).map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+        let get = |k: &str| {
+            get(k)
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
         let bind = get("NAPPLE_SOCIAL_BIND").unwrap_or_else(|| "127.0.0.1:8794".into());
-        let bind: SocketAddr = bind.parse().map_err(|e| format!("NAPPLE_SOCIAL_BIND={bind}: {e}"))?;
-        let account_url = get("NAPPLE_ACCOUNT_URL").unwrap_or_else(|| "https://pretend.napple.lat".into());
+        let bind: SocketAddr = bind
+            .parse()
+            .map_err(|e| format!("NAPPLE_SOCIAL_BIND={bind}: {e}"))?;
+        let account_url =
+            get("NAPPLE_ACCOUNT_URL").unwrap_or_else(|| "https://pretend.napple.lat".into());
         if !(account_url.starts_with("http://") || account_url.starts_with("https://")) {
-            return Err(format!("NAPPLE_ACCOUNT_URL={account_url}: must start with http:// or https://"));
+            return Err(format!(
+                "NAPPLE_ACCOUNT_URL={account_url}: must start with http:// or https://"
+            ));
         }
         let account_url = account_url.trim_end_matches('/').to_string();
-        let data_dir = PathBuf::from(get("NAPPLE_SOCIAL_DATA_DIR").unwrap_or_else(|| "./napple-social-data".into()));
-        fn num<T: std::str::FromStr + PartialOrd + Copy>(v: Option<String>, name: &str, default: T, min: T) -> Result<T, String> {
+        let data_dir = PathBuf::from(
+            get("NAPPLE_SOCIAL_DATA_DIR").unwrap_or_else(|| "./napple-social-data".into()),
+        );
+        fn num<T: std::str::FromStr + PartialOrd + Copy>(
+            v: Option<String>,
+            name: &str,
+            default: T,
+            min: T,
+        ) -> Result<T, String> {
             match v {
                 None => Ok(default),
                 Some(s) => {
@@ -89,11 +105,36 @@ impl Config {
             bind,
             account_url,
             data_dir,
-            heartbeat_secs: num(get("NAPPLE_SOCIAL_HEARTBEAT_SECS"), "NAPPLE_SOCIAL_HEARTBEAT_SECS", 60, 5)?,
-            rate_per_min: num(get("NAPPLE_SOCIAL_RATE_PER_MIN"), "NAPPLE_SOCIAL_RATE_PER_MIN", 240, 2)?,
-            ip_rate_per_min: num(get("NAPPLE_SOCIAL_IP_RATE_PER_MIN"), "NAPPLE_SOCIAL_IP_RATE_PER_MIN", 600, 2)?,
-            friend_requests_per_hour: num(get("NAPPLE_SOCIAL_FRIEND_REQUESTS_PER_HOUR"), "NAPPLE_SOCIAL_FRIEND_REQUESTS_PER_HOUR", 30, 1)?,
-            invites_per_hour: num(get("NAPPLE_SOCIAL_INVITES_PER_HOUR"), "NAPPLE_SOCIAL_INVITES_PER_HOUR", 120, 1)?,
+            heartbeat_secs: num(
+                get("NAPPLE_SOCIAL_HEARTBEAT_SECS"),
+                "NAPPLE_SOCIAL_HEARTBEAT_SECS",
+                60,
+                5,
+            )?,
+            rate_per_min: num(
+                get("NAPPLE_SOCIAL_RATE_PER_MIN"),
+                "NAPPLE_SOCIAL_RATE_PER_MIN",
+                240,
+                2,
+            )?,
+            ip_rate_per_min: num(
+                get("NAPPLE_SOCIAL_IP_RATE_PER_MIN"),
+                "NAPPLE_SOCIAL_IP_RATE_PER_MIN",
+                600,
+                2,
+            )?,
+            friend_requests_per_hour: num(
+                get("NAPPLE_SOCIAL_FRIEND_REQUESTS_PER_HOUR"),
+                "NAPPLE_SOCIAL_FRIEND_REQUESTS_PER_HOUR",
+                30,
+                1,
+            )?,
+            invites_per_hour: num(
+                get("NAPPLE_SOCIAL_INVITES_PER_HOUR"),
+                "NAPPLE_SOCIAL_INVITES_PER_HOUR",
+                120,
+                1,
+            )?,
             trust_proxy: flag("NAPPLE_SOCIAL_TRUST_PROXY"),
             audience: "napple".into(),
         })
@@ -137,11 +178,23 @@ mod tests {
         .into();
         let c = Config::from_lookup(|k| m.get(k).map(|s| s.to_string())).unwrap();
         assert_eq!(c.bind.port(), 9000);
-        assert_eq!(c.jwks_url(), "http://acct.local:8080/account/v1/.well-known/jwks.json");
-        assert_eq!(c.profiles_url(), "http://acct.local:8080/account/v1/profiles");
+        assert_eq!(
+            c.jwks_url(),
+            "http://acct.local:8080/account/v1/.well-known/jwks.json"
+        );
+        assert_eq!(
+            c.profiles_url(),
+            "http://acct.local:8080/account/v1/profiles"
+        );
         assert_eq!(c.presence_timeout_ms(), 90_000);
         assert!(c.trust_proxy);
-        assert!(Config::from_lookup(|k| (k == "NAPPLE_ACCOUNT_URL").then(|| "ftp://x".to_string())).is_err());
-        assert!(Config::from_lookup(|k| (k == "NAPPLE_SOCIAL_HEARTBEAT_SECS").then(|| "1".to_string())).is_err());
+        assert!(
+            Config::from_lookup(|k| (k == "NAPPLE_ACCOUNT_URL").then(|| "ftp://x".to_string()))
+                .is_err()
+        );
+        assert!(
+            Config::from_lookup(|k| (k == "NAPPLE_SOCIAL_HEARTBEAT_SECS").then(|| "1".to_string()))
+                .is_err()
+        );
     }
 }

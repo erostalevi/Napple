@@ -18,34 +18,75 @@ pub const QUEUE: usize = 256;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     /// First message on every stream.
-    Hello { profile_id: String, friend_code: String, server_time_ms: i64, heartbeat_interval_secs: i64, token_expires_at: i64 },
+    Hello {
+        profile_id: String,
+        friend_code: String,
+        server_time_ms: i64,
+        heartbeat_interval_secs: i64,
+        token_expires_at: i64,
+    },
     /// A friend's visible presence changed (or your own, from another device).
-    Presence { profile_id: String, presence: PresenceView },
+    Presence {
+        profile_id: String,
+        presence: PresenceView,
+    },
     /// Someone sent you a friend request.
-    FriendRequest { request: RequestView },
+    FriendRequest {
+        request: RequestView,
+    },
     /// A pending request involving you is gone (accepted elsewhere, declined, cancelled, blocked).
-    FriendRequestClosed { request_id: String },
+    FriendRequestClosed {
+        request_id: String,
+    },
     /// A new friend (your request was accepted, or you accepted on another device).
-    FriendAdded { friend: FriendView },
+    FriendAdded {
+        friend: FriendView,
+    },
     /// A friendship ended.
-    FriendRemoved { profile_id: String },
+    FriendRemoved {
+        profile_id: String,
+    },
     /// A friend invited you to a joinable session.
-    Invite { invite: InviteView },
+    Invite {
+        invite: InviteView,
+    },
     /// An invite is gone: `reason` is "expired", "cancelled", "replaced", "accepted", "declined" or "removed".
-    InviteClosed { invite_id: String, reason: String },
+    InviteClosed {
+        invite_id: String,
+        reason: String,
+    },
     /// Your invite was answered.
-    InviteResponse { invite_id: String, profile_id: String, accepted: bool },
+    InviteResponse {
+        invite_id: String,
+        profile_id: String,
+        accepted: bool,
+    },
     /// Your profile's settings changed (from another device).
-    Settings { presence_visibility: String, appear_offline: bool, accept_friend_requests: bool },
-    Pong { server_time_ms: i64 },
-    Reauthed { token_expires_at: i64 },
-    HeartbeatAck { presence: PresenceView },
-    Error { code: String, message: String },
+    Settings {
+        presence_visibility: String,
+        appear_offline: bool,
+        accept_friend_requests: bool,
+    },
+    Pong {
+        server_time_ms: i64,
+    },
+    Reauthed {
+        token_expires_at: i64,
+    },
+    HeartbeatAck {
+        presence: PresenceView,
+    },
+    Error {
+        code: String,
+        message: String,
+    },
 }
 
 impl Event {
     pub fn to_json(&self) -> Arc<str> {
-        serde_json::to_string(self).unwrap_or_else(|_| "{\"type\":\"error\"}".into()).into()
+        serde_json::to_string(self)
+            .unwrap_or_else(|_| "{\"type\":\"error\"}".into())
+            .into()
     }
 }
 
@@ -61,7 +102,12 @@ impl Hub {
     pub fn register(&self, profile_id: &str) -> (u64, mpsc::Receiver<Arc<str>>) {
         let id = self.next.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = mpsc::channel(QUEUE);
-        self.conns.lock().unwrap_or_else(|e| e.into_inner()).entry(profile_id.to_string()).or_default().push((id, tx));
+        self.conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .entry(profile_id.to_string())
+            .or_default()
+            .push((id, tx));
         (id, rx)
     }
 
@@ -99,10 +145,19 @@ impl Hub {
     }
 
     pub fn connections(&self, profile_id: &str) -> usize {
-        self.conns.lock().unwrap_or_else(|e| e.into_inner()).get(profile_id).map_or(0, Vec::len)
+        self.conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(profile_id)
+            .map_or(0, Vec::len)
     }
 
     pub fn total(&self) -> usize {
-        self.conns.lock().unwrap_or_else(|e| e.into_inner()).values().map(Vec::len).sum()
+        self.conns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .values()
+            .map(Vec::len)
+            .sum()
     }
 }

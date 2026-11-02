@@ -26,11 +26,15 @@ enum ClientMsg {
 }
 
 pub async fn stream(State(s): State<AppState>, caller: Caller, ws: WebSocketUpgrade) -> Response {
-    ws.max_message_size(16 * 1024).on_upgrade(move |socket| run(socket, s, caller))
+    ws.max_message_size(16 * 1024)
+        .on_upgrade(move |socket| run(socket, s, caller))
 }
 
 fn close(code: u16, reason: &'static str) -> Message {
-    Message::Close(Some(CloseFrame { code, reason: reason.into() }))
+    Message::Close(Some(CloseFrame {
+        code,
+        reason: reason.into(),
+    }))
 }
 
 async fn run(socket: WebSocket, s: AppState, caller: Caller) {
@@ -42,11 +46,13 @@ async fn run(socket: WebSocket, s: AppState, caller: Caller) {
     // Hello, then the live invites this profile missed while disconnected.
     let now = s.now_ms();
     let p2 = pid.clone();
-    let initial = s
-        .db
-        .call(move |c| {
+    let initial =
+        s.db.call(move |c| {
             let p = db::must_profile(c, &p2)?;
-            let invites = db::invites_for(c, &p2, false, now)?.iter().map(|i| db::invite_view(c, i)).collect::<Result<Vec<_>, _>>()?;
+            let invites = db::invites_for(c, &p2, false, now)?
+                .iter()
+                .map(|i| db::invite_view(c, i))
+                .collect::<Result<Vec<_>, _>>()?;
             Ok((p.friend_code, invites))
         })
         .await;
@@ -63,12 +69,20 @@ async fn run(socket: WebSocket, s: AppState, caller: Caller) {
         heartbeat_interval_secs: s.config.heartbeat_secs,
         token_expires_at: token_exp,
     };
-    let mut ok = tx.send(Message::Text(hello.to_json().to_string().into())).await.is_ok();
+    let mut ok = tx
+        .send(Message::Text(hello.to_json().to_string().into()))
+        .await
+        .is_ok();
     for invite in invites {
         if !ok {
             break;
         }
-        ok = tx.send(Message::Text(Event::Invite { invite }.to_json().to_string().into())).await.is_ok();
+        ok = tx
+            .send(Message::Text(
+                Event::Invite { invite }.to_json().to_string().into(),
+            ))
+            .await
+            .is_ok();
     }
 
     let mut ping = tokio::time::interval(Duration::from_secs(30));
@@ -133,5 +147,7 @@ async fn run(socket: WebSocket, s: AppState, caller: Caller) {
 }
 
 async fn send(tx: &mut futures_util::stream::SplitSink<WebSocket, Message>, ev: &Event) -> bool {
-    tx.send(Message::Text(ev.to_json().to_string().into())).await.is_ok()
+    tx.send(Message::Text(ev.to_json().to_string().into()))
+        .await
+        .is_ok()
 }

@@ -69,12 +69,27 @@ impl AppState {
         let limits = Limits {
             ip: RateLimiter::per_minute(config.ip_rate_per_min),
             account: RateLimiter::per_minute(config.rate_per_min),
-            friend_request: RateLimiter::new(config.friend_requests_per_hour.div_ceil(2), config.friend_requests_per_hour, 3_600_000),
-            invite: RateLimiter::new(config.invites_per_hour.div_ceil(4), config.invites_per_hour, 3_600_000),
+            friend_request: RateLimiter::new(
+                config.friend_requests_per_hour.div_ceil(2),
+                config.friend_requests_per_hour,
+                3_600_000,
+            ),
+            invite: RateLimiter::new(
+                config.invites_per_hour.div_ceil(4),
+                config.invites_per_hour,
+                3_600_000,
+            ),
             code_regen: RateLimiter::new(3, 3, 86_400_000),
         };
         let auth = Auth::new(&config);
-        AppState(Arc::new(Inner { config, clock, db, hub: Hub::default(), auth, limits }))
+        AppState(Arc::new(Inner {
+            config,
+            clock,
+            db,
+            hub: Hub::default(),
+            auth,
+            limits,
+        }))
     }
 
     pub fn now_ms(&self) -> i64 {
@@ -97,24 +112,41 @@ pub struct Caller {
 
 fn client_ip(parts: &Parts, trust_proxy: bool) -> String {
     if trust_proxy
-        && let Some(v) = parts.headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
-            // The last hop is the one our own load balancer appended; earlier entries are client-controlled.
-            if let Some(last) = v.rsplit(',').map(str::trim).find(|s| !s.is_empty()) {
-                return last.to_string();
-            }
+        && let Some(v) = parts
+            .headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+    {
+        // The last hop is the one our own load balancer appended; earlier entries are client-controlled.
+        if let Some(last) = v.rsplit(',').map(str::trim).find(|s| !s.is_empty()) {
+            return last.to_string();
         }
-    parts.extensions.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip().to_string()).unwrap_or_else(|| "unknown".into())
+    }
+    parts
+        .extensions
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| c.0.ip().to_string())
+        .unwrap_or_else(|| "unknown".into())
 }
 
 pub fn bearer(parts: &Parts) -> Result<&str, ApiError> {
-    let v = parts
-        .headers
-        .get(header::AUTHORIZATION)
-        .ok_or_else(|| ApiError::unauthorized("missing_token", "Authorization: Bearer <Napple access token> required"))?;
-    let v = v.to_str().map_err(|_| ApiError::unauthorized("invalid_token", "bad Authorization header"))?;
-    let (scheme, token) = v.split_once(' ').ok_or_else(|| ApiError::unauthorized("invalid_token", "bad Authorization header"))?;
+    let v = parts.headers.get(header::AUTHORIZATION).ok_or_else(|| {
+        ApiError::unauthorized(
+            "missing_token",
+            "Authorization: Bearer <Napple access token> required",
+        )
+    })?;
+    let v = v
+        .to_str()
+        .map_err(|_| ApiError::unauthorized("invalid_token", "bad Authorization header"))?;
+    let (scheme, token) = v
+        .split_once(' ')
+        .ok_or_else(|| ApiError::unauthorized("invalid_token", "bad Authorization header"))?;
     if !scheme.eq_ignore_ascii_case("bearer") || token.trim().is_empty() {
-        return Err(ApiError::unauthorized("invalid_token", "bad Authorization header"));
+        return Err(ApiError::unauthorized(
+            "invalid_token",
+            "bad Authorization header",
+        ));
     }
     Ok(token.trim())
 }
@@ -124,25 +156,51 @@ impl FromRequestParts<AppState> for Caller {
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
         let now = state.now_ms();
-        state.limits.ip.check(&client_ip(parts, state.config.trust_proxy), now)?;
+        state
+            .limits
+            .ip
+            .check(&client_ip(parts, state.config.trust_proxy), now)?;
         let token = bearer(parts)?.to_string();
         let claims = state.auth.verify(&token, now).await?;
         state.limits.account.check(&claims.account_id, now)?;
         let raw = parts
             .headers
             .get(PROFILE_HEADER)
-            .ok_or_else(|| ApiError::bad_request("missing_profile", "X-Napple-Profile header required"))?
+            .ok_or_else(|| {
+                ApiError::bad_request("missing_profile", "X-Napple-Profile header required")
+            })?
             .to_str()
-            .map_err(|_| ApiError::bad_request("invalid_profile", "X-Napple-Profile must be a profile UUID"))?;
+            .map_err(|_| {
+                ApiError::bad_request("invalid_profile", "X-Napple-Profile must be a profile UUID")
+            })?;
         let profile_id = uuid::Uuid::parse_str(raw.trim())
-            .map_err(|_| ApiError::bad_request("invalid_profile", "X-Napple-Profile must be a profile UUID"))?
+            .map_err(|_| {
+                ApiError::bad_request("invalid_profile", "X-Napple-Profile must be a profile UUID")
+            })?
             .hyphenated()
             .to_string();
-        let ProfileInfo { profile_id, nickname, icon_id } = state.auth.owned_profile(&token, &claims.account_id, &profile_id, now).await?;
+        let ProfileInfo {
+            profile_id,
+            nickname,
+            icon_id,
+        } = state
+            .auth
+            .owned_profile(&token, &claims.account_id, &profile_id, now)
+            .await?;
         let account_id = claims.account_id.clone();
         let pid = profile_id.clone();
-        state.db.call(move |c| db::ensure_profile(c, &account_id, &pid, &nickname, &icon_id, now).map(|_| ())).await?;
-        Ok(Caller { account_id: claims.account_id, device_id: claims.device_id, profile_id, token_exp: claims.exp })
+        state
+            .db
+            .call(move |c| {
+                db::ensure_profile(c, &account_id, &pid, &nickname, &icon_id, now).map(|_| ())
+            })
+            .await?;
+        Ok(Caller {
+            account_id: claims.account_id,
+            device_id: claims.device_id,
+            profile_id,
+            token_exp: claims.exp,
+        })
     }
 }
 
@@ -157,20 +215,40 @@ pub struct PresenceChange {
 }
 
 /// Reads the friend-visible and own presence of a profile inside a DB call.
-pub fn presence_pair(c: &rusqlite::Connection, profile_id: &str, now_ms: i64, timeout_ms: i64) -> Result<(PresenceView, PresenceView), ApiError> {
+pub fn presence_pair(
+    c: &rusqlite::Connection,
+    profile_id: &str,
+    now_ms: i64,
+    timeout_ms: i64,
+) -> Result<(PresenceView, PresenceView), ApiError> {
     let p = db::must_profile(c, profile_id)?;
     let pr = db::presence(c, profile_id)?;
-    Ok((friend_presence(&p, pr.as_ref(), now_ms, timeout_ms), own_presence(&p, pr.as_ref(), now_ms, timeout_ms)))
+    Ok((
+        friend_presence(&p, pr.as_ref(), now_ms, timeout_ms),
+        own_presence(&p, pr.as_ref(), now_ms, timeout_ms),
+    ))
 }
 
 impl AppState {
     /// Pushes presence updates: to friends when what they see changed, to the profile's own devices when its real state changed.
     pub fn push_presence(&self, ch: &PresenceChange) {
         if !ch.friend_before.same_state(&ch.friend_after) {
-            self.hub.send_many(&ch.friends, &Event::Presence { profile_id: ch.profile_id.clone(), presence: ch.friend_after.clone() });
+            self.hub.send_many(
+                &ch.friends,
+                &Event::Presence {
+                    profile_id: ch.profile_id.clone(),
+                    presence: ch.friend_after.clone(),
+                },
+            );
         }
         if !ch.own_before.same_state(&ch.own_after) {
-            self.hub.send(&ch.profile_id, &Event::Presence { profile_id: ch.profile_id.clone(), presence: ch.own_after.clone() });
+            self.hub.send(
+                &ch.profile_id,
+                &Event::Presence {
+                    profile_id: ch.profile_id.clone(),
+                    presence: ch.own_after.clone(),
+                },
+            );
         }
     }
 }
@@ -193,8 +271,18 @@ pub async fn sweep(state: &AppState) -> Result<(), ApiError> {
                 let own_before = own_presence(&p, pr.as_ref(), at, timeout);
                 db::delete_presence(c, &pid)?;
                 let (friend_after, own_after) = presence_pair(c, &pid, now, timeout)?;
-                let friends = db::friend_ids(c, &pid)?.into_iter().map(|(f, _)| f).collect();
-                out.push(PresenceChange { profile_id: pid, friends, friend_before, friend_after, own_before, own_after });
+                let friends = db::friend_ids(c, &pid)?
+                    .into_iter()
+                    .map(|(f, _)| f)
+                    .collect();
+                out.push(PresenceChange {
+                    profile_id: pid,
+                    friends,
+                    friend_before,
+                    friend_after,
+                    own_before,
+                    own_after,
+                });
             }
             let expired = db::expired_invites(c, now)?;
             for i in &expired {
@@ -209,7 +297,10 @@ pub async fn sweep(state: &AppState) -> Result<(), ApiError> {
         state.push_presence(ch);
     }
     for i in &invites {
-        let ev = Event::InviteClosed { invite_id: i.invite_id.clone(), reason: "expired".into() };
+        let ev = Event::InviteClosed {
+            invite_id: i.invite_id.clone(),
+            reason: "expired".into(),
+        };
         state.hub.send(&i.to_profile, &ev);
         state.hub.send(&i.from_profile, &ev);
     }
@@ -222,8 +313,13 @@ pub async fn sweep(state: &AppState) -> Result<(), ApiError> {
     Ok(())
 }
 
-async fn healthz(axum::extract::State(state): axum::extract::State<AppState>) -> Result<Json<serde_json::Value>, ApiError> {
-    state.db.call(|c| Ok(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?)).await?;
+async fn healthz(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    state
+        .db
+        .call(|c| Ok(c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))?))
+        .await?;
     Ok(Json(json!({
         "status": "ok",
         "service": "napple-social",
@@ -241,13 +337,27 @@ pub fn router(state: AppState) -> Router {
         .route("/settings", get(api::get_settings).put(api::put_settings))
         .route("/friends", get(api::friends))
         .route("/friends/{profile_id}", delete(api::remove_friend))
-        .route("/friend-requests", get(api::list_requests).post(api::send_request))
+        .route(
+            "/friend-requests",
+            get(api::list_requests).post(api::send_request),
+        )
         .route("/friend-requests/{request_id}", delete(api::cancel_request))
-        .route("/friend-requests/{request_id}/accept", post(api::accept_request))
-        .route("/friend-requests/{request_id}/decline", post(api::decline_request))
+        .route(
+            "/friend-requests/{request_id}/accept",
+            post(api::accept_request),
+        )
+        .route(
+            "/friend-requests/{request_id}/decline",
+            post(api::decline_request),
+        )
         .route("/blocks", get(api::list_blocks))
         .route("/blocks/{profile_id}", put(api::block).delete(api::unblock))
-        .route("/presence", get(api::get_presence).put(api::put_presence).delete(api::delete_presence))
+        .route(
+            "/presence",
+            get(api::get_presence)
+                .put(api::put_presence)
+                .delete(api::delete_presence),
+        )
         .route("/presence/heartbeat", post(api::heartbeat))
         .route("/invites", get(api::list_invites).post(api::send_invite))
         .route("/invites/{invite_id}", delete(api::cancel_invite))
@@ -258,11 +368,30 @@ pub fn router(state: AppState) -> Router {
         .nest("/social/v1", v1)
         .fallback(|| async { ApiError::not_found("not_found", "no such endpoint") })
         .layer(DefaultBodyLimit::max(16 * 1024))
-        .layer(axum::middleware::map_response(|mut r: axum::response::Response| async move {
-            r.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            r
-        }))
+        .layer(axum::middleware::from_fn(access_log))
         .with_state(state)
+}
+
+/// One log line per request (method, path, status, latency; never headers or bodies) and `Cache-Control: no-store`.
+async fn access_log(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let (method, path) = (req.method().clone(), req.uri().path().to_string());
+    let started = std::time::Instant::now();
+    let mut resp = next.run(req).await;
+    resp.headers_mut()
+        .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    let status = resp.status().as_u16();
+    let ms = started.elapsed().as_millis() as u64;
+    if path.ends_with("/healthz") {
+        tracing::debug!(%method, %path, status, ms, "request");
+    } else if status >= 500 {
+        tracing::warn!(%method, %path, status, ms, "request");
+    } else {
+        tracing::info!(%method, %path, status, ms, "request");
+    }
+    resp
 }
 
 /// Spawns the housekeeping loop.
@@ -281,16 +410,23 @@ pub fn spawn_sweeper(state: AppState) -> tokio::task::JoinHandle<()> {
 
 /// Opens storage under `NAPPLE_SOCIAL_DATA_DIR`, binds and serves until SIGINT/SIGTERM.
 pub async fn run(config: Config) -> Result<(), String> {
-    std::fs::create_dir_all(&config.data_dir).map_err(|e| format!("create {}: {e}", config.data_dir.display()))?;
-    let db = Db::open(&config.db_path()).map_err(|e| format!("open {}: {e}", config.db_path().display()))?;
+    std::fs::create_dir_all(&config.data_dir)
+        .map_err(|e| format!("create {}: {e}", config.data_dir.display()))?;
+    let db = Db::open(&config.db_path())
+        .map_err(|e| format!("open {}: {e}", config.db_path().display()))?;
     let state = AppState::new(config.clone(), db, Arc::new(clock::SystemClock));
     let sweeper = spawn_sweeper(state.clone());
-    let listener = tokio::net::TcpListener::bind(config.bind).await.map_err(|e| format!("bind {}: {e}", config.bind))?;
-    tracing::info!(bind = %config.bind, account = %config.account_url, data = %config.data_dir.display(), "napple-social listening");
-    axum::serve(listener, router(state).into_make_service_with_connect_info::<SocketAddr>())
-        .with_graceful_shutdown(shutdown_signal())
+    let listener = tokio::net::TcpListener::bind(config.bind)
         .await
-        .map_err(|e| format!("serve: {e}"))?;
+        .map_err(|e| format!("bind {}: {e}", config.bind))?;
+    tracing::info!(bind = %config.bind, account = %config.account_url, data = %config.data_dir.display(), "napple-social listening");
+    axum::serve(
+        listener,
+        router(state).into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .map_err(|e| format!("serve: {e}"))?;
     sweeper.abort();
     tracing::info!("napple-social stopped");
     Ok(())
@@ -302,7 +438,8 @@ async fn shutdown_signal() {
     };
     #[cfg(unix)]
     let term = async {
-        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+        if let Ok(mut s) = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+        {
             s.recv().await;
         }
     };

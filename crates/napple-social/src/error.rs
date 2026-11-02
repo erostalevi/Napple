@@ -15,7 +15,12 @@ pub struct ApiError {
 
 impl ApiError {
     pub fn new(status: StatusCode, code: &'static str, message: impl Into<String>) -> Self {
-        ApiError { status, code, message: message.into(), retry_after_secs: None }
+        ApiError {
+            status,
+            code,
+            message: message.into(),
+            retry_after_secs: None,
+        }
     }
     pub fn bad_request(code: &'static str, message: impl Into<String>) -> Self {
         Self::new(StatusCode::BAD_REQUEST, code, message)
@@ -49,13 +54,23 @@ impl ApiError {
     pub fn internal(message: impl Into<String>) -> Self {
         let message = message.into();
         tracing::error!(%message, "internal error");
-        Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "internal error")
+        Self::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal",
+            "internal error",
+        )
     }
 }
 
 impl std::fmt::Display for ApiError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} {}: {}", self.status.as_u16(), self.code, self.message)
+        write!(
+            f,
+            "{} {}: {}",
+            self.status.as_u16(),
+            self.code,
+            self.message
+        )
     }
 }
 
@@ -64,13 +79,17 @@ impl IntoResponse for ApiError {
         let body = json!({ "error": { "code": self.code, "message": self.message } });
         let mut resp = (self.status, axum::Json(body)).into_response();
         if self.status == StatusCode::UNAUTHORIZED {
-            let v = format!("Bearer realm=\"napple\", error=\"invalid_token\", error_description=\"{}\"", self.code);
+            let v = format!(
+                "Bearer realm=\"napple\", error=\"invalid_token\", error_description=\"{}\"",
+                self.code
+            );
             if let Ok(v) = HeaderValue::from_str(&v) {
                 resp.headers_mut().insert(header::WWW_AUTHENTICATE, v);
             }
         }
         if let Some(s) = self.retry_after_secs {
-            resp.headers_mut().insert(header::RETRY_AFTER, HeaderValue::from(s));
+            resp.headers_mut()
+                .insert(header::RETRY_AFTER, HeaderValue::from(s));
         }
         resp
     }
