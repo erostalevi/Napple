@@ -91,6 +91,21 @@ pub unsafe extern "C" fn napple_cloud_runtime_start(
         return 0;
     }
     let uids: Vec<String> = uids.split(',').map(|s| s.trim().to_ascii_lowercase()).filter(|s| s.len() == 32).collect();
+    // Napple Online sign-in: the local user plays as the profile in profile_map.json (else the account's first profile), no linking step
+    if session.is_shared() {
+        for u in &uids {
+            if session.cfg().links.contains_key(u) {
+                continue;
+            }
+            let client = crate::online::client::Client::from_env(crate::online::creds::home());
+            let profs = session.profiles().unwrap_or_default();
+            if let Some(p) = client.profile_for_user(u, &profs) {
+                let _ = session.update_cfg(|c| {
+                    c.links.insert(u.clone(), p);
+                });
+            }
+        }
+    }
     let targets = sync::targets(&session, &title, &PathBuf::from(&save_dir), &uids);
     if targets.is_empty() {
         log("cloud saves: no local user is linked to a Napple profile (napple account link)");
