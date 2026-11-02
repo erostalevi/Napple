@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_18b9540d-679c-457c-888c-59bbb9416a32
 launched_at: 2026-11-03
@@ -29,3 +29,4 @@ Write careful plain-English documents for the Napple Online service (not legal a
 Shared title data read-only; game runs under `lockf -k /Users/neto/NappleWork/.run.lock` (<=120 s, private --save-root); local only, never push; never ask the user; never commit credentials or Nintendo material. Test-first, small commits.
 
 ## Result
+Outcome: Small fix (clean merge). Merged at d3329de. Details: [integrator result](../integrators/claude-legal-pages-2026-11-03-r12.md).

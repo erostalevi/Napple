@@ -6,7 +6,7 @@ head: f5e81ef
 env: mac
 date: 2026-11-03
 areas: [site, docs/legal]
-status: ready
+status: integrated
 ---
 
 # legal-pages: terms v1, privacy v1, report policy v1
@@ -41,3 +41,9 @@ Wording changes are safe; retention numbers must match the real server.
 
 ## Needs from other areas
 Signup (napple-account) store terms version `v1`; overlay/account need an export-my-data action to honour the Privacy text.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at d3329de. Outcome: Small fix (clean merge).
+- integrate: fixes: version label v1 -> 2026-11-03 to match napple-account TERMS_VERSION (stored by signup), pages regenerated with docs/legal/gen_pages.py
+- Tests: check_docs only archive orphans; gen_support OK; relative links in site/{terms,privacy,report,index}.html resolve except docs/... (the docs site, built separately; same as the existing index.html links); overlay links https://napple.lat/terms and /privacy match site/terms.html and privacy.html
+- Corrections to instructions: none. Open for the owner: legal@napple.lat contact, lawyer review, the Privacy text promises a data export the overlay API does not have
