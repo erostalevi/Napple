@@ -2183,7 +2183,7 @@ static const IpcCmd af_cmds[] = {
     {330, "IsLanguageSelectionLimited", am_out_false, IPC_IMPL},
     {1000, "CreateMovieMaker", am_unavailable, IPC_STUB},
     {1001, "PrepareForJit", csg_noop, IPC_STUB},
-    {210, "GetSystemEvent210", af_event_210, IPC_IMPL},
+    {210, "(unnamed)", af_event_210, IPC_IMPL}, /* switchbrew leaves 210 unnamed; a system event (see af_event_210) */
 };
 
 /* ---- IApplicationProxy ------------------------------------------------------------------------------------------------------------ */
