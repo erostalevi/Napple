@@ -230,6 +230,7 @@ static uint64_t i_vmnmx(int d, int a, int b, int c_, int asel, int asg, int bsel
 typedef struct {
     char tag[32];
     int total, ok, comp;
+    int vpi, layer; /* programs that write the viewport index / layer (ShaderInfo.writes_vp_index / writes_layer) */
 } corpus_tag;
 static void corpus_file(const char *path, const char *name, corpus_tag *t, NSMutableDictionary<NSString *, NSNumber *> *fails, int list) {
     FILE *f = fopen(path, "rb");
@@ -267,10 +268,11 @@ static void corpus_file(const char *path, const char *name, corpus_tag *t, NSMut
         ck.tess_out_vertices = 3;
         ck.tess_domain = TESS_DOMAIN_TRIANGLE;
     }
+    ck.layered = 1; /* a program that writes the layer declares [[render_target_array_index]] (as in a layered pass) */
     ShaderInfo *r = maxwell_translate(buf, len, stage, &ck);
     free(buf);
     NSString *why = nil;
-    int ok = r && r->msl, comp = 0;
+    int ok = r && r->msl, comp = 0, vpi = r && r->writes_vp_index, layer = r && r->writes_layer;
     if (!ok) why = [NSString stringWithFormat:@"translate: %s", r ? r->error : "no result"];
     else {
         NSError *e = nil;
@@ -293,6 +295,9 @@ static void corpus_file(const char *path, const char *name, corpus_tag *t, NSMut
         t->total++;
         t->ok += ok;
         t->comp += comp;
+        t->vpi += vpi;
+        t->layer += layer;
+        if ((vpi || layer) && (list || t->vpi + t->layer <= 8)) printf("  %s writes%s%s\n", name, vpi ? " the viewport index" : "", layer ? " the layer" : "");
         if (why) {
             /* group by message with the program-specific numbers removed */
             NSRegularExpression *rx = [NSRegularExpression regularExpressionWithPattern:@"(0x[0-9a-fA-F]+|\\b[0-9]+\\b)" options:0 error:nil];
@@ -334,6 +339,7 @@ static void corpus_run(const char *dir) {
     int total = 0, ok = 0, comp = 0;
     for (int i = 0; i < ntag; i++) {
         printf("corpus %s: %d programs, %d translated, %d compile with Metal\n", tags[i].tag, tags[i].total, tags[i].ok, tags[i].comp);
+        printf("corpus %s: %d write the viewport index, %d the layer\n", tags[i].tag, tags[i].vpi, tags[i].layer);
         total += tags[i].total;
         ok += tags[i].ok;
         comp += tags[i].comp;
