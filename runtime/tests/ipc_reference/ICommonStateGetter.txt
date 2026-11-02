@@ -1,0 +1,103 @@
+# interface ICommonStateGetter (nn::am::service::ICommonStateGetter; switchbrew 'Applet Manager services' command table; layout facts only)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x; n = not reachable from an application (reason in the trailing comment
+# lines: debug-only (am.debug!dev_function / GetDebugModeFlag), [S2] = Switch 2 only, newer than 22.x, system-applet service, unnamed id).
+# Written for napple (am-depth-applets, 2026-11-01-r3).
+0	GetEventHandle	1.0.0	y
+1	ReceiveMessage	1.0.0	y
+2	GetThisAppletKind	1.0.0	y
+3	AllowToEnterSleep	1.0.0	y
+4	DisallowToEnterSleep	1.0.0	y
+5	GetOperationMode	1.0.0	y
+6	GetPerformanceMode	1.0.0	y
+7	GetCradleStatus	1.0.0	y
+8	GetBootMode	1.0.0	y
+9	GetCurrentFocusState	1.0.0	y
+10	RequestToAcquireSleepLock	1.0.0	y
+11	ReleaseSleepLock	1.0.0	y
+12	ReleaseSleepLockTransiently	1.0.0	y
+13	GetAcquiredSleepLockEvent	1.0.0	y
+# 14: system applets
+14	GetWakeupCount	11.0.0	n
+# 15: unnamed
+15	(unnamed)	19.0.0	n
+# 20: not usable under an Application
+20	PushToGeneralChannel	1.0.0	n
+# 30: system applets
+30	GetHomeButtonReaderLockAccessor	1.0.0	n
+# 31: system applets
+31	GetReaderLockAccessorEx	2.0.0	n
+# 32: system applets
+32	GetWriterLockAccessorEx	7.0.0	n
+# 40: system applets
+40	GetCradleFwVersion	2.0.0	n
+50	IsVrModeEnabled	3.0.0	y
+51	SetVrModeEnabled	3.0.0	y
+52	SetLcdBacklighOffEnabled	4.0.0	y
+53	BeginVrModeEx	7.0.0	y
+54	EndVrModeEx	7.0.0	y
+55	IsInControllerFirmwareUpdateSection	3.0.0	y
+# 59: debug
+59	SetVrPositionForDebug	11.0.0	n
+60	GetDefaultDisplayResolution	3.0.0	y
+61	GetDefaultDisplayResolutionChangeEvent	3.0.0	y
+62	GetHdcpAuthenticationState	4.0.0	y
+63	GetHdcpAuthenticationStateChangeEvent	4.0.0	y
+# 64: system applets
+64	SetTvPowerStateMatchingMode	5.0.0	n
+# 65: system applets
+65	GetApplicationIdByContentActionName	5.1.0	n
+66	SetCpuBoostMode	6.0.0	y
+67	CancelCpuBoostMode	10.0.0	y
+68	GetBuiltInDisplayType	11.0.0	y
+80	PerformSystemButtonPressingIfInFocus	6.0.0	y
+90	SetPerformanceConfigurationChangedNotification	7.0.0	y
+91	GetCurrentPerformanceConfiguration	7.0.0	y
+100	SetHandlingHomeButtonShortPressedEnabled	9.1.0	y
+# 110: debug
+110	OpenMyGpuErrorHandler	11.0.0	n
+# 120: system applets
+120	GetAppletLaunchedHistory	13.0.0	n
+130	EnableStartupLogoDisappearedMessage	21.0.0	y
+# 200: system applets
+200	GetOperationModeSystemInfo	7.0.0	n
+300	GetSettingsPlatformRegion	9.0.0	y
+# 310: newer than 22.x
+310	(unnamed)	23.0.0	n
+# 320: newer than 22.x
+320	(unnamed)	23.0.0	n
+# 400: system applets
+400	ActivateMigrationService	10.0.0	n
+# 401: system applets
+401	DeactivateMigrationService	10.0.0	n
+# 500: system applets
+500	DisableSleepTillShutdown	11.0.0	n
+# 501: system applets
+501	SuppressDisablingSleepTemporarily	11.0.0	n
+# 502: system applets
+502	IsSleepEnabled	12.0.0	n
+# 503: system applets
+503	IsDisablingSleepSuppressed	12.0.0	n
+# 600: system applets (was OpenNamedChannelAsChild 17.0.0-18.1.0)
+600	SetHidInputMagnificationForApplication	20.0.0	n
+# 610: unnamed, S1
+610	(unnamed)	21.0.0	n
+# 611: unnamed
+611	(unnamed)	22.0.0	n
+# 650: S2
+650	BeginUsingCameraResource	1.0.0	n
+# 651: S2
+651	EndUsingCameraResource	1.0.0	n
+900	SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled	11.0.0	y
+# 910: system applets
+910	GetLaunchRequiredTick	17.0.0	n
+1000	BeginVrMode3d	19.0.0	y
+1001	EndVrMode3d	19.0.0	y
+1002	IsVrModeEnabled3d	19.0.0	y
+1003	GetVrLaboGoggleViewport	21.0.0	y
+1004	GetPanelPhysicalSizeForSpecificTitle	21.0.0	y
+1005	GetPanelResolutionForSpecificTitle	21.0.0	y
+# 2000: S2
+2000	SetRtcModeChangedMessageEnabled	1.0.0	n
+# 2010: S2
+2010	GetCurrentDisplayLayoutRatio	1.0.0	n

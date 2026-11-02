@@ -70,7 +70,27 @@ int main(void) {
     /* rows made impl by ipc-polish: the answers a single-program, offline title sees */
     svc_call(sc, 41, NULL, 0, &c); CHECK(c.result == 0x1480, "IsSystemBufferSharingEnabled: not granted to an application");
     svc_call(sc, 42, NULL, 0, &c); CHECK(c.result == 0x1480, "GetSystemSharedLayerHandle: refused like 41, no placeholder handles");
-    svc_call(af, 110, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == -1, "GetPreviousProgramIndex: -1 (not started by another program)");
+    svc_call(af, 123, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == -1, "GetPreviousProgramIndex (123): -1 (not started by another program)");
+    /* am-depth-applets: switchbrew numbering and the new application-reachable rows */
+    svc_call(af, 120, NULL, 0, &c); CHECK(c.result == 0x1480, "ExecuteProgram (120): unavailable, not an event");
+    svc_call(af, 110, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 0, "QueryApplicationPlayStatistics (110): no entries");
+    svc_call(af, 141, NULL, 0, &c); CHECK(c.result == 0x680, "TryPopFromFriendInvitationStorageChannel: empty");
+    svc_call(af, 151, NULL, 0, &c); CHECK(c.result == 0x680, "TryPopFromNotificationStorageChannel: empty");
+    svc_call(af, 150, NULL, 0, &c); CHECK(c.result == 0 && c.nout_copy == 1 && !event_is_signaled(c.out_copy[0]), "GetNotificationStorageChannelEvent: a quiet event");
+    svc_call(af, 28, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int64_t, 0) == (4ll << 30), "GetSaveDataSizeMax: 4 GiB");
+    svc_call(af, 27, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 8) == 0, "CreateCacheStorage: nothing more required");
+    svc_call(af, 330, NULL, 0, &c); CHECK(c.result == 0 && c.out[0] == 0, "IsLanguageSelectionLimited: false");
+    { IpcObject *csg2 = applet_shared_object("common");
+      uint8_t on = 1; svc_call(csg2, 53, &on, 0, &c); svc_call(csg2, 1002, NULL, 0, &c); CHECK(c.out[0] == 1, "BeginVrModeEx turns VR mode on (seen by IsVrModeEnabled3d)");
+      svc_call(csg2, 54, NULL, 0, &c); svc_call(csg2, 50, NULL, 0, &c); CHECK(c.out[0] == 0, "EndVrModeEx turns it off");
+      svc_call(csg2, 62, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 2, "GetHdcpAuthenticationState: authenticated");
+      svc_call(csg2, 1005, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 1280 && SVC_OUT(&c, uint32_t, 4) == 720, "GetPanelResolutionForSpecificTitle: 1280x720"); }
+    { IpcObject *lac2 = applet_shared_object("creator");
+      static uint8_t mem[0x4000]; IpcTransferMemory tm = {(uint64_t)(uintptr_t)mem, sizeof mem, 3}; int64_t size = 0x1000;
+      IpcCall h; memset(&h, 0, sizeof h); h.object = lac2; h.in = &size; h.in_size = 8; h.ncopy = 1; h.copy[0] = handle_new(OBJ_TMEM, &tm); svc_call_c(lac2, 12, &h);
+      CHECK(h.result == 0 && h.nout_objects == 1 && ((Storage *)h.out_objects[0]->state)->size == 0x1000 && ((Storage *)h.out_objects[0]->state)->gaddr == tm.addr, "CreateHandleStorage: a 0x1000 storage over the transfer memory");
+      size = 0x8000; memset(&h, 0, sizeof h); h.object = lac2; h.in = &size; h.in_size = 8; h.ncopy = 1; h.copy[0] = handle_new(OBJ_TMEM, &tm); svc_call_c(lac2, 12, &h);
+      CHECK(h.result == 0x1480, "CreateHandleStorage larger than the transfer memory: refused"); }
     svc_call(af, 20, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == 0, "EnsureSaveData: no extra size needed");
     { uint32_t kind = 2; svc_call(af, 1, &kind, 4, &c); CHECK(c.result == 0 && c.nout_objects == 1 && ((Storage *)c.out_objects[0]->state)->size == 0x88, "PopLaunchParameter(account preselect) hands a 0x88 storage once");
       uint32_t magic; memcpy(&magic, ((Storage *)c.out_objects[0]->state)->data, 4); CHECK(magic == 0xC79497CA, "the preselected-user parameter carries its magic");

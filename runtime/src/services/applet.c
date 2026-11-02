@@ -70,7 +70,7 @@ static uint32_t new_message_event(void) {
     return readable;
 }
 /* Events the guest holds that the host signals later: one list per kind (the writable ends), so a state change can wake every holder. */
-enum { EV_SLEEP_LOCK, EV_RESOLUTION, EV_SUSPENDED_TICK, EV_GPU_ERROR, EV_FRIEND_INVITE, EV_AF_210, EV_KINDS };
+enum { EV_SLEEP_LOCK, EV_RESOLUTION, EV_SUSPENDED_TICK, EV_GPU_ERROR, EV_FRIEND_INVITE, EV_AF_210, EV_QUIET, EV_KINDS }; /* EV_QUIET: events nothing here signals */
 #define EV_MAX 8
 static uint32_t tracked_ev[EV_KINDS][EV_MAX];
 static unsigned ntracked_ev[EV_KINDS];
@@ -157,6 +157,70 @@ static void csg_get_this_applet_kind(IpcObject *s, IpcCall *c) {
 static void csg_noop(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
+}
+/* am-depth-applets (2026-11-01-r3): small answers for the application-reachable am commands that only set a preference, report a fixed state or
+ * hand out an event nothing here signals (tests/ipc_reference/I*.txt for the am interfaces). */
+static void am_out_false(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = 0;
+    IPC_OUT(c, v);
+}
+static void am_out_u32_zero(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = 0;
+    IPC_OUT(c, v);
+}
+static void am_out_u64_zero(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t v = 0;
+    IPC_OUT(c, v);
+}
+static void am_quiet_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_copy_handle(c, tracked_event(EV_QUIET, 0));
+}
+/* Features of the console this runtime does not provide (launching another application or program, the movie maker, a child applet): the am error
+ * the SDK reports for an unavailable operation (module 128, 0x1480), so the title takes its error path instead of reading an object that does not exist. */
+static void am_unavailable(IpcObject *s, IpcCall *c) {
+    (void)s;
+    c->result = 0x1480;
+}
+/* A channel that is empty (friend invitation / notification storage): the same "nothing to pop" result as PopOutData on an empty queue. */
+static void am_channel_empty(IpcObject *s, IpcCall *c) {
+    (void)s;
+    c->result = 0x680;
+}
+static void csg_begin_vr_mode(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->vr_mode = 1;
+}
+static void csg_end_vr_mode(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->vr_mode = 0;
+}
+/* HdcpAuthenticationState: 0 unauthenticated, 1 processing, 2 authenticated. The host display path has no HDCP; protected playback is allowed. */
+static void csg_hdcp_state(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int32_t v = 2;
+    IPC_OUT(c, v);
+}
+/* 1003-1005 (Labo VR goggle viewport, panel size and resolution for specific titles): the handheld panel, 1280 x 720, 137 x 77 mm. */
+static void csg_vr_goggle_viewport(IpcObject *s, IpcCall *c) {
+    (void)s;
+    float v[4] = {0.0f, 0.0f, 1280.0f, 720.0f};
+    ipc_out(c, v, sizeof v);
+}
+static void csg_panel_physical_size(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v[2] = {137, 77};
+    ipc_out(c, v, sizeof v);
+}
+static void csg_panel_resolution(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v[2] = {1280, 720};
+    ipc_out(c, v, sizeof v);
 }
 static void csg_get_operation_mode(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -292,6 +356,21 @@ static const IpcCmd csg_cmds[] = {
     {13, "GetAcquiredSleepLockEvent", csg_get_sleep_lock_event, IPC_IMPL},
     {50, "IsVrModeEnabled", csg_is_vr_mode, IPC_IMPL},
     {51, "SetVrModeEnabled", csg_set_vr_mode, IPC_IMPL},
+    {52, "SetLcdBacklighOffEnabled", csg_noop, IPC_STUB},
+    {53, "BeginVrModeEx", csg_begin_vr_mode, IPC_IMPL},
+    {54, "EndVrModeEx", csg_end_vr_mode, IPC_IMPL},
+    {55, "IsInControllerFirmwareUpdateSection", am_out_false, IPC_IMPL},
+    {62, "GetHdcpAuthenticationState", csg_hdcp_state, IPC_STUB},
+    {63, "GetHdcpAuthenticationStateChangeEvent", am_quiet_event, IPC_IMPL},
+    {80, "PerformSystemButtonPressingIfInFocus", csg_noop, IPC_STUB},
+    {100, "SetHandlingHomeButtonShortPressedEnabled", csg_noop, IPC_STUB},
+    {130, "EnableStartupLogoDisappearedMessage", csg_noop, IPC_STUB},
+    {1000, "BeginVrMode3d", csg_begin_vr_mode, IPC_IMPL},
+    {1001, "EndVrMode3d", csg_end_vr_mode, IPC_IMPL},
+    {1002, "IsVrModeEnabled3d", csg_is_vr_mode, IPC_IMPL},
+    {1003, "GetVrLaboGoggleViewport", csg_vr_goggle_viewport, IPC_STUB},
+    {1004, "GetPanelPhysicalSizeForSpecificTitle", csg_panel_physical_size, IPC_STUB},
+    {1005, "GetPanelResolutionForSpecificTitle", csg_panel_resolution, IPC_STUB},
     {60, "GetDefaultDisplayResolution", csg_get_resolution, IPC_IMPL},
     {61, "GetDefaultDisplayResolutionChangeEvent", csg_get_resolution_event, IPC_IMPL},
     {66, "SetCpuBoostMode", csg_set_cpu_boost, IPC_IMPL},
@@ -500,7 +579,7 @@ static const IpcCmd sc_cmds[] = {
     {16, "SetOutOfFocusSuspendingEnabled", csg_noop, IPC_IMPL},
     {17, "SetControllerFirmwareUpdateSection", sc_set_fw_update_section, IPC_IMPL},
     {18, "SetRequiresCaptureButtonShortPressedMessage", sc_set_capture_short_press, IPC_IMPL},
-    {19, "SetScreenShotImageOrientation", sc_set_orientation, IPC_IMPL},
+    {19, "SetAlbumImageOrientation", sc_set_orientation, IPC_IMPL}, /* SetScreenShotImageOrientation in early SDKs */
     {20, "SetDesirableKeyboardLayout", sc_set_keyboard_layout, IPC_IMPL},
     {41, "IsSystemBufferSharingEnabled", sc_no_shared_buffers, IPC_IMPL},
     {42, "GetSystemSharedLayerHandle", sc_shared_layer, IPC_IMPL},
@@ -525,6 +604,10 @@ static const IpcCmd sc_cmds[] = {
     {91, "GetAccumulatedSuspendedTickChangedEvent", sc_suspended_tick_event, IPC_IMPL},
     {100, "SetAlbumImageTakenNotificationEnabled", sc_set_album_notification, IPC_IMPL},
     {110, "SetApplicationAlbumUserData", sc_set_album_user_data, IPC_IMPL},
+    {45, "SetManagedDisplayLayerSeparationMode", csg_noop, IPC_STUB},
+    {46, "SetRecordingLayerCompositionEnabled", csg_noop, IPC_STUB},
+    {120, "SaveCurrentScreenshot", csg_noop, IPC_STUB}, /* the capture button path makes screenshots on the host */
+    {130, "SetRecordVolumeMuted", csg_noop, IPC_STUB},
 };
 
 /* ---- IWindowController / IAudioController / IDisplayController ------------------------------------------------------------ */
@@ -668,6 +751,8 @@ static const IpcCmd dc_cmds[] = {
     {9, "CopyBetweenCaptureBuffers", dc_copy_between, IPC_IMPL},
     {10, "AcquireLastApplicationCaptureBuffer", dc_acquire_app_buffer, IPC_IMPL},
     {11, "ReleaseLastApplicationCaptureBuffer", dc_release_app_buffer, IPC_IMPL},
+    {21, "ClearAppletTransitionBuffer", csg_noop, IPC_STUB},
+    {28, "TakeScreenShotOfOwnLayerEx", csg_noop, IPC_STUB},
 };
 
 /* ---- IStorage / IStorageAccessor: launch parameters and library-applet storage ------------------------------------------------- */
@@ -1555,7 +1640,10 @@ static const IpcCmd la_cmds[] = {
     {20, "RequestExit", la_request_exit, IPC_IMPL},
     {25, "Terminate", la_terminate, IPC_IMPL},
     {30, "GetResult", la_get_result, IPC_IMPL},
-    {50, "PresetLibraryAppletGpuTimeSliceZero", la_preset_gpu_zero, IPC_IMPL},
+    {50, "SetOutOfFocusApplicationSuspendingEnabled", csg_noop, IPC_STUB},
+    {60, "PresetLibraryAppletGpuTimeSliceZero", la_preset_gpu_zero, IPC_IMPL}, /* was listed as 50 before 2026-11-01 */
+    {80, "RequestForLibraryAppletToGetForeground", csg_noop, IPC_STUB},
+    {81, "GetCurrentChildLibraryApplet", am_unavailable, IPC_STUB}, /* applets here start no child applets */
     {100, "PushInData", la_push_in, IPC_IMPL},
     {101, "PopOutData", la_pop_out, IPC_IMPL},
     {102, "PushExtraStorage", la_push_extra, IPC_IMPL},
@@ -1566,6 +1654,7 @@ static const IpcCmd la_cmds[] = {
     {110, "NeedsToExitProcess", la_needs_exit, IPC_IMPL},
     {120, "GetLibraryAppletInfo", la_info, IPC_IMPL},
     {150, "RequestForAppletToGetForeground", la_request_foreground, IPC_IMPL},
+    {160, "GetIndirectLayerConsumerHandle", am_out_u64_zero, IPC_STUB}, /* no indirect layer: the applet UI is drawn by the host */
 };
 static void lac_create_library_applet(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -1586,6 +1675,21 @@ static void lac_create_storage(IpcObject *s, IpcCall *c) {
     ipc_out_object(c, storage_new(size < 0 ? 0 : (uint64_t)size));
 }
 /* CreateTransferMemoryStorage(bool writable, i64 size, handle transfer memory): the storage is a window on guest memory. */
+/* CreateHandleStorage(s64 size, copy handle: transfer memory): like a transfer-memory storage, size first (no writable flag). */
+static void lac_create_handle_storage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t size = IPC_IN(c, int64_t, 0);
+    IpcTransferMemory *t = c->ncopy ? handle_get(c->copy[0], OBJ_TMEM) : NULL;
+    if (!t || size < 0 || (uint64_t)size > t->size) {
+        c->result = 0x1480;
+        return;
+    }
+    IpcObject *o = storage_new(0);
+    Storage *st = o->state;
+    st->size = (uint64_t)size;
+    st->gaddr = t->addr;
+    ipc_out_object(c, o);
+}
 static void lac_create_tmem_storage(IpcObject *s, IpcCall *c) {
     (void)s;
     int64_t size = IPC_IN(c, int64_t, 8);
@@ -1626,11 +1730,13 @@ static void lac_terminate_all(IpcObject *s, IpcCall *c) {
     pthread_mutex_unlock(&lock);
 }
 static const IpcCmd lac_cmds[] = {
-    {0, "CreateLibraryApplet", lac_create_library_applet, IPC_IMPL},
+    {0, "CreateLibraryAppletOld", lac_create_library_applet, IPC_IMPL}, /* CreateLibraryApplet until 19.0.1 */
+    {3, "CreateLibraryApplet", lac_create_library_applet, IPC_IMPL},   /* 20.0.0: same applet id / mode words first */
     {1, "TerminateAllLibraryApplets", lac_terminate_all, IPC_IMPL},
     {2, "AreAnyLibraryAppletsLeft", lac_are_any_left, IPC_IMPL},
     {10, "CreateStorage", lac_create_storage, IPC_IMPL},
     {11, "CreateTransferMemoryStorage", lac_create_tmem_storage, IPC_IMPL},
+    {12, "CreateHandleStorage", lac_create_handle_storage, IPC_IMPL},
 };
 
 /* ---- IApplicationFunctions ------------------------------------------------------------------------------------------------------ */
@@ -1794,8 +1900,57 @@ static void af_set_copyright_visibility(IpcObject *s, IpcCall *c) {
  * boot thread of Animal Crossing 3.0.3 spun on WaitSynchronization(0) forever. Never signalled: no capture or error event is ever raised. */
 /* Kept stubs in this table, each with its reason: PopLaunchParameter (only the preselected-account parameter exists; no ExecuteProgram / deep links),
  * EnsureSaveData and GetSaveDataSize (the data lives in fs.c, which owns it: the answer here is a fixed size), GetPreviousProgramIndex (no program switching, always -1). */
+/* Save data sizes for ExtendSaveData / CreateCacheStorage / Get*Max: host saves have no fixed size, so every request fits (required size 0) and
+ * the maxima are the largest sizes the SDK accepts in practice (4 GiB data, 1 GiB journal, cache index 0..255). */
+static void af_extend_save_data(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t required = 0;
+    IPC_OUT(c, required);
+}
+static void af_create_cache_storage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    struct {
+        uint32_t target; /* 0 = built-in storage */
+        uint32_t pad;
+        uint64_t required;
+    } o = {0, 0, 0};
+    IPC_OUT(c, o);
+}
+static void af_get_save_data_size_max(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t v[2] = {4ll << 30, 1ll << 30};
+    ipc_out(c, v, sizeof v);
+}
+static void af_get_cache_storage_max(IpcObject *s, IpcCall *c) {
+    (void)s;
+    struct {
+        uint32_t index_max, pad;
+        uint64_t size_max;
+    } o = {255, 0, 4ull << 30};
+    IPC_OUT(c, o);
+}
+static void af_exit_with_thanks(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    LOG("applet", "IApplicationFunctions::ExitAndRequestToShowThanksMessage: the guest asked to exit");
+    summary_note("guest called ExitAndRequestToShowThanksMessage");
+}
 static const IpcCmd af_cmds[] = {
     {1, "PopLaunchParameter", af_pop_launch_parameter, IPC_IMPL},
+    {10, "CreateApplicationAndPushAndRequestToStart", am_unavailable, IPC_STUB}, /* one application per runtime */
+    {12, "CreateApplicationAndRequestToStart", am_unavailable, IPC_STUB},
+    {25, "ExtendSaveData", af_extend_save_data, IPC_IMPL},
+    {27, "CreateCacheStorage", af_create_cache_storage, IPC_IMPL},
+    {28, "GetSaveDataSizeMax", af_get_save_data_size_max, IPC_IMPL},
+    {29, "GetCacheStorageMax", af_get_cache_storage_max, IPC_IMPL},
+    {34, "SelectApplicationLicense", csg_noop, IPC_STUB},
+    {35, "GetDeviceSaveDataSizeMax", af_get_save_data_size_max, IPC_IMPL},
+    {36, "GetLimitedApplicationLicense", am_out_u64_zero, IPC_STUB}, /* no limited (trial) license */
+    {37, "GetLimitedApplicationLicenseUpgradableEvent", am_quiet_event, IPC_IMPL},
+    {70, "RequestToShutdown", csg_noop, IPC_STUB},
+    {71, "RequestToReboot", csg_noop, IPC_STUB},
+    {72, "RequestToSleep", csg_noop, IPC_STUB},
+    {80, "ExitAndRequestToShowThanksMessage", af_exit_with_thanks, IPC_IMPL},
     {20, "EnsureSaveData", af_ensure_save_data, IPC_IMPL},
     {21, "GetDesiredLanguage", af_get_desired_language, IPC_IMPL},
     {22, "SetTerminateResult", af_set_terminate_result, IPC_IMPL},
@@ -1813,12 +1968,34 @@ static const IpcCmd af_cmds[] = {
     {67, "SetGamePlayRecordingState", af_set_recording_state, IPC_IMPL},
     {68, "RequestFlushGamePlayingMovieForDebug", af_flush_recording, IPC_IMPL},
     {90, "EnableApplicationCrashReport", af_enable_crash_report, IPC_IMPL},
-    {91, "InitializeApplicationCopyrightFrameBuffer", af_init_copyright_fb, IPC_IMPL},
-    {92, "SetApplicationCopyrightImage", af_set_copyright_image, IPC_IMPL},
-    {93, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
-    {110, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_IMPL},
-    {120, "GetGpuErrorDetectedSystemEvent", af_gpu_error_event, IPC_IMPL},
-    {130, "GetFriendInvitationStorageChannelEvent", af_friend_invite_event, IPC_IMPL},
+    /* 100-102, 123, 130, 140 were listed as 91-93, 110, 120, 130 before 2026-11-01 (switchbrew / libnx numbering) */
+    {100, "InitializeApplicationCopyrightFrameBuffer", af_init_copyright_fb, IPC_IMPL},
+    {101, "SetApplicationCopyrightImage", af_set_copyright_image, IPC_IMPL},
+    {102, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
+    {110, "QueryApplicationPlayStatistics", am_out_u32_zero, IPC_STUB}, /* no play statistics: 0 entries */
+    {111, "QueryApplicationPlayStatisticsByUid", am_out_u32_zero, IPC_STUB},
+    {120, "ExecuteProgram", am_unavailable, IPC_STUB}, /* other programs of a multi-program title are not built */
+    {121, "ClearUserChannel", csg_noop, IPC_STUB},
+    {122, "UnpopToUserChannel", csg_noop, IPC_STUB},
+    {123, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_IMPL},
+    {124, "EnableApplicationAllThreadDumpOnCrash", csg_noop, IPC_STUB},
+    {130, "GetGpuErrorDetectedSystemEvent", af_gpu_error_event, IPC_IMPL},
+    {131, "SetDelayTimeToAbortOnGpuError", csg_noop, IPC_STUB},
+    {140, "GetFriendInvitationStorageChannelEvent", af_friend_invite_event, IPC_IMPL},
+    {141, "TryPopFromFriendInvitationStorageChannel", am_channel_empty, IPC_IMPL},
+    {150, "GetNotificationStorageChannelEvent", am_quiet_event, IPC_IMPL},
+    {151, "TryPopFromNotificationStorageChannel", am_channel_empty, IPC_IMPL},
+    {160, "GetHealthWarningDisappearedSystemEvent", am_quiet_event, IPC_IMPL},
+    {170, "SetHdcpAuthenticationActivated", csg_noop, IPC_STUB},
+    {180, "GetLaunchRequiredVersion", am_out_u32_zero, IPC_STUB},
+    {181, "UpgradeLaunchRequiredVersion", csg_noop, IPC_STUB},
+    {190, "SendServerMaintenanceOverlayNotification", csg_noop, IPC_STUB},
+    {200, "GetLastApplicationExitReason", am_out_u32_zero, IPC_STUB},
+    {220, "SetAudioOutputPolicy", csg_noop, IPC_STUB},
+    {310, "RequestExitApplicationAndTryPopMessage", csg_noop, IPC_STUB},
+    {330, "IsLanguageSelectionLimited", am_out_false, IPC_IMPL},
+    {1000, "CreateMovieMaker", am_unavailable, IPC_STUB},
+    {1001, "PrepareForJit", csg_noop, IPC_STUB},
     {210, "GetSystemEvent210", af_event_210, IPC_IMPL},
 };
 
