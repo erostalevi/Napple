@@ -121,6 +121,20 @@ int main(void) {
         svc_call(dsx, 2460, wh, sizeof wh, &c);
         CHECK(c.result == VI_R_INVALID_RANGE, "...so is an absurd size");
         CHECK(vi_cmd_is_impl(dsx, 103) && vi_cmd_is_impl(dsx, 2460), "both rows are real now");
+        /* ipc-depth-cloud r9: 2450 / 2451 image maps of an indirect layer nothing was presented to */
+        static uint8_t img[64 * 32 * 4 + 16];
+        struct { int64_t w, h; uint64_t handle, aruid; } m = {64, 32, 1, 0};
+        memset(img, 0xcc, sizeof img); memset(&c, 0, sizeof c); c.in = (const uint8_t *)&m; c.in_size = sizeof m; svc_set_out_buf(&c, img, 64 * 32 * 4); svc_call_c(dsx, 2450, &c);
+        CHECK(c.result == 0 && c.out_size == 16 && SVC_OUT(&c, int64_t, 0) == 64 * 32 * 4 && SVC_OUT(&c, int64_t, 8) == 64 * 4, "2450 GetIndirectLayerImageMap: size and RGBA8 stride");
+        CHECK(img[0] == 0 && img[64 * 32 * 4 - 1] == 0 && img[64 * 32 * 4] == 0xcc, "...a transparent frame, nothing written past the image");
+        memset(&c, 0, sizeof c); c.in = (const uint8_t *)&m; c.in_size = sizeof m; svc_set_out_buf(&c, img, 100); svc_call_c(dsx, 2450, &c);
+        CHECK(c.result == VI_R_INVALID_RANGE, "...a buffer smaller than the image is refused");
+        struct { float r[4]; int64_t w, h; uint64_t handle, aruid; } cm = {{0.f, 0.f, 0.5f, 1.f}, 64, 32, 1, 0};
+        memset(img, 0xcc, sizeof img); memset(&c, 0, sizeof c); c.in = (const uint8_t *)&cm; c.in_size = sizeof cm; svc_set_out_buf(&c, img, sizeof img); svc_call_c(dsx, 2451, &c);
+        CHECK(c.result == 0 && SVC_OUT(&c, int64_t, 8) == 256 && img[0] == 0, "2451 GetIndirectLayerImageCropMap: the same frame for a valid crop");
+        cm.r[2] = 0.f; memset(&c, 0, sizeof c); c.in = (const uint8_t *)&cm; c.in_size = sizeof cm; svc_set_out_buf(&c, img, sizeof img); svc_call_c(dsx, 2451, &c);
+        CHECK(c.result == VI_R_INVALID_RANGE, "...an empty crop rectangle is refused");
+        CHECK(vi_cmd_is_impl(dsx, 2450) && vi_cmd_is_impl(dsx, 2451), "2450 / 2451 are real rows");
     }
     printf("{\"test\":\"svc_vi\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;

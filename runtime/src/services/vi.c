@@ -249,6 +249,33 @@ static void ds_indirect_image_memory_info(IpcObject *s, IpcCall *c) {
     int64_t out[2] = {(w * h * 4 + 0x1ffff) / 0x20000 * 0x20000, 0x1000};
     ipc_out(c, out, sizeof out);
 }
+/* 2450 GetIndirectLayerImageMap(s64 width, s64 height, u64 IndirectLayerConsumerHandle, u64 aruid, pid, type-0x46 buffer) -> {s64 size, s64 stride} and
+ * 2451 GetIndirectLayerImageCropMap(f32 x0, y0, x1, y1, then the same arguments): the consumer side of an indirect layer reads the producer's last frame
+ * as RGBA8 (stride = width * 4). Library applets are drawn by the host (AppKit sheets, applet_*.c), never into a guest indirect layer, so the producer
+ * has presented nothing and the image is the transparent frame an unpresented indirect layer gives: zero pixels of the requested size. The size checks
+ * are those of 2460; a buffer smaller than the image is an out-of-range error. */
+static void ds_indirect_image_map(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t base = c->cmd == 2451 ? 16 : 0; /* the crop rectangle (four f32) comes first */
+    int64_t w = IPC_IN(c, int64_t, base), h = IPC_IN(c, int64_t, base + 8);
+    if (c->cmd == 2451) {
+        float r[4];
+        memcpy(r, ipc_in(c, 0, 16), 16);
+        if (!(r[0] >= 0.f && r[1] >= 0.f && r[2] <= 1.f && r[3] <= 1.f && r[0] < r[2] && r[1] < r[3])) { /* normalised crop, x0 < x1, y0 < y1 */
+            c->result = VI_R_INVALID_RANGE;
+            return;
+        }
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384 || !b || (uint64_t)(w * h * 4) > b->size) {
+        c->result = VI_R_INVALID_RANGE;
+        return;
+    }
+    int64_t out[2] = {w * h * 4, w * 4};
+    uint8_t *p = ipc_buf_ptr(b);
+    if (p) memset(p, 0, (size_t)out[0]);
+    ipc_out(c, out, sizeof out);
+}
 /* ISystemDisplayService / IManagerDisplayService: firmware applets (MiiEdit) open them to place their layer. The placement calls keep what they are given in the layer
  * table (vi_core.c); the host window composes the one game layer itself, so none of it moves pixels. Command ids and argument layouts are the author's memory
  * of the public description (unverified). */
@@ -366,8 +393,8 @@ static const IpcCmd display_cmds[] = {
     {5202, "GetDisplayVsyncEvent", ds_vsync_event, IPC_IMPL},
     {103, "GetIndirectDisplayTransactionService", ds_get_indirect_transaction, IPC_IMPL},
     {2102, "ConvertScalingMode", ds_convert_scaling, IPC_IMPL},
-    {2450, "GetIndirectLayerImageMap", sysd_err_generic, IPC_STUB},
-    {2451, "GetIndirectLayerImageCropMap", sysd_err_generic, IPC_STUB},
+    {2450, "GetIndirectLayerImageMap", ds_indirect_image_map, IPC_IMPL},
+    {2451, "GetIndirectLayerImageCropMap", ds_indirect_image_map, IPC_IMPL},
     {2460, "GetIndirectLayerImageRequiredMemoryInfo", ds_indirect_image_memory_info, IPC_IMPL},
 };
 static void vi_get_display_service(IpcObject *s, IpcCall *c) {
