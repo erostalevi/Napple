@@ -145,7 +145,7 @@ int main(void) {
     CHECK(c.result == 0 && c.out_size == 4 && c.out[2] == 0, "18 GetInternetConnectionStatus: disconnected");
     svc_call(gen, 15, NULL, 0, &c);
     CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "15 GetCurrentIpConfigInfo: no connection");
-    CHECK(svc_find(gen, 15)->status == IPC_STUB && svc_find(gen, 18)->status == IPC_IMPL, "...a documented default; 18 is real");
+    CHECK(svc_find(gen, 15)->status == IPC_IMPL && svc_find(gen, 18)->status == IPC_IMPL, "...15 and 18 are real");
     uint32_t types = 3;
     svc_call(gen, 41, NULL, 0, &c);
     CHECK(SVC_OUT(&c, uint32_t, 0) == 0, "41 GetAcceptableNetworkTypeFlag: none by default");
@@ -183,7 +183,7 @@ int main(void) {
     CHECK(!strcmp(svc_find(bs, 28)->name, "GetResourceStatistics") && svc_find(bs, 28)->status == IPC_IMPL, "bsd 28 GetResourceStatistics");
     CHECK(!strcmp(svc_find(bs, 29)->name, "RecvMMsg") && !strcmp(svc_find(bs, 30)->name, "SendMMsg") && !strcmp(svc_find(bs, 31)->name, "EventFd"), "bsd 29 RecvMMsg, 30 SendMMsg, 31 EventFd");
     svc_call(bs, 31, NULL, 0, &c);
-    CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, int32_t, 0) == -1 && SVC_OUT(&c, int32_t, 4) == HZ_EOPNOTSUPP, "bsd 31 EventFd: {-1, EOPNOTSUPP}");
+    CHECK(c.result == 0 && c.out_size == 8 && SVC_OUT(&c, int32_t, 0) == -1 && SVC_OUT(&c, int32_t, 4) == 95, "bsd 31 EventFd: {-1, EOPNOTSUPP (95, the guest's Linux numbering)}");
 
     /* ---- prepo renumbering */
     IpcObject *pr = prepo_open();

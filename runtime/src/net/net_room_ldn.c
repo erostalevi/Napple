@@ -115,11 +115,13 @@ static void host_tell(unsigned i, uint8_t kind) {
     if (!m) return;
     send_frame(L.nodes[i].ipv4, kind, f, 3 + k + m);
 }
-static void host_broadcast_nodes(void) {
+/* NODES to every station except `skip` (the one that just got the same list in its ACCEPT). */
+static void host_broadcast_nodes_except(unsigned skip) {
     for (unsigned i = 1; i < ONLINE_LDN_MAX_NODES; i++)
-        if (L.nodes[i].connected) host_tell(i, P_NODES);
+        if (L.nodes[i].connected && i != skip) host_tell(i, P_NODES);
     host_advertise();
 }
+static void host_broadcast_nodes(void) { host_broadcast_nodes_except(0); }
 static int node_of(uint32_t vip) {
     for (unsigned i = 1; i < ONLINE_LDN_MAX_NODES; i++)
         if (L.nodes[i].connected && L.nodes[i].ipv4 == vip) return (int)i;
@@ -153,7 +155,7 @@ static int host_join(uint32_t src, const uint8_t *p, size_t n) {
     nd->connected = 1;
     memcpy(nd->user_name, name, sizeof nd->user_name);
     host_tell((unsigned)slot, P_ACCEPT);
-    host_broadcast_nodes();
+    host_broadcast_nodes_except((unsigned)slot);
     log_line("net", "room ldn: station '%s' joined as node %d", name, slot);
     return 1;
 }
@@ -311,6 +313,9 @@ int nr_ldn_scan(uint64_t lcid, OnlineLdnNetwork *out, uint32_t max) {
             L.seen[j].vip = vip;
         }
     }
+    static int last = -1;
+    if (got != last) log_line("net", "room ldn: scan (title %#llx) finds %d network(s)%s", (unsigned long long)lcid, got, L.scan_got_req == req ? "" : " (no answer)");
+    last = got;
     pthread_mutex_unlock(&L.lock);
     return got;
 }

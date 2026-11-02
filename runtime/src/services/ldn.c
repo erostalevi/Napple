@@ -113,14 +113,17 @@ static void l_disconnect_reason(IpcObject *s, IpcCall *c) {
     (void)s;
     IPC_OUT(c, v);
 }
-static void l_security_parameter(IpcObject *s, IpcCall *c) { /* 4 -> security parameter (16 bytes) */
+static void l_security_parameter(IpcObject *s, IpcCall *c) { /* 4 -> SecurityParameter (0x20 bytes: 16 bytes of data, then the network's SessionId) */
     OnlineLdnNetwork net;
     uint32_t r = current_network(s, &net, NULL);
     if (r) {
         c->result = r;
         return;
     }
-    ipc_out(c, net.security_param, 16);
+    uint8_t v[0x20];
+    memcpy(v, net.security_param, 16);
+    ldn_session_id(&net, v + 16);
+    ipc_out(c, v, sizeof v);
 }
 static void l_network_config(IpcObject *s, IpcCall *c) { /* 5 -> NetworkConfig (0x20 bytes) */
     OnlineLdnNetwork net;
