@@ -125,7 +125,7 @@ int main(void) {
     CHECK(c.result == 0 && ((NifmReq *)rq->state)->nsockets == 1, "...an unknown descriptor is ignored");
     const unsigned real_rows[] = {1, 16, 17, 18, 19, 20, 21, 23, 24, 25};
     for (unsigned i = 0; i < sizeof real_rows / sizeof real_rows[0]; i++) CHECK(svc_find(rq, real_rows[i])->status == IPC_IMPL, "IRequest %u is real", real_rows[i]);
-    CHECK(svc_find(rq, 22)->status == IPC_STUB, "22 GetAdditionalInfo stays a documented default (its layout is undocumented)");
+    CHECK(svc_find(rq, 22)->status == IPC_IMPL, "22 GetAdditionalInfo answers from the provider (test_svc_provider_hooks)");
 
     /* ---- IGeneralService communication settings (ids 15-20 per switchbrew) */
     svc_call(gen, 17, NULL, 0, &c);

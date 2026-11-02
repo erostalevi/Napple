@@ -109,6 +109,7 @@ enum { ONLINE_TLS_VERIFY_PEER_CA = 1u << 0, ONLINE_TLS_VERIFY_HOST_NAME = 1u << 
 enum { ONLINE_TLS_IO_BLOCKING = 1, ONLINE_TLS_IO_NONBLOCKING = 2 };
 
 struct OnlineFriendInfo; /* friend details (online-friends), defined after the table */
+struct OnlineCloudBackup; /* olsc backup state (ipc-provider-hooks), defined after the table */
 /* TLS: the provider owns the whole connection state. sock is a provider socket handle (see sockets) or -1. */
 typedef struct OnlineProvider {
     uint32_t abi_version;        /* must be ONLINE_ABI_VERSION */
@@ -213,7 +214,31 @@ typedef struct OnlineProvider {
     void (*friend_set_notify)(void *ctx, void (*cb)(void *arg), void *arg);
     /* The local user declared (1) or closed (0) an online-play session (DeclareOpenOnlinePlaySession / DeclareCloseOnlinePlaySession). */
     void (*friend_online_play)(void *ctx, int open);
+
+    /* ---- additions of ipc-provider-hooks (2026-11-03-r11): struct_size-extensible, ABI version unchanged (ONLINE_CAP_FRIENDS) ---- */
+    /* The friend's profile picture (friend 10110 / 10111): up to `max` bytes of image data (JPEG) of the requested edge size (0 = the provider's default)
+     * written to out. Returns the bytes written, 0 = the friend has no picture or is not a friend. */
+    uint32_t (*friend_profile_image)(void *ctx, uint64_t id, uint32_t size, void *out, uint32_t max);
+    /* Friend 11000 / 11001 GetProfileImageUrl: the picture URL `in` (as the friend list carries it) rewritten for edge size `size`, NUL-terminated into out[n].
+     * 0 = ok, nonzero = no URL. */
+    int (*friend_image_url)(void *ctx, const char *in, uint32_t size, char *out, size_t n);
+    /* The local user sends a friend request to account `id` from within the running application (friend 10200). 0 = sent, else a Horizon result. */
+    uint32_t (*friend_send_request)(void *ctx, uint64_t id);
+
+    /* ---- cloud saves (ONLINE_CAP_ACCOUNT; olsc 18 / 27) ---- */
+    /* The backup state of user `user_id`'s save data for the running application. 0 and *out filled, nonzero = no backup information available. */
+    int (*cloud_backup_info)(void *ctx, const uint8_t user_id[16], struct OnlineCloudBackup *out);
+    /* Starts uploading the user's save data for the running application. Returns 0 (accepted, `*done` set when it already finished) or a Horizon result. */
+    uint32_t (*cloud_backup_upload)(void *ctx, const uint8_t user_id[16], int *done);
 } OnlineProvider;
+
+/* olsc (ipc-provider-hooks): what cloud_backup_info reports. last_s = unix seconds of the newest backup (0 = none); size in bytes; pending = an upload is queued. */
+typedef struct OnlineCloudBackup {
+    uint8_t exists, pending, pad[6];
+    uint64_t size;
+    uint64_t last_s;
+    uint64_t title_id;
+} OnlineCloudBackup;
 
 /* friend (online-friends): what friend_list_info / friend_find return. The app field is the friend's own UpdateUserPresence app data, visible only
  * to a title of the same presence group (same_app); status follows nn::friends PresenceStatus (0 offline, 1 online, 2 online play). */

@@ -809,6 +809,67 @@ static void friend_overlay_request(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
 }
+/* ---- friend rows that need the network (ipc-provider-hooks r11) --------------------------------------------------------------------------
+ * 10110 GetFriendProfileImage(Uid @0, u64 friend id @0x10) and 10111 ...WithImageSize(+ u32 edge size @0x18) -> u32 size, the picture in the output buffer.
+ * 10200 SendFriendRequestForApplication(Uid @0, u64 account id @0x10). 11000 / 11001 GetProfileImageUrl(V2)(u32 edge size @0, in buffer: the URL, out buffer: the
+ * URL for that size). Input layouts are not published [unverified]; they follow the other friend rows (Uid first). A provider without the hook (the
+ * NullProvider, a provider without ONLINE_CAP_FRIENDS) answers what an offline console does: the network service account is unavailable. */
+static void friend_profile_image(IpcObject *s, IpcCall *c) {
+    friend_log(c, "GetFriendProfileImage");
+    const OnlineProvider *p = online_provider();
+    uint32_t (*img)(void *, uint64_t, uint32_t, void *, uint32_t) = FRIEND_FN(p, friend_profile_image);
+    uint8_t u[16];
+    if (!img || !friend_gate_local(c, 0, u)) {
+        if (!img) sysd_err_friend(s, c);
+        return;
+    }
+    uint64_t id = 0;
+    uint32_t size = 0;
+    if (c->in_size >= 0x18) memcpy(&id, c->in + 0x10, 8);
+    if (c->cmd == 10111 && c->in_size >= 0x1c) memcpy(&size, c->in + 0x18, 4);
+    uint64_t cap = friend_out_cap(c, 0);
+    if (cap > 0x20000) cap = 0x20000; /* a profile picture is a small JPEG */
+    uint8_t *buf = calloc(1, cap ? cap : 1);
+    if (!buf) return;
+    uint32_t n = img(p->ctx, id, size, buf, (uint32_t)cap);
+    if (n > cap) n = (uint32_t)cap;
+    if (n) friend_out(c, 0, buf, n);
+    free(buf);
+    IPC_OUT(c, n);
+}
+static void friend_send_request(IpcObject *s, IpcCall *c) {
+    friend_log(c, "SendFriendRequestForApplication");
+    const OnlineProvider *p = online_provider();
+    uint32_t (*send)(void *, uint64_t) = FRIEND_FN(p, friend_send_request);
+    uint8_t u[16];
+    if (!send) {
+        sysd_err_friend(s, c);
+        return;
+    }
+    if (!friend_gate_local(c, 0, u)) return;
+    uint64_t id = 0;
+    if (c->in_size >= 0x18) memcpy(&id, c->in + 0x10, 8);
+    c->result = send(p->ctx, id);
+}
+#define FRIEND_URL_MAX 0xa0u /* the URL buffers of nn::friends (Url is 0xa0 bytes) */
+static void friend_image_url(IpcObject *s, IpcCall *c) {
+    friend_log(c, "GetProfileImageUrl");
+    const OnlineProvider *p = online_provider();
+    int (*url)(void *, const char *, uint32_t, char *, size_t) = FRIEND_FN(p, friend_image_url);
+    if (!url) {
+        sysd_err_friend(s, c);
+        return;
+    }
+    uint32_t size = c->in_size >= 4 ? IPC_IN(c, uint32_t, 0) : 0;
+    char in[FRIEND_URL_MAX] = {0}, out[FRIEND_URL_MAX] = {0};
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    if (b && b->size && ipc_buf_ptr(b)) memcpy(in, ipc_buf_ptr(b), b->size < sizeof in - 1 ? b->size : sizeof in - 1);
+    if (url(p->ctx, in, size, out, sizeof out) != 0) {
+        sysd_err_friend(s, c);
+        return;
+    }
+    friend_out(c, 0, out, sizeof out);
+}
 /* Merge of ipc-depth-95 (friend_core cache rows) and online-friends (provider friend rows), 2026-11-02 integration: a provider that serves the
  * online-friends friend list (friend_list_info) answers these rows from the provider; otherwise the friend_core cache rows answer as before. */
 static int friend_from_provider(void) { return FRIEND_FN(online_provider(), friend_list_info) != NULL; }
@@ -829,11 +890,11 @@ static const IpcCmd friend_service_cmds[] = {
     {10600, "DeclareOpenOnlinePlaySession", friend_declare_open, IPC_IMPL},
     {10601, "DeclareCloseOnlinePlaySession", friend_declare_close, IPC_IMPL},
     {10102, "UpdateFriendInfo", friend_row_10102, IPC_IMPL},
-    {10110, "GetFriendProfileImage", sysd_err_friend, IPC_STUB},
-    {10111, "GetFriendProfileImageWithImageSize", sysd_err_friend, IPC_STUB},
+    {10110, "GetFriendProfileImage", friend_profile_image, IPC_IMPL},
+    {10111, "GetFriendProfileImageWithImageSize", friend_profile_image, IPC_IMPL},
     {10120, "CheckFriendListAvailability", friend_row_10120, IPC_IMPL},
     {10121, "EnsureFriendListAvailable", friend_row_10121, IPC_IMPL},
-    {10200, "SendFriendRequestForApplication", sysd_err_friend, IPC_STUB},
+    {10200, "SendFriendRequestForApplication", friend_send_request, IPC_IMPL},
     {10211, "AddFacedFriendRequestForApplication", friend_add_faced, IPC_IMPL},
     {10420, "CheckBlockedUserListAvailability", friend_check_cache, IPC_IMPL},
     {10421, "EnsureBlockedUserListAvailable", friend_sync_uid, IPC_IMPL},
@@ -844,8 +905,8 @@ static const IpcCmd friend_service_cmds[] = {
     {10700, "GetPlayHistoryRegistrationKey", friend_play_history_key, IPC_IMPL},
     {10701, "GetPlayHistoryRegistrationKeyWithNetworkServiceAccountId", friend_play_history_key_nsa, IPC_IMPL},
     {10702, "AddPlayHistory", friend_add_history, IPC_IMPL},
-    {11000, "GetProfileImageUrl", sysd_err_friend, IPC_STUB},
-    {11001, "GetProfileImageUrlV2", sysd_err_friend, IPC_STUB},
+    {11000, "GetProfileImageUrl", friend_image_url, IPC_IMPL},
+    {11001, "GetProfileImageUrlV2", friend_image_url, IPC_IMPL},
     {20102, "GetFriendDetailedInfo", friend_detailed_info, IPC_IMPL},
     {20103, "SyncFriendList", friend_sync_uid, IPC_IMPL},
     {20104, "RequestSyncFriendList", friend_request_sync, IPC_IMPL},
@@ -1185,11 +1246,31 @@ static void nifm_get_applet_info(IpcObject *s, IpcCall *c) {
     uint32_t v[3] = {NIFM_APPLET_NET_CONNECT, 0, used};
     ipc_out(c, v, 12);
 }
-/* GetAdditionalInfo (undocumented layout): a failed request reports its own failure, a request that did not fail has no additional information. */
+/* GetAdditionalInfo (undocumented layout): a failed request reports its own failure. A request the provider accepted (NAPPLE_NET=host: the Mac's interface)
+ * answers a 0x10-byte record built from net_info: {u8 interface kind (1 wireless, 2 wired), u8 strength, u16 0, u32 ip, u32 gateway, u32 dns1}, host byte order
+ * [layout unverified]. Without a connection there is no additional information. */
 static void nifm_get_additional_info(IpcObject *s, IpcCall *c) {
     NifmReq *q = s->state;
     uint32_t res = nifm_request_result(&q->req);
+    OnlineNetInfo ni;
+    if (!res && q->req.state == NIFM_STATE_ACCEPTED && nifm_info(&ni)) {
+        uint8_t v[0x10] = {0};
+        v[0] = ni.kind ? ni.kind : 1;
+        v[1] = ni.strength;
+        memcpy(v + 4, &ni.ip, 4);
+        memcpy(v + 8, &ni.gateway, 4);
+        memcpy(v + 12, &ni.dns1, 4);
+        ipc_out(c, v, sizeof v);
+        return;
+    }
     c->result = res ? res : HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+}
+/* GetNetworkAccessStatus [21.0.0+] -> u32 (layout not public [unverified]): 1 while the provider reports a connection and the request was accepted, else 0. */
+static void nifm_get_network_access_status(IpcObject *s, IpcCall *c) {
+    NifmReq *q = s->state;
+    OnlineNetInfo ni;
+    uint32_t v = q->req.state == NIFM_STATE_ACCEPTED && nifm_info(&ni) ? 1 : 0;
+    IPC_OUT(c, v);
 }
 /* RegisterSocketDescriptor / UnregisterSocketDescriptor(s32 fd): the descriptors the request keeps alive (up to 8). */
 static void nifm_register_socket(IpcObject *s, IpcCall *c) {
@@ -1228,11 +1309,11 @@ static const IpcCmd nifm_request_cmds[] = {
     {19, "GetRequirement", nifm_get_requirement, IPC_IMPL},
     {20, "GetRevision", nifm_get_revision, IPC_IMPL},
     {21, "GetAppletInfo", nifm_get_applet_info, IPC_IMPL},
-    {22, "GetAdditionalInfo", nifm_get_additional_info, IPC_STUB},
+    {22, "GetAdditionalInfo", nifm_get_additional_info, IPC_IMPL},
     {23, "SetKeptInSleep", nifm_set_kept_in_sleep, IPC_IMPL},
     {24, "RegisterSocketDescriptor", nifm_register_socket, IPC_IMPL},
     {25, "UnregisterSocketDescriptor", nifm_unregister_socket, IPC_IMPL},
-    {26, "GetNetworkAccessStatus", sysd_z4, IPC_STUB},
+    {26, "GetNetworkAccessStatus", nifm_get_network_access_status, IPC_IMPL},
 };
 static void nifm_create_request(IpcObject *s, IpcCall *c) {
     (void)s;
