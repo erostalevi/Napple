@@ -44,6 +44,25 @@ int main(void) {
         CHECK(notif_register(&st, set, sizeof set, big, sizeof big, &x) == NOTIF_ERR_INVALID, "a parameter over 0x400 bytes is refused");
         for (unsigned i = 0; i < 6; i++) { const IpcCmd *e = svc_find(na, i == 5 ? 1000 : 500 + i * 10); CHECK(e && e->status == IPC_IMPL, "notif:a row %u is real", e ? e->cmd : 0); }
     }
+    /* ---- r11: npns:u local state ---- */
+    {   npns_local_reset(); service_register_push(); n = open_npns();
+        static const unsigned ids[5] = {103, 104, 111, 151, 153};
+        for (int i = 0; i < 5; i++) CHECK(svc_find(n, ids[i]) && svc_find(n, ids[i])->status == IPC_IMPL, "npns %u is IPC_IMPL", ids[i]);
+        svc_call(n, 103, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 0, "GetState: not connected by default");
+        svc_call(n, 151, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 0, "GetStateWithHandover: same state");
+        svc_call(n, 104, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == 0 && SVC_OUT(&c, uint64_t, 8) == 0, "GetStatistics: nothing received or dropped");
+        char jb[NPNS_JID_SIZE]; memset(jb, 0x55, sizeof jb); memset(&c, 0, sizeof c); svc_set_out_buf(&c, jb, sizeof jb); svc_call_c(n, 111, &c); CHECK(c.result == 0 && jb[0] == 0, "GetJid: empty until assigned");
+        npns_local_set_jid("abc123@npns.example"); memset(&c, 0, sizeof c); svc_set_out_buf(&c, jb, sizeof jb); svc_call_c(n, 111, &c); CHECK(!strcmp(jb, "abc123@npns.example"), "GetJid returns the local JID");
+        svc_call(n, 5, NULL, 0, &c); uint32_t rev = c.out_copy[0]; svc_call(n, 7, NULL, 0, &c); uint32_t cev = c.out_copy[0]; svc_call(n, 153, NULL, 0, &c); uint32_t dev = c.out_copy[0];
+        CHECK(!event_is_signaled(rev) && !event_is_signaled(cev) && !event_is_signaled(dev), "all three events quiet at first");
+        npns_local_set_state(2); CHECK(event_is_signaled(cev) && !event_is_signaled(rev), "a state change fires only the state-change event");
+        svc_call(n, 103, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 2, "GetState reads the new state"); svc_call(n, 151, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 2, "...and so does the handover form");
+        npns_local_enqueue("hi", 2); CHECK(event_is_signaled(rev) && !event_is_signaled(dev) && g_npns.nqueue == 1 && !memcmp(g_npns.queue[0].data, "hi", 2), "a notification queues and fires the receive event");
+        svc_call(n, 104, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 1 && SVC_OUT(&c, uint64_t, 8) == 0, "statistics: one received");
+        for (int i = 0; i < NPNS_QUEUE; i++) npns_local_enqueue("x", 1);
+        CHECK(event_is_signaled(dev) && g_npns.nqueue == NPNS_QUEUE, "overflowing the queue drops the oldest and fires the drop event");
+        svc_call(n, 104, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 17 && SVC_OUT(&c, uint64_t, 8) == 1, "statistics: 17 received, 1 dropped");
+        npns_local_reset(); }
     printf("{\"test\":\"svc_push\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

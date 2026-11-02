@@ -11,7 +11,9 @@
 #include "notif_core.h"
 #include "online_provider.h"
 #include <pthread.h>
+#include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define PUSH_RANGE 32
 #define PUSH_EXTRA 12 /* ids above the generous range that the switchbrew tables list (npns:u 101..154, notif:a 500..1000) */
@@ -21,6 +23,73 @@ static void ok(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
 }
+/* ---- npns:u local state ----
+ * No push server is reachable, so the state is host-side only: a connection state (0 = not connected, the default), a queue of received
+ * notifications (empty by default), receive / state-change / drop counters and the console's own JID string (empty until set). Events handed out
+ * by GetReceiveEvent (5), GetStateChangeEvent (7) and GetDropEventWithHandover (153) are remembered and signalled when the matching thing
+ * happens (npns_local_*), so an offline console's events are quiet only because nothing happens, not because they are dead. Record layouts
+ * are [unverified]: GetState / GetStateWithHandover answer a u32, GetStatistics 0x10 bytes {u64 received, u64 dropped}, GetJid fills the
+ * first output buffer with the NUL-terminated JID. */
+#define NPNS_QUEUE 16
+#define NPNS_PAYLOAD 0x100
+#define NPNS_EVENTS 8
+#define NPNS_JID_SIZE 0x100
+typedef struct {
+    uint32_t size;
+    uint8_t data[NPNS_PAYLOAD];
+} NpnsNotification;
+typedef struct {
+    uint32_t w[NPNS_EVENTS], n;
+} NpnsEvents;
+static struct {
+    uint32_t state, nqueue;
+    uint64_t received, dropped;
+    NpnsNotification queue[NPNS_QUEUE];
+    char jid[NPNS_JID_SIZE];
+    NpnsEvents recv, drop;
+} g_npns;
+static void npns_event_out(IpcCall *c, NpnsEvents *e) {
+    uint32_t r = 0, w = event_create(&r);
+    if (e->n < NPNS_EVENTS) e->w[e->n++] = w;
+    ipc_out_copy_handle(c, r);
+}
+static void npns_event_fire(NpnsEvents *e) {
+    for (uint32_t i = 0; i < e->n; i++) event_signal_handle(e->w[i]);
+}
+static void npns_recv_event(IpcObject *s, IpcCall *c) { (void)s; npns_event_out(c, &g_npns.recv); }
+static void npns_drop_event(IpcObject *s, IpcCall *c) { (void)s; npns_event_out(c, &g_npns.drop); }
+static void npns_get_state(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = g_npns.state;
+    IPC_OUT(c, v);
+}
+static void npns_get_stats(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t v[2] = {g_npns.received, g_npns.dropped};
+    IPC_OUT(c, v);
+}
+static void npns_get_jid(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b) ipc_write_buf(c, b, g_npns.jid, strlen(g_npns.jid) + 1 < b->size ? strlen(g_npns.jid) + 1 : b->size);
+}
+/* Host hooks (a private build's push client, and the tests): a notification arrives (the oldest is dropped when the queue is full), the connection
+ * state changes, the JID is assigned. */
+__attribute__((unused)) static void npns_local_enqueue(const void *data, uint32_t size) {
+    if (size > NPNS_PAYLOAD) size = NPNS_PAYLOAD;
+    if (g_npns.nqueue == NPNS_QUEUE) {
+        memmove(g_npns.queue, g_npns.queue + 1, (NPNS_QUEUE - 1) * sizeof g_npns.queue[0]);
+        g_npns.nqueue--;
+        g_npns.dropped++;
+        npns_event_fire(&g_npns.drop);
+    }
+    NpnsNotification *n = &g_npns.queue[g_npns.nqueue++];
+    n->size = size;
+    memcpy(n->data, data, size);
+    g_npns.received++;
+    npns_event_fire(&g_npns.recv);
+}
+__attribute__((unused)) static void npns_local_set_jid(const char *jid) { snprintf(g_npns.jid, sizeof g_npns.jid, "%s", jid ? jid : ""); }
 static void fill(IpcCmd *t, unsigned event_a, unsigned event_b) {
     for (unsigned i = 0; i < PUSH_RANGE; i++) t[i] = (IpcCmd){i, "OfflineNoop", (i == event_a || i == event_b) ? svc_ret_event : ok, IPC_IMPL};
 }
@@ -35,8 +104,8 @@ static IpcObject *open_nim_eca(void) { return open_table("nim:eca", 4); }
  * process-wide here: the Suspend / Resume flag and the state-change events every GetStateChangeEvent* handed out (they fire when the daemon's state changes).
  * The daemon never reaches the push server: the OnlineProvider has no npns hook (an online path would need one that opens the XMPP connection, creates the
  * device token and delivers notifications), so nothing is ever received and no token is ever created. The page documents no State numbering, Statistics
- * layout or Jid "none" answer: 103 GetState, 151 GetStateWithHandover, 104 GetStatistics and 111 GetJid stay documented defaults, as does 153 (the
- * persistent connection it reports dropping never exists). */
+ * layout or Jid "none" answer: 103 GetState, 151 GetStateWithHandover, 104 GetStatistics, 111 GetJid and 153 are served from the host-side "npns:u local state"
+ * above (ipc-bcat-npns-local r11; the layouts are [unverified] guesses, a persistent connection never exists unless a host hook sets one). */
 #define NPNS_MODULE 154u /* 2154-xxxx; switchbrew's npns:s stub results 0x7fc9a / 0x36dc9a are module 154 */
 #define R_NPNS_SERVER_UNAVAILABLE HZ_RESULT(NPNS_MODULE, 101) /* [unverified] napple's choice: a network exists, the push server is not reachable from napple */
 #define NPNS_MAX_EVENTS 16
@@ -58,6 +127,22 @@ static void npns_set_suspended(int on) {
         g_npns_suspended = on;
         for (unsigned i = 0; i < g_npns_nstate_ev; i++) event_signal_handle(g_npns_state_ev[i]);
     }
+    pthread_mutex_unlock(&g_npns_mu);
+}
+/* Host hooks that touch the daemon state (defined here, after the state-change event list of the daemon state below): a state change from the host fires the
+ * same state-change events a Suspend / Resume does (GetStateChangeEvent 7 and ...WithHandover 152 share them), and the reset clears both state blocks. */
+__attribute__((unused)) static void npns_local_set_state(uint32_t state) {
+    if (state == g_npns.state) return;
+    g_npns.state = state;
+    pthread_mutex_lock(&g_npns_mu);
+    for (unsigned i = 0; i < g_npns_nstate_ev; i++) event_signal_handle(g_npns_state_ev[i]);
+    pthread_mutex_unlock(&g_npns_mu);
+}
+__attribute__((unused)) static void npns_local_reset(void) {
+    memset(&g_npns, 0, sizeof g_npns);
+    pthread_mutex_lock(&g_npns_mu);
+    g_npns_nstate_ev = 0;
+    g_npns_suspended = 0;
     pthread_mutex_unlock(&g_npns_mu);
 }
 /* 101 Suspend / 102 Resume (no input, no output): the daemon is put to rest / woken; a change of state fires the state-change events, a repeat is a no-op. */
@@ -150,13 +235,13 @@ static void npns_create_token_async(IpcObject *s, IpcCall *c) {
  * `# table` lines, since the runtime tables are only filled at registration. */
 static const IpcCmd npns_rows[] = {
     {1, "ListenAll", ok, IPC_IMPL}, {2, "ListenTo", ok, IPC_IMPL}, {3, "Receive", ok, IPC_IMPL}, {4, "ReceiveRaw", ok, IPC_IMPL},
-    {5, "GetReceiveEvent", svc_ret_event, IPC_IMPL}, {7, "GetStateChangeEvent", npns_state_event, IPC_IMPL}, {8, "ListenToByName", ok, IPC_IMPL},
+    {5, "GetReceiveEvent", npns_recv_event, IPC_IMPL}, {7, "GetStateChangeEvent", npns_state_event, IPC_IMPL}, {8, "ListenToByName", ok, IPC_IMPL},
     {21, "CreateToken", ok, IPC_IMPL}, {23, "DestroyToken", ok, IPC_IMPL}, {25, "QueryIsTokenValid", ok, IPC_IMPL},
     {26, "ListenToMyApplicationId", ok, IPC_IMPL},
-    {101, "Suspend", npns_suspend, IPC_IMPL}, {102, "Resume", npns_resume, IPC_IMPL}, {103, "GetState", sysd_z4, IPC_STUB},
-    {104, "GetStatistics", sysd_err_generic, IPC_STUB}, {111, "GetJid", sysd_err_generic, IPC_STUB},
-    {120, "CreateNotificationReceiver", npns_create_receiver, IPC_IMPL}, {151, "GetStateWithHandover", sysd_z4, IPC_STUB},
-    {152, "GetStateChangeEventWithHandover", npns_state_event, IPC_IMPL}, {153, "GetDropEventWithHandover", sysd_event, IPC_STUB},
+    {101, "Suspend", npns_suspend, IPC_IMPL}, {102, "Resume", npns_resume, IPC_IMPL}, {103, "GetState", npns_get_state, IPC_IMPL},
+    {104, "GetStatistics", npns_get_stats, IPC_IMPL}, {111, "GetJid", npns_get_jid, IPC_IMPL},
+    {120, "CreateNotificationReceiver", npns_create_receiver, IPC_IMPL}, {151, "GetStateWithHandover", npns_get_state, IPC_IMPL},
+    {152, "GetStateChangeEventWithHandover", npns_state_event, IPC_IMPL}, {153, "GetDropEventWithHandover", npns_drop_event, IPC_IMPL},
     {154, "CreateTokenAsync", npns_create_token_async, IPC_IMPL},
 };
 /* notif:a INotificationServicesForApplication alarm rows (notif_core.c keeps the alarms; they never fire, there is no HOME menu to raise them):
