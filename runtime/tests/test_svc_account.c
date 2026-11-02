@@ -1,7 +1,12 @@
 /* Unit tests: acc:u0 (local user, profile, application info) and the network-account rows routed through the OnlineProvider. */
 #define NAPPLE_ACCOUNT_TEST 1
 #include "../src/services/account.c"
+/* olsc.c and account.c both define static async_get_result / async_cancel: rename olsc.c's for this single translation unit */
+#define async_get_result olsc_async_get_result
+#define async_cancel olsc_async_cancel
 #include "../src/services/olsc.c" /* the cloud-save rows are exercised below with no linked profile */
+#undef async_get_result
+#undef async_cancel
 #include "svc_test.h"
 #include "online_loopback.h"
 #include <sys/stat.h>
@@ -69,8 +74,9 @@ int main(void) {
           uint8_t cache[ONLINE_ACCOUNT_CACHE_SIZE + 4]; memset(cache, 0xcc, sizeof cache); memset(&c, 0, sizeof c); svc_set_out_buf(&c, cache, sizeof cache); svc_call_c(m, 130, &c);
           CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == 0 && cache[0] == 0 && cache[ONLINE_ACCOUNT_CACHE_SIZE - 1] == 0 && cache[ONLINE_ACCOUNT_CACHE_SIZE] == 0xcc, "unlinked %d: NA cache id 0, zeros, bounded", variant);
           memset(&c, 0, sizeof c); svc_call_c(m, 130, &c); CHECK(c.result == 0, "unlinked %d: NA cache without an output buffer does not crash", variant);
-          const unsigned netrows[] = {2, 3, 4, 150, 170};
-          for (unsigned i = 0; i < 5; i++) { svc_call(m, netrows[i], NULL, 0, &c); CHECK(c.result == IPC_R_UNKNOWN_COMMAND && c.nout_objects == 0 && c.out_size == 0, "unlinked %d: row %u fails with the sf unknown-command result, no object, no output", variant, netrows[i]); }
+          /* 170 became a real async row after the branch was written (it answers an async object whose result is 0x1907C, see test_risk_title); only the others still fail as unknown commands */
+          const unsigned netrows[] = {2, 3, 4, 150};
+          for (unsigned i = 0; i < 4; i++) { svc_call(m, netrows[i], NULL, 0, &c); CHECK(c.result == IPC_R_UNKNOWN_COMMAND && c.nout_objects == 0 && c.out_size == 0, "unlinked %d: row %u fails with the sf unknown-command result, no object, no output", variant, netrows[i]); }
           svc_call(m, 160, NULL, 0, &c); CHECK(c.result == 0, "unlinked %d: StoreOpenContext is accepted", variant);
       }
       /* linking after the fact flips the same session to the provider's values (no cached "unlinked" state) */
@@ -90,7 +96,7 @@ int main(void) {
         svc_call(ol, 10, NULL, 0, &oc); CHECK(oc.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "olsc 10 unlinked: offline result");
         for (unsigned id = 13; id <= 16; id++) { svc_call(ol, id, NULL, 0, &oc); CHECK(oc.result == 0, "olsc %u unlinked: device-side backup setting call succeeds", id); }
         const unsigned stubs[] = {18, 19, 22, 25, 26, 27};
-        for (unsigned i = 0; i < 6; i++) { svc_call(ol, stubs[i], NULL, 0, &oc); CHECK(oc.result == IPC_R_UNKNOWN_COMMAND, "olsc %u unlinked: sf unknown-command result", stubs[i]); } }
+        for (unsigned i = 0; i < 6; i++) { svc_call(ol, stubs[i], NULL, 0, &oc); CHECK(oc.result != IPC_R_UNKNOWN_COMMAND, "olsc %u unlinked: a real row (round-10 made 18/19/22/25/26/27 implemented), not the sf unknown-command result", stubs[i]); } }
     }
     online_provider_install(NULL);
     { /* ipc-local-stubs: the acc:u0 rows that used to be documented defaults */
