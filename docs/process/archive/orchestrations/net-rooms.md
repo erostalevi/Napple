@@ -6,7 +6,7 @@ base: claude/net-host-provider-2026-11-02-r6 (merge it again once handed off; la
 env: mac
 model: claude-opus-5-5
 depends_on: [net-host-provider]
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_d8199ac5-b4e7-45f0-8d48-22e3a3ab703e (fresh)
 launched_at: 2026-11-02
@@ -38,3 +38,6 @@ Our own protocol only; nothing Nintendo-specific beyond the LDN/LAN data the gam
 Read `orchestrations/ENV-MAC.md` (shared data read-only, locks, local-only, never ask). Two simultaneous game instances need ~2x memory: run them as ONE job under the run lock, ≤120 s.
 
 ## Result
+Integrated 2026-11-02 into main as faba99f (head 93da095), outcome **Clean**. Acceptance 1, 2, 4, 5 checked here; acceptance 3 not reached (both MK8D instances see
+each other's LAN announcement through the room, then 2618-0006, as handed off; GetCurrentIpConfigInfo is still a stub on main, mk8d-lan-session owns it).
+Details: [integrator file](../integrators/claude-net-rooms-2026-11-02-r7.md).

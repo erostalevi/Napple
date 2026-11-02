@@ -6,7 +6,7 @@ head: 0228a86 (the commit before this line was set)
 env: mac
 date: 2026-11-02
 areas: [crates/napple-room, runtime/net]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/net-rooms-2026-11-02-r7: LDN and LAN play between Napple instances over the internet (napple-room server + runtime client)
@@ -171,3 +171,23 @@ This matches the contract in the shared notes file `napple-infra-server-contract
 - Studio: a "Play online with friends" panel. It needs server, room, password and nickname fields (written as `NAPPLE_NET=host`, `NAPPLE_ROOM`,
   `NAPPLE_ROOM_PASSWORD`, `NAPPLE_ROOM_NICK` in the launch environment), an optional `napple-room list` call to show rooms, and the joined /
   member-left lines from the log as a member list.
+
+## Integration result
+- Date 2026-11-02, merged into main as faba99f (branch head 93da095 as handed off; first item of the r7-r9 integration run). No conflicts. Outcome: **Clean**, plus one doc
+  commit `integrate: net-rooms change note in the r7 change archive table` (`tools/check_docs.py` reported the change note as an orphan before, OK after).
+- No native ports: the client is BSD sockets + pthreads + `arc4random_buf` (already macOS-native), the server is portable std Rust; C left as written.
+- `cargo test -p napple-room`: 4 unit + 10 integration tests ok (the file says 9 + 4 = 13; the HTTP test makes it 14).
+- `make -C runtime GFX=napple test-net-room`: `test_net_room: 45 checks, 0 failed`, `(console B): 28 checks, 0 failed` (the file's 39 / 22 predate the
+  deployment-contract commit's parser checks).
+- `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0, ipc_reference 111 fixtures, app_reachable 1325, missing 0, errors 0. Build warnings
+  only the three pre-existing ones (applet_ae.c cast, bcat.c unused, stb_vorbis).
+- Two-instance LAN relay smoke (How to test 2), one job under the run lock, 45 s, private save copies, local `target/debug/napple-room serve` on
+  127.0.0.1:31499, `NAPPLE_NET=host NAPPLE_ROOM=127.0.0.1:31499/mk8d NAPPLE_NET_LOG=1`, the file's input script, with the shared-notes
+  `nifm-GetCurrentIpConfigInfo.patch` applied locally and reverted afterwards (not committed: nifm is mk8d-lan-session's): both instances `room: joined`
+  (10.13.0.2 / 10.13.0.3), each logs the other's join, each `recv(2, …) = 873 … from` the other's 10.13.0.x:30000 at 24.7 s; both then show error
+  2618-0006 at 26.7 s exactly as the file reports. Server log: two joins, two leaves. Both rc 0.
+- Four-title 45 s headless boots (run lock, private save copies, shared title data read-only), without and with `NAPPLE_NET=host`: SMO, LAS, MK8D
+  (v1376256), ACNH (3.0.3) rc 0, last stage notify-running, `missing_ipc []`, `unsupported_svcs []`, stubbed only `nvdrv:13`; no `room:` line without
+  `NAPPLE_ROOM`.
+- Corrections to the file: `NAPPLE_NET_TRACE` in the shared-notes `run_pair.sh` is `NAPPLE_NET_LOG` now (the file already says so); test counts above.
+- Still untested (as declared): reconnect after a server loss, a server over the internet, IPv6 `NAPPLE_ROOM`, `NAPPLE_VLAN=off|<address>`, Linux server build.

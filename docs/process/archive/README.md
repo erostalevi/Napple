@@ -66,3 +66,4 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | Item | Orchestration | Integrator file | Goal |
 |---|---|---|---|
 | napple-infra | [napple-infra.md](orchestrations/napple-infra.md) | [claude-napple-infra-2026-11-02-r7.md](integrators/claude-napple-infra-2026-11-02-r7.md) | local test stack + AWS auto-deploy of the Napple game servers (`pretend.napple.lat`) and the `napple.lat` DNS |
+| net-rooms | [net-rooms.md](orchestrations/net-rooms.md) | [claude-net-rooms-2026-11-02-r7.md](integrators/claude-net-rooms-2026-11-02-r7.md) | `napple-room` relay server + runtime client: virtual LAN and LDN between Napple instances over the internet (`NAPPLE_ROOM`) |
