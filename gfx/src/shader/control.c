@@ -82,11 +82,14 @@ int gfx_control_tess(const uint8_t *ctl, size_t len, gfx_tess_params *out) {
     gfx_control_info ci;
     if (!gfx_control_parse(ctl, len, &ci) || ci.stage != 4 || ci.length <= GLSLC_TESS_MODE_OFF) return 0;
     uint32_t m = rd32(ctl, GLSLC_TESS_MODE_OFF);
+    /* NVB197_SET_TESSELLATION_PARAMETERS (open-gpu-doc clb197.h): DOMAIN_TYPE 1:0, SPACING 5:4, OUTPUT_PRIMITIVES 9:8. */
     if (!m || (m & ~0x333u)) return 0; /* bits beyond the Maxwell form: not that word */
-    uint32_t dom = m & 3, sp = (m >> 4) & 3;
+    uint32_t dom = m & 3, sp = (m >> 4) & 3, prim = (m >> 8) & 3;
     if (dom == 3 || sp == 3) return 0;
+    if (prim == 0) return 0;                     /* POINTS: point mode has no equivalent here */
+    if ((dom == 0) != (prim == 1)) return 0;     /* LINES goes with ISOLINE only, triangles with TRIANGLE / QUAD only */
     out->domain = dom == 0 ? TESS_DOMAIN_ISOLINE : dom == 1 ? TESS_DOMAIN_TRIANGLE : TESS_DOMAIN_QUAD;
     out->spacing = sp == 1 ? TESS_SPACING_FRACTIONAL_ODD : sp == 2 ? TESS_SPACING_FRACTIONAL_EVEN : TESS_SPACING_EQUAL;
-    out->winding = (m >> 8) & 1 ? TESS_WINDING_CW : TESS_WINDING_CCW;
+    out->winding = prim == 2 ? TESS_WINDING_CW : TESS_WINDING_CCW;
     return 1;
 }
