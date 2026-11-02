@@ -35,6 +35,11 @@ typedef struct {
 } TimeRule;
 void time_rule_make(TimeRule *r, int mode, int32_t offset, const char *name, uint8_t out[TIME_RULE_SIZE]);
 int time_rule_parse(const void *buf, size_t size, TimeRule *out); /* 0 ok, -1 not one of ours */
+/* TZif (the zoneinfo binary ParseTimeZoneBinary takes): the standard-time UTC offset in seconds east of UTC the zone is in after its last transition
+ * (the type of the last transition, or the last non-DST type before it when that one is daylight time; type 0 when there are no transitions).
+ * Returns 0 and sets *offset, or -1 when the data is not a well-formed TZif v1 block (magic "TZif", counts that fit in `size`). DST rules are not kept:
+ * the rule ParseTimeZoneBinary builds from it is a fixed-offset rule. */
+int time_tzif_std_offset(const void *data, size_t size, int32_t *offset);
 /* Classifies a location name: 1 UTC family (fixed offset 0), 2 the host's zone (`host_name`), 0 unknown. */
 int time_location_kind(const char *name, const char *host_name);
 /* Extracts the IANA name from the target of /etc/localtime ("../var/db/timezone/zoneinfo/Europe/Berlin" -> "Europe/Berlin"); NULL if absent. */

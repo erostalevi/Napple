@@ -100,6 +100,17 @@ static const IpcCmd system_clock_cmds[] = {
     {3, "SetSystemClockContext", sc_set, IPC_IMPL},
     {4, "GetOperationEventReadableHandle", sc_operation_event, IPC_IMPL},
 };
+/* time:u 50 SetStandardSteadyClockInternalOffset(TimeSpanType ns): the offset ISteadyClock 200 GetInternalOffset reports (0 until set). */
+static int64_t g_steady_internal_offset_ns;
+static void steady_get_internal_offset(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t v = __atomic_load_n(&g_steady_internal_offset_ns, __ATOMIC_SEQ_CST);
+    IPC_OUT(c, v);
+}
+static void st_set_internal_offset(IpcObject *s, IpcCall *c) {
+    (void)s;
+    __atomic_store_n(&g_steady_internal_offset_ns, IPC_IN(c, int64_t, 0), __ATOMIC_SEQ_CST);
+}
 /* SetTestOffset / GetTestOffset keep a TimeSpanType (ns) that the console adds to the steady clock; here it shifts the time point's seconds. */
 static int64_t g_steady_test_offset_ns;
 static void steady_now(IpcObject *s, IpcCall *c) {
@@ -107,11 +118,6 @@ static void steady_now(IpcObject *s, IpcCall *c) {
     int64_t v = steady_seconds() + __atomic_load_n(&g_steady_test_offset_ns, __ATOMIC_SEQ_CST) / 1000000000ll;
     ipc_out(c, &v, 8);
     ipc_out(c, clock_source, 16);
-}
-static void steady_zero(IpcObject *s, IpcCall *c) {
-    (void)s;
-    int64_t v = 0;
-    IPC_OUT(c, v);
 }
 static void steady_false(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -142,7 +148,7 @@ static void steady_rtc(IpcObject *s, IpcCall *c) {
 static const IpcCmd steady_clock_cmds[] = {
     {0, "GetCurrentTimePoint", steady_now, IPC_IMPL},    {2, "GetTestOffset", steady_get_test_offset, IPC_IMPL}, {3, "SetTestOffset", steady_set_test_offset, IPC_IMPL},
     {100, "GetRtcValue", steady_rtc, IPC_IMPL},          {101, "IsRtcResetDetected", steady_false, IPC_IMPL},     {102, "GetSetupResultValue", steady_zero32, IPC_IMPL},
-    {200, "GetInternalOffset", steady_zero, IPC_IMPL},
+    {200, "GetInternalOffset", steady_get_internal_offset, IPC_IMPL},
 };
 
 /* time zone. The device zone is the host's IANA zone when /etc/localtime points into a zoneinfo directory, else UTC. A TimeZoneRule is an
@@ -168,6 +174,16 @@ static const char *host_zone_name(void) {
 static char g_zone_override[0x24];
 static int64_t g_zone_updated;
 static const char *device_zone(void) { return g_zone_override[0] ? g_zone_override : host_zone_name(); }
+static uint32_t g_zone_events[8];
+static unsigned g_zone_nevents;
+static pthread_mutex_t g_zone_mu = PTHREAD_MUTEX_INITIALIZER;
+static void zone_set(const char *name) {
+    pthread_mutex_lock(&g_zone_mu);
+    snprintf(g_zone_override, sizeof g_zone_override, "%s", name);
+    g_zone_updated = steady_seconds();
+    for (unsigned i = 0; i < g_zone_nevents; i++) event_signal_handle(g_zone_events[i]);
+    pthread_mutex_unlock(&g_zone_mu);
+}
 /* Calendar for `t` under the host's rules (utc: no zone). */
 static void host_calendar(int64_t t, int utc, TimeCalendar *cal, TimeCalendarInfo *info) {
     time_t tt = (time_t)t;
@@ -329,8 +345,45 @@ static void tz_set_location_name(IpcObject *s, IpcCall *c) {
         c->result = HZ_RESULT(HZ_MOD_TIME, 200);
         return;
     }
-    snprintf(g_zone_override, sizeof g_zone_override, "%s", name);
-    g_zone_updated = steady_seconds();
+    zone_set(name);
+}
+/* 7 SetDeviceLocationNameWithTimeZoneRule(LocationName, type-0x21 rule): the device zone becomes `name`; the rule must be one this service built
+ * (LoadTimeZoneRule / ParseTimeZoneBinary) or the name one the list offers, else the same "time zone not found" error. */
+static void tz_set_location_name_with_rule(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char name[0x25] = {0};
+    memcpy(name, ipc_in(c, 0, 0x24), 0x24);
+    TimeRule r;
+    if (rule_from_call(c, &r) && !time_location_kind(name, host_zone_name())) {
+        c->result = HZ_RESULT(HZ_MOD_TIME, 200);
+        return;
+    }
+    zone_set(name);
+}
+/* 8 ParseTimeZoneBinary(type-0x21 TZif data) -> type-0x16 TimeZoneRule: a fixed-offset rule at the zone's current standard offset (time_core.c); data that is
+ * not TZif fails like an unknown zone. */
+static void tz_parse_binary(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *in = ipc_in_buf(c, 0), *out = ipc_out_buf(c, 0);
+    const void *p = in && in->size ? ipc_buf_ptr(in) : NULL;
+    int32_t off = 0;
+    if (!p || time_tzif_std_offset(p, (size_t)in->size, &off) || !out || out->size < TIME_RULE_SIZE) {
+        c->result = HZ_RESULT(HZ_MOD_TIME, 200);
+        return;
+    }
+    TimeRule r;
+    static uint8_t blob[TIME_RULE_SIZE];
+    time_rule_make(&r, TIME_RULE_FIXED, off, "", blob);
+    ipc_write_buf(c, out, blob, sizeof blob);
+}
+/* 20 GetDeviceLocationNameOperationEventReadableHandle: an event signalled whenever the device location name changes (1 / 7). */
+static void tz_location_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t r = 0, w = event_create(&r);
+    pthread_mutex_lock(&g_zone_mu);
+    if (g_zone_nevents < 8) g_zone_events[g_zone_nevents++] = w;
+    pthread_mutex_unlock(&g_zone_mu);
+    ipc_out_copy_handle(c, r);
 }
 /* 6 GetDeviceLocationNameAndUpdatedTime -> LocationName (0x24) and the SteadyClockTimePoint of the last change (8-aligned at 0x28: {s64 value, clock source id}). */
 static void tz_location_name_and_time(IpcObject *s, IpcCall *c) {
@@ -353,6 +406,9 @@ static const IpcCmd timezone_cmds[] = {
     {202, "ToPosixTimeWithMyRule", tz_to_posix_my_rule, IPC_IMPL},
     {1, "SetDeviceLocationName", tz_set_location_name, IPC_IMPL},
     {6, "GetDeviceLocationNameAndUpdatedTime", tz_location_name_and_time, IPC_IMPL},
+    {7, "SetDeviceLocationNameWithTimeZoneRule", tz_set_location_name_with_rule, IPC_IMPL},
+    {8, "ParseTimeZoneBinary", tz_parse_binary, IPC_IMPL},
+    {20, "GetDeviceLocationNameOperationEventReadableHandle", tz_location_event, IPC_IMPL},
 };
 
 /* ClockSnapshot (400/401) and the calculations on snapshots (500/501). The "user" and "network" clocks are the same host clock: the host's time
@@ -506,6 +562,8 @@ static const IpcCmd static_cmds[] = {
     {500, "CalculateStandardUserSystemClockDifferenceByUser", st_user_clock_difference, IPC_IMPL},
     {501, "CalculateSpanBetween", st_span_between, IPC_IMPL},
     {201, "GetStandardUserSystemClockAutomaticCorrectionUpdatedTime", st_auto_correction_updated, IPC_IMPL},
+    {50, "SetStandardSteadyClockInternalOffset", st_set_internal_offset, IPC_IMPL},
+    {51, "GetStandardSteadyClockRtcValue", steady_rtc, IPC_IMPL}, /* the same RTC value ISteadyClock 100 reports */
 };
 static IpcObject *time_open(void) { return IPC_OBJECT("time:u", static_cmds, NULL, NULL); }
 void service_register_time(void) {

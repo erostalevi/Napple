@@ -73,6 +73,27 @@ int time_rule_parse(const void *buf, size_t size, TimeRule *out) {
     memcpy(out, buf, sizeof *out);
     return memcmp(out->magic, "NAPLTZ01", 8) ? -1 : 0;
 }
+static uint32_t be32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+int time_tzif_std_offset(const void *data, size_t size, int32_t *offset) {
+    const uint8_t *p = data;
+    if (!p || size < 44 || memcmp(p, "TZif", 4)) return -1;
+    uint64_t isut = be32(p + 20), isstd = be32(p + 24), leap = be32(p + 28), timecnt = be32(p + 32), typecnt = be32(p + 36), charcnt = be32(p + 40);
+    if (typecnt == 0 || typecnt > 256 || timecnt > 100000 || leap > 100000 || isut > 256 || isstd > 256 || charcnt > 0x10000) return -1;
+    uint64_t need = 44 + timecnt * 5 + typecnt * 6 + charcnt + leap * 8 + isstd + isut;
+    if (need > size) return -1;
+    const uint8_t *idx = p + 44 + timecnt * 4, *types = idx + timecnt;
+    int64_t t = timecnt ? idx[timecnt - 1] : 0;
+    for (int64_t i = (int64_t)timecnt - 1; i >= 0; i--) { /* walk back to the newest standard-time type */
+        if (idx[i] >= typecnt) return -1;
+        if (!types[idx[i] * 6 + 4]) {
+            t = idx[i];
+            break;
+        }
+    }
+    if ((uint64_t)t >= typecnt) return -1;
+    *offset = (int32_t)be32(types + t * 6);
+    return 0;
+}
 int time_location_kind(const char *n, const char *host) {
     static const char *const utc[] = {"UTC", "GMT", "Etc/UTC", "Etc/GMT", "Etc/Universal", "Etc/Zulu", "Universal", "Zulu"};
     for (unsigned i = 0; i < sizeof utc / sizeof utc[0]; i++)

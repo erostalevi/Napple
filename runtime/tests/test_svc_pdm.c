@@ -51,6 +51,23 @@ int main(void) {
         memset(&c, 0, sizeof c); c.in = in; c.in_size = 1; svc_call_c(o, 17, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 0, "...no buffers: 0 entries");
         const unsigned rows[] = {4, 5, 11, 12, 17}; for (unsigned i = 0; i < 5; i++) CHECK(svc_find(o, rows[i])->status == IPC_IMPL, "pdm:qry %u is real now", rows[i]);
     }
+    { /* ipc-depth-cloud r9: 18 / 19 ApplicationPlayStatistics */
+        IpcObject *q = pdm_open(); IpcCall d;
+        uint64_t ids[3] = {0x0100000000099000ull, g_program_id, 0x0100000000077000ull}, st[4][3];
+        uint8_t in18[1] = {0}, in19[0x18] = {0};
+        for (int k = 0; k < 2; k++) {
+            unsigned cmd = 18 + k;
+            memset(st, 0xcc, sizeof st); memset(&d, 0, sizeof d); d.in = k ? in19 : in18; d.in_size = k ? sizeof in19 : sizeof in18;
+            svc_set_in_buf(&d, ids, sizeof ids); svc_set_out_buf(&d, st, sizeof st); svc_call_c(q, cmd, &d);
+            CHECK(d.result == 0 && SVC_OUT(&d, int32_t, 0) == 3, "%u: one entry per requested title", cmd);
+            CHECK(st[0][0] == ids[0] && st[0][1] == 0 && st[0][2] == 0, "%u: an unplayed title has no play time or launches", cmd);
+            CHECK(st[1][0] == g_program_id && st[1][2] == 1, "%u: the running title was launched once", cmd);
+            CHECK(st[3][0] == 0xccccccccccccccccull, "%u: nothing written past the entries", cmd);
+            memset(&d, 0, sizeof d); d.in = in18; d.in_size = 1; svc_set_in_buf(&d, ids, sizeof ids); svc_set_out_buf(&d, st, 0x18 * 2); svc_call_c(q, cmd, &d);
+            CHECK(SVC_OUT(&d, int32_t, 0) == 2, "%u: limited by the output buffer", cmd);
+            CHECK(svc_find(q, cmd)->status == IPC_IMPL, "%u is a real row", cmd);
+        }
+    }
     printf("{\"test\":\"svc_pdm\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }
