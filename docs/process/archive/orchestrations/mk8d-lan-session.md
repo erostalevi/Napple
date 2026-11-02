@@ -6,7 +6,7 @@ base: claude/net-rooms-2026-11-02-r7 (lands after it)
 env: mac
 model: claude-opus-5-5
 depends_on: [net-rooms]
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_d8199ac5-b4e7-45f0-8d48-22e3a3ab703e (reused net-rooms)
 launched_at: 2026-11-02
@@ -35,3 +35,6 @@ their tests, own change note. Do not touch gfx/, crates/ other than napple-room 
 Read `orchestrations/ENV-MAC.md` (shared title data read-only, locks, local-only, never ask, never push).
 
 ## Result
+Integrated 2026-11-02 into main as 33ac45c (head e6a4dd9), outcome **Clean**. Acceptance 1 and 3 checked; acceptance 2 verified here for LAN Play (two MK8D
+instances in the same room's character select through a local napple-room); Wireless Play still crashes the station after Connect (not diagnosed).
+Details: [integrator file](../integrators/claude-mk8d-lan-session-2026-11-02-r7.md).

@@ -67,3 +67,4 @@ They are kept as written: paths, line numbers and statuses are those of the time
 |---|---|---|---|
 | napple-infra | [napple-infra.md](orchestrations/napple-infra.md) | [claude-napple-infra-2026-11-02-r7.md](integrators/claude-napple-infra-2026-11-02-r7.md) | local test stack + AWS auto-deploy of the Napple game servers (`pretend.napple.lat`) and the `napple.lat` DNS |
 | net-rooms | [net-rooms.md](orchestrations/net-rooms.md) | [claude-net-rooms-2026-11-02-r7.md](integrators/claude-net-rooms-2026-11-02-r7.md) | `napple-room` relay server + runtime client: virtual LAN and LDN between Napple instances over the internet (`NAPPLE_ROOM`) |
+| mk8d-lan-session | [mk8d-lan-session.md](orchestrations/mk8d-lan-session.md) | [claude-mk8d-lan-session-2026-11-02-r7.md](integrators/claude-mk8d-lan-session-2026-11-02-r7.md) | MK8D 2618-0006 fixed (bsd errno numbering), nifm IpConfigInfo, unique pseudo device id; two MK8D instances meet in LAN Play through napple-room |
