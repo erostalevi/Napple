@@ -4,9 +4,12 @@
 #include "applet_lib_core.h"
 #include "host_info.h"
 #include "online_provider.h"
+#include "hz_result.h"
+#include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "sys_default.h"
 
 const uint8_t g_user_id[16] = {0x4e, 0x61, 0x70, 0x70, 0x6c, 0x65, 0x55, 0x73, 0x65, 0x72, 0, 0, 0, 0, 0, 1};
 
@@ -133,7 +136,13 @@ static void manager_na_cache(IpcObject *s, IpcCall *c) {
 }
 static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IPC_IMPL},
                                       {1, "GetAccountId", manager_account_id, IPC_IMPL},
-                                      {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_IMPL}};
+                                      {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_IMPL},
+    {2, "EnsureIdTokenCacheAsync", sysd_err_generic, IPC_STUB},
+    {3, "LoadIdTokenCacheDeprecated", sysd_err_generic, IPC_STUB},
+    {4, "LoadIdTokenCache", sysd_err_generic, IPC_STUB},
+    {150, "CreateAuthorizationRequest", sysd_err_generic, IPC_STUB},
+    {160, "StoreOpenContext", sysd_ok, IPC_STUB},
+    {170, "LoadNetworkServiceLicenseKindAsync", sysd_err_generic, IPC_STUB}};
 
 static void acc_user_count(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -163,6 +172,69 @@ static void acc_get_profile(IpcObject *s, IpcCall *c) {
     (void)s;
     int i = account_profile_find(g_user_id, profile_count(), ipc_in(c, 0, 16));
     ipc_out_object(c, IPC_OBJECT("IProfile", profile_cmds, (void *)(uintptr_t)(i > 0 ? (unsigned)i + 1 : 0), NULL));
+}
+/* 6 GetProfileDigest(uid) -> ProfileDigest (0x10): a digest of the profile's base data (uid, creation time, nickname), so it changes exactly when the profile does. An
+ * unknown uid is the usual "user not found". FNV-1a over 128 bits' worth of two lanes; the console's own hash is not reproduced (the SDK only compares digests). */
+#define R_ACC_USER_NOT_FOUND HZ_RESULT(124, 100) /* [unverified] */
+static void profile_base(unsigned index, uint8_t base[0x38]) {
+    memset(base, 0, 0x38);
+    account_profile_uid(g_user_id, index, base);
+    uint64_t t = 1600000000;
+    memcpy(base + 16, &t, 8);
+    char name[0x20];
+    account_profile_name(host_user_name(), index, name, sizeof name);
+    snprintf((char *)base + 24, 0x20, "%s", name);
+}
+static void acc_profile_digest(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int i = account_profile_find(g_user_id, profile_count(), ipc_in(c, 0, 16));
+    if (i < 0) {
+        c->result = R_ACC_USER_NOT_FOUND;
+        return;
+    }
+    uint8_t base[0x38];
+    profile_base((unsigned)i, base);
+    uint64_t h[2] = {1469598103934665603ull, 0x9e3779b97f4a7c15ull};
+    for (unsigned k = 0; k < sizeof base; k++) {
+        h[0] = (h[0] ^ base[k]) * 1099511628211ull;
+        h[1] = (h[1] ^ base[k]) * 0x100000001b3ull + h[0];
+    }
+    ipc_out(c, h, sizeof h);
+}
+/* 110 StoreSaveDataThumbnail(uid; in: thumbnail) / 111 ClearSaveDataThumbnail(uid): the thumbnail the save-data list shows for this title and user, kept as a file
+ * below the title's save root. */
+static void thumbnail_path(const uint8_t *uid, char *out, size_t cap) {
+    snprintf(out, cap, "%s/%s/thumbnail-%02x%02x%02x%02x%02x%02x%02x%02x.bin", g_cfg.save_root, g_cfg.title_id, uid[0], uid[1], uid[2], uid[3], uid[4], uid[5], uid[6], uid[7]);
+}
+static void acc_store_thumbnail(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const uint8_t *uid = ipc_in(c, 0, 16);
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const void *p = b ? ipc_buf_ptr(b) : NULL;
+    if (account_profile_find(g_user_id, profile_count(), uid) < 0) {
+        c->result = R_ACC_USER_NOT_FOUND;
+        return;
+    }
+    if (!p || !b->size || b->size > (1u << 20)) {
+        c->result = HZ_RESULT(124, 20); /* [unverified] invalid argument */
+        return;
+    }
+    char path[1400];
+    thumbnail_path(uid, path, sizeof path);
+    FILE *f = fopen(path, "wb");
+    if (!f || fwrite(p, 1, (size_t)b->size, f) != (size_t)b->size) c->result = HZ_RESULT(124, 20);
+    if (f) fclose(f);
+}
+static void acc_clear_thumbnail(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const uint8_t *uid = ipc_in(c, 0, 16);
+    if (account_profile_find(g_user_id, profile_count(), uid) < 0) {
+        c->result = R_ACC_USER_NOT_FOUND;
+        return;
+    }
+    char path[1400];
+    thumbnail_path(uid, path, sizeof path);
+    unlink(path); /* clearing a thumbnail that was never stored is not an error */
 }
 static void acc_bool_false(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -203,6 +275,15 @@ static const IpcCmd acc_cmds[] = {
     {141, "ListQualifiedUsers", acc_list_users, IPC_IMPL},
     {150, "IsUserAccountSwitchLocked", acc_bool_false, IPC_IMPL},
     {160, "InitializeApplicationInfoV2", acc_initialize, IPC_IMPL},
+    {6, "GetProfileDigest", acc_profile_digest, IPC_IMPL},
+    {52, "TrySelectUserWithoutInteraction", acc_last_opened, IPC_IMPL}, /* 19.0.0+ name of 51: the one local user (or the last opened one) is selected without a dialog */
+    {102, "AuthenticateApplicationAsync", sysd_err_generic, IPC_STUB},
+    {103, "CheckNetworkServiceAvailabilityAsync", sysd_err_generic, IPC_STUB},
+    {110, "StoreSaveDataThumbnail", acc_store_thumbnail, IPC_IMPL},
+    {111, "ClearSaveDataThumbnail", acc_clear_thumbnail, IPC_IMPL},
+    {120, "CreateGuestLoginRequest", sysd_err_generic, IPC_STUB},
+    {130, "LoadOpenContext", sysd_err_generic, IPC_STUB},
+    {131, "ListOpenContextStoredUsers", sysd_err_generic, IPC_STUB},
 };
 static IpcObject *acc_open(void) { return IPC_OBJECT("acc:u0", acc_cmds, calloc(1, sizeof(AccSession)), acc_destroy); }
 void service_register_account(void) {

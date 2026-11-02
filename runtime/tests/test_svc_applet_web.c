@@ -179,7 +179,73 @@ int main(void) {
     memcpy(&er, out, 4); CHECK(er == WEB_EXIT_ERROR && g_open_calls == before, "offline missing document: error exit");
     o = hdr(b, 2, WEB_SHIM_OFFLINE); o = tlv(b, o, WEB_TLV_DOCUMENT_PATH, "manual/p2.html\0", 15); kind = WEB_DOC_LEGAL_INFO; o = tlv(b, o, WEB_TLV_DOCUMENT_KIND, &kind, 4);
     la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); run(la, out, &n);
-    memcpy(&er, out, 4); CHECK(er == WEB_EXIT_ERROR, "legal information kind: error exit");
+    memcpy(&er, out, 4); CHECK(er == WEB_EXIT_ERROR, "legal information kind without a legal root: error exit");
+    /* legal information under its root (the title's LegalInformation content, extracted) */
+    { applet_web_set_legal_root(root);
+      la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); g_open_ret = WEB_EXIT_BACK_BUTTON; r = run(la, out, &n); memcpy(&er, out, 4);
+      snprintf(exp, sizeof exp, "file://%s/manual/p2.html", root);
+      CHECK(r == 0 && er == WEB_EXIT_BACK_BUTTON && !strcmp(g_open_url, exp), "legal information: resolved under the legal root (%s)", g_open_url);
+      applet_web_set_legal_root(NULL); }
+    /* system data pages: a firmware system data archive (RomFS image <sysdata>/<id>.bin) is extracted once and served like an offline document */
+    { char sd[] = "/tmp/napple_websd_XXXXXX"; CHECK(mkdtemp(sd) != NULL, "mkdtemp sysdata");
+      /* RomFS: root dir {child dir "pages" {file "index.html" = "<p>legal</p>"}, file "top.txt" = "t"} */
+      uint8_t img[0x200] = {0}; uint64_t hd[10] = {0x50, 0x50, 0, 0x50, 0, 0x50, 0, 0xA0, 0, 0x100};
+      uint8_t *dm = img + 0x50, *fm = img + 0xA0, *fd = img + 0x100; uint32_t none = 0xFFFFFFFFu;
+      /* dir entries: root at 0 (child dir 0x18, child file 0x30 of the file table: top.txt), "pages" at 0x18 (child file 0) */
+      uint32_t root_e[6] = {0, none, 0x18, 0x30, none, 0}; memcpy(dm, root_e, 24);
+      uint32_t pages_e[6] = {0, none, none, 0, none, 5}; memcpy(dm + 0x18, pages_e, 24); memcpy(dm + 0x30, "pages", 5);
+      uint32_t f0a[2] = {0x18, none}; uint64_t f0b[2] = {0, 12}; uint32_t f0c[2] = {none, 10};
+      memcpy(fm, f0a, 8); memcpy(fm + 8, f0b, 16); memcpy(fm + 24, f0c, 8); memcpy(fm + 32, "index.html", 10);
+      uint32_t f1a[2] = {0, none}; uint64_t f1b[2] = {12, 1}; uint32_t f1c[2] = {none, 7};
+      memcpy(fm + 0x30, f1a, 8); memcpy(fm + 0x30 + 8, f1b, 16); memcpy(fm + 0x30 + 24, f1c, 8); memcpy(fm + 0x30 + 32, "top.txt", 7);
+      hd[4] = 0x38; hd[8] = 0x30 + 32 + 8; memcpy(img, hd, sizeof hd); memcpy(fd, "<p>legal</p>t", 13);
+      char bin[0x400]; snprintf(bin, sizeof bin, "%s/0100000000000804.bin", sd); FILE *bf = fopen(bin, "wb"); fwrite(img, 1, 0x100 + 13, bf); fclose(bf);
+      char ex[0x400]; snprintf(ex, sizeof ex, "%s/x", sd);
+      CHECK(web_romfs_extract(bin, ex) == 2, "RomFS extract: two files");
+      char f[0x500]; snprintf(f, sizeof f, "%s/pages/index.html", ex); FILE *rf = fopen(f, "rb"); char got[32] = ""; if (rf) { (void)!fread(got, 1, sizeof got - 1, rf); fclose(rf); }
+      CHECK(!strcmp(got, "<p>legal</p>"), "RomFS extract: nested file content (%s)", got);
+      CHECK(web_romfs_extract("/nonexistent.bin", ex) == -1, "RomFS extract: missing image");
+      char cache[0x400]; snprintf(cache, sizeof cache, "%s/cache", sd); applet_web_set_sysdata(sd, cache);
+      uint64_t sid = 0x0100000000000804ull; kind = WEB_DOC_SYSTEM_DATA;
+      o = hdr(b, 3, WEB_SHIM_OFFLINE); o = tlv(b, o, WEB_TLV_DOCUMENT_PATH, "pages/index.html\0", 17); o = tlv(b, o, WEB_TLV_DOCUMENT_KIND, &kind, 4); o = tlv(b, o, WEB_TLV_SYSTEM_DATA_ID, &sid, 8);
+      la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); r = run(la, out, &n); memcpy(&er, out, 4);
+      snprintf(exp, sizeof exp, "file://%s/0100000000000804/pages/index.html", cache);
+      CHECK(r == 0 && er == WEB_EXIT_BACK_BUTTON && !strcmp(g_open_url, exp), "system data page: extracted and opened (%s)", g_open_url);
+      sid = 0x0100000000000999ull; o = hdr(b, 3, WEB_SHIM_OFFLINE); o = tlv(b, o, WEB_TLV_DOCUMENT_PATH, "pages/index.html\0", 17); o = tlv(b, o, WEB_TLV_DOCUMENT_KIND, &kind, 4); o = tlv(b, o, WEB_TLV_SYSTEM_DATA_ID, &sid, 8);
+      la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); run(la, out, &n); memcpy(&er, out, 4);
+      CHECK(er == WEB_EXIT_ERROR, "system data page of a missing archive: error exit");
+      applet_web_set_sysdata(NULL, NULL);
+      { char cmd[0x500]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", sd); (void)!system(cmd); } }
+    /* a real HtmlDocument tree (SMO / MK8D layout): html-document/<name>.htdocs/html/<RegionLang>/index.html, paths relative to html-document/ */
+    { char real[] = "/tmp/napple_webreal_XXXXXX"; CHECK(mkdtemp(real) != NULL, "mkdtemp real");
+      const char *dirs[] = {"html-document", "html-document/htmlcontents.htdocs", "html-document/htmlcontents.htdocs/html", "html-document/htmlcontents.htdocs/html/USen",
+                            "html-document/htmlcontents.htdocs/html/JPja", "html-document/htmlcontents.htdocs/css"};
+      for (unsigned i = 0; i < 6; i++) { char d[0x400]; snprintf(d, sizeof d, "%s/%s", real, dirs[i]); mkdir(d, 0755); }
+      wfile(real, "html-document/htmlcontents.htdocs/html/USen/index.html", "<html>en</html>"); wfile(real, "html-document/htmlcontents.htdocs/html/JPja/index.html", "<html>ja</html>");
+      wfile(real, "html-document/htmlcontents.htdocs/css/index.css", "x");
+      char want[0x400], rel[0x200];
+      snprintf(want, sizeof want, "%s/html-document/htmlcontents.htdocs/html/USen/index.html", real);
+      CHECK(web_offline_resolve(real, "htmlcontents.htdocs/html/USen/index.html", res, sizeof res) == 0 && !strcmp(res, want), "real layout: path relative to html-document/ (%s)", res);
+      CHECK(web_offline_resolve(real, "offline:/htmlcontents.htdocs/html/USen/", res, sizeof res) == 0 && !strcmp(res, want), "real layout: directory -> index.html");
+      CHECK(web_offline_resolve(real, "html-document/htmlcontents.htdocs/html/USen/index.html", res, sizeof res) == 0 && !strcmp(res, want), "real layout: html-document/ prefix also accepted");
+      CHECK(web_offline_resolve(real, "htmlcontents.htdocs/../../x", res, sizeof res) == -1, "real layout: dotdot still rejected");
+      CHECK(web_manual_path(real, "JPja", rel, sizeof rel) == 0 && !strcmp(rel, "htmlcontents.htdocs/html/JPja/index.html"), "manual: wanted language (%s)", rel);
+      CHECK(web_manual_path(real, "EUfr", rel, sizeof rel) == 0 && !strcmp(rel, "htmlcontents.htdocs/html/USen/index.html"), "manual: missing language falls back to USen");
+      CHECK(!strcmp(web_manual_lang("ja"), "JPja") && !strcmp(web_manual_lang("en-GB"), "EUen") && !strcmp(web_manual_lang("es-419"), "USes") && !strcmp(web_manual_lang("xx"), "USen") && !strcmp(web_manual_lang(NULL), "USen"), "manual language map");
+      CHECK(web_manual_path(root, NULL, rel, sizeof rel) == -2, "manual: a tree without html-document has none");
+      CHECK(web_manual_path(real, NULL, rel, 8) == -3, "manual: small buffer");
+      /* opened the HOME-menu way: the handler gets the WebArgs storages and hands the hook the manual's file:// url */
+      libapplet_clear_handlers(); CHECK(applet_web_register() == 0, "register again");
+      applet_web_set_html_root(real); applet_ui_set_open_web(open_hook); g_open_ret = WEB_EXIT_BACK_BUTTON;
+      int calls = g_open_calls; uint32_t why = 99; char lastu[0x400] = "";
+      CHECK(applet_web_open_manual("USen", &why, lastu, sizeof lastu) == 0, "open manual");
+      snprintf(exp, sizeof exp, "file://%s", want);
+      CHECK(g_open_calls == calls + 1 && g_open_offline && !strcmp(g_open_url, exp), "open manual: hook url %s", g_open_url);
+      CHECK(why == WEB_EXIT_BACK_BUTTON && !strncmp(lastu, exp, strlen(exp)), "open manual: exit reason %u, last url %s", why, lastu);
+      applet_web_set_html_root(root);
+      CHECK(applet_web_open_manual(NULL, &why, lastu, sizeof lastu) == -1, "open manual without a manual: -1");
+      applet_web_set_html_root(NULL);
+      { char cmd[0x500]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", real); (void)!system(cmd); } }
     /* unregistered ids still take the old path */
     libapplet_clear_handlers(); applet_ui_set_open_web(NULL);
     before = g_open_calls; la = create_applet(lac, 0x13); push(la, common, sizeof common); push(la, b, o); r = run(la, out, &n);

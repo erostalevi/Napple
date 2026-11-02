@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <unistd.h>
+#include "sys_default.h"
 
 static uint32_t vsync_events[8];
 static unsigned nvsync;
@@ -220,6 +221,21 @@ static void ds_get_relay(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, IPC_OBJECT("IHOSBinderDriver", binder_cmds, NULL, NULL));
 }
+/* 103 GetIndirectDisplayTransactionService: the binder driver of indirect (producer-consumer) layers. It is the same IHOSBinderDriver implementation as the relay
+ * service: layers it creates are the same layer table entries. */
+static void ds_get_indirect_transaction(IpcObject *s, IpcCall *c) { ds_get_relay(s, c); }
+/* 2460 GetIndirectLayerImageRequiredMemoryInfo(s64 width, s64 height) -> {s64 size, s64 alignment}: the buffer the image map commands need, RGBA8 pixels rounded up to
+ * 0x20000 bytes, 0x1000 aligned. */
+static void ds_indirect_image_memory_info(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t w = IPC_IN(c, int64_t, 0), h = IPC_IN(c, int64_t, 8);
+    if (w <= 0 || h <= 0 || w > 16384 || h > 16384) {
+        c->result = VI_R_INVALID_RANGE;
+        return;
+    }
+    int64_t out[2] = {(w * h * 4 + 0x1ffff) / 0x20000 * 0x20000, 0x1000};
+    ipc_out(c, out, sizeof out);
+}
 /* ISystemDisplayService / IManagerDisplayService: firmware applets (MiiEdit) open them to place their layer. The placement calls keep what they are given in the layer
  * table (vi_core.c); the host window composes the one game layer itself, so none of it moves pixels. Command ids and argument layouts are the author's memory
  * of the public description (unverified). */
@@ -335,6 +351,11 @@ static const IpcCmd display_cmds[] = {
     {2031, "DestroyStrayLayer", noop, IPC_IMPL},
     {2101, "SetLayerScalingMode", ds_set_scaling, IPC_IMPL},
     {5202, "GetDisplayVsyncEvent", ds_vsync_event, IPC_IMPL},
+    {103, "GetIndirectDisplayTransactionService", ds_get_indirect_transaction, IPC_IMPL},
+    {2102, "ConvertScalingMode", sysd_ok, IPC_STUB},
+    {2450, "GetIndirectLayerImageMap", sysd_err_generic, IPC_STUB},
+    {2451, "GetIndirectLayerImageCropMap", sysd_err_generic, IPC_STUB},
+    {2460, "GetIndirectLayerImageRequiredMemoryInfo", ds_indirect_image_memory_info, IPC_IMPL},
 };
 static void vi_get_display_service(IpcObject *s, IpcCall *c) {
     (void)s;

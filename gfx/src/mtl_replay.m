@@ -34,6 +34,7 @@ typedef struct {
     bufrange vbuf[16];
     bufrange ubo[6][14], ssbo[6][16];
     uint64_t tex[6][128], img[6][16];
+    uint64_t septex[6][SEP_TEX_C2_COUNT], sepsamp[6][SEP_SAMP_C2_COUNT]; /* nvnCommandBufferBindSeparateTexture(s) / Sampler(s) */
     uint64_t texpool, samppool;
     p_set_rt rt;
     int rt_valid;
@@ -53,6 +54,8 @@ typedef struct {
     uint8_t sample_shading;           /* the bound program asks for sample shading (p_bind_program.sample_shading) */
     float tess_outer[4], tess_inner[2];
     bufrange xfb[MAX_XFB_BUFFERS];    /* transform feedback buffer bindings */
+    uint8_t provoking_last;           /* SetProvokingVertexMode LAST: flat outputs from each primitive's last vertex (pv_last_indices) */
+    uint8_t vp_swz[16][4];            /* SetViewportSwizzles: NVNviewportSwizzle of the x, y, z, w outputs per viewport (identity 0, 2, 4, 6) */
 } nstate;
 
 static nstate S;
@@ -209,7 +212,10 @@ static void state_reset(void) {
     S.poly = (poly_st){NVN_FACE_NONE, NVN_FRONT_FACE_CCW, NVN_POLYGON_MODE_FILL, 0};
     S.ds = (ds_st){0, 1, NVN_DEPTH_FUNC_LESS, 0, NVN_STENCIL_FUNC_ALWAYS, NVN_STENCIL_FUNC_ALWAYS, 1, 1, 1, 1, 1, 1};
     S.stencil_wmask[0] = S.stencil_wmask[1] = S.stencil_rmask[0] = S.stencil_rmask[1] = 0xff;
-    for (int i = 0; i < 16; i++) { S.dr[i][1] = 1.0f; }
+    for (int i = 0; i < 16; i++) {
+        S.dr[i][1] = 1.0f;
+        for (int k = 0; k < 4; k++) S.vp_swz[i][k] = (uint8_t)(2 * k); /* NVN_VIEWPORT_SWIZZLE_POSITIVE_X, _Y, _Z, _W */
+    }
     S.render_enable = 1;
     S.patch_size = 3;
     for (int i = 0; i < 4; i++) S.tess_outer[i] = 1.0f;
@@ -221,8 +227,17 @@ static void state_reset(void) {
  * --------------------------------------------------------------------------------------------------------------- */
 static void dbg_dump_pass(void);
 static void vis_close(void);
+/* Attachments of the open render pass: written when it closes (copy-backed views of them refresh, mtl_tex_written). */
+static __strong GfxTex *g_pass_att[9];
+static void pass_att_written(void) {
+    for (int i = 0; i < 9; i++) {
+        mtl_tex_written(g_pass_att[i]);
+        g_pass_att[i] = nil;
+    }
+}
 static void end_encoders(void) {
     if (g_re) {
+        pass_att_written();
         vis_close();
         g_pass_vis = 0;
         [g_re endEncoding];
@@ -445,6 +460,7 @@ static int pass_begin(void) {
     if (P.open) return 1;
     if (!S.rt_valid) return 0;
     end_encoders();
+    if (mtl_tex_alias_pending()) mtl_tex_alias_flush(g_cb); /* copy-backed views queued since the last pass */
     pass_info_from_rt();
     if (!P.w) return 0;
     if (getenv("NAPPLE_SCALE_DIAG")) { /* every distinct pass whose attachments do not all match guest size x scale (render target scaling bugs) */
@@ -566,6 +582,8 @@ static int pass_begin(void) {
     }
     g_re = [g_cb renderCommandEncoderWithDescriptor:rp];
     if (!g_re) return 0;
+    for (uint32_t i = 0; i < S.rt.n && i < 8; i++) g_pass_att[i] = rp.colorAttachments[i].texture ? mtl_tex_get(&S.rt.color[i].s, 1) : nil;
+    g_pass_att[8] = S.rt.depth.s.valid ? mtl_tex_get(&S.rt.depth.s, 1) : nil;
     g_pass_vis = g_occl && g_vis;
     g_enc_serial++;
     P.open = 1;
@@ -760,6 +778,7 @@ static void dbg_dump_att(const char *dir, uint32_t a, int npass) {
 }
 static void pass_end(void) {
     if (g_re) {
+        pass_att_written();
         vis_close();
         g_pass_vis = 0;
         [g_re endEncoding];
@@ -1111,13 +1130,69 @@ static void ds_slot_masks(int stage, uint32_t *depth, uint32_t *stencil) {
         int dep, st;
         mtl_tex_format_info(&e->s, &pf, &dep, &st);
         int stencil_view = st && (e->view.set_ds ? e->view.ds_mode : e->s.ds_mode) == 1;
-        if (pf == MTLPixelFormatStencil8 || stencil_view) *stencil |= 1u << slot;
-        else if (dep) *depth |= 1u << slot;
+        if (pf == MTLPixelFormatStencil8 || stencil_view || mtl_tex_samples_as_uint(&e->s, &e->view, 1)) *stencil |= 1u << slot; /* uint copies read like stencil views */
+        else if (mtl_tex_samples_as_depth(&e->s, &e->view, 1)) *depth |= 1u << slot; /* a depth texture read through a copy in a colour format is not (mtl_tex_view) */
     }
+}
+
+/* Sampled bindings of a stage whose bound texture / view is an integer colour format (ShaderKey.tex_uint_slots / tex_sint_slots: declared texture2d<uint|int>). */
+static void int_slot_masks(int stage, uint32_t *umask, uint32_t *smask) {
+    *umask = *smask = 0;
+    gdpool *tp = (gdpool *)htab_get(S.texpool);
+    if (!tp) return;
+    for (int slot = 0; slot < 32; slot++) {
+        uint64_t h = S.tex[stage][slot];
+        uint32_t tic = (uint32_t)(h & 0xfffff);
+        if (!h || tic >= (uint32_t)tp->n || !tp->tex[tic].s.valid) continue;
+        int k = mtl_tex_int_kind(&tp->tex[tic].s, &tp->tex[tic].view, 1);
+        if (k == IMGKIND_UINT) *umask |= 1u << slot;
+        else if (k == IMGKIND_INT) *smask |= 1u << slot;
+    }
+}
+
+/* ShaderKey.sep_*_slots: the textures bound with BindSeparateTexture(s) (separate texture binding k = bit k), classified as ds_slot_masks and
+ * int_slot_masks classify combined bindings: stencil views / uint copies, depth, then integer colour formats. */
+static void sep_slot_masks(int stage, uint32_t *depth, uint32_t *stencil, uint32_t *umask, uint32_t *smask) {
+    *depth = *stencil = *umask = *smask = 0;
+    gdpool *tp = (gdpool *)htab_get(S.texpool);
+    if (!tp) return;
+    for (int k = 0; k < 32; k++) {
+        uint64_t h = S.septex[stage][k];
+        uint32_t tic = (uint32_t)(h & 0xfffff);
+        if (!h || tic >= (uint32_t)tp->n || !tp->tex[tic].s.valid) continue;
+        const dtex *e = &tp->tex[tic];
+        MTLPixelFormat pf;
+        int dep, st;
+        mtl_tex_format_info(&e->s, &pf, &dep, &st);
+        int stencil_view = st && (e->view.set_ds ? e->view.ds_mode : e->s.ds_mode) == 1;
+        int ik = mtl_tex_int_kind(&e->s, &e->view, 1);
+        if (pf == MTLPixelFormatStencil8 || stencil_view || mtl_tex_samples_as_uint(&e->s, &e->view, 1)) *stencil |= 1u << k;
+        else if (mtl_tex_samples_as_depth(&e->s, &e->view, 1)) *depth |= 1u << k;
+        else if (ik == IMGKIND_UINT) *umask |= 1u << k;
+        else if (ik == IMGKIND_INT) *smask |= 1u << k;
+    }
+}
+/* ShaderKey.vp_swizzle of viewport 0 (a program that writes the viewport index gets viewport 0's swizzle for every viewport: reported once) */
+static uint16_t vp_swizzle_key(void) {
+    uint32_t v = 0;
+    for (int i = 0; i < 4; i++) v |= (uint32_t)(S.vp_swz[0][i] & 7) << (3 * i);
+    v ^= VP_SWIZZLE_IDENTITY;
+    if (v) {
+        static int other;
+        for (int i = 1; i < 16 && !other; i++) other = memcmp(S.vp_swz[i], S.vp_swz[0], 4) != 0;
+        LOG_ONCE(NAPPLE_LOG_INFO, "viewport swizzles in use (first: viewport 0 %u %u %u %u%s)", S.vp_swz[0][0], S.vp_swz[0][1], S.vp_swz[0][2], S.vp_swz[0][3],
+                 other ? "; viewports 1-15 have other swizzles: a program that selects them gets viewport 0's" : "");
+    }
+    return (uint16_t)v;
 }
 
 static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     memset(k, 0, sizeof *k);
+    sep_slot_masks(ST_VS, &k->sep_depth[0], &k->sep_stencil[0], &k->sep_uint[0], &k->sep_sint[0]);
+    sep_slot_masks(ST_FS, &k->sep_depth[1], &k->sep_stencil[1], &k->sep_uint[1], &k->sep_sint[1]);
+    k->vp_swizzle = vp_swizzle_key();
+    int_slot_masks(ST_VS, &k->tex_uint[0], &k->tex_sint[0]);
+    int_slot_masks(ST_FS, &k->tex_uint[1], &k->tex_sint[1]);
     ds_slot_masks(ST_VS, &k->depth_slots[0], &k->stencil_slots[0]);
     ds_slot_masks(ST_FS, &k->depth_slots[1], &k->stencil_slots[1]);
     image_masks(ST_VS, &k->img_int[0], &k->img_uint[0]);
@@ -1129,6 +1204,8 @@ static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     k->stencil_fmt = P.stencil_fmt;
     k->samples = P.samples;
     k->sample_shading = S.sample_shading && P.samples > 1; /* the fragment function then declares [[sample_id]] and runs per sample */
+    if (k->sample_shading && !g_predict)
+        LOG_ONCE(NAPPLE_LOG_INFO, "sample shading: fragment program %016llx runs per sample in a %u-sample pass", (unsigned long long)S.prog[ST_FS], P.samples);
     k->topo = (uint32_t)topo_class(prim);
     for (int i = 0; i < 8; i++) {
         k->blend[i] = mtl_blend_resolve(S.blend[i]);
@@ -1305,6 +1382,19 @@ static void make_pools_resident(id enc, int compute) {
 }
 
 /* Bind constant buffers, textures and samplers of one stage. `enc` is the render or compute encoder. */
+/* One 32-bit word of a texture handle the shader reads from constant buffer `cb` at byte `off`: c2 is the driver's handle tables (combined textures at
+ * TEX_COMBINED_BASE, separate textures and samplers at SEP_TEX_C2_BASE / SEP_SAMP_C2_BASE, 8 bytes per binding), cbuf >= 3 a user uniform buffer. */
+static uint32_t handle_word(int stage, uint32_t cb, uint32_t off) {
+    if (cb == 2) {
+        if (off >= SEP_SAMP_C2_BASE && off < SEP_SAMP_C2_BASE + 8 * SEP_SAMP_C2_COUNT) return (uint32_t)S.sepsamp[stage][(off - SEP_SAMP_C2_BASE) / 8];
+        if (off >= SEP_TEX_C2_BASE && off < SEP_TEX_C2_BASE + 8 * SEP_TEX_C2_COUNT) return (uint32_t)S.septex[stage][(off - SEP_TEX_C2_BASE) / 8];
+        if (off >= TEX_COMBINED_BASE && off < SEP_TEX_C2_BASE) return (uint32_t)S.tex[stage][(off - TEX_COMBINED_BASE) / 8];
+        return 0;
+    }
+    int ui = (int)cb - CBUF_USER_BASE;
+    if (ui >= 0 && ui < 14 && S.ubo[stage][ui].addr && (uint64_t)off + 4 <= S.ubo[stage][ui].size) return *(const uint32_t *)(uintptr_t)(S.ubo[stage][ui].addr + off);
+    return 0;
+}
 static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint32_t cs_groups[3]) {
     const ShaderInfo *si = &sh->info;
     /* geometry and tess control kernels run on a compute encoder (compute = 1) but keep the graphics driver-constant layout of their stage */
@@ -1417,7 +1507,12 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
         const ShaderTexture *st = &si->tex[i];
         int slot = ((int)st->handle_offset - TEX_COMBINED_BASE) / 8;
         uint64_t h = (slot >= 0 && slot < 128) ? S.tex[stage][slot] : 0;
-        if (st->bindless) { /* handle stored by the game in a uniform buffer: read the bound buffer at the static offset */
+        if (st->separate) { /* (texture word) | (sampler word), each from c2's handle tables or a user uniform buffer */
+            h = handle_word(stage, st->bindless_cbuf, st->bindless_offset) | handle_word(stage, st->sep_cbuf, st->sep_offset);
+            slot = -1;
+            LOG_ONCE(NAPPLE_LOG_INFO, "separate texture / sampler handles in use (first: c%u[%#x] | c%u[%#x] -> handle %#llx; c2 tables at %#x / %#x are a hypothesis)",
+                     st->bindless_cbuf, st->bindless_offset, st->sep_cbuf, st->sep_offset, (unsigned long long)h, SEP_TEX_C2_BASE, SEP_SAMP_C2_BASE);
+        } else if (st->bindless) { /* handle stored by the game in a uniform buffer: read the bound buffer at the static offset */
             int ui = (int)st->bindless_cbuf - CBUF_USER_BASE;
             h = 0;
             slot = -1;
@@ -1536,7 +1631,10 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
             if (gt) {
                 mtl_tex_prepare_sample(gt);
                 tex = mtl_tex_image_view(gt, im->kind, im->type, im->atomic);
-                if (tex && (im->access & IMGACC_WRITE)) gt->gpu_owned = 1; /* the shader writes it: the Metal texture is the data from now on */
+                if (tex && (im->access & IMGACC_WRITE)) {
+                    gt->gpu_owned = 1; /* the shader writes it: the Metal texture is the data from now on */
+                    mtl_tex_written(gt);
+                }
             }
         }
         if (!tex) {
@@ -1681,6 +1779,10 @@ static void do_draw_texture(const p_draw_tex *dt) {
     if (!gt) return;
     mtl_tex_prepare_sample(gt);
     id<MTLTexture> tex = mtl_tex_view(gt, e->s.swz, &e->view, 1, TEXTYPE_2D, 0, e->s.ds_mode);
+    if (mtl_tex_alias_pending()) { /* copy-backed view: refreshed between two halves of the pass */
+        pass_end();
+        if (!pass_begin()) return;
+    }
     id<MTLSamplerState> smp = (sp && tsc < (uint32_t)sp->n && sp->samp_used[tsc]) ? mtl_sampler_get(&sp->samp[tsc]) : nil;
     if (!smp) {
         static samp_par def;
@@ -1968,6 +2070,19 @@ static int prepare_draw(uint32_t prim) {
     }
     bind_stage(ST_VS, p->vs, g_re, 0, NULL);
     if (p->fs) bind_stage(ST_FS, p->fs, g_re, 0, NULL);
+    if (mtl_tex_alias_pending()) {
+        /* A copy-backed texture view (mtl_tex_view) is stale: the copy needs an encoder of its own. Close the pass (the clears it folded in are stored), let
+         * pass_begin encode the copies and reopen it loading the attachments, then set the draw's state again. */
+        pass_end();
+        if (!pass_begin()) return 0;
+        vis_draw();
+        [g_re setRenderPipelineState:p->ps];
+        [g_re setDepthStencilState:depth_stencil_state()];
+        apply_raster_state();
+        bind_vertex_streams();
+        bind_stage(ST_VS, p->vs, g_re, 0, NULL);
+        if (p->fs) bind_stage(ST_FS, p->fs, g_re, 0, NULL);
+    }
     P.draws++;
     atomic_fetch_add(&g_gfx.draws, 1);
     return 1;
@@ -2031,6 +2146,75 @@ static uint32_t expanded_max(uint32_t mode, uint32_t count) {
 }
 static MTLPrimitiveType expanded_type(uint32_t mode) { return mode == 2 ? MTLPrimitiveTypeLineStrip : MTLPrimitiveTypeTriangle; }
 
+/* Provoking vertex LAST (SetProvokingVertexMode 1). Metal takes flat-shaded outputs from the FIRST vertex of each primitive (lists, strips, lines), so
+ * each primitive is re-emitted as a list with its last vertex first: triangles rotated (c, a, b), which keeps the winding; lines reversed; strips, loops,
+ * fans, quads and quad strips split into their primitives (the GL last-vertex convention: strip triangle i -> vertex i + 2, fan -> i + 2, quad -> its
+ * fourth vertex). Polygons keep their first vertex (GL uses it in both conventions). `seq` is the draw's vertex (or raw index) sequence; with primitive
+ * restart each run between restart indices is assembled on its own. Returns the number of list indices written to `out` (pv_last_max of them at most). */
+static uint32_t pv_last_max(uint32_t mode, uint32_t count) {
+    switch (mode) {
+        case 1: case 4: return count;
+        case 2: case 3: return 2 * count;
+        case 5: case 6: return 3 * count;
+        case 7: return count / 4 * 6 + 6;
+        case 8: return count / 2 * 6 + 6;
+        default: return 0;
+    }
+}
+static uint32_t pv_last_run(uint32_t mode, const uint32_t *v, uint32_t c, uint32_t *out) {
+    uint32_t n = 0;
+#define PV2(a, b) (out[n++] = (a), out[n++] = (b))
+#define PV3(a, b, d) (out[n++] = (a), out[n++] = (b), out[n++] = (d))
+    switch (mode) {
+        case 1: for (uint32_t i = 0; i + 1 < c; i += 2) PV2(v[i + 1], v[i]); break;
+        case 2: for (uint32_t i = 0; i + 1 < c; i++) PV2(v[i + 1], v[i]); if (c > 1) PV2(v[0], v[c - 1]); break;
+        case 3: for (uint32_t i = 0; i + 1 < c; i++) PV2(v[i + 1], v[i]); break;
+        case 4: for (uint32_t i = 0; i + 2 < c; i += 3) PV3(v[i + 2], v[i], v[i + 1]); break;
+        case 5: /* odd strip triangles are (i + 1, i, i + 2) in winding order */
+            for (uint32_t i = 0; i + 2 < c; i++)
+                if (i & 1) PV3(v[i + 2], v[i + 1], v[i]);
+                else PV3(v[i + 2], v[i], v[i + 1]);
+            break;
+        case 6: for (uint32_t i = 1; i + 1 < c; i++) PV3(v[i + 1], v[0], v[i]); break;
+        case 7: for (uint32_t i = 0; i + 3 < c; i += 4) { PV3(v[i + 3], v[i], v[i + 1]); PV3(v[i + 3], v[i + 1], v[i + 2]); } break;
+        case 8: /* quad i: (2i, 2i + 1, 2i + 3, 2i + 2), last vertex 2i + 3 */
+            for (uint32_t i = 0; i + 3 < c; i += 2) { PV3(v[i + 3], v[i], v[i + 1]); PV3(v[i + 3], v[i + 2], v[i]); }
+            break;
+    }
+#undef PV2
+#undef PV3
+    return n;
+}
+static uint32_t pv_last_indices(uint32_t mode, const uint32_t *seq, uint32_t count, int restart, uint32_t ridx, uint32_t *out) {
+    uint32_t n = 0, s0 = 0;
+    for (uint32_t i = 0; i <= count; i++)
+        if (i == count || (restart && seq[i] == ridx)) {
+            n += pv_last_run(mode, seq + s0, i - s0, out + n);
+            s0 = i + 1;
+        }
+    return n;
+}
+static int pv_last_applies(uint32_t mode) { return S.provoking_last && mode >= 1 && mode <= 8; }
+/* Draws `count` vertices of `seq` (raw indices for an indexed draw: base_vertex still applies) as the rotated list. */
+static void pv_last_draw(uint32_t mode, const uint32_t *seq, uint32_t count, int restart, int32_t base_vertex, uint32_t instances, uint32_t base_instance) {
+    uint32_t cap = pv_last_max(mode, count);
+    if (!cap) return;
+    id<MTLBuffer> rb;
+    uint32_t ro;
+    uint32_t *out = ring_alloc(&g_ring, cap * 4, 4, &rb, &ro);
+    uint32_t n = pv_last_indices(mode, seq, count, restart, S.prim_restart_idx, out);
+    LOG_ONCE(NAPPLE_LOG_INFO, "provoking vertex LAST in use (first: primitive %u, %u vertices -> %u list indices)", mode, count, n);
+    if (!n) return;
+    [g_re drawIndexedPrimitives:mode <= 3 ? MTLPrimitiveTypeLine : MTLPrimitiveTypeTriangle
+                     indexCount:n
+                      indexType:MTLIndexTypeUInt32
+                    indexBuffer:rb
+              indexBufferOffset:ro
+                  instanceCount:instances
+                     baseVertex:base_vertex
+                   baseInstance:base_instance];
+}
+
 static id<MTLComputeCommandEncoder> compute_encoder(void);
 #include "mtl_stages.inc"
 
@@ -2051,6 +2235,14 @@ static void do_draw_arrays(const p_draw_arrays *d) {
     if (!prepare_draw(d->mode)) return;
     if (g_drawlog_verbose)
         fprintf(stderr, "    drawArrays mode %u first %u count %u instances %u base %u\n", d->mode, d->first, d->count, d->instances, d->base_instance);
+    if (pv_last_applies(d->mode)) {
+        uint32_t *seq = malloc((size_t)d->count * 4 + 4);
+        if (!seq) return;
+        for (uint32_t i = 0; i < d->count; i++) seq[i] = d->first + i;
+        pv_last_draw(d->mode, seq, d->count, 0, 0, d->instances, d->base_instance);
+        free(seq);
+        return;
+    }
     if (native) {
         [g_re drawPrimitives:pt vertexStart:d->first vertexCount:d->count instanceCount:d->instances baseInstance:d->base_instance];
         return;
@@ -2118,6 +2310,15 @@ static void do_draw_elements(const p_draw_elems *d) {
     id<MTLBuffer> rb;
     uint32_t ro;
     MTLIndexType it = isz == 4 ? MTLIndexTypeUInt32 : MTLIndexTypeUInt16;
+    if (pv_last_applies(d->mode)) {
+        uint32_t *seq = malloc((size_t)d->count * 4 + 4);
+        if (!seq) return;
+        const uint8_t *src = (const uint8_t *)(uintptr_t)d->idx_addr;
+        for (uint32_t i = 0; i < d->count; i++) seq[i] = isz == 1 ? src[i] : isz == 2 ? ((const uint16_t *)src)[i] : ((const uint32_t *)src)[i];
+        pv_last_draw(d->mode, seq, d->count, S.prim_restart_en, d->base_vertex, d->instances, d->base_instance);
+        free(seq);
+        return;
+    }
     if (!native) {
         /* read the indices, expand per primitive type through a scratch index list */
         uint32_t cap = expanded_max(d->mode, d->count);
@@ -2171,6 +2372,8 @@ static void do_draw_elements(const p_draw_elems *d) {
 static void do_draw_indirect(const p_draw_ind *d, int indexed) {
     int native;
     MTLPrimitiveType pt = prim_native(d->mode, &native);
+    if (pv_last_applies(d->mode))
+        LOG_ONCE(NAPPLE_LOG_INFO, "provoking vertex LAST is not applied to indirect draws (primitive %u): flat outputs come from the first vertex", d->mode);
     if (xfb_capturing() || stage_draw_needed(d->mode)) {
         /* The stage passes assemble primitives on the CPU, so the arguments are read at encode time (as do_dispatch reads indirect dispatch counts):
          * right when the game wrote them before the submit, wrong for arguments another GPU pass of this submission produces (logged once). */
@@ -2217,6 +2420,7 @@ static id<MTLComputeCommandEncoder> compute_encoder(void) {
     if (!g_ce) {
         flush_clears();
         end_encoders();
+        if (mtl_tex_alias_pending()) mtl_tex_alias_flush(g_cb);
         g_ce = [g_cb computeCommandEncoder];
         g_enc_serial++;
     }
@@ -2233,6 +2437,7 @@ static NSString *const kIndCountMSL = @"#include <metal_stdlib>\nusing namespace
                                        "  if (i >= p.x) return; uint n = min(count[0], p.x); device const uint *s = (device const uint *)(src + i * p.y);\n"
                                        "  for (uint w = 0; w < p.z; w++) dst[i * p.z + w] = i < n ? s[w] : 0; }\n";
 static void do_draw_indirect_count(const p_draw_ind_count *d) {
+    if (stage_draw_indirect_count(d)) return; /* transform feedback / geometry / tessellation: count and records read at encode time (mtl_stages.inc) */
     int native;
     MTLPrimitiveType pt = prim_native(d->mode, &native);
     if (!native) {
@@ -2297,6 +2502,12 @@ static void do_dispatch(uint32_t x, uint32_t y, uint32_t z, uint64_t indirect) {
     id<MTLComputeCommandEncoder> ce = compute_encoder();
     [ce setComputePipelineState:ps];
     bind_stage(ST_CS, sh, ce, 1, cnt);
+    if (mtl_tex_alias_pending()) { /* a copy-backed view must be refreshed before the dispatch reads it: close the encoder, copy, bind again */
+        end_encoders();
+        ce = compute_encoder();
+        [ce setComputePipelineState:ps];
+        bind_stage(ST_CS, sh, ce, 1, cnt);
+    }
     MTLSize local = MTLSizeMake(sh->local[0] ? sh->local[0] : 1, sh->local[1] ? sh->local[1] : 1, sh->local[2] ? sh->local[2] : 1);
     [ce dispatchThreadgroups:MTLSizeMake(cnt[0], cnt[1], cnt[2]) threadsPerThreadgroup:local];
     atomic_fetch_add(&g_gfx.dispatches, 1);
@@ -2360,6 +2571,12 @@ static void copy_region_dims(const GfxTex *t, const int32_t r[6], uint32_t lv, u
     *w = r[3] > 0 ? (uint32_t)r[3] : mw;
     *h = r[4] > 0 ? (uint32_t)r[4] : mh;
     *d = r[5] > 0 ? (uint32_t)r[5] : 1;
+    if (t->tex.textureType == MTLTextureType1DArray) { /* 1D arrays: the region's y / height are layers (as in GL), each layer one row of the buffer */
+        *z = *y;
+        *d = r[4] > 0 ? (uint32_t)r[4] : (uint32_t)t->tex.arrayLength;
+        *y = 0;
+        *h = 1;
+    }
 }
 /* Upload of 24-bit depth data into the 32-bit float depth texture that stands in for DEPTH24 (0x33, depth in the low 24 bits of a 32-bit word) and DEPTH24_STENCIL8
  * (0x35, depth in the high 24 bits, stencil in the low 8: the Maxwell Z24S8 layout): the words are converted on the CPU and blitted into the depth (and
@@ -2409,9 +2626,76 @@ static void copy_d24_to_tex(GfxTex *t, const p_copy_xfer *c, const uint8_t *src,
                             options:MTLBlitOptionStencilFromDepthStencil];
     }
 }
+/* Readback of DEPTH24 / DEPTH24_STENCIL8 (the inverse of copy_d24_to_tex): the depth (and stencil) aspect is blitted into staging memory, then a kernel packs
+ * the NVN words into the destination: 0x33 = unorm24 depth in the low 24 bits, 0x35 = depth << 8 | stencil (Maxwell Z24S8). round(d * (2^24 - 1)) undoes the
+ * upload's v / (2^24 - 1) exactly (32-bit float depth holds every 24-bit value). */
+static NSString *const kD24PackMSL = @"#include <metal_stdlib>\nusing namespace metal;\n"
+                                       "kernel void d24pack(device const float *df [[buffer(0)]], device const uchar *sb [[buffer(1)]], device uchar *dst [[buffer(2)]],\n"
+                                       "                    constant uint4 &p [[buffer(3)]], uint2 g [[thread_position_in_grid]]) {\n" /* p = (w, h, row bytes, stencil) */
+                                       "  if (g.x >= p.x || g.y >= p.y) return; uint i = g.y * p.x + g.x;\n"
+                                       "  uint v = uint(rint(saturate(df[i]) * 16777215.0f));\n"
+                                       "  *(device uint *)(dst + g.y * p.z + g.x * 4u) = p.w != 0u ? ((v << 8) | uint(sb[i])) : v; }\n";
+static void copy_d24_from_tex(GfxTex *t, id<MTLBuffer> b, uint64_t o, NSUInteger row, NSUInteger img, uint32_t lv, uint32_t sl, uint32_t x, uint32_t y, uint32_t z,
+                              uint32_t w, uint32_t h, uint32_t d) {
+    static id<MTLComputePipelineState> ps;
+    if (!ps) {
+        NSError *e = nil;
+        id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:kD24PackMSL options:nil error:&e];
+        ps = lib ? [g_mtl.dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"d24pack"] error:&e] : nil;
+        if (!ps) {
+            LOGE("24-bit depth readback kernel: %s", e.localizedDescription.UTF8String);
+            return;
+        }
+    }
+    if ((row & 3) || (o & 3) || (img & 3)) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "24-bit depth readback to an unaligned destination (offset %#llx, row %lu) skipped", (unsigned long long)o, (unsigned long)row);
+        return;
+    }
+    int stencil = t->key.d.format == 0x35 && t->has_stencil;
+    int is3d = t->tex.textureType == MTLTextureType3D;
+    uint32_t slice = is3d ? 0 : sl + z, ns = is3d ? 1 : d;
+    for (uint32_t k = 0; k < ns; k++) {
+        id<MTLBuffer> bd, bs = nil;
+        uint32_t od, os = 0;
+        if (!ring_alloc(&g_ring, w * h * 4, 256, &bd, &od) || (stencil && !ring_alloc(&g_ring, w * h, 256, &bs, &os))) return;
+        id<MTLBlitCommandEncoder> be = blit();
+        [be copyFromTexture:t->tex
+                         sourceSlice:slice + k
+                         sourceLevel:lv
+                        sourceOrigin:MTLOriginMake(x, y, 0)
+                          sourceSize:MTLSizeMake(w, h, 1)
+                            toBuffer:bd
+                   destinationOffset:od
+              destinationBytesPerRow:(NSUInteger)w * 4
+            destinationBytesPerImage:(NSUInteger)w * h * 4
+                             options:t->has_stencil ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone];
+        if (stencil)
+            [be copyFromTexture:t->tex
+                             sourceSlice:slice + k
+                             sourceLevel:lv
+                            sourceOrigin:MTLOriginMake(x, y, 0)
+                              sourceSize:MTLSizeMake(w, h, 1)
+                                toBuffer:bs
+                       destinationOffset:os
+                  destinationBytesPerRow:(NSUInteger)w
+                destinationBytesPerImage:(NSUInteger)w * h
+                                 options:MTLBlitOptionStencilFromDepthStencil];
+        id<MTLComputeCommandEncoder> ce = compute_encoder();
+        [ce setComputePipelineState:ps];
+        [ce setBuffer:bd offset:od atIndex:0];
+        [ce setBuffer:stencil ? bs : bd offset:stencil ? os : od atIndex:1];
+        [ce setBuffer:b offset:o + k * img atIndex:2];
+        uint32_t p[4] = {w, h, (uint32_t)row, (uint32_t)stencil};
+        [ce setBytes:p length:sizeof p atIndex:3];
+        [ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(MIN(w, 16u), MIN(h, 16u), 1)];
+        end_encoders();
+    }
+}
 static void do_copy_xfer(const p_copy_xfer *c, int to_tex) {
     GfxTex *t = mtl_tex_get(&c->tex.s, to_tex);
     if (!t) return;
+    if (to_tex) mtl_tex_written(t);
+    else mtl_tex_prepare_sample(t); /* reading back a texture the CPU filled: upload the guest data first (as a texture-to-texture copy's source is) */
     int bw, bh;
     int bpb = napple_fmt_bpb(t->key.d.format, &bw, &bh);
     if (!bpb || t->expand_rgb) {
@@ -2434,7 +2718,7 @@ static void do_copy_xfer(const p_copy_xfer *c, int to_tex) {
     if (!mtl_addr(c->buf, img * d, &b, &o)) return;
     if (t->is_depth && (t->key.d.format == 0x33 || t->key.d.format == 0x35)) { /* 24-bit depth: the Metal texture is 32-bit float depth */
         if (!to_tex) {
-            LOG_ONCE(NAPPLE_LOG_WARN, "reading back a 24-bit depth texture (format %#x) into memory is not implemented", t->key.d.format);
+            copy_d24_from_tex(t, b, o, row, img, lv, sl, x, y, z, w, h, d);
             return;
         }
         copy_d24_to_tex(t, c, (const uint8_t *)(uintptr_t)c->buf, row, img, lv, sl, x, y, z, w, h, d);
@@ -2466,7 +2750,7 @@ static void do_copy_xfer(const p_copy_xfer *c, int to_tex) {
     }
 }
 /* Scaled and/or format-converting texture-to-texture copy (the console's 2D engine does both): a draw sampling the source region into the destination
- * region. Depth/stencil, multisampled and 3D textures are not handled (reported once). */
+ * region. Depth <-> colour, multisampled, 3D and integer <-> float pairs go through the generic copy pass (xcopy_draw). */
 static NSString *const kXferMSL =
     @"#include <metal_stdlib>\nusing namespace metal;\n"
      "struct V { float4 pos [[position]]; float2 uv; };\n"
@@ -2529,13 +2813,137 @@ static id<MTLRenderPipelineState> xfer_depth_pso(MTLPixelFormat pf) {
     pso[@(pf)] = p;
     return p;
 }
+/* Generic copy pass: the copies and resolves the paths above refuse (a depth texture to colour or the other way, multisampled sources or destinations of
+ * another size or format, 3D textures with a format or size change, integer <-> float). The fragment function reads the source with read() at the scaled
+ * pixel (nearest: depth and integer texels are not filtered), from a 2D / 2D array / 3D / multisampled (array) texture or its depth counterpart, and writes the
+ * destination colour or depth ([[depth(any)]]). Multisampled sources: a float colour Downsample averages the samples; anything else takes sample 0, as the
+ * console's 2D engine does; a multisampled destination is written per sample (sample i reads source sample i modulo the source's count). Kinds convert by
+ * value between float and integer colour, and by bits between depth and integer colour (an integer view of float depth holds its bits, see mtl_tex.m). */
+enum { XK_FLOAT, XK_SINT, XK_UINT, XK_DEPTH };
+enum { XT_2D, XT_2DARRAY, XT_3D, XT_MS, XT_MSARRAY };
+static int xk_of(GfxTex *t) { return t->is_depth ? XK_DEPTH : pf_is_int((uint32_t)t->pf) ? (pf_is_sint(t->pf) ? XK_SINT : XK_UINT) : XK_FLOAT; }
+static id<MTLRenderPipelineState> xcopy_pso(int sk, int st, int dk, MTLPixelFormat dpf, uint32_t dsamples, int average) {
+    static NSMutableDictionary<NSNumber *, id> *cache;
+    if (!cache) cache = [NSMutableDictionary new];
+    NSNumber *key = @((uint64_t)dpf | (uint64_t)sk << 32 | (uint64_t)st << 36 | (uint64_t)dk << 40 | (uint64_t)dsamples << 44 | (uint64_t)average << 52);
+    id p = cache[key];
+    if (p) return p;
+    static const char *const vt[] = {"float4", "int4", "uint4", "float4"}, *const et[] = {"float", "int", "uint", "float"};
+    const char *tex;
+    char decl[96];
+    if (sk == XK_DEPTH) tex = st == XT_2D ? "depth2d" : st == XT_2DARRAY ? "depth2d_array" : st == XT_MS ? "depth2d_ms" : "depth2d_ms_array";
+    else tex = st == XT_2D ? "texture2d" : st == XT_2DARRAY ? "texture2d_array" : st == XT_3D ? "texture3d" : st == XT_MS ? "texture2d_ms" : "texture2d_ms_array";
+    snprintf(decl, sizeof decl, sk == XK_DEPTH ? "%s<float>" : "%s<%s>", tex, et[sk]);
+    /* read of sample / level `X` */
+    const char *rd = st == XT_2D ? "t.read(c, p.lod)" : st == XT_2DARRAY ? "t.read(c, p.slice, p.lod)" : st == XT_3D ? "t.read(uint3(c, p.slice), p.lod)"
+                     : st == XT_MS ? "t.read(c, X)" : "t.read(c, p.slice, X)";
+    int ms = st == XT_MS || st == XT_MSARRAY;
+    NSMutableString *body = [NSMutableString string];
+    NSString *R = [NSString stringWithUTF8String:rd];
+    NSString *(^read)(NSString *) = ^NSString *(NSString *s) {
+        NSString *r = [R stringByReplacingOccurrencesOfString:@"X" withString:s];
+        return sk == XK_DEPTH ? [NSString stringWithFormat:@"float4(%@, 0, 0, 1)", r] : r;
+    };
+    if (ms && dsamples > 1) [body appendFormat:@"  %s v = %@;\n", vt[sk], read(@"(sid % p.ns)")];
+    else if (ms && average && sk == XK_FLOAT) [body appendFormat:@"  float4 v = 0; for (uint i = 0; i < p.ns; i++) v += %@; v /= float(p.ns);\n", read(@"i")];
+    else [body appendFormat:@"  %s v = %@;\n", vt[sk], read(@"0")];
+    NSString *out;
+    if (dk == XK_DEPTH) out = sk == XK_FLOAT || sk == XK_DEPTH ? @"v.x" : @"as_type<float>(v.x)";
+    else if (sk == XK_DEPTH) out = dk == XK_FLOAT ? @"v" : dk == XK_UINT ? @"uint4(as_type<uint>(v.x), 0, 0, 1)" : @"int4(as_type<int>(v.x), 0, 0, 1)";
+    else if (sk == dk) out = @"v";
+    else if (dk == XK_FLOAT) out = @"float4(v)";
+    else if (sk == XK_FLOAT) out = dk == XK_UINT ? @"uint4(max(v, 0.0))" : @"int4(v)";
+    else out = dk == XK_UINT ? @"as_type<uint4>(v)" : @"as_type<int4>(v)";
+    NSString *src = [NSString stringWithFormat:@"#include <metal_stdlib>\nusing namespace metal;\n"
+                                                "struct CP { float4 m; uint slice, ns, lod, pad; };\n%@"
+                                                "vertex float4 cv(uint vid [[vertex_id]]) { float2 q = float2((vid << 1) & 2, vid & 2); return float4(q * 2.0 - 1.0, 0, 1); }\n"
+                                                "fragment %s cf(float4 pos [[position]], %s t [[texture(0)]], constant CP &p [[buffer(0)]]%s) {\n"
+                                                "  uint2 c = uint2(p.m.xy + pos.xy * p.m.zw);\n%@  %s;\n}\n",
+                                               dk == XK_DEPTH ? @"struct DO { float d [[depth(any)]]; };\n" : @"", dk == XK_DEPTH ? "DO" : vt[dk], decl,
+                                               dsamples > 1 ? ", uint sid [[sample_id]]" : "", body,
+                                               [(dk == XK_DEPTH ? [NSString stringWithFormat:@"DO o; o.d = %@; return o", out] : [NSString stringWithFormat:@"return %@", out]) UTF8String]];
+    NSError *err = nil;
+    id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:src options:nil error:&err];
+    if (!lib) {
+        LOGE("generic copy shader: %s", err.localizedDescription.UTF8String);
+        return nil;
+    }
+    MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
+    pd.vertexFunction = [lib newFunctionWithName:@"cv"];
+    pd.fragmentFunction = [lib newFunctionWithName:@"cf"];
+    if (dk == XK_DEPTH) pd.depthAttachmentPixelFormat = dpf;
+    else pd.colorAttachments[0].pixelFormat = dpf;
+    pd.rasterSampleCount = dsamples;
+    p = [g_mtl.dev newRenderPipelineStateWithDescriptor:pd error:&err];
+    if (!p) {
+        LOGE("generic copy pipeline (format %lu): %s", (unsigned long)dpf, err.localizedDescription.UTF8String);
+        return nil;
+    }
+    cache[key] = p;
+    return p;
+}
+/* Source region (sx, sy, sw, sh) of level slv / slice-or-depth ssl -> destination region of level dlv / slice-or-depth-plane dsl. 0 when the pair is not
+ * handled (stencil-only textures, a 3D or cube source as depth). */
+static int xcopy_draw(GfxTex *s, GfxTex *d, uint32_t slv, uint32_t ssl, uint32_t dlv, uint32_t dsl, uint32_t sx, uint32_t sy, uint32_t sw, uint32_t sh, uint32_t dx,
+                      uint32_t dy, uint32_t dw, uint32_t dh, int average) {
+    if (s->pf == MTLPixelFormatStencil8 || d->pf == MTLPixelFormatStencil8 || !sw || !sh || !dw || !dh) return 0;
+    int sk = xk_of(s), dk = xk_of(d);
+    id<MTLTexture> src = s->tex;
+    MTLTextureType ty = src.textureType;
+    if (ty == MTLTextureTypeCube || ty == MTLTextureTypeCubeArray) { /* faces as array layers */
+        src = [src newTextureViewWithPixelFormat:src.pixelFormat textureType:MTLTextureType2DArray levels:NSMakeRange(0, src.mipmapLevelCount)
+                                          slices:NSMakeRange(0, ty == MTLTextureTypeCube ? 6 : src.arrayLength * 6)];
+        ty = MTLTextureType2DArray;
+    }
+    int st = ty == MTLTextureType2DArray ? XT_2DARRAY : ty == MTLTextureType3D ? XT_3D : ty == MTLTextureType2DMultisample ? XT_MS
+             : ty == MTLTextureType2DMultisampleArray ? XT_MSARRAY : ty == MTLTextureType2D ? XT_2D : -1;
+    if (st < 0 || (sk == XK_DEPTH && st == XT_3D)) return 0;
+    uint32_t dsamples = (uint32_t)d->tex.sampleCount;
+    id<MTLRenderPipelineState> ps = xcopy_pso(sk, st, dk, d->pf, dsamples, average);
+    if (!ps) return 0;
+    LOG_ONCE(NAPPLE_LOG_INFO, "texture copy / resolve through the generic pass (format %lu type %lu x%lu -> format %lu type %lu x%lu)", (unsigned long)s->pf,
+             (unsigned long)s->tex.textureType, (unsigned long)s->tex.sampleCount, (unsigned long)d->pf, (unsigned long)d->tex.textureType, (unsigned long)dsamples);
+    flush_clears();
+    end_encoders();
+    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    MTLRenderPassAttachmentDescriptor *a = dk == XK_DEPTH ? (MTLRenderPassAttachmentDescriptor *)rp.depthAttachment : rp.colorAttachments[0];
+    a.texture = d->tex;
+    a.level = dlv;
+    if (d->tex.textureType == MTLTextureType3D) a.depthPlane = dsl;
+    else a.slice = dsl;
+    a.loadAction = MTLLoadActionLoad;
+    a.storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> e = [g_cb renderCommandEncoderWithDescriptor:rp];
+    [e setRenderPipelineState:ps];
+    if (dk == XK_DEPTH) {
+        static id<MTLDepthStencilState> dsw;
+        if (!dsw) {
+            MTLDepthStencilDescriptor *dd = [MTLDepthStencilDescriptor new];
+            dd.depthCompareFunction = MTLCompareFunctionAlways;
+            dd.depthWriteEnabled = YES;
+            dsw = [g_mtl.dev newDepthStencilStateWithDescriptor:dd];
+        }
+        [e setDepthStencilState:dsw];
+    }
+    float kx = (float)sw / (float)dw, ky = (float)sh / (float)dh;
+    struct { float m[4]; uint32_t slice, ns, lod, pad; } cp = {{(float)sx - (float)dx * kx, (float)sy - (float)dy * ky, kx, ky}, ssl, (uint32_t)s->tex.sampleCount,
+                                                               st == XT_MS || st == XT_MSARRAY ? 0 : slv, 0};
+    [e setViewport:(MTLViewport){(double)dx, (double)dy, (double)dw, (double)dh, 0, 1}];
+    [e setScissorRect:(MTLScissorRect){dx, dy, dw, dh}];
+    [e setFragmentTexture:src atIndex:0];
+    [e setFragmentBytes:&cp length:sizeof cp atIndex:0];
+    [e drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [e endEncoding];
+    return 1;
+}
 static void copy_t2t_draw(GfxTex *s, GfxTex *d, uint32_t slv, uint32_t dlv, uint32_t ssl, uint32_t dsl, uint32_t sx, uint32_t sy, uint32_t sw, uint32_t sh,
                           uint32_t dx, uint32_t dy, uint32_t dw, uint32_t dh) {
     int depth_copy = s->is_depth && d->is_depth && s->pf != MTLPixelFormatStencil8 && d->pf != MTLPixelFormatStencil8;
     if ((s->is_depth != d->is_depth) || (s->is_depth && !depth_copy) || s->tex.sampleCount > 1 || d->tex.sampleCount > 1 ||
-        s->tex.textureType == MTLTextureType3D || d->tex.textureType == MTLTextureType3D) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "texture copy with a depth/multisampled/3D texture and a different size or format is not implemented (format %lu -> %lu)",
-                 (unsigned long)s->pf, (unsigned long)d->pf);
+        s->tex.textureType == MTLTextureType3D || d->tex.textureType == MTLTextureType3D || pf_is_int((uint32_t)s->pf) != pf_is_int((uint32_t)d->pf)) {
+        if (!xcopy_draw(s, d, slv, ssl, dlv, dsl, sx, sy, sw, sh, dx, dy, dw, dh, 0))
+            LOG_ONCE(NAPPLE_LOG_WARN, "texture copy between formats %lu -> %lu (types %lu -> %lu) is not implemented", (unsigned long)s->pf, (unsigned long)d->pf,
+                     (unsigned long)s->tex.textureType, (unsigned long)d->tex.textureType);
         return;
     }
     { /* Metal aborts on a view outside the texture: refuse such a copy instead */
@@ -2596,6 +3004,7 @@ static void copy_t2t_draw(GfxTex *s, GfxTex *d, uint32_t slv, uint32_t dlv, uint
 static void do_copy_t2t(const p_copy_t2t *c) {
     GfxTex *s = mtl_tex_get(&c->src.s, 0), *d = mtl_tex_get(&c->dst.s, 1);
     if (!s || !d) return;
+    mtl_tex_written(d);
     if (getenv("NAPPLE_T2TLOG")) {
         static int n;
         if (n++ < 400) fprintf(stderr, "[t2t] %ux%u type %lu fmt %lu (own %d) -> %ux%u type %lu fmt %lu (own %d) dview layers %d+%d dsl %d\n", s->w, s->h, (unsigned long)s->tex.textureType, (unsigned long)s->pf, s->gpu_owned, d->w, d->h,
@@ -2609,6 +3018,10 @@ static void do_copy_t2t(const p_copy_t2t *c) {
     uint32_t sx, sy, sz, sw, sh, sd, dx, dy, dz, dw, dh, dd;
     copy_region_dims(s, c->sregion, slv, &sx, &sy, &sz, &sw, &sh, &sd);
     copy_region_dims(d, c->dregion, dlv, &dx, &dy, &dz, &dw, &dh, &dd);
+    /* A title that allocates a 1080p swapchain but renders 720p (LAS in handheld mode) copies its frame into the corner of the window texture and sets no
+     * window crop: remember the extent so the present path shows that part, not the whole texture with the game in one corner. */
+    if (!dlv && !dsl && dx == 0 && dy == 0 && (dw < d->w || dh < d->h)) { d->valid_w = dw; d->valid_h = dh; }
+    else if (dx == 0 && dy == 0 && dw >= d->w && dh >= d->h) d->valid_w = d->valid_h = 0;
     { /* render target scaling: the regions are in guest pixels, the allocations may be larger (mtl_scale.m) */
         float srx = s->rsx > 0 ? s->rsx : 1, sry = s->rsy > 0 ? s->rsy : 1, drx = d->rsx > 0 ? d->rsx : 1, dry = d->rsy > 0 ? d->rsy : 1;
         if (srx != 1 || sry != 1 || drx != 1 || dry != 1) {
@@ -2626,13 +3039,13 @@ static void do_copy_t2t(const p_copy_t2t *c) {
                 dw = asw;
                 dh = ash;
             } else {
-                copy_t2t_draw(s, d, slv, dlv, ssl + sz, dsl + dz, asx, asy, asw, ash, adx, ady, adw, adh);
+                for (uint32_t k = 0; k < sd && k < dd; k++) copy_t2t_draw(s, d, slv, dlv, ssl + sz + k, dsl + dz + k, asx, asy, asw, ash, adx, ady, adw, adh);
                 return;
             }
         }
     }
-    if (sw != dw || sh != dh || s->pf != d->pf) {
-        copy_t2t_draw(s, d, slv, dlv, ssl + sz, dsl + dz, sx, sy, sw, sh, dx, dy, dw, dh);
+    if (sw != dw || sh != dh || s->pf != d->pf || s->tex.sampleCount != d->tex.sampleCount) { /* one draw per layer / depth slice of the region */
+        for (uint32_t k = 0; k < sd && k < dd; k++) copy_t2t_draw(s, d, slv, dlv, ssl + sz + k, dsl + dz + k, sx, sy, sw, sh, dx, dy, dw, dh);
         return;
     }
     int s3 = s->tex.textureType == MTLTextureType3D, d3 = d->tex.textureType == MTLTextureType3D;
@@ -2648,7 +3061,8 @@ static void do_copy_t2t(const p_copy_t2t *c) {
 }
 /* Downsample (MSAA resolve): a pass that loads the multisampled source and resolves it into the destination's level / layer (texture views).
  * The source keeps its samples (StoreAndMultisampleResolve): games resolve mid-frame and go on drawing into the multisampled target. Depth
- * resolves take sample 0, as the console's 2D engine does; integer formats cannot be resolved by Metal and are skipped (reported once). */
+ * resolves take sample 0, as the console's 2D engine does; integer formats (no averaging) and depth / integer / float pairs go through resolve_int,
+ * resolve_generic or the generic copy pass. */
 /* Integer formats cannot be resolved by Metal's fixed-function resolve (averaging has no meaning). The hardware's downsample of an integer target copies sample 0:
  * a draw reads that sample of every pixel and writes it to the single-sampled destination. */
 static int pf_is_sint(MTLPixelFormat pf) {
@@ -2695,9 +3109,10 @@ static id<MTLRenderPipelineState> resolve_int_pso(MTLPixelFormat pf) {
     return p;
 }
 static void resolve_int(GfxTex *s, GfxTex *d, uint32_t ssl, uint32_t dlv, uint32_t dsl) {
-    if (s->pf != d->pf || s->tex.textureType != MTLTextureType2DMultisample || ssl) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "Downsample of an integer format (%lu) between different formats or of an array texture is not implemented",
-                 (unsigned long)s->pf);
+    if (s->pf != d->pf || s->tex.textureType != MTLTextureType2DMultisample || ssl) { /* another format or an array layer: sample 0 through the generic pass */
+        if (!xcopy_draw(s, d, 0, ssl, dlv, dsl, 0, 0, (uint32_t)s->tex.width, (uint32_t)s->tex.height, 0, 0, (uint32_t)MAX(1, d->tex.width >> dlv),
+                        (uint32_t)MAX(1, d->tex.height >> dlv), 0))
+            LOG_ONCE(NAPPLE_LOG_WARN, "Downsample of an integer format (%lu -> %lu) is not implemented", (unsigned long)s->pf, (unsigned long)d->pf);
         return;
     }
     id<MTLRenderPipelineState> ps = resolve_int_pso(s->pf);
@@ -2756,8 +3171,10 @@ static id<MTLRenderPipelineState> resolve_generic_pso(MTLPixelFormat dst, int ki
 static void resolve_generic(GfxTex *s, GfxTex *d, uint32_t ssl, uint32_t dlv, uint32_t dsl) {
     int kind = pf_is_int((uint32_t)s->pf) ? (pf_is_sint(s->pf) ? 1 : 2) : 0;
     int array = s->tex.textureType == MTLTextureType2DMultisampleArray;
-    if (s->is_depth || d->is_depth || (kind != 0) != (pf_is_int((uint32_t)d->pf) != 0)) {
-        LOG_ONCE(NAPPLE_LOG_WARN, "Downsample between depth or integer / float formats (%lu -> %lu) is not implemented", (unsigned long)s->pf, (unsigned long)d->pf);
+    if (s->is_depth || d->is_depth || (kind != 0) != (pf_is_int((uint32_t)d->pf) != 0)) { /* depth or integer <-> float: the generic copy pass */
+        if (!xcopy_draw(s, d, 0, ssl, dlv, dsl, 0, 0, (uint32_t)s->tex.width, (uint32_t)s->tex.height, 0, 0, (uint32_t)MAX(1, d->tex.width >> dlv),
+                        (uint32_t)MAX(1, d->tex.height >> dlv), 1))
+            LOG_ONCE(NAPPLE_LOG_WARN, "Downsample between formats %lu -> %lu is not implemented", (unsigned long)s->pf, (unsigned long)d->pf);
         return;
     }
     id<MTLRenderPipelineState> ps = resolve_generic_pso(d->pf, kind, array);
@@ -2785,6 +3202,9 @@ static void resolve_generic(GfxTex *s, GfxTex *d, uint32_t ssl, uint32_t dlv, ui
 static void do_downsample(const p_copy_t2t *c) {
     GfxTex *s = mtl_tex_get(&c->src.s, 1), *d = mtl_tex_get(&c->dst.s, 1);
     if (!s || !d) return;
+    mtl_tex_written(d);
+    LOG_ONCE(NAPPLE_LOG_INFO, "Downsample (MSAA resolve) in use (first: %lu samples, format %lu -> %lu)", (unsigned long)s->tex.sampleCount,
+             (unsigned long)s->pf, (unsigned long)d->pf);
     if (s->tex.sampleCount < 2) {
         LOG_ONCE(NAPPLE_LOG_WARN, "Downsample from a single-sampled texture: copied instead");
         p_copy_t2t cc = *c;
@@ -2844,6 +3264,7 @@ static void do_downsample(const p_copy_t2t *c) {
 static void do_clear_tex(const p_copy_xfer *c) {
     GfxTex *t = mtl_tex_get(&c->tex.s, 1);
     if (!t) return;
+    mtl_tex_written(t);
     end_encoders();
     uint32_t kind = c->flags & 0xff, mask = (c->flags >> 8) & 0xf;
     uint32_t lv = c->tex.has_view && c->tex.view.set_levels ? c->tex.view.base_level : 0;
@@ -3082,7 +3503,10 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
                 for (uint32_t i = 0; i < r->n && r->first + i < 128; i++) S.tex[r->stage][r->first + i] = hs[i];
             else if (h->op == OP_BIND_IMG)
                 for (uint32_t i = 0; i < r->n && r->first + i < 16; i++) S.img[r->stage][r->first + i] = hs[i];
-            else LOG_ONCE(NAPPLE_LOG_WARN, "separate texture/sampler binding is not supported yet");
+            else if (h->op == OP_BIND_SEPTEX)
+                for (uint32_t i = 0; i < r->n && r->first + i < SEP_TEX_C2_COUNT; i++) S.septex[r->stage][r->first + i] = hs[i];
+            else
+                for (uint32_t i = 0; i < r->n && r->first + i < SEP_SAMP_C2_COUNT; i++) S.sepsamp[r->stage][r->first + i] = hs[i];
             break;
         }
         case OP_SET_TEXPOOL: S.texpool = *(const uint64_t *)pl; break;
@@ -3109,6 +3533,13 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
             for (uint32_t i = 0; i < r->n && r->first + i < 16; i++) memcpy(S.vp[r->first + i], f + 4 * i, 16);
             break;
         }
+        case OP_VP_SWIZZLE: {
+            const p_range *r = (const p_range *)pl;
+            const uint8_t *v = (const uint8_t *)(r + 1);
+            for (uint32_t i = 0; i < r->n && r->first + i < 16; i++) memcpy(S.vp_swz[r->first + i], v + 4 * i, 4);
+            break;
+        }
+        case OP_PROVOKING: S.provoking_last = *(const uint32_t *)pl == 1; break;
         case OP_SCISSORS: {
             const p_range *r = (const p_range *)pl;
             const int32_t *f = (const int32_t *)(r + 1);
@@ -3321,7 +3752,12 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
             break;
         }
         case OP_BARRIER:
+            /* ResolveDepthBuffer: the console expands its compressed depth (plane equations per tile, valid only for the sample locations they were made with)
+             * into explicit per-sample values before the depth is sampled, copied or drawn with other sample locations. A Metal depth attachment always holds
+             * explicit per-sample values at the locations they were rasterized with, so the resolve is the pass ending with its depth stored: the following
+             * sample, copy or Downsample reads every sample, and copy-backed views of the depth are refreshed (its write generation moves at pass close). */
             if (*(const uint32_t *)pl & BARRIER_RESOLVE_DEPTH) {
+                LOG_ONCE(NAPPLE_LOG_INFO, "ResolveDepthBuffer: the open pass is closed with its depth stored (%u samples)", P.samples);
                 flush_clears();
                 end_encoders();
             }

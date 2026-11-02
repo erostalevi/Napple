@@ -55,7 +55,7 @@ int main(void) {
     svc_call(rq, 0, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == NIFM_STATE_FREE, "GetRequestState after rejection: Free");
     svc_call(rq, 1, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "GetResult after Submit: communication disabled");
     svc_call(rq, 3, NULL, 0, &c); svc_call(rq, 1, NULL, 0, &c); CHECK(c.result == 0, "Cancel clears the result");
-    svc_call(gen, 15, NULL, 0, &c); CHECK(c.out_size == 4 && c.out[3] == 0, "internet connection status: disconnected");
+    svc_call(gen, 18, NULL, 0, &c); CHECK(c.out_size == 4 && c.out[3] == 0, "internet connection status: disconnected");
     svc_call(gen, 4, NULL, 0, &c); IpcObject *rq2 = c.out_objects[0]; svc_call(rq2, 1, NULL, 0, &c); CHECK(c.result == 0 && rq2->state != rq->state, "requests are independent");
 
     /* friend + ssl */

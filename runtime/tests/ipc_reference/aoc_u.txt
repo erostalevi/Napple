@@ -1,0 +1,20 @@
+# interface aoc:u (nn::aocsrv::detail::IAddOnContentManager; switchbrew 'NS services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+2	CountAddOnContent	1.0.0	y
+3	ListAddOnContent	1.0.0	y
+5	GetAddOnContentBaseId	1.0.0	y
+7	PrepareAddOnContent	1.0.0	y
+8	GetAddOnContentListChangedEvent	4.0.0	y
+9	GetAddOnContentLostErrorCode	10.0.0	y
+10	GetAddOnContentListChangedEventWithProcessId	11.0.0	y
+11	NotifyMountAddOnContent	13.0.0	y
+12	NotifyUnmountAddOnContent	13.0.0	y
+13	IsAddOnContentMountedForDebug	13.0.0	n
+50	CheckAddOnContentMountStatus	13.0.0	y
+100	CreateEcPurchasedEventManager	7.0.0	y
+101	CreatePermanentEcPurchasedEventManager	9.0.0	y
+110	CreateContentsServiceManager	12.0.0	y
+200	SetRequiredAddOnContentsOnContentsAvailabilityTransition	13.1.0	y
+300	SetupHostAddOnContent	16.0.0	y
+301	GetRegisteredAddOnContentPath	16.0.0	y
+302	UpdateCachedList	16.0.0	y

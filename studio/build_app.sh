@@ -23,7 +23,12 @@ CARGO_OUT="${CARGO_TARGET_DIR:-$ROOT/target}"   # honour CARGO_TARGET_DIR (CI an
 if [ ! -x "$CARGO_OUT/release/napple" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then
   (cd "$ROOT" && cargo build --release -p napple-cli)
 fi
-if [ ! -x "$ROOT/runtime/build/napple-runtime" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then make -C "$ROOT/runtime"; fi
+if [ ! -x "$ROOT/runtime/build/napple-runtime" ] || [ ! -f "$ROOT/runtime/build-lib/libnapple-applet.dylib" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then
+  # the runtime links these (tools/ci_build.sh builds them in the same order); building them here lets build_app.sh work on a fresh checkout
+  J="$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"
+  make -C "$ROOT/input" -j"$J" && make -C "$ROOT/audio" -j"$J" && make -C "$ROOT/frontend" -j"$J" && make -C "$ROOT/gfx" -j"$J" lib adapter
+fi
+if [ ! -x "$ROOT/runtime/build/napple-runtime" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then make -C "$ROOT/runtime" -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)"; fi
 if [ ! -f "$ROOT/runtime/build-lib/libnapple-applet.dylib" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then make -C "$ROOT/runtime" applet-lib; fi
 if [ ! -x "$ROOT/packaging/build/napple-launcher" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then make -C "$ROOT/packaging"; fi
 for f in "$CARGO_OUT/release/napple" "$ROOT/runtime/build/napple-runtime" "$ROOT/packaging/build/napple-launcher" "$ROOT/runtime/build-lib/libnapple-applet.dylib"; do
@@ -38,8 +43,19 @@ rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/NappleStudio"
 # CLI + helpers side by side: `napple build` finds napple-runtime/napple-launcher next to itself.
 cp "$CARGO_OUT/release/napple" "$ROOT/runtime/build/napple-runtime" "$ROOT/packaging/build/napple-launcher" "$ROOT/runtime/build-lib/libnapple-applet.dylib" "$APP/Contents/Resources/"   # the applet library beside the runtime: `napple build` bundles it into every game app
-[ -x "$ROOT/runtime/build-ios/napple-runtime" ] && cp "$ROOT/runtime/build-ios/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios"   # optional: tools/build_ios.sh
-[ -x "$ROOT/runtime/build-ios-sim/napple-runtime" ] && cp "$ROOT/runtime/build-ios-sim/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios-sim"   # optional: tools/build_ios.sh --sim
+# iOS runtimes (the iPhone / iPad app engine): built here when missing, because without them every iPhone build from Studio fails. The applet library is
+# bundled under an iOS-specific name so the macOS libnapple-applet.dylib beside it is never packed into an iOS app (napple build picks it by the runtime's name).
+if [ ! -x "$ROOT/runtime/build-ios/napple-runtime" ] || [ -n "${NAPPLE_REBUILD:-}" ]; then
+  (cd "$ROOT" && VPX=1 tools/build_ios_deps.sh && tools/build_ios.sh) || echo "warning: iOS runtime not built; Studio will only build for the Mac" >&2
+fi
+if [ -x "$ROOT/runtime/build-ios/napple-runtime" ]; then
+  cp "$ROOT/runtime/build-ios/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios"
+  [ -f "$ROOT/runtime/build-ios/libnapple-applet.dylib" ] && cp "$ROOT/runtime/build-ios/libnapple-applet.dylib" "$APP/Contents/Resources/libnapple-applet-ios.dylib"
+fi
+if [ -x "$ROOT/runtime/build-ios-sim/napple-runtime" ]; then   # optional: SDK=iphonesimulator tools/build_ios.sh
+  cp "$ROOT/runtime/build-ios-sim/napple-runtime" "$APP/Contents/Resources/napple-runtime-ios-sim"
+  [ -f "$ROOT/runtime/build-ios-sim/libnapple-applet.dylib" ] && cp "$ROOT/runtime/build-ios-sim/libnapple-applet.dylib" "$APP/Contents/Resources/libnapple-applet-ios-sim.dylib"
+fi
 [ -f "$ROOT/compat/matrix.json" ] && cp "$ROOT/compat/matrix.json" "$APP/Contents/Resources/matrix.json"
 # App icon (studio/packaging/icon.png -> AppIcon.icns)
 if [ -f "$HERE/packaging/icon.png" ] && command -v iconutil >/dev/null 2>&1; then

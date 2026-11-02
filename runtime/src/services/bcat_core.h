@@ -14,7 +14,7 @@ enum {
     BCAT_STATUS_PROCESSING_DATA_LIST = 3,
     BCAT_STATUS_DOWNLOADING = 4,
     BCAT_STATUS_COMMITTING = 5,
-    BCAT_STATUS_DONE = 6
+    BCAT_STATUS_DONE = 9 /* DeliveryCacheProgressStatus::Done is 9 in the public ports (yuzu bcat_types.h), not the next number */
 };
 
 /* A directory name is 1..31 characters of [A-Za-z0-9_-], NUL padded. A file name additionally allows '.'. */
@@ -54,11 +54,23 @@ typedef struct {
     /* Bytes read at offset (0 at or past the end), or -1 when the file is gone. */
     int64_t (*read)(void *ctx, const char *dir, const char *file, uint64_t offset, void *buf, size_t n);
 } BcatProvider;
-/* The process-wide provider (NULL clears it). Without one, NAPPLE_BCAT_DIR names a folder laid out as <dir>/<directory>/<file>, read at the first use. */
+/* The process-wide provider (NULL clears it). Without one, NAPPLE_BCAT_DIR names a folder read at the first use: either the plain layout
+ * <dir>/<directory>/<file>, or, when <dir>/directories.meta exists, the console's own delivery cache storage (bcat_save_provider). */
 void bcat_set_provider(const BcatProvider *p);
 const BcatProvider *bcat_provider(void);
 /* A provider over a host folder: directories are its sub-folders, files their regular files (at most the limits above, valid names only). */
 BcatProvider bcat_dir_provider(const char *root);
+/* The console's delivery cache storage, as the BCAT service lays it out in the title's bcat save data (nn::bcat::detail::service::core::DeliveryCacheStorageManager
+ * and the two meta accessors of LibHac / the public ports; read for this note):
+ *   <root>/directories.meta                  u32 header = 1, then entries {char name[0x20]; u8 digest[0x10]; u8 reserved[0x10]} (0x40 each, at most 100)
+ *   <root>/directories/<dir>/files.meta      u32 header = 1, then entries {char name[0x20]; s64 id; s64 size; u8 digest[0x10]; u8 reserved[0x40]} (0x80 each, at most 100)
+ *   <root>/directories/<dir>/files/<file>    the content
+ * (plus passphrase.bin, list.msgpack, etag.bin, na_required and index.lock beside them, which a reader here ignores). The directory list, sizes and digests come
+ * from the meta files; a listed file whose content is missing or shorter than its meta size reads as "gone" / short. */
+enum { BCAT_META_HEADER = 1, BCAT_DIR_META_ENTRY = 0x40, BCAT_FILE_META_ENTRY = 0x80 };
+BcatProvider bcat_save_provider(const char *root);
+/* What NAPPLE_BCAT_DIR gets: the storage layout when <root>/directories.meta is a regular file, the plain folder layout otherwise. */
+BcatProvider bcat_auto_provider(const char *root);
 /* Writes one 0x38-byte DeliveryCacheDirectoryEntry: char name[0x20] at +0, s64 size at +0x20, u8 md5[0x10] at +0x28 (switchbrew "BCAT services"; Ryujinx's
  * DeliveryCacheFileMetaEntry is the same record). */
 void bcat_pack_entry(const BcatFile *f, uint8_t out[BCAT_ENTRY_SIZE]);

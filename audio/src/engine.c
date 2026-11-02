@@ -4,6 +4,8 @@
    callback (real time, no locks, no allocation) sums every active source, applies master volume and clips.
    Latency policy: a source starts playing once `prefill` frames are queued (default 20 ms, four renderer frames) and
    again after an underrun; if a device stall lets a backlog build up, everything beyond prefill + 30 ms is dropped. */
+#include <fcntl.h>
+#include <unistd.h>
 #include "internal.h"
 #include <AudioToolbox/AudioToolbox.h>
 #include <TargetConditionals.h>
@@ -140,6 +142,8 @@ static OSStatus pull(void *ctx, AudioUnitRenderActionFlags *flags, const AudioTi
         float v = out[k] * g;
         out[k] = v > 1.f ? 1.f : v < -1.f ? -1.f : v;
     }
+    { static int fd = -2; if (fd == -2) { const char *dp = getenv("NAPPLE_AUDIO_DUMP"); fd = dp && *dp ? open(dp, O_WRONLY | O_CREAT | O_TRUNC, 0644) : -1; }   /* debug: raw float32 stereo as handed to the device */
+      if (fd >= 0) (void)!write(fd, out, (size_t)frames * 2 * sizeof(float)); }
     atomic_store_explicit(&E.latency_ms, (double)(max_fill + E.device_frames) * 1000.0 / OUT_RATE, memory_order_relaxed);
     atomic_fetch_add_explicit(&E.cb_gen, 1, memory_order_acq_rel);
     return noErr;

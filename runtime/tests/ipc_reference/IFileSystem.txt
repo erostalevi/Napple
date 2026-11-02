@@ -1,0 +1,19 @@
+# interface IFileSystem (nn::fssrv::sf::IFileSystem; switchbrew 'Filesystem services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	CreateFile	1.0.0	y
+1	DeleteFile	1.0.0	y
+2	CreateDirectory	1.0.0	y
+3	DeleteDirectory	1.0.0	y
+4	DeleteDirectoryRecursively	1.0.0	y
+5	RenameFile	1.0.0	y
+6	RenameDirectory	1.0.0	y
+7	GetEntryType	1.0.0	y
+8	OpenFile	1.0.0	y
+9	OpenDirectory	1.0.0	y
+10	Commit	1.0.0	y
+11	GetFreeSpaceSize	1.0.0	y
+12	GetTotalSpaceSize	1.0.0	y
+13	CleanDirectoryRecursively	3.0.0	y
+14	GetFileTimeStampRaw	3.0.0	y
+15	QueryEntry	4.0.0	y
+16	GetFileSystemAttribute	15.0.0	y

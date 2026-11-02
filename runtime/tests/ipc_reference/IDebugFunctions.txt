@@ -1,0 +1,86 @@
+# interface IDebugFunctions (nn::am::service::IDebugFunctions; switchbrew 'Applet Manager services' command table; layout facts only)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x; n = not reachable from an application (reason in the trailing comment
+# lines: debug-only (am.debug!dev_function / GetDebugModeFlag), [S2] = Switch 2 only, newer than 22.x, system-applet service, unnamed id).
+# Written for napple (am-depth-applets, 2026-11-01-r3).
+0	NotifyMessageToHomeMenuForDebug	1.0.0	y
+# 1: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+1	OpenMainApplication	1.0.0-9.2.0	n
+# 10: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+10	PerformSystemButtonPressing	1.0.0	n
+# 20: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+20	InvalidateTransitionLayer	1.0.0	n
+# 30: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+30	RequestLaunchApplicationWithUserAndArgumentForDebug	6.0.0	n
+# 31: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+31	RequestLaunchApplicationByApplicationLaunchInfoForDebug	12.0.0	n
+# 40: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+40	GetAppletResourceUsageInfo	6.0.0	n
+# 50: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+50	AddSystemProgramIdAndAppletIdForDebug	15.0.0	n
+# 51: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+51	AddOperationConfirmedLibraryAppletIdForDebug	16.0.0	n
+# 52: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+52	GetProgramIdFromAppletIdForDebug	17.0.0	n
+# 53: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+53	GetProgramIdFromAppletIdAndLibraryAppletModeForDebug	18.0.0	n
+# 100: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+100	SetCpuBoostModeForApplet	7.0.0	n
+# 101: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+101	CancelCpuBoostModeForApplet	10.0.0	n
+# 110: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+110	PushToAppletBoundChannelForDebug	9.0.0	n
+# 111: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+111	TryPopFromAppletBoundChannelForDebug	9.0.0	n
+# 120: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+120	AlarmSettingNotificationEnableAppEventReserve	9.0.0	n
+# 121: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+121	AlarmSettingNotificationDisableAppEventReserve	9.0.0	n
+# 122: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+122	AlarmSettingNotificationPushAppEventNotify	9.0.0	n
+# 130: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+130	FriendInvitationSetApplicationParameter	9.0.0	n
+# 131: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+131	FriendInvitationClearApplicationParameter	9.0.0	n
+# 132: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+132	FriendInvitationPushApplicationParameter	9.0.0	n
+# 140: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+140	RestrictPowerOperationForSecureLaunchModeForDebug	14.0.0	n
+# 150: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+150	(unnamed)	21.0.0	n
+# 200: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+200	CreateFloatingLibraryAppletAccepterForDebug	15.0.0	n
+# 210: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+210	(unnamed)	23.0.0	n
+# 300: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+300	TerminateAllRunningApplicationsForDebug	16.0.0	n
+# 400: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+400	LaunchDebugAppletForDebug	1.0.0	n
+# 401: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+401	TerminateDebugAppletForDebug	1.0.0	n
+# 402: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+402	IsDebugAppletLaunchedForDebug	1.0.0	n
+# 403: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+403	(unnamed)	1.0.0	n
+# 410: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+410	CreateGeneralStorageForDebug	18.0.0	n
+# 411: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+411	ReadGeneralStorageForDebug	18.0.0	n
+# 412: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+412	WriteGeneralStorageForDebug	18.0.0	n
+# 430: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+430	(unnamed)	20.0.0	n
+# 431: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+431	(unnamed)	20.0.0	n
+# 900: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+900	GetGrcProcessLaunchedSystemEvent	12.0.0	n
+# 910: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+910	(unnamed)	20.0.0	n
+# 1000: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+1000	(unnamed)	23.0.0	n
+# 1001: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+1001	(unnamed)	23.0.0	n
+# 2000: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+2000	(unnamed)	20.0.0	n
+# 10000: debug (IDebugFunctions needs am.debug!dev_function; retail GetDebugFunctions hands out no object)
+10000	(unnamed)	1.0.0	n

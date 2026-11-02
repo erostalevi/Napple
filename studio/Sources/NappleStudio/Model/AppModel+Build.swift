@@ -35,7 +35,7 @@ extension AppModel {
         errorText = nil; notes = []; installMessage = nil; cancelling = false
         builtApp = nil; builtIPA = nil; builtInfo = nil; builtBytes = nil; buildDuration = nil; stagesSeen = []
         buildStarted = Date()
-        progress = ProgressEvent(stage: "preflight", percent: 0, message: String(localized: "Checking keys and firmware")); log = []
+        progress = ProgressEvent(stage: "preflight", percent: 0, message: String(localized: "Checking keys and firmware")); clearLog()
         openLog()
         activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .idleSystemSleepDisabled], reason: "Building a Napple app")
         let isMac = target == .macos
@@ -99,10 +99,16 @@ extension AppModel {
     func handle(_ ev: BuildEvent) {
         switch ev {
         case .progress(let p):
-            progress = p
-            if stagesSeen.last != p.stage { stagesSeen.append(p.stage) }
-            let l = "[\(p.stage)] \(Int(p.percent))% \(p.message)"
-            appendLog(l); writeLog(l)
+            // the view follows at 20 Hz at most, and the log keeps one line per stage change or 5 % step instead of one per progress tick
+            let now = Date(), changed = stagesSeen.last != p.stage
+            if changed { stagesSeen.append(p.stage); lastLoggedBucket = -1 }
+            if changed || p.percent >= 100 || now.timeIntervalSince(lastProgressStamp) > 0.05 { progress = p; lastProgressStamp = now }
+            let bucket = Int(p.percent / 5)
+            if changed || bucket != lastLoggedBucket {
+                lastLoggedBucket = bucket
+                let l = "[\(p.stage)] \(Int(p.percent))% \(p.message)"
+                appendLog(l); writeLog(l)
+            }
         case .result(let p): appendLog("result: \(p)"); writeLog("RESULT \(p)")
         case .log(let l):
             appendLog(l); writeLog(l)
@@ -136,5 +142,14 @@ extension AppModel {
         case "install": String(localized: "Installing")
         default: s.replacingOccurrences(of: "-", with: " ").capitalized
         }
+    }
+}
+
+extension AppModel {
+    /// Back to the games screen; a finished or failed build is cleared so the next Add starts fresh.
+    func goHome() {
+        guard phase != .building else { return }
+        if phase == .done || phase == .failed { resetPlanState() }
+        pane = .library
     }
 }

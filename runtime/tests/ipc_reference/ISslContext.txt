@@ -1,0 +1,16 @@
+# interface ISslContext (nn::ssl::sf::ISslContext; switchbrew 'SSL services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	SetOption	1.0.0	y
+1	GetOption	1.0.0	y
+2	CreateConnection	1.0.0	y
+3	GetConnectionCount	1.0.0	y
+4	ImportServerPki	1.0.0	y
+5	ImportClientPki	1.0.0	y
+6	RemoveServerPki	1.0.0	y
+7	RemoveClientPki	1.0.0	y
+8	RegisterInternalPki	1.0.0	y
+9	AddPolicyOid	1.0.0	y
+10	ImportCrl	3.0.0	y
+11	RemoveCrl	3.0.0	y
+12	ImportClientCertKeyPki	16.0.0	y
+13	GeneratePrivateKeyAndCert	16.0.0	y

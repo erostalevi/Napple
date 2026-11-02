@@ -41,6 +41,9 @@ void nae_mic_ring_reset(void);
 uint32_t nae_mic_read(void *user, float *mono, uint32_t frames, uint32_t rate); /* the `mic` capture source */
 int nae_mic_start(void);                                                        /* 0 or -1 (no device / permission / not macOS) */
 void nae_mic_stop(void);
+enum { NAE_MIC_DENIED = -1, NAE_MIC_UNDETERMINED = 0, NAE_MIC_GRANTED = 1 };
+int nae_mic_permission(void);  /* host microphone access for this process (override: env NAPPLE_AUDIN_MIC_PERMISSION) */
+int nae_mic_can_prompt(void);  /* the process may raise the system prompt (it carries NSMicrophoneUsageDescription) */
 
 /* ---- wire formats of the audren update protocol ---- */
 typedef struct {
@@ -218,6 +221,7 @@ struct napple_audren {
     _Atomic int running;
     uint32_t state, revision, time_limit, npools_alloc;
     uint64_t behavior_flags, elapsed_frames;
+    int perf_logged;                               /* the first performance frame handed to the guest was logged (audren.c) */
     uint8_t *perf_hist;                            /* performance frames not yet collected by the guest, oldest first (audren.c) */
     size_t perf_hist_len;                          /* bytes used in perf_hist */
     uint32_t perf_sizes[64], perf_nframes;         /* byte size of each held frame, and how many */

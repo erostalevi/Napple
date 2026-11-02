@@ -365,7 +365,7 @@ static void write_png(const char *path, const uint8_t *bgra, uint32_t w, uint32_
     CGColorSpaceRelease(cs);
 }
 
-static void compute_crop(const win_t *w, const texsnap *t, float crop[4]) {
+static void compute_crop(const win_t *w, const texsnap *t, const GfxTex *gt, float crop[4]) {
     float tw = (float)t->d.width, th = (float)t->d.height;
     const int *c = w->crop;
     if (c[2] > 0 && c[3] > 0) {
@@ -373,6 +373,11 @@ static void compute_crop(const win_t *w, const texsnap *t, float crop[4]) {
         crop[1] = c[1] / th;
         crop[2] = c[2] / tw;
         crop[3] = c[3] / th;
+    } else if (gt && gt->valid_w && gt->valid_h && gt->valid_w <= t->d.width && gt->valid_h <= t->d.height) {
+        crop[0] = 0;
+        crop[1] = 0;
+        crop[2] = (float)gt->valid_w / tw;
+        crop[3] = (float)gt->valid_h / th;
     } else {
         crop[0] = 0;
         crop[1] = 0;
@@ -483,7 +488,7 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
     }
 
     float crop[4];
-    compute_crop(w, snap, crop);
+    compute_crop(w, snap, gt, crop);
     float gw = (float)snap->d.width, gh = (float)snap->d.height;
     if (g_gfx.origin_flip && g_gfx.device_origin == 0) {
         crop[1] += crop[3];
@@ -512,7 +517,9 @@ void replay_run_present(win_t *w, int idx, const texsnap *snap, uint32_t interva
     id<CAMetalDrawable> dr = nil;
     id<MTLTexture> target = g_mtl.headless;
     if (g_mtl.layer && !drop) {
+#if !TARGET_OS_IOS /* iOS: the frontend sizes the drawable to the view in pixels; a 1280x720 window-size setting would show 1:1 in a corner of the screen */
         if (st.output_width && st.output_height) g_mtl.layer.drawableSize = CGSizeMake(st.output_width, st.output_height);
+#endif
         dr = [g_mtl.layer nextDrawable];
         target = dr.texture;
     }

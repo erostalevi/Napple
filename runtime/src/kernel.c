@@ -327,9 +327,54 @@ static void svc_get_process_id(uint64_t *r) {
     r[1] = 0x80;
 }
 static void svc_flush_cache(uint64_t *r) { r[0] = 0; }
+uint8_t *memory_a32_base(void);
+/* The code range of the defined guest function `name` in any loaded module (its symbol's size, at least one instruction). */
+static int guest_function_range(const char *name, uint64_t *lo, uint64_t *hi) {
+    for (unsigned k = 0; k < g_nmodules; k++) {
+        const Module *m = &g_modules[k];
+        if (m->gone || !m->syms || !m->strtab) continue;
+        for (unsigned i = 0; i < m->nsym; i++) {
+            const Sym *s = &m->syms[i];
+            if (!s->defined || s->value >= m->text_end || strcmp(m->strtab + s->name, name)) continue;
+            *lo = (uintptr_t)m->base + s->value;
+            *hi = *lo + (s->size ? s->size : 4);
+            return 1;
+        }
+    }
+    return 0;
+}
+/* 1 when ExitProcess comes after nnMain returned. The 2-callback nn::init::Start has no finalizer callback (the 3-callback form's cb_finis is
+ * main.c guest_exit_clean): Start runs nnMain on the main thread and, once it returns, ends the process itself through svcExitProcess. The
+ * guest's frame records (x29 chain; the lr of the svc first) show that: a return address inside nn::init::Start and none inside nnMain. A guest
+ * that quits from inside nnMain, from another thread or before nnMain ran does not match. 32-bit titles never get here this way (a32_boot runs
+ * nnMain itself) and their svc registers carry no frame chain. */
+int kernel_exit_after_nnmain(uint64_t fp, uint64_t lr) {
+    uint64_t main_lo, main_hi, start_lo, start_hi;
+    if (!guest_function_range("nnMain", &main_lo, &main_hi) || !guest_function_range("_ZN2nn4init5StartEmmPFvvES2_", &start_lo, &start_hi)) return 0;
+    int in_start = 0;
+    uint64_t ret = lr;
+    for (int depth = 0; depth < 64; depth++) {
+        if (ret >= main_lo && ret < main_hi) return 0;
+        if (ret >= start_lo && ret < start_hi) in_start = 1;
+        if (!fp || (fp & 7)) break;
+        const uint64_t *rec = guest_ptr(fp, 16);
+        if (!rec) break;
+        uint64_t next = rec[0];
+        ret = rec[1];
+        if (!ret || !module_for_address(ret)) break; /* the host frame that entered nn::init::Start */
+        if (next && next <= fp) break;               /* frame records go up the stack */
+        fp = next;
+    }
+    return in_start;
+}
 static void svc_exit_process(uint64_t *r) {
-    (void)r;
     LOG("kernel", "guest called ExitProcess");
+    if (!memory_a32_base() && kernel_exit_after_nnmain(r[29], r[30])) {
+        summary_stage("exit");
+        summary_note("guest exited: nnMain returned and nn::init::Start called ExitProcess");
+        summary_write("partial", "guest exited normally (nnMain returned, ExitProcess)");
+        GUEST_EXIT(0);
+    }
     summary_note("guest called ExitProcess");
     summary_write("fail", "guest exited the process (ExitProcess)");
     GUEST_EXIT(0);
@@ -422,6 +467,10 @@ static void svc_get_info(uint64_t *r) {
         case 16: value = g_npdm.valid ? g_npdm.system_resource_size : (32ULL << 20); break;
         case 17: value = 0x100000; break; /* SystemResourceSizeUsed */
         case 18: value = g_program_id; break;
+        case 19: /* InitialProcessIdRange: [4.0.0-4.1.0] only (mesosphere answers InvalidEnumValue from 5.0.0 on, before the handle check; the range moved
+                  * to svcGetSystemInfo 2). This kernel is 22.x. */
+            r[0] = R_INVALID_ENUM;
+            return;
         case 20: {
             extern uint64_t memory_exception_context(void);
             value = memory_exception_context();
@@ -435,6 +484,10 @@ static void svc_get_info(uint64_t *r) {
         case 25: value = 0; break; /* ThreadTickCount */
         case 26: { /* IsSvcPermitted */ value = !g_npdm.valid || (sub < 192 && (g_npdm.svc_mask[sub / 32] >> (sub % 32) & 1)); break;
         }
+        case 27: /* IoRegionHint [16.0.0+]: subid 0 of a KIoRegion handle (CreateIoRegion). An application's process has no io regions, so every
+                  * handle it can pass is the wrong kind; the subid is checked first, as mesosphere does. */
+            r[0] = sub != 0 ? R_INVALID_COMBINATION : R_INVALID_HANDLE;
+            return;
         case 28: value = 0; break; /* AliasRegionExtraSize */
         default:
             LOG("kernel", "GetInfo id %u (handle %#llx, subid %llu) not implemented", id, (unsigned long long)r[2], (unsigned long long)sub);

@@ -5,9 +5,11 @@
  *   sdcard    <save-root>/<titleid>/sdcard.
  * Paths are validated (no "..", no NUL, bounded length) before they touch the host file system. */
 #include "romfs_map.h"
+#include "romfs_read.h"
 #include "../ipc.h"
 #include "host_info.h"
 #include <dirent.h>
+#include <limits.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -29,10 +31,46 @@ static int clonefile(const char *src, const char *dst, int flags) {
 #endif
 #include <time.h>
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include "sys_default.h"
 
 #define FS_RESULT(desc) (2u | ((desc) << 9))
+/* The host unit tests (runtime/tests/host) link this file without romfs_read.c: these fallbacks make the RomFS file system views unavailable there. */
+__attribute__((weak)) RomfsImg *romfs_img_open(RomfsReadFn rd, void *ctx, uint64_t size) {
+    (void)rd;
+    (void)ctx;
+    (void)size;
+    return NULL;
+}
+__attribute__((weak)) void romfs_img_close(RomfsImg *img) { (void)img; }
+__attribute__((weak)) int romfs_img_lookup(const RomfsImg *img, const char *path, uint64_t *off, uint64_t *size) {
+    (void)img;
+    (void)path;
+    (void)off;
+    (void)size;
+    return ROMFS_NONE;
+}
+__attribute__((weak)) int romfs_img_child(const RomfsImg *img, const char *dir, unsigned n, char *name, size_t cap, int *is_dir, uint64_t *size) {
+    (void)img;
+    (void)dir;
+    (void)n;
+    (void)name;
+    (void)cap;
+    (void)is_dir;
+    (void)size;
+    return 0;
+}
+__attribute__((weak)) ssize_t romfs_img_read(const RomfsImg *img, uint64_t off, uint64_t fsize, uint64_t pos, void *dst, size_t len) {
+    (void)img;
+    (void)off;
+    (void)fsize;
+    (void)pos;
+    (void)dst;
+    (void)len;
+    return -1;
+}
 #define R_FS_PATH_NOT_FOUND FS_RESULT(1)
 #define R_FS_PATH_EXISTS FS_RESULT(2)
 #define R_FS_TARGET_NOT_FOUND FS_RESULT(1002)
@@ -42,6 +80,7 @@ static int clonefile(const char *src, const char *dst, int flags) {
 #define R_FS_INVALID_ARGUMENT FS_RESULT(6002)
 #define R_FS_NOT_FOUND_DATA FS_RESULT(1001)
 #define R_FS_UNEXPECTED FS_RESULT(5000)
+#define R_FS_INVALID_ENUM FS_RESULT(6001) /* 0x2EE202: an enum value the service does not know (OpenCustomStorageFileSystem, OpenContentStorageFileSystem) */
 
 static uint32_t errno_result(void) {
     switch (errno) {
@@ -127,6 +166,35 @@ static void mkdirs(const char *path) {
     mkdir(tmp, 0755);
 }
 
+/* OperateRange(u32 operation id, s64 offset, s64 size): OperationId 0 Clear, 1 ClearSignature, 2 InvalidateCache, 3 QueryRange. A plain file or storage has
+ * nothing to invalidate and no encrypted or emulated-speed range: InvalidateCache succeeds and QueryRange answers an all-zero 0x40-byte QueryRangeInfo (key
+ * type 0, speed emulation 0). Clear zero-fills the range through `clear` when the object is writable and is refused by a read-only one. */
+static void operate_range(IpcCall *c, int writable, int (*clear)(void *, int64_t, int64_t), void *ctx) {
+    uint32_t op = IPC_IN(c, uint32_t, 0);
+    int64_t off = IPC_IN(c, int64_t, 8), size = IPC_IN(c, int64_t, 16);
+    if (off < 0 || size < 0) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    switch (op) {
+        case 3: {
+            uint8_t info[0x40] = {0};
+            ipc_out(c, info, sizeof info);
+            return;
+        }
+        case 2: return;
+        case 0:
+        case 1:
+            if (!writable) {
+                c->result = R_FS_INVALID_ARGUMENT;
+                return;
+            }
+            if (op == 0 && clear && clear(ctx, off, size)) c->result = errno_result();
+            return;
+        default: c->result = R_FS_INVALID_ARGUMENT; return;
+    }
+}
+
 /* ---- IFile --------------------------------------------------------------------------------------------------- */
 typedef struct {
     int fd;
@@ -204,9 +272,30 @@ static void file_get_size(IpcObject *self, IpcCall *c) {
     int64_t v = sb.st_size;
     IPC_OUT(c, v);
 }
+static int host_file_clear(void *ctx, int64_t off, int64_t size) {
+    HostFile *f = ctx;
+    uint8_t zero[4096] = {0};
+    journal_mark_dirty(f->journal);
+    struct stat sb;
+    if (fstat(f->fd, &sb)) return -1;
+    if (off >= sb.st_size) return 0;
+    if (size > sb.st_size - off) size = sb.st_size - off;
+    for (int64_t done = 0; done < size;) {
+        int64_t n = size - done < (int64_t)sizeof zero ? size - done : (int64_t)sizeof zero;
+        if (pwrite(f->fd, zero, (size_t)n, off + done) != n) return -1;
+        done += n;
+    }
+    return 0;
+}
+static void file_operate_range(IpcObject *self, IpcCall *c) {
+    HostFile *f = self->state;
+    operate_range(c, f->writable, host_file_clear, f);
+}
 static const IpcCmd file_cmds[] = {
     {0, "Read", file_read, IPC_IMPL},        {1, "Write", file_write, IPC_IMPL},      {2, "Flush", file_flush, IPC_IMPL},
     {3, "SetSize", file_set_size, IPC_IMPL}, {4, "GetSize", file_get_size, IPC_IMPL},
+    {5, "OperateRange", file_operate_range, IPC_IMPL},
+    {6, "OperateRangeWithBuffer", file_operate_range, IPC_IMPL},
 };
 
 /* ---- IDirectory ---------------------------------------------------------------------------------------------- */
@@ -729,6 +818,17 @@ static void fs_open_directory(IpcObject *s, IpcCall *c) {
     snprintf(hd->path, sizeof hd->path, "%s", p);
     ipc_out_object(c, IPC_OBJECT("IDirectory", dir_cmds, hd, dir_destroy));
 }
+/* Every commit of a save gives it a new commit id (GetSaveDataCommitId, SaveDataExtraData.commit_id): strictly increasing, seeded from the clock. */
+static void meta_bump_commit_id(const char *root) {
+    SaveMeta m;
+    pthread_mutex_lock(&g_meta_mu);
+    if (meta_read(root, &m)) {
+        int64_t now = (int64_t)time(NULL) << 16;
+        m.extra.commit_id = now > m.extra.commit_id ? now : m.extra.commit_id + 1;
+        meta_write(root, &m);
+    }
+    pthread_mutex_unlock(&g_meta_mu);
+}
 static void fs_commit(IpcObject *s, IpcCall *c) {
     HostFs *fs = s->state;
     if (fs_trace()) LOG("fs", "Commit %s%s (thread %#llx)", fs->root, fs->journal ? (fs->journal->dirty ? " (changes pending)" : " (clean)") : " (not transactional)",
@@ -736,6 +836,7 @@ static void fs_commit(IpcObject *s, IpcCall *c) {
     if (fs->journal) {
         uint32_t r = journal_commit(fs->journal);
         if (r) c->result = r;
+        else meta_bump_commit_id(fs->root);
     } else sync();
 }
 /* Sizes: a save created with a size answers from it (free = size - blocks in use); everything else reports 1 GiB. */
@@ -790,6 +891,8 @@ static const IpcCmd fs_cmds[] = {
     {12, "GetTotalSpaceSize", fs_total_space, IPC_IMPL},
     {13, "CleanDirectoryRecursively", fs_clean_directory, IPC_IMPL},
     {14, "GetFileTimeStampRaw", fs_get_timestamp, IPC_IMPL},
+    {15, "QueryEntry", sysd_ok, IPC_STUB},
+    {16, "GetFileSystemAttribute", sysd_z32, IPC_STUB},
 };
 static IpcObject *open_host_fs(const char *root, int read_only, int journaled, int64_t quota) {
     HostFs *fs = calloc(1, sizeof *fs);
@@ -918,10 +1021,15 @@ static void storage_flush(IpcObject *self, IpcCall *c) {
     (void)self;
     (void)c;
 }
+static void storage_operate_range(IpcObject *self, IpcCall *c) {
+    (void)self;
+    operate_range(c, 0, NULL, NULL);
+}
 static const IpcCmd storage_cmds[] = {
     {0, "Read", storage_read, IPC_IMPL},        {1, "Write", storage_write_denied, IPC_IMPL},
     {2, "Flush", storage_flush, IPC_IMPL},      {3, "SetSize", storage_write_denied, IPC_IMPL},
     {4, "GetSize", storage_get_size, IPC_IMPL},
+    {5, "OperateRange", storage_operate_range, IPC_IMPL},
 };
 static IpcObject *open_romfs_storage_path(IpcCall *c, const char *path, const char *what) {
     int fd = open(path, O_RDONLY);
@@ -1381,12 +1489,20 @@ typedef struct {
     uint8_t (*infos)[0x60];
     unsigned n, cap, next;
     int space, only_cache;
+    uint8_t filter[0x48]; /* SaveDataFilter: five "compare this field" flags, option, reserved, then the SaveDataAttribute to compare against */
+    int use_filter;
 } InfoReader;
 static int info_collect(const char *root, const SaveMeta *m, void *arg) {
     (void)root;
     InfoReader *r = arg;
     const uint8_t *a = m->extra.attr;
     if ((r->space >= 0 && m->space != r->space) || (r->only_cache && a[0x20] != SAVE_CACHE)) return 0;
+    if (r->use_filter) {
+        const uint8_t *f = r->filter, *fa = f + 8;
+        if ((f[0] && memcmp(a, fa, 8)) || (f[1] && a[0x20] != fa[0x20]) || (f[2] && memcmp(a + 8, fa + 8, 16)) || (f[3] && memcmp(a + 0x18, fa + 0x18, 8)) ||
+            (f[4] && memcmp(a + 0x22, fa + 0x22, 2)))
+            return 0;
+    }
     if (r->n == r->cap) {
         unsigned nc = r->cap ? r->cap * 2 : 16;
         void *p = realloc(r->infos, (size_t)nc * 0x60);
@@ -1432,14 +1548,21 @@ static void reader_read(IpcObject *self, IpcCall *c) {
     IPC_OUT(c, n);
 }
 static const IpcCmd reader_cmds[] = {{0, "ReadSaveDataInfo", reader_read, IPC_IMPL}};
-static void open_reader(IpcCall *c, int space, int only_cache) {
+static InfoReader *collect_infos(int space, int only_cache, const uint8_t *filter) {
     InfoReader *r = calloc(1, sizeof *r);
     r->space = space;
     r->only_cache = only_cache;
+    if (filter) {
+        memcpy(r->filter, filter, sizeof r->filter);
+        r->use_filter = 1;
+    }
     pthread_mutex_lock(&g_meta_mu);
     meta_walk(host_save_dir(), 6, info_collect, r);
     pthread_mutex_unlock(&g_meta_mu);
-    ipc_out_object(c, IPC_OBJECT("ISaveDataInfoReader", reader_cmds, r, reader_destroy));
+    return r;
+}
+static void open_reader(IpcCall *c, int space, int only_cache) {
+    ipc_out_object(c, IPC_OBJECT("ISaveDataInfoReader", reader_cmds, collect_infos(space, only_cache, NULL), reader_destroy));
 }
 static void srv_open_reader(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -1458,11 +1581,539 @@ static void srv_open_data_storage(IpcObject *s, IpcCall *c) {
     IpcObject *o = open_romfs_storage(c);
     if (o) ipc_out_object(c, o);
 }
-static void srv_get_log_mode(IpcObject *s, IpcCall *c) {
-    (void)s;
-    uint32_t v = 0;
+/* ---- RomFS as an IFileSystem ------------------------------------------------------------------------------------
+ * OpenDataFileSystemByCurrentProcess / ByProgramId and OpenFileSystemWithId(Rom, Data) hand out the RomFS image as a read-only file system: the
+ * directory and file tables are parsed on the host (romfs_read.c) and the files are extents of the same storage the IStorage commands serve
+ * (romfs.bin, romfs.map, the BKTR delta layer or the mod overlay), so both views of a title's RomFS always agree. */
+typedef struct {
+    StorageFile *st;
+    RomfsImg *img;
+    unsigned refs;
+} RomView;
+static ssize_t romview_read_cb(void *ctx, void *dst, size_t len, uint64_t off) { return storage_pread(((RomView *)ctx)->st, dst, len, off); }
+static void romview_unref(RomView *v) {
+    if (!v || __atomic_sub_fetch(&v->refs, 1, __ATOMIC_ACQ_REL)) return;
+    romfs_img_close(v->img);
+    IpcObject tmp = {.state = v->st};
+    storage_destroy(&tmp);
+    free(v);
+}
+/* Takes the StorageFile out of a freshly made IStorage object (nothing else holds a reference to it yet). */
+static StorageFile *take_storage(IpcObject *o) {
+    if (!o) return NULL;
+    StorageFile *st = o->state;
+    o->state = NULL;
+    o->destroy = NULL;
+    free(o);
+    return st;
+}
+static RomView *romview_from_storage(IpcObject *o) {
+    StorageFile *st = take_storage(o);
+    if (!st) return NULL;
+    RomView *v = calloc(1, sizeof *v);
+    v->st = st;
+    v->refs = 1;
+    v->img = romfs_img_open(romview_read_cb, v, st->size);
+    if (!v->img) {
+        LOG("fs", "RomFS file system: the image is not a parsable RomFS");
+        romview_unref(v);
+        return NULL;
+    }
+    return v;
+}
+typedef struct {
+    RomView *v;
+    uint64_t off, size;
+} RomFile;
+static void romfile_destroy(IpcObject *o) {
+    RomFile *f = o->state;
+    if (f) {
+        romview_unref(f->v);
+        free(f);
+    }
+}
+static void romfile_read(IpcObject *self, IpcCall *c) {
+    RomFile *f = self->state;
+    int64_t off = IPC_IN(c, int64_t, 8), size = IPC_IN(c, int64_t, 16);
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (!b || off < 0 || size < 0) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    if ((uint64_t)size > b->size) size = (int64_t)b->size;
+    void *dst = guest_ptr(b->addr, (uint64_t)size);
+    if (!dst && size) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    guest_write_prepare(b->addr, (size_t)size);
+    uint64_t got = 0;
+    while (got < (uint64_t)size) {
+        ssize_t n = romfs_img_read(f->v->img, f->off, f->size, (uint64_t)off + got, (char *)dst + got, (size_t)((uint64_t)size - got));
+        if (n < 0) {
+            c->result = R_FS_UNEXPECTED;
+            return;
+        }
+        if (n == 0) break;
+        got += (uint64_t)n;
+    }
+    IPC_OUT(c, got);
+}
+static void romfile_get_size(IpcObject *self, IpcCall *c) {
+    RomFile *f = self->state;
+    int64_t v = (int64_t)f->size;
     IPC_OUT(c, v);
 }
+static void read_only_denied(IpcObject *self, IpcCall *c) {
+    (void)self;
+    c->result = R_FS_INVALID_ARGUMENT;
+}
+static void romfile_operate_range(IpcObject *self, IpcCall *c) {
+    (void)self;
+    operate_range(c, 0, NULL, NULL);
+}
+static const IpcCmd romfile_cmds[] = {
+    {0, "Read", romfile_read, IPC_IMPL},         {1, "Write", read_only_denied, IPC_IMPL},    {2, "Flush", srv_noop, IPC_IMPL},
+    {3, "SetSize", read_only_denied, IPC_IMPL},  {4, "GetSize", romfile_get_size, IPC_IMPL},  {5, "OperateRange", romfile_operate_range, IPC_IMPL},
+    {6, "OperateRangeWithBuffer", romfile_operate_range, IPC_IMPL},
+};
+typedef struct {
+    RomView *v;
+    char path[0x302];
+    unsigned next;
+    int mode;
+} RomDir;
+static void romdir_destroy(IpcObject *o) {
+    RomDir *d = o->state;
+    if (d) {
+        romview_unref(d->v);
+        free(d);
+    }
+}
+static int romdir_wanted(const RomDir *d, int is_dir) { return is_dir ? (d->mode & 1) : (d->mode & 2); }
+static void romdir_read(IpcObject *self, IpcCall *c) {
+    RomDir *d = self->state;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (!b) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    uint8_t *out = guest_ptr(b->addr, b->size);
+    if (!out) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    int64_t max = (int64_t)(b->size / 0x310), n = 0;
+    guest_write_prepare(b->addr, (size_t)b->size);
+    char name[0x301];
+    int isdir;
+    uint64_t sz;
+    while (n < max && romfs_img_child(d->v->img, d->path, d->next, name, sizeof name, &isdir, &sz)) {
+        d->next++;
+        if (!romdir_wanted(d, isdir)) continue;
+        uint8_t *ent = out + n * 0x310;
+        memset(ent, 0, 0x310);
+        memcpy(ent, name, strnlen(name, 0x300));
+        ent[0x304] = isdir ? 0 : 1;
+        int64_t s = (int64_t)sz;
+        memcpy(ent + 0x308, &s, 8);
+        n++;
+    }
+    IPC_OUT(c, n);
+}
+static void romdir_entry_count(IpcObject *self, IpcCall *c) {
+    RomDir *d = self->state;
+    int64_t n = 0;
+    char name[0x301];
+    int isdir;
+    for (unsigned i = 0; romfs_img_child(d->v->img, d->path, i, name, sizeof name, &isdir, NULL); i++) n += romdir_wanted(d, isdir) != 0;
+    IPC_OUT(c, n);
+}
+static const IpcCmd romdir_cmds[] = {{0, "Read", romdir_read, IPC_IMPL}, {1, "GetEntryCount", romdir_entry_count, IPC_IMPL}};
+/* The RomFS path of a call's buffer argument ("/a/b"), validated like the host file systems' paths. */
+static int rom_path(IpcCall *c, unsigned n, char *out, size_t cap) {
+    static const HostFs none = {.root = ""};
+    char gp[0x302];
+    return guest_path(c, n, gp, sizeof gp) && host_path(&none, gp, out, cap);
+}
+static void romfs_get_entry_type(IpcObject *s, IpcCall *c) {
+    RomView *v = s->state;
+    char p[0x302];
+    if (!rom_path(c, 0, p, sizeof p)) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    int k = romfs_img_lookup(v->img, p, NULL, NULL);
+    if (k == ROMFS_NONE) {
+        c->result = R_FS_PATH_NOT_FOUND;
+        return;
+    }
+    uint32_t t = k == ROMFS_DIR ? 0 : 1;
+    IPC_OUT(c, t);
+}
+static void romfs_open_file(IpcObject *s, IpcCall *c) {
+    RomView *v = s->state;
+    char p[0x302];
+    if (!rom_path(c, 0, p, sizeof p)) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    if (IPC_IN(c, uint32_t, 0) & 6) { /* write or append: this file system is read-only */
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    uint64_t off, size;
+    int k = romfs_img_lookup(v->img, p, &off, &size);
+    if (k != ROMFS_FILE) {
+        c->result = R_FS_PATH_NOT_FOUND;
+        return;
+    }
+    RomFile *f = calloc(1, sizeof *f);
+    f->v = v;
+    f->off = off;
+    f->size = size;
+    __atomic_add_fetch(&v->refs, 1, __ATOMIC_RELAXED);
+    ipc_out_object(c, IPC_OBJECT("IFile", romfile_cmds, f, romfile_destroy));
+}
+static void romfs_open_directory(IpcObject *s, IpcCall *c) {
+    RomView *v = s->state;
+    char p[0x302];
+    if (!rom_path(c, 0, p, sizeof p)) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    if (romfs_img_lookup(v->img, p, NULL, NULL) != ROMFS_DIR) {
+        c->result = R_FS_PATH_NOT_FOUND;
+        return;
+    }
+    RomDir *d = calloc(1, sizeof *d);
+    d->v = v;
+    d->mode = (int)IPC_IN(c, uint32_t, 0);
+    snprintf(d->path, sizeof d->path, "%s", p);
+    __atomic_add_fetch(&v->refs, 1, __ATOMIC_RELAXED);
+    ipc_out_object(c, IPC_OBJECT("IDirectory", romdir_cmds, d, romdir_destroy));
+}
+static void romfs_total_space(IpcObject *s, IpcCall *c) {
+    RomView *v = s->state;
+    int64_t t = (int64_t)v->st->size;
+    IPC_OUT(c, t);
+}
+static void romfs_free_space(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t t = 0; /* nothing can be written to it */
+    IPC_OUT(c, t);
+}
+static void romfs_destroy(IpcObject *o) { romview_unref(o->state); }
+static const IpcCmd romfs_fs_cmds[] = {
+    {0, "CreateFile", read_only_denied, IPC_IMPL},
+    {1, "DeleteFile", read_only_denied, IPC_IMPL},
+    {2, "CreateDirectory", read_only_denied, IPC_IMPL},
+    {3, "DeleteDirectory", read_only_denied, IPC_IMPL},
+    {4, "DeleteDirectoryRecursively", read_only_denied, IPC_IMPL},
+    {5, "RenameFile", read_only_denied, IPC_IMPL},
+    {6, "RenameDirectory", read_only_denied, IPC_IMPL},
+    {7, "GetEntryType", romfs_get_entry_type, IPC_IMPL},
+    {8, "OpenFile", romfs_open_file, IPC_IMPL},
+    {9, "OpenDirectory", romfs_open_directory, IPC_IMPL},
+    {10, "Commit", srv_noop, IPC_IMPL},
+    {11, "GetFreeSpaceSize", romfs_free_space, IPC_IMPL},
+    {12, "GetTotalSpaceSize", romfs_total_space, IPC_IMPL},
+    {13, "CleanDirectoryRecursively", read_only_denied, IPC_IMPL},
+};
+
+/* ---- fsp-srv: content file systems -------------------------------------------------------------------------------- */
+/* The data storage behind a program id: the running application and its update title are the current RomFS, anything else resolves like a data id (a DLC's
+ * romfs image, or a firmware data archive in sysdata/). NULL with c->result set when there is none. */
+static IpcObject *open_storage_for_program(IpcCall *c, uint64_t id, const char *what) {
+    if (id == g_program_id || id == (g_program_id | 0x800)) return open_romfs_storage(c);
+    const char *p = aoc_data_id_romfs(id);
+    char sys[1300];
+    if (!p) {
+        snprintf(sys, sizeof sys, "%s/sysdata/%016llx.bin", g_cfg.data_dir, (unsigned long long)id);
+        if (access(sys, R_OK) != 0) snprintf(sys, sizeof sys, "%s/../sysdata/%016llx.bin", g_cfg.data_dir, (unsigned long long)id);
+        if (access(sys, R_OK) == 0) p = sys;
+    }
+    LOG("fs", "%s: program id %016llx%s", what, (unsigned long long)id, p ? "" : " (no data)");
+    if (!p) {
+        c->result = R_FS_NOT_FOUND_DATA;
+        return NULL;
+    }
+    return open_romfs_storage_path(c, p, what);
+}
+static void out_romfs_fs(IpcCall *c, IpcObject *storage) {
+    if (!storage) {
+        if (!c->result) c->result = R_FS_NOT_FOUND_DATA;
+        return;
+    }
+    RomView *v = romview_from_storage(storage);
+    if (!v) {
+        c->result = R_FS_NOT_FOUND_DATA;
+        return;
+    }
+    ipc_out_object(c, IPC_OBJECT("IFileSystem", romfs_fs_cmds, v, romfs_destroy));
+}
+/* A read-only view of a directory of the data directory (the HostFs checks every path, so nothing outside `root` is reachable). */
+static IpcObject *open_content_dir_fs(const char *root) {
+    HostFs *fs = calloc(1, sizeof *fs);
+    snprintf(fs->root, sizeof fs->root, "%s", root);
+    fs->read_only = 1;
+    LOG("fs", "mounted content directory %s (read only)", root);
+    return IPC_OBJECT("IFileSystem", fs_cmds, fs, NULL);
+}
+/* Manual (the title's offline HTML documents): <data-dir>/html, written by `napple build` from the title's HtmlDocument content. */
+static IpcObject *open_manual_fs(IpcCall *c) {
+    char p[1300];
+    struct stat sb;
+    snprintf(p, sizeof p, "%s/html", g_cfg.data_dir ? g_cfg.data_dir : ".");
+    if (stat(p, &sb) || !S_ISDIR(sb.st_mode)) {
+        c->result = R_FS_NOT_FOUND_DATA;
+        return NULL;
+    }
+    return open_content_dir_fs(p);
+}
+/* Control: control.nacp of the data directory, linked into <save-root>/<title>/content/control (the file system is rooted there so the module files
+ * next to control.nacp stay out of reach). */
+static IpcObject *open_control_fs(IpcCall *c) {
+    char src[1300], dir[1300], link[1400];
+    snprintf(src, sizeof src, "%s/control.nacp", g_cfg.data_dir ? g_cfg.data_dir : ".");
+    if (access(src, R_OK) != 0) {
+        c->result = R_FS_NOT_FOUND_DATA;
+        return NULL;
+    }
+    snprintf(dir, sizeof dir, "%s/%s/content/control", g_cfg.save_root, g_cfg.title_id);
+    mkdirs(dir);
+    snprintf(link, sizeof link, "%s/control.nacp", dir);
+    char abs[PATH_MAX];
+    if (realpath(src, abs)) {
+        unlink(link);
+        if (symlink(abs, link)) LOG("fs", "control file system: cannot link %s: %s", abs, strerror(errno));
+    }
+    return open_content_dir_fs(dir);
+}
+/* FileSystemProxyType: 0 Code, 1 Rom, 2 Logo, 3 Control, 4 Manual, 5 Meta, 6 Data, 7 Package. The host has no NCA files, so only the types it can serve exist:
+ * Rom and Data (the RomFS of the program id), Control, Manual. The others are "path not found", which is what a console answers for content that was never
+ * installed. */
+static void open_content_fs(IpcCall *c, uint32_t type, uint64_t program_id) {
+    IpcObject *fsobj = NULL;
+    switch (type) {
+        case 1:
+        case 6: out_romfs_fs(c, open_storage_for_program(c, program_id, "OpenFileSystemWithId")); return;
+        case 3: fsobj = open_control_fs(c); break;
+        case 4: fsobj = open_manual_fs(c); break;
+        default: c->result = R_FS_PATH_NOT_FOUND; return;
+    }
+    if (fsobj) ipc_out_object(c, fsobj);
+}
+/* 10 OpenFileSystemWithId(buffer FspPath; u8 content attributes, u32 type, u64 program id) */
+static void srv_open_fs_with_id(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 16) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    open_content_fs(c, IPC_IN(c, uint32_t, 4), IPC_IN(c, uint64_t, 8));
+}
+/* 7 OpenFileSystemWithPatch(u32 type, u64 program id): only Manual is allowed (the patched manual); the host has one manual. */
+static void srv_open_fs_with_patch(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 16 || IPC_IN(c, uint32_t, 0) != 4) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    open_content_fs(c, 4, IPC_IN(c, uint64_t, 8));
+}
+static void srv_open_data_fs_current(IpcObject *s, IpcCall *c) {
+    (void)s;
+    out_romfs_fs(c, open_romfs_storage(c));
+}
+static void srv_open_data_fs_by_program(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 8) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    out_romfs_fs(c, open_storage_for_program(c, IPC_IN(c, uint64_t, 0), "OpenDataFileSystemByProgramId"));
+}
+static void srv_open_data_storage_by_program(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 8) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    IpcObject *o = open_storage_for_program(c, IPC_IN(c, uint64_t, 0), "OpenDataStorageByProgramId");
+    if (o) ipc_out_object(c, o);
+}
+/* 205 OpenDataStorageWithProgramIndex(u8 index): an application has one program (index 0); another index is "not found". */
+static void srv_open_data_storage_with_index(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 1 || IPC_IN(c, uint8_t, 0) != 0) {
+        c->result = R_FS_NOT_FOUND_DATA;
+        return;
+    }
+    IpcObject *o = open_romfs_storage(c);
+    if (o) ipc_out_object(c, o);
+}
+/* 100 OpenImageDirectoryFileSystem(u32 id: 0 NAND, 1 SD card) and 130 OpenCustomStorageFileSystem(u32 id: 0 user, 1 SD card): writable directories below the
+ * title's save root. */
+static void srv_open_image_directory(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t id = IPC_IN(c, uint32_t, 0);
+    if (id > 1) {
+        c->result = R_FS_INVALID_ENUM;
+        return;
+    }
+    char root[1300];
+    snprintf(root, sizeof root, "%s/%s/image/%s", g_cfg.save_root, g_cfg.title_id, id ? "sd" : "nand");
+    ipc_out_object(c, open_host_fs(root, 0, 0, 0));
+}
+static void srv_open_custom_storage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t id = IPC_IN(c, uint32_t, 0);
+    if (id > 1) {
+        c->result = R_FS_INVALID_ENUM;
+        return;
+    }
+    char root[1300];
+    snprintf(root, sizeof root, "%s/%s/custom/%s", g_cfg.save_root, g_cfg.title_id, id ? "sd" : "user");
+    ipc_out_object(c, open_host_fs(root, 0, 0, 0));
+}
+
+/* 510 OpenSystemDataUpdateEventNotifier -> IEventNotifier {0 GetEventHandle -> event}: the event is signalled by 511 NotifySystemDataUpdateEvent (the system data
+ * archives are read-only here, so only an explicit notify fires it). */
+static uint32_t g_sysdata_events[8];
+static unsigned g_sysdata_nevents;
+static pthread_mutex_t g_sysdata_mu = PTHREAD_MUTEX_INITIALIZER;
+static void notifier_get_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t r = 0, w = event_create(&r);
+    pthread_mutex_lock(&g_sysdata_mu);
+    if (g_sysdata_nevents < 8) g_sysdata_events[g_sysdata_nevents++] = w;
+    pthread_mutex_unlock(&g_sysdata_mu);
+    ipc_out_copy_handle(c, r);
+}
+static const IpcCmd notifier_cmds[] = {{0, "GetEventHandle", notifier_get_event, IPC_IMPL}};
+static void srv_open_sysdata_notifier(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_object(c, IPC_OBJECT("IEventNotifier", notifier_cmds, NULL, NULL));
+}
+static void srv_notify_sysdata_update(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&g_sysdata_mu);
+    for (unsigned i = 0; i < g_sysdata_nevents; i++) event_signal_handle(g_sysdata_events[i]);
+    pthread_mutex_unlock(&g_sysdata_mu);
+}
+
+/* ---- fsp-srv: state the SDK reads back ----------------------------------------------------------------------------- */
+static int g_sd_accessible = 1;
+static uint8_t g_sd_seed[16];
+static uint32_t g_access_log_mode;
+/* 27 IsExFatSupported: the exFAT driver ships with the firmware since 2.0.0 and the host file system under the SD directory has no FAT limits. */
+static void srv_is_exfat_supported(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = 1;
+    IPC_OUT(c, v);
+}
+static void srv_set_sd_accessibility(IpcObject *s, IpcCall *c) {
+    (void)s;
+    g_sd_accessible = c->in_size >= 1 && IPC_IN(c, uint8_t, 0) != 0;
+}
+/* 631 IsSdCardAccessible: the SD card is a directory below the save root; it is accessible while the guest has not turned it off and the directory can be used. */
+static void srv_is_sd_accessible(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char root[1300];
+    snprintf(root, sizeof root, "%s/%s/sdcard", g_cfg.save_root, g_cfg.title_id);
+    mkdirs(root);
+    uint8_t v = g_sd_accessible && access(root, W_OK | X_OK) == 0;
+    IPC_OUT(c, v);
+}
+static void srv_set_sd_encryption_seed(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 16) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    memcpy(g_sd_seed, ipc_in(c, 0, 16), 16);
+}
+static void srv_set_log_mode(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size >= 4) g_access_log_mode = IPC_IN(c, uint32_t, 0);
+}
+static void srv_get_log_mode(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = g_access_log_mode;
+    IPC_OUT(c, v);
+}
+/* 1011 GetProgramIndexForAccessLog -> {u32 version, u32 program index}: version 1 of the access log format, program 0 of the application. */
+static void srv_get_program_index_for_access_log(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v[2] = {1, 0};
+    ipc_out(c, v, sizeof v);
+}
+/* 612 GetFreeSpaceSizeForSaveData(u8 space id) -> s64: the free space of the volume that holds the save directory. */
+static void srv_free_space_for_save(IpcObject *s, IpcCall *c) {
+    (void)s;
+    struct statvfs sv;
+    int64_t v = 0;
+    if (statvfs(host_save_dir(), &sv) == 0) v = (int64_t)((uint64_t)sv.f_bavail * (uint64_t)sv.f_frsize);
+    IPC_OUT(c, v);
+}
+/* 616 GetSaveDataCommitId(u8 space id, u64 save data id) -> u64: the commit id of the save's extra data, advanced by every commit (fs_commit). */
+static void srv_get_commit_id(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char root[1300];
+    SaveMeta m;
+    pthread_mutex_lock(&g_meta_mu);
+    int found = find_by_id(IPC_IN(c, uint8_t, 0), IPC_IN(c, uint64_t, 8), root, sizeof root, &m);
+    pthread_mutex_unlock(&g_meta_mu);
+    if (!found) {
+        c->result = R_FS_TARGET_NOT_FOUND;
+        return;
+    }
+    uint64_t id = (uint64_t)m.extra.commit_id;
+    IPC_OUT(c, id);
+}
+/* 64 OpenSaveDataInternalStorageFileSystem(u8 space id, u64 save data id): the save's own backing directory, writable like the save itself. */
+static void srv_open_internal_storage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    char root[1300];
+    SaveMeta m;
+    pthread_mutex_lock(&g_meta_mu);
+    int found = find_by_id(IPC_IN(c, uint8_t, 0), IPC_IN(c, uint64_t, 8), root, sizeof root, &m);
+    pthread_mutex_unlock(&g_meta_mu);
+    if (!found) {
+        c->result = R_FS_TARGET_NOT_FOUND;
+        return;
+    }
+    ipc_out_object(c, open_host_fs(root, 0, save_type_journaled(m.extra.attr[0x20]), m.extra.data_size));
+}
+/* 67 FindSaveDataWithFilter(u8 space id, SaveDataFilter) -> s64 count + SaveDataInfo[1]; 68 OpenSaveDataInfoReaderWithFilter(u8 space id, SaveDataFilter). */
+static void srv_find_with_filter(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 0x50) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    InfoReader *r = collect_infos(IPC_IN(c, uint8_t, 0), 0, ipc_in(c, 8, 0x48));
+    int64_t n = 0;
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (r->n && b && b->size >= 0x60) {
+        ipc_write_buf(c, b, r->infos[r->next++], 0x60);
+        n = 1;
+    }
+    free(r->infos);
+    free(r);
+    IPC_OUT(c, n);
+}
+static void srv_open_reader_filter(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 0x50) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    ipc_out_object(c, IPC_OBJECT("ISaveDataInfoReader", reader_cmds, collect_infos(IPC_IN(c, uint8_t, 0), 0, ipc_in(c, 8, 0x48)), reader_destroy));
+}
+
 static const IpcCmd srv_cmds[] = {
     {1, "SetCurrentProcess", srv_noop, IPC_IMPL},
     {18, "OpenSdCardFileSystem", srv_open_sdcard, IPC_IMPL},
@@ -1488,7 +2139,7 @@ static const IpcCmd srv_cmds[] = {
     {69, "ReadSaveDataFileSystemExtraDataBySaveDataAttribute", srv_read_extra_by_attr, IPC_IMPL},
     {70, "WriteSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute", srv_write_extra_mask_by_attr, IPC_IMPL},
     {71, "ReadSaveDataFileSystemExtraDataWithMaskBySaveDataAttribute", srv_read_extra_mask_by_attr, IPC_IMPL},
-    {30, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},
+    {30, "OpenGameCardStorage", sysd_err_generic, IPC_STUB},
     {200, "OpenDataStorageByCurrentProcess", srv_open_data_storage, IPC_IMPL},
     {203, "OpenPatchDataStorageByCurrentProcess", srv_open_patch_storage, IPC_IMPL},
     {202, "OpenDataStorageByDataId", srv_open_data_storage_by_id, IPC_IMPL},
@@ -1497,6 +2148,47 @@ static const IpcCmd srv_cmds[] = {
     {1003, "DisableAutoSaveDataCreation", srv_noop, IPC_IMPL},
     {1005, "GetGlobalAccessLogMode", srv_get_log_mode, IPC_IMPL},
     {1006, "OutputAccessLogToSdCard", srv_noop, IPC_IMPL},
+    {0, "OpenFileSystem", sysd_err_generic, IPC_STUB},
+    {2, "OpenDataFileSystemByCurrentProcess", srv_open_data_fs_current, IPC_IMPL},
+    {7, "OpenFileSystemWithPatch", srv_open_fs_with_patch, IPC_IMPL},
+    {9, "OpenDataFileSystemByProgramId", srv_open_data_fs_by_program, IPC_IMPL},
+    {10, "OpenFileSystemWithId", srv_open_fs_with_id, IPC_IMPL},
+    {27, "IsExFatSupported", srv_is_exfat_supported, IPC_IMPL},
+    {31, "OpenGameCardFileSystem", sysd_err_generic, IPC_STUB},
+    {37, "CreateSaveDataFileSystemWithCreationInfo2", sysd_err_generic, IPC_STUB},
+    {64, "OpenSaveDataInternalStorageFileSystem", srv_open_internal_storage, IPC_IMPL},
+    {67, "FindSaveDataWithFilter", srv_find_with_filter, IPC_IMPL},
+    {68, "OpenSaveDataInfoReaderWithFilter", srv_open_reader_filter, IPC_IMPL},
+    {80, "OpenSaveDataMetaFile", sysd_ok, IPC_STUB},
+    {81, "OpenSaveDataTransferManager", sysd_err_generic, IPC_STUB},
+    {82, "OpenSaveDataTransferManagerVersion2", sysd_err_generic, IPC_STUB},
+    {83, "OpenSaveDataTransferProhibiter", sysd_err_generic, IPC_STUB},
+    {84, "ListAccessibleSaveDataOwnerId", sysd_err_generic, IPC_STUB},
+    {85, "OpenSaveDataTransferManagerForSaveDataRepair", sysd_err_generic, IPC_STUB},
+    {86, "OpenSaveDataMover", sysd_err_generic, IPC_STUB},
+    {87, "OpenSaveDataTransferManagerForRepair", sysd_err_generic, IPC_STUB},
+    {88, "OpenSaveDataTransferManagerForSaveDataRepairWithPolicy", sysd_ok, IPC_STUB},
+    {100, "OpenImageDirectoryFileSystem", srv_open_image_directory, IPC_IMPL},
+    {110, "OpenContentStorageFileSystem", sysd_err_generic, IPC_STUB},
+    {130, "OpenCustomStorageFileSystem", srv_open_custom_storage, IPC_IMPL},
+    {201, "OpenDataStorageByProgramId", srv_open_data_storage_by_program, IPC_IMPL},
+    {205, "OpenDataStorageWithProgramIndex", srv_open_data_storage_with_index, IPC_IMPL},
+    {510, "OpenSystemDataUpdateEventNotifier", srv_open_sysdata_notifier, IPC_IMPL},
+    {511, "NotifySystemDataUpdateEvent", srv_notify_sysdata_update, IPC_IMPL},
+    {606, "GetRightsId", sysd_err_generic, IPC_STUB},
+    {610, "GetRightsIdAndKeyGenerationByPath", sysd_err_generic, IPC_STUB},
+    {612, "GetFreeSpaceSizeForSaveData", srv_free_space_for_save, IPC_IMPL},
+    {616, "GetSaveDataCommitId", srv_get_commit_id, IPC_IMPL},
+    {618, "GetProgramId", sysd_err_generic, IPC_STUB},
+    {620, "SetSdCardEncryptionSeed", srv_set_sd_encryption_seed, IPC_IMPL},
+    {630, "SetSdCardAccessibility", srv_set_sd_accessibility, IPC_IMPL},
+    {631, "IsSdCardAccessible", srv_is_sd_accessible, IPC_IMPL},
+    {800, "GetAndClearErrorInfo", sysd_err_generic, IPC_STUB},
+    {1001, "SetSaveDataSize", sysd_ok, IPC_STUB},
+    {1004, "SetGlobalAccessLogMode", srv_set_log_mode, IPC_IMPL},
+    {1011, "GetProgramIndexForAccessLog", srv_get_program_index_for_access_log, IPC_IMPL},
+    {1012, "GetFsStackUsage", sysd_z8, IPC_STUB},
+    {1016, "FlushAccessLogOnSdCard", srv_noop, IPC_IMPL}, /* the access log is never written (mode 0 unless the guest sets it, and nothing is buffered) */
 };
 static IpcObject *fsp_open(void) { return IPC_OBJECT("fsp-srv", srv_cmds, NULL, NULL); }
 void service_register_fs(void) { ipc_register_service("fsp-srv", fsp_open); }

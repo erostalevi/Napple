@@ -439,9 +439,28 @@ static void gs_fallback(const char *why) {
     if (ns < 32) seen[ns++] = S.prog[2];
     LOGW("geometry program %016llx: %s: drawn without the geometry stage", (unsigned long long)S.prog[2], why);
 }
+/* Evidence that a stage path ran in a title (the boot logs tell which programs went through it): one info line the first time each program `h`
+ * goes through path `kind` (0 geometry, 1 tessellation, 2 software tessellation, 3 transform feedback capture), and the running count of such
+ * draws at powers of two. */
+static void stage_ran(int kind, uint64_t h, const char *detail) {
+    static const char *const names[4] = {"geometry", "tessellation", "software tessellation", "transform feedback capture"};
+    static _Atomic uint64_t count[4];
+    static uint64_t seen[4][16];
+    static int ns[4];
+    uint64_t k = atomic_fetch_add(&count[kind], 1) + 1;
+    int i = 0;
+    while (i < ns[kind] && seen[kind][i] != h) i++;
+    if (i == ns[kind] && i < 16) {
+        seen[kind][ns[kind]++] = h;
+        LOGI("stage path ran: %s, program %016llx (vs %016llx): %s", names[kind], (unsigned long long)h, (unsigned long long)S.prog[0], detail);
+    }
+    if (k >= 16 && !(k & (k - 1))) LOGI("stage path ran: %s, %llu draws so far", names[kind], (unsigned long long)k);
+}
 static void stage_key_masks(int stage, ShaderKey *sk) {
     ds_slot_masks(stage, &sk->depth_slots, &sk->stencil_slots);
     image_masks(stage, &sk->image_int_mask, &sk->image_uint_mask);
+    int_slot_masks(stage, &sk->tex_uint_slots, &sk->tex_sint_slots);
+    sep_slot_masks(stage, &sk->sep_depth_slots, &sk->sep_stencil_slots, &sk->sep_uint_slots, &sk->sep_sint_slots);
 }
 
 /* The capture layout of the program that feeds the rasterizer: `h` (geometry, else vertex). 0 with one warning per program when none is registered. */
@@ -751,6 +770,10 @@ static int draw_geometry(const sdraw *d) {
         gs_fallback("the geometry program did not compile");
         return 0;
     }
+    char det[128];
+    snprintf(det, sizeof det, "mode %u, %u primitives x %u invocations, %u max vertices, topology %u%s%s", d->mode, nprim, g.inv, g.maxv, g.topo,
+             want_draw ? ", drawn" : "", want_xfb ? ", captured" : "");
+    stage_ran(0, gsh, det);
     return 1;
 }
 
@@ -869,6 +892,13 @@ static int tes_soft_capture(const stage_pipe_key *tsk, id<MTLBuffer> vb, uint32_
 
 /* Tessellated draw (passes 1-3): patches of S.patch_size control points. Metal's tessellator draws triangle and quad patches; isolines, a capture of the
  * tess eval output and a geometry program after tessellation go through the software tessellator above. Captures its own transform feedback. */
+/* stage_ran for a tessellation draw (kind 1 Metal's tessellator, 2 the software one). */
+static void tess_ran(int kind, uint64_t tes, uint64_t tcs, uint32_t npatch, uint32_t tov, const gfx_tess_params *tp, int gs, int xfb) {
+    char det[160];
+    snprintf(det, sizeof det, "tcs %016llx, %u patches of %u control points, domain %u spacing %u winding %u%s%s", (unsigned long long)tcs, npatch, tov,
+             tp->domain, tp->spacing, tp->winding, gs ? ", then geometry" : "", xfb ? ", captured" : "");
+    stage_ran(kind, tes, det);
+}
 static void draw_tessellation(const sdraw *d) {
     uint64_t tcs = S.prog[3], tes = S.prog[4];
     if (!tes) { stage_skip(d->mode == NVN_DRAW_PRIMITIVE_PATCHES ? "patches without a tess evaluation program" : "tess control program without patches"); return; }
@@ -977,6 +1007,7 @@ static void draw_tessellation(const sdraw *d) {
         [g_re setVertexBuffer:pb offset:po atIndex:TESS_PATCH_BUFFER_INDEX];
         [g_re setTessellationFactorBuffer:fb offset:fo instanceStride:0];
         [g_re drawPatches:tov patchStart:0 patchCount:npatch patchIndexBuffer:nil patchIndexBufferOffset:0 instanceCount:1 baseInstance:0];
+        tess_ran(1, tes, tcs, npatch, tov, &tp, 0, 0);
         return;
     }
     /* software tessellation: level cap, coordinates + index strips */
@@ -1016,8 +1047,10 @@ static void draw_tessellation(const sdraw *d) {
             stage_skip("software tessellation capture failed (tess eval program or scratch)");
             return;
         }
-        if (!use_gs) xfb_gpu_capture(&xl, xused, sb, so, xb, xo, nidx, 1, iso ? GS_OUT_LINE_STRIP : GS_OUT_TRIANGLE_STRIP, mask);
-        else {
+        if (!use_gs) {
+            xfb_gpu_capture(&xl, xused, sb, so, xb, xo, nidx, 1, iso ? GS_OUT_LINE_STRIP : GS_OUT_TRIANGLE_STRIP, mask);
+            if (!want_draw) tess_ran(2, tes, tcs, npatch, tov, &tp, 0, 1);
+        } else {
             id<MTLBuffer> qb2, spb, lb;
             uint32_t qo2, spo, lo2, cap = nidx / (pv + 1);
             uint32_t *lt = stage_alloc(16, &lb, &lo2);
@@ -1040,6 +1073,7 @@ static void draw_tessellation(const sdraw *d) {
             if (!gs_run(S.prog[2], &g, iso ? NVN_DRAW_PRIMITIVE_LINES : NVN_DRAW_PRIMITIVE_TRIANGLES, pv, sb, so, qb2, qo2, cap, spb, spo, want_draw,
                         want_xfb ? &xl : NULL, xused))
                 stage_skip("the geometry program after tessellation did not compile");
+            else tess_ran(2, tes, tcs, npatch, tov, &tp, 1, want_xfb);
             return;
         }
     }
@@ -1060,6 +1094,7 @@ static void draw_tessellation(const sdraw *d) {
                       indexType:MTLIndexTypeUInt32
                     indexBuffer:xb
               indexBufferOffset:xo];
+    tess_ran(2, tes, tcs, npatch, tov, &tp, 0, want_xfb);
 }
 
 /* Entry from do_draw_arrays / do_draw_elements: transform feedback capture first, then the draw's stages. Returns 1 when the draw was handled here. */
@@ -1077,4 +1112,32 @@ static int stage_draw(const sdraw *d) {
     int r = draw_geometry(d);
     if (!r && xfb_capturing()) xfb_capture(d); /* pass-through / unusable geometry program: its input is what the hardware would capture */
     return r;
+}
+
+/* MultiDraw*IndirectCount with transform feedback capturing or stage programs bound. do_draw_indirect_count (mtl_replay.m) runs the count on the GPU and
+ * draws Metal indirect records, which the stage passes cannot use (they assemble primitives on the CPU), so here the count and each argument record
+ * are read at encode time, as do_draw_indirect does for one draw: right when the game wrote them before the submit, wrong for a count or arguments a
+ * GPU pass of the same submission produces (culling compute; logged once). Every draw i < min(count, max) then goes through do_draw_indirect, which
+ * runs the stages, or draws natively what needs none (a pass-through geometry program, a capture-only draw). Returns 1 when handled here; called
+ * first by do_draw_indirect_count. */
+static void do_draw_indirect(const p_draw_ind *d, int indexed); /* mtl_replay.m */
+static int stage_draw_indirect_count(const p_draw_ind_count *d) {
+    if (!xfb_capturing() && !stage_draw_needed(d->mode)) return 0;
+    if (g_predict) return stage_draw_needed(d->mode); /* the look-ahead pass: stage pipelines are built at the draw */
+    if ((d->stride & 3) || (d->indirect & 3) || (d->count_addr & 3) || !d->max_draws) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "MultiDraw*IndirectCount with stages and unaligned arguments (or no draws) skipped");
+        return 1;
+    }
+    id<MTLBuffer> cb;
+    uint64_t co;
+    if (!mtl_addr(d->count_addr, 4, &cb, &co)) return 1;
+    uint32_t n = *(const uint32_t *)((const uint8_t *)cb.contents + co);
+    if (n > d->max_draws) n = d->max_draws;
+    LOG_ONCE(NAPPLE_LOG_INFO, "MultiDraw*IndirectCount with transform feedback / geometry / tessellation: count and arguments read at encode time (%u of %u draws)", n,
+             d->max_draws);
+    for (uint32_t i = 0; i < n; i++) {
+        p_draw_ind pd = {d->mode, d->idx_type, d->indirect + (uint64_t)i * d->stride, d->idx_addr};
+        do_draw_indirect(&pd, (int)d->indexed);
+    }
+    return 1;
 }

@@ -8,15 +8,17 @@ struct GlassCard<Content: View>: View {
     var symbol: String?
     @ViewBuilder var content: Content
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             if let title {
                 Label { Text(title).font(.headline) } icon: { if let symbol { Image(systemName: symbol).foregroundStyle(.tint) } }
             }
             content
         }
-        .padding(12)
+        .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .glassEffect(.regular, in: .rect(cornerRadius: 14, style: .continuous))
+        // a material, not .glassEffect: a stack of live-blurred glass cards is what made scrolling and resizing stutter
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(.separator.opacity(0.5)))
     }
 }
 
@@ -124,5 +126,17 @@ struct KeysetForm: View {
                 switch res { case .success: done(); case .failure(let e): error = e.localizedDescription }
             }
         }
+    }
+}
+
+/// Hover feedback for cards and rows: a slight lift that follows the pointer with a short spring.
+struct HoverLift: ViewModifier {
+    var scale: CGFloat = 1.025
+    @State private var hovering = false
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(hovering ? scale : 1)
+            .animation(.spring(response: 0.28, dampingFraction: 0.75), value: hovering)
+            .onHover { hovering = $0 }
     }
 }

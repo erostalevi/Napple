@@ -140,7 +140,47 @@ static void cb_all_init(void) {
     for (unsigned i = 0; i < g_nmodules; i++) run_init(&g_modules[i]);
     summary_stage("module-init");
 }
-static void cb_finis(void) { runtime_fail("guest ran module finalizers (exit path not implemented)"); }
+/* ---- guest exit ------------------------------------------------------------------------------------------------ */
+/* One module's finalizers, as rtld's teardown runs them: DT_FINI when the module has one (it walks its own fini_array), else fini_array from the last
+ * entry to the first. */
+static void run_fini(const Module *m) {
+    LOG("boot", "running %s finalizers (DT_FINI %#llx, %llu fini_array entries)", m->name, (unsigned long long)m->dt_fini,
+        (unsigned long long)(m->fini_array_size / 8));
+    trace_event("module_fini", "\"module\":\"%s\"", m->name);
+    if (m->dt_fini) {
+        ((void (*)(void))(m->base + m->dt_fini))();
+        return;
+    }
+    for (uint64_t i = m->fini_array_size / 8; i-- > 0;) {
+        uint64_t fn;
+        memcpy(&fn, m->base + m->fini_array + i * 8, 8);
+        if (fn && fn != ~0ull) ((void (*)(void))(uintptr_t)fn)();
+    }
+}
+void fs_report_uncommitted(void);
+void napple_audio_pcm_report(void);
+void audio_report(void);
+/* nnMain returned and nn::init hands over its finalizer callback (SDK 15 form of Start): the guest is quitting on its own, as a console title does
+ * when the user closes it. Every loaded module's finalizers run in reverse load order, the reverse of the order cb_all_init initialised them in
+ * (an NRO unloaded by ldr:ro is skipped), then the process stops cleanly: the save journals report what was committed (uncommitted changes roll back at the
+ * next start, as on the console; committed snapshots are already synced by the commit) and sync() flushes host file data, the run summary says
+ * the guest exited, the graphics back end shuts down and the process exits 0. */
+static void guest_exit_clean(void) {
+    LOG("boot", "guest exit: nnMain returned, running module finalizers");
+    for (unsigned i = g_nmodules; i-- > 0;)
+        if (!g_modules[i].gone) run_fini(&g_modules[i]);
+    summary_stage("exit");
+    fs_report_uncommitted();
+    sync();
+    napple_audio_pcm_report();
+    audio_report();
+    summary_note("guest exited: nnMain returned and the module finalizers ran");
+    summary_write("partial", "guest exited normally (nnMain returned, module finalizers ran)");
+    gfx_shutdown();
+    LOG("boot", "guest exit: done, exiting 0");
+    GUEST_EXIT(0);
+}
+static void cb_finis(void) { guest_exit_clean(); }
 
 static GfxConfig gc;
 static void boot(void) {

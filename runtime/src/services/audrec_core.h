@@ -28,3 +28,4 @@ unsigned audrec_release(AudrecQueue *q, uint64_t *tags, unsigned max, uint64_t *
 int audrec_contains(const AudrecQueue *q, uint64_t tag);
 int audrec_end_time(const AudrecQueue *q, uint64_t tag, uint64_t *end); /* 0 if the tag is known (queued ones report 0) */
 unsigned audrec_count(const AudrecQueue *q);
+int audrec_flush(AudrecQueue *q); /* FlushFinalOutputRecorderBuffers: releases every queued buffer (recorded as silence); 1 if any */

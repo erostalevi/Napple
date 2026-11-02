@@ -1,6 +1,6 @@
 /* t_control.c - the GLSLC control section reader (src/shader/control.c): header fields of a real vertex output (Link's Awakening's StartUpRegion.arc,
- * reproduced word for word), the "not present" answers on it, the varying-table conversion, and a synthetic section carrying a transform feedback block
- * and a tessellation word at the candidate offsets. No Metal. */
+ * reproduced word for word), the "not present" answers on it, the varying-table conversion, a synthetic section carrying a transform feedback block
+ * and a tessellation word at the candidate offsets, and two real geometry sections (SMO, ACNH; 2026-11-01). No Metal. */
 #include <stdio.h>
 #include <string.h>
 
@@ -19,6 +19,25 @@ static void las_vertex(uint8_t *c) {
     w32(c, 0x6f0, 0x850); w32(c, 0x6f8, 0x5d0); w32(c, 0x700, 0x600); w32(c, 0x704, 0x600); w32(c, 0x708, 0x30); w32(c, 0x70c, 0x1f);
     w32(c, 0x788, 1); w32(c, 0x790, 0x00220014); w32(c, 0x794, 8);
     w32(c, 0x7c8, 0x850); w32(c, 0x7e8, 0x850); w32(c, 0x7f4, 0xc); w32(c, 0x830, 0x00010000);
+}
+
+/* The non-zero words of two real geometry sections (NAPPLE_GFX_CTL_DUMP, 2026-11-01): Super Mario Odyssey's alThunderShader line program fccb3f42c7f70682
+ * (GLSLC version 9, length 0x7d1) and Animal Crossing's keyboard ocean program 8c8302af6b2a4b88 (version 0xf, 0x850; +0x7d0..+0x7e4 its digest) */
+static void smo_geometry(uint8_t *c) {
+    memset(c, 0, 0x880);
+    w32(c, 0x00, 0x98761234); w32(c, 0x04, 1); w32(c, 0x08, 9); w32(c, 0x0c, 0x120); w32(c, 0x10, 0xb); w32(c, 0x14, 0x7d0);
+    w32(c, 0x20, 0x7d1);
+    w32(c, 0x6f0, 0x7d1); w32(c, 0x6f8, 0x250); w32(c, 0x700, 0x300); w32(c, 0x704, 0x300); w32(c, 0x708, 0x30); w32(c, 0x70c, 0xc); w32(c, 0x714, 2);
+    w32(c, 0x790, 0x0022001c); w32(c, 0x7c8, 0x7d1);
+}
+static void acnh_geometry(uint8_t *c) {
+    memset(c, 0, 0x880);
+    w32(c, 0x00, 0x98761234); w32(c, 0x04, 1); w32(c, 0x08, 0xf); w32(c, 0x0c, 0x120); w32(c, 0x10, 0xb); w32(c, 0x14, 0x848);
+    w32(c, 0x20, 0x850);
+    w32(c, 0x6f0, 0x850); w32(c, 0x6f8, 0x890); w32(c, 0x6fc, 8); w32(c, 0x700, 0x900); w32(c, 0x704, 0xa00); w32(c, 0x708, 0x30); w32(c, 0x70c, 0x20);
+    w32(c, 0x714, 2); w32(c, 0x788, 1); w32(c, 0x790, 0x00220014); w32(c, 0x794, 8); w32(c, 0x7c8, 0x850);
+    w32(c, 0x7d0, 0x453a0109); w32(c, 0x7d4, 0x03f8a400); w32(c, 0x7d8, 0xef942178); w32(c, 0x7dc, 0xc506e696); w32(c, 0x7e0, 0x51c22772); w32(c, 0x7e4, 0x840ba5d8);
+    w32(c, 0x7e8, 0x850); w32(c, 0x7f4, 0xc); w32(c, 0x828, 4);
 }
 
 int main(void) {
@@ -98,6 +117,15 @@ int main(void) {
     CHECK(gfx_control_tess(c, sizeof c, &tp) && tp.domain == TESS_DOMAIN_TRIANGLE && tp.spacing == TESS_SPACING_FRACTIONAL_ODD && tp.winding == TESS_WINDING_CCW, "triangle / fractional odd / ccw");
     w32(c, GLSLC_TESS_MODE_OFF, 0x12345678);
     CHECK(!gfx_control_tess(c, sizeof c, &tp), "a word with bits outside the mode form is not taken");
+    /* 6. real geometry sections: header fields read, no transform feedback layout, no tessellation word (geometry parameters come from the SPH) */
+    smo_geometry(c);
+    CHECK(gfx_control_parse(c, 0x7d1, &ci) && ci.length == 0x7d1 && ci.stage == 2 && ci.code_len == 0x300 && ci.const_off == 0x300 && ci.const_size == 0,
+          "SMO geometry section: len %#x stage %u code %#x const %#x/%#x", ci.length, ci.stage, ci.code_len, ci.const_off, ci.const_size);
+    CHECK(!gfx_control_xfb(c, 0x7d1, &xl) && !gfx_control_tess(c, 0x7d1, &tp), "SMO geometry section: no layout, no tessellation word");
+    acnh_geometry(c);
+    CHECK(gfx_control_parse(c, sizeof c, &ci) && ci.length == 0x850 && ci.stage == 2 && ci.code_len == 0xa00 && ci.const_off == 0x900 && ci.const_size == 8,
+          "ACNH geometry section: len %#x stage %u code %#x const %#x/%#x", ci.length, ci.stage, ci.code_len, ci.const_off, ci.const_size);
+    CHECK(!gfx_control_xfb(c, sizeof c, &xl) && !gfx_control_tess(c, sizeof c, &tp), "ACNH geometry section: no layout, no tessellation word");
     printf("t_control: %s\n", fails ? "FAILED" : "ok");
     return fails != 0;
 }

@@ -8,14 +8,68 @@ void gfx_api_link_program(void) {}
 
 #define PROG_MAGIC MAGIC('P', 'R', 'G', '0')
 
-NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) {
-    (void)d;
-    prog_t *o = (prog_t *)p;
-    memset(o, 0, sizeof *o);
-    o->magic = PROG_MAGIC;
+/* Stage hashes of each program, kept host-side by program address. The guest object may be smaller than nvn.h's 0xC0 (Animal Crossing's NVNprogram is followed
+ * by an NVNbuffer at +0x80): only prog_t (obj.h, 0x28 bytes, within NVN_MIN_NVNprogram) is written into it, and the guest's writes over a program object (or a
+ * neighbour's over a too-large layout, the old "program hash 0x3") never reach BindProgram, which takes the hashes from here and reports such an overwrite
+ * once (gfx_program_hashes). Stages 0..GUEST_HASHES-1 are mirrored in the object for programs the guest copies by value. */
+#define GUEST_BYTES sizeof(prog_t)
+#define GUEST_HASHES 4
+_Static_assert(sizeof(((prog_t *)0)->hash) == GUEST_HASHES * sizeof(uint64_t), "prog_t mirrors GUEST_HASHES stages");
+#define PH_N 16384
+static struct { const void *p; uint64_t hash[6]; } g_ph[PH_N];
+static pthread_mutex_t g_ph_mu = PTHREAD_MUTEX_INITIALIZER;
+static uint32_t ph_slot(const void *p) { return (uint32_t)(((uintptr_t)p >> 4) * 2654435761u) % PH_N; }
+static void ph_set(const void *p, const uint64_t *h) {
+    uint32_t i = ph_slot(p);
+    pthread_mutex_lock(&g_ph_mu);
+    g_ph[i].p = h ? p : NULL;
+    if (h) memcpy(g_ph[i].hash, h, sizeof g_ph[i].hash);
+    pthread_mutex_unlock(&g_ph_mu);
+}
+static int ph_get(const void *p, uint64_t out[6]) {
+    uint32_t i = ph_slot(p);
+    int ok = 0;
+    pthread_mutex_lock(&g_ph_mu);
+    if (g_ph[i].p == p) { memcpy(out, g_ph[i].hash, sizeof g_ph[i].hash); ok = 1; }
+    pthread_mutex_unlock(&g_ph_mu);
+    return ok;
+}
+/* The stage hashes of a program for BindProgram and the per-program state setters (api_state.c): the host copy; for an address the table does not know (a
+ * program object the guest copied by value, an evicted slot) the guest object's, with values that cannot be shader hashes (small integers: guest data over
+ * a scribbled object) dropped. Returns 0 when `p` is not an initialized program. */
+int gfx_program_hashes(const NVNprogram *p, uint64_t out[6]) {
+    const prog_t *o = (const prog_t *)p;
+    memset(out, 0, 6 * sizeof *out);
+    if (!o || o->magic != PROG_MAGIC) return 0;
+    if (ph_get(p, out)) {
+        if (memcmp(out, o->hash, GUEST_HASHES * sizeof *out)) {
+            int k = 0;
+            while (k < GUEST_HASHES && out[k] == o->hash[k]) k++;
+            LOG_ONCE(NAPPLE_LOG_INFO, "program %p: stage hash %d (object offset %#zx) holds %#llx, SetShaders stored %#llx: the guest wrote over the program "
+                     "object (host copy used)", (const void *)p, k, offsetof(prog_t, hash) + 8 * (size_t)k, (unsigned long long)o->hash[k], (unsigned long long)out[k]);
+        }
+        return 1;
+    }
+    memcpy(out, o->hash, GUEST_HASHES * sizeof *out);
+    for (int k = 0; k < GUEST_HASHES; k++)
+        if (out[k] && out[k] < 0x100000) {
+            LOG_ONCE(NAPPLE_LOG_INFO, "program %p (not set up at this address: copied by value?): stage hash %d holds %#llx, dropped", (const void *)p, k,
+                     (unsigned long long)out[k]);
+            out[k] = 0;
+        }
     return 1;
 }
-NVN(nvnProgramFinalize, void, NVNprogram *p) { memset(p, 0, sizeof(prog_t)); }
+
+NVN(nvnProgramInitialize, NVNboolean, NVNprogram *p, NVNdevice *d) { OBJTRACE(OT_PROGRAM, p, 1);
+    (void)d;
+    prog_t *o = (prog_t *)p;
+    memset(o, 0, GUEST_BYTES);
+    o->magic = PROG_MAGIC;
+    static const uint64_t none[6];
+    ph_set(p, none);
+    return 1;
+}
+NVN(nvnProgramFinalize, void, NVNprogram *p) { OBJTRACE(OT_PROGRAM, p, 0); memset(p, 0, GUEST_BYTES); ph_set(p, NULL); }
 
 /* ProgramSetShaders may name a stage's code by a bare offset into a shader-code pool (Animal Crossing sets its window-pass program, and others, this way: the
  * address it adds the offset to is 0). The game checks the result and, when the call fails, never binds the program: the window pass then drew with the previous
@@ -74,7 +128,9 @@ uint64_t gfx_prog_resolve_hash(uint64_t h) {
 static NVNboolean set_shaders(NVNprogram *p, int n, const uint8_t *data, size_t stride) {
     prog_t *o = (prog_t *)p;
     if (o->magic != PROG_MAGIC || n < 0 || n > 6) return 0;
-    memset(o->hash, 0, sizeof o->hash);
+    uint64_t hs[6] = {0};                                 /* stage hashes: host table + the guest-visible GUEST_HASHES */
+    memset(o->hash, 0, GUEST_HASHES * sizeof *hs);
+    ph_set(p, hs);
     o->nstage = 0;
     static _Atomic uint32_t g_grp;
     uint32_t grp = atomic_fetch_add(&g_grp, 1) + 1;     /* the stubs of one call belong together */
@@ -87,7 +143,7 @@ static NVNboolean set_shaders(NVNprogram *p, int n, const uint8_t *data, size_t 
         if (code < 0x100000000ull && accept_off) {   /* every host pointer is above the 4 GiB page-zero of an arm64 Mac process: a pool offset */
             int stage = (int)*(const uint32_t *)(control + 0x714);
             if (stage < 0 || stage > 5 || i >= 6) { LOGE("ProgramSetShaders: control section names stage %d", stage); return 0; }
-            o->hash[stage] = stub_new(code, stage, control, grp);
+            hs[stage] = stub_new(code, stage, control, grp);
             o->nstage++;
             continue;
         }
@@ -97,16 +153,17 @@ static NVNboolean set_shaders(NVNprogram *p, int n, const uint8_t *data, size_t 
             if (k < 8 || (k & (k - 1)) == 0) LOGW("ProgramSetShaders: stage %d code address %#llx / control %p is not a mapped address (%llu so far); program rejected (NAPPLE_PROGRAM_POOL_OFFSETS=0)", i, (unsigned long long)code, (const void *)control, (unsigned long long)k + 1);
             return 0;
         }
-        if (i < 6) { o->sd[i].data = code; o->sd[i].control = control; }
         /* The stage comes from the control section (what the shader compiler recorded); gfx_shader_register validates it. */
         int stage = (int)*(const uint32_t *)(control + 0x714);
         if (stage < 0 || stage > 5) { LOGE("ProgramSetShaders: control section names stage %d", stage); return 0; }
         { static int k; if (k++ < 4) { const uint32_t *w = (const uint32_t *)(uintptr_t)code; LOGD("normal code %#llx words %08x %08x %08x %08x %08x %08x %08x %08x (stage %d codelen %#x)", (unsigned long long)code, w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], stage, *(const uint32_t *)(control + 0x700)); } }
         uint64_t h = gfx_shader_register(stage, code, control);
         if (!h) return 0;
-        o->hash[stage] = h;
+        hs[stage] = h;
         o->nstage++;
     }
+    memcpy(o->hash, hs, GUEST_HASHES * sizeof *hs);
+    ph_set(p, hs);
     return 1;
 }
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *d) { return set_shaders(p, n, (const uint8_t *)d, sizeof(NVNshaderData)); }
@@ -114,9 +171,10 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
 NVN(nvnProgramSetShadersExt, NVNboolean, NVNprogram *p, int n, const void *d) { return set_shaders(p, n, (const uint8_t *)d, 24); }
 NVN(nvnProgramSetSubroutineLinkage, NVNboolean, NVNprogram *p, int n, const NVNsubroutineLinkageMapPtr *m) { (void)p; (void)n; (void)m; return 1; }
 /* Sample shading: kept in a side table keyed by the program address, NOT in the program object. The guest's NVNprogram may be smaller than the 0xC0 bytes of this
- * header (the SDK it was built with decides; writing past prog_t's 152 bytes crashed Animal Crossing at boot by corrupting a neighbour). Metal has no pipeline switch
- * for it: a fragment function runs once per sample exactly when it reads [[sample_id]] or a per-sample interpolant, a property of the translated shader, so
- * nothing enters the pipeline key. The debug label is accepted and dropped. */
+ * header (the SDK it was built with decides; writing past the old 152-byte prog_t crashed Animal Crossing at boot by corrupting a neighbour). Metal has no pipeline switch
+ * for it: a fragment function runs once per sample exactly when it reads [[sample_id]] or a per-sample interpolant, a property of the translated shader. BindProgram
+ * records the flag (p_bind_program.sample_shading, api_cmd.c), the replay puts it in the pipeline key of multisampled passes and the fragment function is translated
+ * with [[sample_id]] (ShaderKey.sample_shading). Any rate > 0 shades every sample (Metal has no minimum sample fraction). The debug label is accepted and dropped. */
 #define SS_N 4096
 static struct { const void *p; uint32_t en; float rate; } g_ss[SS_N];
 static pthread_mutex_t g_ss_mu = PTHREAD_MUTEX_INITIALIZER;
@@ -129,6 +187,12 @@ NVN(nvnProgramSetSampleShading, void, NVNprogram *p, uint32_t enable, float rate
     pthread_mutex_unlock(&g_ss_mu);
 }
 NVN(nvnProgramSetDebugLabel, void, NVNprogram *p, const char *l) { (void)p; (void)l; }
+/* Subtile (tiled cache) size the program asks for: none here (0 x 0 = the driver's choice); Metal's tile renderer picks its own. */
+NVN(nvnProgramGetSubtileSize, void, const NVNprogram *p, int *w, int *h) {
+    (void)p;
+    if (w) *w = 0;
+    if (h) *h = 0;
+}
 /* test hook: the stored sample shading (enable, rate) */
 int gfx_program_sample_shading(const NVNprogram *p, float *rate) {
     uint32_t i = (uint32_t)(((uintptr_t)p >> 4) * 2654435761u) % SS_N;

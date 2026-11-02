@@ -10,6 +10,7 @@
 #include "host_info.h"
 #include <stdlib.h>
 #include <time.h>
+#include "sys_default.h"
 
 static CapsState caps;
 
@@ -128,13 +129,112 @@ static const IpcCmd su_cmds[] = {
 };
 static IpcObject *su_open(void) { return IPC_OBJECT("caps:su", su_cmds, NULL, NULL); }
 
+/* Movie read streams (2001..2005): the album entries of content type movie (entry byte 0x19) can be read in pieces through a stream handle; the data is the
+ * entry's stored file. Nothing on the host records movies, so a screenshot entry is "not a movie" and a stream only opens for an entry that was stored as one. */
+#define MOVIE_STREAMS 8
+typedef struct {
+    uint8_t used[MOVIE_STREAMS];
+    uint8_t entry[MOVIE_STREAMS][CAPS_ENTRY_SIZE];
+} MovieSession;
+static int stream_entry(IpcObject *s, IpcCall *c, uint64_t handle, int *idx) {
+    MovieSession *m = s->state;
+    if (!m || handle == 0 || handle > MOVIE_STREAMS || !m->used[handle - 1]) {
+        c->result = HZ_R_CAPTURE_INVALID_ARGUMENT;
+        return 0;
+    }
+    *idx = caps_album_find(&caps, m->entry[handle - 1]);
+    if (*idx < 0) { /* the movie was deleted while the stream was open */
+        c->result = HZ_R_CAPTURE_NOT_FOUND;
+        return 0;
+    }
+    return 1;
+}
+static void movie_open(IpcObject *s, IpcCall *c) {
+    MovieSession *m = s->state;
+    int idx = find_arg(c, 0);
+    if (idx < 0) {
+        c->result = HZ_R_CAPTURE_NOT_FOUND;
+        return;
+    }
+    if (caps.album[idx][0x19] != CAPS_CONTENT_MOVIE) {
+        c->result = HZ_R_CAPTURE_INVALID_ARGUMENT;
+        return;
+    }
+    for (unsigned i = 0; i < MOVIE_STREAMS; i++)
+        if (!m->used[i]) {
+            m->used[i] = 1;
+            memcpy(m->entry[i], ipc_in(c, 0, CAPS_ENTRY_SIZE), CAPS_ENTRY_SIZE);
+            uint64_t handle = i + 1;
+            IPC_OUT(c, handle);
+            return;
+        }
+    c->result = HZ_R_CAPTURE_INVALID_ARGUMENT; /* all stream slots in use */
+}
+static void movie_close(IpcObject *s, IpcCall *c) {
+    MovieSession *m = s->state;
+    uint64_t handle = IPC_IN(c, uint64_t, 0);
+    if (!m || handle == 0 || handle > MOVIE_STREAMS || !m->used[handle - 1]) {
+        c->result = HZ_R_CAPTURE_INVALID_ARGUMENT;
+        return;
+    }
+    m->used[handle - 1] = 0;
+}
+static void movie_size(IpcObject *s, IpcCall *c) {
+    MovieSession *m = s->state;
+    int idx;
+    uint64_t handle = IPC_IN(c, uint64_t, 0);
+    if (!stream_entry(s, c, handle, &idx)) return;
+    int64_t n = caps_album_file_size(&caps, m->entry[handle - 1]);
+    uint64_t v = n > 0 ? (uint64_t)n : 0;
+    IPC_OUT(c, v);
+}
+/* 2004 ReadMovieDataFromAlbumMovieReadStream(u64 handle, s64 offset; out: buffer) -> u64 bytes read (0 at or past the end). */
+static void movie_read(IpcObject *s, IpcCall *c) {
+    MovieSession *m = s->state;
+    int idx;
+    uint64_t handle = IPC_IN(c, uint64_t, 0);
+    int64_t off = IPC_IN(c, int64_t, 8);
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (!stream_entry(s, c, handle, &idx)) return;
+    if (!b || off < 0) {
+        c->result = HZ_R_CAPTURE_INVALID_ARGUMENT;
+        return;
+    }
+    int64_t total = caps_album_file_size(&caps, m->entry[handle - 1]);
+    uint64_t got = 0;
+    if (total > 0 && off < total) {
+        uint8_t *all = malloc((size_t)total);
+        if (!all || caps_album_load(&caps, m->entry[handle - 1], 0, all, (size_t)total) != total) {
+            free(all);
+            c->result = HZ_R_CAPTURE_INVALID_ARGUMENT;
+            return;
+        }
+        got = (uint64_t)(total - off) < b->size ? (uint64_t)(total - off) : b->size;
+        ipc_write_buf(c, b, all + off, got);
+        free(all);
+    }
+    IPC_OUT(c, got);
+}
+/* 2005 GetAlbumMovieReadStreamBrokenReason(u64 handle) -> result: 0 while the stream's file reads cleanly (the album keeps whole files in memory). */
+static void movie_broken_reason(IpcObject *s, IpcCall *c) {
+    int idx;
+    if (!stream_entry(s, c, IPC_IN(c, uint64_t, 0), &idx)) return;
+    uint32_t r = 0;
+    IPC_OUT(c, r);
+}
 static const IpcCmd session_cmds[] = {
     {1, "GetAlbumFileList", list_album, IPC_IMPL}, {2, "LoadAlbumFile", load_file, IPC_IMPL},           {3, "GetAlbumFileSize", file_size, IPC_IMPL},
     {4, "DeleteAlbumFile", delete_file, IPC_IMPL}, {5, "LoadAlbumFileThumbnail", load_thumb, IPC_IMPL},
+    {2001, "OpenAlbumMovieReadStream", movie_open, IPC_IMPL},
+    {2002, "CloseAlbumMovieReadStream", movie_close, IPC_IMPL},
+    {2003, "GetAlbumMovieReadStreamMovieDataSize", movie_size, IPC_IMPL},
+    {2004, "ReadMovieDataFromAlbumMovieReadStream", movie_read, IPC_IMPL},
+    {2005, "GetAlbumMovieReadStreamBrokenReason", movie_broken_reason, IPC_IMPL},
 };
+static void session_destroy(IpcObject *o) { free(o->state); }
 static void caps_open_session(IpcObject *s, IpcCall *c) {
     (void)s;
-    ipc_out_object(c, IPC_OBJECT("IAlbumAccessorApplicationSession", session_cmds, NULL, NULL));
+    ipc_out_object(c, IPC_OBJECT("IAlbumAccessorApplicationSession", session_cmds, calloc(1, sizeof(MovieSession)), session_destroy));
 }
 static const IpcCmd u_cmds[] = {
     {32, "SetShimLibraryVersion", set_shim_version, IPC_IMPL},
@@ -147,9 +247,13 @@ static const IpcCmd u_cmds[] = {
     {130, "PrecheckToCreateContentsByAruid", precheck, IPC_IMPL},
     {140, "GetAlbumFileList1AafeAruidDeprecated", list_album, IPC_IMPL},
     {141, "GetAlbumFileList2AafeUidAruidDeprecated", list_album, IPC_IMPL},
-    {142, "GetAlbumFileList3AaeAruid", list_album, IPC_IMPL},
-    {143, "GetAlbumFileList4AaeUidAruid", list_album, IPC_IMPL},
+    {142, "GetAlbumFileList3AaeAruidDeprecated", list_album, IPC_IMPL},
+    {143, "GetAlbumFileList4AaeUidAruidDeprecated", list_album, IPC_IMPL},
     {60002, "OpenAccessorSessionForApplication", caps_open_session, IPC_IMPL},
+    {144, "GetAllAlbumFileList3AaeAruidDeprecated", list_album, IPC_IMPL},
+    {145, "GetAlbumFileList5AaeAruid", list_album, IPC_IMPL},
+    {146, "GetAlbumFileList6AaeUidAruid", list_album, IPC_IMPL},
+    {147, "GetAllAlbumFileList5AaeAruid", list_album, IPC_IMPL},
 };
 static IpcObject *u_open(void) { return IPC_OBJECT("caps:u", u_cmds, NULL, NULL); }
 void service_register_caps(void) {

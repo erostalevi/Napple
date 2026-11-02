@@ -226,6 +226,13 @@ int main(void) {
     CHECK(submit(dec, &cb, badop, 1, NULL, 0) == NV_BAD_PARAMETER, "unknown host1x opcode");
     uint32_t unk[] = {SETCL(MEDIA_CLASS_NVDEC), IMM(0x1ee, 5), 0xe1000000u, SETCL(0), IMM(0, 1)}; uint64_t u0 = stats(dec)->unknown_regs;
     CHECK(submit(dec, &cb, unk, 5, NULL, 0) == NV_OK && stats(dec)->unknown_regs == u0 + 1 && stats(dec)->last_unknown_reg == 0x1ee && stats(dec)->syncpt_incrs >= 1, "unknown registers are counted and logged, EXTEND and host1x INCR_SYNCPT accepted");
+    uint32_t thi_incr[] = {SETCL(MEDIA_CLASS_NVDEC), IMM(0, 0x105), IMM(0, 0x105)}; uint64_t u1 = stats(dec)->unknown_regs, s1 = stats(dec)->syncpt_incrs;
+    CHECK(submit(dec, &cb, thi_incr, 3, NULL, 0) == NV_OK && stats(dec)->unknown_regs == u1 && stats(dec)->syncpt_incrs == s1 + 2,
+          "the engine class's THI word 0 is INCR_SYNCPT, not an unknown register (as MK8D's submits end)");
+    uint32_t mk8d_regs[] = {SETCL(MEDIA_CLASS_NVDEC), IMM(NVDEC_SET_UNNAMED_0x140, 0x210)}; uint64_t u2 = stats(dec)->unknown_regs;
+    CHECK(submit(dec, &cb, mk8d_regs, 2, NULL, 0) == NV_OK && stats(dec)->unknown_regs == u2, "NVDEC 0x140 (MK8D's constant buffer address) is a known register");
+    uint32_t vic_ctl[] = {SETCL(MEDIA_CLASS_VIC), IMM(VIC_SET_CONTROL_PARAMS, 0x110)}; uint64_t u3 = stats(vic)->unknown_regs;
+    CHECK(submit(vic, &cb, vic_ctl, 2, NULL, 0) == NV_OK && stats(vic)->unknown_regs == u3, "VIC SetControlParams (0x1c1) is a known register");
     uint32_t mask[] = {SETCL(MEDIA_CLASS_NVDEC), (3u << 28) | (NVDEC_SET_DRV_PIC_SETUP_OFFSET << 16) | 0x5, 0xaaa, 0xbbb};
     submit(dec, &cb, mask, 4, NULL, 0);
     CHECK(media_engine_reg(fds[dec].ch.eng, NVDEC_SET_DRV_PIC_SETUP_OFFSET) == 0xaaa && media_engine_reg(fds[dec].ch.eng, NVDEC_SET_DRV_PIC_SETUP_OFFSET + 2) == 0xbbb, "MASK writes the set bits");

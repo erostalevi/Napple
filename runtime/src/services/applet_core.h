@@ -41,6 +41,10 @@ typedef struct {
     uint32_t platform_region; /* 1 Global, 2 China */
     int illuminance_available;
     float illuminance; /* lux */
+    int record_volume_muted;               /* SetRecordVolumeMuted: game play recordings without the game's sound */
+    uint32_t layer_separation_mode;        /* SetManagedDisplayLayerSeparationMode */
+    int recording_layer_composition;       /* SetRecordingLayerCompositionEnabled */
+    unsigned screenshots_saved;            /* SaveCurrentScreenshot calls that stored an album entry */
 } AppletState;
 
 void applet_state_init(AppletState *s);
@@ -75,6 +79,7 @@ enum { APPLET_CAP_LAST_FOREGROUND = 0, APPLET_CAP_LAST_APPLICATION = 1, APPLET_C
 /* Source: copies the last presented frame into `rgba` (w*h*4 bytes, row stride w*4) and returns 1, or returns 0 when there is no frame yet. */
 typedef int (*AppletFrameSource)(uint8_t *rgba, uint32_t w, uint32_t h);
 void applet_capture_set_source(AppletFrameSource src); /* NULL (the default) = none */
+void applet_capture_register_host_source(void); /* applet_capture_host.c: the graphics back end's last completed frame (macOS); a no-op elsewhere */
 /* Capture the source's frame into a slot; returns 1 when a frame was copied, 0 when the slot now holds black. */
 int applet_capture_update(unsigned slot);
 /* Read a slot into out (cap bytes, up to APPLET_CAP_BYTES); returns the bytes written (the slot is black until updated), 0 for a bad slot. */

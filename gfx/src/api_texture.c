@@ -20,7 +20,7 @@ void gfx_api_link_texture(void) {}
  * --------------------------------------------------------------------------------------------------------------- */
 #define TB(b) ((tex_builder_t *)(b))
 #define CTB(b) ((const tex_builder_t *)(b))
-NVN(nvnTextureBuilderSetDefaults, void, NVNtextureBuilder *b) {
+NVN(nvnTextureBuilderSetDefaults, void, NVNtextureBuilder *b) { OBJTRACE(OT_TEXTURE_B, b, 1);
     NVNdevice *dev = TB(b)->dev;
     memset(b, 0, sizeof(tex_builder_t));
     TB(b)->dev = dev;
@@ -128,7 +128,7 @@ NVN(nvnTextureBuilderGetStorageAlignment, size_t, const NVNtextureBuilder *b) {
 #define TX(t) ((tex_t *)(t))
 #define CTX(t) ((const tex_t *)(t))
 
-NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) {
+NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b) { OBJTRACE(OT_TEXTURE, t, 1);
     const tex_builder_t *s = CTB(b);
     tex_t *o = TX(t);
     memset(o, 0, sizeof *o);
@@ -159,7 +159,7 @@ NVN(nvnTextureInitialize, NVNboolean, NVNtexture *t, const NVNtextureBuilder *b)
     }
     return 1;
 }
-NVN(nvnTextureFinalize, void, NVNtexture *t) { memset(t, 0, sizeof(tex_t)); }
+NVN(nvnTextureFinalize, void, NVNtexture *t) { OBJTRACE(OT_TEXTURE, t, 0); memset(t, 0, sizeof(tex_t)); }
 NVN(nvnTextureSetDebugLabel, void, NVNtexture *t, const char *l) { (void)t; (void)l; }
 NVN(nvnTextureGetZCullStorageSize, size_t, const NVNtexture *t) { (void)t; return 0; }
 NVN(nvnTextureGetStorageClass, NVNstorageClass, const NVNtexture *t) { return storage_class(&CTX(t)->s.d); }
@@ -194,7 +194,7 @@ NVN(nvnTextureGetMemoryOffset, ptrdiff_t, const NVNtexture *t) { return (ptrdiff
  * --------------------------------------------------------------------------------------------------------------- */
 #define VW(v) ((view_t *)(v))
 #define CVW(v) ((const view_t *)(v))
-NVN(nvnTextureViewSetDefaults, void, NVNtextureView *v) { memset(v, 0, sizeof(view_t)); }
+NVN(nvnTextureViewSetDefaults, void, NVNtextureView *v) { OBJTRACE(OT_VIEW, v, 1); memset(v, 0, sizeof(view_t)); }
 NVN(nvnTextureViewSetLevels, void, NVNtextureView *v, int base, int n) { VW(v)->set_levels = 1; VW(v)->base_level = (uint8_t)base; VW(v)->nlevels = (uint8_t)n; }
 NVN(nvnTextureViewSetLayers, void, NVNtextureView *v, int min, int n) { VW(v)->set_layers = 1; VW(v)->min_layer = (uint16_t)min; VW(v)->nlayers = (uint16_t)n; }
 NVN(nvnTextureViewSetFormat, void, NVNtextureView *v, NVNformat f) { VW(v)->set_format = 1; VW(v)->format = (uint16_t)f; }
@@ -213,16 +213,17 @@ NVN(nvnTextureViewGetSwizzle, NVNboolean, const NVNtextureView *v, NVNtextureSwi
 NVN(nvnTextureViewGetDepthStencilMode, NVNboolean, const NVNtextureView *v, NVNtextureDepthStencilMode *m) { *m = (NVNtextureDepthStencilMode)CVW(v)->ds_mode; return CVW(v)->set_ds; }
 NVN(nvnTextureViewGetTarget, NVNboolean, const NVNtextureView *v, NVNtextureTarget *t) { *t = (NVNtextureTarget)CVW(v)->target; return CVW(v)->set_target; }
 NVN(nvnTextureViewCompare, NVNboolean, const NVNtextureView *a, const NVNtextureView *b) { return !memcmp(a, b, sizeof(view_t)); }
-NVN(nvnTextureGetViewOffset, ptrdiff_t, const NVNtexture *t, const NVNtextureView *v) {
-    const tex_t *o = CTX(t);
-    const view_t *w = CVW(v);
+/* Byte offset of a view's first level / layer inside the storage described by `d` */
+static ptrdiff_t view_offset(const napple_texdesc *d, const view_t *w) {
     if (!w) return 0;
     napple_texlayout L;
-    napple_tex_layout(&o->s.d, &L);
-    uint64_t off = w->set_levels ? napple_tex_level_offset(&o->s.d, (unsigned)w->base_level) : 0;
+    napple_tex_layout(d, &L);
+    uint64_t off = w->set_levels ? napple_tex_level_offset(d, (unsigned)w->base_level) : 0;
     if (w->set_layers) off += (uint64_t)w->min_layer * L.layer_size;
     return (ptrdiff_t)off;
 }
+NVN(nvnTextureGetViewOffset, ptrdiff_t, const NVNtexture *t, const NVNtextureView *v) { return view_offset(&CTX(t)->s.d, CVW(v)); }
+NVN(nvnTextureBuilderGetViewOffset, ptrdiff_t, const NVNtextureBuilder *b, const NVNtextureView *v) { return view_offset(&CTB(b)->d, CVW(v)); }
 
 /* ---------------------------------------------------------------------------------------------------------------
  * CPU texel access (storage is block-linear: convert)
@@ -262,7 +263,7 @@ NVN(nvnTextureInvalidateTexels, void, const NVNtexture *t, const NVNtextureView 
 #define CSP(s) ((const samp_t *)(s))
 
 NVN(nvnSamplerBuilderSetDevice, void, NVNsamplerBuilder *b, NVNdevice *d) { SB(b)->dev = d; }
-NVN(nvnSamplerBuilderSetDefaults, void, NVNsamplerBuilder *b) {
+NVN(nvnSamplerBuilderSetDefaults, void, NVNsamplerBuilder *b) { OBJTRACE(OT_SAMPLER_B, b, 1);
     NVNdevice *d = SB(b)->dev;
     memset(b, 0, sizeof(samp_builder_t));
     SB(b)->dev = d;
@@ -306,8 +307,8 @@ NVN(nvnSamplerGetBorderColorui, void, const NVNsampler *b, uint32_t *c) { for (i
 NVN(nvnSamplerGetMaxAnisotropy, float, const NVNsampler *b) { return CSP(b)->p.aniso; }
 NVN(nvnSamplerGetReductionFilter, NVNsamplerReduction, const NVNsampler *b) { return (NVNsamplerReduction)CSP(b)->p.reduction; }
 NVN(nvnSamplerBuilderGetLodSnap, float, const NVNsamplerBuilder *b) { return CSB(b)->p.lod_snap; }
-NVN(nvnSamplerInitialize, NVNboolean, NVNsampler *s, const NVNsamplerBuilder *b) { SP(s)->magic = SAMP_MAGIC; SP(s)->p = CSB(b)->p; return 1; }
-NVN(nvnSamplerFinalize, void, NVNsampler *s) { SP(s)->magic = 0; }
+NVN(nvnSamplerInitialize, NVNboolean, NVNsampler *s, const NVNsamplerBuilder *b) { OBJTRACE(OT_SAMPLER, s, 1); SP(s)->magic = SAMP_MAGIC; SP(s)->p = CSB(b)->p; return 1; }
+NVN(nvnSamplerFinalize, void, NVNsampler *s) { OBJTRACE(OT_SAMPLER, s, 0); SP(s)->magic = 0; }
 NVN(nvnSamplerSetDebugLabel, void, NVNsampler *s, const char *l) { (void)s; (void)l; }
 NVN(nvnSamplerCompare, NVNboolean, const NVNsampler *a, const NVNsampler *b) { return !memcmp(&CSP(a)->p, &CSP(b)->p, sizeof(samp_par)); }
 NVN(nvnSamplerGetDebugID, uint64_t, const NVNsampler *s) { return (uint64_t)(uintptr_t)s; }
@@ -342,9 +343,9 @@ static void dpool_fini(dpool_t *o) {
     memset(o, 0, sizeof *o);
 }
 
-NVN(nvnTexturePoolInitialize, NVNboolean, NVNtexturePool *p, const NVNmemoryPool *mp, ptrdiff_t off, int n) { return dpool_init(DP(p), mp, off, n, 0); }
+NVN(nvnTexturePoolInitialize, NVNboolean, NVNtexturePool *p, const NVNmemoryPool *mp, ptrdiff_t off, int n) { OBJTRACE(OT_TEXPOOL, p, 1); return dpool_init(DP(p), mp, off, n, 0); }
 NVN(nvnTexturePoolSetDebugLabel, void, NVNtexturePool *p, const char *l) { (void)p; (void)l; }
-NVN(nvnTexturePoolFinalize, void, NVNtexturePool *p) { dpool_fini(DP(p)); }
+NVN(nvnTexturePoolFinalize, void, NVNtexturePool *p) { OBJTRACE(OT_TEXPOOL, p, 0); dpool_fini(DP(p)); }
 static void register_tex(const dpool_t *p, int id, const NVNtexture *t, const NVNtextureView *v) {
     gdpool *h = dpool_host(p);
     if (!h || id < 0 || id >= h->n || !t || CTX(t)->magic != TEX_MAGIC) return;
@@ -362,9 +363,9 @@ NVN(nvnTexturePoolGetMemoryPool, const NVNmemoryPool *, const NVNtexturePool *p)
 NVN(nvnTexturePoolGetMemoryOffset, ptrdiff_t, const NVNtexturePool *p) { return (ptrdiff_t)CDP(p)->off; }
 NVN(nvnTexturePoolGetSize, int, const NVNtexturePool *p) { return CDP(p)->n; }
 
-NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *p, const NVNmemoryPool *mp, ptrdiff_t off, int n) { return dpool_init(DP(p), mp, off, n, 1); }
+NVN(nvnSamplerPoolInitialize, NVNboolean, NVNsamplerPool *p, const NVNmemoryPool *mp, ptrdiff_t off, int n) { OBJTRACE(OT_SAMPPOOL, p, 1); return dpool_init(DP(p), mp, off, n, 1); }
 NVN(nvnSamplerPoolSetDebugLabel, void, NVNsamplerPool *p, const char *l) { (void)p; (void)l; }
-NVN(nvnSamplerPoolFinalize, void, NVNsamplerPool *p) { dpool_fini(DP(p)); }
+NVN(nvnSamplerPoolFinalize, void, NVNsamplerPool *p) { OBJTRACE(OT_SAMPPOOL, p, 0); dpool_fini(DP(p)); }
 NVN(nvnSamplerPoolRegisterSampler, void, const NVNsamplerPool *p, int id, const NVNsampler *s) {
     gdpool *h = dpool_host(CDP(p));
     if (!h || id < 0 || id >= h->n || CSP(s)->magic != SAMP_MAGIC) return;

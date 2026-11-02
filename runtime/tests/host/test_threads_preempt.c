@@ -1,6 +1,10 @@
 /* Host unit test (kernel-threads, 2026-10-27): timer preemption of a guest thread that spins in user code and never reaches an svc.
  *   P1  a better-priority thread waiting for the spinner's core gets it (the SMO stall: prio 44 waiting for a prio 47 spinner on core 0)
- *   P2  equal-priority spinners on one core both run (10 ms slices)
+ *   P2  equal-priority spinners of the preemption priority 59 on one core both run (10 ms slices)
+ *   P5  equal-priority spinners of any other priority do not share the core: the second one runs only once the first stops (Horizon
+ *       rotates only priority 59 on the application cores)
+ *   P6  a thread preempted by a better one keeps its place: once the better thread leaves, the preempted spinner resumes, not an equal-priority
+ *       thread that waited for the core meanwhile (Horizon leaves the preempted thread at the head of its priority)
  *   P3  a spinner inside a preemption-disabled section (TLR disable_count) is not switched; it is once the count is back to 0 and it calls
  *       SynchronizePreemptionState
  *   P4  a worse-priority waiter does not take the core of a spinner
@@ -45,6 +49,19 @@ static void finish(Spinner *s, pthread_t pt) {
     pthread_join(pt, NULL);
 }
 
+static volatile int h_done;
+static uint8_t tlr_h[0x200] __attribute__((aligned(16)));
+static void *better(void *p) {
+    (void)p;
+    host_thread_attach(tlr_h);
+    svcv(0x0D, CUR, 40, 0, 0);
+    svcv(0x0F, CUR, (uint64_t)-1, 1, 0); /* takes core 0 from the prio-47 spinner */
+    for (int i = 0; i < 3; i++) svcv(0x0B, 30000000, 0, 0, 0); /* leaves the core for 30 ms, three times */
+    h_done = 1;
+    svcv(0x0A, 0, 0, 0, 0);
+    return NULL;
+}
+
 static volatile int got;
 static uint8_t tlr_w[0x200] __attribute__((aligned(16)));
 static void *waiter(void *p) {
@@ -53,7 +70,7 @@ static void *waiter(void *p) {
     svcv(0x0D, CUR, 44, 0, 0);
     svcv(0x0F, CUR, (uint64_t)-1, 1, 0);
     got = 1;
-    svcv(0x0F, CUR, (uint64_t)-1, 4, 0);
+    svcv(0x0F, CUR, (uint64_t)-1, 2, 0); /* off core 0, to the free core 1 (core 2 is main's, which keeps it: equal priority does not rotate) */
     svcv(0x0A, 0, 0, 0, 0);
     return NULL;
 }
@@ -100,14 +117,57 @@ int main(void) {
     {
         Spinner a, b;
         pthread_t pa, pb;
+        start(&a, &pa, 59);
+        memset((void *)&b, 0, sizeof b);
+        b.prio = 59;
+        pthread_create(&pb, NULL, spinner, &b);
+        ms(400);
+        CHECK(b.ready && b.spins > 1000 && a.spins > 1000, "equal-priority spinners of priority 59 share the core (a %llu, b %llu)", (unsigned long long)a.spins, (unsigned long long)b.spins);
+        a.stop = b.stop = 1;
+        pthread_join(pa, NULL);
+        pthread_join(pb, NULL);
+    }
+    /* P5 */
+    {
+        Spinner a, b;
+        pthread_t pa, pb;
         start(&a, &pa, 47);
         memset((void *)&b, 0, sizeof b);
         b.prio = 47;
         pthread_create(&pb, NULL, spinner, &b);
         ms(400);
-        CHECK(b.ready && b.spins > 1000 && a.spins > 1000, "equal-priority spinners share the core (a %llu, b %llu)", (unsigned long long)a.spins, (unsigned long long)b.spins);
-        a.stop = b.stop = 1;
+        uint64_t a_spins = a.spins;
+        ms(50);
+        CHECK(!b.ready, "an equal-priority thread of priority 47 does not take the spinner's core");
+        CHECK(a.spins > a_spins, "the first prio-47 spinner kept running");
+        a.stop = 1;
         pthread_join(pa, NULL);
+        while (!b.ready) ms(1);
+        CHECK(b.ready, "the second spinner runs once the first one stopped");
+        b.stop = 1;
+        pthread_join(pb, NULL);
+    }
+    /* P6 */
+    {
+        Spinner a, b;
+        pthread_t pa, pb, ph;
+        start(&a, &pa, 47);
+        memset((void *)&b, 0, sizeof b);
+        b.prio = 47;
+        pthread_create(&pb, NULL, spinner, &b); /* waits for core 0 behind a */
+        ms(100);
+        h_done = 0;
+        pthread_create(&ph, NULL, better, NULL);
+        pthread_join(ph, NULL);
+        ms(100);
+        uint64_t a_spins = a.spins;
+        ms(50);
+        CHECK(h_done && !b.ready, "after the better thread left, the waiting equal-priority thread did not get the core");
+        CHECK(a.spins > a_spins, "the preempted spinner resumed");
+        a.stop = 1;
+        pthread_join(pa, NULL);
+        while (!b.ready) ms(1);
+        b.stop = 1;
         pthread_join(pb, NULL);
     }
     /* P3 */

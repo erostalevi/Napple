@@ -48,3 +48,20 @@ typedef int (*NVNT_nvnWindowGetNumActiveTextures)(const NVNwindow *w);
 typedef int (*NVNT_nvnWindowGetNumTextures)(const NVNwindow *w);
 typedef NVNboolean (*NVNT_nvnSyncInitializeFromFencedGLSync)(NVNsync *s, NVNdevice *d, const void *gl_sync);
 typedef void * (*NVNT_nvnSyncCreateGLSync)(const NVNsync *s);
+/* Looked up by Animal Crossing (13) and Mario Kart 8 Deluxe (nvnDeviceWaitForError) and absent from the bundled header. The parameter lists are inferred from
+ * the neighbouring entry points of the same family (the non-deferred binds, SetCommandMemoryCallbackEnabled, nvnTextureGetViewOffset, the checkpoint setters):
+ * no title of the test set calls them (Animal Crossing's loader stores them and nothing reads the pointers back; 2026-11-01 xref scan). */
+typedef void (*NVNT_nvnCommandBufferBindUniformBuffersDeferred)(NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *r);
+typedef void (*NVNT_nvnCommandBufferBindStorageBuffersDeferred)(NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *r);
+typedef void (*NVNT_nvnCommandBufferBindTexturesDeferred)(NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNtextureHandle *h);
+typedef void (*NVNT_nvnCommandBufferBindImagesDeferred)(NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNimageHandle *h);
+typedef void (*NVNT_nvnCommandBufferBindSeparateTexturesDeferred)(NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateTextureHandle *h);
+typedef void (*NVNT_nvnCommandBufferBindSeparateSamplersDeferred)(NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateSamplerHandle *h);
+typedef void (*NVNT_nvnCommandBufferOverrideSubtileSize)(NVNcommandBuffer *c, int w, int h);
+typedef void (*NVNT_nvnProgramGetSubtileSize)(const NVNprogram *p, int *w, int *h);
+typedef void (*NVNT_nvnCommandBufferSetControlMemoryCallbackEnabled)(NVNcommandBuffer *c, uint32_t e);
+typedef void (*NVNT_nvnCommandBufferSetProvokingVertexMode)(NVNcommandBuffer *c, int mode);
+typedef void (*NVNT_nvnCommandBufferSetZCullZF32CompressionEnable)(NVNcommandBuffer *c, uint32_t e);
+typedef void (*NVNT_nvnDeviceSetAutomaticCheckpointsMask)(NVNdevice *d, uint32_t mask);
+typedef uint32_t (*NVNT_nvnDeviceWaitForError)(NVNdevice *d, uint64_t timeout_ns);
+typedef ptrdiff_t (*NVNT_nvnTextureBuilderGetViewOffset)(const NVNtextureBuilder *b, const NVNtextureView *v);

@@ -70,7 +70,7 @@ extension AppModel {
         case .profile:
             if signing?.identities.isEmpty ?? true { return String(localized: "No code-signing identity found. In Xcode: Settings > Accounts > Manage Certificates > + Apple Development.") }
             if iosIdentity.isEmpty { return String(localized: "Choose a signing identity in Signing.") }
-            guard let prof = selectedProfile else { return String(localized: "Choose a provisioning profile in Signing.") }
+            guard selectedProfile != nil else { return String(localized: "Choose a provisioning profile in Signing.") }
             return nil
         }
     }
@@ -127,7 +127,11 @@ extension AppModel {
             let details = await Task.detached { Dictionary(uniqueKeysWithValues: paths.compactMap { p in ProfileDetails.read(URL(fileURLWithPath: p)).map { (p, $0) } }) }.value
             profileDetails = details
         }
-        if !xcodeTeams.contains(where: { $0.teamId == teamId }) { teamId = xcodeTeams.first(where: { !$0.isFree })?.teamId ?? xcodeTeams.first?.teamId ?? "" }
+        if !xcodeTeams.contains(where: { $0.teamId == teamId }) {
+            // several Apple IDs can be signed in to Xcode: prefer a paid team, then the team whose profile is the newest one on this Mac (the account in use), never dictionary order
+            let withProfile = profileDetails.values.sorted { ($0.created ?? .distantPast) > ($1.created ?? .distantPast) }.map(\.teamId)
+            teamId = xcodeTeams.first(where: { !$0.isFree })?.teamId ?? withProfile.first(where: { t in xcodeTeams.contains { $0.teamId == t } }) ?? xcodeTeams.sorted { $0.teamId < $1.teamId }.first?.teamId ?? ""
+        }
         await refreshDevices()
     }
 
@@ -145,15 +149,23 @@ extension AppModel {
         guard let app = app ?? builtApp, let dev = selectedDevice else { installMessage = String(localized: "Choose a connected device first."); return }
         if !dev.supported { installMessage = String(localized: "\(dev.name) runs iOS \(dev.osVersion); Napple apps need iOS or iPadOS 26 or later."); return }
         if !dev.developerMode { installMessage = String(localized: "Turn on Developer Mode on \(dev.name): Settings > Privacy & Security > Developer Mode, then restart it."); return }
-        installing = true; installMessage = String(localized: "Installing on \(dev.name)…")
+        installing = true; installFailed = false; installMessage = String(localized: "Installing on \(dev.name)…")
         let id = NappleCLI.bundleId(of: app) ?? effectiveBundleId
         for l in DeviceService.commandLines(app: app, bundleId: id, on: dev) { appendLog("$ " + l) }
         var message: String
         do {
-            try await devicesService.install(app: app, on: dev)
+            let sink: @Sendable (String) -> Void = { l in
+                let t = l.trimmingCharacters(in: .whitespaces)
+                guard !t.isEmpty else { return }
+                // devicectl redraws "12%......" progress bars: show the percentage in the banner, keep the log for real lines
+                if let pct = t.split(separator: "%").first.flatMap({ Int($0.filter(\.isNumber)) }), t.contains("%") {
+                    Task { @MainActor in self.installMessage = String(localized: "Installing on \(dev.name)… \(pct)%") }
+                } else { Task { @MainActor in self.appendLog(t) } }
+            }
+            try await devicesService.install(app: app, on: dev, onLine: sink)
             if iosLaunchAfterInstall { try await devicesService.launch(bundleId: id, on: dev) }
             message = iosLaunchAfterInstall ? String(localized: "Installed and launched on \(dev.name).") : String(localized: "Installed on \(dev.name).")
-        } catch { message = error.localizedDescription }
+        } catch { message = error.localizedDescription; installFailed = true }
         await Task.yield()
         installMessage = message
         installing = false

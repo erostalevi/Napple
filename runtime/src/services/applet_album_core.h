@@ -27,5 +27,10 @@ uint32_t album_run(const CapsState *s, const AlbumArgs *a, uint8_t picked[CAPS_E
 
 /* The caps state the album is read from (caps.c keeps its state static: the service registers it here). NULL = an empty album. */
 void applet_album_set_source(const CapsState *s);
+const CapsState *applet_album_source(void); /* the registered album, NULL = none */
+/* Saves a CAPS_IMAGE_W x CAPS_IMAGE_H RGBA8 screenshot into that album (ISelfController::SaveCurrentScreenshot): a new entry dated now, stored as
+ * JPEG like caps:su's saves. The registered album is caps.c's own (mutable) state. Writes the entry to `entry` when not NULL. 0 ok, -1 no album, -2 encode
+ * failed. */
+int applet_album_save_rgba(const uint8_t *rgba, uint8_t entry[CAPS_ENTRY_SIZE]);
 int applet_album_register(void); /* 0x15 through libapplet_register_handler */
 int applet_album_handler(LibAppletCall *call);

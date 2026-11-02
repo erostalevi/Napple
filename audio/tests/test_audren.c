@@ -446,109 +446,132 @@ static void t_circular_sink(void) {
     napple_audren_close(g.r);
 }
 
-/* Performance frame: format 2 header on REV11 (the default rig), format 1 on REV3. */
-static void perf_check(int rev, uint32_t header_size) {
+/* Performance frame layouts. Format 1 (REV1..REV4): header 0x18, entry/detail 0x10. Format 2 (REV5 and later): header 0x30, entry/detail 0x18. */
+typedef struct {
+    uint32_t hs, es;
+    int v2;
+} PL;
+static PL pl_for(int rev) {
+    PL l;
+    l.v2 = rev >= 5;
+    l.hs = l.v2 ? 0x30 : 0x18;
+    l.es = l.v2 ? 0x18 : 0x10;
+    return l;
+}
+/* header fields in the order magic, entries, details, next_offset, total_time, frame_index (the format 2 header keeps frame_index at 0x20) */
+static void pl_hdr(PL l, const uint8_t *b, uint32_t out[6]) {
+    memcpy(out, b, 20);
+    memcpy(&out[5], b + (l.v2 ? 0x20 : 0x14), 4);
+}
+static uint32_t pl_u32(const uint8_t *b, size_t o) {
+    uint32_t v;
+    memcpy(&v, b + o, 4);
+    return v;
+}
+static uint32_t perf_bytes(const Rig *g) {
+    AudrenHeader oh;
+    memcpy(&oh, g->out, sizeof oh);
+    return pl_u32(g->out, sizeof oh + oh.memory_pools + oh.voices + oh.effects + oh.sinks);
+}
+static void perf_check(int rev) {
+    const PL l = pl_for(rev);
     AudrenParameter p = param_default();
     Rig g;
     rig_open(&g, p);
     Update u;
     scene_init(&u, rev, &p);
     u.voices[0] = voice_pcm(0, FMT_PCM16, g_pcm, sizeof g_pcm, 240);
-    uint8_t perf[0x20 + 16 * 16];
+    uint8_t perf[0x30 + 16 * 0x18];
     size_t w = 0;
-    uint32_t hdr[8] = {0}, ent[4];
+    uint32_t hdr[6];
     size_t n = build_update(&u, g.in);
     memset(perf, 0xcc, sizeof perf);
     CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf) == 0, "REV%d: update with a performance buffer", rev);
-    memcpy(hdr, perf, header_size);
-    const uint32_t *f = header_size == 0x20 ? hdr + 1 : hdr; /* f: entry_count, detail_count, next_offset, total_time */
-    if (header_size == 0x20) CHECK(hdr[0] == 0x46524550, "REV%d: PERF magic", rev);
+    pl_hdr(l, perf, hdr);
+    CHECK(hdr[0] == 0x46524550, "REV%d: PERF magic", rev);
     /* default rig: 1 started voice + 1 submix + final mix + 1 sink */
-    CHECK(f[0] >= 3 && f[2] == header_size + f[0] * 0x10 && f[1] == 0, "REV%d perf header: next %u entries %u", rev, f[2], f[0]);
+    CHECK(hdr[1] >= 3 && hdr[3] == l.hs + hdr[1] * l.es && hdr[2] == 0, "REV%d perf header: next %u entries %u", rev, hdr[3], hdr[1]);
     uint32_t t = 0, kinds[5] = {0};
-    for (uint32_t i = 0; i < f[0]; i++) {
-        memcpy(ent, perf + header_size + i * 0x10, sizeof ent);
-        CHECK(ent[1] == t && ent[2] > 0 && ent[3] >= 1 && ent[3] <= 4, "perf entry %u is contiguous with a plausible time", i);
-        t += ent[2];
-        kinds[ent[3]]++;
+    for (uint32_t i = 0; i < hdr[1]; i++) {
+        const uint8_t *e = perf + l.hs + i * l.es;
+        CHECK(pl_u32(e, 4) == t && pl_u32(e, 8) > 0 && e[12] >= 1 && e[12] <= 4, "REV%d: perf entry %u is contiguous with a plausible time", rev, i);
+        t += pl_u32(e, 8);
+        kinds[e[12]]++;
     }
-    CHECK(f[3] == t, "perf total processing time = sum of entries");
-    if (header_size == 0x20) CHECK(hdr[6] == 0 && hdr[7] == 0, "no voice dropped on the default rig, start time 0");
-    CHECK(kinds[1] == 1 && kinds[3] == 1 && kinds[4] == 1, "one voice, one final mix, one sink");
-    AudrenHeader oh;
-    memcpy(&oh, g.out, sizeof oh);
-    uint32_t pb;
-    size_t off = sizeof oh + oh.memory_pools + oh.voices + oh.effects + oh.sinks;
-    memcpy(&pb, g.out + off, 4);
-    CHECK(pb == f[2], "update output carries the performance byte count");
+    CHECK(hdr[4] == t, "REV%d: perf total processing time = sum of entries", rev);
+    if (l.v2) {
+        CHECK(pl_u32(perf, 0x14) == 0 && pl_u32(perf, 0x18) == 0 && pl_u32(perf, 0x1c) == 0 && perf[0x24] == 0, "REV%d: nothing dropped, start 0, not exceeded", rev);
+        int pad = 1;
+        for (int i = 0x25; i < 0x30; i++) pad &= perf[i] == 0;
+        CHECK(pad, "REV%d: header padding is zero", rev);
+    }
+    CHECK(kinds[1] == 1 && kinds[3] == 1 && kinds[4] == 1, "REV%d: one voice, one final mix, one sink", rev);
+    CHECK(perf_bytes(&g) == hdr[3], "REV%d: update output carries the performance byte count", rev);
     size_t n2 = build_update(&u, g.in);
-    uint8_t tiny[0x40];
+    uint8_t tiny[0x60];
     memset(tiny, 0, sizeof tiny);
-    CHECK(napple_audren_request_update(g.r, g.in, n2, g.out, sizeof g.out, &w, tiny, header_size + 0x20) == 0, "small performance buffer is accepted");
-    memcpy(hdr, tiny, header_size);
-    f = header_size == 0x20 ? hdr + 1 : hdr;
-    CHECK(f[0] == 2 && f[2] == header_size + 0x20, "entries are capped to the buffer");
-    CHECK(napple_audren_request_update(g.r, g.in, n2, g.out, sizeof g.out, &w, tiny, 8) == 0, "buffer smaller than the header is ignored");
+    CHECK(napple_audren_request_update(g.r, g.in, n2, g.out, sizeof g.out, &w, tiny, l.hs + 2 * l.es) == 0, "REV%d: small performance buffer is accepted", rev);
+    pl_hdr(l, tiny, hdr);
+    CHECK(hdr[1] == 2 && hdr[3] == l.hs + 2 * l.es, "REV%d: entries are capped to the buffer", rev);
+    CHECK(napple_audren_request_update(g.r, g.in, n2, g.out, sizeof g.out, &w, tiny, 8) == 0, "REV%d: buffer smaller than the header is ignored", rev);
     napple_audren_close(g.r);
 }
 /* History: with performance_frame_count = 3 the renderer holds the last three frames until a buffer arrives, and hands them over back to back. */
-static void t_performance_history(void) {
+static void t_performance_history(int rev) {
+    const PL l = pl_for(rev);
     AudrenParameter p = param_default();
     p.performance_frame_count = 3;
     Rig g;
     rig_open(&g, p);
     Update u;
-    scene_init(&u, 11, &p);
+    scene_init(&u, rev, &p);
     u.voices[0] = voice_pcm(0, FMT_PCM16, g_pcm, sizeof g_pcm, 240);
     size_t w = 0;
     for (int i = 0; i < 4; i++) {
         size_t n = build_update(&u, g.in);
         CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, NULL, 0) == 0, "update %d without a performance buffer", i);
     }
-    uint8_t perf[3 * (0x20 + 16 * 16) + 64];
+    uint8_t perf[3 * (0x30 + 16 * 0x18) + 64];
     size_t n = build_update(&u, g.in);
-    memset(perf, 0, sizeof perf);
+    memset(perf, 0xcc, sizeof perf);
     CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf) == 0, "update with a buffer");
-    AudrenHeader oh;
-    memcpy(&oh, g.out, sizeof oh);
-    uint32_t pb;
-    size_t off = sizeof oh + oh.memory_pools + oh.voices + oh.effects + oh.sinks;
-    memcpy(&pb, g.out + off, 4);
-    uint32_t at = 0, frames = 0, idx[8] = {0}, hdr[8];
-    while (at + 0x20 <= pb && frames < 8) {
-        memcpy(hdr, perf + at, sizeof hdr);
-        CHECK(hdr[0] == 0x46524550 && hdr[3] > 0, "frame %u has a PERF header and a next offset", frames);
+    uint32_t pb = perf_bytes(&g);
+    uint32_t at = 0, frames = 0, idx[8] = {0}, hdr[6];
+    while (at + l.hs <= pb && frames < 8) {
+        pl_hdr(l, perf + at, hdr);
+        CHECK(hdr[0] == 0x46524550 && hdr[3] > 0, "REV%d: frame %u has a PERF header and a next offset", rev, frames);
         if (hdr[3] == 0) break;
-        idx[frames++] = hdr[7];
+        idx[frames++] = hdr[5];
         at += hdr[3];
     }
-    CHECK(at == pb && frames == 3, "three frames fill exactly the reported %u bytes (got %u frames)", pb, frames);
+    CHECK(at == pb && frames == 3, "REV%d: three frames fill exactly the reported %u bytes (got %u frames)", rev, pb, frames);
     CHECK(idx[1] >= idx[0] && idx[2] >= idx[1], "frame indices never go backwards (%u %u %u)", idx[0], idx[1], idx[2]);
+    CHECK(pl_u32(perf, pb) == 0, "REV%d: a null header ends the chain", rev);
     n = build_update(&u, g.in);
     CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf) == 0, "next update");
-    memcpy(&pb, g.out + off, 4);
-    memcpy(hdr, perf, sizeof hdr);
+    pb = perf_bytes(&g);
+    pl_hdr(l, perf, hdr);
     CHECK(pb == hdr[3], "after collecting, only the new frame is returned (%u vs %u)", pb, hdr[3]);
     /* a buffer that holds two frames: the oldest two are handed over, the rest waits */
     for (int i = 0; i < 2; i++) {
         n = build_update(&u, g.in);
         napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, NULL, 0);
     }
-    memcpy(hdr, perf, sizeof hdr);
     n = build_update(&u, g.in);
     uint32_t fsz = hdr[3];
     napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, 2 * fsz);
-    memcpy(&pb, g.out + off, 4);
+    pb = perf_bytes(&g);
     CHECK(pb == 2 * fsz, "a two-frame buffer takes two whole frames (%u)", pb);
     n = build_update(&u, g.in);
     napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf);
-    memcpy(&pb, g.out + off, 4);
+    pb = perf_bytes(&g);
     CHECK(pb >= 2 * fsz, "the frame left behind comes out with the next update (%u)", pb);
     napple_audren_close(g.r);
 }
 /* Detail entries: the update's performance section names a target node; a voice target adds data source / volume ramp / mix details after the entries.
  * Node ids come from the title (voice_pcm sets node_id = id; the test gives them a type in bits 28..31 like the SDK does). */
-static void t_performance_detail(int rev, uint32_t header_size) {
+static void t_performance_detail(int rev) {
+    const PL l = pl_for(rev);
     AudrenParameter p = param_default();
     Rig g;
     rig_open(&g, p);
@@ -556,7 +579,7 @@ static void t_performance_detail(int rev, uint32_t header_size) {
     scene_init(&u, rev, &p);
     u.voices[0] = voice_pcm(0, FMT_PCM16, g_pcm, sizeof g_pcm, 240);
     u.voices[0].node_id = 0x10000000u | 7u; /* NodeIdType voice, index 7 */
-    uint8_t perf[0x20 + 16 * 16 + 8 * 0x10];
+    uint8_t perf[0x30 + 16 * 0x18 + 8 * 0x18];
     size_t w = 0, n = build_update(&u, g.in);
     AudrenHeader h;
     memcpy(&h, g.in, sizeof h);
@@ -564,48 +587,48 @@ static void t_performance_detail(int rev, uint32_t header_size) {
     memcpy(g.in + n - h.render_info - h.performance, &target, 4);
     memset(perf, 0, sizeof perf);
     CHECK(napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf) == 0, "REV%d: update with a detail target", rev);
-    uint32_t hdr[8];
-    memcpy(hdr, perf, sizeof hdr);
-    const uint32_t *f = header_size == 0x20 ? hdr + 1 : hdr; /* entry_count, detail_count, next_offset, total_time */
-    CHECK(f[1] == 3 && f[2] == header_size + (f[0] + f[1]) * 0x10, "REV%d: three details, next offset covers entries and details (%u %u %u)", rev, f[0], f[1], f[2]);
-    uint32_t e[4];
-    memcpy(e, perf + header_size, sizeof e);
-    CHECK(e[0] == 0x10000007u && e[3] == 1, "REV%d: the voice entry carries the title's node id", rev);
-    uint32_t d[3][4], ts = e[1];
-    for (int i = 0; i < 3; i++) memcpy(d[i], perf + header_size + (f[0] + (uint32_t)i) * 0x10, 0x10);
-    CHECK(d[0][0] == 0x10000007u && (d[0][3] & 0xff) == 1 && ((d[0][3] >> 8) & 0xff) == 1, "REV%d: PcmInt16 data source detail, parent voice", rev);
-    CHECK((d[1][3] & 0xff) == 3 && (d[2][3] & 0xff) == 5, "REV%d: volume ramp, then mix", rev);
-    CHECK(d[0][1] == ts && d[1][1] == ts + d[0][2] && d[2][1] == d[1][1] + d[1][2] && d[0][2] > 0, "REV%d: details are contiguous from the entry start", rev);
+    uint32_t f[6];
+    pl_hdr(l, perf, f);
+    CHECK(f[2] == 3 && f[3] == l.hs + (f[1] + f[2]) * l.es, "REV%d: three details, next offset covers entries and details (%u %u %u)", rev, f[1], f[2], f[3]);
+    const uint8_t *e = perf + l.hs;
+    CHECK(pl_u32(e, 0) == 0x10000007u && e[12] == 1, "REV%d: the voice entry carries the title's node id", rev);
+    const uint8_t *d[3];
+    for (int i = 0; i < 3; i++) d[i] = perf + l.hs + (f[1] + (uint32_t)i) * l.es;
+    uint32_t ts = pl_u32(e, 4);
+    CHECK(pl_u32(d[0], 0) == 0x10000007u && d[0][12] == 15 && d[0][13] == 1, "REV%d: PcmInt16 data source detail (type 15), parent voice", rev);
+    CHECK(d[1][12] == 8 && d[2][12] == 10, "REV%d: volume ramp, then mix", rev);
+    CHECK(pl_u32(d[0], 4) == ts && pl_u32(d[1], 4) == ts + pl_u32(d[0], 8) && pl_u32(d[2], 4) == pl_u32(d[1], 4) + pl_u32(d[1], 8) && pl_u32(d[0], 8) > 0,
+          "REV%d: details are contiguous from the entry start", rev);
     /* no target: no details; a target that names nothing: none either */
     n = build_update(&u, g.in);
     napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf);
-    memcpy(hdr, perf, sizeof hdr);
-    f = header_size == 0x20 ? hdr + 1 : hdr;
-    CHECK(f[1] == 0, "REV%d: target 0 produces no details", rev);
+    pl_hdr(l, perf, f);
+    CHECK(f[2] == 0, "REV%d: target 0 produces no details", rev);
     target = 0x10000063;
     memcpy(g.in + n - h.render_info - h.performance, &target, 4);
     napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, perf, sizeof perf);
-    memcpy(hdr, perf, sizeof hdr);
-    f = header_size == 0x20 ? hdr + 1 : hdr;
-    CHECK(f[1] == 0, "REV%d: a target that names no started node produces no details", rev);
+    pl_hdr(l, perf, f);
+    CHECK(f[2] == 0, "REV%d: a target that names no started node produces no details", rev);
     /* a buffer with room for the entries only: details are dropped, not truncated mid-entry */
     target = 0x10000007;
     memcpy(g.in + n - h.render_info - h.performance, &target, 4);
-    uint8_t small[0x20 + 4 * 0x10 + 0x10];
+    uint8_t small[0x30 + 5 * 0x18];
     memset(small, 0, sizeof small);
-    napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, small, sizeof small);
-    memcpy(hdr, small, sizeof hdr);
-    f = header_size == 0x20 ? hdr + 1 : hdr;
-    CHECK(f[1] < 3 && f[0] + f[1] <= (sizeof small - header_size) / 0x10 && f[2] == header_size + (f[0] + f[1]) * 0x10 && f[2] <= sizeof small, "REV%d: details share the buffer with the entries and are capped (%u %u %u)", rev, f[0], f[1], f[2]);
+    size_t sz = l.hs + 5 * l.es;
+    napple_audren_request_update(g.r, g.in, n, g.out, sizeof g.out, &w, small, sz);
+    pl_hdr(l, small, f);
+    CHECK(f[2] < 3 && f[1] + f[2] <= 5 && f[3] == l.hs + (f[1] + f[2]) * l.es && f[3] <= sz, "REV%d: details share the buffer with the entries and are capped (%u %u %u)", rev, f[1], f[2], f[3]);
     napple_audren_close(g.r);
 }
 static void t_performance(void) {
-    t_performance_history();
-    t_performance_detail(11, 0x20);
-    t_performance_detail(3, 0x10);
-    perf_check(11, 0x20);
-    perf_check(3, 0x10);
-    perf_check(5, 0x20);
+    static const int revs[] = {1, 3, 4, 5, 7, 9, 11, 12};
+    for (unsigned i = 0; i < sizeof revs / sizeof *revs; i++) {
+        perf_check(revs[i]);
+        t_performance_detail(revs[i]);
+    }
+    t_performance_history(11);
+    t_performance_history(3);
+    t_performance_history(5);
 }
 
 int main(void) {

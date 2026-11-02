@@ -321,7 +321,13 @@ pub fn rewrite_module(
     build_id: &str,
     opts: &RewriteOptions,
 ) -> Result<RewriteOutput, RewriteError> {
-    let orig = ModuleImage::from_nso(nso)?;
+    let mut orig = ModuleImage::from_nso(nso)?;
+    let ordered = if opts.order_exclusives {
+        let data = scan::data_words(&orig);
+        crate::ordering::strengthen(&mut orig, &data, opts.max_window_len)
+    } else {
+        Default::default()
+    };
     let scanned = scan::scan(&orig);
     let starts = orig.function_starts();
     let mut warnings = Vec::new();
@@ -345,6 +351,8 @@ pub fn rewrite_module(
     }
     let mut rw = Rewriter::new(&orig, scanned.sites, starts, opts);
     rw.run();
+    rw.stats.insert("exclusive_loads_acquire", ordered.loads);
+    rw.stats.insert("exclusive_stores_release", ordered.stores);
     let layout = orig.layout;
     let mut image = rw.img;
     image.resize(layout.patch_off as usize, 0);

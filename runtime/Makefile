@@ -92,7 +92,7 @@ HOST_MEDIA := src/services/nvdrv_media_core.c src/services/decoder_null_core.c s
 # nvdrv-device-nodes (2026-10-28-b8): state-tracked nvhost-gpu / as-gpu / ctrl-gpu, linked wherever nvdrv.c is
 HOST_MEDIA += src/services/nvdrv_nodes_core.c
 HOST_TESTS := $(HOST_BUILD)/test_svc_async $(HOST_BUILD)/test_kernel_ipc $(HOST_BUILD)/test_loader $(HOST_BUILD)/test_nvdrv $(HOST_BUILD)/test_fs_savedata $(HOST_BUILD)/test_fs_journal $(HOST_BUILD)/test_ios_dylib
-HOST_FS := src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c tests/host/host_save_dir.c src/services/romfs_map.c
+HOST_FS := src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c tests/host/host_save_dir.c src/services/romfs_map.c src/services/romfs_read.c
 $(HOST_BUILD)/test_kernel_ipc: tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) $(HOST_HDRS)
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_ipc.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
@@ -119,6 +119,14 @@ $(HOST_BUILD)/test_kernel_sched: tests/host/test_kernel_sched.c $(HOST_KERNEL) $
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_sched.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
 HOST_TESTS += $(HOST_BUILD)/test_kernel_sched
+$(HOST_BUILD)/test_light_event: tests/host/test_light_event.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_light_event.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_light_event
+$(HOST_BUILD)/test_input_script: tests/host/test_input_script.c src/input_script.c $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) -I../input/include tests/host/test_input_script.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_input_script
 # media-services (2026-10-26): the media engines through nvdrv's own ioctl handlers (also runs under tools/linux-check on Linux)
 $(HOST_BUILD)/test_nvdrv_media: tests/test_svc_nvdrv_media.c src/services/nvdrv.c src/ipc.c $(HOST_KERNEL) $(HOST_MEDIA) $(HOST_HDRS) $(wildcard tests/*vectors.h)
 	@mkdir -p $(dir $@)
@@ -153,6 +161,11 @@ $(HOST_BUILD)/test_threads_preempt: tests/host/test_threads_preempt.c $(HOST_KER
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_threads_preempt.c src/ipc.c $(HOST_KERNEL) tests/host/host_nomodules.c -o $@
 HOST_TESTS += $(HOST_BUILD)/test_threads_preempt
+# core-ordering-kernel (2026-11-02): svcGetInfo 19 / 27, svcExitProcess after nnMain returned (includes kernel.c; its own fake modules)
+$(HOST_BUILD)/test_kernel_exit: tests/host/test_kernel_exit.c $(HOST_KERNEL) $(HOST_HDRS)
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_exit.c src/ipc.c $(filter-out src/kernel.c,$(HOST_KERNEL)) -o $@
+HOST_TESTS += $(HOST_BUILD)/test_kernel_exit
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 
@@ -180,6 +193,14 @@ test-a32: $(BUILD)/tests/a32/difftest $(BUILD)/napple-runtime
 	python3 tests/a32jit/progtest.py
 	../tools/check_a32_no_interp.sh $(BUILD)/napple-runtime
 .PHONY: test-a32
+# Memory ordering of the lifted exclusives and lda / stl (core-ordering-kernel, 2026-11-02): runs first in `make test-a32`
+$(BUILD)/tests/a32/excltest: tests/a32jit/excltest.c src/a32jit/a32lift.c $(A32_TEST_SRC)
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O2 -DNAPPLE_A32_INTERP -Isrc/a32 -o $@ tests/a32jit/excltest.c src/a32jit/a32lift.c $(A32_TEST_SRC)
+test-a32-order: $(BUILD)/tests/a32/excltest
+	$(BUILD)/tests/a32/excltest
+test-a32: test-a32-order
+.PHONY: test-a32-order
 
 # Fuzz drivers for the untrusted-input C parsers (tests/fuzz/HOWTO.md): `make fuzz-build`, `make fuzz-smoke`, `make fuzz-run FUZZ_SECONDS=300`
 -include tests/fuzz/fuzz.mk
@@ -187,3 +208,17 @@ test-a32: $(BUILD)/tests/a32/difftest $(BUILD)/napple-runtime
 $(BUILD)/tests/test_decoder_vt: tests/test_decoder_vt.c src/services/decoder_vt.c src/vt_h264.c src/services/decoder_null_core.c src/services/codec_headers_core.c tests/check.h
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Isrc/services tests/test_decoder_vt.c src/services/decoder_vt.c src/vt_h264.c src/services/decoder_null_core.c src/services/codec_headers_core.c -lm -framework VideoToolbox -framework CoreMedia -framework CoreVideo -framework CoreFoundation -framework ImageIO -framework CoreGraphics -o $@
+
+# ipc-depth-hid (2026-11-01-r2): every application-reachable command id of tests/ipc_reference/*.txt must have a row in the runtime's command
+# tables (tests/test_ipc_reference.c reads the sources; portable C, so it runs in `test` and `test-host`). `make test-ipc-reference` lists details.
+$(BUILD)/tests/test_ipc_reference: tests/test_ipc_reference.c
+	@mkdir -p $(dir $@)
+	$(CC) -std=gnu11 -O1 -g -Wall -Wextra $< -o $@
+test: $(BUILD)/tests/test_ipc_reference
+$(HOST_BUILD)/test_ipc_reference: tests/test_ipc_reference.c
+	@mkdir -p $(dir $@)
+	$(HOST_CC) -std=gnu11 -O1 -g -Wall -Wextra $< -o $@
+test-host: $(HOST_BUILD)/test_ipc_reference
+test-ipc-reference: $(BUILD)/tests/test_ipc_reference
+	./$< -v
+.PHONY: test-ipc-reference

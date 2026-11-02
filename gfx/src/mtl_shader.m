@@ -8,12 +8,14 @@
 #include <dirent.h>
 #include <pthread.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <signal.h>
 #include <sys/sysctl.h>
 
 #import "mtl_priv.h"
 #include "cache_trim.h"
 
-#define TRANSLATOR_VERSION 14u /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 18u /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader
 @end
@@ -91,6 +93,13 @@ static void archive_open(void) {
     NSString *marker = [path stringByAppendingString:@".loading"], *tmp = [path stringByAppendingString:@".tmp"];
     NSFileManager *fm = NSFileManager.defaultManager;
     [fm removeItemAtPath:tmp error:nil];                                 /* a save that never finished (crash, kill): the real file was never touched */
+    /* the same for the per-process temporary names (<file>.tmp.<pid>) of processes that are gone */
+    for (NSString *f in [fm contentsOfDirectoryAtPath:path.stringByDeletingLastPathComponent error:nil]) {
+        NSString *pre = [path.lastPathComponent stringByAppendingString:@".tmp."];
+        if (![f hasPrefix:pre]) continue;
+        int pid = [f substringFromIndex:pre.length].intValue;
+        if (pid > 0 && kill(pid, 0) != 0 && errno == ESRCH) [fm removeItemAtPath:[path.stringByDeletingLastPathComponent stringByAppendingPathComponent:f] error:nil];
+    }
     if ([fm fileExistsAtPath:marker]) {
         /* The previous launch started loading this file and never finished (Metal's loader hung or the process was killed or crashed inside it): the file is suspect, and a
          * corrupt archive made every later launch hang on the shader screen. Drop it; the next save rebuilds it. */
@@ -136,9 +145,32 @@ static void archive_save(void) {
     if (!g_archive_dirty || g_archive_broken) return;
     for (int tries = 0; tries < ARCHIVE_SAVE_TRIES; tries++) {
         NSError *err = nil;
-        /* Serialize next to the real file and rename over it: a crash or kill during the write can no longer leave a half-written archive at the real path. */
-        NSURL *tmpurl = [NSURL fileURLWithPath:[g_archive_url.path stringByAppendingString:@".tmp"]];
-        if ([g_out serializeToURL:tmpurl error:&err] && rename(tmpurl.path.fileSystemRepresentation, g_archive_url.path.fileSystemRepresentation) == 0) {
+        /* Serialize next to the real file and rename over it: a crash or kill during the write can no longer leave a half-written archive at the real path. The
+         * temporary name carries the process id: two processes of one title share the cache directory (a second instance, a test run next to the app), and
+         * with one name the second rename found the file already moved ("renaming the saved archive into place failed", MK8D). */
+        NSURL *tmpurl = [NSURL fileURLWithPath:[g_archive_url.path stringByAppendingFormat:@".tmp.%d", (int)getpid()]];
+        BOOL ser = [g_out serializeToURL:tmpurl error:&err];
+        struct stat tst;
+        if (ser && stat(tmpurl.path.fileSystemRepresentation, &tst) != 0) {
+            /* Metal writes nothing (and still answers YES) when the archive gained nothing since its last serialization: a pipeline added again that it
+             * already held marks the save dirty without changing it. The file on disk is current. (Renaming the missing file failed and disabled the
+             * archive for the run: "renaming the saved archive into place failed", MK8D.) */
+            g_archive_dirty = 0;
+            return;
+        }
+        int ren = ser ? rename(tmpurl.path.fileSystemRepresentation, g_archive_url.path.fileSystemRepresentation) : -1, ren_errno = ren ? errno : 0;
+        if (ser && ren) {
+            /* The archive was written but could not be moved into place: say why, keep the archive on and try again at the next save (a transient cause
+             * must not disable it for the whole run); only repeated failures disable it. */
+            static int rename_fails;
+            struct stat st;
+            int tmp_there = stat(tmpurl.path.fileSystemRepresentation, &st) == 0;
+            LOGW("binary archive: moving %s into place failed (%s; the written file %s)%s", tmpurl.path.UTF8String, strerror(ren_errno),
+                 tmp_there ? "is there" : "is gone", ++rename_fails >= 3 ? ": archive disabled for this run" : ": retried at the next save");
+            if (rename_fails >= 3) g_archive_broken = 1;
+            return;
+        }
+        if (ser && !ren) {
             g_archive_dirty = 0;
             NSDictionary *at = [NSFileManager.defaultManager attributesOfItemAtPath:g_archive_url.path error:nil];
             if ([at fileSize] > archive_max_bytes() && g_out_desc.count > 8) { /* over the cap: leave the oldest quarter out of the next save */
@@ -521,8 +553,9 @@ static void cache_store(NSString *path, const ShaderInfo *info) {
     NSMutableData *d = [NSMutableData dataWithBytes:&h length:sizeof h];
     [d appendBytes:&copy length:sizeof copy];
     [d appendBytes:info->msl length:h.msl_size];
-    [d writeToFile:[path stringByAppendingString:@".tmp"] atomically:NO];
-    rename([path stringByAppendingString:@".tmp"].UTF8String, path.UTF8String);
+    NSString *tmp = [path stringByAppendingFormat:@".tmp.%d", (int)getpid()]; /* per process: instances of one title share the cache directory */
+    [d writeToFile:tmp atomically:NO];
+    if (rename(tmp.UTF8String, path.UTF8String)) unlink(tmp.UTF8String);
 }
 static int cache_load(NSString *path, ShaderInfo *info) {
     if (!path) return 0;
@@ -957,9 +990,16 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     vk.stencil_slots = k.stencil_slots[0];
     vk.image_int_mask = k.img_int[0];
     vk.image_uint_mask = k.img_uint[0];
+    vk.tex_uint_slots = k.tex_uint[0];
+    vk.tex_sint_slots = k.tex_sint[0];
+    vk.sep_depth_slots = k.sep_depth[0];
+    vk.sep_stencil_slots = k.sep_stencil[0];
+    vk.sep_uint_slots = k.sep_uint[0];
+    vk.sep_sint_slots = k.sep_sint[0];
     vk.point_prim = k.topo == MTLPrimitiveTopologyClassPoint;
     vk.flip_y = k.flip_y;
     vk.depth_minus_one = k.depth_mode == 0;
+    vk.vp_swizzle = k.vp_swizzle;
     GfxShader *vs = shader_variant(k.vs, &vk, 1);
     if (vs->state != 1) {
         p->state = 2;
@@ -980,6 +1020,12 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     fk.stencil_slots = k.stencil_slots[1];
     fk.image_int_mask = k.img_int[1];
     fk.image_uint_mask = k.img_uint[1];
+    fk.tex_uint_slots = k.tex_uint[1];
+    fk.tex_sint_slots = k.tex_sint[1];
+    fk.sep_depth_slots = k.sep_depth[1];
+    fk.sep_stencil_slots = k.sep_stencil[1];
+    fk.sep_uint_slots = k.sep_uint[1];
+    fk.sep_sint_slots = k.sep_sint[1];
     { /* NAPPLE_SHADER_PROBE=<fragment program hash hex>:<pc hex>:<rA>:<rB>:<rC>[:<scale>][;<next probe>...]: the fragment program draws those registers as its colour
          * (debugging aid; several probes are cycled every 30 frames so one run can capture them all) */
         const char *pr = getenv("NAPPLE_SHADER_PROBE");
@@ -1259,6 +1305,12 @@ static ShaderKey stage_vs_key(const pipe_key *k) {
     vk.stencil_slots = k->stencil_slots[0];
     vk.image_int_mask = k->img_int[0];
     vk.image_uint_mask = k->img_uint[0];
+    vk.tex_uint_slots = k->tex_uint[0];
+    vk.tex_sint_slots = k->tex_sint[0];
+    vk.sep_depth_slots = k->sep_depth[0];
+    vk.sep_stencil_slots = k->sep_stencil[0];
+    vk.sep_uint_slots = k->sep_uint[0];
+    vk.sep_sint_slots = k->sep_sint[0];
     vk.flip_y = k->flip_y;
     vk.depth_minus_one = k->depth_mode == 0;
     return vk;
@@ -1276,12 +1328,18 @@ static GfxShader *stage_fs(const pipe_key *k, uint32_t vs_out_mask) {
     fk.stencil_slots = k->stencil_slots[1];
     fk.image_int_mask = k->img_int[1];
     fk.image_uint_mask = k->img_uint[1];
+    fk.tex_uint_slots = k->tex_uint[1];
+    fk.tex_sint_slots = k->tex_sint[1];
+    fk.sep_depth_slots = k->sep_depth[1];
+    fk.sep_stencil_slots = k->sep_stencil[1];
+    fk.sep_uint_slots = k->sep_uint[1];
+    fk.sep_sint_slots = k->sep_sint[1];
     return shader_variant(k->fs, &fk, 1);
 }
 /* Pass-through vertex function of the geometry output: record r of gs_vtx -> position + the generic slots the program stores (+ point size for points). */
-static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip) {
+static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip, uint16_t swz) {
     static NSMutableDictionary<NSNumber *, id<MTLFunction>> *cache;
-    NSNumber *ck = @((slots * 2 + (uint64_t)(points != 0)) ^ ((uint64_t)(clip & 3) << 62));
+    NSNumber *ck = @((slots * 2 + (uint64_t)(points != 0)) ^ ((uint64_t)(clip & 3) << 62) ^ ((uint64_t)swz << 40));
     @synchronized([GfxPipe class]) {
         if (!cache) cache = [NSMutableDictionary dictionary];
         if (cache[ck]) return cache[ck];
@@ -1297,6 +1355,16 @@ static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip) {
     else [m appendString:@"  uint r = vid;\n"];
     [m appendFormat:@"  device const float4 *s = gs_vtx + r * %uu;\n  o.pos = s[%d];\n", STAGE_SLOTS, STAGE_SLOT_POS];
     /* the clip-space conversions happen here, not in the geometry kernel: gs_vtx keeps the program's own values for transform feedback */
+    if (swz) { /* viewport swizzle (ShaderKey.vp_swizzle) */
+        uint32_t sw = swz ^ VP_SWIZZLE_IDENTITY;
+        static const char cn[4] = {'x', 'y', 'z', 'w'};
+        [m appendString:@"  { float4 q = o.pos; o.pos = float4("];
+        for (int i = 0; i < 4; i++) {
+            uint32_t v = (sw >> (3 * i)) & 7;
+            [m appendFormat:@"%s%sq.%c", i ? ", " : "", v & 1 ? "-" : "", cn[v >> 1]];
+        }
+        [m appendString:@"); }\n"];
+    }
     if (clip & 1) [m appendString:@"  o.pos.y = -o.pos.y;\n"];
     if (clip & 2) [m appendString:@"  o.pos.z = (o.pos.z + o.pos.w) * 0.5f;\n"];
     for (int i = 0; i < 32; i++)
@@ -1342,7 +1410,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         d.rasterizationEnabled = NO; /* the capture function is `vertex void` (ShaderKey.capture_void): no rasterizer work at all */
     } else if (sk->mode == SPK_GS_DRAW) {
         int points = sk->gs_topo == GS_OUT_POINTS;
-        vfn = gs_passthrough_fn(sk->gs_slots, points, sk->gs_clip);
+        vfn = gs_passthrough_fn(sk->gs_slots, points, sk->gs_clip, k->vp_swizzle);
         if (!vfn) return;
         fs = stage_fs(k, generic_mask(sk->gs_slots));
         if (k->fs && fs->state != 1) return;
@@ -1357,6 +1425,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         if (!cap) {
             tk.flip_y = k->flip_y;
             tk.depth_minus_one = k->depth_mode == 0;
+            tk.vp_swizzle = k->vp_swizzle;
         }
         tk.tess_soft = 1;
         tk.stage_out = (uint8_t)cap;
@@ -1388,6 +1457,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         ShaderKey tk = {0};
         tk.flip_y = k->flip_y;
         tk.depth_minus_one = k->depth_mode == 0;
+        tk.vp_swizzle = k->vp_swizzle;
         tk.tess_domain = sk->tess_domain;
         tk.tess_out_vertices = sk->tess_cp;
         tk.depth_slots = sk->te_depth;
@@ -1446,7 +1516,9 @@ GfxPipe *mtl_stage_pipe_get(const stage_pipe_key *k0, const gfx_xfb_layout *xfb)
         kn.k.depth_fmt = kn.k.stencil_fmt = 0;
         kn.k.samples = 1;
         kn.k.a2c = 0;
-        kn.k.depth_slots[1] = kn.k.stencil_slots[1] = kn.k.img_int[1] = kn.k.img_uint[1] = 0;
+        kn.k.depth_slots[1] = kn.k.stencil_slots[1] = kn.k.img_int[1] = kn.k.img_uint[1] = kn.k.tex_uint[1] = kn.k.tex_sint[1] = 0;
+        kn.k.sep_depth[1] = kn.k.sep_stencil[1] = kn.k.sep_uint[1] = kn.k.sep_sint[1] = 0;
+        kn.k.vp_swizzle = 0;
     }
     kn.k.probe = 0;
     NSNumber *key = @(fnv1a(&kn, sizeof kn, FNV_INIT) ^ 0x5354474550495045ull);

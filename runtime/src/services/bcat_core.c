@@ -101,7 +101,7 @@ const BcatProvider *bcat_provider(void) {
         g_env_checked = 1;
         const char *root = getenv("NAPPLE_BCAT_DIR");
         if (root && *root) {
-            g_provider = bcat_dir_provider(root);
+            g_provider = bcat_auto_provider(root);
             g_have = 1;
         }
     }
@@ -111,6 +111,12 @@ const BcatProvider *bcat_provider(void) {
 typedef struct {
     char root[512];
 } DirCtx;
+BcatProvider bcat_auto_provider(const char *root) {
+    char meta[1024];
+    struct stat st;
+    snprintf(meta, sizeof meta, "%s/directories.meta", root);
+    return stat(meta, &st) == 0 && S_ISREG(st.st_mode) ? bcat_save_provider(root) : bcat_dir_provider(root);
+}
 static int path_join(char *out, size_t cap, const char *root, const char *a, const char *b) {
     int n = b ? snprintf(out, cap, "%s/%s/%s", root, a, b) : a ? snprintf(out, cap, "%s/%s", root, a) : snprintf(out, cap, "%s", root);
     return n > 0 && (size_t)n < cap ? 0 : -1;
@@ -195,4 +201,74 @@ BcatProvider bcat_dir_provider(const char *root) {
     DirCtx *d = calloc(1, sizeof *d); /* lives as long as the provider (the process, or until the test exits) */
     if (d) snprintf(d->root, sizeof d->root, "%s", root ? root : "");
     return (BcatProvider){d, dir_list_dirs, dir_list_files, dir_read};
+}
+
+/* ---- the console's storage layout (bcat_core.h) ---- */
+static int meta_load(const char *path, size_t entry, uint8_t **buf, int *count, int max) {
+    uint64_t size;
+    uint8_t *raw;
+    if (read_all(path, &raw, &size)) return -1;
+    uint32_t hdr = 0;
+    if (size >= 4) memcpy(&hdr, raw, 4);
+    if (size < 4 || hdr != BCAT_META_HEADER) {
+        free(raw);
+        return -1;
+    }
+    int n = (int)((size - 4) / entry);
+    *count = n > max ? max : n;
+    *buf = raw;
+    return 0;
+}
+static int save_list_dirs(void *ctx, char names[][BCAT_NAME_SIZE], int max) {
+    DirCtx *d = ctx;
+    char path[1024];
+    uint8_t *raw;
+    int count, n = 0;
+    if (!d || path_join(path, sizeof path, d->root, "directories.meta", NULL) || meta_load(path, BCAT_DIR_META_ENTRY, &raw, &count, BCAT_MAX_DIRS)) return 0;
+    for (int i = 0; i < count && n < max; i++) {
+        const char *name = (const char *)raw + 4 + (size_t)i * BCAT_DIR_META_ENTRY;
+        if (!bcat_valid_directory_name(name)) continue;
+        memcpy(names[n++], name, BCAT_NAME_SIZE);
+    }
+    free(raw);
+    return n;
+}
+static int save_list_files(void *ctx, const char *dir, BcatFile *out, int max) {
+    DirCtx *d = ctx;
+    char sub[BCAT_NAME_SIZE + 16], path[1024];
+    uint8_t *raw;
+    int count, n = 0;
+    if (!d || snprintf(sub, sizeof sub, "directories/%s/files.meta", dir) <= 0 || path_join(path, sizeof path, d->root, sub, NULL) ||
+        meta_load(path, BCAT_FILE_META_ENTRY, &raw, &count, BCAT_MAX_FILES))
+        return -1;
+    for (int i = 0; i < count && n < max; i++) {
+        const uint8_t *e = raw + 4 + (size_t)i * BCAT_FILE_META_ENTRY;
+        BcatFile f;
+        int64_t size;
+        memset(&f, 0, sizeof f);
+        memcpy(f.name, e, BCAT_NAME_SIZE);
+        memcpy(&size, e + 0x28, 8); /* name 0x20, s64 id at 0x20, s64 size at 0x28, digest at 0x30 */
+        if (!bcat_valid_file_name(f.name) || size < 0) continue;
+        f.size = (uint64_t)size;
+        memcpy(f.digest, e + 0x30, 16);
+        out[n++] = f;
+    }
+    free(raw);
+    return n;
+}
+static int64_t save_read(void *ctx, const char *dir, const char *file, uint64_t off, void *buf, size_t n) {
+    DirCtx *d = ctx;
+    char sub[2 * BCAT_NAME_SIZE + 32], path[1024];
+    if (!d || snprintf(sub, sizeof sub, "directories/%s/files/%s", dir, file) <= 0 || path_join(path, sizeof path, d->root, sub, NULL)) return -1;
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    int64_t got = 0;
+    if (off <= (uint64_t)INT64_MAX && fseek(f, (long)off, SEEK_SET) == 0) got = (int64_t)fread(buf, 1, n, f);
+    fclose(f);
+    return got;
+}
+BcatProvider bcat_save_provider(const char *root) {
+    DirCtx *d = calloc(1, sizeof *d);
+    if (d) snprintf(d->root, sizeof d->root, "%s", root ? root : "");
+    return (BcatProvider){d, save_list_dirs, save_list_files, save_read};
 }

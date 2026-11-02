@@ -1,0 +1,22 @@
+# interface spsm (switchbrew OMM_services IPowerStateInterface)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: spsm is a system service (not in an application's access list)
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+0	GetCurrentState	1.0.0	n
+1	EnterSleep	1.0.0	n
+2	GetLastWakeReason	1.0.0	n
+3	Shutdown	1.0.0	n
+4	GetNotificationMessageEventHandle	1.0.0	n
+5	ReceiveNotificationMessage	1.0.0	n
+6	AnalyzeLogForLastSleepWakeSequence	1.0.0	n
+7	ResetEventLog	1.0.0	n
+8	AnalyzePerformanceLogForLastSleepWakeSequence	1.0.0	n
+9	ChangeHomeButtonLongPressingTime	1.0.0	n
+10	PutErrorState	1.0.0	n
+11	InvalidateCurrentHomeButtonPressing	1.0.0-3.0.2	n
+12	EmulatePowerButtonPressedBriefly	17.0.0	n
+13	EmulatePowerButtonPressedFor7Sec	17.0.0	n
+14	SetAlwaysRebootFlag	17.0.0	n
+15	SetWakeReasonOverride	18.0.0	n
+16	SetWakeupAlarm	18.0.0	n

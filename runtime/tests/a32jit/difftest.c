@@ -246,6 +246,7 @@ int main(int argc, char **argv) {
             A32Insn di; memset(&di, 0, sizeof di);
             if (s->thumb) a32_decode_thumb((uint16_t)s->word, (uint16_t)(s->word >> 16), &di); else a32_decode_arm(s->word, &di);
             if (di.op == OP_LDREX || di.op == OP_STREX) { skipped++; continue; }
+            if (di.op == OP_LDST && (di.fl & FL_ACQ)) { skipped++; continue; }   /* unaligned lda / stl: an alignment fault on the guest's core and the host's (ldar / stlr); the interpreter does not model it */
         }   /* unaligned exclusives: the core raises its own alignment exit, the host faults */
         if (hle_hit) { skipped++; continue; }
         char why[512] = ""; size_t wl = 0;

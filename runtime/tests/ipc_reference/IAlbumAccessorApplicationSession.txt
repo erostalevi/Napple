@@ -1,0 +1,7 @@
+# interface IAlbumAccessorApplicationSession (nn::capsrv::sf::IAlbumAccessorApplicationSession; switchbrew 'Capture services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+2001	OpenAlbumMovieReadStream	1.0.0	y
+2002	CloseAlbumMovieReadStream	1.0.0	y
+2003	GetAlbumMovieReadStreamMovieDataSize	1.0.0	y
+2004	ReadMovieDataFromAlbumMovieReadStream	1.0.0	y
+2005	GetAlbumMovieReadStreamBrokenReason	1.0.0	y

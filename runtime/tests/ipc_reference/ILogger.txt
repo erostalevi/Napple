@@ -1,0 +1,7 @@
+# interface ILogger (nn::lm::ILogger; switchbrew 'Log services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	Log	1.0.0	y
+1	SetDestination	3.0.0	y
+2	TransmitHashedLog	20.0.0	y
+3	DevNotify	20.0.0	y
+11	OpenSharedMemoryAccessorForHashedLog	22.0.0	y

@@ -540,6 +540,28 @@ static void channel_release(Channel *ch) { /* close of the fd: its syncpoints go
 }
 
 /* ---- IPC ----------------------------------------------------------------------------------------------------------------------------- */
+/* The first open of each device path goes to the log and the run summary: which nodes a title really opens (nvdec/vic/nvjpg/msenc, nvdisp) is
+ * the evidence for those devices' status, and the open log line is otherwise verbose-only. */
+static void open_note(const char *p, uint32_t err) {
+    static char seen[24][48];
+    static unsigned nseen;
+    pthread_mutex_lock(&lock);
+    unsigned i = 0;
+    while (i < nseen && strcmp(seen[i], p)) i++;
+    int first = i == nseen && nseen < 24;
+    if (first) snprintf(seen[nseen++], sizeof seen[0], "%s", p);
+    pthread_mutex_unlock(&lock);
+    if (!first) return;
+    LOG("nvdrv", "first Open(\"%s\") -> error %u", p, err);
+    summary_note("nvdrv: opened %s (error %u)", p, err);
+}
+/* nvdisp: the first call of each ioctl number goes to the log and the run summary (the vblank ioctls have no real-title trace yet). */
+static void disp_note(const char *path, unsigned type, unsigned nr, uint32_t err) {
+    static uint32_t seen; /* bit per nr 0..31 */
+    if (type != NVDISP_IOCTL_TYPE || nr >= 32 || (__atomic_fetch_or(&seen, 1u << nr, __ATOMIC_RELAXED) & (1u << nr))) return;
+    LOG("nvdrv", "%s: first ioctl nr %u -> error %u", path, nr, err);
+    summary_note("nvdrv: %s ioctl nr %u (error %u)", path, nr, err);
+}
 static void nv_open(IpcObject *s, IpcCall *c) {
     (void)s;
     const IpcBuf *b = ipc_in_buf(c, 0);
@@ -594,6 +616,7 @@ static void nv_open(IpcObject *s, IpcCall *c) {
         pthread_mutex_unlock(&lock);
     }
     LOGV("nvdrv", "Open(\"%s\") -> fd %u error %u", p, fd, err);
+    open_note(p, err);
     if (kind == DEV_OTHER) summary_note("nvdrv: opened %s (no ioctl surface, ioctls are refused)", p);
     IPC_OUT(c, fd);
     IPC_OUT(c, err);
@@ -657,6 +680,7 @@ static void do_ioctl(IpcCall *c, unsigned in_idx, unsigned out_idx) {
         case DEV_DISP:
             err = type == NVDISP_IOCTL_TYPE ? nvdisp_ioctl(&fds[fd].disp, nr, tmp, size, disp_now_ns()) : NV_NOT_IMPLEMENTED;
             if (err == NVDISP_BAD_PARAMETER) err = NV_BAD_PARAMETER;
+            disp_note(fds[fd].path, type, nr, err);
             break;
         case DEV_GPU_CHAN:
         case DEV_GPU_AS:

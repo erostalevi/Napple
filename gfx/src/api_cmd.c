@@ -460,7 +460,7 @@ static void cbh_retire(cmdbuf_host *h) {
     pthread_mutex_unlock(&g_cbh_mu);
 }
 
-NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
+NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) { OBJTRACE(OT_CMDBUF, c, 1);
     (void)d;
     cmd_t *o = (cmd_t *)c;
     cmdbuf_host *old = cbh_lock(o);
@@ -486,7 +486,7 @@ NVN(nvnCommandBufferInitialize, NVNboolean, NVNcommandBuffer *c, NVNdevice *d) {
     cbtrace(CBEV_INIT, o, LR());
     return 1;
 }
-NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) {
+NVN(nvnCommandBufferFinalize, void, NVNcommandBuffer *c) { OBJTRACE(OT_CMDBUF, c, 0);
     cmd_t *o = (cmd_t *)c;
     cbtrace(CBEV_FIN, o, LR());
     cmdbuf_host *h = o->magic == CB_MAGIC ? cbh_lock(o) : NULL;
@@ -503,6 +503,7 @@ NVN(nvnCommandBufferGetMemoryCallback, PFNNVNCOMMANDBUFFERMEMORYCALLBACKPROC, co
 NVN(nvnCommandBufferGetMemoryCallbackData, void *, const NVNcommandBuffer *c) { return CBH(c)->cb_data; }
 /* Recordings live in host memory, so command memory never runs out and the out-of-memory callback is never due: enabling it changes nothing. */
 NVN(nvnCommandBufferSetCommandMemoryCallbackEnabled, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
+NVN(nvnCommandBufferSetControlMemoryCallbackEnabled, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }   /* control memory is host-allocated here: the callback is never needed */
 
 /* Command and control memory belong to the game; recordings live in host memory, so the memory is only accounted (see the lifetime notes above). */
 NVN(nvnCommandBufferAddCommandMemory, void, NVNcommandBuffer *c, const NVNmemoryPool *p, ptrdiff_t off, size_t size) {
@@ -673,11 +674,12 @@ NVN(nvnCommandBufferCopyCommands, void, NVNcommandBuffer *c, int n, const NVNcom
  * State binding
  * --------------------------------------------------------------------------------------------------------------- */
 int gfx_program_sample_shading(const NVNprogram *p, float *rate); /* api_program.c */
+int gfx_program_hashes(const NVNprogram *p, uint64_t out[6]);     /* api_program.c */
 NVN(nvnCommandBufferBindProgram, void, NVNcommandBuffer *c, const NVNprogram *prog, int stages) {
     p_bind_program *p = REC(c, p_bind_program, OP_BIND_PROGRAM);
     const prog_t *pr = (const prog_t *)prog;
     memset(p, 0, sizeof *p);
-    if (pr && pr->magic == PROG_MAGIC) memcpy(p->hash, pr->hash, sizeof p->hash);
+    gfx_program_hashes(prog, p->hash); /* host copy (api_program.c): the guest may have written over the program object */
     p->stage_mask = (uint32_t)stages;
     if (pr && pr->magic == PROG_MAGIC && (stages & NVN_SHADER_STAGE_FRAGMENT_BIT)) {
         float rate = 0;
@@ -741,6 +743,14 @@ NVN(nvnCommandBufferBindSeparateTexture, void, NVNcommandBuffer *c, NVNshaderSta
 NVN(nvnCommandBufferBindSeparateSampler, void, NVNcommandBuffer *c, NVNshaderStage st, int idx, NVNseparateSamplerHandle h) { bind_handles(c, OP_BIND_SEPSAMP, st, idx, 1, &h.value); }
 NVN(nvnCommandBufferBindSeparateTextures, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateTextureHandle *h) { bind_handles(c, OP_BIND_SEPTEX, st, first, n, &h->value); }
 NVN(nvnCommandBufferBindSeparateSamplers, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateSamplerHandle *h) { bind_handles(c, OP_BIND_SEPSAMP, st, first, n, &h->value); }
+/* The *Deferred binds (newer NVN; Animal Crossing looks them up) bind like their plain counterparts: the arrays are copied into the recording. Should the console
+ * read them when the command buffer executes instead, a game that rewrites the array between recording and submission would see the old values here. */
+NVN(nvnCommandBufferBindUniformBuffersDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *r) { bind_ranges(c, OP_BIND_UBO, st, first, n, r); }
+NVN(nvnCommandBufferBindStorageBuffersDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNbufferRange *r) { bind_ranges(c, OP_BIND_SSBO, st, first, n, r); }
+NVN(nvnCommandBufferBindTexturesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNtextureHandle *h) { bind_handles(c, OP_BIND_TEX, st, first, n, h); }
+NVN(nvnCommandBufferBindImagesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNimageHandle *h) { bind_handles(c, OP_BIND_IMG, st, first, n, h); }
+NVN(nvnCommandBufferBindSeparateTexturesDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateTextureHandle *h) { bind_handles(c, OP_BIND_SEPTEX, st, first, n, &h->value); }
+NVN(nvnCommandBufferBindSeparateSamplersDeferred, void, NVNcommandBuffer *c, NVNshaderStage st, int first, int n, const NVNseparateSamplerHandle *h) { bind_handles(c, OP_BIND_SEPSAMP, st, first, n, &h->value); }
 
 uint64_t gfx_dpool_handle(const void *guest_pool);
 NVN(nvnCommandBufferSetTexturePool, void, NVNcommandBuffer *c, const NVNtexturePool *p) { *REC(c, uint64_t, OP_SET_TEXPOOL) = p ? gfx_dpool_handle(p) : 0; }
@@ -819,7 +829,15 @@ NVN(nvnCommandBufferSetTiledCacheTileSize, void, NVNcommandBuffer *c, int w, int
 NVN(nvnCommandBufferSetConservativeRasterEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
 NVN(nvnCommandBufferSetConservativeRasterDilate, void, NVNcommandBuffer *c, float d) { (void)c; (void)d; }
 NVN(nvnCommandBufferSetSubpixelPrecisionBias, void, NVNcommandBuffer *c, int x, int y) { (void)c; (void)x; (void)y; }
-NVN(nvnCommandBufferSetViewportSwizzles, void, NVNcommandBuffer *c, int f, int n, const NVNviewportSwizzle *s) { (void)c; (void)f; (void)n; (void)s; }
+/* Viewport swizzles: four NVNviewportSwizzle values (x, y, z, w outputs) per viewport, applied to the clip position by the vertex program (ShaderKey.vp_swizzle). */
+NVN(nvnCommandBufferSetViewportSwizzles, void, NVNcommandBuffer *c, int first, int n, const NVNviewportSwizzle *s) {
+    if (first < 0 || first >= 16 || n <= 0 || !s) return;
+    if (first + n > 16) n = 16 - first;
+    p_range *p = REC_N(c, p_range, OP_VP_SWIZZLE, (size_t)n * 4);
+    p->first = (uint32_t)first; p->n = (uint32_t)n;
+    uint8_t *v = (uint8_t *)(p + 1);
+    for (int i = 0; i < 4 * n; i++) v[i] = (uint8_t)((uint32_t)s[i] & 7u);
+}
 NVN(nvnCommandBufferSetShaderScratchMemory, void, NVNcommandBuffer *c, const NVNmemoryPool *p, ptrdiff_t o, size_t s) { (void)c; (void)p; (void)o; (void)s; }
 NVN(nvnCommandBufferSaveZCullData, void, NVNcommandBuffer *c, NVNbufferAddress a, size_t s) { (void)c; (void)a; (void)s; }
 NVN(nvnCommandBufferRestoreZCullData, void, NVNcommandBuffer *c, NVNbufferAddress a, size_t s) { (void)c; (void)a; (void)s; }
@@ -855,6 +873,19 @@ NVN(nvnCommandBufferBindCoverageModulationTable, void, NVNcommandBuffer *c, cons
 NVN(nvnCommandBufferSetColorReductionEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
 NVN(nvnCommandBufferSetColorReductionThresholds, void, NVNcommandBuffer *c, int a, int b) { (void)c; (void)a; (void)b; }
 NVN(nvnCommandBufferSetStencilCullCriteria, void, NVNcommandBuffer *c, int a, int b, int d) { (void)c; (void)a; (void)b; (void)d; }
+/* Tiled-cache and ZCull tuning: Metal's tile-based renderer chooses its own tile size and depth compression, so both are hints with nothing to apply. */
+NVN(nvnCommandBufferOverrideSubtileSize, void, NVNcommandBuffer *c, int w, int h) { (void)c; (void)w; (void)h; }
+NVN(nvnCommandBufferSetZCullZF32CompressionEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
+/* Provoking vertex (the vertex whose flat-shaded outputs a primitive uses), recorded for the replay: 0 the first vertex (Metal's own convention, the default),
+ * 1 the last (the replay reorders each primitive, pv_last_indices in mtl_replay.m). The values follow the Maxwell register (0 first, 1 last); the NVN enum is
+ * not in the public headers, so this mapping is the assumption no title on hand has tested. The last mode set is also kept for tests. */
+static _Atomic int g_provoking_mode;
+int gfx_cmd_provoking_vertex_mode(void) { return atomic_load(&g_provoking_mode); }
+NVN(nvnCommandBufferSetProvokingVertexMode, void, NVNcommandBuffer *c, int mode) {
+    atomic_store(&g_provoking_mode, mode);
+    *(uint32_t *)rec_op(c, OP_PROVOKING, 4) = (uint32_t)mode;
+    if (mode) LOG_ONCE(NAPPLE_LOG_INFO, "SetProvokingVertexMode(%d): flat-shaded outputs from each primitive's last vertex", mode);
+}
 NVN(nvnCommandBufferSetProgramSubroutines, void, NVNcommandBuffer *c, NVNprogram *p, NVNshaderStage s, const int a, const int b, const int *v) { (void)c; (void)p; (void)s; (void)a; (void)b; (void)v; }
 
 /* ---------------------------------------------------------------------------------------------------------------

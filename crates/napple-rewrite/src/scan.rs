@@ -108,7 +108,7 @@ enum Classified {
 
 /// Offsets of words inside the code segment that are data: the MOD0 header, the word after a
 /// `bl pc+8` (the "get pc" literal idiom) and the targets of pc-relative literal loads.
-fn data_words(img: &ModuleImage) -> HashSet<u32> {
+pub(crate) fn data_words(img: &ModuleImage) -> HashSet<u32> {
     let text = img.layout.text_end;
     let mut set = HashSet::new();
     if let Some(m) = &img.mod0 {

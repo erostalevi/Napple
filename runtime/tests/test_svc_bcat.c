@@ -53,6 +53,10 @@ int main(void) {
     memset(&pc, 0, sizeof pc); svc_set_in_buf(&pc, pass, 0x42); svc_call_c(bsv, 30100, &pc); CHECK(pc.result != 0, "passphrase too long");
     svc_call(bsv, 30200, NULL, 0, &c); CHECK(c.result == 0, "register task"); svc_call(bsv, 90100, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no tasks");
     svc_call(bsv, 90201, NULL, 0, &c); CHECK(c.result == 0, "clear storage");
+    /* ipc-depth-sys: bcat commands that needed a network answer offline the way the sync does */
+    svc_call(bsv, 90200, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "GetDeliveryList: offline");
+    svc_call(bsv, 20400, NULL, 0, &c); CHECK(c.result == 0, "RegisterSystemApplicationDeliveryTask: accepted");
+    CHECK(svc_find(bsv, 20400)->status == IPC_STUB, "...as a documented default");
 
     /* MD5 vectors */
     { uint8_t d[16];
@@ -120,6 +124,50 @@ int main(void) {
     CHECK(SVC_OUT(&c, int64_t, 0) == 0, "an empty file opens with size 0");
     svc_call(bsv, 90201, NULL, 0, &c); CHECK(c.result == 0, "ClearDeliveryCacheStorage succeeds");
     { char p[600]; snprintf(p, sizeof p, "%s/news/b.bin", rootdir); CHECK(access(p, R_OK) == 0, "...and never deletes the provider's folder"); }
+
+    /* the console's own storage layout: directories.meta, directories/<dir>/files.meta, directories/<dir>/files/<file> */
+    { char sroot[] = "/tmp/napple-bcat-save-XXXXXX"; if (!mkdtemp(sroot)) return 1;
+      char p[700];
+      const char *dnames[] = {"news", "events"};
+      uint8_t dm[4 + 2 * BCAT_DIR_META_ENTRY]; memset(dm, 0, sizeof dm); uint32_t one = BCAT_META_HEADER; memcpy(dm, &one, 4);
+      for (int i = 0; i < 2; i++) { memcpy(dm + 4 + i * BCAT_DIR_META_ENTRY, dnames[i], strlen(dnames[i])); memset(dm + 4 + i * BCAT_DIR_META_ENTRY + 0x20, 0xa0 + i, 16); }
+      snprintf(p, sizeof p, "%s/directories.meta", sroot); { FILE *f = fopen(p, "wb"); fwrite(dm, 1, sizeof dm, f); fclose(f); }
+      snprintf(p, sizeof p, "%s/directories", sroot); mkdir(p, 0755);
+      for (int i = 0; i < 2; i++) { snprintf(p, sizeof p, "%s/directories/%s", sroot, dnames[i]); mkdir(p, 0755); snprintf(p, sizeof p, "%s/directories/%s/files", sroot, dnames[i]); mkdir(p, 0755); }
+      /* news: two files with ids and digests from the meta (the digest is NOT recomputed), events: an empty files.meta */
+      uint8_t fm[4 + 2 * BCAT_FILE_META_ENTRY]; memset(fm, 0, sizeof fm); memcpy(fm, &one, 4);
+      const char *fnames[] = {"list.json", "banner.png"}; const char *content[] = {"{\"a\":1}", "PNGDATA!!"}; const int64_t sizes[] = {7, 9};
+      for (int i = 0; i < 2; i++) { uint8_t *e = fm + 4 + i * BCAT_FILE_META_ENTRY; int64_t id = 100 + i; memcpy(e, fnames[i], strlen(fnames[i])); memcpy(e + 0x20, &id, 8); memcpy(e + 0x28, &sizes[i], 8); memset(e + 0x30, 0x11 * (i + 1), 16);
+        snprintf(p, sizeof p, "%s/directories/news/files/%s", sroot, fnames[i]); FILE *f = fopen(p, "wb"); fwrite(content[i], 1, (size_t)sizes[i], f); fclose(f); }
+      snprintf(p, sizeof p, "%s/directories/news/files.meta", sroot); { FILE *f = fopen(p, "wb"); fwrite(fm, 1, sizeof fm, f); fclose(f); }
+      snprintf(p, sizeof p, "%s/directories/events/files.meta", sroot); { FILE *f = fopen(p, "wb"); fwrite(&one, 1, 4, f); fclose(f); }
+      snprintf(p, sizeof p, "%s/passphrase.bin", sroot); { FILE *f = fopen(p, "wb"); fputs("secret", f); fclose(f); } /* ignored neighbour */
+
+      BcatProvider auto_plain = bcat_auto_provider(rootdir), auto_save = bcat_auto_provider(sroot);
+      CHECK(auto_plain.list_dirs == prov.list_dirs && auto_save.list_dirs != auto_plain.list_dirs, "NAPPLE_BCAT_DIR picks the storage layout only when directories.meta exists");
+      bcat_set_provider(&auto_save);
+      svc_call(root, 1, NULL, 0, &c); IpcObject *stg3 = c.out_objects[0];
+      char names3[8][BCAT_NAME_SIZE]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, names3, sizeof names3); svc_call_c(stg3, 10, &c);
+      CHECK(SVC_OUT(&c, int32_t, 0) == 2 && !strncmp(names3[0], "news", BCAT_NAME_SIZE) && !strncmp(names3[1], "events", BCAT_NAME_SIZE), "storage layout: directories come from directories.meta, in order");
+      svc_call(stg3, 1, NULL, 0, &c); IpcObject *dir3 = c.out_objects[0];
+      name(n, "news"); svc_call(dir3, 0, n, sizeof n, &c); CHECK(c.result == 0, "Open news from files.meta");
+      svc_call(dir3, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 2, "news lists the two files of files.meta");
+      uint8_t e3[2 * BCAT_ENTRY_SIZE]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, e3, sizeof e3); svc_call_c(dir3, 1, &c);
+      { int64_t sz; CHECK(SVC_OUT(&c, int32_t, 0) == 2 && !strcmp((char *)e3, "list.json") && !strcmp((char *)e3 + BCAT_ENTRY_SIZE, "banner.png"), "files in meta order");
+        memcpy(&sz, e3 + 0x20, 8); CHECK(sz == 7, "size from the meta entry");
+        uint8_t want[16]; memset(want, 0x11, 16); CHECK(!memcmp(e3 + 0x28, want, 16), "digest is the stored one, not recomputed"); }
+      name(n, "events"); svc_call(dir3, 0, n, sizeof n, &c); svc_call(dir3, 2, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "an empty files.meta is an empty directory");
+      name(n, "ghost"); svc_call(dir3, 0, n, sizeof n, &c); CHECK(c.result == HZ_R_BCAT_NOT_FOUND, "a directory without a files.meta: not found");
+      svc_call(stg3, 0, NULL, 0, &c); IpcObject *fs3 = c.out_objects[0];
+      name(names, "news"); name(names + BCAT_NAME_SIZE, "banner.png"); svc_call(fs3, 0, names, sizeof names, &c); CHECK(c.result == 0, "file Open from the storage layout");
+      { uint8_t out[16]; int64_t off = 4; memset(&c, 0, sizeof c); svc_set_out_buf(&c, out, sizeof out); c.in = (const uint8_t *)&off; c.in_size = 8; svc_call_c(fs3, 1, &c);
+        CHECK(SVC_OUT(&c, int64_t, 0) == 5 && !memcmp(out, "ATA!!", 5), "Read from directories/news/files/banner.png"); }
+      name(names + BCAT_NAME_SIZE, "nope.png"); svc_call(fs3, 0, names, sizeof names, &c); CHECK(c.result == HZ_R_BCAT_NOT_FOUND, "a file the meta does not list: not found");
+      /* a corrupt header is treated as absent */
+      snprintf(p, sizeof p, "%s/directories.meta", sroot); { uint32_t bad = 2; FILE *f = fopen(p, "wb"); fwrite(&bad, 1, 4, f); fclose(f); }
+      memset(&c, 0, sizeof c); svc_set_out_buf(&c, names3, sizeof names3); svc_call_c(stg3, 10, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "a meta file with the wrong header lists nothing");
+      bcat_set_provider(&prov);
+      CHECK(BCAT_STATUS_DONE == 9, "the Done status is 9"); }
 
     /* removing the provider restores the offline answers */
     bcat_set_provider(NULL);

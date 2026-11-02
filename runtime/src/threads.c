@@ -18,6 +18,7 @@
 #include "kthread.h"
 #include "timescale.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <signal.h>
 #include <sched.h>
 #include <stdatomic.h>
@@ -73,6 +74,16 @@ static uint64_t g_next_id = 0x51, g_seq;
 static int g_cores_on = -1;
 
 static Thread *self_or_null(void) { return g_key_ready ? pthread_getspecific(g_key) : NULL; }
+/* NAPPLE_THREAD_STATS=1 (debug aid): per guest thread, how often it lost its core to the timer / at an svc-exit checkpoint and how often it asked
+ * GetCurrentProcessorNumber; logged with the thread dump at quit (thread_dump_all). Indexed by thread id - 0x51. */
+#define TSTAT_N 1024
+static struct {
+    _Atomic uint64_t getcore, checkpoint;
+} g_tstat[TSTAT_N];
+static int g_tstats = -1;
+static void tstat_getcore(const Thread *t) {
+    if (t->id >= 0x51 && t->id - 0x51 < TSTAT_N) atomic_fetch_add_explicit(&g_tstat[t->id - 0x51].getcore, 1, memory_order_relaxed);
+}
 static Thread *self(void) {
     Thread *t = self_or_null();
     if (!t) runtime_fail("thread svc from a host thread");
@@ -105,6 +116,12 @@ static Thread *pick(int kind, uint64_t a) {
         if (!b || t->prio < b->prio || (t->prio == b->prio && t->wseq < b->wseq)) b = t;
     }
     return b;
+}
+static int arb_waiters(int kind, uint64_t a) {
+    int n = 0;
+    for (Thread *t = g_wait; t; t = t->next)
+        if (t->wkind == kind && (kind == 2 ? t->wkey : t->waddr) == a) n++;
+    return n > 255 ? 255 : n;
 }
 static void core_handoff_note(Thread *t);
 static void wake(Thread *t, int64_t res) {
@@ -157,7 +174,13 @@ static void core_put(Thread *t) {
     g_core_owner[c] = NULL;
     core_grant(c);
 }
-static void core_take(Thread *t) {
+/* Order of the core wait list within one priority: a thread preempted by a better one goes back to the head of its priority (Horizon leaves it at the
+ * front of its run queue, so it resumes as soon as the better thread blocks); woken, started, yielding and rotated threads go to the back. */
+#define CSEQ_BASE (1ull << 62)
+static uint64_t g_front_seq;
+static void core_take_q(Thread *t, int front);
+static void core_take(Thread *t) { core_take_q(t, 0); }
+static void core_take_q(Thread *t, int front) {
     if (!cores_enabled() || t->cur_core >= 0) return;
     uint64_t mask = t->mask & CORE_MASK_ALL;
     if (!mask) runtime_fail("thread %#x has a core mask (%#llx) without an application core", t->handle, (unsigned long long)t->mask);
@@ -170,7 +193,7 @@ static void core_take(Thread *t) {
         core_assign(t, c);
         return;
     }
-    t->cseq = ++g_seq;
+    t->cseq = front ? CSEQ_BASE - ++g_front_seq : CSEQ_BASE + ++g_seq;
     t->cnext = g_core_wait;
     g_core_wait = t;
     for (int i = 0; i < NCORE; i++)
@@ -185,6 +208,21 @@ static void core_take(Thread *t) {
                 core_grant(i);
             }
     }
+}
+/* Does a better-priority thread wait for t's core (or hold its reservation)? Then t is preempted, not rotated, and keeps its place. G held. */
+static int core_wanted_by_better(const Thread *t) {
+    int c = t->cur_core;
+    if (c < 0) return 0;
+    if (g_core_resv[c] && g_core_resv[c] != t && g_core_resv[c]->prio < t->prio) return 1;
+    for (Thread *w = g_core_wait; w; w = w->cnext)
+        if (core_allowed(w, c) && w->prio < t->prio && (!g_core_resv[c] || g_core_resv[c] == w)) return 1;
+    return 0;
+}
+/* Gives up the core at a preemption point and waits to get one back: at the head of its priority when a better thread takes it. G held. */
+static void core_switch(Thread *t) {
+    int front = core_wanted_by_better(t);
+    core_put(t);
+    core_take_q(t, front);
 }
 /* Same-core handoff (Horizon runs the better thread at once): waking or starting a thread that can only run on the caller's core, with a
  * better priority than the caller, reserves that core for it and flags the caller, which yields the core at its svc exit (core_checkpoint)
@@ -230,26 +268,34 @@ static void core_checkpoint(void) {
         *tlr_word(t, TLR_INTERRUPT_FLAG) = 1;
         return;
     } /* pinned: the switch waits for SynchronizePreemptionState */
+    if (t->id >= 0x51 && t->id - 0x51 < TSTAT_N) atomic_fetch_add_explicit(&g_tstat[t->id - 0x51].checkpoint, 1, memory_order_relaxed);
     pthread_mutex_lock(&G);
     t->preempt = 0;
-    core_put(t);
-    core_take(t);
+    core_switch(t);
     pthread_mutex_unlock(&G);
 }
 
 /* ---- timer preemption -------------------------------------------------------------------------------------------------
  * Horizon switches threads on a timer as well as at svc: a thread of better priority that waits for a core takes it from a running one, and
- * equal-priority threads share a core in 10 ms slices. A guest thread that spins in user code (a flag poll, a try-lock loop) never reaches
+ * every 10 ms the kernel rotates the run queue of one priority per core (KScheduler::RotateScheduledQueue with the preemption priorities
+ * {59, 59, 59, 63}): only threads of priority 59 share an application core in slices. Threads of any other priority keep their core against
+ * an equal-priority thread until they block or yield. Slicing every priority (the first version of this code) made ACNH's prio-44 job workers
+ * lose their core for 10 ms inside their job windows, which hardware never does, and two threads then recorded one command buffer
+ * (docs/archive/changes/2026-11-01-claude-sched-applets-2026-11-01-r1.md). A guest thread that spins in user code (a flag poll, a try-lock loop) never reaches
  * an svc, so on its own the cooperative scheduler would keep the core for good and starve the waiter (SMO: a prio-47 thread spinning on core
  * 0 while the prio-44 main thread waited). The slice thread looks at every core a few ms apart; when a thread waits for a core that its owner
  * should give up, it sends the owner SIGPROF. The handler (on the thread's signal stack) switches only when the interrupted pc is guest code
  * (never inside the runtime, so no host lock is held) and the thread is not inside a preemption-disabled section (TLR disable_count: then
  * interrupt_flag is raised and SynchronizePreemptionState does the switch, as on the kernel). Threads inside an svc get the existing
- * svc-exit checkpoint instead of a signal. NAPPLE_SLICE_MS=<n> sets the slice (default 10), 0 turns timer preemption off. */
+ * svc-exit checkpoint instead of a signal. NAPPLE_SLICE_MS=<n> sets the slice (default 10), 0 turns timer preemption off (better-priority
+ * preemption included); NAPPLE_SLICE_ALL=1 slices equal-priority threads of every priority (the old behaviour, for comparisons). */
 #define SLICE_DEFAULT_MS 10
 #define SLICE_TICK_NS 2000000
+#define SLICE_PRIO 59 /* the preemption priority of the application cores 0..2 */
 static int64_t g_slice_ns = SLICE_DEFAULT_MS * 1000000ll;
-static int g_slice_started, g_preempt_any_pc;
+static int g_slice_started, g_preempt_any_pc, g_slice_all, g_preempt_signal = 1; /* NAPPLE_PREEMPT_SIGNAL=0: switch at the next svc only, never by signal */
+/* Do equal-priority threads of priority `prio` rotate on an application core? */
+static int slice_rotates(int prio) { return g_slice_all || prio == SLICE_PRIO; }
 /* Host unit tests run "guest" code in plain C: every pc counts as preemptible there. */
 void threads_preempt_test_any_pc(int on) { g_preempt_any_pc = on; }
 static uint64_t sig_pc(void *uc) {
@@ -275,8 +321,7 @@ static void preempt_handler(int sig, siginfo_t *si, void *uc) {
             pthread_mutex_lock(&G);
             if (t->cur_core >= 0) {
                 t->nslice++;
-                core_put(t);
-                core_take(t);
+                core_switch(t);
             }
             pthread_mutex_unlock(&G);
         }
@@ -293,10 +338,10 @@ static int slice_scan(int64_t now, Thread **signals) {
         for (Thread *w = g_core_wait; w && !need; w = w->cnext) {
             if (!core_allowed(w, c)) continue;
             if (g_core_resv[c] && g_core_resv[c] != w) continue;
-            need = w->prio < o->prio || (w->prio == o->prio && now - (int64_t)o->core_since >= g_slice_ns);
+            need = w->prio < o->prio || (w->prio == o->prio && slice_rotates(o->prio) && now - (int64_t)o->core_since >= g_slice_ns);
         }
         if (!need) continue;
-        if (__atomic_load_n(&o->svc_regs, __ATOMIC_ACQUIRE)) o->preempt = 1; /* inside an svc: its exit checkpoint does the switch */
+        if (__atomic_load_n(&o->svc_regs, __ATOMIC_ACQUIRE) || !g_preempt_signal) o->preempt = 1; /* inside an svc: its exit checkpoint does the switch */
         else {
             o->slice_req = 1;
             signals[n++] = o;
@@ -326,11 +371,33 @@ static void *slice_main(void *arg) {
     }
     return NULL;
 }
+static void tstat_report(void) {
+    int locked = 0;
+    for (int i = 0; i < 100 && !(locked = pthread_mutex_trylock(&G) == 0); i++) usleep(1000); /* at exit: never wait for good on a lock a dying thread holds */
+    if (!locked) return;
+    LOG("threads", "stats: id prio ideal mask timer-switches svc-exit-switches GetCurrentProcessorNumber (threads with any)");
+    for (Thread *t = g_all; t; t = t->all) {
+        if (t->id < 0x51 || t->id - 0x51 >= TSTAT_N) continue;
+        uint64_t gc = atomic_load(&g_tstat[t->id - 0x51].getcore), cp = atomic_load(&g_tstat[t->id - 0x51].checkpoint);
+        if (!t->nslice && !gc && !cp) continue;
+        LOG("threads", "stats: %#llx prio %d ideal %d mask %#llx timer %llu svc-exit %llu getcore %llu%s", (unsigned long long)t->id, t->prio, t->core,
+            (unsigned long long)t->mask, (unsigned long long)t->nslice, (unsigned long long)cp, (unsigned long long)gc, t->exited ? " (exited)" : "");
+    }
+    pthread_mutex_unlock(&G);
+}
 /* Starts the slice thread (once; the main thread registers first). */
 void threads_preempt_start(void) {
+    if (g_tstats < 0) {
+        const char *st = getenv("NAPPLE_THREAD_STATS");
+        g_tstats = st && *st && *st != '0';
+    }
     if (g_slice_started || !cores_enabled()) return;
     const char *e = getenv("NAPPLE_SLICE_MS");
     if (e && *e) g_slice_ns = (int64_t)atoi(e) * 1000000ll;
+    e = getenv("NAPPLE_PREEMPT_SIGNAL");
+    if (e && *e == '0') g_preempt_signal = 0;
+    e = getenv("NAPPLE_SLICE_ALL");
+    g_slice_all = e && *e && *e != '0';
     if (g_slice_ns <= 0) return;
     g_slice_started = 1;
     struct sigaction sa;
@@ -393,6 +460,56 @@ static int64_t block(Thread *t, int kind, int64_t ns) {
     return r;
 }
 int64_t kthread_block(Thread *t, int kind, int64_t ns) { return block(t, kind, ns); }
+
+/* ---- arbitration trace (debug aid) -------------------------------------------------------------------------------------------
+ * NAPPLE_ARB_TRACE=<file>: a ring of the last ARB_N address-arbitration, mutex and condition-variable svcs (entry and exit) with the thread, the
+ * user word before / after, the waiter count and the threads a signal woke; written to <file> at quit (thread_dump_all) and on a crash
+ * (threads_arb_trace_flush from signals.c). Clock: CLOCK_MONOTONIC_RAW ns, the gfx CBTRACE clock. Format: tools/soak/arbtrace.py. */
+typedef struct {
+    uint64_t t, addr, addr2;
+    uint32_t tid;
+    uint8_t svc, phase; /* phase 0 entry, 1 exit */
+    uint8_t type, nwait;
+    int32_t val, cnt, before, after;
+    uint32_t res;
+    uint16_t woke[2];
+} ArbRec;
+_Static_assert(sizeof(ArbRec) == 56, "ArbRec layout (tools/soak/arbtrace.py)");
+#define ARB_N (1u << 20)
+static ArbRec *g_arb;
+static _Atomic uint64_t g_arb_pos;
+static const char *g_arb_path;
+static int g_arb_on = -1;
+static int arb_on(void) {
+    if (g_arb_on < 0) {
+        g_arb_path = getenv("NAPPLE_ARB_TRACE");
+        g_arb_on = g_arb_path && *g_arb_path && (g_arb = calloc(ARB_N, sizeof *g_arb)) != NULL;
+    }
+    return g_arb_on;
+}
+static int32_t arb_word(uint64_t a) { return a && !(a & 3) && guest_ptr(a, 4) ? (int32_t)__atomic_load_n((uint32_t *)(uintptr_t)a, __ATOMIC_RELAXED) : 0; }
+static int arb_waiters(int kind, uint64_t a); /* G held */
+static void arb_rec(unsigned svc, int phase, uint64_t addr, uint64_t addr2, int type, int32_t val, int32_t cnt, int32_t before, uint32_t res, const uint16_t *woke) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    ArbRec *e = &g_arb[atomic_fetch_add_explicit(&g_arb_pos, 1, memory_order_relaxed) % ARB_N];
+    Thread *me = self_or_null();
+    *e = (ArbRec){(uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec, addr, addr2, me ? (uint32_t)me->id : 0, (uint8_t)svc, (uint8_t)phase, (uint8_t)type,
+                  (uint8_t)arb_waiters(svc == 0x1C || svc == 0x1D ? 2 : svc == 0x1A || svc == 0x1B ? 1 : 3, svc == 0x1C || svc == 0x1D ? addr2 : addr), val, cnt, before,
+                  arb_word(addr), res, {woke ? woke[0] : 0, woke ? woke[1] : 0}};
+}
+void threads_arb_trace_flush(void) { /* also called from the crash handler: write(2) only */
+    if (g_arb_on <= 0) return;
+    int fd = open(g_arb_path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    if (fd < 0) return;
+    uint64_t end = atomic_load(&g_arb_pos), beg = end > ARB_N ? end - ARB_N : 0;
+    for (uint64_t i = beg; i < end;) {
+        uint64_t k = i % ARB_N, n = ARB_N - k < end - i ? ARB_N - k : end - i;
+        if (write(fd, &g_arb[k], n * sizeof *g_arb) < 0) break;
+        i += n;
+    }
+    close(fd);
+}
 
 /* ---- user-mode words ---------------------------------------------------------------------------------------- */
 static inline uint32_t ld32(uint64_t a) { return __atomic_load_n((uint32_t *)(uintptr_t)a, __ATOMIC_SEQ_CST); }
@@ -520,7 +637,9 @@ uint32_t threads_register_main(void) {
     t->started = 1;
     t->prio = 44;
     t->core = g_npdm.valid ? g_npdm.main_core : 0;
-    t->mask = CORE_MASK_ALL;
+    /* Horizon starts the main thread with the affinity of its ideal core only (KThread::Initialize). Host unit tests adopt threads without an npdm
+     * and keep them free to run on any core. */
+    t->mask = g_npdm.valid && t->core >= 0 && t->core < NCORE ? 1ull << t->core : CORE_MASK_ALL;
     t->pt = pthread_self();
     t->cur_core = -1;
     if (g_npdm.valid) t->prio = g_npdm.main_priority;
@@ -616,6 +735,8 @@ static void *pcprof_main(void *arg) {
 }
 static int sync_state(uint32_t h);
 void thread_dump_all(void) {
+    if (g_tstats > 0) tstat_report();
+    threads_arb_trace_flush();
     pthread_mutex_lock(&G);
     for (int i = 0; i < NCORE; i++)
         LOG("threads", "core %d owner %#llx reserved for %#llx", i, g_core_owner[i] ? (unsigned long long)g_core_owner[i]->id : 0ull, g_core_resv[i] ? (unsigned long long)g_core_resv[i]->id : 0ull);
@@ -845,6 +966,8 @@ static void svc_set_thread_priority(uint64_t *r) {
     }
     pthread_mutex_lock(&G);
     Thread *t = thread_of((uint32_t)r[0]);
+    if (t && getenv("NAPPLE_THREAD_LOG"))
+        LOG("threads", "SetThreadPriority id %#llx by thread %#llx: %d (was %d)", (unsigned long long)t->id, (unsigned long long)threads_current_id(), (int)r[1], t->prio);
     if (t) t->prio = (int)r[1];
     r[0] = t ? 0 : R_INVALID_HANDLE;
     pthread_mutex_unlock(&G);
@@ -879,6 +1002,9 @@ static void svc_set_thread_core_mask(uint64_t *r) {
         else if (c != -1)
             res = R_INVALID_PROCESSOR_ID;
         if (!res) {
+            if (getenv("NAPPLE_THREAD_LOG"))
+                LOG("threads", "SetThreadCoreMask id %#llx by thread %#llx: ideal %d mask %#llx (was %d / %#llx)", (unsigned long long)t->id,
+                    (unsigned long long)threads_current_id(), c, (unsigned long long)m, t->core, (unsigned long long)t->mask);
             t->core = c;
             t->mask = m;
             if (t == self_or_null() && t->cur_core >= 0 && !core_allowed(t, t->cur_core)) {
@@ -892,6 +1018,7 @@ static void svc_set_thread_core_mask(uint64_t *r) {
 }
 static void svc_get_processor_number(uint64_t *r) {
     Thread *t = self();
+    if (g_tstats > 0) tstat_getcore(t);
     r[0] = (uint32_t)(t->cur_core >= 0 ? t->cur_core : t->core);
 }
 static void svc_get_thread_id(uint64_t *r) {
@@ -1036,8 +1163,7 @@ static void svc_synchronize_preemption_state(uint64_t *r) {
     pthread_mutex_lock(&G);
     if (t->preempt) {
         t->preempt = 0;
-        core_put(t);
-        core_take(t);
+        core_switch(t);
     }
     pthread_mutex_unlock(&G);
     r[0] = 0;
@@ -1052,11 +1178,14 @@ static void svc_arbitrate_lock(uint64_t *r) {
     }
     pthread_mutex_lock(&G);
     int64_t res = 0;
+    int32_t before = (int32_t)ld32(addr);
+    if (arb_on()) arb_rec(0x1A, 0, addr, 0, 0, (int32_t)r[0], 0, before, 0, NULL);
     if (ld32(addr) == ((uint32_t)r[0] | WAITERS_BIT)) {
         t->waddr = addr;
         t->wtag = (uint32_t)r[2];
         res = block(t, 1, -1);
     }
+    if (arb_on()) arb_rec(0x1A, 1, addr, 0, 0, (int32_t)r[0], 0, before, (uint32_t)res, NULL);
     pthread_mutex_unlock(&G);
     r[0] = (uint64_t)res;
 }
@@ -1066,6 +1195,11 @@ static void svc_arbitrate_unlock(uint64_t *r) {
         return;
     }
     pthread_mutex_lock(&G);
+    if (arb_on()) {
+        Thread *w = pick(1, r[0]);
+        uint16_t wk[2] = {w ? (uint16_t)w->id : 0, 0};
+        arb_rec(0x1B, 0, r[0], 0, 0, 0, 0, (int32_t)ld32(r[0]), 0, wk);
+    }
     lock_handoff(r[0]);
     pthread_mutex_unlock(&G);
     r[0] = 0;
@@ -1081,12 +1215,14 @@ static void svc_wait_process_wide_key(uint64_t *r) {
         return;
     }
     pthread_mutex_lock(&G);
+    if (arb_on()) arb_rec(0x1C, 0, addr, key, 0, (int32_t)r[2], 0, (int32_t)ld32(addr), 0, NULL);
     st32(key, 1);
     t->wkey = key;
     t->waddr = addr;
     t->wtag = (uint32_t)r[2];
     lock_handoff(addr);
     int64_t res = block(t, 2, (int64_t)r[3]); /* on timeout the lock is not re-taken here: user mode takes it */
+    if (arb_on()) arb_rec(0x1C, 1, addr, key, 0, (int32_t)r[2], 0, 0, (uint32_t)res, NULL);
     pthread_mutex_unlock(&G);
     r[0] = (uint64_t)res;
 }
@@ -1094,7 +1230,13 @@ static void svc_signal_process_wide_key(uint64_t *r) {
     uint64_t key = r[0];
     int cnt = (int)r[1], n = 0;
     pthread_mutex_lock(&G);
-    for (Thread *w; (cnt <= 0 || n < cnt) && (w = pick(2, key)); n++) lock_acquire_for(w, w->waddr, w->wtag);
+    uint16_t wk[2] = {0, 0};
+    int nw0 = arb_on() ? arb_waiters(2, key) : 0;
+    for (Thread *w; (cnt <= 0 || n < cnt) && (w = pick(2, key)); n++) {
+        if (n < 2) wk[n] = (uint16_t)w->id;
+        lock_acquire_for(w, w->waddr, w->wtag);
+    }
+    if (arb_on()) arb_rec(0x1D, 0, key, 0, 0, nw0, cnt, 0, (uint32_t)n, wk);
     int left = 0;
     for (Thread *w = g_wait; w; w = w->next)
         if (w->wkind == 2 && w->wkey == key) {
@@ -1131,10 +1273,13 @@ static void svc_wait_for_address(uint64_t *r) {
                 break;
             }
     }
+    int32_t before = (int32_t)v;
+    if (arb_on()) arb_rec(0x34, 0, addr, 0, type, val, 0, before, ok ? 0 : R_INVALID_STATE, NULL);
     if (!ok) res = R_INVALID_STATE;
     else {
         t->waddr = addr;
         res = block(t, 3, (int64_t)r[3]);
+        if (arb_on()) arb_rec(0x34, 1, addr, 0, type, val, 0, before, (uint32_t)res, NULL);
     }
     pthread_mutex_unlock(&G);
     r[0] = (uint64_t)res;
@@ -1168,10 +1313,15 @@ static void svc_signal_to_address(uint64_t *r) {
         uint32_t e = (uint32_t)val;
         if (!cas32(addr, &e, (uint32_t)nv)) res = R_INVALID_STATE;
     }
+    uint16_t wk[2] = {0, 0};
     if (!res) {
         int n = 0;
-        for (Thread *w; (cnt <= 0 || n < cnt) && (w = pick(3, addr)); n++) wake(w, 0);
+        for (Thread *w; (cnt <= 0 || n < cnt) && (w = pick(3, addr)); n++) {
+            if (n < 2) wk[n] = (uint16_t)w->id;
+            wake(w, 0);
+        }
     }
+    if (arb_on()) arb_rec(0x35, 0, addr, 0, type, val, cnt, nw, (uint32_t)res, wk);
     pthread_mutex_unlock(&G);
     r[0] = (uint64_t)res;
 }

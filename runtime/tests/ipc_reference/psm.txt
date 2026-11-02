@@ -1,0 +1,33 @@
+# interface psm (switchbrew PTM_services IPsmServer; libnx psm.c)
+# columns: id<TAB>name<TAB>min_fw (a-b when the command was removed after b)<TAB>app_reachable (y|n)
+# y = an application can issue it through the SDK on firmware up to 22.x (removed commands stay y: older SDKs still send them);
+# n = not reachable from an application: 17 (system UI battery details), ids 19-27 (unnamed, firmware 18.0.0+)
+# Layout facts (ids, names, firmware) only; written for napple (ipc-depth-hid, 2026-11-01-r2).
+0	GetBatteryChargePercentage	1.0.0	y
+1	GetChargerType	1.0.0	y
+2	EnableBatteryCharging	1.0.0	y
+3	DisableBatteryCharging	1.0.0	y
+4	IsBatteryChargingEnabled	1.0.0	y
+5	AcquireControllerPowerSupply	1.0.0	y
+6	ReleaseControllerPowerSupply	1.0.0	y
+7	OpenSession	1.0.0	y
+8	EnableEnoughPowerChargeEmulation	1.0.0	y
+9	DisableEnoughPowerChargeEmulation	1.0.0	y
+10	EnableFastBatteryCharging	1.0.0	y
+11	DisableFastBatteryCharging	1.0.0	y
+12	GetBatteryVoltageState	1.0.0	y
+13	GetRawBatteryChargePercentage	1.0.0	y
+14	IsEnoughPowerSupplied	1.0.0	y
+15	GetBatteryAgePercentage	1.0.0	y
+16	GetBatteryChargeInfoEvent	1.0.0	y
+17	GetBatteryChargeInfoFields	1.0.0	n
+18	GetBatteryChargeCalibratedEvent	3.0.0	y
+19	Cmd19	18.0.0	n
+20	Cmd20	18.0.0	n
+21	Cmd21	19.0.0-19.0.1	n
+22	Cmd22	19.0.0	n
+23	Cmd23	19.0.0	n
+24	Cmd24	20.0.0-22.5.0	n
+25	Cmd25	21.0.0	n
+26	Cmd26	21.0.0	n
+27	Cmd27	21.0.0	n

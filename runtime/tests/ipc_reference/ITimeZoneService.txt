@@ -1,0 +1,16 @@
+# interface ITimeZoneService (nn::timesrv::detail::service::ITimeZoneService; switchbrew 'Glue services' command table; layout facts only)
+# id	name	min_fw	app_reachable (y = reachable by an application process, n = system / development only)
+0	GetDeviceLocationName	1.0.0	y
+1	SetDeviceLocationName	1.0.0	y
+2	GetTotalLocationNameCount	1.0.0	y
+3	LoadLocationNameList	1.0.0	y
+4	LoadTimeZoneRule	1.0.0	y
+5	GetTimeZoneRuleVersion	2.0.0	y
+6	GetDeviceLocationNameAndUpdatedTime	5.0.0	y
+7	SetDeviceLocationNameWithTimeZoneRule	9.0.0	n
+8	ParseTimeZoneBinary	9.0.0	n
+20	GetDeviceLocationNameOperationEventReadableHandle	9.0.0	n
+100	ToCalendarTime	1.0.0	y
+101	ToCalendarTimeWithMyRule	1.0.0	y
+201	ToPosixTime	1.0.0	y
+202	ToPosixTimeWithMyRule	1.0.0	y

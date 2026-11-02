@@ -57,7 +57,15 @@ enum {
     NAPPLE_BTN_RIGHT_SL,
     NAPPLE_BTN_RIGHT_SR,
     NAPPLE_BTN_COUNT_BASIC = 16, /* A..Down: the bindable "pad" buttons */
-    NAPPLE_BTN_COUNT = 28
+    NAPPLE_BTN_COUNT = 28,
+    /* bits 28..34 of HidNpadButton (libnx): reported only by the Palma, NES-in-handheld and N64 pads, never bindable */
+    NAPPLE_BTN_PALMA = 28,           /* the Poke Ball Plus button */
+    NAPPLE_BTN_VERIFICATION = 29,
+    NAPPLE_BTN_HANDHELD_LEFT_B = 30, /* B of the left NES / Famicom pad in handheld mode */
+    NAPPLE_BTN_LAGON_C_LEFT = 31,    /* the four C buttons of the N64 pad */
+    NAPPLE_BTN_LAGON_C_UP = 32,
+    NAPPLE_BTN_LAGON_C_RIGHT = 33,
+    NAPPLE_BTN_LAGON_C_DOWN = 34
 };
 #define NAPPLE_BTN_MASK(b) (1ull << (b))
 
@@ -166,11 +174,33 @@ void napple_hid_set_npad_style(uint8_t *shm, const napple_hid_layout *l, int slo
 void napple_hid_set_npad_colors(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t body, uint32_t buttons);
 /* Push one state into the lifo of `style` (exactly one NAPPLE_STYLE_* bit). Increments the sampling number. */
 void napple_hid_push_npad(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t style, const napple_npad_state *s);
-/* GameCube analog triggers (NpadGcTriggerState {u64 sampling, u32 left, u32 right}, 0..0x7fff, in the GC trigger lifo at layout.npad_gc_trigger; 0 = absent). Also writes
-   the NpadLarkType words that follow the lifo when `style` is Lark. Layout offsets are recalled from switchbrew / yuzu: unverified. */
+/* GameCube analog triggers (NpadGcTriggerState {u64 sampling, u32 left, u32 right}, 0..0x7fff, in the GC trigger lifo at layout.npad_gc_trigger = 0x4228; 0 = absent).
+   The four words that follow the lifo are NpadLarkType (main / left, right), NpadLuciaType and NpadLagerType. Offsets from libnx HidNpadInternalState. */
 void napple_hid_push_gc_trigger(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t left, uint32_t right);
 enum { NAPPLE_LARK_INVALID = 0, NAPPLE_LARK_H1 = 1, NAPPLE_LARK_H2 = 2, NAPPLE_LARK_NL = 3, NAPPLE_LARK_NR = 4 }; /* NpadLarkType */
 void napple_hid_set_lark_type(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t left_and_main, uint32_t right);
+enum { NAPPLE_LUCIA_INVALID = 0, NAPPLE_LUCIA_J = 1, NAPPLE_LUCIA_E = 2, NAPPLE_LUCIA_U = 3 }; /* NpadLuciaType and NpadLagerType share these values */
+void napple_hid_set_retro_types(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t lucia_type, uint32_t lager_type);
+/* HidDeviceTypeBits (libnx) each style reports in the npad entry's device type word: the standard styles as a console's pads (Pro Controller FullKey,
+   handheld HandheldLeft | HandheldRight, a Joy-Con pair JoyLeft | JoyRight, one Joy-Con its side), the retro / GameCube / Palma ones their own bit.
+   NAPPLE_NPAD_DEVICE_TYPES=0 keeps the standard styles at 0, the value they reported before sweep-media r2 (2026-11-01). */
+enum {
+    NAPPLE_DEVTYPE_FULL_KEY = 1u << 0,
+    NAPPLE_DEVTYPE_HANDHELD_LEFT = 1u << 2,
+    NAPPLE_DEVTYPE_HANDHELD_RIGHT = 1u << 3,
+    NAPPLE_DEVTYPE_JOY_LEFT = 1u << 4,
+    NAPPLE_DEVTYPE_JOY_RIGHT = 1u << 5,
+    NAPPLE_DEVTYPE_PALMA = 1u << 6,
+    NAPPLE_DEVTYPE_LARK_NES_LEFT = 1u << 9,
+    NAPPLE_DEVTYPE_HANDHELD_LARK_NES_LEFT = 1u << 13,
+    NAPPLE_DEVTYPE_LUCIA = 1u << 15,
+    NAPPLE_DEVTYPE_LAGON = 1u << 16,
+    NAPPLE_DEVTYPE_LAGER = 1u << 17
+};
+uint32_t napple_hid_device_type_for(uint32_t style);
+/* The button word a style reports, from the pad-level one: Palma folds A into its single top button, the N64 right stick becomes the four C buttons, the
+   NES-in-handheld pad mirrors B to HandheldLeftB. Other styles pass through. */
+uint64_t napple_style_buttons(uint32_t style, uint64_t buttons);
 void napple_hid_push_sixaxis(uint8_t *shm, const napple_hid_layout *l, int slot, int sixaxis_index, const napple_sixaxis_state *s);
 void napple_hid_set_npad_device(uint8_t *shm, const napple_hid_layout *l, int slot, uint32_t device_type, uint64_t system_properties, uint32_t battery_level);
 void napple_hid_push_touch(uint8_t *shm, const napple_hid_layout *l, const napple_touch_point *pts, uint32_t count);

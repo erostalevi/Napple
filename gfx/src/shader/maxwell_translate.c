@@ -72,6 +72,8 @@ typedef struct {
     uint32_t smem_need;       // highest statically addressed shared byte + 1
     uint32_t cbuf_need[18];   // highest constant vec4 index + 1 per cbuf
     int reg_cb[256];          // register -> (cbuf << 24 | byte offset) it was last loaded from (-1 = unknown): resolves bindless (.B) texture handles
+    int reg_cb2[256];         // ... the second word when the register is (cbuf word) | (cbuf word): a separate texture / sampler handle pair (-1 = none)
+    int sp_n, sp_a[64], sp_b[64], sp_slot[64]; // separate handle pairs (index 16384 + n in tex_slot): the two words' (cbuf << 24 | offset)
     int bl_n, bl_cb[64], bl_off[64], bl_slot[64];   // bindless handles read from user uniform buffers (index 8192 + n in tex_slot)
     uint64_t gs_slots;      // geometry / tess control: record slots stored (STAGE_SLOT bits); tess control: patch slots in patch_slots
     uint64_t patch_slots;
@@ -79,6 +81,8 @@ typedef struct {
     bool uses_gs_emit;      // geometry: OUT present
     bool uses_vabsdiff4, uses_isel, uses_idp;   // helper functions to emit
     bool uses_stencil;                          // a texture binding is a stencil view: uint texture + the StencilTex wrapper
+    bool uses_itex;                             // a texture binding is an integer colour texture: texture2d<uint|int> + the IntTex wrapper
+    bool uses_txq;                              // TXQ / TXA size queries: the txq_* helpers (the binding's type is only known at the end)
     bool has_pexit, uses_ljs, uses_lmb;         // PEXIT in the program / PLONGJMP stack and local memory base to declare
     int ald_vertex;         // register holding the vertex index of the ALD/AST being translated (RZ = none), set by the handler
     bool ald_patch, ald_out, ald_vlatched;   // ald_vlatched: the vertex index was copied to `vx` (the destination registers may overlap it)
@@ -179,6 +183,7 @@ static void set_reg(Ctx *c, int r, const char *expr) {
     if (r == RZ) return;
     c->reg_used[r] = 1;
     c->reg_cb[r] = -1;
+    c->reg_cb2[r] = -1;
     sp(&c->body, "    r%d = %s;\n", r, expr);
 }
 
@@ -352,7 +357,10 @@ static void attr_load_staged(Ctx *c, int dst, uint32_t addr, const char *idx) {
         } else if (patch) {
             sprintf(e, "0u /* patch attribute in a geometry shader */");
         } else {
-            sprintf(e, "as_type<uint>(stage_in[(sp[1] + gs_pid * %uu + %s) * %uu + %s][%s])", gs_in_verts(c), vexp, STAGE_SLOTS, sl, cm);
+            /* a vertex operand past the primitive (the 0x80000000 "no vertex" handle) reads 0 instead of another primitive's or unmapped records */
+            if (c->ald_vertex == RZ) sprintf(e, "as_type<uint>(stage_in[(sp[1] + gs_pid * %uu + 0u) * %uu + %s][%s])", gs_in_verts(c), STAGE_SLOTS, sl, cm);
+            else sprintf(e, "(%s < %uu ? as_type<uint>(stage_in[(sp[1] + gs_pid * %uu + %s) * %uu + %s][%s]) : 0u)", vexp, gs_in_verts(c), gs_in_verts(c), vexp, STAGE_SLOTS,
+                         sl, cm);
         }
     } else if (c->stage == STAGE_TESS_CTRL) {
         if (!idx && addr == 0x60 && !patch) sprintf(e, "(sp[2] + pid)");
@@ -421,7 +429,10 @@ static void attr_load(Ctx *c, int dst, uint32_t addr, const char *idx) {
         if (addr >= 0x70 && addr < 0x80) {
             c->uses_frag_coord = true;
             int comp = (addr >> 2) & 3;
-            if (comp < 2) {   // guest pixel units: the render target may be allocated larger
+            if (comp < 2 && c->key && c->key->sample_shading) {   // per-sample shading: the sample's own position (Metal's [[position]] stays at the pixel centre)
+                c->uses_rscale = true;
+                sprintf(e, "as_type<uint>((floor(in.pos[%d]) + get_sample_position(sample_id)[%d] - rscale[0][%d]) / rscale[0][%d])", comp, comp, comp + 2, comp);
+            } else if (comp < 2) {   // guest pixel units: the render target may be allocated larger
                 c->uses_rscale = true;
                 sprintf(e, "as_type<uint>((in.pos[%d] - rscale[0][%d]) / rscale[0][%d])", comp, comp + 2, comp);
             } else {
@@ -780,7 +791,86 @@ static uint32_t bindless_index(Ctx *c, int cb, int off) {
     c->bl_off[c->bl_n] = off;
     return 8192u + (uint32_t)c->bl_n++;
 }
+/* Depth / stencil / integer kind of a separate pair's texture (ShaderKey.sep_*_slots for c2's separate texture table, the combined masks for a combined table word;
+ * a word from a user uniform buffer is not known when the key is made). Either word may be the texture one: the sampler word is in neither table. */
+static void sep_masks(Ctx *c, ShaderTexture *t, int a, int b) {
+    if (!c->key) return;
+    int w[2] = {a, b};
+    for (int i = 0; i < 2; i++) {
+        uint32_t cb = (uint32_t)w[i] >> 24, off = (uint32_t)w[i] & 0xffffff;
+        if (cb != 2) continue;
+        uint32_t bit, dm, sm, um, im;
+        if (off >= SEP_TEX_C2_BASE && off < SEP_TEX_C2_BASE + 8 * 32) {
+            bit = 1u << ((off - SEP_TEX_C2_BASE) / 8);
+            dm = c->key->sep_depth_slots, sm = c->key->sep_stencil_slots, um = c->key->sep_uint_slots, im = c->key->sep_sint_slots;
+        } else if (off >= 0x20 && off < 0x120) {
+            bit = 1u << ((off - 0x20) / 8);
+            dm = c->key->depth_slots, sm = c->key->stencil_slots, um = c->key->tex_uint_slots, im = c->key->tex_sint_slots;
+        } else continue;
+        if (sm & bit) t->stencil = true;
+        else if (um & bit) t->int_kind = IMGKIND_UINT;
+        else if (im & bit) t->int_kind = IMGKIND_INT;
+        else if (dm & bit) t->depth = true;
+        return;
+    }
+}
+/* A separate texture / sampler handle: the register is (word a) | (word b), each (cbuf << 24 | byte offset). Pseudo index 16384 + n. */
+static uint32_t separate_index(Ctx *c, int a, int b) {
+    for (int i = 0; i < c->sp_n; i++)
+        if (c->sp_a[i] == a && c->sp_b[i] == b) return 16384u + (uint32_t)i;
+    if (c->sp_n >= 64) {
+        fail(c, "too many separate texture / sampler pairs");
+        return 16384u;
+    }
+    c->sp_a[c->sp_n] = a;
+    c->sp_b[c->sp_n] = b;
+    c->sp_slot[c->sp_n] = 0;
+    return 16384u + (uint32_t)c->sp_n++;
+}
+/* The bindless index of a handle register: a separate pair, one constant buffer word, or -1 (fail logged by the caller). */
+static int64_t handle_index(Ctx *c, int r) {
+    if (r == RZ) return -1;
+    if (c->reg_cb[r] >= 0 && c->reg_cb2[r] >= 0) return separate_index(c, c->reg_cb[r], c->reg_cb2[r]);
+    if (c->reg_cb[r] >= 0) return bindless_index(c, c->reg_cb[r] >> 24, c->reg_cb[r] & 0xffffff);
+    return -1;
+}
+
 static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
+    if (index >= 16384) { /* separate texture / sampler pair */
+        int n = (int)(index - 16384);
+        if (n >= c->sp_n) return 0;
+        if (c->sp_slot[n]) {
+            int s = c->sp_slot[n] - 1;
+            if (type >= 0 && c->tex_weak[s]) {
+                ShaderTexture *t = &c->info->tex[s];
+                t->type = (uint8_t)type;
+                t->shadow = shadow;
+                t->is_array = array;
+                c->tex_weak[s] = false;
+            }
+            return s;
+        }
+        bool weak = type < 0;
+        int s = c->info->ntex++;
+        if (s >= 63) {
+            fail(c, "too many textures");
+            return 0;
+        }
+        c->sp_slot[n] = s + 1;
+        c->tex_weak[s] = weak;
+        ShaderTexture *t = &c->info->tex[s];
+        t->bindless = true;
+        t->separate = true;
+        t->bindless_cbuf = (uint32_t)(c->sp_a[n] >> 24);
+        t->bindless_offset = (uint32_t)(c->sp_a[n] & 0xffffff);
+        t->sep_cbuf = (uint32_t)(c->sp_b[n] >> 24);
+        t->sep_offset = (uint32_t)(c->sp_b[n] & 0xffffff);
+        sep_masks(c, t, c->sp_a[n], c->sp_b[n]);
+        t->type = (uint8_t)(weak ? TEXTYPE_2D : type);
+        t->shadow = shadow;
+        t->is_array = array;
+        return s;
+    }
     if (index >= 8192) {
         int n = (int)(index - 8192);
         if (n >= c->bl_n) return 0;
@@ -836,6 +926,11 @@ static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
     t->handle_offset = index * 4;
     if (c->key && index * 4 >= 0x20 && index * 4 < 0x120 && ((c->key->depth_slots >> ((index * 4 - 0x20) / 8)) & 1)) t->depth = true;
     if (c->key && index * 4 >= 0x20 && index * 4 < 0x120 && ((c->key->stencil_slots >> ((index * 4 - 0x20) / 8)) & 1)) t->stencil = true, t->depth = false;
+    if (c->key && index * 4 >= 0x20 && index * 4 < 0x120 && !t->stencil) {
+        uint32_t bit = 1u << ((index * 4 - 0x20) / 8);
+        if (c->key->tex_uint_slots & bit) t->int_kind = IMGKIND_UINT, t->depth = false;
+        else if (c->key->tex_sint_slots & bit) t->int_kind = IMGKIND_INT, t->depth = false;
+    }
     t->type = (uint8_t)type;
     t->shadow = shadow;
     t->is_array = array;
@@ -856,10 +951,25 @@ static const char *tex_type_name(int t) {
     }
 }
 
+/* Suffix of the StencilTex / IntTex wrapper for a texture type */
+static const char *wrapper_name(int t) {
+    switch (t) {
+        case TEXTYPE_1D: return "1D";
+        case TEXTYPE_1D_ARRAY: return "1DArray";
+        case TEXTYPE_2D_ARRAY: return "2DArray";
+        case TEXTYPE_3D: return "3D";
+        case TEXTYPE_CUBE: return "Cube";
+        case TEXTYPE_CUBE_ARRAY: return "CubeArray";
+        case TEXTYPE_2D_MS: return "2DMS";
+        case TEXTYPE_2D_MS_ARRAY: return "2DMSArray";
+        default: return "2D";
+    }
+}
+
 // Write texture results: component mask selects which of r,g,b,a go to consecutive registers.
 static void write_tex_result(Ctx *c, int slot, const char *call, uint32_t mask, int d0, int d1, bool texs, bool f16) {
-    if (f16 && c->info->tex[slot].stencil) {
-        fail(c, "half-precision (.F16) result from a stencil texture binding (the value is an integer)");
+    if (f16 && (c->info->tex[slot].stencil || c->info->tex[slot].int_kind)) {
+        fail(c, "half-precision (.F16) result from a %s texture binding (the value is an integer)", c->info->tex[slot].stencil ? "stencil" : "integer");
         return;
     }
     if (c->info->tex[slot].depth && !c->info->tex[slot].shadow && !strstr(call, ".gather("))
@@ -1034,6 +1144,10 @@ static void emit_texs(Ctx *c, uint64_t w, bool fetch) {
                 slot = tex_slot(c, index, TEXTYPE_2D, false, false);
                 sprintf(call, "t%d.read(%s, uint(%s))", slot, RSC2(c, slot, "uint2(%s, %s)", A, A1), Bv);
                 break;
+            case 6: /* 2D.LZ.MS (yuzu's reading; Super Mario Odyssey): texel (Ra, Ra+1) of a multisampled texture, sample Rb (clamped like TLD.MS) */
+                slot = tex_slot(c, index, TEXTYPE_2D_MS, false, false);
+                sprintf(call, "t%d.read(%s, min(uint(%s), t%d.get_num_samples() - 1u))", slot, RSC2(c, slot, "uint2(%s, %s)", A, A1), Bv, slot);
+                break;
             case 7:
                 slot = tex_slot(c, index, TEXTYPE_3D, false, false);
                 sprintf(call, "t%d.read(uint3(%s, %s, %s))", slot, A, A1, Bv);
@@ -1058,12 +1172,12 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     uint32_t index = (uint32_t)bits(w, 36, 13);
     if (bindless) {
-        int v = b == RZ ? -1 : c->reg_cb[b];
+        int64_t v = handle_index(c, b);
         if (v < 0) {
             fail(c, "bindless texture handle is not a constant buffer load");
             return;
         }
-        index = bindless_index(c, v >> 24, v & 0xffffff);
+        index = (uint32_t)v;
     }
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), dc = bits(w, 50, 1), aoffi = bindless ? bits(w, 36, 1) : bits(w, 54, 1);
@@ -1098,8 +1212,11 @@ static void emit_tex(Ctx *c, uint64_t w, bool bindless) {
         strcpy(lod, ", level(0)");
     }
     if (aoffi) {
+        /* 4-bit signed texel offsets x, y, z in the register's low bytes. Metal takes int2 (2D), int3 (3D: Super Mario Odyssey samples 3D textures with
+         * AOFFI) and no offset at all for 1D and cube textures (where the hardware has none to apply either) */
         c->reg_used[pr] = 1;
-        sprintf(off, ", int2(int(r%d << 28) >> 28, int(r%d << 24) >> 28)", pr, pr);
+        if (type == TEXTYPE_3D) sprintf(off, ", int3(int(r%d << 28) >> 28, int(r%d << 24) >> 28, int(r%d << 20) >> 28)", pr, pr, pr);
+        else if (type == TEXTYPE_2D || type == TEXTYPE_2D_ARRAY) sprintf(off, ", int2(int(r%d << 28) >> 28, int(r%d << 24) >> 28)", pr, pr);
         pr++;
     }
     if (dc) {
@@ -1119,22 +1236,19 @@ static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8), b = (int)bits(w, 20, 8);
     uint32_t index = (uint32_t)bits(w, 36, 13);
     if (bindless) {
-        int v = b == RZ ? -1 : c->reg_cb[b];
+        int64_t v = handle_index(c, b);
         if (v < 0) {
             fail(c, "bindless texture handle is not a constant buffer load");
             return;
         }
-        index = bindless_index(c, v >> 24, v & 0xffffff);
+        index = (uint32_t)v;
     }
     int target = (int)bits(w, 29, 2);
     bool array = bits(w, 28, 1), dc = !tmml && bits(w, 50, 1);
     uint32_t mask = (uint32_t)bits(w, 31, 4);
     int comp = tmml ? 0 : (int)bits(w, 56, 2);
     int aoff = tmml ? 0 : (int)bits(w, 54, 2);
-    if (aoff == 2) {
-        fail(c, "texture gather with per-texel offsets (PTP: Metal needs constant offsets)");
-        return;
-    }
+    if (aoff == 2 && tmml) aoff = 0;
     if (aoff == 3) {
         fail(c, "texture gather with reserved offset mode");
         return;
@@ -1167,6 +1281,28 @@ static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
     static const char *const cn[] = {"x", "y", "z", "w"};
     char cexpr[900];
     sprintf(cexpr, "%s(%s)", vec, coords);
+    char ptp[4][300] = {"", "", "", ""}; /* PTP: the coordinate expression of each texel's gather */
+    if (aoff == 2) {
+        /* PTP: one texel offset per gathered texel, 6-bit signed x / y fields at bits 0, 8 (texel 0), 16, 24 (texel 1) of Rpr and the same in Rpr+1
+         * (texels 2, 3) (yuzu's MakeOffsetPTP; Super Mario Odyssey uses it). As SPIRV-Cross lowers textureGatherOffsets to MSL: component i of the
+         * result is the base texel (.w) of a gather at offset i; the runtime offset moves the coordinate by whole texels as for AOFFI below. */
+        if (ncoord != 2) {
+            fail(c, "texture gather with per-texel offsets on target %d", target);
+            return;
+        }
+        char gs[200];
+        if (c->stage == STAGE_VERTEX) sprintf(gs, "float2(t%d.get_width(), t%d.get_height())", slot, slot);
+        else {
+            c->uses_rscale = true;
+            sprintf(gs, "(float2(t%d.get_width(), t%d.get_height()) / rscale[%d].xy)", slot, slot, slot + 1);
+        }
+        c->reg_used[pr] = c->reg_used[pr + 1] = 1;
+        for (int i = 0; i < 4; i++) {
+            int r = pr + i / 2, sh = 16 * (i & 1);
+            snprintf(ptp[i], sizeof ptp[i], "float2(%s) + float2(int2(int(r%d << %du) >> 26, int(r%d << %du) >> 26)) / %s", coords, r, 26 - sh, r, 18 - sh, gs);
+        }
+        pr += 2;
+    }
     if (aoff == 1 && !tmml) {
         /* AOFFI: a per-thread texel offset in Rpr (4-bit signed x, y). Metal only takes constant gather offsets, but a whole-texel offset keeps the
          * fractional position, so gathering at coord + offset / size selects exactly the shifted 2x2 footprint (the sampler's wrap/clamp still applies) */
@@ -1201,6 +1337,21 @@ static void emit_tld4_tmml(Ctx *c, uint64_t w, bool bindless, bool tmml) {
                 }
             }
         sp(&c->body, "    }\n");
+        return;
+    }
+    if (aoff == 2) {
+        char g[4][700];
+        for (int i = 0; i < 4; i++) {
+            if (dc) snprintf(g[i], sizeof g[i], "t%d.gather_compare(s%d, %s%s%s, as_type<float>(r%d)).w", slot, slot, ptp[i], array ? ", " : "", layer, pr);
+            else if (c->info->tex[slot].depth || c->info->tex[slot].shadow)
+                snprintf(g[i], sizeof g[i], "float(t%d.gather(s%d, %s%s%s).w)", slot, slot, ptp[i], array ? ", " : "", layer);
+            else snprintf(g[i], sizeof g[i], "t%d.gather(s%d, %s%s%s, int2(0), component::%s).w", slot, slot, ptp[i], array ? ", " : "", layer, cn[comp]);
+        }
+        if (dc) c->reg_used[pr] = 1;
+        char *pcall = malloc(4 * 700 + 32);
+        sprintf(pcall, "float4(%s, %s, %s, %s)", g[0], g[1], g[2], g[3]);
+        write_tex_result(c, slot, pcall, mask, d, RZ, false, false);
+        free(pcall);
         return;
     }
     if (dc) {
@@ -1421,6 +1572,31 @@ static const char *video_cmp(int op, char *buf) {
 // ------------------------------------------------------------------ instruction translation
 #include "surface.inc"
 
+/* Separate texture / sampler handles (nvnCommandBufferBindSeparate*): GLSLC combines the texture word and the sampler word with an OR (or an add: the
+ * fields do not overlap) before a bindless TEX. Detected before the instruction is emitted (its destination may be one of the sources): LOP.OR / IADD
+ * without negation or carry / LOP3 with an OR table, both sources single constant buffer words (a register loaded from one, or the cbuf operand). */
+static int cb_word_of_reg(const Ctx *c, int r) { return r != RZ && c->reg_cb[r] >= 0 && c->reg_cb2[r] < 0 ? c->reg_cb[r] : -1; }
+static int pair_detect(const Ctx *c, uint64_t w, int *wa, int *wb) {
+    uint64_t top = w & 0xfff8000000000000ull;
+    int a = (int)((w >> 8) & 0xff), d = (int)(w & 0xff);
+    int bw = -1, ok = 0;
+    if (top == 0x5c40000000000000ull || top == 0x4c40000000000000ull) {   /* LOP */
+        ok = ((w >> 41) & 3) == 1 && !((w >> 39) & 3) && ((w >> 48) & 7) == 7;
+    } else if (top == 0x5c10000000000000ull || top == 0x4c10000000000000ull) {   /* IADD */
+        ok = !((w >> 48) & 3) && !((w >> 43) & 1) && !((w >> 47) & 1) && !((w >> 50) & 1);
+    } else if (top == 0x5be0000000000000ull) {   /* LOP3, register form */
+        uint32_t lut = (uint32_t)((w >> 28) & 0xff);
+        ok = lut == 0xfc || (lut == 0xfe && ((w >> 39) & 0xff) == RZ);
+    }
+    if (!ok || d == RZ) return -1;
+    if ((w >> 60) == 0x4) bw = (int)(((w >> 34) & 0x1f) << 24) | (int)(((w >> 20) & 0x3fff) * 4);   /* cbuf operand */
+    else bw = cb_word_of_reg(c, (int)((w >> 20) & 0xff));
+    if ((w >> 60) == 0x4 && ((w >> 34) & 0x1f) < 2) return -1;
+    *wa = cb_word_of_reg(c, a);
+    *wb = bw;
+    return *wa >= 0 && *wb >= 0 ? d : -1;
+}
+
 static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     char t[2048], u[2048];
     int d = (int)bits(w, 0, 8), a = (int)bits(w, 8, 8);
@@ -1436,6 +1612,7 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     }
     bool guarded = !(pr == PT && !prn);
     if (pr == PT && prn) return;   // @!pt: never executes
+    int pair_wa = -1, pair_wb = -1, pair_d = guarded ? -1 : pair_detect(c, w, &pair_wa, &pair_wb);
     if (guarded) sp(&c->body, "  if (%s) {\n", P(pr, prn));
 
 #define OPM(val, mask) ((w & (uint64_t)(mask)) == (uint64_t)(val))
@@ -1585,13 +1762,13 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             if (c->stage != STAGE_VERTEX) {                // report the guest size of scaled allocations
                 c->uses_rscale = true;
                 sp(&c->body,
-                   "    { uint lv = %s; uint4 q = uint4(uint(round(float(t%d.get_width(lv)) / rscale[%d].x)), "
-                   "uint(round(float(t%d.get_height(lv)) / rscale[%d].y)), 1, t%d.get_num_mip_levels());\n",
+                   "    { uint lv = %s; uint4 q = uint4(uint(round(float(txq_w(t%d, lv)) / rscale[%d].x)), "
+                   "uint(round(float(txq_h(t%d, lv)) / rscale[%d].y)), 1, txq_n(t%d));\n",
                    R(a), slot, slot + 1, slot, slot + 1, slot);
             } else {
-                sp(&c->body, "    { uint lv = %s; uint4 q = uint4(t%d.get_width(lv), t%d.get_height(lv), 1, t%d.get_num_mip_levels());\n", R(a), slot, slot,
-                   slot);
+                sp(&c->body, "    { uint lv = %s; uint4 q = uint4(txq_w(t%d, lv), txq_h(t%d, lv), 1, txq_n(t%d));\n", R(a), slot, slot, slot);
             }
+            c->uses_txq = true;
             int n = 0;
             for (int i = 0; i < 4; i++)
                 if (mask & (1u << i)) {
@@ -1917,6 +2094,23 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
             sprintf(t, "(%s * %s + %s)", R(a), bv, cv);
         }
         set_reg(c, d, t);
+    } else if (OPM(0x1800000000000000ull, 0xfc00000000000000ull)) {   // LEA.HI, constant buffer form (opcode 000110)
+        /* Real words in Super Mario Odyssey's compute programs (18f77f9000270000: r0 = c4[0x8] + (r0 >> 2)); layout as yuzu reads it (LEA_HI_C): Rd [0,8),
+         * offset low word Ra [8,16), cbuf [20,34) / [34,39), offset high word [39,47), scale [51,56), .NEG 56 (negates the 64-bit offset), .X 57 (adds the
+         * carry). d = B + low word of ({hi:a} >> (32 - scale)), i.e. the high word of the offset shifted left by scale. */
+        int sc = (int)bits(w, 51, 5);
+        bool neg = bits(w, 56, 1), x = bits(w, 57, 1);
+        char cb[160], off[256];
+        const char *bv = cbuf_ref(c, (int)bits(w, 34, 5), bits(w, 20, 14) * 4, NULL, cb);
+        sprintf(off, "((ulong(%s) << 32) | ulong(%s))", R((int)bits(w, 39, 8)), R(a));
+        if (neg) {
+            char t2[300];
+            sprintf(t2, "(0ul - %s)", off);
+            strcpy(off, t2);
+        }
+        if (x) c->uses_cc = true;
+        sprintf(t, "(%s + uint(%s >> %du)%s)", bv, off, 32 - sc, x ? " + cc" : "");
+        set_reg(c, d, t);
     } else if (OPM(0x5bd0000000000000ull, 0xfff0000000000000ull) || OPM(0x4bd0000000000000ull, 0xfff0000000000000ull) ||
                OPM(0x36d0000000000000ull, 0xfef8000000000000ull)) {   // LEA (.LO, and .HI in the reg and cbuf forms)
         /* Bit layout from memory; no real word in the corpora. B by the opcode class, bit 45 negates B. .LO (opcode bit 51 clear): d = (a << scale) + B,
@@ -2176,6 +2370,17 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
          * (Ryujinx's constant, right for the upper-left titles it runs). The origin is the guest's, from the pipeline key. */
             case 0x12: set_reg(c, d, c->key && c->key->upper_left ? "0x3f800000u" : "0xbf800000u"); break;
             case 0x11: set_reg(c, d, c->stage == STAGE_TESS_CTRL || c->stage == STAGE_GEOMETRY ? "inv" : "0u"); break;   // SR_INVOCATION_ID: the output control point of a tess control thread; the geometry instance (gid % sp[3])
+            /* SR_INVOCATION_INFO: bits 16..23 = vertices of the input primitive (geometry) / control points of the input patch (tessellation), bits 0..7 = the
+             * invocation (geometry instance; yuzu answers 0x00ff0000 for geometry and patch vertices << 16 for tessellation). GLSLC's geometry
+             * prologue builds the input vertex handles from it: handle k = (info & 0xff) * ((info >> 16) & 0xff) + k, ISBERD, and 0x80000000 (no
+             * vertex) when k >= the vertex count (Super Mario Odyssey's alThunderShader programs). */
+            case 0x1d:
+                if (c->stage == STAGE_GEOMETRY) sprintf(t, "((%uu << 16) | (inv & 0xffu))", (unsigned)gs_in_verts(c));
+                else if (c->stage == STAGE_TESS_CTRL) sprintf(t, "(%uu << 16)", c->key ? (unsigned)c->key->tess_in_vertices : 1u);
+                else if (c->stage == STAGE_TESS_EVAL) sprintf(t, "(%uu << 16)", c->key ? (unsigned)c->key->tess_out_vertices : 1u);
+                else strcpy(t, "0u /* sr 0x1d */");
+                set_reg(c, d, t);
+                break;
             case 0x21: set_reg(c, d, c->stage == STAGE_COMPUTE || c->stage == STAGE_TESS_CTRL ? "tid.x" : "0u"); break;
             case 0x22: set_reg(c, d, "tid.y"); break;
             case 0x23: set_reg(c, d, "tid.z"); break;
@@ -2848,15 +3053,27 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
     } else if (OPM(0xf0c0000000000000ull, 0xfff8000000000000ull)) {   // R2B: register to barrier state
         // The inverse of B2R: the barrier state is not materialised, so the write is dropped: no-op
     } else if (OPM(0xefd0000000000000ull, 0xfff8000000000000ull)) {   // ISBERD: read the attribute (ISBE) memory at the address in Ra
-        /* Rd = a[Ra + imm10 at 20]: the indexed attribute read (AL2P + ALD.PHYS family) in the stage's own input space, so it shares the ALD register-addressed path */
-        c->ald_vertex = RZ;
-        c->ald_patch = false;
-        c->ald_out = false;
-        sp(&c->body, "    { uint ix = %s;\n", R(a));
-        char ib[48];
-        sprintf(ib, "(ix + %uu)", (uint32_t)bits(w, 20, 10));
-        attr_load(c, d, 0, ib);
-        sp(&c->body, "    }\n");
+        if (c->stage == STAGE_GEOMETRY || c->stage == STAGE_TESS_CTRL || c->stage == STAGE_TESS_EVAL) {
+            /* In these stages ISBERD turns an input vertex handle (built from SR_INVOCATION_INFO, see S2R) into the vertex operand of ALD a[Rv][..]: the
+             * ALD path takes vertex indices, so the handle maps back to its index (yuzu copies the register; the handle of geometry instance i is
+             * i * vertices + k, hence the remainder). Reading it as an attribute address (the vertex / fragment reading below) made the vertex
+             * operand an attribute value and the kernel read stage_in out of bounds. */
+            uint32_t nv = c->stage == STAGE_GEOMETRY ? (uint32_t)gs_in_verts(c) : c->stage == STAGE_TESS_CTRL ? (c->key ? c->key->tess_in_vertices : 1u)
+                                                                                                             : (c->key ? c->key->tess_out_vertices : 1u);
+            if (c->stage == STAGE_GEOMETRY) sprintf(t, "((%s + %uu) %% %uu)", R(a), (uint32_t)bits(w, 20, 10), nv ? nv : 1u);
+            else sprintf(t, "(%s + %uu)", R(a), (uint32_t)bits(w, 20, 10));
+            set_reg(c, d, t);
+        } else {
+            /* Rd = a[Ra + imm10 at 20]: the indexed attribute read (AL2P + ALD.PHYS family) in the stage's own input space, so it shares the ALD register-addressed path */
+            c->ald_vertex = RZ;
+            c->ald_patch = false;
+            c->ald_out = false;
+            sp(&c->body, "    { uint ix = %s;\n", R(a));
+            char ib[48];
+            sprintf(ib, "(ix + %uu)", (uint32_t)bits(w, 20, 10));
+            attr_load(c, d, 0, ib);
+            sp(&c->body, "    }\n");
+        }
     } else if (OPM(0xeea0000000000000ull, 0xfff8000000000000ull)) {   // STP: store to the trap-handler parameter area
         // STP writes the state area the trap handler reads back (with RTT/RAM/SAM); with no handler the store has no observer: no-op
     } else if (OPM(0xfbe0000000000000ull, 0xfff8000000000000ull) || OPM(0xf6e0000000000000ull, 0xfff8000000000000ull) ||
@@ -2906,6 +3123,10 @@ static void emit_insn(Ctx *c, uint64_t w, uint32_t pc) {
         fail(c, "unknown instruction %016llx at %#x", (unsigned long long)w, pc);
     }
     (void)op13;
+    if (pair_d >= 0) {
+        c->reg_cb[pair_d] = pair_wa;
+        c->reg_cb2[pair_d] = pair_wb;
+    }
     if (guarded) sp(&c->body, "  }\n");
 }
 
@@ -2996,7 +3217,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     ShaderInfo *info = calloc(1, sizeof *info);
     info->stage = stage;
     Ctx *c = calloc(1, sizeof *c);
-    if (c) memset(c->reg_cb, 0xff, sizeof c->reg_cb);
+    if (c) memset(c->reg_cb, 0xff, sizeof c->reg_cb), memset(c->reg_cb2, 0xff, sizeof c->reg_cb2);
     c->info = info;
     c->key = key;
     c->stage = stage;
@@ -3095,9 +3316,16 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         info->shared_mem = sz;
     }
     for (int i = 0; i < info->ntex && !c->fail; i++) {
-        const ShaderTexture *t = &info->tex[i];
+        ShaderTexture *t = &info->tex[i];
+        if (t->int_kind) {
+            /* integer colour textures: every sampled target through the IntTex wrappers; texel buffers, and depth comparison, keep the float declaration */
+            if (t->type != TEXTYPE_BUFFER && !t->shadow) c->uses_itex = true;
+            else t->int_kind = IMGKIND_FLOAT;
+            continue;
+        }
         if (!t->stencil) continue;
-        if (t->type != TEXTYPE_2D && t->type != TEXTYPE_2D_ARRAY) fail(c, "stencil sampling of a texture of type %d (only 2D and 2D array stencil views exist)", t->type);
+        if (t->type != TEXTYPE_2D && t->type != TEXTYPE_2D_ARRAY && t->type != TEXTYPE_CUBE && t->type != TEXTYPE_CUBE_ARRAY)
+            fail(c, "stencil sampling of a texture of type %d (2D, 2D array, cube and cube array stencil views exist)", t->type);
         else if (t->shadow) fail(c, "depth comparison on a stencil texture binding");
         else c->uses_stencil = true;
     }
@@ -3177,6 +3405,15 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "    int y = sb ? int(char(b >> (i * 8u))) : int((b >> (i * 8u)) & 0xFFu);\n    uint dl = uint(abs(x - y)), cl = (c >> (i * 8u)) & 0xFFu;\n"
            "    sum += dl;\n    r |= ((op == 2u ? min(dl, cl) : (op == 3u ? max(dl, cl) : dl)) & 0xFFu) << (i * 8u);\n  }\n"
            "  if (op == 1u) { uint t = sum + c; return (sat && t < sum) ? 0xFFFFFFFFu : t; }\n  return r;\n}\n");
+    if (c->uses_stencil || c->uses_itex)
+        /* Cube face selection for the integer and stencil cube wrappers (no sampler can address an integer cube): the face the major axis of `d` names and
+         * the [0, 1] coordinate on it, in the GL / Metal face convention (+X, -X, +Y, -Y, +Z, -Z) */
+        sp(&s, "static inline uint cube_face(float3 d, thread float2 &uv) { float3 a = abs(d); uint f;\n"
+               "  if (a.x >= a.y && a.x >= a.z) { f = d.x >= 0.0f ? 0u : 1u; uv = float2(d.x >= 0.0f ? -d.z : d.z, -d.y) / a.x; }\n"
+               "  else if (a.y >= a.z) { f = d.y >= 0.0f ? 2u : 3u; uv = float2(d.x, d.y >= 0.0f ? d.z : -d.z) / a.y; }\n"
+               "  else { f = d.z >= 0.0f ? 4u : 5u; uv = float2(d.z >= 0.0f ? d.x : -d.x, -d.y) / a.z; }\n"
+               "  uv = uv * 0.5f + 0.5f; return f; }\n"
+               "static inline uint2 cube_texel(float2 uv, int s, int2 o, float h) { return uint2(clamp(int2(floor(uv * float(s) - h)) + o, int2(0), int2(s - 1))); }\n");
     if (c->uses_stencil) {
         /* Stencil views are uint textures (X32_Stencil8 / Stencil8): Metal cannot `sample` an integer texture, so the shader's texture name is a wrapper with the
          * float-texture member functions the translator emits. Sampling is a nearest read of level 0 (stencil values are never filtered; bias / lod / offset
@@ -3186,7 +3423,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "struct StencilTex2D { texture2d<uint> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
            "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
-           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float calculate_clamped_lod(sampler, float2) const { return 0.0f; } float calculate_unclamped_lod(sampler, float2) const { return 0.0f; }\n"
            "  float4 read(uint2 c, uint l = 0u) const { return stx(t.read(c, l).x); }\n"
            "  uint at(int2 p) const { return t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1)))).x; }\n"
            "  template <typename... A> float4 sample(sampler, float2 uv, A...) const { return stx(at(int2(floor(uv * float2(t.get_width(), t.get_height()))))); }\n"
@@ -3196,12 +3433,128 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
            "struct StencilTex2DArray { texture2d_array<uint> t;\n"
            "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
            "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
-           "  float2 calculate_clamped_lod(sampler, float2) const { return float2(0.0f); } float2 calculate_unclamped_lod(sampler, float2) const { return float2(0.0f); }\n"
+           "  float calculate_clamped_lod(sampler, float2) const { return 0.0f; } float calculate_unclamped_lod(sampler, float2) const { return 0.0f; }\n"
            "  float4 read(uint2 c, uint layer, uint l = 0u) const { return stx(t.read(c, layer, l).x); }\n"
            "  uint at(int2 p, uint layer) const { return t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))), layer).x; }\n"
            "  template <typename... A> float4 sample(sampler, float2 uv, uint layer, A...) const { return stx(at(int2(floor(uv * float2(t.get_width(), t.get_height()))), layer)); }\n"
            "  template <typename... A> float4 gather(sampler, float2 uv, uint layer, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
            "    return as_type<float4>(uint4(at(b + int2(0, 1), layer), at(b + int2(1, 1), layer), at(b + int2(1, 0), layer), at(b, layer))); } };\n");
+        /* cube / cube array stencil views (X32_Stencil8 view of a cube depth-stencil texture): the face and texel the direction selects (cube_face) */
+        sp(&s,
+           "struct StencilTexCube { texturecube<uint> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint face, uint l = 0u) const { return stx(t.read(c, face, l).x); }\n"
+           "  uint at(float3 d, int2 o = int2(0), float h = 0.0f) const { float2 uv; uint f = cube_face(d, uv); return t.read(cube_texel(uv, int(t.get_width()), o, h), f).x; }\n"
+           "  template <typename... A> float4 sample(sampler, float3 d, A...) const { return stx(at(d)); }\n"
+           "  template <typename... A> float4 gather(sampler, float3 d, A...) const {\n"
+           "    return as_type<float4>(uint4(at(d, int2(0, 1), 0.5f), at(d, int2(1, 1), 0.5f), at(d, int2(1, 0), 0.5f), at(d, int2(0), 0.5f))); } };\n");
+        sp(&s,
+           "struct StencilTexCubeArray { texturecube_array<uint> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint face, uint layer, uint l = 0u) const { return stx(t.read(c, face, layer, l).x); }\n"
+           "  uint at(float3 d, uint layer, int2 o = int2(0), float h = 0.0f) const { float2 uv; uint f = cube_face(d, uv);\n"
+           "    return t.read(cube_texel(uv, int(t.get_width()), o, h), f, layer).x; }\n"
+           "  template <typename... A> float4 sample(sampler, float3 d, uint layer, A...) const { return stx(at(d, layer)); }\n"
+           "  template <typename... A> float4 gather(sampler, float3 d, uint layer, A...) const {\n"
+           "    return as_type<float4>(uint4(at(d, layer, int2(0, 1), 0.5f), at(d, layer, int2(1, 1), 0.5f), at(d, layer, int2(1, 0), 0.5f), at(d, layer, int2(0), 0.5f))); } };\n");
+    }
+    if (c->uses_txq) {
+        /* TXQ / TXA: the binding's texture type is only fixed once the whole program is read (a later TLDS.MS makes it multisampled), so the size query
+         * goes through overloads: multisampled textures take no level argument and have one level. */
+        sp(&s, "template <typename T> static inline uint txq_w(T t, uint l) { return t.get_width(l); }\n"
+               "template <typename T> static inline uint txq_h(T t, uint l) { return t.get_height(l); }\n"
+               "template <typename T> static inline uint txq_n(T t) { return t.get_num_mip_levels(); }\n");
+        static const char *const ms[3] = {"texture2d_ms", "texture2d_ms_array", "depth2d_ms"};
+        for (int i = 0; i < 3; i++)
+            sp(&s, "template <typename E, access A> static inline uint txq_w(%s<E, A> t, uint) { return t.get_width(); }\n"
+                   "template <typename E, access A> static inline uint txq_h(%s<E, A> t, uint) { return t.get_height(); }\n"
+                   "template <typename E, access A> static inline uint txq_n(%s<E, A>) { return 1u; }\n", ms[i], ms[i], ms[i]);
+    }
+    if (c->uses_itex) {
+        /* Integer colour textures (ShaderKey.tex_uint_slots / tex_sint_slots): Metal cannot filter an integer texture and the registers receive the texel's
+         * integer bits, so, as for stencil views, the shader's texture name is a wrapper with the float-texture member functions: `read` and `sample` (a
+         * nearest read of level 0 at the coordinate) return all four channels as raw bits (sign-extended for int), `gather` the x channel of the 2x2 quad.
+         * 3D: nearest texel of the normalised coordinate; cube: the face and texel the direction selects (GL / Metal face convention); 2D multisample:
+         * read by sample index (one level). */
+        sp(&s,
+           "template <typename T> struct IntTex2D { texture2d<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float2) const { return 0.0f; } float calculate_unclamped_lod(sampler, float2) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, l))); }\n"
+           "  uint4 at(int2 p) const { return uint4(t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))))); }\n"
+           "  template <typename... A> float4 sample(sampler, float2 uv, A...) const { return as_type<float4>(at(int2(floor(uv * float2(t.get_width(), t.get_height()))))); }\n"
+           "  template <typename... A> float4 gather(sampler, float2 uv, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
+           "    return as_type<float4>(uint4(at(b + int2(0, 1)).x, at(b + int2(1, 1)).x, at(b + int2(1, 0)).x, at(b).x)); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex2DArray { texture2d_array<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float2) const { return 0.0f; } float calculate_unclamped_lod(sampler, float2) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint layer, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, layer, l))); }\n"
+           "  uint4 at(int2 p, uint layer) const { return uint4(t.read(uint2(clamp(p, int2(0), int2(int(t.get_width()) - 1, int(t.get_height()) - 1))), layer)); }\n"
+           "  template <typename... A> float4 sample(sampler, float2 uv, uint layer, A...) const { return as_type<float4>(at(int2(floor(uv * float2(t.get_width(), t.get_height()))), layer)); }\n"
+           "  template <typename... A> float4 gather(sampler, float2 uv, uint layer, A...) const { int2 b = int2(floor(uv * float2(t.get_width(), t.get_height()) - 0.5f));\n"
+           "    return as_type<float4>(uint4(at(b + int2(0, 1), layer).x, at(b + int2(1, 1), layer).x, at(b + int2(1, 0), layer).x, at(b, layer).x)); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex3D { texture3d<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_depth(uint l = 0u) const { return t.get_depth(l); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint3 c, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, l))); }\n"
+           "  template <typename... A> float4 sample(sampler, float3 uvw, A...) const { int3 sz = int3(t.get_width(), t.get_height(), t.get_depth());\n"
+           "    return as_type<float4>(uint4(t.read(uint3(clamp(int3(floor(uvw * float3(sz))), int3(0), sz - 1))))); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTexCube { texturecube<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint face, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, face, l))); }\n"
+           "  uint4 at(float3 d, int2 o = int2(0), float h = 0.0f) const { float2 uv; uint f = cube_face(d, uv); return uint4(t.read(cube_texel(uv, int(t.get_width()), o, h), f)); }\n"
+           "  template <typename... A> float4 sample(sampler, float3 d, A...) const { return as_type<float4>(at(d)); }\n"
+           "  template <typename... A> float4 gather(sampler, float3 d, A...) const {\n"
+           "    return as_type<float4>(uint4(at(d, int2(0, 1), 0.5f).x, at(d, int2(1, 1), 0.5f).x, at(d, int2(1, 0), 0.5f).x, at(d, int2(0), 0.5f).x)); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex2DMS { texture2d_ms<T> t;\n"
+           "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return t.get_height(); }\n"
+           "  uint get_num_samples() const { return t.get_num_samples(); } uint get_num_mip_levels() const { return 1u; }\n"
+           "  float4 read(uint2 c, uint smp) const { return as_type<float4>(uint4(t.read(c, smp))); } };\n");
+        /* 1D / 1D array (Metal 1D textures have one level: read() takes a constant 0 lod), cube array, 2D multisample array (read by layer and sample) */
+        sp(&s,
+           "template <typename T> struct IntTex1D { texture1d<T> t;\n"
+           "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return 1u; } uint get_num_mip_levels() const { return 1u; }\n"
+           "  float calculate_clamped_lod(sampler, float) const { return 0.0f; } float calculate_unclamped_lod(sampler, float) const { return 0.0f; }\n"
+           "  float4 read(uint x, uint = 0u) const { return as_type<float4>(uint4(t.read(x))); }\n"
+           "  template <typename... A> float4 sample(sampler, float u, A...) const { int w = int(t.get_width());\n"
+           "    return as_type<float4>(uint4(t.read(uint(clamp(int(floor(u * float(w))), 0, w - 1))))); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex1DArray { texture1d_array<T> t;\n"
+           "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return 1u; }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return 1u; }\n"
+           "  float calculate_clamped_lod(sampler, float) const { return 0.0f; } float calculate_unclamped_lod(sampler, float) const { return 0.0f; }\n"
+           "  float4 read(uint x, uint layer, uint = 0u) const { return as_type<float4>(uint4(t.read(x, layer))); }\n"
+           "  template <typename... A> float4 sample(sampler, float u, uint layer, A...) const { int w = int(t.get_width());\n"
+           "    return as_type<float4>(uint4(t.read(uint(clamp(int(floor(u * float(w))), 0, w - 1)), layer))); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTexCubeArray { texturecube_array<T> t;\n"
+           "  uint get_width(uint l = 0u) const { return t.get_width(l); } uint get_height(uint l = 0u) const { return t.get_height(l); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_mip_levels() const { return t.get_num_mip_levels(); }\n"
+           "  float calculate_clamped_lod(sampler, float3) const { return 0.0f; } float calculate_unclamped_lod(sampler, float3) const { return 0.0f; }\n"
+           "  float4 read(uint2 c, uint face, uint layer, uint l = 0u) const { return as_type<float4>(uint4(t.read(c, face, layer, l))); }\n"
+           "  uint4 at(float3 d, uint layer, int2 o = int2(0), float h = 0.0f) const { float2 uv; uint f = cube_face(d, uv);\n"
+           "    return uint4(t.read(cube_texel(uv, int(t.get_width()), o, h), f, layer)); }\n"
+           "  template <typename... A> float4 sample(sampler, float3 d, uint layer, A...) const { return as_type<float4>(at(d, layer)); }\n"
+           "  template <typename... A> float4 gather(sampler, float3 d, uint layer, A...) const {\n"
+           "    return as_type<float4>(uint4(at(d, layer, int2(0, 1), 0.5f).x, at(d, layer, int2(1, 1), 0.5f).x, at(d, layer, int2(1, 0), 0.5f).x, at(d, layer, int2(0), 0.5f).x)); } };\n");
+        sp(&s,
+           "template <typename T> struct IntTex2DMSArray { texture2d_ms_array<T> t;\n"
+           "  uint get_width(uint = 0u) const { return t.get_width(); } uint get_height(uint = 0u) const { return t.get_height(); }\n"
+           "  uint get_array_size() const { return t.get_array_size(); } uint get_num_samples() const { return t.get_num_samples(); } uint get_num_mip_levels() const { return 1u; }\n"
+           "  float4 read(uint2 c, uint layer, uint smp) const { return as_type<float4>(uint4(t.read(c, layer, smp))); } };\n");
     }
     if (c->uses_idp)
         sp(&s,
@@ -3261,7 +3614,11 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         sp(&s, "struct FIn {\n  float4 pos [[position]];\n");
         for (int i = 0; i < 32; i++) {
             if (!(c->in_attr_mask & (1u << i))) continue;
-            const char *interp = (c->flat_mask & (1u << i)) ? " [[flat]]" : (c->noperspective_mask & (1u << i)) ? " [[center_no_perspective]]" : "";
+            /* per-sample shading interpolates at each sample (as the hardware does with sample shading on) */
+            int ss = c->key && c->key->sample_shading;
+            const char *interp = (c->flat_mask & (1u << i))             ? " [[flat]]"
+                                 : (c->noperspective_mask & (1u << i)) ? (ss ? " [[sample_no_perspective]]" : " [[center_no_perspective]]")
+                                                                        : (ss ? " [[sample_perspective]]" : "");
             sp(&s, "  float4 v%d [[user(locn%d)]]%s;\n", i, i, interp);
         }
         sp(&s, "};\n");
@@ -3301,6 +3658,7 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
         const char *tn = tex_type_name(t->type);
         /* Metal allows 16 samplers per function: textures from the 17th on share the first texture's sampler */
         if (t->stencil) sp(&args, ", texture%s<uint> t%d_u [[texture(%d)]]", tn, i, i);
+        else if (t->int_kind) sp(&args, ", texture%s<%s> t%d_i [[texture(%d)]]", tn, t->int_kind == IMGKIND_INT ? "int" : "uint", i, i);
         else if (t->shadow || t->depth) sp(&args, ", depth%s<float> t%d [[texture(%d)]]", tn, i, i);
         else sp(&args, ", texture%s<float> t%d [[texture(%d)]]", tn, i, i);
         if (i < 16) sp(&args, ", sampler s%d [[sampler(%d)]]", i, i);
@@ -3393,7 +3751,9 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     if (c->uses_local) sp(&s, "  uint lmem[%d] = {};\n", LMEM_WORDS);
     if (c->uses_lmb) sp(&s, "  uint lmb = 0u;\n");
     for (int i = 0; i < info->ntex; i++)
-        if (info->tex[i].stencil) sp(&s, "  const StencilTex%s t%d = {t%d_u};\n", info->tex[i].type == TEXTYPE_2D_ARRAY ? "2DArray" : "2D", i, i);
+        if (info->tex[i].stencil) sp(&s, "  const StencilTex%s t%d = {t%d_u};\n", wrapper_name(info->tex[i].type), i, i);
+        else if (info->tex[i].int_kind)
+            sp(&s, "  const IntTex%s<%s> t%d = {t%d_i};\n", wrapper_name(info->tex[i].type), info->tex[i].int_kind == IMGKIND_INT ? "int" : "uint", i, i);
     if (any_branch) {
         sp(&s, "  uint pc = 8u; uint ssy[16]; uint ssy_n = 0; uint pbk[16]; uint pbk_n = 0; uint pcnt[16]; uint pcnt_n = 0; uint cal[16]; uint cal_n = 0;\n");
         if (c->uses_ljs) sp(&s, "  uint ljs[16]; uint ljs_n = 0;\n");
@@ -3407,6 +3767,17 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     }
     if (stage == STAGE_VERTEX || stage == STAGE_TESS_EVAL) {
         if (xfb_epi.buf) sp(&s, "%s", xfb_epi.buf);
+        if (key && key->vp_swizzle) {
+            /* viewport swizzle (ShaderKey.vp_swizzle): each clip component from a (negated) component of the program's position */
+            uint32_t sw = key->vp_swizzle ^ VP_SWIZZLE_IDENTITY;
+            static const char cn[4] = {'x', 'y', 'z', 'w'};
+            char e[4][8];
+            for (int i = 0; i < 4; i++) {
+                uint32_t v = (sw >> (3 * i)) & 7;
+                snprintf(e[i], sizeof e[i], "%sq.%c", v & 1 ? "-" : "", cn[v >> 1]);
+            }
+            sp(&s, "  { float4 q = out.pos; out.pos = float4(%s, %s, %s, %s); }\n", e[0], e[1], e[2], e[3]);
+        }
         if (key && key->flip_y) sp(&s, "  out.pos.y = -out.pos.y;\n");
         if (key && key->depth_minus_one) sp(&s, "  out.pos.z = (out.pos.z + out.pos.w) * 0.5f;\n");
         if (key && key->capture_void) sp(&s, "  (void)out;\n}\n");

@@ -1,13 +1,39 @@
 /* audin microphone capture (macOS): an AUHAL input unit on the default input device feeding the mic ring of audin_source.c with 48 kHz mono
-   float. Started only when NAPPLE_AUDIN_SOURCE=mic: the process needs NSMicrophoneUsageDescription and the audio-input entitlement
-   (packaging) before this is on by default. Not built or run on Linux; the Linux suite links the unsupported stub below. */
+   float. On by default when the app may use it (nae_mic_permission below; generated apps carry NSMicrophoneUsageDescription and the audio-input
+   entitlement), or when NAPPLE_AUDIN_SOURCE=mic asks for it; denied or absent permission leaves the guest recording silence.
+   Not built or run on Linux; the Linux suite links the unsupported stub below. */
 #include "internal.h"
 #include <TargetConditionals.h>
+#include <stdlib.h>
+#include <string.h>
 
 #if defined(__APPLE__) && TARGET_OS_OSX
 #include <AudioToolbox/AudioToolbox.h>
 #include <CoreAudio/CoreAudio.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <dlfcn.h>
+#include <objc/message.h>
+#include <objc/runtime.h>
 #include <stdlib.h>
+#include <string.h>
+
+/* AVCaptureDevice authorizationStatusForMediaType:@"soun" through the ObjC runtime (this file stays plain C and links no AVFoundation).
+   0 notDetermined, 1 restricted, 2 denied, 3 authorized. The env NAPPLE_AUDIN_MIC_PERMISSION=granted|undetermined|denied overrides it (tests, CI). */
+int nae_mic_permission(void) {
+    const char *ov = getenv("NAPPLE_AUDIN_MIC_PERMISSION");
+    if (ov && *ov) return !strcmp(ov, "granted") ? NAE_MIC_GRANTED : !strcmp(ov, "undetermined") ? NAE_MIC_UNDETERMINED : NAE_MIC_DENIED;
+    if (!dlopen("/System/Library/Frameworks/AVFoundation.framework/AVFoundation", RTLD_LAZY)) return NAE_MIC_DENIED;
+    Class cls = objc_getClass("AVCaptureDevice");
+    if (!cls) return NAE_MIC_DENIED;
+    long st = ((long (*)(Class, SEL, CFStringRef))objc_msgSend)(cls, sel_registerName("authorizationStatusForMediaType:"), CFSTR("soun"));
+    return st == 3 ? NAE_MIC_GRANTED : st == 0 ? NAE_MIC_UNDETERMINED : NAE_MIC_DENIED;
+}
+/* A process that has no NSMicrophoneUsageDescription is killed by the system when it first touches the microphone: only an app bundle that
+   carries one may trigger the prompt (a command-line run is "undetermined" and stays silent). */
+int nae_mic_can_prompt(void) {
+    CFBundleRef b = CFBundleGetMainBundle();
+    return b && CFBundleGetValueForInfoDictionaryKey(b, CFSTR("NSMicrophoneUsageDescription")) != NULL;
+}
 
 static struct {
     AudioComponentInstance unit;
@@ -65,6 +91,11 @@ void nae_mic_stop(void) {
     U.running = 0;
 }
 #else
+int nae_mic_permission(void) {
+    const char *ov = getenv("NAPPLE_AUDIN_MIC_PERMISSION");
+    return ov && !strcmp(ov, "granted") ? NAE_MIC_GRANTED : NAE_MIC_DENIED; /* nothing can capture here: the start below fails anyway */
+}
+int nae_mic_can_prompt(void) { return 0; }
 int nae_mic_start(void) { return -1; }
 void nae_mic_stop(void) {}
 #endif

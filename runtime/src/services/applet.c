@@ -7,6 +7,7 @@
 #include "applet_lib_core.h"
 #include "applet_web_core.h"
 #include "applet_album_core.h"
+#include "hz_result.h"
 #include "../frontend.h"
 #include "../gfx.h"
 #include "napple_frontend.h"
@@ -55,9 +56,12 @@ int applet_game_hidden(void) {
     pthread_mutex_unlock(&lock);
     return h;
 }
+uint64_t runtime_guest_ticks(void);
+static uint64_t play_start_ticks; /* when the application started (its first appletOE session): play time for QueryApplicationPlayStatistics */
 static void applet_start_once(void) {
     if (started) return;
     started = 1;
+    play_start_ticks = runtime_guest_ticks();
     queue[0] = MSG_FOCUS_CHANGED;
     qcount = 1; /* a freshly launched application is told it has focus */
 }
@@ -70,7 +74,7 @@ static uint32_t new_message_event(void) {
     return readable;
 }
 /* Events the guest holds that the host signals later: one list per kind (the writable ends), so a state change can wake every holder. */
-enum { EV_SLEEP_LOCK, EV_RESOLUTION, EV_SUSPENDED_TICK, EV_GPU_ERROR, EV_FRIEND_INVITE, EV_AF_210, EV_KINDS };
+enum { EV_SLEEP_LOCK, EV_RESOLUTION, EV_SUSPENDED_TICK, EV_GPU_ERROR, EV_FRIEND_INVITE, EV_AF_210, EV_QUIET, EV_KINDS }; /* EV_QUIET: events nothing here signals */
 #define EV_MAX 8
 static uint32_t tracked_ev[EV_KINDS][EV_MAX];
 static unsigned ntracked_ev[EV_KINDS];
@@ -157,6 +161,70 @@ static void csg_get_this_applet_kind(IpcObject *s, IpcCall *c) {
 static void csg_noop(IpcObject *s, IpcCall *c) {
     (void)s;
     (void)c;
+}
+/* am-depth-applets (2026-11-01-r3): small answers for the application-reachable am commands that only set a preference, report a fixed state or
+ * hand out an event nothing here signals (tests/ipc_reference/I*.txt for the am interfaces). */
+static void am_out_false(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = 0;
+    IPC_OUT(c, v);
+}
+static void am_out_u32_zero(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = 0;
+    IPC_OUT(c, v);
+}
+static void am_out_u64_zero(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t v = 0;
+    IPC_OUT(c, v);
+}
+static void am_quiet_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    ipc_out_copy_handle(c, tracked_event(EV_QUIET, 0));
+}
+/* Features of the console this runtime does not provide (launching another application or program, the movie maker, a child applet): the am error
+ * the SDK reports for an unavailable operation (module 128, 0x1480), so the title takes its error path instead of reading an object that does not exist. */
+static void am_unavailable(IpcObject *s, IpcCall *c) {
+    (void)s;
+    c->result = 0x1480;
+}
+/* A channel that is empty (friend invitation / notification storage): the same "nothing to pop" result as PopOutData on an empty queue. */
+static void am_channel_empty(IpcObject *s, IpcCall *c) {
+    (void)s;
+    c->result = 0x680;
+}
+static void csg_begin_vr_mode(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->vr_mode = 1;
+}
+static void csg_end_vr_mode(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    AS()->vr_mode = 0;
+}
+/* HdcpAuthenticationState: 0 unauthenticated, 1 processing, 2 authenticated. The host display path has no HDCP; protected playback is allowed. */
+static void csg_hdcp_state(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int32_t v = 2;
+    IPC_OUT(c, v);
+}
+/* 1003-1005 (Labo VR goggle viewport, panel size and resolution for specific titles): the handheld panel, 1280 x 720, 137 x 77 mm. */
+static void csg_vr_goggle_viewport(IpcObject *s, IpcCall *c) {
+    (void)s;
+    float v[4] = {0.0f, 0.0f, 1280.0f, 720.0f};
+    ipc_out(c, v, sizeof v);
+}
+static void csg_panel_physical_size(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v[2] = {137, 77};
+    ipc_out(c, v, sizeof v);
+}
+static void csg_panel_resolution(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v[2] = {1280, 720};
+    ipc_out(c, v, sizeof v);
 }
 static void csg_get_operation_mode(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -292,6 +360,21 @@ static const IpcCmd csg_cmds[] = {
     {13, "GetAcquiredSleepLockEvent", csg_get_sleep_lock_event, IPC_IMPL},
     {50, "IsVrModeEnabled", csg_is_vr_mode, IPC_IMPL},
     {51, "SetVrModeEnabled", csg_set_vr_mode, IPC_IMPL},
+    {52, "SetLcdBacklighOffEnabled", csg_noop, IPC_STUB},
+    {53, "BeginVrModeEx", csg_begin_vr_mode, IPC_IMPL},
+    {54, "EndVrModeEx", csg_end_vr_mode, IPC_IMPL},
+    {55, "IsInControllerFirmwareUpdateSection", am_out_false, IPC_IMPL},
+    {62, "GetHdcpAuthenticationState", csg_hdcp_state, IPC_STUB},
+    {63, "GetHdcpAuthenticationStateChangeEvent", am_quiet_event, IPC_IMPL},
+    {80, "PerformSystemButtonPressingIfInFocus", csg_noop, IPC_STUB},
+    {100, "SetHandlingHomeButtonShortPressedEnabled", csg_noop, IPC_STUB},
+    {130, "EnableStartupLogoDisappearedMessage", csg_noop, IPC_STUB},
+    {1000, "BeginVrMode3d", csg_begin_vr_mode, IPC_IMPL},
+    {1001, "EndVrMode3d", csg_end_vr_mode, IPC_IMPL},
+    {1002, "IsVrModeEnabled3d", csg_is_vr_mode, IPC_IMPL},
+    {1003, "GetVrLaboGoggleViewport", csg_vr_goggle_viewport, IPC_STUB},
+    {1004, "GetPanelPhysicalSizeForSpecificTitle", csg_panel_physical_size, IPC_IMPL}, /* the built-in panel's real values */
+    {1005, "GetPanelResolutionForSpecificTitle", csg_panel_resolution, IPC_IMPL},
     {60, "GetDefaultDisplayResolution", csg_get_resolution, IPC_IMPL},
     {61, "GetDefaultDisplayResolutionChangeEvent", csg_get_resolution_event, IPC_IMPL},
     {66, "SetCpuBoostMode", csg_set_cpu_boost, IPC_IMPL},
@@ -484,6 +567,74 @@ static void sc_shared_layer(IpcObject *s, IpcCall *c) {
     if (shared_layer_queries++ == 0) LOG("applet", "GetSystemSharedLayerHandle: refused (no shared system buffer for an application)");
     c->result = 0x1480;
 }
+/* SaveCurrentScreenshot(u32 AlbumReportOption): what the capture button does, asked by the application: the current screen (the last frame the
+ * graphics back end completed) is saved to the album as a new screenshot. Refused like the console when the guest disabled screenshots
+ * (SetScreenShotPermission); with no frame yet there is nothing to save (capture's not-found result). The report option (notify / not) only changes
+ * the HOME-menu notification, which this host does not show. */
+static uint32_t am_save_current_screenshot(uint8_t entry[CAPS_ENTRY_SIZE], uint32_t option) {
+    if (!applet_screenshot_allowed(AS())) return HZ_R_CAPTURE_SCREENSHOT_NOT_PERMITTED;
+    applet_capture_update(APPLET_CAP_LAST_APPLICATION);
+    uint8_t *px = malloc(APPLET_CAP_BYTES);
+    int has = 0;
+    if (!px || !applet_capture_read(APPLET_CAP_LAST_APPLICATION, px, APPLET_CAP_BYTES, &has) || !has) {
+        free(px);
+        LOG("applet", "SaveCurrentScreenshot: no frame to save yet");
+        return HZ_R_CAPTURE_NOT_FOUND;
+    }
+    int r = applet_album_save_rgba(px, entry);
+    free(px);
+    if (r) {
+        LOG("applet", "SaveCurrentScreenshot: the album refused the image (%d)", r);
+        return HZ_R_CAPTURE_INVALID_ARGUMENT;
+    }
+    AS()->screenshots_saved++;
+    uint64_t size;
+    memcpy(&size, entry, 8);
+    LOG("applet", "SaveCurrentScreenshot: saved to the album (%llu-byte JPEG, report option %u)", (unsigned long long)size, option);
+    return 0;
+}
+static void sc_save_current_screenshot(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t e[CAPS_ENTRY_SIZE];
+    c->result = am_save_current_screenshot(e, IN_OK(c, 0, uint32_t) ? IPC_IN(c, uint32_t, 0) : 0);
+}
+/* Debug/test aid: NAPPLE_DEBUG_SAVE_SCREENSHOT=<seconds>[:<file.jpg>] runs SaveCurrentScreenshot's path after that many seconds from a host thread (no
+ * title of the test material calls it) and writes the album JPEG it stored to the file. */
+static void *debug_save_screenshot_thread(void *arg) {
+    char spec[0x300], path[0x2c0] = "";
+    snprintf(spec, sizeof spec, "%s", (const char *)arg);
+    unsigned secs = 0;
+    if (sscanf(spec, "%u:%703[^\n]", &secs, path) < 1) return NULL;
+    sleep(secs);
+    uint8_t e[CAPS_ENTRY_SIZE];
+    uint32_t r = am_save_current_screenshot(e, 0);
+    LOG("applet", "NAPPLE_DEBUG_SAVE_SCREENSHOT: result %#x", r);
+    const CapsState *album = applet_album_source();
+    int64_t n = !r && album ? caps_album_file_size(album, e) : 0;
+    uint8_t *jpg = n > 0 ? malloc((size_t)n) : NULL;
+    if (jpg && path[0] && caps_album_load(album, e, 0, jpg, (size_t)n) == n) {
+        FILE *f = fopen(path, "wb");
+        if (f) {
+            fwrite(jpg, 1, (size_t)n, f);
+            fclose(f);
+            LOG("applet", "NAPPLE_DEBUG_SAVE_SCREENSHOT: album JPEG (%lld bytes) -> %s", (long long)n, path);
+        }
+    }
+    free(jpg);
+    return NULL;
+}
+static void sc_set_record_volume_muted(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) AS()->record_volume_muted = IPC_IN(c, uint8_t, 0) != 0;
+}
+static void sc_set_layer_separation_mode(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint32_t)) AS()->layer_separation_mode = IPC_IN(c, uint32_t, 0);
+}
+static void sc_set_recording_layer_composition(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (IN_OK(c, 0, uint8_t)) AS()->recording_layer_composition = IPC_IN(c, uint8_t, 0) != 0;
+}
 static const IpcCmd sc_cmds[] = {
     {0, "Exit", sc_exit, IPC_IMPL},
     {1, "LockExit", csg_noop, IPC_IMPL},
@@ -500,7 +651,7 @@ static const IpcCmd sc_cmds[] = {
     {16, "SetOutOfFocusSuspendingEnabled", csg_noop, IPC_IMPL},
     {17, "SetControllerFirmwareUpdateSection", sc_set_fw_update_section, IPC_IMPL},
     {18, "SetRequiresCaptureButtonShortPressedMessage", sc_set_capture_short_press, IPC_IMPL},
-    {19, "SetScreenShotImageOrientation", sc_set_orientation, IPC_IMPL},
+    {19, "SetAlbumImageOrientation", sc_set_orientation, IPC_IMPL}, /* SetScreenShotImageOrientation in early SDKs */
     {20, "SetDesirableKeyboardLayout", sc_set_keyboard_layout, IPC_IMPL},
     {41, "IsSystemBufferSharingEnabled", sc_no_shared_buffers, IPC_IMPL},
     {42, "GetSystemSharedLayerHandle", sc_shared_layer, IPC_IMPL},
@@ -525,6 +676,10 @@ static const IpcCmd sc_cmds[] = {
     {91, "GetAccumulatedSuspendedTickChangedEvent", sc_suspended_tick_event, IPC_IMPL},
     {100, "SetAlbumImageTakenNotificationEnabled", sc_set_album_notification, IPC_IMPL},
     {110, "SetApplicationAlbumUserData", sc_set_album_user_data, IPC_IMPL},
+    {45, "SetManagedDisplayLayerSeparationMode", sc_set_layer_separation_mode, IPC_STUB}, /* kept; no separable layers on the host */
+    {46, "SetRecordingLayerCompositionEnabled", sc_set_recording_layer_composition, IPC_STUB}, /* kept; no game play recording */
+    {120, "SaveCurrentScreenshot", sc_save_current_screenshot, IPC_IMPL},
+    {130, "SetRecordVolumeMuted", sc_set_record_volume_muted, IPC_STUB}, /* kept; no game play recording */
 };
 
 /* ---- IWindowController / IAudioController / IDisplayController ------------------------------------------------------------ */
@@ -668,6 +823,8 @@ static const IpcCmd dc_cmds[] = {
     {9, "CopyBetweenCaptureBuffers", dc_copy_between, IPC_IMPL},
     {10, "AcquireLastApplicationCaptureBuffer", dc_acquire_app_buffer, IPC_IMPL},
     {11, "ReleaseLastApplicationCaptureBuffer", dc_release_app_buffer, IPC_IMPL},
+    {21, "ClearAppletTransitionBuffer", csg_noop, IPC_STUB},
+    {28, "TakeScreenShotOfOwnLayerEx", dc_take_own_layer, IPC_IMPL}, /* the Ex form's extra flags change nothing here: same capture */
 };
 
 /* ---- IStorage / IStorageAccessor: launch parameters and library-applet storage ------------------------------------------------- */
@@ -725,7 +882,9 @@ static IpcObject *storage_new(uint64_t size) {
     Storage *st = calloc(1, sizeof *st);
     st->size = size;
     st->data = calloc(1, size ? size : 1);
-    return IPC_OBJECT("IStorage", storage_cmds, st, storage_destroy);
+    /* "IStorage(am)": the am storage (nn::am::service::IStorage) is a different interface from fsp-srv's IStorage; the distinct name keeps
+     * test_ipc_reference from comparing it with the fs fixture and keeps the two apart in logs and run summaries. Name only. */
+    return IPC_OBJECT("IStorage(am)", storage_cmds, st, storage_destroy);
 }
 
 /* ---- ILibraryAppletCreator / ILibraryAppletAccessor: the software keyboard ------------------------------------------------------------
@@ -851,6 +1010,12 @@ static void libapplet_run_swkbd(LibApplet *a) {
         for (unsigned i = 0x3AC; i < 0x3E0 && n < 190; i++) n += snprintf(hx + n, sizeof hx - (size_t)n, "%02x%s", k[i], (i & 3) == 3 ? " " : "");
         LOGV("applet", "swkbd config +0x3ac: %s; +0x4b0: %02x%02x%02x%02x %02x%02x%02x%02x", hx, k[0x4b0], k[0x4b1], k[0x4b2], k[0x4b3], k[0x4b4], k[0x4b5],
              k[0x4b6], k[0x4b7]);
+        static const unsigned at[] = {0x0, 0x20, 0x24, 0xA6, 0x1A8}; /* ok text, flags, header, sub, guide: the raw words behind the texts above */
+        for (unsigned j = 0; j < sizeof at / sizeof *at; j++) {
+            n = 0;
+            for (unsigned i = at[j]; i < at[j] + 0x20 && n < 190; i++) n += snprintf(hx + n, sizeof hx - (size_t)n, "%02x%s", k[i], (i & 3) == 3 ? " " : "");
+            LOGV("applet", "swkbd config +%#x: %s", at[j], hx);
+        }
     }
     AppletSwkbdConfig sc;
     applet_swkbd_parse(cfg ? cfg->data : NULL, cfg ? cfg->size : 0, &sc);
@@ -1549,7 +1714,10 @@ static const IpcCmd la_cmds[] = {
     {20, "RequestExit", la_request_exit, IPC_IMPL},
     {25, "Terminate", la_terminate, IPC_IMPL},
     {30, "GetResult", la_get_result, IPC_IMPL},
-    {50, "PresetLibraryAppletGpuTimeSliceZero", la_preset_gpu_zero, IPC_IMPL},
+    {50, "SetOutOfFocusApplicationSuspendingEnabled", csg_noop, IPC_STUB},
+    {60, "PresetLibraryAppletGpuTimeSliceZero", la_preset_gpu_zero, IPC_IMPL}, /* was listed as 50 before 2026-11-01 */
+    {80, "RequestForLibraryAppletToGetForeground", csg_noop, IPC_STUB},
+    {81, "GetCurrentChildLibraryApplet", am_unavailable, IPC_STUB}, /* applets here start no child applets */
     {100, "PushInData", la_push_in, IPC_IMPL},
     {101, "PopOutData", la_pop_out, IPC_IMPL},
     {102, "PushExtraStorage", la_push_extra, IPC_IMPL},
@@ -1560,6 +1728,7 @@ static const IpcCmd la_cmds[] = {
     {110, "NeedsToExitProcess", la_needs_exit, IPC_IMPL},
     {120, "GetLibraryAppletInfo", la_info, IPC_IMPL},
     {150, "RequestForAppletToGetForeground", la_request_foreground, IPC_IMPL},
+    {160, "GetIndirectLayerConsumerHandle", am_out_u64_zero, IPC_STUB}, /* no indirect layer: the applet UI is drawn by the host */
 };
 static void lac_create_library_applet(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -1580,6 +1749,21 @@ static void lac_create_storage(IpcObject *s, IpcCall *c) {
     ipc_out_object(c, storage_new(size < 0 ? 0 : (uint64_t)size));
 }
 /* CreateTransferMemoryStorage(bool writable, i64 size, handle transfer memory): the storage is a window on guest memory. */
+/* CreateHandleStorage(s64 size, copy handle: transfer memory): like a transfer-memory storage, size first (no writable flag). */
+static void lac_create_handle_storage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t size = IPC_IN(c, int64_t, 0);
+    IpcTransferMemory *t = c->ncopy ? handle_get(c->copy[0], OBJ_TMEM) : NULL;
+    if (!t || size < 0 || (uint64_t)size > t->size) {
+        c->result = 0x1480;
+        return;
+    }
+    IpcObject *o = storage_new(0);
+    Storage *st = o->state;
+    st->size = (uint64_t)size;
+    st->gaddr = t->addr;
+    ipc_out_object(c, o);
+}
 static void lac_create_tmem_storage(IpcObject *s, IpcCall *c) {
     (void)s;
     int64_t size = IPC_IN(c, int64_t, 8);
@@ -1620,11 +1804,13 @@ static void lac_terminate_all(IpcObject *s, IpcCall *c) {
     pthread_mutex_unlock(&lock);
 }
 static const IpcCmd lac_cmds[] = {
-    {0, "CreateLibraryApplet", lac_create_library_applet, IPC_IMPL},
+    {0, "CreateLibraryAppletOld", lac_create_library_applet, IPC_IMPL}, /* CreateLibraryApplet until 19.0.1 */
+    {3, "CreateLibraryApplet", lac_create_library_applet, IPC_IMPL},   /* 20.0.0: same applet id / mode words first */
     {1, "TerminateAllLibraryApplets", lac_terminate_all, IPC_IMPL},
     {2, "AreAnyLibraryAppletsLeft", lac_are_any_left, IPC_IMPL},
     {10, "CreateStorage", lac_create_storage, IPC_IMPL},
     {11, "CreateTransferMemoryStorage", lac_create_tmem_storage, IPC_IMPL},
+    {12, "CreateHandleStorage", lac_create_handle_storage, IPC_IMPL},
 };
 
 /* ---- IApplicationFunctions ------------------------------------------------------------------------------------------------------ */
@@ -1788,8 +1974,172 @@ static void af_set_copyright_visibility(IpcObject *s, IpcCall *c) {
  * boot thread of Animal Crossing 3.0.3 spun on WaitSynchronization(0) forever. Never signalled: no capture or error event is ever raised. */
 /* Kept stubs in this table, each with its reason: PopLaunchParameter (only the preselected-account parameter exists; no ExecuteProgram / deep links),
  * EnsureSaveData and GetSaveDataSize (the data lives in fs.c, which owns it: the answer here is a fixed size), GetPreviousProgramIndex (no program switching, always -1). */
+/* Save data sizes for ExtendSaveData / CreateCacheStorage / Get*Max: host saves have no fixed size, so every request fits (required size 0) and
+ * the maxima are the largest sizes the SDK accepts in practice (4 GiB data, 1 GiB journal, cache index 0..255). */
+static void af_extend_save_data(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint64_t required = 0;
+    IPC_OUT(c, required);
+}
+static void af_create_cache_storage(IpcObject *s, IpcCall *c) {
+    (void)s;
+    struct {
+        uint32_t target; /* 0 = built-in storage */
+        uint32_t pad;
+        uint64_t required;
+    } o = {0, 0, 0};
+    IPC_OUT(c, o);
+}
+static void af_get_save_data_size_max(IpcObject *s, IpcCall *c) {
+    (void)s;
+    int64_t v[2] = {4ll << 30, 1ll << 30};
+    ipc_out(c, v, sizeof v);
+}
+static void af_get_cache_storage_max(IpcObject *s, IpcCall *c) {
+    (void)s;
+    struct {
+        uint32_t index_max, pad;
+        uint64_t size_max;
+    } o = {255, 0, 4ull << 30};
+    IPC_OUT(c, o);
+}
+static void af_exit_with_thanks(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    LOG("applet", "IApplicationFunctions::ExitAndRequestToShowThanksMessage: the guest asked to exit");
+    summary_note("guest called ExitAndRequestToShowThanksMessage");
+}
+/* ---- am-stubs-legal (2026-11-02, r4): requests to end the application, launch-required version, play statistics -------------------------------- */
+/* RequestToShutdown / RequestToReboot / RequestExitApplicationAndTryPopMessage: the system ends the application. As on the console, the application
+ * is first told to leave (AppletMessage ExitRequested, 4) and gets a grace period to save and exit on its own (a title that returns from nnMain ends
+ * through main.c's finalizer exit); then the host stops the process cleanly, the way the system terminates an application that did not react.
+ * NAPPLE_EXIT_GRACE_MS overrides the 3000 ms grace. The run summary records which request ended it. */
+static char exit_request_what[64];
+static void *exit_grace_thread(void *arg) {
+    (void)arg;
+    const char *e = getenv("NAPPLE_EXIT_GRACE_MS");
+    long ms = e ? atol(e) : 3000;
+    if (ms > 0) usleep((useconds_t)(ms * 1000));
+    char why[128];
+    snprintf(why, sizeof why, "guest requested %s (the application was told to exit, then stopped)", exit_request_what);
+    LOG("applet", "%s: grace period over, stopping", exit_request_what);
+    summary_write("partial", why);
+    frontend_quit(0);
+    return NULL;
+}
+static void am_request_exit(const char *what) {
+    static int once;
+    if (__atomic_exchange_n(&once, 1, __ATOMIC_ACQ_REL)) return; /* a second request changes nothing: the exit is under way */
+    snprintf(exit_request_what, sizeof exit_request_what, "%s", what);
+    LOG("applet", "IApplicationFunctions::%s: telling the application to exit (ExitRequested), then stopping", what);
+    summary_note("guest called %s", what);
+    applet_push_message(MSG_EXIT_REQUESTED);
+    pthread_t t;
+    if (!pthread_create(&t, NULL, exit_grace_thread, NULL)) pthread_detach(t);
+}
+static void af_request_shutdown(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    am_request_exit("RequestToShutdown");
+}
+static void af_request_reboot(IpcObject *s, IpcCall *c) { /* the console restarts: for the application that is the same end */
+    (void)s;
+    (void)c;
+    am_request_exit("RequestToReboot");
+}
+static void af_request_exit_and_pop(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    am_request_exit("RequestExitApplicationAndTryPopMessage");
+}
+/* GetLaunchRequiredVersion / UpgradeLaunchRequiredVersion: the version an application must have to be launched again (ns keeps it per title; a
+ * title raises it after it migrated its save data to a newer format). Kept per title next to the saves (<save-root>/<title id>/launch_required_version),
+ * only ever raised; 0 until a title upgrades it. A value above the running version is accepted and logged (the console would then refuse to start
+ * the older version; this host always starts what it was given). */
+static uint32_t launch_required_version = 0xffffffffu; /* not loaded yet */
+static void lrv_path(char *out, size_t cap) {
+    snprintf(out, cap, "%s/%s/launch_required_version", g_cfg.save_root && *g_cfg.save_root ? g_cfg.save_root : ".",
+             g_cfg.title_id[0] ? g_cfg.title_id : "0000000000000000");
+}
+static uint32_t lrv_get(void) {
+    if (launch_required_version == 0xffffffffu) {
+        char p[1200];
+        lrv_path(p, sizeof p);
+        FILE *f = fopen(p, "r");
+        unsigned long v = 0;
+        if (f) {
+            if (fscanf(f, "%lu", &v) != 1) v = 0;
+            fclose(f);
+        }
+        launch_required_version = (uint32_t)v;
+    }
+    return launch_required_version;
+}
+static void af_get_launch_required_version(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t v = lrv_get();
+    IPC_OUT(c, v);
+}
+static void af_upgrade_launch_required_version(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (!IN_OK(c, 0, uint32_t)) return;
+    uint32_t v = IPC_IN(c, uint32_t, 0);
+    if (v <= lrv_get()) return; /* never lowered */
+    launch_required_version = v;
+    char p[1200];
+    lrv_path(p, sizeof p);
+    FILE *f = fopen(p, "w");
+    if (f) {
+        fprintf(f, "%u\n", v);
+        fclose(f);
+    }
+    char shown[16];
+    host_display_version(shown);
+    LOG("applet", "UpgradeLaunchRequiredVersion: %u (running display version %s)", v, shown);
+}
+/* QueryApplicationPlayStatistics(ByUid): in a buffer of u64 application ids, out PdmApplicationPlayStatistics { u64 application id; u64 total play
+ * time (ns); u64 total launches } for each one that has been played, and the count (s32). Only the running title has been played on this host: one
+ * launch, play time since it started (the same source as pdm:qry). The user id of the ByUid form changes nothing (one local user). */
+static void af_query_play_statistics(IpcObject *s, IpcCall *c) {
+    (void)s;
+    const IpcBuf *in = ipc_in_buf(c, 0), *out = ipc_out_buf(c, 0);
+    const uint8_t *ids = in && in->size ? ipc_buf_ptr(in) : NULL;
+    unsigned nid = ids ? (unsigned)(in->size / 8) : 0, cap = out ? (unsigned)(out->size / 0x18) : 0, n = 0;
+    uint64_t now = runtime_guest_ticks(), st[16][3];
+    if (!play_start_ticks) play_start_ticks = now;
+    if (cap > 16) cap = 16;
+    for (unsigned i = 0; i < nid && n < cap; i++) {
+        uint64_t id;
+        memcpy(&id, ids + i * 8, 8);
+        if (id != g_program_id) continue;
+        int seen = 0;
+        for (unsigned k = 0; k < n; k++) seen |= st[k][0] == id;
+        if (seen) continue; /* one entry per title */
+        st[n][0] = id;
+        st[n][1] = (now - play_start_ticks) * 1000000000ull / 19200000ull;
+        st[n][2] = 1;
+        n++;
+    }
+    if (n) ipc_write_buf(c, out, st, (uint64_t)n * sizeof st[0]);
+    int32_t cnt = (int32_t)n;
+    IPC_OUT(c, cnt);
+}
 static const IpcCmd af_cmds[] = {
     {1, "PopLaunchParameter", af_pop_launch_parameter, IPC_IMPL},
+    {10, "CreateApplicationAndPushAndRequestToStart", am_unavailable, IPC_STUB}, /* one application per runtime */
+    {12, "CreateApplicationAndRequestToStart", am_unavailable, IPC_STUB},
+    {25, "ExtendSaveData", af_extend_save_data, IPC_IMPL},
+    {27, "CreateCacheStorage", af_create_cache_storage, IPC_IMPL},
+    {28, "GetSaveDataSizeMax", af_get_save_data_size_max, IPC_IMPL},
+    {29, "GetCacheStorageMax", af_get_cache_storage_max, IPC_IMPL},
+    {34, "SelectApplicationLicense", csg_noop, IPC_IMPL}, /* the application holds its full license: nothing to select */
+    {35, "GetDeviceSaveDataSizeMax", af_get_save_data_size_max, IPC_IMPL},
+    {36, "GetLimitedApplicationLicense", am_out_u64_zero, IPC_IMPL}, /* full license: no limited (trial) license, 0 */
+    {37, "GetLimitedApplicationLicenseUpgradableEvent", am_quiet_event, IPC_IMPL},
+    {70, "RequestToShutdown", af_request_shutdown, IPC_IMPL},
+    {71, "RequestToReboot", af_request_reboot, IPC_IMPL},
+    {72, "RequestToSleep", csg_noop, IPC_STUB},
+    {80, "ExitAndRequestToShowThanksMessage", af_exit_with_thanks, IPC_IMPL},
     {20, "EnsureSaveData", af_ensure_save_data, IPC_IMPL},
     {21, "GetDesiredLanguage", af_get_desired_language, IPC_IMPL},
     {22, "SetTerminateResult", af_set_terminate_result, IPC_IMPL},
@@ -1807,13 +2157,35 @@ static const IpcCmd af_cmds[] = {
     {67, "SetGamePlayRecordingState", af_set_recording_state, IPC_IMPL},
     {68, "RequestFlushGamePlayingMovieForDebug", af_flush_recording, IPC_IMPL},
     {90, "EnableApplicationCrashReport", af_enable_crash_report, IPC_IMPL},
-    {91, "InitializeApplicationCopyrightFrameBuffer", af_init_copyright_fb, IPC_IMPL},
-    {92, "SetApplicationCopyrightImage", af_set_copyright_image, IPC_IMPL},
-    {93, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
-    {110, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_IMPL},
-    {120, "GetGpuErrorDetectedSystemEvent", af_gpu_error_event, IPC_IMPL},
-    {130, "GetFriendInvitationStorageChannelEvent", af_friend_invite_event, IPC_IMPL},
-    {210, "GetSystemEvent210", af_event_210, IPC_IMPL},
+    /* 100-102, 123, 130, 140 were listed as 91-93, 110, 120, 130 before 2026-11-01 (switchbrew / libnx numbering) */
+    {100, "InitializeApplicationCopyrightFrameBuffer", af_init_copyright_fb, IPC_IMPL},
+    {101, "SetApplicationCopyrightImage", af_set_copyright_image, IPC_IMPL},
+    {102, "SetApplicationCopyrightVisibility", af_set_copyright_visibility, IPC_IMPL},
+    {110, "QueryApplicationPlayStatistics", af_query_play_statistics, IPC_IMPL},
+    {111, "QueryApplicationPlayStatisticsByUid", af_query_play_statistics, IPC_IMPL},
+    {120, "ExecuteProgram", am_unavailable, IPC_STUB}, /* other programs of a multi-program title are not built */
+    {121, "ClearUserChannel", csg_noop, IPC_STUB},
+    {122, "UnpopToUserChannel", csg_noop, IPC_STUB},
+    {123, "GetPreviousProgramIndex", af_get_previous_program_index, IPC_IMPL},
+    {124, "EnableApplicationAllThreadDumpOnCrash", csg_noop, IPC_STUB},
+    {130, "GetGpuErrorDetectedSystemEvent", af_gpu_error_event, IPC_IMPL},
+    {131, "SetDelayTimeToAbortOnGpuError", csg_noop, IPC_STUB},
+    {140, "GetFriendInvitationStorageChannelEvent", af_friend_invite_event, IPC_IMPL},
+    {141, "TryPopFromFriendInvitationStorageChannel", am_channel_empty, IPC_IMPL},
+    {150, "GetNotificationStorageChannelEvent", am_quiet_event, IPC_IMPL},
+    {151, "TryPopFromNotificationStorageChannel", am_channel_empty, IPC_IMPL},
+    {160, "GetHealthWarningDisappearedSystemEvent", am_quiet_event, IPC_IMPL},
+    {170, "SetHdcpAuthenticationActivated", csg_noop, IPC_STUB},
+    {180, "GetLaunchRequiredVersion", af_get_launch_required_version, IPC_IMPL},
+    {181, "UpgradeLaunchRequiredVersion", af_upgrade_launch_required_version, IPC_IMPL},
+    {190, "SendServerMaintenanceOverlayNotification", csg_noop, IPC_STUB},
+    {200, "GetLastApplicationExitReason", am_out_u32_zero, IPC_STUB},
+    {220, "SetAudioOutputPolicy", csg_noop, IPC_STUB},
+    {310, "RequestExitApplicationAndTryPopMessage", af_request_exit_and_pop, IPC_IMPL},
+    {330, "IsLanguageSelectionLimited", am_out_false, IPC_IMPL},
+    {1000, "CreateMovieMaker", am_unavailable, IPC_STUB},
+    {1001, "PrepareForJit", csg_noop, IPC_STUB},
+    {210, "(unnamed)", af_event_210, IPC_IMPL}, /* switchbrew leaves 210 unnamed; a system event (see af_event_210) */
 };
 
 /* ---- IApplicationProxy ------------------------------------------------------------------------------------------------------------ */
@@ -1864,21 +2236,99 @@ static void *debug_launch_thread(void *arg) {
     LOG("applet", "debug launch: firmware applet %s, output %llu bytes", ok ? "ran" : "did not run", (unsigned long long)(a.nout ? a.outq[0]->size : 0));
     return NULL;
 }
+/* Debug/test aid: NAPPLE_OPEN_MANUAL=<seconds>[:<RegionLang>] opens the running title's offline manual after that many seconds, as the HOME menu's
+ * "Manual" entry does (the offline applet with the manual's OfflineHtmlPage; the frontend's web sheet shows it, NAPPLE_WEB_ANSWER answers it scripted).
+ * The language defaults to the system language. */
+static void *open_manual_thread(void *arg) {
+    const char *spec = arg;
+    sleep((unsigned)atoi(spec));
+    const char *colon = strchr(spec, ':');
+    char code[9] = {0};
+    uint64_t v = host_desired_language();
+    memcpy(code, &v, 8);
+    const char *lang = colon && colon[1] ? colon + 1 : web_manual_lang(code);
+    char rel[0x200] = "", last[WEB_URL_MAX] = "";
+    const char *root = applet_web_html_root();
+    if (!root || web_manual_path(root, lang, rel, sizeof rel)) {
+        LOG("applet", "manual: this title has no offline manual (html root %s)", root ? root : "none");
+        return NULL;
+    }
+    LOG("applet", "manual: opening %s (language %s) from %s/html-document", rel, lang, root);
+    uint32_t why = 0;
+    int r = applet_web_open_manual(lang, &why, last, sizeof last);
+    LOG("applet", "manual: %s, exit reason %u, last page %s", r ? "could not be shown" : "shown", why, last);
+    return NULL;
+}
+/* Debug/test aid: NAPPLE_OPEN_WEB_DOC=<seconds>:<kind 1 html | 2 legal | 3 system data>:<system data id, hex>:<document path> opens that offline
+ * document after that many seconds, through the offline web applet (as a title or the HOME menu would). */
+static void *open_web_doc_thread(void *arg) {
+    char spec[0x300];
+    snprintf(spec, sizeof spec, "%s", (const char *)arg);
+    unsigned secs = 0, kind = 0;
+    unsigned long long id = 0;
+    char path[0x200] = "";
+    if (sscanf(spec, "%u:%u:%llx:%511[^\n]", &secs, &kind, &id, path) < 4) {
+        LOG("applet", "NAPPLE_OPEN_WEB_DOC: expected <seconds>:<kind>:<id hex>:<path>, got \"%s\"", spec);
+        return NULL;
+    }
+    sleep(secs);
+    char last[WEB_URL_MAX] = "";
+    uint32_t why = 0;
+    LOG("applet", "web document: opening kind %u id %#llx path %s", kind, id, path);
+    int r = applet_web_open_document(kind, id, path, &why, last, sizeof last);
+    LOG("applet", "web document: %s, exit reason %u, last page %s", r ? "could not be shown" : "shown", why, last);
+    return NULL;
+}
 void service_register_applet(void) {
     ipc_register_service("appletOE", oe_open);
     /* The portable web / offline web (0x13, 0x17) and album (0x15) applets answer through the handler table (libapplet_run_registered). Their
      * offline documents come from <data-dir>/html when the build extracted the HtmlDocument romfs there (NAPPLE_HTML_ROOT overrides). */
     if (applet_web_register()) LOG("applet", "web applet handlers were not registered (table full)");
     if (applet_album_register()) LOG("applet", "album applet handler was not registered (table full)");
+    applet_capture_register_host_source(); /* capture images and SaveCurrentScreenshot read the last completed frame */
+    if (applet_netconnect_register()) LOG("applet", "network connection applet handler was not registered (table full)");
     if (g_cfg.data_dir) {
         char html[1300];
         snprintf(html, sizeof html, "%s/html", g_cfg.data_dir);
         if (!getenv("NAPPLE_HTML_ROOT") && access(html, R_OK) == 0) applet_web_set_html_root(html);
+        /* legal information extracted next to it by the build (<data-dir>/legal), and the firmware system data archives (<data-dir>/../sysdata, the
+         * layout fs.c serves them from) for system data pages, extracted on first use under $TMPDIR/napple-web-sysdata */
+        char legal[1300], sys[1300], cache[1100];
+        snprintf(legal, sizeof legal, "%s/legal", g_cfg.data_dir);
+        if (!getenv("NAPPLE_LEGAL_ROOT") && access(legal, R_OK) == 0) applet_web_set_legal_root(legal);
+        snprintf(sys, sizeof sys, "%s/sysdata", g_cfg.data_dir);
+        if (access(sys, R_OK) != 0) snprintf(sys, sizeof sys, "%s/../sysdata", g_cfg.data_dir);
+        snprintf(cache, sizeof cache, "%s/napple-web-sysdata", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp");
+        applet_web_set_sysdata(getenv("NAPPLE_SYSDATA_DIR") ? getenv("NAPPLE_SYSDATA_DIR") : sys, cache);
     }
     const char *d = getenv("NAPPLE_DEBUG_LAUNCH_APPLET");
+    const char *man = getenv("NAPPLE_OPEN_MANUAL");
 #ifdef NAPPLE_LIB
     d = NULL; /* only the host image launches */
+    man = NULL;
 #endif
+    const char *dshot = getenv("NAPPLE_DEBUG_SAVE_SCREENSHOT");
+#ifdef NAPPLE_LIB
+    dshot = NULL;
+#endif
+    if (dshot && *dshot) {
+        pthread_t t;
+        if (!pthread_create(&t, NULL, debug_save_screenshot_thread, (void *)dshot)) pthread_detach(t);
+    }
+    const char *wdoc = getenv("NAPPLE_OPEN_WEB_DOC");
+#ifdef NAPPLE_LIB
+    wdoc = NULL;
+#endif
+    if (wdoc && *wdoc) {
+        pthread_t t;
+        pthread_create(&t, NULL, open_web_doc_thread, (void *)wdoc);
+        pthread_detach(t);
+    }
+    if (man && *man) {
+        pthread_t t;
+        pthread_create(&t, NULL, open_manual_thread, (void *)man);
+        pthread_detach(t);
+    }
     if (d) {
         pthread_t t;
         pthread_create(&t, NULL, debug_launch_thread, (void *)(uintptr_t)atoi(d));

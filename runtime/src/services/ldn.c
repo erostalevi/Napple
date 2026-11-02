@@ -7,6 +7,7 @@
 #include "hz_result.h"
 #include "online_provider.h"
 #include <stdlib.h>
+#include "sys_default.h"
 
 /* The provider's LDN table when it can carry local wireless (ONLINE_CAP_LDN), else NULL: the NullProvider answers apply. */
 static const OnlineProvider *ldn_provider(void) {
@@ -249,11 +250,11 @@ static const IpcCmd local_cmds[] = {
     {3, "GetDisconnectReason", l_disconnect_reason, IPC_IMPL},
     {4, "GetSecurityParameter", l_security_parameter, IPC_IMPL},
     {5, "GetNetworkConfig", l_network_config, IPC_IMPL},
-    {100, "AttachStateChangeEvent", l_state_event, IPC_IMPL},
-    {101, "GetNetworkInfoLatestUpdate", l_network_info, IPC_IMPL},
+    {100, "GetStateChangeEvent", l_state_event, IPC_IMPL},
+    {101, "GetNetworkInfoAndHistory", l_network_info, IPC_IMPL},
     {102, "Scan", l_scan, IPC_IMPL},
     {103, "ScanPrivate", l_scan, IPC_IMPL},
-    {104, "SetWirelessControllerRestriction", l_set_restriction, IPC_IMPL},
+    {104, "SetWirelessControllerPolicy", l_set_restriction, IPC_IMPL},
     {200, "OpenAccessPoint", l_open_ap, IPC_IMPL},
     {201, "CloseAccessPoint", l_close_ap, IPC_IMPL},
     {202, "CreateNetwork", l_create, IPC_IMPL},
@@ -271,13 +272,23 @@ static const IpcCmd local_cmds[] = {
     {304, "Disconnect", l_disconnect, IPC_IMPL},
     {400, "Initialize", l_initialize, IPC_IMPL},
     {401, "Finalize", l_finalize, IPC_IMPL},
-    {402, "InitializeSystem2", l_initialize, IPC_IMPL},
+    {402, "InitializeWithVersion", l_initialize, IPC_IMPL},
+    {105, "SetWirelessAudioPolicy", sysd_ok, IPC_STUB},
+    {106, "SetProtocol", sysd_ok, IPC_STUB},
+    {403, "SetOperationMode", sysd_ok, IPC_STUB},
+    {500, "EnableActionFrame", sysd_ok, IPC_STUB},
+    {501, "DisableActionFrame", sysd_ok, IPC_STUB},
+    {502, "SendActionFrame", sysd_err_ldn, IPC_STUB},
+    {503, "RecvActionFrame", sysd_err_ldn, IPC_STUB},
+    {505, "SetHomeChannel", sysd_ok, IPC_STUB},
+    {600, "SetTxPower", sysd_ok, IPC_STUB},
+    {601, "ResetTxPower", sysd_ok, IPC_STUB},
 };
 static void ldn_create_local(IpcObject *s, IpcCall *c) {
     (void)s;
     Ldn *l = calloc(1, sizeof *l);
     ipc_out_object(c, IPC_OBJECT("IUserLocalCommunicationService", local_cmds, l, NULL));
 }
-static const IpcCmd ldn_cmds[] = {{0, "CreateUserLocalCommunicationService", ldn_create_local, IPC_IMPL}};
+static const IpcCmd ldn_cmds[] = {{0, "CreateUserLocalCommunicationService", ldn_create_local, IPC_IMPL}, {1, "CreateClientProcessMonitor", sysd_err_ldn, IPC_STUB}};
 static IpcObject *ldn_open(void) { return IPC_OBJECT("ldn:u", ldn_cmds, NULL, NULL); }
 void service_register_ldn(void) { ipc_register_service("ldn:u", ldn_open); }

@@ -106,6 +106,10 @@ final class AppModel {
     var progress: ProgressEvent?
     var stagesSeen: [String] = []
     var log: [String] = []
+    @ObservationIgnored var pendingLog: [String] = []
+    @ObservationIgnored var logFlushScheduled = false
+    @ObservationIgnored var lastProgressStamp = Date.distantPast
+    @ObservationIgnored var lastLoggedBucket = -1
     var notes: [String] = []
     var builtApp: URL?
     var builtIPA: URL?
@@ -118,6 +122,7 @@ final class AppModel {
     var compat: CompatEntry?
     var installMessage: String?
     var installing = false
+    var installFailed = false
     var engineMessage: String?
     /// Engine builds Studio can build with (its own bundled one + the installed versions) and the one the user picked ("" = the default order of NappleCLI.locate).
     private(set) var engines: [EngineBuild] = []
@@ -308,7 +313,7 @@ final class AppModel {
 
     func resetPlanState() {
         guard phase != .building else { return }
-        files = []; plan = nil; phase = .idle; errorText = nil; inputNote = nil; progress = nil; log = []; notes = []; stagesSeen = []
+        files = []; plan = nil; phase = .idle; errorText = nil; inputNote = nil; progress = nil; clearLog(); notes = []; stagesSeen = []
         builtApp = nil; builtIPA = nil; builtInfo = nil; builtBytes = nil; compat = nil; installMessage = nil; installing = false; cancelling = false
         builtSummary = ""; buildDuration = nil
     }
@@ -354,8 +359,27 @@ final class AppModel {
         latestLog = u
     }
     private static let logTime: DateFormatter = { let f = DateFormatter(); f.dateFormat = "HH:mm:ss.SSS"; return f }()
-    func writeLog(_ l: String) { logFile?.write(Data((Self.logTime.string(from: Date()) + " " + l + "\n").utf8)) }
-    func appendLog(_ l: String) { log.append(l); if log.count > 3000 { log.removeFirst(1000) } }
+    /// The log file is written on its own queue: a build prints hundreds of progress lines a second and the main thread must not wait for the disk.
+    private static let logQueue = DispatchQueue(label: "studio.logfile")
+    func writeLog(_ l: String) {
+        guard let f = logFile else { return }
+        let line = Data((Self.logTime.string(from: Date()) + " " + l + "\n").utf8)
+        Self.logQueue.async { f.write(line) }
+    }
+    /// Lines reach the visible log in batches (about 8 per second): one SwiftUI update per batch instead of one per line keeps the window smooth during a build.
+    func appendLog(_ l: String) {
+        pendingLog.append(l)
+        guard !logFlushScheduled else { return }
+        logFlushScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in self?.flushLog() }
+    }
+    func flushLog() {
+        logFlushScheduled = false
+        guard !pendingLog.isEmpty else { return }
+        log.append(contentsOf: pendingLog); pendingLog.removeAll(keepingCapacity: true)
+        if log.count > 3000 { log.removeFirst(log.count - 2000) }
+    }
+    func clearLog() { pendingLog.removeAll(); log = [] }
 
     func showLogsInFinder() {
         try? FileManager.default.createDirectory(at: Self.logsDir, withIntermediateDirectories: true)
@@ -414,7 +438,7 @@ final class AppModel {
                 destination = .device(devices.first(where: { $0.simulator })?.id ?? devices.first?.id ?? "x")
                 builtSummary = plan?.includedSummary ?? ""
                 if !skip.contains("building") { phase = .building }
-                buildStarted = Date(); stagesSeen = []; log = []
+                buildStarted = Date(); stagesSeen = []; clearLog()
                 progress = ProgressEvent(stage: "preflight", percent: 0, message: "Checking keys and firmware")
                 try? await Task.sleep(nanoseconds: 1_500_000_000)
                 for st in ["ingest", "plan", "rewrite", "romfs", "fonts", "bundle", "sign", "done"] {
