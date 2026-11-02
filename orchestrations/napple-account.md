@@ -12,7 +12,7 @@ session: local_c64384ec-6d13-4c51-94f4-d0c620829c33 (fresh)
 launched_at: 2026-11-02
 ---
 
-# napple-account: the Napple Account server (email magic link + passkeys, devices, E2E key exchange, cloud-save metadata, plans + Stripe billing)
+# napple-account: the Napple Account server (email magic link + passkeys, devices, E2E key exchange, cloud-save metadata)
 
 ## Goal
 Implement `orchestrations/ACCOUNT-CONTRACT.md` server side as a new Rust crate/binary `crates/napple-account` (axum or hyper; sqlite via rusqlite/sqlx;

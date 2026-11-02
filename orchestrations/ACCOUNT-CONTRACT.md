@@ -35,39 +35,8 @@ SQLite (WAL) in the instance data volume for accounts/devices/tokens/profiles/sa
 block public access, lifecycle: abort incomplete uploads after 1 day, delete noncurrent objects after 7 days). Email via Amazon SES (domain `napple.lat`,
 DKIM in Route 53, sender `no-reply@napple.lat`).
 
-## Launch mode (user decision 2026-11-02): paid plans are OFF
-Until the user announces the paid plan, **every account gets every feature for free** (the Plus column below, with Plus limits). Server config
-`NAPPLE_PLANS_ENABLED=false` (the default) makes `plan.name = "free-launch"` with all feature flags on and Plus limits; no 402 is ever returned for plan
-reasons, no upgrade prompts are shown, billing endpoints return 503. The engine below is built and tested but dormant; turning it on is a config change
-(`NAPPLE_PLANS_ENABLED=true` + Stripe secrets) plus a grace period for existing users (config `NAPPLE_PLANS_GRACE_DAYS`, default 90).
-
-## Plans and billing (dormant; user decision 2026-11-02, revised: free tier has no limits on online play)
-Principles: online play and everything social are free and unlimited; Plus sells storage, history, sync and convenience — never access, never
-gameplay advantage, never data hostage. All limits and feature flags come from server config (env/JSON), not code.
-
-| Feature | Free | Napple Plus |
-|---|---|---|
-| Napple Account, passkeys, devices (up to 10), 8 profiles, shared online identity | yes | yes |
-| Online play on napple-online (all modes), matchmaking, rankings | unlimited | unlimited |
-| LDN / LAN Play rooms (public + password rooms) | unlimited | unlimited |
-| Napple friends, presence, invites, room browser | yes | yes |
-| Cloud saves (E2E) | 1 title, 5 versions, 256 MiB | unlimited titles, 30-day version history (min 20 versions/title), 10 GiB |
-| Automatic session restore points (pre-launch snapshot, keep 3/title) | 1 title | all titles |
-| Settings sync: per-game settings, controller maps, mod/cheat selections, Studio library metadata (no game files) | no | yes |
-| Album sync: screenshots + short clips (E2E) | no | 5 GiB |
-| Persistent private rooms (reserved name, invite list, stays up when empty) | no | 3 rooms |
-| Beta update channel for Napple builds | no | yes |
-| Supporter badge on the online profile (cosmetic only) | no | yes |
-| Family: up to 4 accounts share one Plus | no | Family plan |
-
-Prices (Stripe, configurable): **Plus 2.99 USD/month or 24.99 USD/year; Family 4.99 USD/month or 39.99 USD/year** (up to 4 accounts, each with
-its own storage). Optional regional prices via Stripe price IDs. 14-day free trial of Plus once per account (no card needed; reverts to Free).
-- Entitlements API: `GET /me` returns `plan {name, status, renews_at, trial_ends_at, features: {...flag: true|limit}}`. Every limited endpoint returns
-  **402** `{reason: "plan_limit", feature, upgrade_url}`; clients keep data locally and show an upgrade prompt.
-- Billing: Stripe Checkout + Customer Portal on a small web page at `/account/v1/billing/*`, signed webhooks, idempotent events; apps open the web
-  page (no in-app payment). Family: owner invites up to 3 accounts by email; members see Plus while the owner's subscription is active.
-- Free title switch: the free synced title can be changed once every 30 days.
-- Never hold data hostage: downloads and restores always work; after a downgrade, data beyond Free limits stays read-only for 90 days, then is
-  deleted after two email warnings. Account deletion cancels billing and deletes all data.
-- Secrets at deploy time: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_PLUS_MONTHLY`, `STRIPE_PRICE_PLUS_YEARLY`,
-  `STRIPE_PRICE_FAMILY_MONTHLY`, `STRIPE_PRICE_FAMILY_YEARLY`; without them everyone is Free (trial still works) and billing endpoints return 503.
+## Plans and billing: NOT BUILT (user decision 2026-11-02)
+No billing, no Stripe, no plan engine in this round. Every account gets every feature. `GET /me` returns a static
+`plan {name: "free", features: {}}` placeholder only so clients have a stable field later. Storage limits are plain server config
+(`NAPPLE_SAVE_QUOTA_BYTES`, default 10 GiB per account; `NAPPLE_SAVE_VERSIONS`, default 20 per title; max 64 MiB per version), returning
+413 `{reason: "quota"}` when exceeded. The paid-plan spec (Free/Plus/Family) is parked in `orchestrations/backlog.md` for later.
