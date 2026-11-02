@@ -19,6 +19,7 @@ Background on how the pieces fit: [architecture](../architecture/overview.md); p
 | [ios-device-candidate.md](ios-device-candidate.md) | Which iPhone/iPad fits which games: Simulator profiling method, memory figures, picks. |
 | [fuzzing.md](fuzzing.md) | Run the Rust cargo-fuzz targets, the seeded-mutation tests and the C runtime fuzz drivers; fix and record a finding ([findings](../reference/fuzz-findings.md)). |
 | [testing.md](testing.md) | Every test suite, its command, and whether it runs on Linux or only on macOS. |
+| [deploy-servers.md](deploy-servers.md) | Deploy the Napple game servers to AWS at `pretend.napple.lat` and the `napple.lat` DNS: one-time setup, the workflow, rollback, costs, the local test stack. |
 | [testing-graphics.md](testing-graphics.md) | Golden-frame routes per title, the gfx warning and Metal validation gate, contact sheets, approving goldens. |
 
 ### For community contributors

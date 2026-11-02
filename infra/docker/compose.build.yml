@@ -1,0 +1,10 @@
+# Local overlay: build both images from this checkout instead of pulling them (context = repository root).
+services:
+  online:
+    build:
+      context: ../..
+      dockerfile: infra/docker/napple-online.Dockerfile
+  room:
+    build:
+      context: ../..
+      dockerfile: infra/docker/napple-room.Dockerfile

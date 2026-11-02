@@ -1,0 +1,22 @@
+# TLS terminator for the Napple game servers. Certificates: automatic (Let's Encrypt / ZeroSSL) for a public name, Caddy's internal CA for localhost.
+# NAPPLE_DOMAIN: pretend.napple.lat on AWS, localhost for a local Docker run.
+{
+	admin 127.0.0.1:2019
+}
+
+{$NAPPLE_DOMAIN:pretend.napple.lat} {
+	encode zstd gzip
+	header -Server
+
+	# napple-room's plain-HTTP status API (/room/healthz, /room/rooms), prefix stripped.
+	handle_path /room/* {
+		reverse_proxy room:8081
+	}
+
+	# Everything else: napple-online's account/token API (/healthz included).
+	handle {
+		reverse_proxy online:8080
+	}
+
+	log
+}
