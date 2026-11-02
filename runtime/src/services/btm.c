@@ -78,11 +78,28 @@ static void core_disconnect(IpcObject *s, IpcCall *c) { /* nothing is connected,
     if (b->conn_w) event_signal_handle(b->conn_w);
 }
 /* Scan filter parameters (1: BleAdvertisePacketParameter, 8 bytes {u16 company id, u8 pattern[6]}; 2: GattAttributeUuid, 0x14 bytes {u32 size, u8 uuid[16]}) are
- * constants the system keeps per parameter id; their values are not known here, so an all-zero filter of the documented size is answered (documented default: a scan with
- * it would match nothing, which is what the host's scans find anyway). */
+ * constants the system keeps per parameter id. The values of 2 are not known here, so an all-zero filter of the documented size is answered (documented default: a
+ * scan with it would match nothing, which is what the host's scans find anyway); 1 has documented values (core_filter_param_general below). */
 static void core_filter_param(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_zero(c, c->cmd == 1 ? 8 : 0x14);
+}
+/* GetBleScanFilterParameter (1, u16 parameter id) -> BleAdvertisePacketParameter {u16 company id; u8 pattern[6]}, 8 bytes. switchbrew: "the same as
+ * GetBleScanParameterGeneral" (btm 24), whose id must be 0x1 (hid uses it for Palma) or 0xFFFF; both carry Nintendo's company id 0x0553, and the
+ * pattern at +2 is 00 01 00 00 01 00 for id 1 and AD DE 00 EF BE 00 for id 0xFFFF. Those are the system's constants and are answered as such; any
+ * other id has no parameter and gets an all-zero one [unverified: what the system answers for it]. Cmd 2 (GattAttributeUuid) stays the documented
+ * default above: the UUIDs it returns per id are not public. */
+static void core_filter_param_general(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint16_t id = c->in_size >= 2 ? IPC_IN(c, uint16_t, 0) : 0;
+    static const uint8_t pat1[6] = {0x00, 0x01, 0x00, 0x00, 0x01, 0x00}, patf[6] = {0xAD, 0xDE, 0x00, 0xEF, 0xBE, 0x00};
+    uint8_t o[8] = {0};
+    if (id == 0x1 || id == 0xFFFF) {
+        o[0] = 0x53;
+        o[1] = 0x05; /* company id 0x0553, little endian */
+        memcpy(o + 2, id == 0x1 ? pat1 : patf, 6);
+    }
+    ipc_out(c, o, sizeof o);
 }
 static void core_unpair(IpcObject *s, IpcCall *c) { /* 23 / 24: nothing is paired, so there is nothing to remove */
     (void)s;
@@ -100,8 +117,8 @@ static void core_unregister_path(IpcObject *s, IpcCall *c) {
 /* 22 pair, 27-32 GATT queries and 34/35 MTU take a connection handle; none can be valid without a connection, so they fail like BleConnect. */
 static const IpcCmd core_cmds[] = {
     {0, "AcquireBleScanEvent", core_acquire_scan_event, IPC_IMPL},
-    {1, "GetBleScanFilterParameter", core_filter_param, IPC_STUB},
-    {2, "GetBleScanFilterParameter2", core_filter_param, IPC_STUB},
+    {1, "GetBleScanFilterParameter", core_filter_param_general, IPC_IMPL},
+    {2, "GetBleScanFilterParameter2", core_filter_param, IPC_STUB}, /* kept: the GattAttributeUuid values per id are not public */
     {3, "StartBleScanForGeneral", core_start_general, IPC_IMPL},
     {4, "StopBleScanForGeneral", core_stop_general, IPC_IMPL},
     {5, "GetBleScanResultsForGeneral", core_no_results, IPC_IMPL},

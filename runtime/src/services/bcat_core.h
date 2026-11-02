@@ -53,6 +53,9 @@ typedef struct {
     int (*list_files)(void *ctx, const char *dir, BcatFile *out, int max);
     /* Bytes read at offset (0 at or past the end), or -1 when the file is gone. */
     int64_t (*read)(void *ctx, const char *dir, const char *file, uint64_t offset, void *buf, size_t n);
+    /* Optional (ipc-depth-95 r10): the delivery list the last sync downloaded (list.msgpack beside the directories): copies up to n bytes to buf (buf may be
+     * NULL when n is 0) and returns the list's full size, or -1 when there is none. */
+    int64_t (*read_list)(void *ctx, void *buf, size_t n);
 } BcatProvider;
 /* The process-wide provider (NULL clears it). Without one, NAPPLE_BCAT_DIR names a folder read at the first use: either the plain layout
  * <dir>/<directory>/<file>, or, when <dir>/directories.meta exists, the console's own delivery cache storage (bcat_save_provider). */
@@ -65,7 +68,8 @@ BcatProvider bcat_dir_provider(const char *root);
  *   <root>/directories.meta                  u32 header = 1, then entries {char name[0x20]; u8 digest[0x10]; u8 reserved[0x10]} (0x40 each, at most 100)
  *   <root>/directories/<dir>/files.meta      u32 header = 1, then entries {char name[0x20]; s64 id; s64 size; u8 digest[0x10]; u8 reserved[0x40]} (0x80 each, at most 100)
  *   <root>/directories/<dir>/files/<file>    the content
- * (plus passphrase.bin, list.msgpack, etag.bin, na_required and index.lock beside them, which a reader here ignores). The directory list, sizes and digests come
+ * (plus passphrase.bin, list.msgpack, etag.bin, na_required and index.lock beside them; only list.msgpack is read, by read_list, the others are ignored; the
+ * plain folder layout's read_list reads <root>/list.msgpack too). The directory list, sizes and digests come
  * from the meta files; a listed file whose content is missing or shorter than its meta size reads as "gone" / short. */
 enum { BCAT_META_HEADER = 1, BCAT_DIR_META_ENTRY = 0x40, BCAT_FILE_META_ENTRY = 0x80 };
 BcatProvider bcat_save_provider(const char *root);
@@ -74,4 +78,7 @@ BcatProvider bcat_auto_provider(const char *root);
 /* Writes one 0x38-byte DeliveryCacheDirectoryEntry: char name[0x20] at +0, s64 size at +0x20, u8 md5[0x10] at +0x28 (switchbrew "BCAT services"; Ryujinx's
  * DeliveryCacheFileMetaEntry is the same record). */
 void bcat_pack_entry(const BcatFile *f, uint8_t out[BCAT_ENTRY_SIZE]);
+/* A fingerprint of everything a title can read from the delivery cache (directory names, file names, sizes, digests), independent of listing order:
+ * GetDeliveryCacheStorageUpdateNotifier compares it after each sync to tell whether the storage was updated. 0 without a provider. */
+uint64_t bcat_storage_fingerprint(const BcatProvider *p);
 void bcat_md5(const void *data, size_t n, uint8_t out[16]);

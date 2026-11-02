@@ -13,12 +13,13 @@ int main(void) {
     svc_call(nf, 5, NULL, 0, &c); IpcObject *gen = c.out_objects[0];
     no_dup(nf); no_dup(gen);
     /* nifm IGeneralService: no network, so what needs one reports it; plain getters answer zero */
-    svc_call(gen, 2, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "CreateScanRequest: no network");
-    svc_call(gen, 7, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "EnumerateNetworkProfiles: no network");
+    /* ipc-depth-95 r10: 2 and 7 became real: a scan request object, and an empty profile list (this console has no saved profile) */
+    svc_call(gen, 2, NULL, 0, &c); CHECK(c.result == 0 && c.nout_objects == 1, "CreateScanRequest: an IScanRequest");
+    { uint8_t all = 7; svc_call(gen, 7, &all, 1, &c); CHECK(c.result == 0 && c.out_size == 4 && SVC_OUT(&c, int32_t, 0) == 0, "EnumerateNetworkProfiles: none saved"); }
     svc_call(gen, 20, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 1 && c.out[0] == 0, "IsEthernetCommunicationEnabled: false");
     svc_call(gen, 44, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 1 && c.out[0] == 0, "IsWiredConnectionAvailable: false");
     svc_call(gen, 23, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 0, "PutToSleep: accepted");
-    CHECK(svc_find(gen, 23)->status == IPC_STUB && svc_find(gen, 18)->status == IPC_IMPL, "new rows are STUB, the old ones stay IMPL");
+    CHECK(svc_find(gen, 25)->status == IPC_STUB && svc_find(gen, 18)->status == IPC_IMPL, "documented defaults are STUB, the old rows stay IMPL (23 PutToSleep became real in r10)");
     svc_call(gen, 4, NULL, 0, &c); IpcObject *rq = c.out_objects[0];
     no_dup(rq);
     svc_call(rq, 20, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 4, "IRequest GetRevision: a zero word");
@@ -33,7 +34,7 @@ int main(void) {
     IpcObject *ssl = ssl_open();
     no_dup(ssl);
     svc_call(ssl, 11, NULL, 0, &c); CHECK(c.result == 0 && c.out_size == 4, "GetTrustedCertificateCount: zero");
-    svc_call(ssl, 2, NULL, 0, &c); CHECK(c.result == HZ_R_SSL_NOT_CONNECTED, "GetCertificates: no store, not connected result");
+    svc_call(ssl, 2, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0) == 0, "GetCertificates: no ids asked, no built-in entries (ipc-depth-95 r10: was the stub's not-connected result)");
     /* bsd / nsd / sfdnsres */
     IpcObject *bs = bsd_open();
     no_dup(bs);

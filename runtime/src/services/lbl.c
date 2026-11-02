@@ -53,6 +53,9 @@ static void lbl_switch_off(IpcObject *s, IpcCall *c) {
     (void)c;
     lbl_switch(state(), 0);
 }
+/* am ICommonStateGetter::SetLcdBacklighOffEnabled: the application asks the system to switch the backlight off (1) or back on (0); the same switch state
+ * lbl's own SwitchBacklightOn/Off keep and GetBacklightSwitchStatus reads. */
+void lbl_app_backlight_off(int off) { lbl_switch(state(), !off); }
 static void lbl_get_switch_status(IpcObject *s, IpcCall *c) {
     (void)s;
     uint32_t v = state()->switch_status;

@@ -54,9 +54,10 @@ int main(void) {
     svc_call(bsv, 30200, NULL, 0, &c); CHECK(c.result == 0, "register task"); svc_call(bsv, 90100, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "no tasks");
     svc_call(bsv, 90201, NULL, 0, &c); CHECK(c.result == 0, "clear storage");
     /* ipc-depth-sys: bcat commands that needed a network answer offline the way the sync does */
-    svc_call(bsv, 90200, NULL, 0, &c); CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "GetDeliveryList: offline");
+    /* ipc-depth-95 r10: GetDeliveryList reads the list a sync left (none without a provider: not found) and 20400 keeps the registration (now real rows) */
+    svc_call(bsv, 90200, NULL, 0, &c); CHECK(c.result == HZ_R_BCAT_NOT_FOUND, "GetDeliveryList: offline, no list");
     svc_call(bsv, 20400, NULL, 0, &c); CHECK(c.result == 0, "RegisterSystemApplicationDeliveryTask: accepted");
-    CHECK(svc_find(bsv, 20400)->status == IPC_STUB, "...as a documented default");
+    CHECK(svc_find(bsv, 20400)->status == IPC_IMPL, "...and kept");
 
     /* MD5 vectors */
     { uint8_t d[16];

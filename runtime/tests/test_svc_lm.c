@@ -23,7 +23,7 @@ int main(void) {
         CHECK(c.result == 0, "ILogger %u without a buffer is harmless", cmd);
         CHECK(svc_find(lg, cmd)->status == IPC_IMPL, "ILogger %u is real now", cmd);
     }
-    CHECK(svc_find(lg, 11)->status == IPC_STUB, "11 OpenSharedMemoryAccessorForHashedLog stays a documented default");
+    CHECK(svc_find(lg, 11)->status == IPC_IMPL, "11 OpenSharedMemoryAccessorForHashedLog is real now (r10; was a documented default)"); /* behaviour: test_svc_misc_r10.c */
     printf("{\"test\":\"svc_lm\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

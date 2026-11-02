@@ -3,6 +3,7 @@
  * radio: scans find nothing and a station can never connect. */
 #pragma once
 #include "online_provider.h"
+#include "hz_result.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -78,3 +79,26 @@ void ldn_config_encode(const OnlineLdnNetwork *n, uint8_t out[0x20]);
 uint32_t ldn_connect_done(LdnState *state, uint32_t provider_result);
 /* Whether the state holds a network the provider has to tear down when the state is left (AP created, station connected). */
 int ldn_state_has_network(LdnState state);
+
+/* ---- configuration rows (ipc-depth-95 r10) ----
+ * Rules from switchbrew "LDN services" (IUserLocalCommunicationService / ISystemLocalCommunicationService sections; layout facts only). The result values are the
+ * module's own unverified ones above: the invalid-state result for a call made in the wrong State, the invalid-argument result for a value the page says is
+ * refused (the page does not give the values). */
+#define LDN_R_INVALID_STATE HZ_RESULT(HZ_MOD_LDN, 32) /* [unverified] call not allowed in the current state (same value as ldn_core.c) */
+#define LDN_R_INVALID_ARGUMENT HZ_RESULT(HZ_MOD_LDN, 4) /* [unverified] (same value as ldn_core.c) */
+/* State masks for the checks: bit n = nn::ldn::State n. */
+#define LDN_STATES(...) ldn_state_mask((const int[]){__VA_ARGS__, -1})
+unsigned ldn_state_mask(const int *states);
+static inline int ldn_state_in(LdnState s, unsigned mask) { return (unsigned)s < 32 && (mask >> (unsigned)s & 1u); }
+/* nn::ldn::Protocol: 0 Default, 1 NX, 3 [20.0.0+] (2 and 4 are Switch 2 only). On NX the permission bitmask of every ldn service object is 0xA (1 and 3).
+ * SetProtocol: the value must be non-zero and permitted by that bitmask, and the State must be Initialized; the Initialize commands set NX. */
+enum { LDN_PROTOCOL_NX = 1, LDN_PROTOCOL_NX_PERMISSION = 0xA };
+uint32_t ldn_check_protocol(LdnState state, uint32_t protocol);
+/* ActionFrameSettings (0x80 bytes): u64 LocalCommunicationId at 0, u16 SecurityMode at 0x3C (must be 1-2), u16 PassphraseSize at 0x3E (0x10-0x40), passphrase at
+ * 0x40. EnableActionFrame / DisableActionFrame need State Initialized. */
+#define LDN_ACTION_FRAME_SETTINGS_SIZE 0x80u
+uint32_t ldn_check_action_frame_settings(const uint8_t *in, size_t n);
+/* SetHomeChannel / SendActionFrame channel argument. Before 20.0.0: two s16, Band (24 or 50) then ChannelNumber; 20.0.0+: one u16, ChannelNumber in the low
+ * 10 bits and a band index above (2 -> 2400, 5 -> 5000 MHz; 6 -> 6000 is not valid on NX). The two are told apart by the first u16: 24 and 50 are not a valid
+ * 20.0.0+ value (band index 0). Returns 0 with the band in MHz and the channel, or -1 when the band is not valid on NX or the channel is 0. */
+int ldn_decode_channel(const uint8_t *in, size_t n, uint16_t *band_mhz, uint16_t *channel);
