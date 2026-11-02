@@ -6,7 +6,7 @@ head: 03aef3a (code; the docs commit on top of it adds the change note, index li
 env: mac
 date: 2026-11-02
 areas: [runtime/a32jit, runtime/kernel, docs]
-status: ready
+status: integrated
 ---
 
 # claude/core-ordering-kernel-2026-11-02-r4: acquire/release for 32-bit exclusives, svcGetInfo 19/27, clean ExitProcess summary, docs links
@@ -93,3 +93,13 @@ None unbuilt. Not exercised on a title: the ExitProcess `partial` branch (no tes
   `docs/process/archive/{integrators,orchestrations}/` (30 orphans). Regenerate the support matrix.
 - Shared title data: rebuild MK8D base's `a32jit.dylib` in `NappleWork/games/` with the new lifter when this lands. Not done here: shared data is
   read-only for sessions.
+
+## Integration result
+- Date 2026-11-02, merged into main as 827afa5 (branch head 07c45c5, matches the hand-off: code 03aef3a + docs commit). Outcome: **Clean** (no `integrate:` fixes, no native ports: the lifter and kernel changes are pure logic, left as C).
+- Build: `make -C gfx lib adapter`, frontend, input, audio, `make -C runtime GFX=napple`: rc 0.
+- `make -C runtime GFX=napple test-a32`: `excltest: 47/47 passed`; difftest mismatches 0 (11590 ARM samples); inline_words 1033199 samples, 0 forms failed; `ok: no AArch32 interpreter`.
+- `make -C runtime test-host`: `{"test":"kernel_exit","checked":19,"failed":0}`, all host suites 0 failed. `make -C runtime GFX=napple test`: rc 0, ipc_reference fixtures 111 / missing 0. `test-services`: rc 0, 0 failed.
+- `python3 tools/check_docs.py | grep archive/changes`: nothing.
+- MK8D base, private copy (`/Users/neto/NappleWork/games-integ-r4/`, APFS clone of the shared data with `a32jit.dylib` rebuilt by `tools/build_a32jit.sh` from this tree, under the build lock; shared `games/` untouched at that point): `soak.py run mk8d-base --runs 3 --seconds 60 --lockf .run.lock`: 3/3 ok, frames 3039 / 3348 / 3328 (first-run dip again, as in Findings; the other two inside r3's 3328-3566).
+- Unverified as before: the ExitProcess `partial` path and GetInfo 19/27 on a title (no title reaches them). Unicorn fuzz not run.
+- Correction to "How to test" step 4: `soak.py` reads `NAPPLE_GOLDEN_DATA/<titleid>/napple-app.json`, so the private copy must be the whole title dir, not just the build-id dir.

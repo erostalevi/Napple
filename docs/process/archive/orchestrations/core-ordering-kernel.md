@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r4
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_3b3cd256-1668-4a2b-8542-c3387e1fbb05 (reused)
 launched_at: 2026-11-02
@@ -37,3 +37,5 @@ The A64 race fix (r3, `crates/napple-rewrite/src/ordering.rs`) has a 32-bit twin
 Read `orchestrations/ENV-MAC.md` first (shared title data — rebuilt in r3 with the ordering fix, never overwrite it; locks; local-only; never ask). This is planned as the LAST reachable round (snapshot 2026-11-02-5b9cf3a, 98.3%, ceiling ~98.9-99.0%).
 
 ## Result
+Integrated 2026-11-02: **Clean**, merged into main as 827afa5 (branch head 07c45c5). test-a32 (excltest 47/47, difftest 0 mismatches), test-host (kernel_exit 19/19), test, test-services green; docs checker 0 orphan change notes. MK8D base with the rebuilt a32jit.dylib (private copy): 3 × 60 s ok, 3039 / 3348 / 3328 frames. ExitProcess partial summary and GetInfo 19/27 tested, not reached by any title.
+Integrator file: `docs/process/archive/integrators/claude-core-ordering-kernel-2026-11-02-r4.md`.
