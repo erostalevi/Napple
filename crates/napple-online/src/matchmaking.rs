@@ -19,6 +19,8 @@ pub struct Gathering {
 
 /// Gathering flag: when the owner leaves, another participant becomes owner (else the gathering ends).
 pub const GATHERING_FLAG_MIGRATE_OWNER: u32 = 0x10;
+/// Gathering flags asking for participant events to go to every participant (0x200 and its "Ex" form 0x800).
+pub const GATHERING_FLAG_VERBOSE_PARTICIPANTS: u32 = 0x200 | 0x800;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct MatchmakeSession {

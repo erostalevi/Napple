@@ -5,7 +5,7 @@
 use crate::accounts::{now_secs, Accounts};
 use crate::crypto::{hex, random_bytes};
 use crate::kerberos;
-use crate::matchmaking::{Criteria, MatchmakeSession, Participant, Sessions};
+use crate::matchmaking::{Criteria, MatchmakeSession, Participant, Sessions, GATHERING_FLAG_VERBOSE_PARTICIPANTS};
 use crate::nex::{DateTime, Reader, StationUrl, Writer};
 use crate::rmc::{self, err, Request};
 use std::collections::HashMap;
@@ -351,13 +351,28 @@ impl Server {
 
     // ---------------- matchmaking ----------------
 
+    /// "New participant" (3001) for `joiner` in `gid`. A gathering with a verbose-participants flag (0x200 / 0x800, MK8D sets both) tells every
+    /// participant, the joiner included, even when it just created the gathering: MK8D waits for its own join event before it starts its
+    /// session (10 s, then SessionKeepFailed 2618-0562). Otherwise only the owner hears about others joining.
+    fn announce_join(&self, w: &mut World, gid: u32, joiner: u64, msg: &str) {
+        let Some(s) = w.sessions.all.get(&gid) else { return };
+        let (owner, n, flags) = (s.mm.g.owner, s.players(), s.mm.g.flags);
+        let targets: Vec<u64> = if flags & GATHERING_FLAG_VERBOSE_PARTICIPANTS != 0 {
+            let mut v: Vec<u64> = s.participants.iter().map(|p| p.pid).collect();
+            v.dedup();
+            v
+        } else if owner != joiner {
+            vec![owner]
+        } else {
+            vec![]
+        };
+        for t in targets {
+            self.notify(w, t, joiner, notif::PARTICIPANT_JOINED, gid as u64, joiner, msg, n as u64);
+        }
+    }
     fn join_existing(&self, w: &mut World, me: Caller, gid: u32, count: u16, msg: &str) -> Result<(), u32> {
         w.sessions.join(gid, me.pid, me.cid, count).map_err(|_| err::RV_SESSION_VOID)?;
-        let s = &w.sessions.all[&gid];
-        let (owner, n) = (s.mm.g.owner, s.players());
-        if owner != me.pid {
-            self.notify(w, owner, me.pid, notif::PARTICIPANT_JOINED, gid as u64, me.pid, msg, n as u64);
-        }
+        self.announce_join(w, gid, me.pid, msg);
         Ok(())
     }
     /// Find-or-create: the matchmaking every "_Postpone" call does.
@@ -365,7 +380,11 @@ impl Server {
         let mut w = self.world.lock().unwrap();
         let gid = match w.sessions.find(criteria, &template, me.pid, count) {
             Some(gid) if self.join_existing(&mut w, me, gid, count, msg).is_ok() => gid,
-            _ => w.sessions.create(template, me.pid, me.cid, count),
+            _ => {
+                let gid = w.sessions.create(template, me.pid, me.cid, count);
+                self.announce_join(&mut w, gid, me.pid, msg);
+                gid
+            }
         };
         if self.verbose {
             let s = &w.sessions.all[&gid];
@@ -442,6 +461,7 @@ impl Server {
                 let Ok((t, count)) = parsed else { return bad };
                 let mut w = self.world.lock().unwrap();
                 let gid = w.sessions.create(t, me.pid, me.cid, count);
+                self.announce_join(&mut w, gid, me.pid, "");
                 let s = w.sessions.all[&gid].mm.clone();
                 if req.method == 6 {
                     ok(|w| {
@@ -1013,6 +1033,36 @@ mod tests {
         assert!(matches!(srv.secure_call(b, &req(115, 1, vec![])), Reply::Err(err::CORE_NOT_IMPLEMENTED)));
         let Reply::Ok(m) = srv.secure_call(b, &req(PROTO_UTILITY, 7, vec![0, 0, 0, 0])) else { panic!() };
         assert_eq!(m, vec![0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn verbose_gatherings_announce_every_join_to_everyone() {
+        let srv = Server::new(Accounts::open(None).unwrap(), false);
+        let (a, rx_a) = attach(&srv, 100);
+        let (b, rx_b) = attach(&srv, 200);
+        let auto = |me: Caller| -> MatchmakeSession {
+            let mut t = sample(1, 12);
+            t.g.flags = 0xa10; // MK8D's worldwide gathering
+            let mut body = Writer::new();
+            body.structure(0, |w| {
+                t.encode(w);
+                w.u32(0).u32(0).u32(0).string("").u16(1).u32(0).u32(0).structure(0, |w| {
+                    w.u32(0);
+                });
+            });
+            let Reply::Ok(resp) = srv.secure_call(me, &req(PROTO_MATCHMAKE_EXT, 40, body.buf)) else { panic!() };
+            MatchmakeSession::decode(&mut Reader::new(&resp)).unwrap()
+        };
+        let s1 = auto(a);
+        assert_eq!(s1.g.owner, 100);
+        // the creator hears about its own join
+        assert_eq!(notification(&rx_a), (100, notif::PARTICIPANT_JOINED, s1.g.id as u64, 100));
+        assert!(rx_a.try_recv().is_err());
+        let s2 = auto(b);
+        assert_eq!(s2.g.id, s1.g.id);
+        // the second join reaches both
+        assert_eq!(notification(&rx_a), (200, notif::PARTICIPANT_JOINED, s1.g.id as u64, 200));
+        assert_eq!(notification(&rx_b), (200, notif::PARTICIPANT_JOINED, s1.g.id as u64, 200));
     }
 
     #[test]
