@@ -4,14 +4,12 @@
  *  2. RGBA8I view of another RGBA8 texture with bytes (ff, 80, 7f, 01): sign-extended (-1, -128, 127, 1);
  *  3. RG32UI view of a BC1 texture (one 4x4 block; a copy): the block's two words, then (0, 1).
  * Before integer slots, these bindings were declared texture2d<float> (the format view read as converted floats, the BC1 integer view fell back to the
- * texture's own format). Needs the replay to fill the slot masks (int_slot_masks in mtl_replay.m): built with -DNAPPLE_TEST_INT_TEX_SLOTS until that
- * hook lands, else the test reports itself skipped. Headless Metal (MTL_DEBUG_LAYER=1 in make test), no game data. */
+ * texture's own format). The replay fills the slot masks (int_slot_masks in mtl_replay.m). Headless Metal (MTL_DEBUG_LAYER=1 in make test), no game data. */
 #include "nvn_harness.h"
 
 #define W 8
 enum { OFF_VB = 0x0, OFF_SH = 0x1000, OFF_T8 = 0x100000, OFF_T8I = 0x108000, OFF_TBC = 0x110000, OFF_RT = 0x160000, OFF_TP = 0x180000, OFF_SP = 0x190000, OFF_RB = H_READBACK };
 
-#ifdef NAPPLE_TEST_INT_TEX_SLOTS
 static H h;
 static NVNtexturePool *tp;
 static NVNsamplerPool *sp;
@@ -105,9 +103,3 @@ int main(void) {
     CHECK(t[0] == blk[0] && t[1] == blk[1] && t[2] == 0 && t[3] == 1, "RG32UI copy of a BC1 block reads its words: %08x %08x %x %x", t[0], t[1], t[2], t[3]);
     return h_finish("t_int_tex", &h);
 }
-#else
-int main(void) {
-    printf("t_int_tex: ok (1 skipped: built without -DNAPPLE_TEST_INT_TEX_SLOTS; needs the int_slot_masks hook in mtl_replay.m)\n");
-    return 0;
-}
-#endif

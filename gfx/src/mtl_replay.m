@@ -1129,8 +1129,25 @@ static void ds_slot_masks(int stage, uint32_t *depth, uint32_t *stencil) {
     }
 }
 
+/* Sampled bindings of a stage whose bound texture / view is an integer colour format (ShaderKey.tex_uint_slots / tex_sint_slots: declared texture2d<uint|int>). */
+static void int_slot_masks(int stage, uint32_t *umask, uint32_t *smask) {
+    *umask = *smask = 0;
+    gdpool *tp = (gdpool *)htab_get(S.texpool);
+    if (!tp) return;
+    for (int slot = 0; slot < 32; slot++) {
+        uint64_t h = S.tex[stage][slot];
+        uint32_t tic = (uint32_t)(h & 0xfffff);
+        if (!h || tic >= (uint32_t)tp->n || !tp->tex[tic].s.valid) continue;
+        int k = mtl_tex_int_kind(&tp->tex[tic].s, &tp->tex[tic].view, 1);
+        if (k == IMGKIND_UINT) *umask |= 1u << slot;
+        else if (k == IMGKIND_INT) *smask |= 1u << slot;
+    }
+}
+
 static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     memset(k, 0, sizeof *k);
+    int_slot_masks(ST_VS, &k->tex_uint[0], &k->tex_sint[0]);
+    int_slot_masks(ST_FS, &k->tex_uint[1], &k->tex_sint[1]);
     ds_slot_masks(ST_VS, &k->depth_slots[0], &k->stencil_slots[0]);
     ds_slot_masks(ST_FS, &k->depth_slots[1], &k->stencil_slots[1]);
     image_masks(ST_VS, &k->img_int[0], &k->img_uint[0]);
