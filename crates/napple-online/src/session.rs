@@ -218,7 +218,10 @@ pub fn serve(server: Arc<Server>, mut stream: TcpStream) {
         .and_then(|v| v.trim().parse::<IpAddr>().ok())
         .unwrap_or(peer);
     if !req.is_websocket() {
-        let (st, reason, body) = http::handle_api(&server.accounts, &req);
+        let (st, reason, body) = match server.hub.as_ref().and_then(|h| h.http(&req, now_secs())) {
+            Some(r) => r,
+            None => http::handle_api(&server.accounts, &req),
+        };
         if server.verbose || st != 200 {
             println!("napple-online: {peer}: {} {} -> {st}", req.method, req.path);
         }
