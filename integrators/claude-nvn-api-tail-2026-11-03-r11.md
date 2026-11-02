@@ -2,7 +2,7 @@
 branch: claude/nvn-api-tail-2026-11-03-r11
 orchestration: nvn-api-tail
 base: 281f4d3
-head: PENDING
+head: 87503c1
 env: mac
 date: 2026-11-03
 areas: [gfx]
