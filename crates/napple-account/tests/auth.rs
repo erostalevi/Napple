@@ -509,3 +509,32 @@ async fn cors_only_for_napple_origins() {
     let (_, h, _) = t.raw(pre("https://evil.example")).await;
     assert!(h.get("access-control-allow-origin").is_none());
 }
+
+#[tokio::test]
+async fn signup_yields_a_valid_unique_first_profile_nickname() {
+    let t = T::new();
+    // Plain case: the profile has the nickname, a friend code, and goes through profiles::insert.
+    let (s, _) = signup(&t, "a@example.com", "Racer_X").await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    // A second account verifies first and ends up owning the nickname (simulating the race the pending reservation cannot cover).
+    let (s, _) = signup(&t, "c@example.com", "Taker").await;
+    assert_eq!(s, StatusCode::ACCEPTED);
+    let code = t.code_for("c@example.com");
+    let (s, v) = t.req("POST", "/auth/verify", None, Some(json!({"email": "c@example.com", "code": code}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    t.app.db().execute("UPDATE profiles SET nickname = 'racer_x' WHERE nickname = 'Taker'", []).unwrap();
+
+    let code = t.code_for("a@example.com");
+    let (s, v) = t.req("POST", "/auth/verify", None, Some(json!({"email": "a@example.com", "code": code}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let access = v["access_token"].as_str().unwrap();
+    let (_, p) = t.req("GET", "/profiles", Some(access), None).await;
+    let first = &p["profiles"][0];
+    let nick = first["nickname"].as_str().unwrap();
+    assert_ne!(nick.to_lowercase(), "racer_x", "the taken nickname must not be reused");
+    assert!(nick.starts_with("Racer_X"), "{nick}");
+    assert!(napple_account::nicknames::valid_charset(nick), "{nick}");
+    assert!(first["friend_code"].as_str().unwrap().starts_with("NP-"), "{first}");
+    let dup: i64 = t.app.db().query_row("SELECT COUNT(*) FROM profiles WHERE nickname = ?1 COLLATE NOCASE", [nick], |r| r.get(0)).unwrap();
+    assert_eq!(dup, 1);
+}

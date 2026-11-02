@@ -318,20 +318,19 @@ pub async fn verify(
             })
         })
         .ok_or_else(|| ApiError::internal("pending device unreadable"))?;
-    db.execute(
-        "UPDATE accounts SET verified_at = ?2, pending_nickname = NULL, pending_device = NULL WHERE id = ?1",
-        params![id, now],
-    )?;
-    // The first profile is the online identity. If someone took the nickname meanwhile, add digits.
-    let mut name = nick.clone();
-    while nickname_taken(&db, &name, Some(&id))? {
+    // The first profile is the online identity. Validate it like any profile nickname (reserved words, charset); if
+    // someone took it meanwhile (or it no longer validates), add digits. All under the one DB lock, then
+    // `profiles::insert` re-checks uniqueness case-insensitively.
+    let mut name = crate::nicknames::validate(&db, &id, &nick).unwrap_or_else(|_| "Player".into());
+    while nickname_taken(&db, &name, Some(&id))? || crate::nicknames::taken(&db, &name, None)? {
         let suffix = random_code();
         name = format!("{}{}", &nick[..nick.len().min(14)], &suffix[..4]);
     }
     db.execute(
-        "INSERT INTO profiles (id, account_id, nickname, icon_id, created_at, updated_at) VALUES (?1, ?2, ?3, 0, ?4, ?4)",
-        params![new_id(), id, name, now],
+        "UPDATE accounts SET verified_at = ?2, pending_nickname = NULL, pending_device = NULL WHERE id = ?1",
+        params![id, now],
     )?;
+    crate::profiles::insert(&db, &id, &name, 0, now)?;
     db.execute("UPDATE accounts SET display_name = ?2 WHERE id = ?1", params![id, name])?;
     let device_id = upsert_device(&db, &id, &device, now)?;
     let mut v = issue_tokens(&app, &db, &id, &device_id, now)?;
