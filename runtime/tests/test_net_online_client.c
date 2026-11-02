@@ -126,7 +126,7 @@ int main(void) {
     OnlineProvider *p = net_online_new(net_host_provider(), &s, dir);
     CHECK(p && !strcmp(p->name, NET_ONLINE_NAME) && online_has(p, ONLINE_CAP_ACCOUNT) && online_has(p, ONLINE_CAP_NSD) && online_has(p, ONLINE_CAP_SOCKETS) &&
           p->ctx == net_host_provider()->ctx, "the wrapper: accounts and nsd on top of the host's capabilities, sharing its ctx");
-    CHECK(p->ldn_scan == net_host_provider()->ldn_scan && p->sock_bind == net_host_provider()->sock_bind, "entry points it does not override are the host's own");
+    CHECK(p->ldn_scan == net_host_provider()->ldn_scan && p->sock_listen == net_host_provider()->sock_listen, "entry points it does not override are the host's own");
     void *ctx = p->ctx;
     OnlineAccountInfo ai;
     CHECK(p->account_info(ctx, g_user_id, &ai) == 0 && ai.linked && ai.id == 777 && fake_accounts == 1, "first use creates the Napple account on the server");

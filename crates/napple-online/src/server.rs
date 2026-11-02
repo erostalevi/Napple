@@ -296,7 +296,7 @@ impl Server {
                 }
                 // what the server sees: the same station at the address the connection comes from
                 let mut public = c.urls.first().cloned().unwrap_or_else(|| StationUrl::parse("prudp:/"));
-                public.set("address", c.peer);
+                public.set("address", crate::natcheck::observed_ip(c.peer));
                 let public = public.to_string();
                 let cid = me.cid;
                 ok(|w| {
@@ -948,6 +948,7 @@ mod tests {
         assert_eq!(r.u32().unwrap(), me.cid);
         let public = StationUrl::parse(&r.string().unwrap());
         assert_eq!(public.get("address"), Some("192.168.1.20"));
+        assert_ne!(crate::natcheck::observed_ip("127.0.0.1".parse().unwrap()).to_string(), "", "a loopback peer is reported at the LAN address when there is one");
         assert_eq!(public.get("port"), Some("49152"));
         assert_eq!(public.get("RVCID"), Some(me.cid.to_string().as_str()));
         // another client finds the URLs by pid

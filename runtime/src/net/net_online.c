@@ -313,6 +313,7 @@ static int64_t no_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, On
         if (nat_check_port(p)) set_ip(from, NET_ONLINE_VIRTUAL_IP, p);
         else if (nat_check_port((uint16_t)(p - NET_ONLINE_NATCHECK_SECONDARY))) set_ip(from, NET_ONLINE_VIRTUAL_IP2, (uint16_t)(p - NET_ONLINE_NATCHECK_SECONDARY));
         else return r;
+        if (r >= 16) memcpy((uint8_t *)buf + 12, from->addr, 4); /* the reply's "server address" field: the server the title knows */
         NO_DBG("datagram socket %d from the NAT check (server port %u)", h, p);
     }
     return r;
@@ -322,6 +323,13 @@ static int no_sock_getpeername(void *ctx, int h, OnlineAddr *out, int *err) {
     int rc = o->host->sock_getpeername(o->host->ctx, h, out, err);
     uint16_t port;
     if (rc == 0 && is_redirected(o, h, &port)) set_ip(out, NET_ONLINE_VIRTUAL_IP, port);
+    return rc;
+}
+static int no_sock_bind(void *ctx, int h, const OnlineAddr *a, int *err) {
+    NetOnline *o = no_of(ctx);
+    int rc = o->host->sock_bind(o->host->ctx, h, a, err);
+    char ab[64];
+    NO_DBG("bind socket %d to %s: rc %d errno %d", h, addr_str(a, ab, sizeof ab), rc, rc ? *err : 0);
     return rc;
 }
 static int no_sock_set_nonblock(void *ctx, int h, int on, int *err) {
@@ -548,6 +556,7 @@ OnlineProvider *net_online_new(const OnlineProvider *host, const NetOnlineServer
     t->sock_getpeername = no_sock_getpeername;
     t->sock_close = no_sock_close;
     t->sock_set_nonblock = no_sock_set_nonblock;
+    t->sock_bind = no_sock_bind;
     t->tls_new = no_tls_new;
     t->tls_free = no_tls_free;
     t->tls_set_host = no_tls_set_host;
