@@ -108,7 +108,15 @@ typedef struct {
                               * and read through the IntTex wrappers, all four channels as raw integer bits (what the hardware writes to the registers for integer
                               * formats). Cube arrays, multisample arrays and depth comparison keep the float declaration. stencil_slots win. */
     uint32_t tex_sint_slots;
+    uint32_t sep_depth_slots, sep_stencil_slots, sep_uint_slots, sep_sint_slots; /* separate texture / sampler pairs whose texture word is c2's separate texture
+                          * table entry k (SEP_TEX_C2_BASE + 8 * k, k < 32): bit k as depth_slots / stencil_slots / tex_uint_slots / tex_sint_slots are for combined
+                          * slots. A pair whose texture word is a combined table entry takes the combined masks; a word read from a user uniform buffer none */
+    uint16_t vp_swizzle; /* vertex / tess eval: nvnCommandBufferSetViewportSwizzles of viewport 0, applied to the clip position after the program (and after transform
+                          * feedback capture, before the flip / depth conversions): 3 bits per output component x, y, z, w (bits 0, 3, 6, 9), each an
+                          * NVN_VIEWPORT_SWIZZLE_* (source component << 1 | negate), stored XOR VP_SWIZZLE_IDENTITY so that 0 is the identity */
+    uint16_t vp_pad;
 } ShaderKey;
+#define VP_SWIZZLE_IDENTITY (0u | 2u << 3 | 4u << 6 | 6u << 9)
 
 typedef struct {
     uint32_t handle_offset; /* byte offset of the texture handle in the texture constant buffer (c2) */

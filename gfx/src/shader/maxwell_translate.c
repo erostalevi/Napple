@@ -791,6 +791,29 @@ static uint32_t bindless_index(Ctx *c, int cb, int off) {
     c->bl_off[c->bl_n] = off;
     return 8192u + (uint32_t)c->bl_n++;
 }
+/* Depth / stencil / integer kind of a separate pair's texture (ShaderKey.sep_*_slots for c2's separate texture table, the combined masks for a combined table word;
+ * a word from a user uniform buffer is not known when the key is made). Either word may be the texture one: the sampler word is in neither table. */
+static void sep_masks(Ctx *c, ShaderTexture *t, int a, int b) {
+    if (!c->key) return;
+    int w[2] = {a, b};
+    for (int i = 0; i < 2; i++) {
+        uint32_t cb = (uint32_t)w[i] >> 24, off = (uint32_t)w[i] & 0xffffff;
+        if (cb != 2) continue;
+        uint32_t bit, dm, sm, um, im;
+        if (off >= SEP_TEX_C2_BASE && off < SEP_TEX_C2_BASE + 8 * 32) {
+            bit = 1u << ((off - SEP_TEX_C2_BASE) / 8);
+            dm = c->key->sep_depth_slots, sm = c->key->sep_stencil_slots, um = c->key->sep_uint_slots, im = c->key->sep_sint_slots;
+        } else if (off >= 0x20 && off < 0x120) {
+            bit = 1u << ((off - 0x20) / 8);
+            dm = c->key->depth_slots, sm = c->key->stencil_slots, um = c->key->tex_uint_slots, im = c->key->tex_sint_slots;
+        } else continue;
+        if (sm & bit) t->stencil = true;
+        else if (um & bit) t->int_kind = IMGKIND_UINT;
+        else if (im & bit) t->int_kind = IMGKIND_INT;
+        else if (dm & bit) t->depth = true;
+        return;
+    }
+}
 /* A separate texture / sampler handle: the register is (word a) | (word b), each (cbuf << 24 | byte offset). Pseudo index 16384 + n. */
 static uint32_t separate_index(Ctx *c, int a, int b) {
     for (int i = 0; i < c->sp_n; i++)
@@ -842,6 +865,7 @@ static int tex_slot(Ctx *c, uint32_t index, int type, bool shadow, bool array) {
         t->bindless_offset = (uint32_t)(c->sp_a[n] & 0xffffff);
         t->sep_cbuf = (uint32_t)(c->sp_b[n] >> 24);
         t->sep_offset = (uint32_t)(c->sp_b[n] & 0xffffff);
+        sep_masks(c, t, c->sp_a[n], c->sp_b[n]);
         t->type = (uint8_t)(weak ? TEXTYPE_2D : type);
         t->shadow = shadow;
         t->is_array = array;
@@ -3743,6 +3767,17 @@ ShaderInfo *maxwell_translate(const uint8_t *blob, size_t max_size, int stage, c
     }
     if (stage == STAGE_VERTEX || stage == STAGE_TESS_EVAL) {
         if (xfb_epi.buf) sp(&s, "%s", xfb_epi.buf);
+        if (key && key->vp_swizzle) {
+            /* viewport swizzle (ShaderKey.vp_swizzle): each clip component from a (negated) component of the program's position */
+            uint32_t sw = key->vp_swizzle ^ VP_SWIZZLE_IDENTITY;
+            static const char cn[4] = {'x', 'y', 'z', 'w'};
+            char e[4][8];
+            for (int i = 0; i < 4; i++) {
+                uint32_t v = (sw >> (3 * i)) & 7;
+                snprintf(e[i], sizeof e[i], "%sq.%c", v & 1 ? "-" : "", cn[v >> 1]);
+            }
+            sp(&s, "  { float4 q = out.pos; out.pos = float4(%s, %s, %s, %s); }\n", e[0], e[1], e[2], e[3]);
+        }
         if (key && key->flip_y) sp(&s, "  out.pos.y = -out.pos.y;\n");
         if (key && key->depth_minus_one) sp(&s, "  out.pos.z = (out.pos.z + out.pos.w) * 0.5f;\n");
         if (key && key->capture_void) sp(&s, "  (void)out;\n}\n");

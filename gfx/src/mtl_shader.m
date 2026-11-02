@@ -992,9 +992,14 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     vk.image_uint_mask = k.img_uint[0];
     vk.tex_uint_slots = k.tex_uint[0];
     vk.tex_sint_slots = k.tex_sint[0];
+    vk.sep_depth_slots = k.sep_depth[0];
+    vk.sep_stencil_slots = k.sep_stencil[0];
+    vk.sep_uint_slots = k.sep_uint[0];
+    vk.sep_sint_slots = k.sep_sint[0];
     vk.point_prim = k.topo == MTLPrimitiveTopologyClassPoint;
     vk.flip_y = k.flip_y;
     vk.depth_minus_one = k.depth_mode == 0;
+    vk.vp_swizzle = k.vp_swizzle;
     GfxShader *vs = shader_variant(k.vs, &vk, 1);
     if (vs->state != 1) {
         p->state = 2;
@@ -1017,6 +1022,10 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     fk.image_uint_mask = k.img_uint[1];
     fk.tex_uint_slots = k.tex_uint[1];
     fk.tex_sint_slots = k.tex_sint[1];
+    fk.sep_depth_slots = k.sep_depth[1];
+    fk.sep_stencil_slots = k.sep_stencil[1];
+    fk.sep_uint_slots = k.sep_uint[1];
+    fk.sep_sint_slots = k.sep_sint[1];
     { /* NAPPLE_SHADER_PROBE=<fragment program hash hex>:<pc hex>:<rA>:<rB>:<rC>[:<scale>][;<next probe>...]: the fragment program draws those registers as its colour
          * (debugging aid; several probes are cycled every 30 frames so one run can capture them all) */
         const char *pr = getenv("NAPPLE_SHADER_PROBE");
@@ -1298,6 +1307,10 @@ static ShaderKey stage_vs_key(const pipe_key *k) {
     vk.image_uint_mask = k->img_uint[0];
     vk.tex_uint_slots = k->tex_uint[0];
     vk.tex_sint_slots = k->tex_sint[0];
+    vk.sep_depth_slots = k->sep_depth[0];
+    vk.sep_stencil_slots = k->sep_stencil[0];
+    vk.sep_uint_slots = k->sep_uint[0];
+    vk.sep_sint_slots = k->sep_sint[0];
     vk.flip_y = k->flip_y;
     vk.depth_minus_one = k->depth_mode == 0;
     return vk;
@@ -1317,12 +1330,16 @@ static GfxShader *stage_fs(const pipe_key *k, uint32_t vs_out_mask) {
     fk.image_uint_mask = k->img_uint[1];
     fk.tex_uint_slots = k->tex_uint[1];
     fk.tex_sint_slots = k->tex_sint[1];
+    fk.sep_depth_slots = k->sep_depth[1];
+    fk.sep_stencil_slots = k->sep_stencil[1];
+    fk.sep_uint_slots = k->sep_uint[1];
+    fk.sep_sint_slots = k->sep_sint[1];
     return shader_variant(k->fs, &fk, 1);
 }
 /* Pass-through vertex function of the geometry output: record r of gs_vtx -> position + the generic slots the program stores (+ point size for points). */
-static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip) {
+static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip, uint16_t swz) {
     static NSMutableDictionary<NSNumber *, id<MTLFunction>> *cache;
-    NSNumber *ck = @((slots * 2 + (uint64_t)(points != 0)) ^ ((uint64_t)(clip & 3) << 62));
+    NSNumber *ck = @((slots * 2 + (uint64_t)(points != 0)) ^ ((uint64_t)(clip & 3) << 62) ^ ((uint64_t)swz << 40));
     @synchronized([GfxPipe class]) {
         if (!cache) cache = [NSMutableDictionary dictionary];
         if (cache[ck]) return cache[ck];
@@ -1338,6 +1355,16 @@ static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip) {
     else [m appendString:@"  uint r = vid;\n"];
     [m appendFormat:@"  device const float4 *s = gs_vtx + r * %uu;\n  o.pos = s[%d];\n", STAGE_SLOTS, STAGE_SLOT_POS];
     /* the clip-space conversions happen here, not in the geometry kernel: gs_vtx keeps the program's own values for transform feedback */
+    if (swz) { /* viewport swizzle (ShaderKey.vp_swizzle) */
+        uint32_t sw = swz ^ VP_SWIZZLE_IDENTITY;
+        static const char cn[4] = {'x', 'y', 'z', 'w'};
+        [m appendString:@"  { float4 q = o.pos; o.pos = float4("];
+        for (int i = 0; i < 4; i++) {
+            uint32_t v = (sw >> (3 * i)) & 7;
+            [m appendFormat:@"%s%sq.%c", i ? ", " : "", v & 1 ? "-" : "", cn[v >> 1]];
+        }
+        [m appendString:@"); }\n"];
+    }
     if (clip & 1) [m appendString:@"  o.pos.y = -o.pos.y;\n"];
     if (clip & 2) [m appendString:@"  o.pos.z = (o.pos.z + o.pos.w) * 0.5f;\n"];
     for (int i = 0; i < 32; i++)
@@ -1383,7 +1410,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         d.rasterizationEnabled = NO; /* the capture function is `vertex void` (ShaderKey.capture_void): no rasterizer work at all */
     } else if (sk->mode == SPK_GS_DRAW) {
         int points = sk->gs_topo == GS_OUT_POINTS;
-        vfn = gs_passthrough_fn(sk->gs_slots, points, sk->gs_clip);
+        vfn = gs_passthrough_fn(sk->gs_slots, points, sk->gs_clip, k->vp_swizzle);
         if (!vfn) return;
         fs = stage_fs(k, generic_mask(sk->gs_slots));
         if (k->fs && fs->state != 1) return;
@@ -1398,6 +1425,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         if (!cap) {
             tk.flip_y = k->flip_y;
             tk.depth_minus_one = k->depth_mode == 0;
+            tk.vp_swizzle = k->vp_swizzle;
         }
         tk.tess_soft = 1;
         tk.stage_out = (uint8_t)cap;
@@ -1429,6 +1457,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         ShaderKey tk = {0};
         tk.flip_y = k->flip_y;
         tk.depth_minus_one = k->depth_mode == 0;
+        tk.vp_swizzle = k->vp_swizzle;
         tk.tess_domain = sk->tess_domain;
         tk.tess_out_vertices = sk->tess_cp;
         tk.depth_slots = sk->te_depth;
@@ -1488,6 +1517,8 @@ GfxPipe *mtl_stage_pipe_get(const stage_pipe_key *k0, const gfx_xfb_layout *xfb)
         kn.k.samples = 1;
         kn.k.a2c = 0;
         kn.k.depth_slots[1] = kn.k.stencil_slots[1] = kn.k.img_int[1] = kn.k.img_uint[1] = kn.k.tex_uint[1] = kn.k.tex_sint[1] = 0;
+        kn.k.sep_depth[1] = kn.k.sep_stencil[1] = kn.k.sep_uint[1] = kn.k.sep_sint[1] = 0;
+        kn.k.vp_swizzle = 0;
     }
     kn.k.probe = 0;
     NSNumber *key = @(fnv1a(&kn, sizeof kn, FNV_INIT) ^ 0x5354474550495045ull);

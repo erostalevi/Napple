@@ -829,7 +829,15 @@ NVN(nvnCommandBufferSetTiledCacheTileSize, void, NVNcommandBuffer *c, int w, int
 NVN(nvnCommandBufferSetConservativeRasterEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
 NVN(nvnCommandBufferSetConservativeRasterDilate, void, NVNcommandBuffer *c, float d) { (void)c; (void)d; }
 NVN(nvnCommandBufferSetSubpixelPrecisionBias, void, NVNcommandBuffer *c, int x, int y) { (void)c; (void)x; (void)y; }
-NVN(nvnCommandBufferSetViewportSwizzles, void, NVNcommandBuffer *c, int f, int n, const NVNviewportSwizzle *s) { (void)c; (void)f; (void)n; (void)s; }
+/* Viewport swizzles: four NVNviewportSwizzle values (x, y, z, w outputs) per viewport, applied to the clip position by the vertex program (ShaderKey.vp_swizzle). */
+NVN(nvnCommandBufferSetViewportSwizzles, void, NVNcommandBuffer *c, int first, int n, const NVNviewportSwizzle *s) {
+    if (first < 0 || first >= 16 || n <= 0 || !s) return;
+    if (first + n > 16) n = 16 - first;
+    p_range *p = REC_N(c, p_range, OP_VP_SWIZZLE, (size_t)n * 4);
+    p->first = (uint32_t)first; p->n = (uint32_t)n;
+    uint8_t *v = (uint8_t *)(p + 1);
+    for (int i = 0; i < 4 * n; i++) v[i] = (uint8_t)((uint32_t)s[i] & 7u);
+}
 NVN(nvnCommandBufferSetShaderScratchMemory, void, NVNcommandBuffer *c, const NVNmemoryPool *p, ptrdiff_t o, size_t s) { (void)c; (void)p; (void)o; (void)s; }
 NVN(nvnCommandBufferSaveZCullData, void, NVNcommandBuffer *c, NVNbufferAddress a, size_t s) { (void)c; (void)a; (void)s; }
 NVN(nvnCommandBufferRestoreZCullData, void, NVNcommandBuffer *c, NVNbufferAddress a, size_t s) { (void)c; (void)a; (void)s; }
@@ -868,14 +876,15 @@ NVN(nvnCommandBufferSetStencilCullCriteria, void, NVNcommandBuffer *c, int a, in
 /* Tiled-cache and ZCull tuning: Metal's tile-based renderer chooses its own tile size and depth compression, so both are hints with nothing to apply. */
 NVN(nvnCommandBufferOverrideSubtileSize, void, NVNcommandBuffer *c, int w, int h) { (void)c; (void)w; (void)h; }
 NVN(nvnCommandBufferSetZCullZF32CompressionEnable, void, NVNcommandBuffer *c, uint32_t e) { (void)c; (void)e; }
-/* Provoking vertex (the vertex whose flat-shaded outputs a primitive uses). Metal has no switch for it and the translator has no key bit to rotate the flat
- * inputs yet: the mode is kept (gfx_cmd_provoking_vertex_mode, tests) and a non-zero mode is reported once. */
+/* Provoking vertex (the vertex whose flat-shaded outputs a primitive uses), recorded for the replay: 0 the first vertex (Metal's own convention, the default),
+ * 1 the last (the replay reorders each primitive, pv_last_indices in mtl_replay.m). The values follow the Maxwell register (0 first, 1 last); the NVN enum is
+ * not in the public headers, so this mapping is the assumption no title on hand has tested. The last mode set is also kept for tests. */
 static _Atomic int g_provoking_mode;
 int gfx_cmd_provoking_vertex_mode(void) { return atomic_load(&g_provoking_mode); }
 NVN(nvnCommandBufferSetProvokingVertexMode, void, NVNcommandBuffer *c, int mode) {
-    (void)c;
     atomic_store(&g_provoking_mode, mode);
-    if (mode) LOG_ONCE(NAPPLE_LOG_INFO, "SetProvokingVertexMode(%d): flat-shaded outputs keep Metal's provoking vertex (no translator support yet)", mode);
+    *(uint32_t *)rec_op(c, OP_PROVOKING, 4) = (uint32_t)mode;
+    if (mode) LOG_ONCE(NAPPLE_LOG_INFO, "SetProvokingVertexMode(%d): flat-shaded outputs from each primitive's last vertex", mode);
 }
 NVN(nvnCommandBufferSetProgramSubroutines, void, NVNcommandBuffer *c, NVNprogram *p, NVNshaderStage s, const int a, const int b, const int *v) { (void)c; (void)p; (void)s; (void)a; (void)b; (void)v; }
 

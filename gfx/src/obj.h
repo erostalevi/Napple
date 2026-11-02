@@ -219,7 +219,9 @@ enum {
     OP_COPY_B2B, OP_COPY_B2T, OP_COPY_T2B, OP_COPY_T2T, OP_DOWNSAMPLE, OP_UPDATE_UBO, OP_COPY_STRIDES,
     OP_FENCE_SYNC, OP_WAIT_SYNC, OP_SIGNAL_EVENT, OP_WAIT_EVENT, OP_REPORT_COUNTER, OP_RESET_COUNTER, OP_BARRIER,
     OP_DISCARD_COLOR, OP_DISCARD_DS, OP_DRAW_TEXTURE, OP_SCREEN_MARK, OP_DRAW_IND_COUNT,
-    OP_PATCH_SIZE, OP_TESS_LEVELS, OP_BIND_XFB, OP_XFB, OP_DRAW_XFB, OP_COUNT
+    OP_PATCH_SIZE, OP_TESS_LEVELS, OP_BIND_XFB, OP_XFB, OP_DRAW_XFB,
+    OP_VP_SWIZZLE, OP_PROVOKING, /* p_range + n x 4 NVNviewportSwizzle bytes (x, y, z, w per viewport); u32 provoking vertex mode */
+    OP_COUNT
 };
 
 /* Payloads (follow op_hdr). All pointer-sized fields are raw guest/GPU addresses or handles; nothing points into guest-owned objects. */
