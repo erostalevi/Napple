@@ -6,10 +6,10 @@ base: claude/net-host-provider-2026-11-02-r6 (merge it again once handed off; la
 env: mac
 model: claude-opus-5-5
 depends_on: [net-host-provider]
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_d8199ac5-b4e7-45f0-8d48-22e3a3ab703e (fresh)
+launched_at: 2026-11-02
 ---
 
 # net-rooms: local wireless (LDN) and LAN Play between Napple instances over the internet
