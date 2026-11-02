@@ -117,12 +117,13 @@ void nifm_request_submit(NifmRequest *r) {
     r->state = res == 0 ? NIFM_STATE_ACCEPTED : NIFM_STATE_FREE; /* the NullProvider rejects at once: communication disabled */
     r->result = res;
 }
+/* Only an accepted request gives its connection back and starts over. A request nifm already rejected keeps its result: the SDK cancels it before
+ * HandleNetworkRequestResult asks GetAppletInfo which applet resolves the failure (MK8D Online Play: Submit, GetResult, Cancel, GetAppletInfo). */
 void nifm_request_cancel(NifmRequest *r) {
-    if (r->state == NIFM_STATE_ACCEPTED) {
-        const OnlineProvider *p = online_provider();
-        void (*rel)(void *) = ONLINE_FN(p, net_release);
-        if (rel) rel(p->ctx);
-    }
+    if (r->state != NIFM_STATE_ACCEPTED) return;
+    const OnlineProvider *p = online_provider();
+    void (*rel)(void *) = ONLINE_FN(p, net_release);
+    if (rel) rel(p->ctx);
     nifm_request_init(r);
 }
 uint32_t nifm_request_result(const NifmRequest *r) { return r->result; }
