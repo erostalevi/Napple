@@ -37,10 +37,14 @@ int main(void) {
     timescale_set(1.0, 0);
     /* a step is judged against the real time that passed between the two reads (a loaded host can preempt the loop for milliseconds): the guest
      * clock may advance by at most 7.5x the real time of the step (the fastest factor used) plus a small slack, whatever the load */
-    uint64_t prev = timescale_guest_ns(); int backwards = 0; uint64_t maxexcess = 0, maxstep = 0;
+    /* the window brackets both guest reads: from the host read taken just before the previous guest read to the one just after this one, so a
+     * preemption between a guest read and its host read cannot make a step look too large */
     struct timespec ts0; clock_gettime(CLOCK_MONOTONIC, &ts0);
     uint64_t real0 = (uint64_t)ts0.tv_sec * 1000000000ull + (uint64_t)ts0.tv_nsec;
+    uint64_t prev = timescale_guest_ns(); int backwards = 0; uint64_t maxexcess = 0, maxstep = 0;
     for (int i = 0; i < 2000; i++) {
+        struct timespec tb; clock_gettime(CLOCK_MONOTONIC, &tb);
+        uint64_t realb = (uint64_t)tb.tv_sec * 1000000000ull + (uint64_t)tb.tv_nsec;
         timescale_set(i % 2 ? 7.5 : 0.25, 0);
         uint64_t cur = timescale_guest_ns();
         struct timespec t1; clock_gettime(CLOCK_MONOTONIC, &t1);
@@ -49,7 +53,7 @@ int main(void) {
         uint64_t step = cur - prev, allowed = (uint64_t)((double)(real1 - real0) * 7.5) + 100000;
         if (step > maxstep) maxstep = step;
         if (step > allowed && step - allowed > maxexcess) maxexcess = step - allowed;
-        prev = cur; real0 = real1;
+        prev = cur; real0 = realb;
     }
     CHECK(backwards == 0, "guest clock is monotonic across %d speed changes", 2000);
     CHECK(maxexcess == 0, "no jump at a speed change (largest step %llu ns, over the real-time bound by %llu ns)", (unsigned long long)maxstep, (unsigned long long)maxexcess);
@@ -80,9 +84,13 @@ int main(void) {
     }
     /* guest ticks (19.2 MHz) agree with the guest clock */
     timescale_set(2.0, 0);
+    /* bracketed by host clock reads: a loaded host (CI VM) can stretch the 100 ms sleep, so the upper bound is 2x the real time that actually
+     * passed around the tick reads, not 2x 100 ms; the lower bound stays 2x the sleep (a 1x clock would give 0.1) */
+    uint64_t tr0 = runtime_now_ns();
     uint64_t t_a = runtime_guest_ticks(); real_sleep_ms(100); uint64_t t_b = runtime_guest_ticks();
+    double treal = (double)(runtime_now_ns() - tr0) / 1e9;
     double secs = (double)(t_b - t_a) / 19200000.0;
-    CHECK(secs > 0.19 && secs < 0.23, "100 ms real at 2x = %.3f guest seconds of ticks", secs);
+    CHECK(secs > 0.19 && secs < 2.0 * treal + 0.01, "100 ms real (%.3f s measured) at 2x = %.3f guest seconds of ticks", treal, secs);
 
     /* wall clock skew is the accumulated difference (0 when the clock is never scaled) */
     /* measured as a delta from the skew the earlier sections left (their retry loops run a variable time at 2x / 0.5x), over the real elapsed time (a
