@@ -1,4 +1,5 @@
 mod clean;
+mod cloud;
 
 use napple_core::application::decomp;
 use napple_core::application::ingest::ingest;
@@ -13,6 +14,8 @@ const USAGE: &str = "usage:
   napple plan   <files...> -k <prod.keys> [--updates all|latest|none|<v,v>] [--dlc all|none|<id,id>] [--json]
   napple clean  [--shader-cache] [--build-cache <dir>] [--engine <dir>] [--dry-run]   (removes rebuildable artifacts)
   napple decomp <files...> -k <prod.keys> [--updates ...] [--dlc ...] [-o <dir>] [--json]
+  napple account login|logout|status|devices|approve|recover|profiles|link|plan|upgrade   (Napple Account)
+  napple saves   list|pull|push|history|restore|enable|disable <title-id>               (end-to-end encrypted cloud saves)
 files: base game, updates and DLC (XCI/NSP), any order, one or several files.";
 
 struct Args {
@@ -262,6 +265,8 @@ fn main() {
         Some("build") => Some(napple_build::run),
         Some("mods") => Some(napple_mods::run),
         Some("clean") => Some(clean::run),
+        Some("account") => Some(cloud::account),
+        Some("saves") => Some(cloud::saves),
         _ => None,
     };
     if let Some(f) = ext {

@@ -841,6 +841,7 @@ name = "napple-cli"
 version = "0.0.1"
 dependencies = [
  "napple-build",
+ "napple-cloud",
  "napple-compat",
  "napple-core",
  "napple-mods",
