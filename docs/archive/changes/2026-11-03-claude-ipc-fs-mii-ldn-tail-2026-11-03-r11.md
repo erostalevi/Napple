@@ -19,3 +19,6 @@
 
 ## Not done / notes
 - Nothing in `runtime/src/net/` calls `ldn_push_action_frame` yet (out of this session's ownership); a send hook for 502 is also still missing.
+
+## Verified
+`make -C runtime GFX=napple test test-services test-ipc-reference` passes (missing 0). Four-title 60 s headless boots: rc 0, `missing_ipc []` (one title still loading at the limit, no crash).
