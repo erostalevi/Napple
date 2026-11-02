@@ -221,3 +221,4 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | Note | Summary |
 |---|---|
 | [2026-11-02-claude-napple-account-2026-11-02-r8](2026-11-02-claude-napple-account-2026-11-02-r8.md) | napple-account: the Napple Account server (email magic link + passkeys, devices, Ed25519 JWT + JWKS, E2E save-key exchange, profiles with reserved names and admin grants, cloud-save metadata with presigned S3 URLs); no billing. |
+| [2026-11-02-claude-cloud-saves-client-2026-11-02-r8](2026-11-02-claude-cloud-saves-client-2026-11-02-r8.md) | cloud-saves-client: end-to-end encrypted cloud saves (crates/napple-cloud: Keychain store, HPKE key wrap, 24-word recovery, deterministic AES-256-GCM blobs, sync engine, runtime FFI), runtime pull-before-mount / push-after-commit hooks, `napple account` / `napple saves` CLI. |
