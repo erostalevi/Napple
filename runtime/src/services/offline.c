@@ -330,7 +330,7 @@ static void nifm_ip_config(IpcObject *s, IpcCall *c) {
 static void nifm_ip(IpcObject *s, IpcCall *c) {
     (void)s;
     OnlineNetInfo ni;
-    uint32_t v = nifm_info(&ni) ? ni.ip : 0;
+    uint32_t v = nifm_info(&ni) ? htonl(ni.ip) : 0; /* an in_addr (network byte order), like GetCurrentIpConfigInfo */
     IPC_OUT(c, v);
 }
 /* Communication settings of the nifm service (service-wide, shared by all clients): wireless on by default (the console's airplane mode is off), ethernet off (no
