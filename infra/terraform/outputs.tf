@@ -4,7 +4,7 @@ output "instance_id" {
 }
 
 output "public_ip" {
-  description = "Elastic IP of the servers (handed to napple-online as NAPPLE_ONLINE_PUBLIC_IP for NEX station URLs)."
+  description = "Elastic IP of the servers (the pretend A record)."
   value       = aws_eip.servers.public_ip
 }
 

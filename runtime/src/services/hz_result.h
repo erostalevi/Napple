@@ -53,6 +53,7 @@ enum {
 #define HZ_R_SSL_NOT_CONNECTED HZ_RESULT(HZ_MOD_SSL, 205)                              /* [unverified] */
 #define HZ_R_SSL_INVALID_ARGUMENT HZ_RESULT(HZ_MOD_SSL, 2)                             /* [unverified] a bad option, size, format or a second client cert */
 #define HZ_R_SSL_NOT_FOUND HZ_RESULT(HZ_MOD_SSL, 3)                                    /* [unverified] an unknown CRL id, certificate id or index */
+#define HZ_R_SSL_WOULD_BLOCK HZ_RESULT(HZ_MOD_SSL, 204) /* a non-blocking connection has nothing to read or write yet (MK8D's NEX loop waits for it) */
 
 /* BSD errno values as the Horizon socket service reports them (FreeBSD numbering). */
 enum {

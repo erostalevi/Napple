@@ -150,7 +150,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 - [2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
 - [2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
 
-## Unattended rounds (2026-10-27-b7 to 2026-11-02-r7)
+## Unattended rounds (2026-10-27-b7 to 2026-11-02-r8)
 Hand-off files of these rounds (orchestrations and integrator files) are in the [process archive](../../process/archive/README.md).
 
 ### Batch 2026-10-27-b7 (notes not listed above)
@@ -215,3 +215,10 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | [2026-11-02-claude-napple-infra-2026-11-02-r7](2026-11-02-claude-napple-infra-2026-11-02-r7.md) | AWS auto-deploy of the game servers to `pretend.napple.lat` (OpenTofu, Docker + Caddy, a workflow that skips without secrets), `napple.lat` DNS to GitHub Pages, the native local test stack. |
 | [2026-11-02-claude-net-rooms-2026-11-02-r7](2026-11-02-claude-net-rooms-2026-11-02-r7.md) | Napple rooms: the `napple-room` relay server (own protocol, std only) and the runtime client (`NAPPLE_ROOM`): virtual LAN and LDN between Napple instances over the internet. |
 | [2026-11-02-claude-mk8d-lan-session-2026-11-02-r7](2026-11-02-claude-mk8d-lan-session-2026-11-02-r7.md) | bsd replies use the console's (Linux) errno numbers (MK8D 2618-0006 fixed), nifm GetCurrentIpConfigInfo, a per-installation GetPseudoDeviceId, friend 10700, ldn GetSecurityParameter; two MK8D instances meet in a LAN Play room through napple-room. |
+| [2026-11-02-claude-napple-online-2026-11-02-r7](2026-11-02-claude-napple-online-2026-11-02-r7.md) | napple-online: Napple-run accounts/tokens and a NEX game server (PRUDP Lite over WebSocket), runtime client glue (`NAPPLE_ONLINE_SERVER`), ssl IoMode + ResultWouldBlock; MK8D reaches its online menu. |
+
+### Round 2026-11-02-r8
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-napple-account-2026-11-02-r8](2026-11-02-claude-napple-account-2026-11-02-r8.md) | napple-account: the Napple Account server (email magic link + passkeys, devices, Ed25519 JWT + JWKS, E2E save-key exchange, profiles with reserved names and admin grants, cloud-save metadata with presigned S3 URLs); no billing. |
+| [2026-11-02-claude-cloud-saves-client-2026-11-02-r8](2026-11-02-claude-cloud-saves-client-2026-11-02-r8.md) | cloud-saves-client: end-to-end encrypted cloud saves (crates/napple-cloud: Keychain store, HPKE key wrap, 24-word recovery, deterministic AES-256-GCM blobs, sync engine, runtime FFI), runtime pull-before-mount / push-after-commit hooks, `napple account` / `napple saves` CLI. |

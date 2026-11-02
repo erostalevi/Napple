@@ -6,7 +6,7 @@ base: claude/net-host-provider-2026-11-02-r6 (merge it again once handed off; la
 env: mac
 model: claude-opus-5-5
 depends_on: [net-host-provider]
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_8e7ca377-aa50-49b2-bdc8-9625b3743e48 (fresh)
 launched_at: 2026-11-02
@@ -41,3 +41,6 @@ net-rooms' paths (`crates/napple-room/`, `net_room*`, LDN/LAN relay hooks), `gfx
 Read `orchestrations/ENV-MAC.md` (shared data read-only, locks, local-only, never ask). Two simultaneous instances: one job under the run lock, ≤120 s.
 
 ## Result
+Integrated 2026-11-02 into main as a979903 (head 193474f, which carries the ssl IoMode change), outcome **Clean**. Acceptance 2, 3, 5 checked; acceptance 4
+verified here (MK8D reaches the online menu through a local napple-online); the stretch (two instances in one room) moved to online-pia.
+Details: [integrator file](../integrators/claude-napple-online-2026-11-02-r7.md).

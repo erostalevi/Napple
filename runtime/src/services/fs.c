@@ -857,14 +857,22 @@ static void meta_bump_commit_id(const char *root) {
     }
     pthread_mutex_unlock(&g_meta_mu);
 }
+/* Cloud saves hooks (runtime/src/cloud/cloud.c): a commit that took a new snapshot schedules a debounced background push; both clean exits
+ * (fs_report_uncommitted) push what is pending. Weak no-ops here so builds without runtime/src/cloud (CLOUD=0, tools/build_ios.sh) link. */
+__attribute__((weak)) void cloud_on_commit(const char *root) { (void)root; }
+__attribute__((weak)) void cloud_on_exit(void) {}
 static void fs_commit(IpcObject *s, IpcCall *c) {
     HostFs *fs = s->state;
     if (fs_trace()) LOG("fs", "Commit %s%s (thread %#llx)", fs->root, fs->journal ? (fs->journal->dirty ? " (changes pending)" : " (clean)") : " (not transactional)",
                             (unsigned long long)threads_current_id());
     if (fs->journal) {
+        int had_changes = fs->journal->dirty;
         uint32_t r = journal_commit(fs->journal);
         if (r) c->result = r;
-        else meta_bump_commit_id(fs->root);
+        else {
+            meta_bump_commit_id(fs->root);
+            if (had_changes) cloud_on_commit(fs->root);
+        }
     } else sync();
 }
 /* Sizes: a save created with a size answers from it (free = size - blocks in use); everything else reports 1 GiB. */
@@ -2606,4 +2614,5 @@ void fs_report_uncommitted(void) {
         if (g_journals[i]->dirty)
             LOG("fs", "save %s: changes since the last commit are discarded (%u commits this run)", g_journals[i]->live, g_journals[i]->commits);
         else if (g_journals[i]->commits) LOG("fs", "save %s: %u commits this run, nothing pending", g_journals[i]->live, g_journals[i]->commits);
+    cloud_on_exit();
 }

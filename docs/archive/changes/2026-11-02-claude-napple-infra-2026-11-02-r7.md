@@ -5,10 +5,10 @@ Branch `claude/napple-infra-2026-11-02-r7` (Mac session, base `91c5b2e`). Guide:
 ## What changed
 - `infra/docker/`: multi-stage Dockerfiles for `napple-online` and `napple-room` (build context allowlisted to the Rust workspace, non-root
   Debian slim runtime, `/healthz` health checks), `compose.yml` with Caddy terminating TLS for `pretend.napple.lat` (`/room/*` -> room, the rest ->
-  online), the NEX UDP ports and the room port published directly; `compose.aws.yml` (EBS bind mounts, CloudWatch logs) and `compose.build.yml`.
+  online, NEX as a WebSocket included), the room port published directly; `compose.aws.yml` (EBS bind mounts, CloudWatch logs) and `compose.build.yml`.
 - `infra/terraform/bootstrap/`: the S3 state bucket (locking with S3 lock files, no DynamoDB), created once by the workflow, which then migrates
   the stack's own state into the bucket.
-- `infra/terraform/`: own VPC, public subnet, security group (80/443, 443/udp, 60000-60010/udp, 31415 tcp+udp, no SSH), t4g.micro on AL2023
+- `infra/terraform/`: own VPC, public subnet, security group (80/443, 443/udp, 31415 tcp+udp, no SSH), t4g.micro on AL2023
   with Docker + Compose from user data (8 GB root, standard CPU credits), Elastic IP, a 1 GB encrypted data volume at `/var/lib/napple`, instance role (SSM, ECR pull, logs),
   two immutable-tag ECR repositories, the log group, and the Route 53 records in the existing zone: `pretend` A, apex A/AAAA to GitHub Pages,
   `www` and `*` CNAME to `<owner>.github.io`, an optional Pages verification TXT.
@@ -24,7 +24,8 @@ Branch `claude/napple-infra-2026-11-02-r7` (Mac session, base `91c5b2e`). Guide:
 ## Status
 - **tested**: both stacks `tofu fmt -check`, `validate` and `tofu test` (10 mocked plan runs, no AWS call); actionlint and shellcheck clean; the
   workflow's guard and image-source steps run for 8 + 3 cases; the stand-in's entrypoint and health check run natively; `docker compose config` of the three compose combinations; `tools/check_docs.py`.
-- **verified (plumbing only)**: `infra/local/run.sh` with the stand-in server: start, `/healthz`, UDP echo on the NEX ports, TCP on the room port,
+- **verified (plumbing only)**: `infra/local/run.sh` with the stand-in server: start, `/healthz`, TCP on the room port,
   refusal of a second start, clean stop, failure cleanup.
-- **untested**: the `destroy` path, the Docker image builds (the stand-in's too) (no Docker on this Mac), any real AWS apply, the SSM roll, Caddy's certificate, the real server
-  binaries (the crates were not committed on their branches at hand-off).
+- **verified (real servers)**: `infra/local/run.sh` builds and starts the merged napple-online (f7c5b68) and napple-room (93da095) crates;
+  both `/healthz` answer `ok`, `/rooms` lists none, stop is clean. napple-online needs no UDP (NEX is a WebSocket on its HTTP port), so no NEX ports are opened.
+- **untested**: the `destroy` path, the Docker image builds (the stand-in's too) (no Docker on this Mac), any real AWS apply, the SSM roll, Caddy's certificate, the real server images on Linux.

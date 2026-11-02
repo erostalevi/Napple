@@ -199,26 +199,62 @@ static void manager_na_cache(IpcObject *s, IpcCall *c) {
         ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
     }
 }
-/* 2 EnsureIdTokenCacheAsync -> IAsyncContext: fetches the user's id token into the manager's cache; the outcome is acc_nsa_result (no token can be
- * fetched without an id-token provider hook, so the cache never fills). */
-static void manager_ensure_token(IpcObject *s, IpcCall *c) {
-    AccManager *m = s->state;
-    uint32_t r = acc_nsa_result(m ? m->uid : g_user_id);
-    if (m) m->ensured = 1, m->ensure_result = r;
-    out_async(c, r, 0);
+/* The ID token of the linked account (napple-online): the provider's account_id_token. A provider without one (the NullProvider, the bare host provider)
+ * keeps the old answer, the generic error, so nothing changes for an unlinked user. */
+static size_t (*id_token_fn(const OnlineProvider **pp))(void *, const uint8_t[16], char *, size_t) {
+    const OnlineProvider *p = online_provider();
+    *pp = p;
+    return online_has(p, ONLINE_CAP_ACCOUNT) ? ONLINE_FN(p, account_id_token) : NULL;
 }
-/* 3 LoadIdTokenCache (LoadIdTokenCacheDeprecated since 19.0.0) / 4 LoadIdTokenCache [19.0.0+] (out buffer) -> u32 size: copies the cached id token. The
- * cache is empty: the call fails with how the last EnsureIdTokenCacheAsync ended, or (none yet) with the user's account state. A cache that could be
- * filled would be copied here; with r == 0 and nothing cached the size is 0. */
-static void manager_load_token(IpcObject *s, IpcCall *c) {
-    AccManager *m = s->state;
-    uint32_t r = m && m->ensured ? m->ensure_result : acc_nsa_result(m ? m->uid : g_user_id);
-    if (r) {
-        c->result = r;
+#define ACC_ID_TOKEN_MAX 0xc00u /* the SDK's id token cache buffer */
+/* IAsyncContext of EnsureIdTokenCacheAsync: the request ran when the context was made (its event is signalled at once); state = the result. */
+static void acc_async_event(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint32_t r = 0;
+    uint32_t w = event_create(&r);
+    event_signal_handle(w);
+    ipc_out_copy_handle(c, r);
+}
+static void acc_async_has_done(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = 1;
+    IPC_OUT(c, v);
+}
+static void acc_async_result(IpcObject *s, IpcCall *c) { c->result = (uint32_t)(uintptr_t)s->state; }
+static const IpcCmd acc_async_cmds[] = {{0, "GetSystemEvent", acc_async_event, IPC_IMPL},
+                                        {1, "Cancel", sysd_ok, IPC_IMPL},
+                                        {2, "HasDone", acc_async_has_done, IPC_IMPL},
+                                        {3, "GetResult", acc_async_result, IPC_IMPL}};
+/* 2 EnsureIdTokenCacheAsync -> IAsyncContext: fetches the token now (the provider caches it), so LoadIdTokenCache answers from the cache. */
+static void manager_ensure_id_token(IpcObject *s, IpcCall *c) {
+    const OnlineProvider *p;
+    size_t (*f)(void *, const uint8_t[16], char *, size_t) = id_token_fn(&p);
+    if (!f) {
+        sysd_err_generic(s, c);
         return;
     }
-    uint32_t n = 0;
-    IPC_OUT(c, n);
+    char tok[ACC_ID_TOKEN_MAX];
+    uint32_t res = f(p->ctx, g_user_id, tok, sizeof tok) ? 0 : IPC_R_UNKNOWN_COMMAND;
+    ipc_out_object(c, IPC_OBJECT("IAsyncContext", acc_async_cmds, (void *)(uintptr_t)res, NULL));
+}
+/* 3 LoadIdTokenCacheDeprecated / 4 LoadIdTokenCache -> u32 size, the token in the output buffer. */
+static void manager_load_id_token(IpcObject *s, IpcCall *c) {
+    const OnlineProvider *p;
+    size_t (*f)(void *, const uint8_t[16], char *, size_t) = id_token_fn(&p);
+    if (!f) {
+        sysd_err_generic(s, c);
+        return;
+    }
+    char tok[ACC_ID_TOKEN_MAX];
+    size_t n = f(p->ctx, g_user_id, tok, sizeof tok);
+    if (!n) {
+        c->result = IPC_R_UNKNOWN_COMMAND;
+        return;
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b) n = ipc_write_buf(c, b, tok, b->size < n ? b->size : n);
+    uint32_t v = (uint32_t)n;
+    IPC_OUT(c, v);
 }
 /* 160 StoreOpenContext: keeps this manager's user as an open context the next application can load (acc:u0 130 LoadOpenContext). */
 static void manager_store_open_context(IpcObject *s, IpcCall *c) {
@@ -239,9 +275,9 @@ static void manager_license_kind(IpcObject *s, IpcCall *c) {
 static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IPC_IMPL},
                                       {1, "GetAccountId", manager_account_id, IPC_IMPL},
                                       {130, "GetNintendoAccountUserResourceCacheForApplication", manager_na_cache, IPC_IMPL},
-    {2, "EnsureIdTokenCacheAsync", manager_ensure_token, IPC_IMPL},
-    {3, "LoadIdTokenCacheDeprecated", manager_load_token, IPC_IMPL},
-    {4, "LoadIdTokenCache", manager_load_token, IPC_IMPL},
+    {2, "EnsureIdTokenCacheAsync", manager_ensure_id_token, IPC_IMPL},
+    {3, "LoadIdTokenCacheDeprecated", manager_load_id_token, IPC_IMPL},
+    {4, "LoadIdTokenCache", manager_load_id_token, IPC_IMPL},
     /* 150: IAuthorizationRequest (an OAuth flow with the Nintendo Account server through transfer memory); the input layout is not documented */
     {150, "CreateAuthorizationRequest", sysd_err_generic, IPC_STUB},
     {160, "StoreOpenContext", manager_store_open_context, IPC_IMPL},

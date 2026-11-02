@@ -69,16 +69,19 @@ static uint32_t async_outcome(IpcObject *o, unsigned cmd, const void *in, uint32
 static void t_offline(IpcObject *u, IpcObject *m) {
     online_provider_install(NULL);
     IpcCall c;
-    CHECK(async_outcome(m, 2, NULL, 0, NULL) == HZ_R_ACC_NSA_REGISTRATION_REQUIRED, "NullProvider: 2 EnsureIdTokenCacheAsync ends with NSA registration required");
+    /* 2 / 3 / 4 are napple-online's (main): a provider without an id-token hook keeps the old generic answer, no object */
+    memset(&c, 0, sizeof c);
+    svc_call_c(m, 2, &c);
+    CHECK(c.result == IPC_R_UNKNOWN_COMMAND && c.nout_objects == 0, "NullProvider: 2 EnsureIdTokenCacheAsync keeps the generic answer");
     uint8_t tok[64];
     memset(&c, 0, sizeof c);
     svc_set_out_buf(&c, tok, sizeof tok);
     svc_call_c(m, 3, &c);
-    CHECK(c.result == HZ_R_ACC_NSA_REGISTRATION_REQUIRED, "...3 LoadIdTokenCache: nothing cached, the ensure's outcome");
+    CHECK(c.result == IPC_R_UNKNOWN_COMMAND, "...3 LoadIdTokenCache: the generic answer");
     memset(&c, 0, sizeof c);
     svc_set_out_buf(&c, tok, sizeof tok);
     svc_call_c(m, 4, &c);
-    CHECK(c.result == HZ_R_ACC_NSA_REGISTRATION_REQUIRED, "...4 LoadIdTokenCache (19.0.0+) the same");
+    CHECK(c.result == IPC_R_UNKNOWN_COMMAND, "...4 LoadIdTokenCache (19.0.0+) the same");
     IpcObject *lk = NULL;
     CHECK(async_outcome(m, 170, NULL, 0, &lk) == HZ_R_ACC_NSA_REGISTRATION_REQUIRED, "170 LoadNetworkServiceLicenseKindAsync: NSA registration required");
     if (lk) {
@@ -94,23 +97,22 @@ static void t_offline(IpcObject *u, IpcObject *m) {
         memset(&c, 0, sizeof c);
         svc_set_out_buf(&c, tok, sizeof tok);
         svc_call_c(m2, 3, &c);
-        CHECK(c.result == HZ_R_ACC_NSA_REGISTRATION_REQUIRED, "a fresh manager's LoadIdTokenCache: NSA registration required");
+        CHECK(c.result == IPC_R_UNKNOWN_COMMAND, "a fresh manager's LoadIdTokenCache: the generic answer");
         drop(m2);
     }
 }
 static void t_providers(IpcObject *u, IpcObject *m) {
     online_provider_install(&t_host);
-    CHECK(async_outcome(m, 2, NULL, 0, NULL) == HZ_R_ACC_NSA_REGISTRATION_REQUIRED, "host-like provider (network, no account): still NSA registration required");
+    {
+        IpcCall e;
+        memset(&e, 0, sizeof e);
+        svc_call_c(m, 2, &e);
+        CHECK(e.result == IPC_R_UNKNOWN_COMMAND, "host-like provider (no id-token hook): 2 keeps the generic answer");
+    }
     CHECK(async_outcome(u, 103, NULL, 0, NULL) == HZ_R_ACC_NSA_REGISTRATION_REQUIRED, "...103 the same");
     online_provider_install(&t_provider);
     g_linked = 1;
-    CHECK(async_outcome(m, 2, NULL, 0, NULL) == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "linked user: the account server is unreachable (no id-token hook)");
-    IpcCall c;
-    uint8_t tok[64];
-    memset(&c, 0, sizeof c);
-    svc_set_out_buf(&c, tok, sizeof tok);
-    svc_call_c(m, 3, &c);
-    CHECK(c.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "...LoadIdTokenCache follows the last ensure");
+    /* 2 / 3 with an id-token hook: test_net_online_client.c (main) */
     CHECK(async_outcome(m, 170, NULL, 0, NULL) == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "...170 the same");
     CHECK(async_outcome(u, 103, NULL, 0, NULL) == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "...103 the same");
     g_linked = 0;

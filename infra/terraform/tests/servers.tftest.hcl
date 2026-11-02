@@ -69,8 +69,15 @@ run "defaults" {
     error_message = "SSH must stay closed (SSM only)"
   }
   assert {
-    condition     = aws_vpc_security_group_ingress_rule.v4["nex"].from_port == 60000 && aws_vpc_security_group_ingress_rule.v4["nex"].ip_protocol == "udp"
-    error_message = "NEX UDP range not open"
+    condition     = !contains(keys(aws_vpc_security_group_ingress_rule.v4), "nex") && aws_vpc_security_group_ingress_rule.v4["room_tcp"].from_port == 31415
+    error_message = "no NEX UDP range (NEX is WebSocket on 443); the room port must be open"
+  }
+  assert {
+    condition = length(aws_vpc_security_group_ingress_rule.natcheck) == 16 && alltrue([
+      for p in [10025, 10125, 33334, 33335, 11025, 11125, 34334, 34335] :
+      aws_vpc_security_group_ingress_rule.natcheck["${p}-v4"].cidr_ipv4 == "0.0.0.0/0" && aws_vpc_security_group_ingress_rule.natcheck["${p}-v6"].cidr_ipv6 == "::/0" && aws_vpc_security_group_ingress_rule.natcheck["${p}-v4"].ip_protocol == "udp"
+    ])
+    error_message = "the 8 NAT-check UDP ports must be open on IPv4 and IPv6"
   }
   assert {
     condition     = startswith(aws_iam_role.instance.name, "napple-") && startswith(aws_iam_instance_profile.instance.name, "napple-")
