@@ -85,6 +85,8 @@ int net_online_request(const OnlineProvider *host, const NetOnlineServer *srv, c
  * written to out (no NUL needed), 0 = signed out. It wins over the environment. net_online_social.c has a weak default that returns 0; friends are
  * switched on when it hands out a token at start-up. */
 size_t napple_account_access_token(char *out, size_t n);
+/* The Napple profile (UUID text) the local user plays as, from the shared credentials' profile mapping (src/online/); weak default 0 = none. NAPPLE_SOCIAL_PROFILE wins. */
+size_t napple_account_profile_id(char *out, size_t n);
 
 typedef struct {
     NetOnlineServer social, account;

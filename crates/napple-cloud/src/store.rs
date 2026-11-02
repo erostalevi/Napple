@@ -157,6 +157,13 @@ pub mod keychain {
     }
 
     impl Keychain {
+        /// A keychain item set under an exact service name (the shared Napple Online wrap key: `lat.napple.online`).
+        pub fn with_service(service: &str) -> Result<Self> {
+            let mut k = Self::new("")?;
+            k.service = service.to_string();
+            Ok(k)
+        }
+
         pub fn new(namespace: &str) -> Result<Self> {
             #[cfg(target_os = "macos")]
             {
