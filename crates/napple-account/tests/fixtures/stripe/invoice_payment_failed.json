@@ -1,0 +1,9 @@
+{
+  "id": "evt_test_invoice_failed_0005",
+  "object": "event",
+  "api_version": "2025-03-31.basil",
+  "created": "{{NOW}}",
+  "livemode": false,
+  "type": "invoice.payment_failed",
+  "data": { "object": { "id": "in_test_0001", "object": "invoice", "customer": "cus_test_napple_0001", "subscription": "sub_test_napple_0001", "attempt_count": 1 } }
+}

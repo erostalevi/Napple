@@ -1,0 +1,20 @@
+{
+  "id": "evt_test_sub_past_due_0003",
+  "object": "event",
+  "api_version": "2025-03-31.basil",
+  "created": "{{NOW}}",
+  "livemode": false,
+  "type": "customer.subscription.updated",
+  "data": {
+    "object": {
+      "id": "sub_test_napple_0001",
+      "object": "subscription",
+      "customer": "cus_test_napple_0001",
+      "status": "past_due",
+      "cancel_at_period_end": false,
+      "metadata": { "account_id": "{{ACCOUNT_ID}}" },
+      "items": { "object": "list", "data": [ { "id": "si_test_0001", "current_period_end": "{{PERIOD_END}}", "price": { "id": "price_test_monthly", "recurring": { "interval": "month" } } } ] }
+    },
+    "previous_attributes": { "status": "active" }
+  }
+}
