@@ -2,7 +2,7 @@
 branch: claude/media-synthetic-streams-2026-11-03-r11
 orchestration: media-synthetic-streams
 base: 281f4d3483540816dea22517d4d3d9a263adfb67
-head: HEADPLACEHOLDER
+head: 57a98e9
 env: mac
 date: 2026-11-03
 areas: [runtime/media]
