@@ -6,7 +6,7 @@ head: f4711e7
 env: mac
 date: 2026-11-03
 areas: [crates/napple-social, docs/guides]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/social-tiers-2026-11-03-r12: napple-social visibility tiers, search, request rules, lobbies, recent players, reports, stats
@@ -58,3 +58,9 @@ Safe: path/field-name alignment with the real account service. Design decision: 
 - napple-account: `GET /account/v1/internal/profiles/{id}` (header X-Napple-Service = NAPPLE_ACCOUNT_SERVICE_TOKEN) returning the profile JSON incl. `tier` and `photo`; also `tier`/`photo` in `GET /profiles` items.
 - napple-online: call POST /internal/lobbies when a room forms, POST /encounters after matches, POST /internal/stats; use returned aliases for ghosts; same NAPPLE_SOCIAL_SERVICE_TOKEN.
 - infra: set the two service tokens as secrets.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at 19968c7. Outcome: Small fixes (contract alignment with napple-account / napple-visibility).
+- integrate: fixes: napple-social visibility.rs now delegates to napple-visibility; directory lookup sends x-napple-internal (account's header) instead of X-Napple-Service; photo parsed from account's {url,updated_at} object; index link; test napple_account_profile_shape_parses_with_photo_object_and_tier
+- Native ports: none (Rust only). Tests: cargo test --workspace: 533 passed, 0 failed, 2 ignored; gen_support OK
+- Corrections to instructions: cargo needs PATH=/opt/homebrew/opt/rustup/bin; used a shared CARGO_TARGET_DIR.

@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: launched
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_b7088465-f863-4480-9dbd-bd47ff08ac82
 launched_at: 2026-11-03
@@ -32,3 +32,5 @@ Everything else: other r12 items edit the other paths in parallel (account auth/
 Shared title data read-only; game runs under `lockf -k /Users/neto/NappleWork/.run.lock` (<=120 s, private --save-root); local only, never push; never ask the user; never commit credentials or Nintendo material. Test-first, small commits.
 
 ## Result
+
+Outcome: Small fixes (contract alignment with napple-account / napple-visibility). Merged at 19968c7. Details: [integrator result](../integrators/claude-social-tiers-2026-11-03-r12.md).
