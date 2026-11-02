@@ -180,6 +180,36 @@ int main(void) {
     o = hdr(b, 2, WEB_SHIM_OFFLINE); o = tlv(b, o, WEB_TLV_DOCUMENT_PATH, "manual/p2.html\0", 15); kind = WEB_DOC_LEGAL_INFO; o = tlv(b, o, WEB_TLV_DOCUMENT_KIND, &kind, 4);
     la = create_applet(lac, 0x17); push(la, common, sizeof common); push(la, b, o); run(la, out, &n);
     memcpy(&er, out, 4); CHECK(er == WEB_EXIT_ERROR, "legal information kind: error exit");
+    /* a real HtmlDocument tree (SMO / MK8D layout): html-document/<name>.htdocs/html/<RegionLang>/index.html, paths relative to html-document/ */
+    { char real[] = "/tmp/napple_webreal_XXXXXX"; CHECK(mkdtemp(real) != NULL, "mkdtemp real");
+      const char *dirs[] = {"html-document", "html-document/htmlcontents.htdocs", "html-document/htmlcontents.htdocs/html", "html-document/htmlcontents.htdocs/html/USen",
+                            "html-document/htmlcontents.htdocs/html/JPja", "html-document/htmlcontents.htdocs/css"};
+      for (unsigned i = 0; i < 6; i++) { char d[0x400]; snprintf(d, sizeof d, "%s/%s", real, dirs[i]); mkdir(d, 0755); }
+      wfile(real, "html-document/htmlcontents.htdocs/html/USen/index.html", "<html>en</html>"); wfile(real, "html-document/htmlcontents.htdocs/html/JPja/index.html", "<html>ja</html>");
+      wfile(real, "html-document/htmlcontents.htdocs/css/index.css", "x");
+      char want[0x400], rel[0x200];
+      snprintf(want, sizeof want, "%s/html-document/htmlcontents.htdocs/html/USen/index.html", real);
+      CHECK(web_offline_resolve(real, "htmlcontents.htdocs/html/USen/index.html", res, sizeof res) == 0 && !strcmp(res, want), "real layout: path relative to html-document/ (%s)", res);
+      CHECK(web_offline_resolve(real, "offline:/htmlcontents.htdocs/html/USen/", res, sizeof res) == 0 && !strcmp(res, want), "real layout: directory -> index.html");
+      CHECK(web_offline_resolve(real, "html-document/htmlcontents.htdocs/html/USen/index.html", res, sizeof res) == 0 && !strcmp(res, want), "real layout: html-document/ prefix also accepted");
+      CHECK(web_offline_resolve(real, "htmlcontents.htdocs/../../x", res, sizeof res) == -1, "real layout: dotdot still rejected");
+      CHECK(web_manual_path(real, "JPja", rel, sizeof rel) == 0 && !strcmp(rel, "htmlcontents.htdocs/html/JPja/index.html"), "manual: wanted language (%s)", rel);
+      CHECK(web_manual_path(real, "EUfr", rel, sizeof rel) == 0 && !strcmp(rel, "htmlcontents.htdocs/html/USen/index.html"), "manual: missing language falls back to USen");
+      CHECK(!strcmp(web_manual_lang("ja"), "JPja") && !strcmp(web_manual_lang("en-GB"), "EUen") && !strcmp(web_manual_lang("es-419"), "USes") && !strcmp(web_manual_lang("xx"), "USen") && !strcmp(web_manual_lang(NULL), "USen"), "manual language map");
+      CHECK(web_manual_path(root, NULL, rel, sizeof rel) == -2, "manual: a tree without html-document has none");
+      CHECK(web_manual_path(real, NULL, rel, 8) == -3, "manual: small buffer");
+      /* opened the HOME-menu way: the handler gets the WebArgs storages and hands the hook the manual's file:// url */
+      libapplet_clear_handlers(); CHECK(applet_web_register() == 0, "register again");
+      applet_web_set_html_root(real); applet_ui_set_open_web(open_hook); g_open_ret = WEB_EXIT_BACK_BUTTON;
+      int calls = g_open_calls; uint32_t why = 99; char lastu[0x400] = "";
+      CHECK(applet_web_open_manual("USen", &why, lastu, sizeof lastu) == 0, "open manual");
+      snprintf(exp, sizeof exp, "file://%s", want);
+      CHECK(g_open_calls == calls + 1 && g_open_offline && !strcmp(g_open_url, exp), "open manual: hook url %s", g_open_url);
+      CHECK(why == WEB_EXIT_BACK_BUTTON && !strncmp(lastu, exp, strlen(exp)), "open manual: exit reason %u, last url %s", why, lastu);
+      applet_web_set_html_root(root);
+      CHECK(applet_web_open_manual(NULL, &why, lastu, sizeof lastu) == -1, "open manual without a manual: -1");
+      applet_web_set_html_root(NULL);
+      { char cmd[0x500]; snprintf(cmd, sizeof cmd, "rm -rf '%s'", real); (void)!system(cmd); } }
     /* unregistered ids still take the old path */
     libapplet_clear_handlers(); applet_ui_set_open_web(NULL);
     before = g_open_calls; la = create_applet(lac, 0x13); push(la, common, sizeof common); push(la, b, o); r = run(la, out, &n);

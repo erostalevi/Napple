@@ -1,5 +1,6 @@
 #include "applet_web_core.h"
 #include <ctype.h>
+#include <dirent.h>
 #include <limits.h>
 #include <unistd.h>
 #include "applet_ui.h"
@@ -77,6 +78,7 @@ void web_args_parse(const uint8_t *data, size_t size, WebArgs *a) {
     }
 }
 
+static int resolve_under(const char *html_root, const char *base, const char *rel, char *out, size_t cap);
 int web_offline_resolve(const char *html_root, const char *doc_path, char *out, size_t cap) {
     if (!html_root || !doc_path) return -1;
     const char *p = doc_path;
@@ -120,8 +122,22 @@ int web_offline_resolve(const char *html_root, const char *doc_path, char *out, 
         if (!e) break;
     }
     if (n == 0 || rel[n - 1] == '/') strcat(rel, "index.html");
+    /* An OfflineHtmlPage path is relative to the html-document/ directory of the HtmlDocument romfs (a real manual: html-document/<name>.htdocs/
+     * html/<RegionLang>/index.html). The build writes that romfs as it is, so look there first, then directly under the root (older trees, tests). */
+    char doc_dir[0x400];
+    struct stat st;
+    int w = snprintf(doc_dir, sizeof doc_dir, "%s/html-document", html_root);
+    int r = -2;
+    if (w > 0 && (size_t)w < sizeof doc_dir && strncmp(rel, "html-document/", 14) && stat(doc_dir, &st) == 0 && S_ISDIR(st.st_mode))
+        r = resolve_under(html_root, doc_dir, rel, out, cap);
+    if (r == -2) r = resolve_under(html_root, html_root, rel, out, cap);
+    return r;
+}
+
+/* <base>/<rel> (a directory -> its index.html), contained in html_root after symlinks. 0 ok, -1 bad, -2 missing, -3 out too small. */
+static int resolve_under(const char *html_root, const char *base, const char *rel, char *out, size_t cap) {
     char path[0x400];
-    int w = snprintf(path, sizeof path, "%s/%s", html_root, rel);
+    int w = snprintf(path, sizeof path, "%s/%s", base, rel);
     if (w < 0 || (size_t)w >= sizeof path) return -1;
     struct stat st;
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -139,6 +155,101 @@ int web_offline_resolve(const char *html_root, const char *doc_path, char *out, 
     if (strlen(path) >= cap) return -3;
     strcpy(out, path);
     return 0;
+}
+
+int web_manual_path(const char *html_root, const char *lang, char *out, size_t cap) {
+    if (!html_root || !cap) return -1;
+    char dir[0x400];
+    snprintf(dir, sizeof dir, "%s/html-document", html_root);
+    DIR *d = opendir(dir);
+    if (!d) return -2;
+    const char *langs[3] = {lang && *lang ? lang : "USen", "USen", "EUen"};
+    char best[0x200] = "", any[0x200] = "";
+    struct dirent *e;
+    while (!best[0] && (e = readdir(d))) {
+        size_t l = strlen(e->d_name);
+        if (l < 8 || strcmp(e->d_name + l - 7, ".htdocs")) continue;
+        for (int i = 0; i < 3 && !best[0]; i++) {
+            char rel[0x200], path[0x700];
+            snprintf(rel, sizeof rel, "%s/html/%s/index.html", e->d_name, langs[i]);
+            snprintf(path, sizeof path, "%s/%s", dir, rel);
+            if (access(path, R_OK) == 0) snprintf(best, sizeof best, "%s", rel);
+        }
+        if (!any[0]) { /* no wanted language: the first language directory with an index */
+            char hd[0x700];
+            snprintf(hd, sizeof hd, "%s/%s/html", dir, e->d_name);
+            DIR *h = opendir(hd);
+            struct dirent *le;
+            while (h && !any[0] && (le = readdir(h))) {
+                if (le->d_name[0] == '.') continue;
+                char path[0xa00];
+                snprintf(path, sizeof path, "%s/%s/index.html", hd, le->d_name);
+                if (access(path, R_OK) == 0) snprintf(any, sizeof any, "%s/html/%s/index.html", e->d_name, le->d_name);
+            }
+            if (h) closedir(h);
+        }
+    }
+    closedir(d);
+    const char *r = best[0] ? best : any;
+    if (!r[0]) return -2;
+    if (strlen(r) >= cap) return -3;
+    strcpy(out, r);
+    return 0;
+}
+
+const char *web_manual_lang(const char *code) {
+    static const char *const map[][2] = {{"ja", "JPja"},     {"en-US", "USen"}, {"fr", "EUfr"},      {"de", "EUde"},      {"it", "EUit"},   {"es", "EUes"},
+                                         {"zh-CN", "CNzh"},  {"ko", "KRko"},    {"nl", "EUnl"},      {"pt", "EUpt"},      {"ru", "EUru"},   {"zh-TW", "TWzh"},
+                                         {"en-GB", "EUen"},  {"fr-CA", "USfr"}, {"es-419", "USes"},  {"zh-Hans", "CNzh"}, {"zh-Hant", "TWzh"}, {"pt-BR", "USpt"}};
+    for (unsigned i = 0; code && i < sizeof map / sizeof map[0]; i++)
+        if (!strcmp(code, map[i][0])) return map[i][1];
+    return "USen";
+}
+
+/* One TLV entry of a WebArgs storage. */
+static size_t tlv_put(uint8_t *buf, size_t off, uint16_t type, const void *data, uint16_t len) {
+    memcpy(buf + off, &type, 2);
+    memcpy(buf + off + 2, &len, 2);
+    memset(buf + off + 4, 0, 4);
+    memcpy(buf + off + 8, data, len);
+    return off + 8 + len;
+}
+int applet_web_open_manual(const char *lang, uint32_t *exit_reason, char *last_url, size_t cap) {
+    const char *root = applet_web_html_root();
+    char rel[0x200];
+    if (!root || web_manual_path(root, lang, rel, sizeof rel)) return -1;
+    /* The same storages the HOME menu's offline applet gets: CommonArguments, then WebArgs {shim offline; document kind HTML page; document path}. */
+    uint8_t common[0x20] = {0}, args[0x400] = {0};
+    uint16_t entries = 2;
+    uint32_t shim = WEB_SHIM_OFFLINE, kind = WEB_DOC_HTML_PAGE;
+    memcpy(args, &entries, 2);
+    memcpy(args + 4, &shim, 4);
+    size_t off = tlv_put(args, 8, WEB_TLV_DOCUMENT_KIND, &kind, 4);
+    char docpath[0x100] = {0}; /* the SDK's document path field: 0xC00 bytes there, this tree's paths fit in 0x100 */
+    snprintf(docpath, sizeof docpath, "%s", rel);
+    off = tlv_put(args, off, WEB_TLV_DOCUMENT_PATH, docpath, sizeof docpath);
+    LibAppletCall call;
+    memset(&call, 0, sizeof call);
+    call.applet_id = LIBAPPLET_ID_OFFLINE_WEB;
+    call.nin = 2;
+    call.in[0] = (LibAppletIn){.data = common, .size = sizeof common};
+    call.in[1] = (LibAppletIn){.data = args, .size = off};
+    if (!applet_web_handler(&call) || !call.out || call.out_size < WEB_RETURN_SIZE) {
+        libapplet_call_free(&call);
+        return -1;
+    }
+    uint32_t reason;
+    uint64_t n;
+    memcpy(&reason, call.out, 4);
+    memcpy(&n, call.out + 0x1008, 8);
+    if (exit_reason) *exit_reason = reason;
+    if (last_url && cap) {
+        if (n >= cap) n = cap - 1;
+        memcpy(last_url, call.out + 8, n);
+        last_url[n] = 0;
+    }
+    libapplet_call_free(&call);
+    return reason == WEB_EXIT_ERROR ? -1 : 0;
 }
 
 void web_file_url(const char *path, char *out, size_t cap) {

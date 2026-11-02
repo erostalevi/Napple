@@ -42,6 +42,15 @@ void web_args_parse(const uint8_t *data, size_t size, WebArgs *a);
  * leading slashes, rejects "..", backslashes and NULs, a directory or empty path becomes <dir>/index.html. Writes "<html_root>/<rel>" to out.
  * Returns 0 and fills out when the file exists, -1 for a bad path, -2 when no such file, -3 when out is too small. */
 int web_offline_resolve(const char *html_root, const char *doc_path, char *out, size_t cap);
+/* The title's offline manual inside an extracted HtmlDocument romfs: html-document/<name>.htdocs/html/<lang>/index.html, `lang` first (a RegionLang
+ * directory name such as "USen", "EUfr", "JPja"; NULL = USen), then USen, EUen, then the first language with an index. Writes the document path
+ * relative to html-document/ (what OfflineHtmlPage takes). 0 ok, -2 no manual, -3 out too small, -1 bad arguments. */
+int web_manual_path(const char *html_root, const char *lang, char *out, size_t cap);
+/* The manual's RegionLang directory for a Switch language code ("en-US" -> "USen", "ja" -> "JPja", "en-GB" -> "EUen", ...); unknown -> "USen". */
+const char *web_manual_lang(const char *code);
+/* Opens the running title's manual the way the HOME menu does (the offline applet with an OfflineHtmlPage of the manual), through
+ * applet_web_handler and so the frontend's web sheet or NAPPLE_WEB_ANSWER. Fills the exit reason and the page left on. 0 shown, -1 none / error. */
+int applet_web_open_manual(const char *lang, uint32_t *exit_reason, char *last_url, size_t cap);
 /* "file://" URL for a resolved host path (no escaping beyond spaces -> %20). */
 void web_file_url(const char *path, char *out, size_t cap);
 
