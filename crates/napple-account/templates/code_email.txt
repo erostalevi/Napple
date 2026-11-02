@@ -1,0 +1,15 @@
+{{headline}}
+
+{{intro}}
+
+    {{code}}
+
+This code expires in {{minutes}} minutes. Enter it in the Napple window where you asked for it.
+
+{{ignore}}
+
+For your safety: Napple will never ask for this code, or your password, by email, chat or in a game. Don't share it with anyone.
+
+--
+You received this because someone entered this email address in Napple. One-time message; no newsletters or marketing.
+https://www.napple.lat - Napple is an independent project, not affiliated with or endorsed by Nintendo.

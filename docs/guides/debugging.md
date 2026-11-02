@@ -52,7 +52,7 @@ How to read it:
 - The frame chain follows x29; a leaf function crash loses its own frame, use `lr` first.
 - `NAPPLE_PEEK=<module>+0x<off>` logs the 8 bytes there at crash time (`runtime_peek`); `NAPPLE_WATCH=<module>+0x<off>` logs every guest write to a location with pc, caller and value.
 - AArch32 titles: the crash handler also prints the interpreter's CPU state (`a32_crash_report`); `NAPPLE_A32_TRACE=1` runs one instruction at a time and dumps the last 4096 pcs when the guest calls Break (slow); `NAPPLE_A32_SVCTRACE=1` traces svcs.
-- Flaky crashes: run the same boot repeatedly with `tools/legacy/flaky_boot.sh <runtime-binary> <data-dir> <runs> [seconds] <outdir>` (one line per run: exit code and first FAIL/crash line). The Animal Crossing command-buffer race was found this way
+- Flaky crashes: run the same boot repeatedly (`for i in 1 2 3 4 5; do tools/boot_test.sh <titleid> 12; done`: one exit code and log tail per run). The Animal Crossing command-buffer race was found this way
   ([symptoms.md](../symptoms.md), "one run in three").
 
 ## 4. Hangs and spins

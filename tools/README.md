@@ -47,11 +47,3 @@ Everything that touches game data expects files you dumped yourself under `work/
 
 Developer test drivers (not part of the product): GPU-lock wrapper, windowed and packaged-app runs with injected key events, thread dumps via `SIGUSR1`.
 See [`dev/README.md`](dev/README.md). `dev/synth_keys.m` is the key injector the drivers use (macOS, needs Accessibility permission for the terminal).
-
-## legacy/
-
-Kept for reference, candidates for removal; nothing in the repository references them.
-
-| Script | Status |
-|---|---|
-| `flaky_boot.sh` | Repeated headless boots to tell a flaky guest `Break` from a build-specific one. Superseded by `boot_test.sh` for normal use. |

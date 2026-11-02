@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="supported-color-schemes" content="dark">
+<title>{{subject}}</title>
+<!--
+  Napple confirmation / reset code email, in the napple.lat visual identity (dark violet, red-to-pink accent, soft cards).
+  Placeholders (all HTML-escaped by the sender):
+    {{subject}}   e.g. "Your Napple confirmation code"
+    {{preheader}} the grey preview line some clients show next to the subject
+    {{headline}}  e.g. "Confirm your email" / "Reset your password"
+    {{intro}}     one sentence above the code
+    {{code}}      the 6 digits, no spaces (the template spaces them)
+    {{minutes}}   expiry in minutes (10)
+    {{ignore}}    the "if this wasn't you" sentence
+  The only remote resource is the app icon (static file on napple.lat); with images blocked the wordmark still reads.
+  Colours are set inline AND as bgcolor attributes so Outlook and Gmail keep the dark look; gradients are decoration with solid fallbacks.
+-->
+<style>
+  :root { color-scheme: dark; supported-color-schemes: dark; }
+  body { margin:0; padding:0; background:#120c1a; }
+  a { color:#ff9a8b; }
+  @media only screen and (max-width:620px) {
+    .wrap { width:100% !important; }
+    .pad { padding:28px 20px !important; }
+    .code { font-size:32px !important; letter-spacing:6px !important; }
+    h1 { font-size:22px !important; }
+  }
+</style>
+</head>
+<body style="margin:0;padding:0;background:#120c1a;" bgcolor="#120c1a">
+<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;">{{preheader}}&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#120c1a"
+       style="background:#120c1a;background-image:radial-gradient(520px 300px at 90% 0%,rgba(255,94,98,.28),rgba(18,12,26,0) 70%),radial-gradient(520px 380px at 0% 40%,rgba(124,92,255,.22),rgba(18,12,26,0) 70%);">
+  <tr><td align="center" style="padding:36px 12px;">
+    <table role="presentation" class="wrap" width="560" cellpadding="0" cellspacing="0" border="0" style="width:560px;max-width:560px;">
+
+      <!-- brand -->
+      <tr><td align="center" style="padding:0 0 22px 0;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter','Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <a href="https://www.napple.lat" style="text-decoration:none;">
+          <img src="https://www.napple.lat/assets/icon.png" width="64" height="64" alt="" style="display:block;margin:0 auto 10px auto;border:0;border-radius:16px;">
+          <span style="font-size:22px;font-weight:700;letter-spacing:-0.3px;color:#f6f2fa;">Napple</span>
+        </a>
+      </td></tr>
+
+      <!-- card -->
+      <tr><td bgcolor="#1a1224" style="background:#1a1224;border:1px solid #2c2338;border-radius:16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+          <tr><td bgcolor="#ff5e62" style="height:5px;border-radius:16px 16px 0 0;background:#ff5e62;background-image:linear-gradient(90deg,#ff5e62,#ff9a8b 55%,#7c5cff);font-size:0;line-height:0;">&nbsp;</td></tr>
+
+          <tr><td class="pad" style="padding:36px 40px 12px 40px;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter','Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+            <p style="margin:0 0 10px 0;font-size:12px;line-height:1.4;font-weight:600;letter-spacing:2px;text-transform:uppercase;color:#ff9a8b;">Account</p>
+            <h1 style="margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:700;letter-spacing:-0.4px;color:#f6f2fa;">{{headline}}</h1>
+            <p style="margin:0 0 26px 0;font-size:15px;line-height:1.65;color:#b4a9c4;">{{intro}}</p>
+
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr><td align="center" bgcolor="#241a30" style="background:#241a30;border:1px solid #3a2e4a;border-radius:14px;padding:24px 12px;">
+                <div class="code" style="font-family:'SF Mono',ui-monospace,SFMono-Regular,Menlo,Consolas,'Courier New',monospace;font-size:40px;line-height:1.1;font-weight:700;letter-spacing:10px;color:#ffffff;">{{code}}</div>
+                <div style="margin:14px auto 0 auto;width:56px;height:3px;border-radius:2px;background:#ff5e62;background-image:linear-gradient(90deg,#ff5e62,#7c5cff);font-size:0;line-height:0;">&nbsp;</div>
+              </td></tr>
+            </table>
+
+            <p style="margin:22px 0 0 0;font-size:14px;line-height:1.65;color:#b4a9c4;text-align:center;">
+              This code expires in <strong style="color:#f6f2fa;">{{minutes}} minutes</strong>.<br>
+              Enter it in the Napple window where you asked for it.
+            </p>
+          </td></tr>
+
+          <tr><td class="pad" style="padding:10px 40px 32px 40px;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter','Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr><td style="border-top:1px solid #2c2338;padding-top:20px;">
+                <p style="margin:0 0 8px 0;font-size:13px;line-height:1.65;color:#8a7fa0;">{{ignore}}</p>
+                <p style="margin:0;font-size:13px;line-height:1.65;color:#8a7fa0;">
+                  For your safety: Napple will <strong style="color:#b4a9c4;">never</strong> ask for this code, or your password, by email, chat or in a game. Don't share it with anyone.
+                </p>
+              </td></tr>
+            </table>
+          </td></tr>
+        </table>
+      </td></tr>
+
+      <!-- footer -->
+      <tr><td align="center" style="padding:24px 16px 0 16px;font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Inter','Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+        <p style="margin:0 0 8px 0;font-size:13px;line-height:1.5;color:#b4a9c4;">Switch games you own, <span style="color:#ff9a8b;">native on your Mac.</span></p>
+        <p style="margin:0 0 6px 0;font-size:12px;line-height:1.6;color:#8a7fa0;">
+          You received this because someone entered this email address in Napple. It's a one-time message; we don't send newsletters or marketing.
+        </p>
+        <p style="margin:0;font-size:12px;line-height:1.6;color:#8a7fa0;">
+          <a href="https://www.napple.lat" style="color:#8a7fa0;">napple.lat</a> &middot; Napple is an independent project, not affiliated with or endorsed by Nintendo.
+        </p>
+      </td></tr>
+
+    </table>
+  </td></tr>
+</table>
+</body>
+</html>
