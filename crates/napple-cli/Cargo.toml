@@ -15,3 +15,4 @@ napple-compat = { path = "../napple-compat" }
 napple-sigs = { path = "../napple-sigs" }
 napple-build = { path = "../napple-build" }
 napple-mods = { path = "../napple-mods" }
+napple-cloud = { path = "../napple-cloud" }

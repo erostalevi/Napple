@@ -262,3 +262,17 @@ test-net-online: $(NETONLINE_TESTS)
 	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
 test-services: $(NETONLINE_TESTS)
 .PHONY: test-net-online
+
+# Cloud saves (cloud-saves-client 2026-11-02-r8, docs/guides/cloud-saves.md): runtime/src/cloud/*.c and the Rust sync engine crates/napple-cloud
+# (target/release/libnapple_cloud.a, built here with cargo). Linked into the runtime and the applet dylib only (through LDFLAGS); the unit tests
+# keep the weak no-op hooks of main.c and services/fs.c. CLOUD=0, or no cargo on PATH, builds without cloud saves.
+CLOUD ?= $(if $(shell command -v cargo 2>/dev/null),1,0)
+ifeq ($(CLOUD),1)
+CLOUD_OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/cloud/*.c))
+CLOUD_LIB := $(ROOT)/target/release/libnapple_cloud.a
+$(CLOUD_OBJ): CFLAGS += -I$(ROOT)/crates/napple-cloud/include
+LDFLAGS += $(CLOUD_OBJ) $(CLOUD_LIB) -framework Security
+$(BUILD)/napple-runtime build-lib/libnapple-applet.dylib: $(CLOUD_OBJ) $(CLOUD_LIB)
+$(CLOUD_LIB): $(wildcard $(ROOT)/crates/napple-cloud/src/*.rs $(ROOT)/crates/napple-cloud/src/*/*.rs) $(ROOT)/crates/napple-cloud/Cargo.toml
+	cd $(ROOT) && MACOSX_DEPLOYMENT_TARGET=$${MACOSX_DEPLOYMENT_TARGET:-14.0} cargo build --release -p napple-cloud --lib
+endif
