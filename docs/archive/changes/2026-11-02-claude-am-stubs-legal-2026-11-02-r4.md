@@ -35,7 +35,7 @@ registered, so every capture image read as black.
 Kept as state only (still IPC_STUB, listed): ISelfController 45 SetManagedDisplayLayerSeparationMode, 46 SetRecordingLayerCompositionEnabled, 130
 SetRecordVolumeMuted (no game play recording or separable layers on the host).
 Still stubs (rest): ICommonStateGetter 52, 62, 80, 100, 130, 1003; IDisplayController 21; IApplicationFunctions 10, 12, 72, 120, 121, 122, 124, 131,
-170, 181→done, 190, 200, 220, 1000, 1001; ILibraryAppletSelfAccessor-side 50, 80, 81, 160. Reasons per row in the integrator file.
+170, 190, 200, 220, 1000, 1001; the applet-side 50, 80, 81, 160. Reasons per row in the integrator file.
 Debug aid: `NAPPLE_DEBUG_SAVE_SCREENSHOT=<seconds>[:<file.jpg>]` runs SaveCurrentScreenshot's path from a host thread (no test title calls it).
 **Verified** with it on LAS (headless, 12 s into the opening movie): `SaveCurrentScreenshot: saved to the album (115030-byte JPEG)`. The album JPEG
 is the storm scene the game was showing, so the real frame source works end to end: gfx readback, then the capture slot, then the caps album.
