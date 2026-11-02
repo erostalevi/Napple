@@ -122,6 +122,19 @@ int main(void) {
         g_zone_override[0] = 0;
         CHECK(svc_find(tz, 6)->status == IPC_IMPL && svc_find(tz, 1)->status == IPC_IMPL && svc_find(uc, 4)->status == IPC_IMPL && svc_find(st, 201)->status == IPC_IMPL, "all four rows are real now");
     }
+    { /* ipc-reference-audit: ISteadyClock ids per switchbrew (100 GetRtcValue, 101 IsRtcResetDetected, 102 GetSetupResultValue, 200 GetInternalOffset) + test offset */
+        IpcCall d; svc_call(st, 2, NULL, 0, &d); CHECK(d.nout_objects == 1, "GetStandardSteadyClock"); IpcObject *sc = d.out_objects[0];
+        svc_call(sc, 100, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 8 && SVC_OUT(&d, int64_t, 0) > 700000000, "100 GetRtcValue: seconds since 2000");
+        svc_call(sc, 101, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 1 && d.out[0] == 0, "101 IsRtcResetDetected: no");
+        svc_call(sc, 102, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 4 && SVC_OUT(&d, uint32_t, 0) == 0, "102 GetSetupResultValue: success");
+        svc_call(sc, 200, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 8 && SVC_OUT(&d, int64_t, 0) == 0, "200 GetInternalOffset: zero");
+        CHECK(svc_find(sc, 201) == NULL && svc_find(sc, 204) == NULL, "the old misnumbered rows are gone");
+        svc_call(sc, 0, NULL, 0, &d); int64_t t0 = SVC_OUT(&d, int64_t, 0);
+        int64_t off_ns = 3600ll * 1000000000ll; svc_call(sc, 3, &off_ns, 8, &d); CHECK(d.result == 0, "3 SetTestOffset");
+        svc_call(sc, 2, NULL, 0, &d); CHECK(SVC_OUT(&d, int64_t, 0) == off_ns, "2 GetTestOffset reads it back");
+        svc_call(sc, 0, NULL, 0, &d); CHECK(SVC_OUT(&d, int64_t, 0) >= t0 + 3600 && SVC_OUT(&d, int64_t, 0) <= t0 + 3602, "...and GetCurrentTimePoint is shifted by it");
+        off_ns = 0; svc_call(sc, 3, &off_ns, 8, &d);
+    }
     printf("{\"test\":\"svc_time\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

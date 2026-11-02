@@ -51,10 +51,10 @@ int main(void) {
         svc_call(d, 207, &pol, 4, &c); CHECK(c.result == 0 && ((Ldn *)d->state)->cfg.accept_policy == 1, "SetStationAcceptPolicy once created");
         svc_call(d, 208, mac, 6, &c); CHECK(c.result == 0 && ((Ldn *)d->state)->cfg.nfilter == 1, "AddAcceptFilterEntry");
         svc_call(d, 209, NULL, 0, &c); CHECK(((Ldn *)d->state)->cfg.nfilter == 0, "ClearAcceptFilter via IPC");
-        uint32_t rs = 2; svc_call(d, 104, &rs, 4, &c); CHECK(((Ldn *)d->state)->cfg.controller_restriction == 2, "SetWirelessControllerRestriction stored");
+        uint32_t rs = 2; svc_call(d, 104, &rs, 4, &c); CHECK(((Ldn *)d->state)->cfg.controller_restriction == 2, "SetWirelessControllerPolicy stored");
         svc_call(d, 4, NULL, 0, &c); CHECK(c.result == HZ_R_LDN_NETWORK_NOT_AVAILABLE, "GetSecurityParameter: not available");
         svc_call(d, 5, NULL, 0, &c); CHECK(c.result == HZ_R_LDN_NETWORK_NOT_AVAILABLE, "GetNetworkConfig: not available");
-        svc_call(d, 101, NULL, 0, &c); CHECK(c.result == HZ_R_LDN_NETWORK_NOT_AVAILABLE, "GetNetworkInfoLatestUpdate: not available");
+        svc_call(d, 101, NULL, 0, &c); CHECK(c.result == HZ_R_LDN_NETWORK_NOT_AVAILABLE, "GetNetworkInfoAndHistory: not available");
         svc_call(d, 3, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint16_t, 0) == 0, "GetDisconnectReason = none");
         svc_call(d, 205, &pol, 4, &c); CHECK(c.result != 0, "Reject: no stations to reject");
     }

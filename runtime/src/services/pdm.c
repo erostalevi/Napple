@@ -69,17 +69,14 @@ static void q_last_play_time(IpcObject *s, IpcCall *c) {
 /* Event history: this host keeps no play log (only the running title's statistics above are tracked), which is how a console that was just
  * reset answers: zero events returned, an empty available range {0, 0, 0}. Documented no-ops rather than stubs. */
 static const IpcCmd pdm_cmds[] = {
+    /* ids per switchbrew 'Shared Database services': 4 / 5 current statistics queries (the 1.0.0-6.2.0 ids 1-3 and 6 were other queries and are gone),
+     * 8-12 play / account event queries, 17 QueryLastPlayTime (the layout (u8 flag, u64 application id[, u128 user]) is what the handlers read) */
     {0, "QueryAppletEvent", q_count_0, IPC_IMPL},
-    {1, "QueryPlayStatisticsByApplicationId", q_stats_by_app, IPC_IMPL},
-    {2, "QueryPlayStatisticsByApplicationIdAndUserAccountId", q_stats_by_app_user, IPC_IMPL},
-    {6, "QueryPlayEvent", q_count_0, IPC_IMPL},
-    {7, "GetAvailablePlayEventRange", q_range_0, IPC_IMPL},
-    {8, "QueryAccountEvent", q_count_0, IPC_IMPL},
-    {9, "QueryAccountPlayEvent", q_count_0, IPC_IMPL},
-    {10, "GetAvailableAccountPlayEventRange", q_range_0, IPC_IMPL},
-    /* 10.0.0+ numbering of the same queries: (u8 flag, u64 application id[, u128 user]) is the layout the handlers above already read */
     {4, "QueryPlayStatisticsByApplicationId", q_stats_by_app, IPC_IMPL},
     {5, "QueryPlayStatisticsByApplicationIdAndUserAccountId", q_stats_by_app_user, IPC_IMPL},
+    {8, "QueryPlayEvent", q_count_0, IPC_IMPL},
+    {9, "GetAvailablePlayEventRange", q_range_0, IPC_IMPL},
+    {10, "QueryAccountEvent", q_count_0, IPC_IMPL},
     {11, "QueryAccountPlayEvent", q_count_0, IPC_IMPL},
     {12, "GetAvailableAccountPlayEventRange", q_range_0, IPC_IMPL},
     {17, "QueryLastPlayTime", q_last_play_time, IPC_IMPL},

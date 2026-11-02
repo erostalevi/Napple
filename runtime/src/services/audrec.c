@@ -102,8 +102,8 @@ static void ar_attach_work_buffer(IpcObject *s, IpcCall *c) { /* 11 (9.0.0+): th
 }
 static const IpcCmd recorder_cmds[] = {
     {0, "GetFinalOutputRecorderState", ar_state, IPC_IMPL},
-    {1, "StartFinalOutputRecorder", ar_start, IPC_IMPL},
-    {2, "StopFinalOutputRecorder", ar_stop, IPC_IMPL},
+    {1, "Start", ar_start, IPC_IMPL},
+    {2, "Stop", ar_stop, IPC_IMPL},
     {3, "AppendFinalOutputRecorderBuffer", ar_append, IPC_IMPL},
     {4, "RegisterBufferEvent", ar_event, IPC_IMPL},
     {5, "GetReleasedFinalOutputRecorderBuffers", ar_released, IPC_IMPL},

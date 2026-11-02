@@ -232,7 +232,7 @@ static const IpcCmd irs_cmds[] = {
     {309, "GetImageTransferProcessorState", irs_get_transfer_state, IPC_IMPL},
     {310, "RunTeraPluginProcessor", irs_run_tera, IPC_IMPL},
     {311, "GetNpadIrCameraHandle", irs_get_camera_handle, IPC_IMPL},
-    {312, "RunDpdProcessor", irs_run_dpd, IPC_IMPL},
+    {312, "RunPointingProcessor", irs_run_dpd, IPC_IMPL},
     {313, "SuspendImageProcessor", irs_stop, IPC_IMPL},
     {314, "CheckFirmwareVersion", irs_check_firmware, IPC_IMPL},
     {315, "SetFunctionLevel", irs_set_level, IPC_IMPL},

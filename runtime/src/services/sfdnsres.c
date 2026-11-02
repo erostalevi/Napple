@@ -197,7 +197,7 @@ static const IpcCmd res_cmds[] = {
     {5, "GetGaiStringErrorRequest", res_gai_strerror, IPC_IMPL},
     {6, "GetAddrInfoRequest", res_addr_info, IPC_IMPL},
     {7, "GetNameInfoRequest", res_name_info, IPC_IMPL},
-    {8, "RequestCancelHandleRequest", res_cancel_handle, IPC_IMPL},
+    {8, "GetCancelHandleRequest", res_cancel_handle, IPC_IMPL},
     {9, "CancelRequest", res_cancel, IPC_IMPL},
     {10, "GetHostByNameRequestWithOptions", res_host_by_name, IPC_IMPL},
     {11, "GetHostByAddrRequestWithOptions", res_host_by_addr, IPC_IMPL},
