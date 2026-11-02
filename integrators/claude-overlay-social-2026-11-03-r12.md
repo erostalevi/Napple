@@ -2,7 +2,7 @@
 branch: claude/overlay-social-2026-11-03-r12
 orchestration: overlay-social
 base: 085785db1056dd6c04dc5ed76bc407c953bb9527
-head: HEAD
+head: ed7e776
 env: mac
 date: 2026-11-03
 areas: [frontend/overlay]
