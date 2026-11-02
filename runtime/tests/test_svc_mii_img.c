@@ -52,6 +52,35 @@ int main(void) {
     svc_call(s, 16, u1, 16, &c); svc_call(s, 0, NULL, 0, &c); svc_call(s, 10, NULL, 0, &c); svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "Initialize and Reload keep the entries");
     svc_call(s, 103, NULL, 0, &c); CHECK(c.result == 0, "ExportFile: success"); svc_call(s, 102, NULL, 0, &c); CHECK(c.result == 0, "ImportFile: success");
     svc_call(s, 101, NULL, 0, &c); CHECK(c.result == 0, "DestroyFile: success");
+    /* migration store 18-20 */
+    {
+        svc_call(s, 100, NULL, 0, &c);
+        uint8_t m1[16], m2[16]; uid(m1, 31); uid(m2, 32);
+        static const uint8_t jm[] = {0xff, 0xd8, 9, 9};
+        memset(&c, 0, sizeof c); c.in = m1; c.in_size = 16; svc_set_in_buf(&c, jm, sizeof jm); svc_call_c(s, 18, &c); CHECK(c.result == 0, "18 stages an image");
+        svc_call(s, 18, m2, 16, &c); CHECK(c.result == 0, "18 without an image stages a generated one");
+        svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "staged images are not in the database yet");
+        svc_call(s, 19, NULL, 0, &c); CHECK(c.result == 0, "19 clears the staging table");
+        svc_call(s, 20, NULL, 0, &c); svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 0, "20 after 19 saves nothing");
+        memset(&c, 0, sizeof c); c.in = m1; c.in_size = 16; svc_set_in_buf(&c, jm, sizeof jm); svc_call_c(s, 18, &c);
+        svc_call(s, 18, m2, 16, &c);
+        svc_call(s, 20, NULL, 0, &c); CHECK(c.result == 0, "20 saves the staged images");
+        svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 2, "...both are in the database");
+        idx = 0; svc_call(s, 14, &idx, 4, &c); CHECK(!memcmp(c.out, m1, 16) && SVC_OUT(&c, uint32_t, 24) == 4, "...with the supplied bytes");
+        svc_call(s, 20, NULL, 0, &c); svc_call(s, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 2, "the staging table is empty after a save");
+        svc_call(s, 18, NULL, 0, &c); CHECK(c.result == MIIIMG_R_NOT_FOUND, "18 without an id fails");
+        svc_call(s, 100, NULL, 0, &c);
+        /* full database: a save that needs more slots than are free changes nothing */
+        MiiImgDb *d = img_db();
+        for (int i = 0; i < (int)MIIIMG_CAPACITY; i++) { uint8_t u[16]; uid(u, 100 + i); miiimg_add(d, u, "\xff\xd8z", 3); }
+        svc_call(s, 18, m1, 16, &c); CHECK(c.result == 0, "18 stages while the database is full");
+        svc_call(s, 20, NULL, 0, &c); CHECK(c.result == MIIIMG_R_FULL && miiimg_count(d) == MIIIMG_CAPACITY && miiimg_migration_count(d) == 1, "20 on a full database: refused, staging kept");
+        svc_call(s, 19, NULL, 0, &c);
+        { uint8_t u[16]; uid(u, 100); IpcCall a = {0}; a.in = u; a.in_size = 16; svc_set_in_buf(&a, jm, sizeof jm); svc_call_c(s, 18, &a); svc_call(s, 20, NULL, 0, &c);
+          CHECK(c.result == 0 && miiimg_count(d) == MIIIMG_CAPACITY && d->e[0].size == 4, "20 replaces an existing id even when full"); }
+        svc_call(s, 18, m2, 16, &c); svc_call(s, 104, NULL, 0, &c); CHECK(miiimg_migration_count(img_db()) == 0, "ForceInitialize drops the staging table");
+        CHECK(svc_find(s, 18)->status == IPC_IMPL && svc_find(s, 19)->status == IPC_IMPL && svc_find(s, 20)->status == IPC_IMPL, "18-20 are implemented");
+    }
     CHECK(svc_find(s, 1) == NULL && svc_find(s, 9) == NULL && svc_find(s, 11)->status == IPC_IMPL && svc_find(s, 15)->status == IPC_IMPL, "ids follow switchbrew: the old 1-9 numbering is gone");
     printf("{\"test\":\"svc_mii_img\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;

@@ -18,6 +18,8 @@ typedef struct {
 typedef struct {
     MiiImgEntry e[MIIIMG_CAPACITY];
     unsigned count;
+    MiiImgEntry m[MIIIMG_CAPACITY]; /* the migration store (commands 18-20): images staged by AddImageForMigration, merged into `e` by SaveHeaderForMigration */
+    unsigned mcount;
     int initialized;
 } MiiImgDb;
 
@@ -32,3 +34,10 @@ int miiimg_delete_index(MiiImgDb *d, unsigned index);      /* 0 or -1; later ent
 void miiimg_attribute(const MiiImgEntry *e, uint8_t out[MIIIMG_ATTR_SIZE]);
 /* A deterministic 96x96 baseline JPEG face for `uid` (skin tone, hair colour, eyes and mouth derived from the id). malloc'd; NULL on failure. */
 uint8_t *miiimg_generate(const uint8_t uid[16], size_t *out_size);
+/* Migration store (miiimg 18 AddImageForMigration, 19 ClearHeaderForMigration, 20 SaveHeaderForMigration): a staging table keyed by the same unique id as the
+ * database. Add behaves like miiimg_add on the staging table (-1: full or oversized); clear empties it; save merges every staged image into the database (an existing id is
+ * replaced) and empties the staging table, or returns -1 and changes nothing when the new ids do not fit. */
+unsigned miiimg_migration_count(const MiiImgDb *d);
+int miiimg_migration_add(MiiImgDb *d, const uint8_t uid[16], const void *image, size_t n);
+void miiimg_migration_clear(MiiImgDb *d);
+int miiimg_migration_save(MiiImgDb *d);
