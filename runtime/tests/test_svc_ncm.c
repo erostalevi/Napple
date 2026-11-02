@@ -113,6 +113,28 @@ int main(void) {
         in[0] = 0; memcpy(in + 8, k1, 16); c = (IpcCall){0}; c.in = in; c.in_size = 24; svc_set_out_buf(&c, infos, sizeof infos); svc_call_c(db, 4, &c);
         CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 0, "ListContentInfo on an unparseable blob = 0");
     }
+    { /* ipc-depth-cloud r9: 19 / 22 / 23 read the extended header */
+        uint8_t aoc[8 + 0x10] = {0}, ka[16] = {0}, pat[8 + 0x10] = {0}, kpt[16] = {0}, ka2[16] = {0};
+        aoc[0] = 0x10; /* ext size 0x10, no contents */
+        uint64_t owner = 0x0100000000005000ull, aid = 0x0100000000006001ull, ptid = 0x0100000000005800ull; uint32_t rav = 0x30000;
+        memcpy(aoc + 8, &owner, 8); memcpy(aoc + 16, &rav, 4); aoc[20] = 0x05; /* accessibilities */
+        memcpy(ka, &aid, 8); ka[12] = NCM_TYPE_ADDON;
+        IpcCall t = {0}; t.in = ka; t.in_size = 16; svc_set_in_buf(&t, aoc, sizeof aoc); svc_call_c(db, 0, &t); CHECK(t.result == 0, "Set(add-on meta)");
+        svc_call(db, 19, ka, 16, &c); CHECK(c.result == 0 && c.out_size == 4 && SVC_OUT(&c, uint32_t, 0) == rav, "19 GetRequiredApplicationVersion of an add-on");
+        svc_call(db, 22, ka, 16, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == owner, "22 GetOwnerApplicationId of an add-on");
+        svc_call(db, 23, ka, 16, &c); CHECK(c.result == 0 && c.out_size == 1 && c.out[0] == 5, "23 GetContentAccessibilities of an add-on");
+        pat[0] = 0x10; memcpy(pat + 8, &owner, 8); memcpy(kpt, &ptid, 8); kpt[12] = NCM_TYPE_PATCH;
+        t = (IpcCall){0}; t.in = kpt; t.in_size = 16; svc_set_in_buf(&t, pat, sizeof pat); svc_call_c(db, 0, &t);
+        svc_call(db, 22, kpt, 16, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == owner, "22 of a patch: its application");
+        svc_call(db, 19, kpt, 16, &c); CHECK(c.result == R_NCM_INVALID_CONTENT_META_KEY, "19 of a patch is refused");
+        svc_call(db, 23, kpt, 16, &c); CHECK(c.result == R_NCM_INVALID_CONTENT_META_KEY, "23 of a patch is refused");
+        uint64_t appid = 0x0100000000002000ull; uint8_t kapp[16] = {0}; memcpy(kapp, &appid, 8); kapp[12] = NCM_TYPE_APPLICATION;
+        svc_call(db, 22, kapp, 16, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == appid, "22 of an application: itself");
+        memcpy(ka2, &aid, 8); ka2[12] = NCM_TYPE_ADDON; ka2[0] ^= 1;
+        svc_call(db, 19, ka2, 16, &c); CHECK(c.result == HZ_R_NCM_CONTENT_META_NOT_FOUND, "an unknown key: meta not found");
+        uint8_t shortaoc[8 + 4] = {4}; t = (IpcCall){0}; t.in = ka2; t.in_size = 16; svc_set_in_buf(&t, shortaoc, sizeof shortaoc); svc_call_c(db, 0, &t);
+        svc_call(db, 19, ka2, 16, &c); CHECK(c.result == R_NCM_INVALID_CONTENT_META_KEY, "an extended header too short for the field is refused");
+    }
     printf("{\"test\":\"svc_ncm\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

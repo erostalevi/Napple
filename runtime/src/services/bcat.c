@@ -214,7 +214,8 @@ static const IpcCmd bcat_service_cmds[] = {
     {30203, "UnblockDeliveryTask", svc_noop, IPC_IMPL},
     {90100, "GetDeliveryTaskList", ret_s32_0, IPC_IMPL},
     {90201, "ClearDeliveryCacheStorage", svc_noop, IPC_IMPL}, /* nothing of ours to clear: a provider folder is the user's, never deleted */
-    {20101, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName", sysd_ok, IPC_STUB},
+    /* 20101 (u64 application id, DirectoryName): the same sync as 10101, from the provider; the console's system variant names the application explicitly */
+    {20101, "RequestSyncDeliveryCacheWithApplicationIdAndDirectoryName", make_progress, IPC_IMPL},
     {20300, "GetDeliveryCacheStorageUpdateNotifier", sysd_err_net, IPC_STUB},
     {20301, "RequestSuspendDeliveryTask", sysd_err_net, IPC_STUB},
     {20400, "RegisterSystemApplicationDeliveryTask", sysd_ok, IPC_STUB},

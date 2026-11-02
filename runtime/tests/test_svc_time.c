@@ -134,6 +134,44 @@ int main(void) {
         svc_call(sc, 2, NULL, 0, &d); CHECK(SVC_OUT(&d, int64_t, 0) == off_ns, "2 GetTestOffset reads it back");
         svc_call(sc, 0, NULL, 0, &d); CHECK(SVC_OUT(&d, int64_t, 0) >= t0 + 3600 && SVC_OUT(&d, int64_t, 0) <= t0 + 3602, "...and GetCurrentTimePoint is shifted by it");
         off_ns = 0; svc_call(sc, 3, &off_ns, 8, &d);
+        /* ipc-depth-cloud r9: time:u 50 / 51 */
+        int64_t internal = 5000000000ll; svc_call(st, 50, &internal, 8, &d); CHECK(d.result == 0 && d.out_size == 0, "time:u 50 SetStandardSteadyClockInternalOffset");
+        svc_call(sc, 200, NULL, 0, &d); CHECK(SVC_OUT(&d, int64_t, 0) == internal, "...ISteadyClock 200 GetInternalOffset reports it");
+        internal = 0; svc_call(st, 50, &internal, 8, &d);
+        svc_call(st, 51, NULL, 0, &d); int64_t rtc = SVC_OUT(&d, int64_t, 0); svc_call(sc, 100, NULL, 0, &d);
+        CHECK(d.out_size == 8 && rtc > 700000000 && llabs(rtc - SVC_OUT(&d, int64_t, 0)) < 3, "time:u 51 GetStandardSteadyClockRtcValue: the ISteadyClock RTC value");
+    }
+    { /* ipc-depth-cloud r9: ITimeZoneService 7 / 8 / 20 and the TZif reader */
+        static uint8_t tzif[44 + 2 * 5 + 2 * 6 + 8];
+        memset(tzif, 0, sizeof tzif); memcpy(tzif, "TZif2", 5);
+        tzif[35] = 2; tzif[39] = 2; tzif[43] = 8; /* timecnt 2, typecnt 2, charcnt 8 (big endian) */
+        uint8_t *idx = tzif + 44 + 8, *ty = idx + 2;
+        idx[0] = 0; idx[1] = 1;                          /* the last transition goes to daylight time */
+        ty[0] = 0; ty[1] = 0; ty[2] = 0x0e; ty[3] = 0x10; ty[4] = 0; /* +3600 standard */
+        ty[6] = 0; ty[7] = 0; ty[8] = 0x1c; ty[9] = 0x20; ty[10] = 1; /* +7200 daylight */
+        int32_t off = 0; CHECK(time_tzif_std_offset(tzif, sizeof tzif, &off) == 0 && off == 3600, "TZif: standard offset of the newest standard-time type");
+        idx[1] = 0; CHECK(time_tzif_std_offset(tzif, sizeof tzif, &off) == 0 && off == 3600, "TZif: last transition already standard"); idx[1] = 1;
+        CHECK(time_tzif_std_offset(tzif, 40, &off) == -1 && time_tzif_std_offset("TZiX", 4, &off) == -1, "TZif: short or wrong magic refused");
+        tzif[43] = 0xff; tzif[42] = 0xff; CHECK(time_tzif_std_offset(tzif, sizeof tzif, &off) == -1, "TZif: counts past the data refused"); tzif[42] = 0; tzif[43] = 8;
+
+        IpcCall d; svc_call(st, 3, NULL, 0, &d); IpcObject *tz = d.out_objects[0];
+        static uint8_t rule[TIME_RULE_SIZE];
+        memset(&d, 0, sizeof d); svc_set_in_buf(&d, tzif, sizeof tzif); svc_set_out_buf(&d, rule, sizeof rule); svc_call_c(tz, 8, &d);
+        TimeRule pr; CHECK(d.result == 0 && time_rule_parse(rule, sizeof rule, &pr) == 0 && pr.mode == TIME_RULE_FIXED && pr.offset == 3600, "8 ParseTimeZoneBinary: a fixed +1h rule");
+        int64_t noon = 1700000000; memset(&d, 0, sizeof d); d.in = (const uint8_t *)&noon; d.in_size = 8; svc_set_in_buf(&d, rule, sizeof rule); svc_call_c(tz, 100, &d);
+        TimeCalendar cal; time_cal_read(d.out, &cal); CHECK(d.result == 0 && cal.hour == 23, "...ToCalendarTime under it is UTC+1 (22:13 UTC -> 23)");
+        static uint8_t junk[64]; memset(&d, 0, sizeof d); svc_set_in_buf(&d, junk, sizeof junk); svc_set_out_buf(&d, rule, sizeof rule); svc_call_c(tz, 8, &d);
+        CHECK(d.result == HZ_RESULT(HZ_MOD_TIME, 200), "...data that is not TZif is refused");
+
+        svc_call(tz, 20, NULL, 0, &d); uint32_t ev = d.nout_copy ? d.out_copy[0] : 0;
+        CHECK(ev && !event_is_signaled(ev), "20 GetDeviceLocationNameOperationEventReadableHandle: not signalled at first");
+        uint8_t in[0x24] = "Asia/Tokyo"; memset(&d, 0, sizeof d); d.in = in; d.in_size = sizeof in; svc_set_in_buf(&d, rule, sizeof rule); svc_call_c(tz, 7, &d);
+        CHECK(d.result == 0 && event_is_signaled(ev), "7 SetDeviceLocationNameWithTimeZoneRule with one of our rules: accepted, event signalled");
+        svc_call(tz, 0, NULL, 0, &d); CHECK(!strcmp((char *)d.out, "Asia/Tokyo"), "...the device zone is the new name");
+        uint8_t mars[0x24] = "Mars/Olympus"; memset(&d, 0, sizeof d); d.in = mars; d.in_size = sizeof mars; svc_set_in_buf(&d, junk, sizeof junk); svc_call_c(tz, 7, &d);
+        CHECK(d.result == HZ_RESULT(HZ_MOD_TIME, 200), "...a foreign rule with an unknown name is refused");
+        event_clear_handle(ev); uint8_t utc[0x24] = "UTC"; svc_call(tz, 1, utc, sizeof utc, &d); CHECK(event_is_signaled(ev), "1 SetDeviceLocationName signals it too");
+        g_zone_override[0] = 0;
     }
     printf("{\"test\":\"svc_time\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
