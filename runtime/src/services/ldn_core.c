@@ -121,10 +121,28 @@ void ldn_net_encode(const OnlineLdnNetwork *n, uint8_t out[LDN_NETINFO_SIZE]) {
         }
         node[0xa] = (uint8_t)i;
         node[0xb] = 1;
+        put16(node + 0x2e, n->local_communication_version); /* NodeInfo.localCommunicationVersion: a station joins with the version it scanned */
     }
     uint32_t al = n->advertise_len > ONLINE_LDN_ADVERTISE_MAX ? ONLINE_LDN_ADVERTISE_MAX : n->advertise_len;
     put16(out + 0x268, (uint16_t)al);
     memcpy(out + 0x26a, n->advertise, al);
+}
+void ldn_net_encode_nodes(uint8_t out[LDN_NETINFO_SIZE], const OnlineLdnNode *nodes, unsigned n) {
+    unsigned count = 0;
+    uint16_t version = get16(out + 0x68 + 0x2e); /* what ldn_net_encode put on node 0 */
+    if (n > 8) n = 8;
+    memset(out + 0x68, 0, 8 * LDN_NODE_SIZE);
+    for (unsigned i = 0; i < n; i++) {
+        uint8_t *node = out + 0x68 + i * LDN_NODE_SIZE;
+        put32(node, nodes[i].ipv4);
+        memcpy(node + 4, nodes[i].mac, 6);
+        node[0xa] = (uint8_t)i;
+        node[0xb] = nodes[i].connected ? 1 : 0;
+        memcpy(node + 0xc, nodes[i].user_name, strnlen(nodes[i].user_name, 0x20));
+        if (nodes[i].connected) put16(node + 0x2e, version);
+        count += nodes[i].connected ? 1 : 0;
+    }
+    out[0x67] = (uint8_t)count;
 }
 int ldn_net_decode(const uint8_t *in, size_t n, OnlineLdnNetwork *out) {
     memset(out, 0, sizeof *out);
@@ -141,6 +159,7 @@ int ldn_net_decode(const uint8_t *in, size_t n, OnlineLdnNetwork *out) {
     out->node_count = in[0x67];
     memcpy(out->host_name, in + 0x68 + 0xc, 0x20);
     out->host_name[32] = 0;
+    out->local_communication_version = get16(in + 0x68 + 0x2e);
     uint32_t al = get16(in + 0x268);
     if (al > ONLINE_LDN_ADVERTISE_MAX) al = ONLINE_LDN_ADVERTISE_MAX;
     if (n < 0x26a + al) al = n > 0x26a ? (uint32_t)(n - 0x26a) : 0;
