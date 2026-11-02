@@ -38,10 +38,16 @@ build/test_window: tests/test_window.m libnapple_frontend.a $(SIBLINGS)
 build/demo_window: tests/demo_window.m libnapple_frontend.a $(SIBLINGS)
 	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
 
-test: build/test_settings build/test_window
+build/test_online_ui: tests/test_online_ui.m libnapple_frontend.a $(SIBLINGS)
+	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
+test-online-ui: build/test_online_ui
+	./build/test_online_ui
+
+test: build/test_settings build/test_window build/test_online_ui
 	@cmp src/tinyjson.h ../input/src/tinyjson.h && echo "tinyjson.h copies identical"
 	./build/test_settings
 	./build/test_window
+	./build/test_online_ui
 # Interactive-free check of the applet sheets (they open real windows for about a second each; NAPPLE_SHEET_SHOT=<dir> keeps their screenshots).
 build/test_sheets: tests/test_sheets.m libnapple_frontend.a $(SIBLINGS)
 	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
@@ -53,4 +59,4 @@ demo: build/demo_window
 
 clean:
 	rm -rf build libnapple_frontend.a
-.PHONY: all test test-sheets demo clean
+.PHONY: all test test-online-ui test-sheets demo clean

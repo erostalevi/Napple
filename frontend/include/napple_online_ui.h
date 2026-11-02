@@ -166,7 +166,7 @@ void napple_frontend_set_online_ui(struct napple_frontend *fe, const napple_onli
 /* The stub table (canned data, no servers); also usable by tests. */
 const napple_online_ui_api *napple_online_ui_stub(void);
 
-/* Sub-tab registration for overlay-social (frontend/src/overlay_online_social*.m): a page maker returns the NSView* (as void*) for one sub-tab.
+/* Sub-tab registration for overlay-social (frontend/src/overlay_online_social*.m): a page maker returns a +1 retained NSView* (as void*, __bridge_retained) for one sub-tab.
    Registered pages appear after Account in the Online tab's sub-tab strip, in registration order, shown only while signed in. */
 typedef void *(*napple_online_page_fn)(const napple_online_ui_api *api);
 void napple_online_register_subtab(const char *title, napple_online_page_fn make);
