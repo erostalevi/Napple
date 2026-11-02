@@ -568,20 +568,48 @@ static void exec_misc_alu(Ctx *x, const A32Insn *i) {
 }
 
 /* ---- loads and stores --------------------------------------------------------------------------------------------- */
-static uint32_t ld_sub(A32Cpu *c, unsigned sub, uint32_t addr, unsigned fl) {
-    uint32_t v;
+static uint32_t ld_sub(A32Cpu *c, unsigned sub, uint32_t addr) {
     switch (sub) {
-        case 1: v = ld32(c, addr); break;
-        case 3: v = ld8(c, addr); break;
-        case 5: v = ld16(c, addr); break;
-        case 6: v = (uint32_t)(int32_t)(int8_t)ld8(c, addr); break;
-        default: v = (uint32_t)(int32_t)(int16_t)ld16(c, addr); break;
+        case 1: return ld32(c, addr);
+        case 3: return ld8(c, addr);
+        case 5: return ld16(c, addr);
+        case 6: return (uint32_t)(int32_t)(int8_t)ld8(c, addr);
+        default: return (uint32_t)(int32_t)(int16_t)ld16(c, addr);
     }
-    if (fl & FL_ACQ) __atomic_thread_fence(__ATOMIC_ACQUIRE);
-    return v;
+}
+
+/* lda / stl (+ byte / half): AArch32's load-acquire / store-release are RCsc (a store-release followed by a load-acquire stays in order), so
+ * they are seq_cst accesses, the same as the lifter's ldar / stlr. A fence around a plain access is not enough: a release fence before a store
+ * and an acquire fence after a load let stl; lda reorder. An unaligned address is an alignment fault whatever SCTLR.A says. */
+static void exec_ldst_acq(Ctx *x, const A32Insn *i) {
+    A32Cpu *c = x->c;
+    uint32_t addr = i->rn == 15 ? (x->pcv & ~3u) : c->r[i->rn];
+    unsigned sub = i->sub, size = sub < 2 ? 4 : sub < 4 ? 1 : 2; /* by sub: str ldr strb ldrb strh ldrh */
+    if (addr & (size - 1)) {
+        c->fault_addr = addr;
+        x->exit = A32_EXIT_ALIGN;
+        return;
+    }
+    void *p = c->mem + addr;
+    if (!(sub & 1)) {
+        uint32_t v = R(x, i->rd);
+        if (size == 4) __atomic_store_n((uint32_t *)p, v, __ATOMIC_SEQ_CST);
+        else if (size == 1) __atomic_store_n((uint8_t *)p, (uint8_t)v, __ATOMIC_SEQ_CST);
+        else __atomic_store_n((uint16_t *)p, (uint16_t)v, __ATOMIC_SEQ_CST);
+        return;
+    }
+    uint32_t v = size == 4 ? __atomic_load_n((uint32_t *)p, __ATOMIC_SEQ_CST)
+               : size == 1 ? __atomic_load_n((uint8_t *)p, __ATOMIC_SEQ_CST)
+                           : __atomic_load_n((uint16_t *)p, __ATOMIC_SEQ_CST);
+    if (i->rd == 15) bx_write(x, v); /* UNPREDICTABLE; as ldr pc */
+    else c->r[i->rd] = v;
 }
 
 static void exec_ldst(Ctx *x, const A32Insn *i) {
+    if (i->fl & FL_ACQ) {
+        exec_ldst_acq(x, i);
+        return;
+    }
     A32Cpu *c = x->c;
     uint32_t base = i->rn == 15 ? (x->pcv & ~3u) : c->r[i->rn];
     uint32_t off;
@@ -609,14 +637,13 @@ static void exec_ldst(Ctx *x, const A32Insn *i) {
     int load = sub & 1 || sub >= 6;
     if (!load) {
         uint32_t v = R(x, i->rd);
-        if (i->fl & FL_ACQ) __atomic_thread_fence(__ATOMIC_RELEASE);
         if (sub == 0) st32(c, addr, v);
         else if (sub == 2) st8(c, addr, v);
         else st16(c, addr, v);
         if (wb) c->r[i->rn] = off_addr;
         return;
     }
-    uint32_t v = ld_sub(c, sub, addr, i->fl);
+    uint32_t v = ld_sub(c, sub, addr);
     if (wb && i->rn != 15) c->r[i->rn] = off_addr;
     if (i->rd == 15) {
         if (sub == 1) bx_write(x, v);

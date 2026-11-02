@@ -15,7 +15,7 @@
 #import "mtl_priv.h"
 #include "cache_trim.h"
 
-#define TRANSLATOR_VERSION 18u /* bump when generated MSL changes: invalidates the disk cache */
+#define TRANSLATOR_VERSION 20u /* bump when generated MSL changes: invalidates the disk cache */
 
 @implementation GfxShader
 @end
@@ -1000,6 +1000,8 @@ static void build_pipe(GfxPipe *p, pipe_key k) {
     vk.flip_y = k.flip_y;
     vk.depth_minus_one = k.depth_mode == 0;
     vk.vp_swizzle = k.vp_swizzle;
+    memcpy(vk.vp_swizzle_vp, k.vp_swizzle_vp, sizeof vk.vp_swizzle_vp);
+    vk.layered = k.layered;
     GfxShader *vs = shader_variant(k.vs, &vk, 1);
     if (vs->state != 1) {
         p->state = 2;
@@ -1337,9 +1339,18 @@ static GfxShader *stage_fs(const pipe_key *k, uint32_t vs_out_mask) {
     return shader_variant(k->fs, &fk, 1);
 }
 /* Pass-through vertex function of the geometry output: record r of gs_vtx -> position + the generic slots the program stores (+ point size for points). */
-static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip, uint16_t swz) {
-    static NSMutableDictionary<NSNumber *, id<MTLFunction>> *cache;
-    NSNumber *ck = @((slots * 2 + (uint64_t)(points != 0)) ^ ((uint64_t)(clip & 3) << 62) ^ ((uint64_t)swz << 40));
+/* `sys`: GS_SYS_* outputs the geometry program stores in slot 0 (the layer .y, the viewport index .z), routed to the rasterizer. */
+static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip, uint32_t sys, const pipe_key *k) {
+    static NSMutableDictionary<NSData *, id<MTLFunction>> *cache;
+    struct { uint64_t slots; uint32_t points, clip, sys; uint16_t swz[16]; } ckv;
+    memset(&ckv, 0, sizeof ckv);
+    ckv.slots = slots;
+    ckv.points = points != 0;
+    ckv.clip = (uint32_t)clip & 3;
+    ckv.sys = sys & (GS_SYS_VP_INDEX | (k->layered ? GS_SYS_LAYER : 0)); /* the layer only in a layered pass (ShaderKey.layered) */
+    ckv.swz[0] = k->vp_swizzle;
+    memcpy(ckv.swz + 1, k->vp_swizzle_vp, sizeof k->vp_swizzle_vp);
+    NSData *ck = [NSData dataWithBytes:&ckv length:sizeof ckv];
     @synchronized([GfxPipe class]) {
         if (!cache) cache = [NSMutableDictionary dictionary];
         if (cache[ck]) return cache[ck];
@@ -1348,6 +1359,8 @@ static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip, u
     for (int i = 0; i < 32; i++)
         if (slots & (1ull << (STAGE_SLOT_GENERIC + i))) [m appendFormat:@"  float4 v%d [[user(locn%d)]];\n", i, i];
     if (points) [m appendString:@"  float psize [[point_size]];\n"];
+    if (ckv.sys & GS_SYS_VP_INDEX) [m appendString:@"  uint vpi [[viewport_array_index]];\n"];
+    if (ckv.sys & GS_SYS_LAYER) [m appendString:@"  uint layer [[render_target_array_index]];\n"];
     [m appendFormat:@"};\nvertex VOut gs_out(uint vid [[vertex_id]], device const float4 *gs_vtx [[buffer(%d)]], device const uint *gs_idx [[buffer(%d)]]) {\n  VOut o;\n",
                     GS_VERTEX_BUFFER_INDEX, GS_INDEX_BUFFER_INDEX];
     if (points) /* point lists have no restart: an unused index slot becomes a point outside the clip volume */
@@ -1355,21 +1368,17 @@ static id<MTLFunction> gs_passthrough_fn(uint64_t slots, int points, int clip, u
     else [m appendString:@"  uint r = vid;\n"];
     [m appendFormat:@"  device const float4 *s = gs_vtx + r * %uu;\n  o.pos = s[%d];\n", STAGE_SLOTS, STAGE_SLOT_POS];
     /* the clip-space conversions happen here, not in the geometry kernel: gs_vtx keeps the program's own values for transform feedback */
-    if (swz) { /* viewport swizzle (ShaderKey.vp_swizzle) */
-        uint32_t sw = swz ^ VP_SWIZZLE_IDENTITY;
-        static const char cn[4] = {'x', 'y', 'z', 'w'};
-        [m appendString:@"  { float4 q = o.pos; o.pos = float4("];
-        for (int i = 0; i < 4; i++) {
-            uint32_t v = (sw >> (3 * i)) & 7;
-            [m appendFormat:@"%s%sq.%c", i ? ", " : "", v & 1 ? "-" : "", cn[v >> 1]];
-        }
-        [m appendString:@"); }\n"];
+    { /* viewport swizzle (ShaderKey.vp_swizzle / vp_swizzle_vp): the geometry program's viewport index is slot 0 .z (0 when it stores none) */
+        char e[512];
+        if (maxwell_vp_swizzle_msl(ckv.swz, "o.pos", (slots & (1ull << STAGE_SLOT_SYS)) ? "as_type<uint>(s[0].z)" : NULL, e, sizeof e)) [m appendFormat:@"%s", e];
     }
     if (clip & 1) [m appendString:@"  o.pos.y = -o.pos.y;\n"];
     if (clip & 2) [m appendString:@"  o.pos.z = (o.pos.z + o.pos.w) * 0.5f;\n"];
     for (int i = 0; i < 32; i++)
         if (slots & (1ull << (STAGE_SLOT_GENERIC + i))) [m appendFormat:@"  o.v%d = s[%d];\n", i, STAGE_SLOT_GENERIC + i];
     if (points) [m appendFormat:@"  o.psize = %@;\n", (slots & (1ull << STAGE_SLOT_SYS)) ? @"max(s[0].w, 1.0f)" : @"1.0f"];
+    if (ckv.sys & GS_SYS_VP_INDEX) [m appendString:@"  o.vpi = min(as_type<uint>(s[0].z), 15u);\n"];
+    if (ckv.sys & GS_SYS_LAYER) [m appendString:@"  o.layer = as_type<uint>(s[0].y);\n"];
     [m appendString:@"  return o;\n}\n"];
     NSError *err = nil;
     id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:m options:nil error:&err];
@@ -1410,7 +1419,7 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         d.rasterizationEnabled = NO; /* the capture function is `vertex void` (ShaderKey.capture_void): no rasterizer work at all */
     } else if (sk->mode == SPK_GS_DRAW) {
         int points = sk->gs_topo == GS_OUT_POINTS;
-        vfn = gs_passthrough_fn(sk->gs_slots, points, sk->gs_clip, k->vp_swizzle);
+        vfn = gs_passthrough_fn(sk->gs_slots, points, sk->gs_clip, sk->gs_sys, k);
         if (!vfn) return;
         fs = stage_fs(k, generic_mask(sk->gs_slots));
         if (k->fs && fs->state != 1) return;
@@ -1426,6 +1435,8 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
             tk.flip_y = k->flip_y;
             tk.depth_minus_one = k->depth_mode == 0;
             tk.vp_swizzle = k->vp_swizzle;
+            memcpy(tk.vp_swizzle_vp, k->vp_swizzle_vp, sizeof tk.vp_swizzle_vp);
+            tk.layered = k->layered;
         }
         tk.tess_soft = 1;
         tk.stage_out = (uint8_t)cap;
@@ -1458,6 +1469,8 @@ static void build_stage_pipe(GfxPipe *p, const stage_pipe_key *sk, const gfx_xfb
         tk.flip_y = k->flip_y;
         tk.depth_minus_one = k->depth_mode == 0;
         tk.vp_swizzle = k->vp_swizzle;
+        memcpy(tk.vp_swizzle_vp, k->vp_swizzle_vp, sizeof tk.vp_swizzle_vp);
+        tk.layered = k->layered;
         tk.tess_domain = sk->tess_domain;
         tk.tess_out_vertices = sk->tess_cp;
         tk.depth_slots = sk->te_depth;
@@ -1519,6 +1532,8 @@ GfxPipe *mtl_stage_pipe_get(const stage_pipe_key *k0, const gfx_xfb_layout *xfb)
         kn.k.depth_slots[1] = kn.k.stencil_slots[1] = kn.k.img_int[1] = kn.k.img_uint[1] = kn.k.tex_uint[1] = kn.k.tex_sint[1] = 0;
         kn.k.sep_depth[1] = kn.k.sep_stencil[1] = kn.k.sep_uint[1] = kn.k.sep_sint[1] = 0;
         kn.k.vp_swizzle = 0;
+        memset(kn.k.vp_swizzle_vp, 0, sizeof kn.k.vp_swizzle_vp);
+        kn.k.layered = 0;
     }
     kn.k.probe = 0;
     NSNumber *key = @(fnv1a(&kn, sizeof kn, FNV_INIT) ^ 0x5354474550495045ull);

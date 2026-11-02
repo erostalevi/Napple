@@ -423,6 +423,15 @@ static int stage_draw_begin(pipe_key *k, uint32_t prim, int triangles) {
     fill_pipe_key(prim, k);
     return 1;
 }
+/* The viewport index / layer the rasterized stage (geometry or tess eval: `sys`, GS_SYS_*) writes: pass_routing, and the stage pipeline again with the
+ * layered key when the pass was reopened. Returns the pipeline to draw with (nil: skip the draw). */
+static GfxPipe *stage_route(GfxPipe *p, stage_pipe_key *sk, pipe_key *k, uint32_t prim, uint64_t prog, uint32_t sys) {
+    int rl = pass_routing(prog, (sys & GS_SYS_VP_INDEX) != 0, (sys & GS_SYS_LAYER) != 0);
+    if (rl != 2) return rl ? p : nil;
+    fill_pipe_key(prim, k);
+    sk->k = *k;
+    return mtl_stage_pipe_get(sk, NULL);
+}
 static void stage_draw_state(GfxPipe *p) {
     [g_re setRenderPipelineState:p->ps];
     [g_re setDepthStencilState:depth_stencil_state()];
@@ -431,6 +440,7 @@ static void stage_draw_state(GfxPipe *p) {
     P.draws++;
     atomic_fetch_add(&g_gfx.draws, 1);
 }
+static uint32_t te_sys(const GfxPipe *p) { return p->vs ? (p->vs->info.writes_layer ? GS_SYS_LAYER : 0) | (p->vs->info.writes_vp_index ? GS_SYS_VP_INDEX : 0) : 0; }
 static void gs_fallback(const char *why) {
     static uint64_t seen[32];
     static int ns;
@@ -721,8 +731,10 @@ static int gs_run(uint64_t gsh, const gs_decl *g, uint32_t prim, uint32_t nv, id
     sk.gs_topo = g->topo;
     sk.prog = gsh;
     sk.gs_slots = gs->info.stage_slot_mask;
+    sk.gs_sys = (gs->info.writes_layer ? GS_SYS_LAYER : 0) | (gs->info.writes_vp_index ? GS_SYS_VP_INDEX : 0);
     sk.gs_clip = (uint8_t)((k.flip_y ? 1 : 0) | (k.depth_mode == 0 ? 2 : 0));
     GfxPipe *p = mtl_stage_pipe_get(&sk, NULL);
+    if (p) p = stage_route(p, &sk, &k, prim, gsh, sk.gs_sys);
     if (!p) { stage_skip("geometry output pipeline failed"); return 1; }
     stage_draw_state(p);
     [g_re setVertexBuffer:vb offset:vo atIndex:GS_VERTEX_BUFFER_INDEX];
@@ -998,6 +1010,7 @@ static void draw_tessellation(const sdraw *d) {
         sk.k = k;
         sk.mode = SPK_TESS;
         GfxPipe *p = mtl_stage_pipe_get(&sk, NULL);
+        if (p) p = stage_route(p, &sk, &k, d->mode, tes, te_sys(p));
         if (!p) { stage_skip("tessellation pipeline failed"); return; }
         stage_draw_state(p);
         bind_stage(4, p->vs, g_re, 0, NULL);
@@ -1081,6 +1094,7 @@ static void draw_tessellation(const sdraw *d) {
     sk.k = k;
     sk.mode = SPK_TESS_SOFT;
     GfxPipe *p = mtl_stage_pipe_get(&sk, NULL);
+    if (p) p = stage_route(p, &sk, &k, iso ? NVN_DRAW_PRIMITIVE_LINES : NVN_DRAW_PRIMITIVE_TRIANGLES, tes, te_sys(p));
     if (!p) { stage_skip("software tessellation pipeline failed"); return; }
     stage_draw_state(p);
     bind_stage(4, p->vs, g_re, 0, NULL);

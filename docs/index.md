@@ -67,9 +67,5 @@ See the [guide index](guides/README.md).
 
 ### Process and history
 - [Parallel-session workflow](process/README.md)
-- [Change archive](archive/changes/README.md). Notes of the unattended rounds that the archive README does not list yet:
-  - Batch 2026-10-27-b7: [applets on a title](archive/changes/2026-10-27-claude-applets-on-title-2026-10-27-b7.md), [gfx stages real](archive/changes/2026-10-27-claude-gfx-stages-real-2026-10-27-b7.md), [applets live](archive/changes/2026-10-28-claude-applets-live-2026-10-27-b7.md), [content real 2](archive/changes/2026-10-28-claude-content-real-2-2026-10-27-b7.md).
-  - Round 2026-11-01-r1: [sched-applets](archive/changes/2026-11-01-claude-sched-applets-2026-11-01-r1.md), [gfx-msaa-views](archive/changes/2026-11-01-claude-gfx-msaa-views-2026-11-01-r1.md), [gfx-stages-live](archive/changes/2026-11-01-claude-gfx-stages-live-2026-11-01-r1.md), [sweep-small](archive/changes/2026-11-01-claude-sweep-small-2026-11-01-r1.md).
-  - Round 2026-11-01-r2: [gfx-nvn-api](archive/changes/2026-11-01-claude-gfx-nvn-api-2026-11-01-r2.md), [gfx-shader-views](archive/changes/2026-11-01-claude-gfx-shader-views-2026-11-01-r2.md), [ipc-depth-hid](archive/changes/2026-11-01-claude-ipc-depth-hid-2026-11-01-r2.md), [ipc-depth-sys](archive/changes/2026-11-01-claude-ipc-depth-sys-2026-11-01-r2.md), [sweep-media-r2](archive/changes/2026-11-01-claude-sweep-media-r2-2026-11-01-r2.md).
-  - Round 2026-11-01-r3: [acnh-race-atomics](archive/changes/2026-11-01-claude-acnh-race-atomics-2026-11-01-r3.md), [am-depth-applets](archive/changes/2026-11-01-claude-am-depth-applets-2026-11-01-r3.md), [gfx-replay-gaps](archive/changes/2026-11-01-claude-gfx-replay-gaps-2026-11-01-r3.md), [ipc-local-stubs](archive/changes/2026-11-01-claude-ipc-local-stubs-2026-11-01-r3.md), [nvn-object-layouts](archive/changes/2026-11-01-claude-nvn-object-layouts-2026-11-01-r3.md).
-  - Round 2026-11-02-r4: [core-ordering-kernel](archive/changes/2026-11-02-claude-core-ordering-kernel-2026-11-02-r4.md).
+- [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r6) (batch b7, rounds r1-r6)
+- [Process archive](process/archive/README.md): orchestration and integrator files of the landed rounds

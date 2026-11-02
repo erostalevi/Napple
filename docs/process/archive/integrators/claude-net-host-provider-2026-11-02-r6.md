@@ -6,7 +6,7 @@ head: 731f086 (code and docs; the integrator file is the next commit)
 env: mac
 date: 2026-11-02
 areas: [runtime/net, runtime/services]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/net-host-provider-2026-11-02-r6: a built-in, opt-in macOS host network provider (sockets, DNS, TLS, nifm, LDN over LAN)
@@ -121,3 +121,13 @@ Branch-only changes (`git diff --stat c33eb7f..HEAD`, c33eb7f = the main merged 
 - **account (account.c):** `EnsureIdTokenCacheAsync` / `LoadIdTokenCache` are generic error stubs. A console without a linked Nintendo account answers through an
   IAsyncContext whose result is the "account required" error; worth checking against the SDK's expectations when the applet fix lands.
 - Nice to have (ABI, later): a netmask in `OnlineLdnNetwork`, the station's user name / passphrase in `ldn_connect`.
+
+## Integration result
+- Date 2026-11-02, merged into main as ce05285 (branch head 80a8880: e625ea1 as handed off plus 731f086, the bsd empty-Poll timeout fix, and its integrator-file update; the orchestrator moved the head during integration, the delta was merged and re-tested). First of batch r6; no conflicts. Outcome: **Clean**, plus one doc commit `integrate: r6 round in the change archive` (c046a67: `### Round 2026-11-02-r6` section in `docs/archive/changes/README.md` with this note's row, heading range and its two anchors in `docs/index.md` / `docs/process/archive/README.md` moved to r6; `tools/check_docs.py` reported the change note as an orphan before, OK after).
+- No native ports: `src/net` is already macOS-native (SecureTransport, SystemConfiguration, BSD sockets with poll slices); the C is left as written on purpose (portable POSIX + service logic).
+- Build (scratch worktree, fresh): `make -C input/audio/frontend/gfx`, `make -C gfx adapter`, `make -C runtime GFX=napple`: rc 0, no new warnings in `src/net` (the three warnings are pre-existing: applet_ae.c cast, bcat.c unused, stb_vorbis).
+- `make -C runtime GFX=napple test-net-host`: test_net_host_ldn 68/0, test_net_host_sock 108/0 (incl. the vendor-domain block: 9 names under the 7 domains refused with EAI_NONAME, look-alikes not blocked, redirect hook; and the new empty-Poll timeout checks), test_net_host_tls 41/0.
+- `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0 on e625ea1 and again on 80a8880; `ipc_reference` 111 fixtures, app_reachable 1325, missing 0.
+- Four-title 60 s headless boots (run lock, private copies of the shared saves, shared title data read-only), on 80a8880 (and before on e625ea1, same results): without `NAPPLE_NET`: SMO, LAS, MK8D, ACNH rc 0, `missing_ipc []`, `unsupported_svcs []`, stubbed only `nvdrv:13`, no `online:` line. With `NAPPLE_NET=host`: same four rc 0, `missing_ipc []`, `unsupported_svcs []`, stubbed only `nvdrv:13`; `online: provider 'host (macOS network stack)' (built in) selected by NAPPLE_NET=host (caps 0x8f)` (SMO, MK8D, ACNH; LAS opens no network service while booting) and `net: host provider: nifm connected, ip 192.168.5.229` (SMO, ACNH).
+- The MK8D Online Play caveat is resolved by error-applet-output (landed next; verified on main there).
+- Still untested (as declared): LDN between two runtime processes / two Macs, a title's local wireless mode, IPv6 sockets, `NAPPLE_LDN_PEERS`.

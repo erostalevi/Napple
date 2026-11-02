@@ -42,12 +42,12 @@ int main(void) {
     svc_call(sa, 11, NULL, 0, &c); CHECK(SVC_OUT(&c, uint32_t, 0) == 0x11 && SVC_OUT(&c, uint32_t, 4) == 1, "GetLibraryAppletInfo reports the id and mode");
     svc_call(sa, 5, NULL, 0, &c); CHECK(event_is_signaled(c.out_copy[0]), "pop-in event signalled while storages remain");
     svc_call(sa, 0, NULL, 0, &c); CHECK(c.result == 0 && c.nout_objects == 1 && ((Storage *)c.out_objects[0]->state)->size == 16, "PopInData skips the common arguments and pops the applet's own storage");
-    svc_call(sa, 0, NULL, 0, &c); CHECK(c.result == 0x680, "PopInData: no more data");
+    svc_call(sa, 0, NULL, 0, &c); CHECK(c.result == 0x480, "PopInData: no more data (NoDataInChannel, what the SDK's TryPopFromInChannel takes as empty)");
 
     svc_call(sa, 6, NULL, 0, &c); CHECK(event_is_signaled(c.out_copy[0]), "interactive pop-in event signalled while storages remain");
     svc_call(sa, 2, NULL, 0, &c); CHECK(c.result == 0 && ((Storage *)c.out_objects[0]->state)->size == 4 && ((Storage *)c.out_objects[0]->state)->data[0] == 0xC0, "PopInteractiveInData #0");
     svc_call(sa, 2, NULL, 0, &c); CHECK(c.result == 0 && ((Storage *)c.out_objects[0]->state)->size == 2, "PopInteractiveInData #1");
-    svc_call(sa, 2, NULL, 0, &c); CHECK(c.result == 0x680, "PopInteractiveInData: empty");
+    svc_call(sa, 2, NULL, 0, &c); CHECK(c.result == 0x480, "PopInteractiveInData: empty (NoDataInChannel)");
     svc_call(sa, 6, NULL, 0, &c); CHECK(!event_is_signaled(c.out_copy[0]), "interactive pop-in event clear once drained");
 
     IpcObject *st = applet_storage_make("hello", 5);
@@ -65,7 +65,7 @@ int main(void) {
     svc_call(pw, 0, NULL, 0, &c); CHECK(c.result == 0, "GetLaunchReason");
 
     uint32_t tr = 0x2a5; svc_call(acf, 0, &tr, 4, &c); CHECK(terminate_result == 0x2a5, "SetTerminateResult is kept for the exit");
-    svc_call(acf, 21, NULL, 0, &c); CHECK(c.result == 0x680, "TryPopFromAppletBoundChannel: empty");
+    svc_call(acf, 21, NULL, 0, &c); CHECK(c.result == 0x480, "TryPopFromAppletBoundChannel: empty (NoDataInChannel)");
     { IpcCall r; memset(&r, 0, sizeof r); static uint8_t buf[0x40]; svc_set_out_buf(&r, buf, sizeof buf); svc_call_c(acf, 10, &r); CHECK(r.result == 0x680, "ReadThemeStorage before any write"); }
     { uint8_t theme[8] = {1, 2, 3, 4, 5, 6, 7, 8}; IpcCall w; memset(&w, 0, sizeof w); svc_set_in_buf(&w, theme, sizeof theme); svc_call_c(acf, 11, &w); CHECK(w.result == 0, "WriteThemeStorage");
       IpcCall r; memset(&r, 0, sizeof r); static uint8_t buf[0x40]; svc_set_out_buf(&r, buf, sizeof buf); svc_call_c(acf, 10, &r); CHECK(r.result == 0 && buf[3] == 4 && buf[7] == 8, "ReadThemeStorage reads back what was written"); }
