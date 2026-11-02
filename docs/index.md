@@ -21,6 +21,7 @@ the repository front page is the [README](../README.md) and the title status is 
 1. [Parallel-session workflow](process/README.md).
 2. [Change archive](archive/changes/README.md): the dated notes of every round.
 3. [Tooling](reference/tooling.md) (REA, Ghidra) and the CI workflows in `.github/workflows/`.
+4. [Deploy the game servers](guides/deploy-servers.md) (`pretend.napple.lat` on AWS, the `napple.lat` DNS, the local test stack).
 
 ## Contents
 
@@ -67,4 +68,4 @@ See the [guide index](guides/README.md).
 
 ### Process and history
 - [Parallel-session workflow](process/README.md)
-- [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r5) (batch b7, rounds r1-r5)
+- [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r7) (batch b7, rounds r1-r7)

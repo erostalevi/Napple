@@ -52,21 +52,23 @@ uint32_t ldn_apply(LdnState *s, LdnOp op) {
 #define R_INVALID_ARG HZ_RESULT(HZ_MOD_LDN, 4)     /* [unverified] */
 #define R_FILTER_FULL HZ_RESULT(HZ_MOD_LDN, 12)    /* [unverified] */
 #define R_NODE_NOT_FOUND HZ_RESULT(HZ_MOD_LDN, 24) /* [unverified] */
+/* The access point's configuration can be set once it is opened, before CreateNetwork too (MK8D sets its advertise data first); CreateNetwork uses it. */
+static int ap_open(LdnState s) { return s == LDN_AP_OPENED || s == LDN_AP_CREATED; }
 uint32_t ldn_set_advertise(LdnState state, LdnConfig *cfg, const void *data, uint32_t n) {
-    if (state != LDN_AP_CREATED) return R_INVALID_STATE;
+    if (!ap_open(state)) return R_INVALID_STATE;
     if (n > LDN_ADVERTISE_MAX) return R_INVALID_SIZE;
     if (n) memcpy(cfg->advertise, data, n);
     cfg->advertise_len = (uint16_t)n;
     return 0;
 }
 uint32_t ldn_set_accept_policy(LdnState state, LdnConfig *cfg, uint32_t policy) {
-    if (state != LDN_AP_CREATED) return R_INVALID_STATE;
+    if (!ap_open(state)) return R_INVALID_STATE;
     if (policy > 3) return R_INVALID_ARG;
     cfg->accept_policy = policy;
     return 0;
 }
 uint32_t ldn_filter_add(LdnState state, LdnConfig *cfg, const uint8_t mac[6]) {
-    if (state != LDN_AP_CREATED) return R_INVALID_STATE;
+    if (!ap_open(state)) return R_INVALID_STATE;
     for (unsigned i = 0; i < cfg->nfilter; i++)
         if (!memcmp(cfg->filter[i], mac, 6)) return 0;
     if (cfg->nfilter >= LDN_FILTER_MAX) return R_FILTER_FULL;
@@ -74,7 +76,7 @@ uint32_t ldn_filter_add(LdnState state, LdnConfig *cfg, const uint8_t mac[6]) {
     return 0;
 }
 uint32_t ldn_filter_clear(LdnState state, LdnConfig *cfg) {
-    if (state != LDN_AP_CREATED) return R_INVALID_STATE;
+    if (!ap_open(state)) return R_INVALID_STATE;
     cfg->nfilter = 0;
     return 0;
 }
@@ -121,10 +123,28 @@ void ldn_net_encode(const OnlineLdnNetwork *n, uint8_t out[LDN_NETINFO_SIZE]) {
         }
         node[0xa] = (uint8_t)i;
         node[0xb] = 1;
+        put16(node + 0x2e, n->local_communication_version); /* NodeInfo.localCommunicationVersion: a station joins with the version it scanned */
     }
     uint32_t al = n->advertise_len > ONLINE_LDN_ADVERTISE_MAX ? ONLINE_LDN_ADVERTISE_MAX : n->advertise_len;
     put16(out + 0x268, (uint16_t)al);
     memcpy(out + 0x26a, n->advertise, al);
+}
+void ldn_net_encode_nodes(uint8_t out[LDN_NETINFO_SIZE], const OnlineLdnNode *nodes, unsigned n) {
+    unsigned count = 0;
+    uint16_t version = get16(out + 0x68 + 0x2e); /* what ldn_net_encode put on node 0 */
+    if (n > 8) n = 8;
+    memset(out + 0x68, 0, 8 * LDN_NODE_SIZE);
+    for (unsigned i = 0; i < n; i++) {
+        uint8_t *node = out + 0x68 + i * LDN_NODE_SIZE;
+        put32(node, nodes[i].ipv4);
+        memcpy(node + 4, nodes[i].mac, 6);
+        node[0xa] = (uint8_t)i;
+        node[0xb] = nodes[i].connected ? 1 : 0;
+        memcpy(node + 0xc, nodes[i].user_name, strnlen(nodes[i].user_name, 0x20));
+        if (nodes[i].connected) put16(node + 0x2e, version);
+        count += nodes[i].connected ? 1 : 0;
+    }
+    out[0x67] = (uint8_t)count;
 }
 int ldn_net_decode(const uint8_t *in, size_t n, OnlineLdnNetwork *out) {
     memset(out, 0, sizeof *out);
@@ -141,6 +161,7 @@ int ldn_net_decode(const uint8_t *in, size_t n, OnlineLdnNetwork *out) {
     out->node_count = in[0x67];
     memcpy(out->host_name, in + 0x68 + 0xc, 0x20);
     out->host_name[32] = 0;
+    out->local_communication_version = get16(in + 0x68 + 0x2e);
     uint32_t al = get16(in + 0x268);
     if (al > ONLINE_LDN_ADVERTISE_MAX) al = ONLINE_LDN_ADVERTISE_MAX;
     if (n < 0x26a + al) al = n > 0x26a ? (uint32_t)(n - 0x26a) : 0;

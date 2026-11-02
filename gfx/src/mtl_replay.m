@@ -40,7 +40,7 @@ typedef struct {
     int rt_valid;
     float vp[16][4];
     int32_t sc[16][4];
-    int sc_set;
+    uint32_t sc_set; /* bit i: scissor i was set (an unset one covers the target) */
     float dr[16][2];
     float blend_color[4];
     uint32_t stencil_ref[2], stencil_wmask[2], stencil_rmask[2]; /* [0] front, [1] back */
@@ -69,6 +69,7 @@ static id<MTLRenderCommandEncoder> g_re;
 static id<MTLBlitCommandEncoder> g_be;
 static id<MTLComputeCommandEncoder> g_ce;
 static uint64_t g_enc_serial; /* identity of the current encoder (an address can be reused by the next one) */
+static uint64_t g_vp_serial;  /* encoder that has the viewport / scissor arrays of apply_raster_state (0: none; a single-viewport pass resets it) */
 static ring g_ring;
 static uint64_t g_seq;
 
@@ -112,8 +113,12 @@ typedef struct {
     int discard_color[8], discard_ds;
     int draws;
     uint8_t sl_n, sl_pos[8]; /* programmable sample positions the pass was begun with (sl_n 0 = the default positions) */
+    uint32_t layers;         /* array layers every attachment has from its slice (1: a single image) */
+    uint8_t layered;         /* the pass was begun with renderTargetArrayLength = layers (a draw's program writes the layer) */
+    uint32_t pw, ph;         /* Metal's render pass size: the smallest attachment at its level (scissor rectangles must lie inside it) */
 } passinfo;
 static passinfo P;
+static int g_want_layered; /* the next pass_begin makes a layered pass (pass_layered) */
 
 static id<MTLTexture> g_dummy_tex[8];
 static NSMutableDictionary<NSNumber *, id<MTLDepthStencilState>> *g_dss;
@@ -456,6 +461,20 @@ static void sample_positions(uint8_t *n, uint8_t pos[8]) {
 }
 id<MTLTexture> g_dbg_composite;
 id<MTLTexture> mtl_dbg_composite(void) { return g_dbg_composite; }
+/* Array layers of an attachment from its slice (cube faces count as layers; 3D textures and single images: 1), limited by the view's layer count. */
+static uint32_t att_layers(id<MTLTexture> mt, uint32_t sl, const view_t *v, int has_view) {
+    uint32_t n;
+    switch (mt.textureType) {
+        case MTLTextureType2DArray:
+        case MTLTextureType2DMultisampleArray: n = (uint32_t)mt.arrayLength; break;
+        case MTLTextureTypeCube: n = 6; break;
+        case MTLTextureTypeCubeArray: n = 6 * (uint32_t)mt.arrayLength; break;
+        default: return 1;
+    }
+    n = n > sl ? n - sl : 1;
+    if (has_view && v->set_layers && v->nlayers && v->nlayers < n) n = v->nlayers;
+    return n;
+}
 static int pass_begin(void) {
     if (P.open) return 1;
     if (!S.rt_valid) return 0;
@@ -482,11 +501,15 @@ static int pass_begin(void) {
         }
     }
     MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor renderPassDescriptor];
+    uint32_t layers = ~0u, pw = ~0u, ph = ~0u;
     for (uint32_t i = 0; i < S.rt.n && i < 8; i++) {
         GfxTex *t = mtl_tex_get(&S.rt.color[i].s, 1);
         if (!t) continue;
         uint32_t lv, sl;
         id<MTLTexture> mt = mtl_tex_attach_view(t, &S.rt.color[i].view, S.rt.color[i].has_view, &lv, &sl);
+        layers = MIN(layers, att_layers(mt, sl, &S.rt.color[i].view, S.rt.color[i].has_view));
+        pw = MIN(pw, (uint32_t)MAX(1, mt.width >> lv));
+        ph = MIN(ph, (uint32_t)MAX(1, mt.height >> lv));
         MTLRenderPassColorAttachmentDescriptor *a = rp.colorAttachments[i];
         a.texture = mt;
         a.level = lv;
@@ -510,6 +533,9 @@ static int pass_begin(void) {
         if (d) {
             uint32_t lv, sl;
             id<MTLTexture> mt = mtl_tex_attach_view(d, &S.rt.depth.view, S.rt.depth.has_view, &lv, &sl);
+            layers = MIN(layers, att_layers(mt, sl, &S.rt.depth.view, S.rt.depth.has_view));
+            pw = MIN(pw, (uint32_t)MAX(1, mt.width >> lv));
+            ph = MIN(ph, (uint32_t)MAX(1, mt.height >> lv));
             if (d->pf != MTLPixelFormatStencil8) {
                 rp.depthAttachment.texture = mt;
                 rp.depthAttachment.level = lv;
@@ -580,6 +606,12 @@ static int pass_begin(void) {
             if ((int)i >= P.ncolor && actual) P.ncolor = (int)i + 1;
         }
     }
+    P.layers = layers == ~0u || !layers ? 1 : layers;
+    P.pw = pw == ~0u ? (uint32_t)lroundf((float)P.w * P.sx) : pw;
+    P.ph = ph == ~0u ? (uint32_t)lroundf((float)P.h * P.sy) : ph;
+    P.layered = g_want_layered && P.layers > 1;
+    g_want_layered = 0;
+    if (P.layered) rp.renderTargetArrayLength = P.layers; /* the layer a program writes selects the image (as the slice offset; layer 0 = the attachment's slice) */
     g_re = [g_cb renderCommandEncoderWithDescriptor:rp];
     if (!g_re) return 0;
     for (uint32_t i = 0; i < S.rt.n && i < 8; i++) g_pass_att[i] = rp.colorAttachments[i].texture ? mtl_tex_get(&S.rt.color[i].s, 1) : nil;
@@ -594,6 +626,27 @@ static int pass_begin(void) {
     P.discard_ds = 0;
     g_pk_dirty = 1;
     return 1;
+}
+
+/* A draw whose program writes the layer ([[render_target_array_index]]) needs a layered pass: the pass is reopened with renderTargetArrayLength (loading
+ * what it drew; its folded clears were applied to the attachments' own slices, as before). The pipeline key then changes (pipe_key.layered): the caller
+ * fills it again. Single-image targets stay as they are (the program's layer is dropped: ShaderKey.layered). `vpi` / `layer`: the program writes the
+ * viewport index / layer; the first draw of each kind is logged. Returns 0 when the reopened pass could not begin, 2 when it was reopened, else 1. */
+static void pass_end(void);
+static int pass_routing(uint64_t prog, int vpi, int layer) {
+    if (vpi) LOG_ONCE(NAPPLE_LOG_INFO, "viewport index written (program %016llx): primitives routed to viewports 0-15", (unsigned long long)prog);
+    if (!layer || !P.open || P.layered) return 1;
+    if (P.layers < 2) {
+        LOG_ONCE(NAPPLE_LOG_INFO, "layer written (program %016llx) with single-image render targets: drawn into the attachment's own image",
+                 (unsigned long long)prog);
+        return 1;
+    }
+    LOG_ONCE(NAPPLE_LOG_INFO, "layer written (program %016llx): layered pass of %u layers", (unsigned long long)prog, P.layers);
+    pass_end();
+    g_want_layered = 1;
+    if (!pass_begin()) return 0;
+    vis_draw();
+    return 2;
 }
 
 static void cb_commit(int complete_seq);
@@ -794,10 +847,11 @@ static void pass_end(void) {
 
 /* Clears folded into the next pass must still happen when no draw follows. */
 /* The active scissor in Metal's top-left convention (clamped to the pass); NVN counts y from the bottom in the default lower-left window origin mode. */
-static MTLScissorRect scissor_rect(void) {
+static MTLScissorRect scissor_rect_clamp(MTLScissorRect sr);
+static MTLScissorRect scissor_rect_of(int i) {
     MTLScissorRect sr = {0, 0, (NSUInteger)lroundf((float)P.w * P.sx), (NSUInteger)lroundf((float)P.h * P.sy)};
-    if (!S.sc_set) return sr;
-    int32_t x = S.sc[0][0] < 0 ? 0 : S.sc[0][0], y = S.sc[0][1], w = S.sc[0][2], h = S.sc[0][3];
+    if (!(S.sc_set & (1u << i))) return scissor_rect_clamp(sr);
+    int32_t x = S.sc[i][0] < 0 ? 0 : S.sc[i][0], y = S.sc[i][1], w = S.sc[i][2], h = S.sc[i][3];
     if (w < 0) w = 0;
     if (h < 0) h = 0;
     if (g_gfx.device_origin == 0 && !g_gfx.origin_flip) y = (int32_t)P.h - y - h;
@@ -822,8 +876,19 @@ static MTLScissorRect scissor_rect(void) {
         if (w < 0) w = 0;
         if (h < 0) h = 0;
     }
-    return (MTLScissorRect){(NSUInteger)x, (NSUInteger)y, (NSUInteger)w, (NSUInteger)h};
+    return scissor_rect_clamp((MTLScissorRect){(NSUInteger)x, (NSUInteger)y, (NSUInteger)w, (NSUInteger)h});
 }
+/* Metal requires the rectangle inside the render pass, which is smaller than the guest size when an attachment is a lower mip level or smaller than the
+ * others (P.pw / P.ph; 0 before a pass begins: no clamp) */
+static MTLScissorRect scissor_rect_clamp(MTLScissorRect sr) {
+    if (!P.pw || !P.ph) return sr;
+    if (sr.x > P.pw) sr.x = P.pw;
+    if (sr.y > P.ph) sr.y = P.ph;
+    if (sr.width > P.pw - sr.x) sr.width = P.pw - sr.x;
+    if (sr.height > P.ph - sr.y) sr.height = P.ph - sr.y;
+    return sr;
+}
+static MTLScissorRect scissor_rect(void) { return scissor_rect_of(0); }
 static void flush_clears(void) {
     int pending = P.clear_depth || P.clear_stencil;
     for (int i = 0; i < 8; i++) pending |= P.clear_color[i];
@@ -833,7 +898,7 @@ static void flush_clears(void) {
 
 /* A clear folded into the load action of the next pass is only valid while nothing was drawn and the area is the whole target. */
 static int clear_covers_target(void) {
-    if (!S.sc_set) return 1;
+    if (!(S.sc_set & 1)) return 1;
     return S.sc[0][0] <= 0 && S.sc[0][1] <= 0 && (uint32_t)(S.sc[0][0] + S.sc[0][2]) >= P.w && (uint32_t)(S.sc[0][1] + S.sc[0][3]) >= P.h;
 }
 
@@ -948,6 +1013,7 @@ static void clear_color_quad(uint32_t index, uint32_t kind, uint32_t mask, const
     [g_re setFragmentBytes:v length:16 atIndex:0];
     MTLViewport vp = {0, 0, (double)lroundf((float)P.w * P.sx), (double)lroundf((float)P.h * P.sy), 0, 1};
     [g_re setViewport:vp];
+    g_vp_serial = 0;
     [g_re setScissorRect:scissor_rect()];
     [g_re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     g_pk_dirty = 1;
@@ -1014,6 +1080,7 @@ static void do_clear_ds(const p_clear_ds *c) {
     [g_re setVertexBytes:&z length:4 atIndex:0];
     MTLViewport vp = {0, 0, (double)lroundf((float)P.w * P.sx), (double)lroundf((float)P.h * P.sy), 0, 1};
     [g_re setViewport:vp];
+    g_vp_serial = 0;
     [g_re setScissorRect:scissor_rect()];
     [g_re drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     g_pk_dirty = 1;
@@ -1198,6 +1265,7 @@ static void fill_pipe_key(uint32_t prim, pipe_key *k) {
     sep_slot_masks(ST_VS, &k->sep_depth[0], &k->sep_stencil[0], &k->sep_uint[0], &k->sep_sint[0]);
     sep_slot_masks(ST_FS, &k->sep_depth[1], &k->sep_stencil[1], &k->sep_uint[1], &k->sep_sint[1]);
     vp_swizzle_key(k);
+    k->layered = P.layered;
     int_slot_masks(ST_VS, &k->tex_uint[0], &k->tex_sint[0]);
     int_slot_masks(ST_FS, &k->tex_uint[1], &k->tex_sint[1]);
     ds_slot_masks(ST_VS, &k->depth_slots[0], &k->stencil_slots[0]);
@@ -1333,29 +1401,45 @@ static void apply_raster_state(void) {
     else [g_re setDepthBias:0 slopeScale:0 clamp:0];
     [g_re setBlendColorRed:S.blend_color[0] green:S.blend_color[1] blue:S.blend_color[2] alpha:S.blend_color[3]];
     [g_re setStencilFrontReferenceValue:S.stencil_ref[0] & 0xff backReferenceValue:S.stencil_ref[1] & 0xff];
-    MTLViewport vp = {S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.dr[0][0], S.dr[0][1]};
-    if (vp.height < 0 || vp.width < 0) LOG_ONCE(NAPPLE_LOG_WARN, "negative viewport extent %g x %g (origin mode %u)", vp.width, vp.height, g_gfx.device_origin);
-    if (vp.width <= 0 || vp.height <= 0) {
-        vp.originX = 0;
-        vp.originY = 0;
-        vp.width = P.w;
-        vp.height = P.h;
-    } else if (lower_left && !g_gfx.origin_flip) vp.originY = (double)P.h - vp.originY - vp.height;
-    vp.originX *= P.sx;
-    vp.originY *= P.sy;
-    vp.width *= P.sx;
-    vp.height *= P.sy; /* guest pixels -> scaled render target */
-    [g_re setViewport:vp];
+    /* all 16 viewports, depth ranges and scissors: a program that writes the viewport index ([[viewport_array_index]]) selects one */
+    MTLViewport vps[16];
+    MTLScissorRect srs[16];
+    for (int i = 0; i < 16; i++) {
+        MTLViewport v = {S.vp[i][0], S.vp[i][1], S.vp[i][2], S.vp[i][3], S.dr[i][0], S.dr[i][1]};
+        if (i == 0 && (v.height < 0 || v.width < 0))
+            LOG_ONCE(NAPPLE_LOG_WARN, "negative viewport extent %g x %g (origin mode %u)", v.width, v.height, g_gfx.device_origin);
+        if (v.width <= 0 || v.height <= 0) { /* unset (or negative): the whole target */
+            v.originX = 0;
+            v.originY = 0;
+            v.width = P.w;
+            v.height = P.h;
+        } else if (lower_left && !g_gfx.origin_flip) v.originY = (double)P.h - v.originY - v.height;
+        v.originX *= P.sx;
+        v.originY *= P.sy;
+        v.width *= P.sx;
+        v.height *= P.sy; /* guest pixels -> scaled render target */
+        vps[i] = v;
+        srs[i] = scissor_rect_of(i);
+    }
+    MTLViewport vp = vps[0];
+    static MTLViewport last_vps[16];
+    static MTLScissorRect last_srs[16];
+    if (g_vp_serial != g_enc_serial || memcmp(vps, last_vps, sizeof vps) || memcmp(srs, last_srs, sizeof srs)) { /* unchanged in this encoder: not set again */
+        [g_re setViewports:vps count:16];
+        [g_re setScissorRects:srs count:16];
+        memcpy(last_vps, vps, sizeof vps);
+        memcpy(last_srs, srs, sizeof srs);
+        g_vp_serial = g_enc_serial;
+    }
     {
-        MTLScissorRect sr = scissor_rect();
+        MTLScissorRect sr = srs[0];
         static int wl = -1;
         if (wl < 0) wl = getenv("NAPPLE_WINDRAWLOG") != NULL;
         if (wl && P.w == 1920 && P.color_fmt[0] == 71)
-            fprintf(stderr, "[windraw] fmt %d vp %g %g %g %g (guest %g %g %g %g) sc_set %d guest sc %d %d %d %d -> %lu %lu %lu %lu P %ux%u scale %g %g\n",
+            fprintf(stderr, "[windraw] fmt %d vp %g %g %g %g (guest %g %g %g %g) sc_set %#x guest sc %d %d %d %d -> %lu %lu %lu %lu P %ux%u scale %g %g\n",
                     (int)P.color_fmt[0], vp.originX, vp.originY, vp.width, vp.height, S.vp[0][0], S.vp[0][1], S.vp[0][2], S.vp[0][3], S.sc_set, S.sc[0][0],
                     S.sc[0][1], S.sc[0][2], S.sc[0][3], (unsigned long)sr.x, (unsigned long)sr.y, (unsigned long)sr.width, (unsigned long)sr.height, P.w, P.h,
                     P.sx, P.sy);
-        [g_re setScissorRect:sr];
     }
 }
 
@@ -1830,6 +1914,7 @@ static void do_draw_texture(const p_draw_tex *dt) {
     [g_re setFragmentSamplerState:smp atIndex:0];
     MTLViewport vp = {0, 0, (double)lroundf(W * P.sx), (double)lroundf(H * P.sy), 0, 1};
     [g_re setViewport:vp];
+    g_vp_serial = 0;
     [g_re setScissorRect:scissor_rect()];
     [g_re drawPrimitives:MTLPrimitiveTypeTriangleStrip vertexStart:0 vertexCount:4];
     P.draws++;
@@ -2027,6 +2112,15 @@ static int prepare_draw(uint32_t prim) {
         atomic_fetch_add(&g_gfx.draws_skipped, 1);
         return 0;
     }
+    int rl = pass_routing(S.prog[ST_VS], p->vs->info.writes_vp_index, p->vs->info.writes_layer);
+    if (rl == 2) {
+        fill_pipe_key(prim, &k);
+        p = mtl_pipe_get(&k);
+    }
+    if (!rl || !p) {
+        if (rl) atomic_fetch_add(&g_gfx.draws_skipped, 1);
+        return 0;
+    }
     [g_re setRenderPipelineState:p->ps];
     [g_re setDepthStencilState:depth_stencil_state()];
     apply_raster_state();
@@ -2079,7 +2173,9 @@ static int prepare_draw(uint32_t prim) {
     if (p->fs) bind_stage(ST_FS, p->fs, g_re, 0, NULL);
     if (mtl_tex_alias_pending()) {
         /* A copy-backed texture view (mtl_tex_view) is stale: the copy needs an encoder of its own. Close the pass (the clears it folded in are stored), let
-         * pass_begin encode the copies and reopen it loading the attachments, then set the draw's state again. */
+         * pass_begin encode the copies and reopen it loading the attachments, then set the draw's state again (layered again if it was: the pipeline
+         * may write the layer). */
+        g_want_layered = P.layered;
         pass_end();
         if (!pass_begin()) return 0;
         vis_draw();
@@ -3550,8 +3646,10 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
         case OP_SCISSORS: {
             const p_range *r = (const p_range *)pl;
             const int32_t *f = (const int32_t *)(r + 1);
-            for (uint32_t i = 0; i < r->n && r->first + i < 16; i++) memcpy(S.sc[r->first + i], f + 4 * i, 16);
-            S.sc_set = 1;
+            for (uint32_t i = 0; i < r->n && r->first + i < 16; i++) {
+                memcpy(S.sc[r->first + i], f + 4 * i, 16);
+                S.sc_set |= 1u << (r->first + i);
+            }
             break;
         }
         case OP_DEPTH_RANGES: {

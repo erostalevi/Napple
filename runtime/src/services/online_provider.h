@@ -91,6 +91,18 @@ typedef struct {
     uint8_t resource_cache[ONLINE_ACCOUNT_CACHE_SIZE];
 } OnlineAccountInfo;
 
+/* ldn: one node of a hosted or joined network (net-host-provider addition). ipv4 in host byte order; user_name UTF-8, NUL-terminated. */
+#define ONLINE_LDN_MAX_NODES 8
+typedef struct {
+    uint32_t ipv4;
+    uint8_t mac[6];
+    uint8_t node_id, connected;
+    char user_name[33];
+    uint8_t pad[3];
+} OnlineLdnNode;
+/* ssl SetVerifyOption bits (nn::ssl::Connection::VerifyOption) as the provider receives them. */
+enum { ONLINE_TLS_VERIFY_PEER_CA = 1u << 0, ONLINE_TLS_VERIFY_HOST_NAME = 1u << 1, ONLINE_TLS_VERIFY_DATE = 1u << 2 };
+
 /* TLS: the provider owns the whole connection state. sock is a provider socket handle (see sockets) or -1. */
 typedef struct OnlineProvider {
     uint32_t abi_version;        /* must be ONLINE_ABI_VERSION */
@@ -162,6 +174,16 @@ typedef struct OnlineProvider {
     /* ---- acc (ONLINE_CAP_ACCOUNT) ---- */
     /* Network-account state of the local user `user_id` (16 bytes): 0 and *out filled, nonzero = not available (treated as not linked). */
     int (*account_info)(void *ctx, const uint8_t user_id[16], OnlineAccountInfo *out);
+
+    /* ---- additions of net-host-provider (2026-11-02): struct_size-extensible, ABI version unchanged ---- */
+    /* ssl: also trust the guest-imported CA certificate `cert` (DER, or PEM text) when this connection verifies its server. 0 = ok. */
+    int (*tls_add_ca)(void *ctx, void *conn, const void *cert, size_t n);
+    /* ssl: the guest's SetVerifyOption bits (ONLINE_TLS_VERIFY_*); before the call every check is on. 0 = ok. */
+    int (*tls_set_verify)(void *ctx, void *conn, uint32_t option);
+    /* ldn: the nodes of the current network, node 0 = the host: the count written (<= max), *self = the caller's own index; negative = no network. */
+    int (*ldn_get_nodes)(void *ctx, OnlineLdnNode *out, uint32_t max, uint32_t *self);
+    /* ldn: `cb(arg)` is called (from any thread) whenever the hosted or joined network changes: a station joined or left, the host went away. NULL clears. */
+    void (*ldn_set_notify)(void *ctx, void (*cb)(void *arg), void *arg);
 } OnlineProvider;
 
 /* The active provider; never NULL. The first call loads ONLINE_ENV_PROVIDER once (a failure is logged and falls back to the NullProvider). */
@@ -179,3 +201,7 @@ void online_null_reset(void);
 #define ONLINE_FN(p, field) ((offsetof(OnlineProvider, field) + sizeof((p)->field) <= (p)->struct_size) ? (p)->field : NULL)
 /* Capability test against the active provider. */
 static inline int online_has(const OnlineProvider *p, uint32_t cap) { return (p->caps & cap) != 0; }
+/* Built-in providers selected with NAPPLE_NET (net-host-provider): NAPPLE_NET=host picks the provider a linked module registered here (runtime/src/net/
+ * registers it from a constructor, so a build without that module has none and stays offline). NAPPLE_ONLINE_PROVIDER, when set, wins. */
+#define ONLINE_ENV_NET "NAPPLE_NET"
+extern const OnlineProvider *(*online_builtin_host)(void);

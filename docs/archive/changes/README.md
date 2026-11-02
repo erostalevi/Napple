@@ -150,7 +150,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 - [2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
 - [2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
 
-## Unattended rounds (2026-10-27-b7 to 2026-11-02-r5)
+## Unattended rounds (2026-10-27-b7 to 2026-11-02-r7)
 
 ### Batch 2026-10-27-b7 (notes not listed above)
 | Note | Summary |
@@ -200,3 +200,15 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 |---|---|
 | [2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5](2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5.md) | Interpreter `lda` / `stl` seq_cst with the alignment fault, per-viewport swizzles, these archive indexes. |
 | [2026-11-02-claude-nifm-netconnect-2026-11-02-r5](2026-11-02-claude-nifm-netconnect-2026-11-02-r5.md) | nifm Cancel keeps a rejected request's result, GetAppletInfo storages, the real NetConnect output (MK8D Online Play: one applet per attempt), vi ConvertScalingMode. |
+
+### Round 2026-11-02-r6
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-net-host-provider-2026-11-02-r6](2026-11-02-claude-net-host-provider-2026-11-02-r6.md) | Opt-in macOS host network provider (`NAPPLE_NET=host`): BSD sockets, host resolver with the console vendor's domains refused, TLS with the host trust store, nifm from the host, LDN over the LAN. |
+| [2026-11-02-claude-error-applet-output-2026-11-02-r6](2026-11-02-claude-error-applet-output-2026-11-02-r6.md) | Empty applet storage channels answer NoDataInChannel 0x480 (the SDK aborted on 0x680 after every error applet), unimplemented applets end Canceled 0x2c80, every error applet mode decoded (MK8D Online Play with `NAPPLE_NET=host` returns to its menu). |
+| [2026-11-02-claude-gfx-multi-viewport-2026-11-02-r6](2026-11-02-claude-gfx-multi-viewport-2026-11-02-r6.md) | Viewport / scissor / depth-range arrays on the encoder, viewport index and layer outputs, layered passes on demand. |
+
+### Round 2026-11-02-r7
+| Note | Summary |
+|---|---|
+| [2026-11-02-claude-napple-infra-2026-11-02-r7](2026-11-02-claude-napple-infra-2026-11-02-r7.md) | AWS auto-deploy of the game servers to `pretend.napple.lat` (OpenTofu, Docker + Caddy, a workflow that skips without secrets), `napple.lat` DNS to GitHub Pages, the native local test stack. |

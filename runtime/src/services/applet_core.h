@@ -6,6 +6,19 @@
 
 enum { APPLET_SCREENSHOT_INHERIT = 0, APPLET_SCREENSHOT_ENABLE = 1, APPLET_SCREENSHOT_DISABLE = 2 };
 
+/* am results for "nothing there". A storage channel that is empty (PopOutData, PopInteractiveOutData, PopInData, PopInteractiveInData,
+ * PopLaunchParameter, the context stack, the TryPopFrom...Channel commands) answers NoDataInChannel, module 128 description 2: every nn::applet
+ * TryPopFrom*Channel reader of the SDK treats exactly 0x480 as "empty" and aborts on any other error (MK8D v1376256 sdk: TryPopFromOutChannel
+ * +0xd316c, TryPopFromInteractiveOutChannel +0xd3210, TryPopFromInChannel +0xd384c, TryPopFromInteractiveInChannel +0xd38f0,
+ * TryPopFromApplicationParameterChannel +0xd475c, TryPopFromContextStack +0xd3ce4: `and w8, w0, #0x3fffff; cmp w8, #0x480`). The message queue
+ * (ICommonStateGetter::ReceiveMessage) answers NoMessages, description 3 (nn::oe::TryPopNotificationMessage +0x15c214 compares 0x680). */
+#define APPLET_R_NO_DATA_IN_CHANNEL 0x480u
+#define APPLET_R_NO_MESSAGES 0x680u
+/* ILibraryAppletAccessor::GetResult of an applet that ended without completing: LibraryAppletTerminated, module 128 description 22. The SDK's
+ * nn::applet::JoinLibraryAppletImpl (MK8D v1376256 sdk +0xd2ddc) turns GetResult into the exit reason the applet readers switch on: 0 -> Normal,
+ * module 128 description 22 -> Canceled, descriptions 20..49 -> Abnormal, anything else -> Unexpected (most readers abort on it). */
+#define APPLET_R_LIBRARY_APPLET_TERMINATED 0x2c80u
+
 typedef struct {
     float main_volume, library_volume, transparent_volume_rate; /* IAudioController: expected master volumes, 0..1 */
     int vr_mode, auto_sleep_disabled, restart_message, capture_short_press_message, album_image_taken_notification;
