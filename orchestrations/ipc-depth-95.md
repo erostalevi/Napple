@@ -12,11 +12,11 @@ session: none
 launched_at: none
 ---
 
-# ipc-depth-95: IPC command depth from 91% to at least 95%
+# ipc-depth-95: IPC command depth from 91% to at least 98% (user target: every sub-item 98-99%, overall ~99.5%)
 
 ## Goal
 %Analysis measures IPC depth from runtime/tests/ipc_reference (impl 1 / stub 0.5 / missing 0) over 1325 app-reachable commands (+ rows without
-fixtures). It was 91% judged (snapshot 2026-11-02-8389280). ipc-depth-cloud (98 rows, landing now) helps; this item takes it to >= 95%:
+fixtures). It was 91% judged (snapshot 2026-11-02-8389280). ipc-depth-cloud (98 rows, landing now) helps; this item takes it to >= 98%:
 convert the remaining documented-default `IPC_STUB` rows to real behaviour, including the NETWORK rows, which now have a real path: with
 `NAPPLE_NET=host` they go through the host provider / Napple online glue, and offline they answer exactly what an offline console answers —
 implement both paths and mark them IPC_IMPL with tests. Priority by game usage: nifm, bsd, sfdnsres, ssl, nsd, friend, prepo, account (Napple
@@ -29,7 +29,7 @@ merging main/online-friends if they land first; runtime/tests/; docs/architectur
 (online-friends), not gfx/, not crates/.
 
 ## Acceptance
-1. scan.py IPC depth >= 95% measured (and the fixtures still report missing 0).
+1. scan.py IPC depth >= 98% measured (and the fixtures still report missing 0).
 2. Every converted row has a unit test; `make -C runtime GFX=napple test test-services test-ipc-reference` green.
 3. Four-title boots (with and without NAPPLE_NET=host) unchanged: rc 0, missing_ipc [].
 
