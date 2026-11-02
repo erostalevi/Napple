@@ -984,6 +984,17 @@ static void nsd_zero_struct(IpcObject *s, IpcCall *c) {
     uint8_t z[0x1000] = {0};
     if (b && b->size) ipc_write_buf(c, b, z, b->size < sizeof z ? b->size : sizeof z);
 }
+/* 15 SetChangeEnvironmentIdentifierDisabled(bool) / 63 IsChangeEnvironmentIdentifierDisabled -> bool: whether the environment identifier may be changed (default no). */
+static uint8_t nsd_change_env_disabled;
+static void nsd_set_change_env_disabled(IpcObject *s, IpcCall *c) {
+    (void)s;
+    nsd_change_env_disabled = c->in_size >= 1 && IPC_IN(c, uint8_t, 0) != 0;
+}
+static void nsd_is_change_env_disabled(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t v = nsd_change_env_disabled;
+    IPC_OUT(c, v);
+}
 static const IpcCmd nsd_cmds[] = {
     {10, "GetSettingName", nsd_env_name, IPC_IMPL},
     {11, "GetEnvironmentIdentifier", nsd_env_name, IPC_IMPL},
@@ -1000,8 +1011,8 @@ static const IpcCmd nsd_cmds[] = {
     {43, "GetNasApiFqdnEx", nsd_resolve, IPC_IMPL},
     {50, "GetCurrentSetting", nsd_zero_struct, IPC_IMPL},
     {5, "GetSettingUrl", sysd_err_generic, IPC_STUB},
-    {15, "SetChangeEnvironmentIdentifierDisabled", sysd_ok, IPC_STUB},
-    {63, "IsChangeEnvironmentIdentifierDisabled", sysd_z4, IPC_STUB},
+    {15, "SetChangeEnvironmentIdentifierDisabled", nsd_set_change_env_disabled, IPC_IMPL},
+    {63, "IsChangeEnvironmentIdentifierDisabled", nsd_is_change_env_disabled, IPC_IMPL},
     {64, "SetWithoutDomainExchangeFqdns", sysd_ok, IPC_STUB},
     {100, "GetApplicationServerEnvironmentType", sysd_z4, IPC_STUB},
     {101, "SetApplicationServerEnvironmentType", sysd_ok, IPC_STUB},
@@ -1556,6 +1567,14 @@ static void prepo_set_agreement(IpcObject *s, IpcCall *c) {
     prepo_st()->agreement_check = c->in_size >= 1 && IPC_IN(c, uint8_t, 0) ? 1 : 0;
     pthread_mutex_unlock(&prepo_lock);
 }
+/* 20200 SetOperationMode(u32): the report store's operation mode, kept for the session (0 normal, the default). */
+static uint32_t prepo_operation_mode;
+static void prepo_set_operation_mode(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&prepo_lock);
+    if (c->in_size >= 4) prepo_operation_mode = IPC_IN(c, uint32_t, 0);
+    pthread_mutex_unlock(&prepo_lock);
+}
 static const IpcCmd prepo_cmds[] = {
     {10100, "SaveReport", prepo_save, IPC_IMPL},
     {10101, "SaveReportWithUser", prepo_save, IPC_IMPL},
@@ -1572,9 +1591,9 @@ static const IpcCmd prepo_cmds[] = {
     {40101, "SetUserAgreementCheckEnabled", prepo_set_agreement, IPC_IMPL},
     {90100, "ClearStorage", prepo_clear_storage, IPC_IMPL},
     {90200, "GetStorageUsage", prepo_storage_usage, IPC_IMPL},
-    {20102, "SaveSystemReport", sysd_err_generic, IPC_STUB},
-    {20200, "SetOperationMode", sysd_ok, IPC_STUB},
-    {30100, "ClearStorage", sysd_ok, IPC_STUB},
+    {20102, "SaveSystemReport", prepo_save_system, IPC_IMPL},    /* the 21.0.0 numbering of 20100 */
+    {20200, "SetOperationMode", prepo_set_operation_mode, IPC_IMPL},
+    {30100, "ClearStorage", prepo_clear_storage, IPC_IMPL},      /* the earlier numbering of 90100 */
     {50100, "ReadAllApplicationReportFiles", sysd_err_generic, IPC_STUB},
 };
 static IpcObject *prepo_open(void) { return IPC_OBJECT("prepo:u", prepo_cmds, NULL, NULL); }
@@ -1596,7 +1615,7 @@ typedef struct {
     SslCtx *ctx;
     int32_t fd;
     char host[256];
-    uint32_t verify, io_mode, cache_mode;
+    uint32_t verify, io_mode, cache_mode, io_timeout;
     void *conn;
     int established;
 } SslConn;
@@ -1658,6 +1677,15 @@ static void ssl_set_cache(IpcObject *s, IpcCall *c) {
 static void ssl_get_cache(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
     IPC_OUT(c, k->cache_mode);
+}
+/* 34 SetIoTimeout(u32 milliseconds) / 35 GetIoTimeout -> u32: the connection's I/O timeout (0 = none, the default), kept per connection. */
+static void ssl_set_io_timeout(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    if (c->in_size >= 4) k->io_timeout = IPC_IN(c, uint32_t, 0);
+}
+static void ssl_get_io_timeout(IpcObject *s, IpcCall *c) {
+    SslConn *k = s->state;
+    IPC_OUT(c, k->io_timeout);
 }
 static void ssl_handshake(IpcObject *s, IpcCall *c) {
     SslConn *k = s->state;
@@ -1754,8 +1782,8 @@ static const IpcCmd ssl_connection_cmds[] = {
     {14, "Poll", sysd_event, IPC_STUB},
     {15, "GetVerifyCertError", sysd_z4, IPC_STUB},
     {16, "GetNeededServerCertBufferSize", sysd_z4, IPC_STUB},
-    {17, "SetSessionCacheMode", sysd_ok, IPC_STUB},
-    {18, "GetSessionCacheMode", sysd_err_ssl, IPC_STUB},
+    {17, "SetSessionCacheMode", ssl_set_cache, IPC_IMPL}, /* the numbering of the later firmwares for 19 / 20 */
+    {18, "GetSessionCacheMode", ssl_get_cache, IPC_IMPL},
     {22, "SetOption", sysd_ok, IPC_STUB},
     {23, "GetOption", sysd_z4, IPC_STUB},
     {24, "GetVerifyCertErrors", sysd_err_ssl, IPC_STUB},
@@ -1768,8 +1796,8 @@ static const IpcCmd ssl_connection_cmds[] = {
     {31, "SetSrtpCiphers", sysd_ok, IPC_STUB},
     {32, "GetSrtpCipher", sysd_z4, IPC_STUB},
     {33, "ExportKeyingMaterial", sysd_err_ssl, IPC_STUB},
-    {34, "SetIoTimeout", sysd_ok, IPC_STUB},
-    {35, "GetIoTimeout", sysd_z4, IPC_STUB},
+    {34, "SetIoTimeout", ssl_set_io_timeout, IPC_IMPL},
+    {35, "GetIoTimeout", ssl_get_io_timeout, IPC_IMPL},
     {36, "GetSessionTicket", sysd_err_ssl, IPC_STUB},
     {37, "SetSessionTicket", sysd_ok, IPC_STUB},
 };

@@ -399,7 +399,6 @@ static IpcObject *audren_open(void) { return IPC_OBJECT("audren:u", audren_cmds,
 typedef struct {
     napple_audout *o;
     EventPair *ev;
-    float volume; /* SetAudioOutVolume: kept and read back; libnapple_audio has no per-stream gain, so the mix is not scaled (documented stub) */
 } AudOut;
 static void out_destroy(IpcObject *o) {
     AudOut *a = o->state;
@@ -480,13 +479,14 @@ static void out_flush(IpcObject *s, IpcCall *c) {
     uint8_t v = (uint8_t)napple_audout_flush(a->o);
     IPC_OUT(c, v);
 }
-static void out_set_volume(IpcObject *s, IpcCall *c) { /* 12(f32) */
+/* 12 SetAudioOutVolume(f32) / 13 GetAudioOutVolume -> f32: the stream's own gain in libnapple_audio (clamped to 0..1, applied before the mix). */
+static void out_set_volume(IpcObject *s, IpcCall *c) {
     AudOut *a = s->state;
-    if (c->in_size >= 4) a->volume = IPC_IN(c, float, 0);
+    if (c->in_size >= 4) napple_audout_set_volume(a->o, IPC_IN(c, float, 0));
 }
-static void out_get_volume(IpcObject *s, IpcCall *c) { /* 13 -> f32 */
+static void out_get_volume(IpcObject *s, IpcCall *c) {
     AudOut *a = s->state;
-    float v = a->volume;
+    float v = napple_audout_get_volume(a->o);
     IPC_OUT(c, v);
 }
 static const IpcCmd out_cmds[] = {
@@ -502,8 +502,8 @@ static const IpcCmd out_cmds[] = {
     {9, "GetAudioOutBufferCount", out_count, IPC_IMPL},
     {10, "GetAudioOutPlayedSampleCount", out_played, IPC_IMPL},
     {11, "FlushAudioOutBuffers", out_flush, IPC_IMPL},
-    {12, "SetAudioOutVolume", out_set_volume, IPC_STUB},
-    {13, "GetAudioOutVolume", out_get_volume, IPC_STUB},
+    {12, "SetAudioOutVolume", out_set_volume, IPC_IMPL},
+    {13, "GetAudioOutVolume", out_get_volume, IPC_IMPL},
 };
 static void aout_list(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -523,7 +523,6 @@ static void aout_open(IpcObject *s, IpcCall *c) {
     uint32_t rate = IPC_IN(c, uint32_t, 0);
     uint16_t ch = IPC_IN(c, uint16_t, 4);
     AudOut *a = calloc(1, sizeof *a);
-    a->volume = 1.0f;
     a->ev = new_event_pair();
     napple_audio_host h = make_host(a->ev, 0);
     uint32_t grate = 0, gch = 0;

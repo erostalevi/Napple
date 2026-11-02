@@ -89,13 +89,38 @@ int main(void) {
     int64_t st0 = steady_seconds();   /* the real guest tick counts from host boot, not from 0 as in the Linux mock */
     memset(&c, 0, sizeof c); c.in = ctxin; c.in_size = sizeof ctxin; svc_set_out_buf(&c, snapA, sizeof snapA); svc_call_c(st, 401, &c);
     time_snapshot_read(snapA, &sn); CHECK(c.result == 0 && sn.type == 1 && sn.user_time >= offs + st0 && sn.user_time <= offs + steady_seconds() + 1, "snapshot from a clock context: offset + steady time");
-    { /* ipc-depth-sys: rows the time tables lacked */
-        IpcCall d; svc_call(st, 201, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 24, "GetStandardUserSystemClockAutomaticCorrectionUpdatedTime: a zeroed SteadyClockTimePoint");
+    { /* ipc-local-stubs: the rows that used to be documented defaults */
+        IpcCall d; int64_t st0 = steady_seconds();
+        svc_call(st, 201, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 24 && SVC_OUT(&d, int64_t, 0) >= 0 && !memcmp(d.out + 8, clock_source, 16), "201 GetStandardUserSystemClockAutomaticCorrectionUpdatedTime: a SteadyClockTimePoint with the clock source id");
+        uint8_t flag = 0; svc_call(st, 101, &flag, 1, &d);
+        svc_call(st, 201, NULL, 0, &d); CHECK(d.result == 0 && SVC_OUT(&d, int64_t, 0) >= st0 && SVC_OUT(&d, int64_t, 0) <= steady_seconds() + 1, "...201 then reports the steady time of the change");
+        flag = 1; svc_call(st, 101, &flag, 1, &d);
         svc_call(st, 0, NULL, 0, &d); IpcObject *uc = d.out_objects[0];
-        svc_call(uc, 4, NULL, 0, &d); CHECK(d.result == 0 && d.nout_copy + d.nout_move >= 1, "ISystemClock::GetOperationEventReadableHandle: an event that never fires");
+        svc_call(uc, 4, NULL, 0, &d); CHECK(d.result == 0 && d.nout_copy == 1, "ISystemClock 4 GetOperationEventReadableHandle hands out an event");
+        uint32_t ev = d.nout_copy ? d.out_copy[0] : 0;
+        CHECK(ev && !event_is_signaled(ev), "...not signalled at first");
+        int64_t newtime = 1700000000; svc_call(uc, 1, &newtime, 8, &d);
+        CHECK(d.result == 0 && event_is_signaled(ev), "...SetCurrentTime signals it");
+        event_clear_handle(ev);
+        CHECK(!event_is_signaled(ev), "...and it can be cleared");
+        uint8_t ctx[0x20] = {0}; svc_call(uc, 3, ctx, sizeof ctx, &d);
+        CHECK(d.result == 0 && event_is_signaled(ev), "...SetSystemClockContext signals it too");
+        svc_call(uc, 0, NULL, 0, &d); int64_t host_now = SVC_OUT(&d, int64_t, 0);
+        CHECK(llabs(host_now - posix_now()) < 3, "a guest set does not move the clock the guest reads");
+
         svc_call(st, 3, NULL, 0, &d); IpcObject *tz = d.out_objects[0];
-        svc_call(tz, 6, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 60, "ITimeZoneService::GetDeviceLocationNameAndUpdatedTime: name + steady time point");
-        CHECK(svc_find(tz, 6)->status == IPC_STUB, "...marked as a documented default");
+        svc_call(tz, 6, NULL, 0, &d); CHECK(d.result == 0 && d.out_size == 0x40 && !strcmp((char *)d.out, device_zone()) && SVC_OUT(&d, int64_t, 0x28) == 0 && !memcmp(d.out + 0x30, clock_source, 16), "ITimeZoneService 6 GetDeviceLocationNameAndUpdatedTime: the device zone, time point 0, the clock source id");
+        char name[0x24] = "UTC"; svc_call(tz, 1, name, sizeof name, &d); CHECK(d.result == 0, "1 SetDeviceLocationName(UTC) is accepted");
+        svc_call(tz, 0, NULL, 0, &d); CHECK(d.result == 0 && !strcmp((char *)d.out, "UTC"), "...GetDeviceLocationName now says UTC");
+        svc_call(tz, 6, NULL, 0, &d); CHECK(!strcmp((char *)d.out, "UTC") && SVC_OUT(&d, int64_t, 0x28) >= st0 && SVC_OUT(&d, int64_t, 0x28) <= steady_seconds() + 1, "...and 6 reports it with the time of the change");
+        char bad[0x24] = "Mars/Olympus"; svc_call(tz, 1, bad, sizeof bad, &d); CHECK(d.result == HZ_RESULT(HZ_MOD_TIME, 200), "a zone the list does not offer is refused");
+        svc_call(tz, 0, NULL, 0, &d); CHECK(!strcmp((char *)d.out, "UTC"), "...and the zone stays as it was");
+        if (strcmp(host_zone_name(), "UTC")) { /* the host's own zone is also on the list */
+            char hz[0x24]; snprintf(hz, sizeof hz, "%s", host_zone_name()); svc_call(tz, 1, hz, sizeof hz, &d);
+            CHECK(d.result == 0, "the host's own zone is accepted");
+        }
+        g_zone_override[0] = 0;
+        CHECK(svc_find(tz, 6)->status == IPC_IMPL && svc_find(tz, 1)->status == IPC_IMPL && svc_find(uc, 4)->status == IPC_IMPL && svc_find(st, 201)->status == IPC_IMPL, "all four rows are real now");
     }
     printf("{\"test\":\"svc_time\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;

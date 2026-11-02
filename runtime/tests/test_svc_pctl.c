@@ -23,8 +23,8 @@ int main(void) {
     svc_call(p, 1603, NULL, 0, &c); CHECK(c.result == 0 && c.out[0] == 0, "IsAllFeaturesDisabled: false");
     for (unsigned i = 0; i < ((IpcObject *)p)->ncmds; i++) CHECK(p->cmds[i].status == IPC_IMPL, "pctl row %u is resolved", p->cmds[i].cmd);
     IpcObject *aoc = aoc_open();
-    for (unsigned i = 0; i < aoc->ncmds; i++) { /* rows 100..110 (purchase managers) and 200..302 (development setup) are documented defaults (ipc-depth-sys) */
-        unsigned id = aoc->cmds[i].cmd, dflt = id == 100 || id == 101 || id == 110 || id == 200 || id == 300 || id == 301 || id == 302;
+    for (unsigned i = 0; i < aoc->ncmds; i++) { /* rows 100..110 (purchase managers) and 300 / 301 (host add-on content setup) are documented defaults; 200 and 302 are real (ipc-local-stubs) */
+        unsigned id = aoc->cmds[i].cmd, dflt = id == 100 || id == 101 || id == 110 || id == 300 || id == 301;
         CHECK(aoc->cmds[i].status == (dflt ? IPC_STUB : IPC_IMPL), "aoc row %u is %s", id, dflt ? "a documented default" : "resolved");
     }
     printf("{\"test\":\"svc_pctl\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
