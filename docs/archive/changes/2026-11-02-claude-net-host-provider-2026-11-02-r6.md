@@ -7,7 +7,9 @@ Branch `claude/net-host-provider-2026-11-02-r6`, Mac session. Integrator file: `
   - `net_host_sock.c`: real BSD sockets. Host descriptors always non-blocking; guest blocking mode, `SO_RCVTIMEO`/`SO_SNDTIMEO`, `MSG_DONTWAIT`, `MSG_WAITALL`
     applied by waiting in 50 ms poll slices (a Close from another guest thread ends a wait with EBADF); waits give the virtual core away (`thread_core_away`).
     FreeBSD option / flag / errno numbering (Darwin's above 65 mapped).
-  - `net_host_dns.c`: `getaddrinfo` / `getnameinfo`, EAI mapping.
+  - `net_host_dns.c`: `getaddrinfo` / `getnameinfo`, EAI mapping. Names under the console vendor's domains (nintendo.net, .com, .co.jp, .eu,
+    nintendowifi.net, nintendo-europe.com, nintendoswitch.com) answer EAI_NONAME unless the `net_host_redirect_lookup` hook (NULL here) redirects them
+    (orchestrator requirement, added at hand-off).
   - `net_host_tls.m`: SecureTransport client over the guest's socket; verification against the host trust store plus guest-imported CAs; verify option.
   - `net_host_nifm.m`: SystemConfiguration (primary IPv4 interface, router, DNS) + `getifaddrs`; wired-style connection; 1 s cache.
   - `net_host_ldn.c`: LDN over the LAN (UDP discovery on `NAPPLE_LDN_PORT`..+7 via 127.0.0.1, broadcast, `NAPPLE_LDN_PEERS`; TCP session JOIN / ACCEPT /

@@ -70,7 +70,7 @@ memory of the public documentation and unverified. See the [hand-off notes](../a
 
 An opt-in provider that ships with the runtime (`runtime/src/net/`): the title's network traffic goes through the Mac's own network stack. The default stays
 offline; `NAPPLE_NET=host` selects it (`NAPPLE_ONLINE_PROVIDER`, when set, wins, even if its module fails to load). It is **generic transport only**: it
-contains no hostname, endpoint, token, certificate or protocol of any online service and implements no account or device authentication. Friends,
+contains no endpoint, token, certificate or protocol of any online service (the only names in it are the vendor domains it refuses, below) and implements no account or device authentication. Friends,
 presence, play reports, nsd, network accounts and every other online-service call keep their offline answers (their entry points are `NULL`), so a title that
 needs a signed-in account still sees "no account" and ends its online attempt the way it does offline.
 
@@ -81,6 +81,15 @@ needs a signed-in account still sees "no account" and ends its online attempt th
 | `ONLINE_CAP_TLS` (ssl) | Security.framework SecureTransport over the guest's socket (`net_host_tls.m`) | TLS 1.2+ client. The server is verified against the **host trust store** plus the CA certificates the guest imported for the connection (`tls_add_ca`, DER or PEM); the guest's verify option (`tls_set_verify`: PeerCa, HostName) can relax it. SNI from SetHostName. |
 | `ONLINE_CAP_NETWORK` (nifm) | SystemConfiguration dynamic store + `getifaddrs` (`net_host_nifm.m`) | Connected while the Mac has a primary IPv4 interface with an address; reports it as a wired connection (no SSID) with the real IP, mask, router and DNS servers. Requests are accepted; without a connection they are refused like offline. |
 | `ONLINE_CAP_LDN` (ldn) | UDP discovery + TCP session between Napple instances (`net_host_ldn.c`) | Local wireless over the LAN. A node's address in the network is its real LAN address (the ldn_mitm idea), so the title's own sockets reach the other consoles. Discovery: UDP `NAPPLE_LDN_PORT` (default 11452) .. +7 on 127.0.0.1, the broadcast address and `NAPPLE_LDN_PEERS`; scans wait `NAPPLE_LDN_SCAN_MS` (150). The host tells stations about joins, leaves, new advertise data, Reject and DestroyNetwork. |
+
+### The console vendor's servers are never reached
+In this provider's DNS path (sfdnsres, the only place it resolves names) every name under `nintendo.net`, `nintendo.com`, `nintendo.co.jp`, `nintendo.eu`,
+`nintendowifi.net`, `nintendo-europe.com` and `nintendoswitch.com` (the domain itself and any subdomain, any case, trailing dot allowed) answers
+**host not found** (`EAI_NONAME`), exactly what an offline resolver gives, so a title ends its online attempt as it would with a dead DNS. The one way
+around it is the redirect hook `net_host_redirect_lookup` (`runtime/src/net/net_host.h`): `int (*)(const char *name, char *out, size_t n)`, NULL by default,
+called for every name before the block check. It returns 1 with the name or address of a configured Napple server in `out`, or 0. A redirect whose target
+is itself a blocked name is refused. A later item (napple-online) sets it. A title that connects to a literal IP address bypasses DNS: not covered (no title
+seen doing so).
 
 ### ABI additions (struct_size-extensible, `ABI_VERSION` still 1)
 - `tls_add_ca(conn, cert, n)`: trust a guest-imported CA for this connection; `tls_set_verify(conn, option)` with `ONLINE_TLS_VERIFY_PEER_CA` / `_HOST_NAME` / `_DATE`.
