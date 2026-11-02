@@ -6,10 +6,10 @@ base: orchestrate/2026-11-02-r8
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: planned
+status: launched
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
-session: none
-launched_at: none
+session: local_c64384ec-6d13-4c51-94f4-d0c620829c33 (fresh)
+launched_at: 2026-11-02
 ---
 
 # napple-account: the Napple Account server (email magic link + passkeys, devices, E2E key exchange, cloud-save metadata, plans + Stripe billing)
