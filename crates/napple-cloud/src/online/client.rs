@@ -159,6 +159,9 @@ impl Client {
 
     /// A valid access token (refreshing when it is about to expire), or None when signed out.
     pub fn access_token(&self) -> Option<String> {
+        if !self.signed_in() {
+            return None;
+        }
         if let Some((t, exp)) = &self.st.lock().unwrap().access {
             if *exp > now() + 30 {
                 return Some(t.clone());

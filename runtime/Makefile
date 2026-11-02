@@ -283,3 +283,22 @@ $(BUILD)/tests/test_risk_title: tests/test_risk_title.c tests/check.h tests/svc_
 test-risk-title: $(BUILD)/tests/test_risk_title
 	./$<
 .PHONY: test-risk-title
+
+# Napple Online client core (client-core 2026-11-03-r12, docs/guides/napple-online-client.md): runtime/src/online/ implements the overlay's
+# napple_online_ui_api over the Rust client in crates/napple-cloud (same CLOUD=1 condition and link as src/cloud/). Strong napple_account_access_token /
+# napple_account_profile_id come with it, which switches the friend service on for a signed-in Mac. Tests: a fake account+social server on localhost
+# (`make test-online`, part of `make test-services`).
+ifeq ($(CLOUD),1)
+ONLINE_OBJ := $(BUILD)/online/online_ui.o
+$(ONLINE_OBJ): CFLAGS += -I$(ROOT)/crates/napple-cloud/include -I$(ROOT)/frontend/include
+LDFLAGS += $(ONLINE_OBJ)
+$(BUILD)/napple-runtime build-lib/libnapple-applet.dylib: $(ONLINE_OBJ)
+ONLINE_TESTS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_online_*.c))
+$(ONLINE_TESTS): $(BUILD)/tests/%: tests/%.c tests/check.h src/online/online_ui.h $(ONLINE_OBJ) $(BUILD)/json.o $(CLOUD_LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) -I$(ROOT)/crates/napple-cloud/include -I$(ROOT)/frontend/include -Isrc/online $< $(ONLINE_OBJ) $(BUILD)/json.o $(CLOUD_LIB) -framework Security -framework CoreFoundation -o $@
+test-online: $(ONLINE_TESTS)
+	@for t in $^; do case $$t in *.o|*.a) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
+test-services: $(ONLINE_TESTS)
+.PHONY: test-online
+endif
