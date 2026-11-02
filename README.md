@@ -86,7 +86,7 @@ The iPhone results were played by a person on an iPhone 16 Pro Max (2026-11-02);
 |---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | Animal Crossing: New Horizons (ACNH) | nex | untested | untested | untested | untested | untested | - | untested |
 | Link's Awakening (LAS) | none | - | - | - | - | - | - | - |
-| Mario Kart 8 Deluxe (MK8D) | nex | works | broken | works | partial | untested | untested | untested |
+| Mario Kart 8 Deluxe (MK8D) | nex | works | broken | works | partial | partial | untested | untested |
 | Super Mario Odyssey (SMO) | nex | - | - | - | - | - | untested | untested |
 
 `-` means the game has no such mode.

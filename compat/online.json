@@ -7,11 +7,11 @@
    "short": "MK8D",
    "backend": "nex",
    "modes": {
-    "lan_play": {"status": "works", "note": "LAN Play through a Napple room; two instances verified in one race.", "checked": "2026-11-02"},
+    "lan_play": {"status": "works", "note": "LAN Play through a local napple-room: two instances verified in the same room (one creates it, the other lists and joins it; both reach its character select).", "checked": "2026-11-02"},
     "local_wireless": {"status": "broken", "note": "Local wireless (LDN) through a room: the station crashes right after joining.", "checked": "2026-11-02"},
-    "online_matchmaking": {"status": "works", "note": "Through napple-online: login, the online menu, and two instances matched into one gathering.", "checked": "2026-11-02"},
-    "online_race_or_match": {"status": "partial", "note": "Matched players do not start a race yet; waiting on the peer-to-peer fix.", "checked": "2026-11-02"},
-    "friends": {"status": "untested", "note": "Friend list and friend rooms; work in progress.", "checked": "2026-11-02"},
+    "online_matchmaking": {"status": "works", "note": "Through a local napple-online: login, the online menu, and two instances matched into one gathering (verified).", "checked": "2026-11-02"},
+    "online_race_or_match": {"status": "partial", "note": "Open: the host reaches the course vote; the joiner completes NAT traversal with the host, then ends with 2618-0502.", "checked": "2026-11-02"},
+    "friends": {"status": "partial", "note": "A friend shows as joinable; the friend list on the Friends menu is still empty.", "checked": "2026-11-02"},
     "rankings": {"status": "untested", "note": "Time trial rankings; not tried yet.", "checked": "2026-11-02"},
     "datastore": {"status": "untested", "note": "Ghost upload and download; not tried yet.", "checked": "2026-11-02"}
    }

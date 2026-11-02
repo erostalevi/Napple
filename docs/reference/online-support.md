@@ -12,7 +12,7 @@ Last checked: 2026-11-02. Statuses: `works`, `partial`, `broken`, `untested`; `-
 |---|---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
 | Animal Crossing: New Horizons | `01006F8002326000` | nex | untested | untested | untested | untested | untested | - | untested |
 | Link's Awakening | `01006BB00C6F0000` | none | - | - | - | - | - | - | - |
-| Mario Kart 8 Deluxe | `0100152000022000` | nex | works | broken | works | partial | untested | untested | untested |
+| Mario Kart 8 Deluxe | `0100152000022000` | nex | works | broken | works | partial | partial | untested | untested |
 | Super Mario Odyssey | `0100000000010000` | nex | - | - | - | - | - | untested | untested |
 
 ## Notes per title
@@ -51,11 +51,11 @@ Backend `nex`: NEX, the game-server protocol of most first-party games; served b
 
 | Mode | Status | Note | Checked |
 |---|:-:|---|---|
-| LAN Play | works | LAN Play through a Napple room; two instances verified in one race. | 2026-11-02 |
+| LAN Play | works | LAN Play through a local napple-room: two instances verified in the same room (one creates it, the other lists and joins it; both reach its character select). | 2026-11-02 |
 | Local wireless | broken | Local wireless (LDN) through a room: the station crashes right after joining. | 2026-11-02 |
-| Online matchmaking | works | Through napple-online: login, the online menu, and two instances matched into one gathering. | 2026-11-02 |
-| Online race / match | partial | Matched players do not start a race yet; waiting on the peer-to-peer fix. | 2026-11-02 |
-| Friends | untested | Friend list and friend rooms; work in progress. | 2026-11-02 |
+| Online matchmaking | works | Through a local napple-online: login, the online menu, and two instances matched into one gathering (verified). | 2026-11-02 |
+| Online race / match | partial | Open: the host reaches the course vote; the joiner completes NAT traversal with the host, then ends with 2618-0502. | 2026-11-02 |
+| Friends | partial | A friend shows as joinable; the friend list on the Friends menu is still empty. | 2026-11-02 |
 | Rankings | untested | Time trial rankings; not tried yet. | 2026-11-02 |
 | DataStore | untested | Ghost upload and download; not tried yet. | 2026-11-02 |
 

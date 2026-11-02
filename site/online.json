@@ -158,12 +158,12 @@
     },
     "friends": {
      "checked": "2026-11-02",
-     "note": "Friend list and friend rooms; work in progress.",
-     "status": "untested"
+     "note": "A friend shows as joinable; the friend list on the Friends menu is still empty.",
+     "status": "partial"
     },
     "lan_play": {
      "checked": "2026-11-02",
-     "note": "LAN Play through a Napple room; two instances verified in one race.",
+     "note": "LAN Play through a local napple-room: two instances verified in the same room (one creates it, the other lists and joins it; both reach its character select).",
      "status": "works"
     },
     "local_wireless": {
@@ -173,12 +173,12 @@
     },
     "online_matchmaking": {
      "checked": "2026-11-02",
-     "note": "Through napple-online: login, the online menu, and two instances matched into one gathering.",
+     "note": "Through a local napple-online: login, the online menu, and two instances matched into one gathering (verified).",
      "status": "works"
     },
     "online_race_or_match": {
      "checked": "2026-11-02",
-     "note": "Matched players do not start a race yet; waiting on the peer-to-peer fix.",
+     "note": "Open: the host reaches the course vote; the joiner completes NAT traversal with the host, then ends with 2618-0502.",
      "status": "partial"
     },
     "rankings": {
