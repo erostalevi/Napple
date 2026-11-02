@@ -34,6 +34,7 @@ typedef struct {
     bufrange vbuf[16];
     bufrange ubo[6][14], ssbo[6][16];
     uint64_t tex[6][128], img[6][16];
+    uint64_t septex[6][SEP_TEX_C2_COUNT], sepsamp[6][SEP_SAMP_C2_COUNT]; /* nvnCommandBufferBindSeparateTexture(s) / Sampler(s) */
     uint64_t texpool, samppool;
     p_set_rt rt;
     int rt_valid;
@@ -1337,6 +1338,19 @@ static void make_pools_resident(id enc, int compute) {
 }
 
 /* Bind constant buffers, textures and samplers of one stage. `enc` is the render or compute encoder. */
+/* One 32-bit word of a texture handle the shader reads from constant buffer `cb` at byte `off`: c2 is the driver's handle tables (combined textures at
+ * TEX_COMBINED_BASE, separate textures and samplers at SEP_TEX_C2_BASE / SEP_SAMP_C2_BASE, 8 bytes per binding), cbuf >= 3 a user uniform buffer. */
+static uint32_t handle_word(int stage, uint32_t cb, uint32_t off) {
+    if (cb == 2) {
+        if (off >= SEP_SAMP_C2_BASE && off < SEP_SAMP_C2_BASE + 8 * SEP_SAMP_C2_COUNT) return (uint32_t)S.sepsamp[stage][(off - SEP_SAMP_C2_BASE) / 8];
+        if (off >= SEP_TEX_C2_BASE && off < SEP_TEX_C2_BASE + 8 * SEP_TEX_C2_COUNT) return (uint32_t)S.septex[stage][(off - SEP_TEX_C2_BASE) / 8];
+        if (off >= TEX_COMBINED_BASE && off < SEP_TEX_C2_BASE) return (uint32_t)S.tex[stage][(off - TEX_COMBINED_BASE) / 8];
+        return 0;
+    }
+    int ui = (int)cb - CBUF_USER_BASE;
+    if (ui >= 0 && ui < 14 && S.ubo[stage][ui].addr && (uint64_t)off + 4 <= S.ubo[stage][ui].size) return *(const uint32_t *)(uintptr_t)(S.ubo[stage][ui].addr + off);
+    return 0;
+}
 static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint32_t cs_groups[3]) {
     const ShaderInfo *si = &sh->info;
     /* geometry and tess control kernels run on a compute encoder (compute = 1) but keep the graphics driver-constant layout of their stage */
@@ -1449,7 +1463,12 @@ static void bind_stage(int stage, GfxShader *sh, id enc, int compute, const uint
         const ShaderTexture *st = &si->tex[i];
         int slot = ((int)st->handle_offset - TEX_COMBINED_BASE) / 8;
         uint64_t h = (slot >= 0 && slot < 128) ? S.tex[stage][slot] : 0;
-        if (st->bindless) { /* handle stored by the game in a uniform buffer: read the bound buffer at the static offset */
+        if (st->separate) { /* (texture word) | (sampler word), each from c2's handle tables or a user uniform buffer */
+            h = handle_word(stage, st->bindless_cbuf, st->bindless_offset) | handle_word(stage, st->sep_cbuf, st->sep_offset);
+            slot = -1;
+            LOG_ONCE(NAPPLE_LOG_INFO, "separate texture / sampler handles in use (first: c%u[%#x] | c%u[%#x] -> handle %#llx; c2 tables at %#x / %#x are a hypothesis)",
+                     st->bindless_cbuf, st->bindless_offset, st->sep_cbuf, st->sep_offset, (unsigned long long)h, SEP_TEX_C2_BASE, SEP_SAMP_C2_BASE);
+        } else if (st->bindless) { /* handle stored by the game in a uniform buffer: read the bound buffer at the static offset */
             int ui = (int)st->bindless_cbuf - CBUF_USER_BASE;
             h = 0;
             slot = -1;
@@ -2469,6 +2488,71 @@ static void copy_d24_to_tex(GfxTex *t, const p_copy_xfer *c, const uint8_t *src,
                             options:MTLBlitOptionStencilFromDepthStencil];
     }
 }
+/* Readback of DEPTH24 / DEPTH24_STENCIL8 (the inverse of copy_d24_to_tex): the depth (and stencil) aspect is blitted into staging memory, then a kernel packs
+ * the NVN words into the destination: 0x33 = unorm24 depth in the low 24 bits, 0x35 = depth << 8 | stencil (Maxwell Z24S8). round(d * (2^24 - 1)) undoes the
+ * upload's v / (2^24 - 1) exactly (32-bit float depth holds every 24-bit value). */
+static NSString *const kD24PackMSL = @"#include <metal_stdlib>\nusing namespace metal;\n"
+                                       "kernel void d24pack(device const float *df [[buffer(0)]], device const uchar *sb [[buffer(1)]], device uchar *dst [[buffer(2)]],\n"
+                                       "                    constant uint4 &p [[buffer(3)]], uint2 g [[thread_position_in_grid]]) {\n" /* p = (w, h, row bytes, stencil) */
+                                       "  if (g.x >= p.x || g.y >= p.y) return; uint i = g.y * p.x + g.x;\n"
+                                       "  uint v = uint(rint(saturate(df[i]) * 16777215.0f));\n"
+                                       "  *(device uint *)(dst + g.y * p.z + g.x * 4u) = p.w != 0u ? ((v << 8) | uint(sb[i])) : v; }\n";
+static void copy_d24_from_tex(GfxTex *t, id<MTLBuffer> b, uint64_t o, NSUInteger row, NSUInteger img, uint32_t lv, uint32_t sl, uint32_t x, uint32_t y, uint32_t z,
+                              uint32_t w, uint32_t h, uint32_t d) {
+    static id<MTLComputePipelineState> ps;
+    if (!ps) {
+        NSError *e = nil;
+        id<MTLLibrary> lib = [g_mtl.dev newLibraryWithSource:kD24PackMSL options:nil error:&e];
+        ps = lib ? [g_mtl.dev newComputePipelineStateWithFunction:[lib newFunctionWithName:@"d24pack"] error:&e] : nil;
+        if (!ps) {
+            LOGE("24-bit depth readback kernel: %s", e.localizedDescription.UTF8String);
+            return;
+        }
+    }
+    if ((row & 3) || (o & 3) || (img & 3)) {
+        LOG_ONCE(NAPPLE_LOG_WARN, "24-bit depth readback to an unaligned destination (offset %#llx, row %lu) skipped", (unsigned long long)o, (unsigned long)row);
+        return;
+    }
+    int stencil = t->key.d.format == 0x35 && t->has_stencil;
+    int is3d = t->tex.textureType == MTLTextureType3D;
+    uint32_t slice = is3d ? 0 : sl + z, ns = is3d ? 1 : d;
+    for (uint32_t k = 0; k < ns; k++) {
+        id<MTLBuffer> bd, bs = nil;
+        uint32_t od, os = 0;
+        if (!ring_alloc(&g_ring, w * h * 4, 256, &bd, &od) || (stencil && !ring_alloc(&g_ring, w * h, 256, &bs, &os))) return;
+        id<MTLBlitCommandEncoder> be = blit();
+        [be copyFromTexture:t->tex
+                         sourceSlice:slice + k
+                         sourceLevel:lv
+                        sourceOrigin:MTLOriginMake(x, y, 0)
+                          sourceSize:MTLSizeMake(w, h, 1)
+                            toBuffer:bd
+                   destinationOffset:od
+              destinationBytesPerRow:(NSUInteger)w * 4
+            destinationBytesPerImage:(NSUInteger)w * h * 4
+                             options:t->has_stencil ? MTLBlitOptionDepthFromDepthStencil : MTLBlitOptionNone];
+        if (stencil)
+            [be copyFromTexture:t->tex
+                             sourceSlice:slice + k
+                             sourceLevel:lv
+                            sourceOrigin:MTLOriginMake(x, y, 0)
+                              sourceSize:MTLSizeMake(w, h, 1)
+                                toBuffer:bs
+                       destinationOffset:os
+                  destinationBytesPerRow:(NSUInteger)w
+                destinationBytesPerImage:(NSUInteger)w * h
+                                 options:MTLBlitOptionStencilFromDepthStencil];
+        id<MTLComputeCommandEncoder> ce = compute_encoder();
+        [ce setComputePipelineState:ps];
+        [ce setBuffer:bd offset:od atIndex:0];
+        [ce setBuffer:stencil ? bs : bd offset:stencil ? os : od atIndex:1];
+        [ce setBuffer:b offset:o + k * img atIndex:2];
+        uint32_t p[4] = {w, h, (uint32_t)row, (uint32_t)stencil};
+        [ce setBytes:p length:sizeof p atIndex:3];
+        [ce dispatchThreads:MTLSizeMake(w, h, 1) threadsPerThreadgroup:MTLSizeMake(MIN(w, 16u), MIN(h, 16u), 1)];
+        end_encoders();
+    }
+}
 static void do_copy_xfer(const p_copy_xfer *c, int to_tex) {
     GfxTex *t = mtl_tex_get(&c->tex.s, to_tex);
     if (!t) return;
@@ -2496,7 +2580,7 @@ static void do_copy_xfer(const p_copy_xfer *c, int to_tex) {
     if (!mtl_addr(c->buf, img * d, &b, &o)) return;
     if (t->is_depth && (t->key.d.format == 0x33 || t->key.d.format == 0x35)) { /* 24-bit depth: the Metal texture is 32-bit float depth */
         if (!to_tex) {
-            LOG_ONCE(NAPPLE_LOG_WARN, "reading back a 24-bit depth texture (format %#x) into memory is not implemented", t->key.d.format);
+            copy_d24_from_tex(t, b, o, row, img, lv, sl, x, y, z, w, h, d);
             return;
         }
         copy_d24_to_tex(t, c, (const uint8_t *)(uintptr_t)c->buf, row, img, lv, sl, x, y, z, w, h, d);
@@ -3281,7 +3365,10 @@ static void exec_op(const op_hdr *h, const uint8_t *pl, int depth) {
                 for (uint32_t i = 0; i < r->n && r->first + i < 128; i++) S.tex[r->stage][r->first + i] = hs[i];
             else if (h->op == OP_BIND_IMG)
                 for (uint32_t i = 0; i < r->n && r->first + i < 16; i++) S.img[r->stage][r->first + i] = hs[i];
-            else LOG_ONCE(NAPPLE_LOG_WARN, "separate texture/sampler binding is not supported yet");
+            else if (h->op == OP_BIND_SEPTEX)
+                for (uint32_t i = 0; i < r->n && r->first + i < SEP_TEX_C2_COUNT; i++) S.septex[r->stage][r->first + i] = hs[i];
+            else
+                for (uint32_t i = 0; i < r->n && r->first + i < SEP_SAMP_C2_COUNT; i++) S.sepsamp[r->stage][r->first + i] = hs[i];
             break;
         }
         case OP_SET_TEXPOOL: S.texpool = *(const uint64_t *)pl; break;
