@@ -284,3 +284,12 @@ reads them. `NAPPLE_PACING_FIXED` and `NAPPLE_PACING_GAME` (gfx pacing) and `NAP
 | `NAPPLE_CAPS_E2E_PNG`, `NAPPLE_CAPS_E2E_OUT` | `runtime/tests/test_svc_caps_e2e` only: a 1280x720 PNG (e.g. a `NAPPLE_SCREENSHOT` of a headless run) to send through the album round trip instead of the synthetic scene, and a directory that keeps the album JPEG and the decoded frames. |
 | `NAPPLE_MOVIE_TC` | Log movie decoder call counters, queue state and the first input buffers every 2 s. |
 | `NAPPLE_PREPLOG`, `NAPPLE_T2TLOG`, `NAPPLE_CUBELOG`, `NAPPLE_DEBUG_EQUAL_LEQUAL` | gfx diagnostics for the look-ahead pass, texture-to-texture copies, cube-map passes and depth EQUAL bisecting. |
+
+### Host network provider (net-host-provider 2026-11-02)
+
+| Variable | Values / default | Effect | Defined in |
+|---|---|---|---|
+| `NAPPLE_NET` | `host`, `offline`; unset = offline | `host` selects the built-in host network provider (real sockets, DNS, TLS with the host trust store, nifm connectivity, LDN over the LAN; see [network providers](../guides/network-providers.md#the-built-in-host-provider-napple_nethost-net-host-provider-2026-11-02)). `NAPPLE_ONLINE_PROVIDER`, when set, wins. Any other value is logged and stays offline. | `runtime/src/services/online_core.c`, `runtime/src/net/` |
+| `NAPPLE_LDN_PORT` | port; default 11452 | First of the 8 UDP discovery ports a host listens on and a scan probes (host provider LDN). | `runtime/src/net/net_host_ldn.c` |
+| `NAPPLE_LDN_PEERS` | comma-separated IPv4 addresses; unset = none | Extra addresses a scan probes, for networks that drop broadcasts. | `runtime/src/net/net_host_ldn.c` |
+| `NAPPLE_LDN_SCAN_MS` | 1..5000; default 150 | How long a scan waits for hosts to answer. | `runtime/src/net/net_host_ldn.c` |
