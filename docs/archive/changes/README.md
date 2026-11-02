@@ -227,3 +227,4 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 | Note | Summary |
 |---|---|
 | [2026-11-02-claude-napple-social-cloud-2026-11-02-r9](2026-11-02-claude-napple-social-cloud-2026-11-02-r9.md) | napple-social: friends, presence and invites service for Napple players (REST + WebSocket, SQLite). |
+| [2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9](2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9.md) | ipc-depth-cloud: 98 IPC rows made real (11 stub to impl, 87 new impl rows): set:sys settings store, time, vi display settings, aoc purchase events, notif:a alarms, pctl PIN / rating / free communication, pdm, lbl, ncm. |
