@@ -6,7 +6,7 @@ head: 7e4024cf49152c4bc032b25de8c49b27378b19ec
 env: mac
 date: 2026-11-03
 areas: [infra, .github/workflows/deploy-servers.yml, docs/guides/deploy-servers.md]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/infra-online-2026-11-03-r12: deploy napple-account + napple-social, SES, photo/saves buckets, env wiring
@@ -69,3 +69,9 @@ YAML/Caddy syntax slips are safe to fix. Changing route prefixes or env names ne
 ## Needs from other areas
 - account-auth-ses: keep reading `NAPPLE_PHOTO_BUCKET` / `NAPPLE_ACCOUNT_S3_BUCKET` and the contract mail names; bind on `NAPPLE_ACCOUNT_BIND`.
 - napple-online (online-identity): read `NAPPLE_ACCOUNT_URL` / `NAPPLE_SOCIAL_URL`.
+
+## Integration result
+- Date: 2026-11-03 (batch r12, rolling). Merged at 6ca1ad2. Outcome: Small fixes (clean merge).
+- integrate: fixes: (1) service tokens were not wired anywhere: compose/roll.sh/run.sh now give napple-account NAPPLE_INTERNAL_TOKEN and napple-social the SAME value as NAPPLE_ACCOUNT_SERVICE_TOKEN, and napple-social + napple-online one NAPPLE_SOCIAL_SERVICE_TOKEN (generated once on the instance in /opt/napple/.service-tokens, 0600; verified on the real local stack: equal values, tier lookup 200 with the token and 404 without, social internal stats 200/401); (2) Caddy answers 404 for /account/v1/internal/* and /social/v1/internal/*; (3) instance metadata hop limit 1 -> 2 (napple-account in Docker reads the instance role through IMDSv2, one more hop; tofu test asserts it); guide documents the tokens
+- Tests: tofu fmt/validate ok, tofu test 9 passed; actionlint and shellcheck -x clean; infra/local/run.sh start with the real crates (account 18082, social /social/v1/healthz 18083, online 18080, room 18081) healthy, then a scripted run of the client-core Rust client against it: signup, verify, second account, profile update, tier, friend request by code, accept, friends list, search, block/unblock, report, photo upload, create profile, second device login; docker, compose, caddy and a real AWS plan were not available (Dockerfiles, compose.yml, Caddyfile syntax, storage.tf against AWS stay unverified)
+- Corrections to instructions: ports/healthz/routes/env names match the crates (account 8082 /healthz, social 8083 /social/v1/healthz, online 8080, Caddy prefixes kept); NAPPLE_PHOTO_BUCKET/NAPPLE_ACCOUNT_S3_BUCKET/NAPPLE_MAIL_*/NAPPLE_SES_* names are read by napple-account

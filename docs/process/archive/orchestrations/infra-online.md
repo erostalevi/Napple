@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-sonnet-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_2cca500c-4401-46cd-a061-3a3602c54337
 launched_at: 2026-11-03
@@ -33,3 +33,4 @@ Everything else: other r12 items edit the other paths in parallel (account auth/
 Shared title data read-only; game runs under `lockf -k /Users/neto/NappleWork/.run.lock` (<=120 s, private --save-root); local only, never push; never ask the user; never commit credentials or Nintendo material. Test-first, small commits.
 
 ## Result
+Outcome: Small fixes (clean merge). Merged at 6ca1ad2. Details: [integrator result](../integrators/claude-infra-online-2026-11-03-r12.md).
