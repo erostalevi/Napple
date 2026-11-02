@@ -58,6 +58,9 @@ typedef struct {
     uint32_t layer_separation_mode;        /* SetManagedDisplayLayerSeparationMode */
     int recording_layer_composition;       /* SetRecordingLayerCompositionEnabled */
     unsigned screenshots_saved;            /* SaveCurrentScreenshot calls that stored an album entry */
+    int hdcp_activated;                    /* SetHdcpAuthenticationActivated: HDCP authentication is running (GetHdcpAuthenticationState) */
+    int handling_home_short_press;         /* SetHandlingHomeButtonShortPressedEnabled: the Home short press comes to the application as a message */
+    int jit_prepared;                      /* PrepareForJit succeeded (the jit:u service is there) */
 } AppletState;
 
 void applet_state_init(AppletState *s);

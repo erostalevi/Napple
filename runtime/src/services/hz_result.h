@@ -92,3 +92,12 @@ enum {
 /* getaddrinfo / netdb error numbers (FreeBSD numbering) */
 enum { HZ_EAI_AGAIN = 2, HZ_EAI_FAIL = 4, HZ_EAI_NONAME = 8 };
 enum { HZ_NETDB_HOST_NOT_FOUND = 1, HZ_NETDB_TRY_AGAIN = 2, HZ_NETDB_NO_RECOVERY = 3, HZ_NETDB_NO_DATA = 4 };
+
+/* ipc-depth-95 r10 (applet part): am results from switchbrew 'Error codes' (module 128 rows, value and description as listed there), the lr result
+ * switchbrew's PrepareForJit note quotes, and the ovln / ec answers napple picked where no public code exists. */
+#define HZ_R_AM_TITLE_NOT_FOUND HZ_RESULT(HZ_MOD_APPLET, 37)           /* 0x4A80 "Title-ID not found" (listed for applet launches; [unverified] for applications) */
+#define HZ_R_AM_INVALID_PARAMETERS HZ_RESULT(HZ_MOD_APPLET, 506)       /* 0x3F480 "Invalid parameters" */
+#define HZ_R_AM_DEBUG_MODE_NOT_ENABLED HZ_RESULT(HZ_MOD_APPLET, 974)   /* 0x79C80 "DebugMode not enabled" */
+#define HZ_R_LR_PROGRAM_NOT_FOUND HZ_RESULT(8, 2)                      /* 0x408: what PrepareForJit returns when the jit sysmodule does not exist */
+#define HZ_R_OVLN_QUEUE_FULL HZ_RESULT(25, 2)                          /* [unverified] ovln (module 25) Send into a full queue with OverflowOption Error */
+#define HZ_R_EC_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE HZ_RESULT(124, 280) /* [unverified] account: the user has no linked Nintendo account */
