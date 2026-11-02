@@ -35,15 +35,28 @@ SQLite (WAL) in the instance data volume for accounts/devices/tokens/profiles/sa
 block public access, lifecycle: abort incomplete uploads after 1 day, delete noncurrent objects after 7 days). Email via Amazon SES (domain `napple.lat`,
 DKIM in Route 53, sender `no-reply@napple.lat`).
 
-## Plans and billing (user decision 2026-11-02)
-- **Free**: account, passkeys, devices, profiles and the online identity are free. Cloud saves for **1 title** per account (the first title the user
-  enables; the user may switch which title once every 30 days), up to 10 most recent versions, 256 MiB quota.
-- **Napple Plus** (paid subscription, monthly and yearly prices configurable): cloud saves for unlimited titles, 20 versions per title, 5 GiB quota.
-- Entitlement source: **Stripe** (Checkout + Customer Portal on a small web page served by napple-account at `/account/v1/billing/*`, webhook with signature
-  verification, idempotent event handling). Apps never take payment in-app: they open the web checkout. Plans/prices/quota limits come from server config
-  (env), not code. Price IDs and Stripe keys are secrets supplied at deploy time (`STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_PRICE_MONTHLY`,
-  `STRIPE_PRICE_YEARLY`); without them the server runs with every account on Free and billing endpoints return 503.
-- `GET /me` returns `plan {name, status, renews_at, synced_titles_limit, quota}`. Save upload for a title beyond the plan returns **402** with
-  `{reason: "plan_limit", upgrade_url}`; clients show an upgrade prompt and keep saving locally.
-- Never hold data hostage: downloads and restores of existing versions always work; on downgrade/expiry, saves of titles beyond the limit stay
-  downloadable for 90 days (read-only), then are deleted after an email warning. Account deletion cancels the subscription and deletes all data.
+## Plans and billing: NOT BUILT (user decision 2026-11-02)
+No billing, no Stripe, no plan engine in this round. Every account gets every feature. `GET /me` returns a static
+`plan {name: "free", features: {}}` placeholder only so clients have a stable field later. Storage limits are plain server config
+(`NAPPLE_SAVE_QUOTA_BYTES`, default 10 GiB per account; `NAPPLE_SAVE_VERSIONS`, default 20 per title; max 64 MiB per version), returning
+413 `{reason: "quota"}` when exceeded. The paid-plan spec (Free/Plus/Family) is parked in `orchestrations/backlog.md` for later.
+
+## Reserved names (user decision 2026-11-02)
+Applies to every user-chosen name: account `display_name`, profile `nickname`, and any future username/handle or room name shown to others.
+- Normalise before checking: Unicode NFKC + case-fold, remove whitespace, `-`, `_`, `.` and other punctuation for the "contains" check, and map common
+  look-alikes to their skeleton (Unicode confusables: Cyrillic/Greek letters, fullwidth forms; leet: 0->o, 1/l/|/I->l, 4/@->a, 3->e, 5/$->s, 7->t, 9->g).
+- **"napple" is forbidden anywhere** in a name (e.g. `Napple`, `xNAPPLEx`, `n4pple`, `nappIe`, `na pple`), except the single exact name `napple`
+  (and profile nickname `napple`) granted to the owner's account.
+- **Prefix `nap-` is reserved**: a name whose normalised form (before removing punctuation) starts with `nap-` / `nap_` / `nap ` / `nap.` (and look-alikes
+  such as `n4p-`) is allowed only for accounts holding the `reserved_prefix` grant (approved contributors/members later).
+- Grants are stored per account (`grants: ["owner_napple", "reserved_prefix"]`) and set only by an admin: bootstrap admin = the account whose verified
+  email is in `NAPPLE_ADMIN_EMAILS`; admin endpoints `POST /admin/grants {account_id|email, grant}` / `DELETE ...` (admin JWT required) and a CLI
+  subcommand of the server binary (`napple-account admin grant <email> reserved_prefix`). Rejected names return 422 `{reason: "reserved_name"}` with a
+  human message; existing names are re-checked when renamed. Tests cover every rule above, including look-alikes.
+
+## Where the user sees it (user decision 2026-11-02)
+Account and cloud-save UI lives **in game, in the settings panel** — the in-game overlay (`frontend/src/overlay.m` on macOS, `frontend/src/ios/panel_ios.m`
+later on iOS) gets a new **Account** tab: sign in (email code / passkey), the linked Napple profile (nickname, icon, switch profile), devices (approve a
+new device, revoke), cloud saves for the running game (status, last sync, version history / restore, conflict choice, sync on/off), and online options
+(room server, online server, presence visibility). **Not in Napple Studio.** The client core (cloud-saves-client) exposes a small C API the overlay calls
+(state query + async actions + change callbacks); the CLI stays for scripting.

@@ -3,7 +3,7 @@
 Hand-off files of the unattended parallel rounds, moved here once their branch landed (`/napple-integrate`). Each round has an orchestration file per
 work item (`orchestrations/<name>.md`: goal, owned paths, acceptance, written by `/napple-orchestrate`) and the integrator file its session wrote
 (`integrators/<branch>.md`: what was done, evidence, how to integrate and test). The workflow is in the [process README](../README.md); the
-matching change notes are listed in the [change archive](../../archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r6).
+matching change notes are listed in the [change archive](../../archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r8).
 
 They are kept as written: paths, line numbers and statuses are those of the time, and links inside them are not checked.
 
@@ -60,3 +60,19 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | net-host-provider | [net-host-provider.md](orchestrations/net-host-provider.md) | [claude-net-host-provider-2026-11-02-r6.md](integrators/claude-net-host-provider-2026-11-02-r6.md) | opt-in macOS host network provider (`NAPPLE_NET=host`): sockets, DNS with the vendor's domains refused, TLS, nifm, LDN over the LAN |
 | error-applet-output | [error-applet-output.md](orchestrations/error-applet-output.md) | [claude-error-applet-output-2026-11-02-r6.md](integrators/claude-error-applet-output-2026-11-02-r6.md) | empty applet channels answer 0x480, error applet modes decoded (MK8D Online Play with a network returns to its menu) |
 | gfx-multi-viewport | [gfx-multi-viewport.md](orchestrations/gfx-multi-viewport.md) | [claude-gfx-multi-viewport-2026-11-02-r6.md](integrators/claude-gfx-multi-viewport-2026-11-02-r6.md) | 16 viewports / scissors / depth ranges on the encoder, viewport index and layer outputs, layered passes on demand |
+
+## Round 2026-11-02-r7
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| napple-infra | [napple-infra.md](orchestrations/napple-infra.md) | [claude-napple-infra-2026-11-02-r7.md](integrators/claude-napple-infra-2026-11-02-r7.md) | local test stack + AWS auto-deploy of the Napple game servers (`pretend.napple.lat`) and the `napple.lat` DNS |
+| net-rooms | [net-rooms.md](orchestrations/net-rooms.md) | [claude-net-rooms-2026-11-02-r7.md](integrators/claude-net-rooms-2026-11-02-r7.md) | `napple-room` relay server + runtime client: virtual LAN and LDN between Napple instances over the internet (`NAPPLE_ROOM`) |
+| mk8d-lan-session | [mk8d-lan-session.md](orchestrations/mk8d-lan-session.md) | [claude-mk8d-lan-session-2026-11-02-r7.md](integrators/claude-mk8d-lan-session-2026-11-02-r7.md) | MK8D 2618-0006 fixed (bsd errno numbering), nifm IpConfigInfo, unique pseudo device id; two MK8D instances meet in LAN Play through napple-room |
+| napple-online | [napple-online.md](orchestrations/napple-online.md) | [claude-napple-online-2026-11-02-r7.md](integrators/claude-napple-online-2026-11-02-r7.md) | Pretendo-style Napple online service (accounts/tokens, NEX over WebSocket) + runtime glue; MK8D reaches its online menu |
+| online-pia | [online-pia.md](orchestrations/online-pia.md) | [claude-online-pia-2026-11-02-r7.md](integrators/claude-online-pia-2026-11-02-r7.md) | SessionKeepFailed fixed (verbose-gathering join notifications), Pia NAT check server + glue; two MK8D instances matched into one gathering |
+
+## Round 2026-11-02-r8
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| napple-account | [napple-account.md](orchestrations/napple-account.md) | [claude-napple-account-2026-11-02-r8.md](integrators/claude-napple-account-2026-11-02-r8.md) | the Napple Account server: sign-in, devices, JWT/JWKS, E2E save-key exchange, profiles with reserved names, cloud-save metadata (no billing) |

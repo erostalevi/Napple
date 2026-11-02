@@ -6,7 +6,7 @@ head: f74f563 (the commit before this line was set)
 env: mac
 date: 2026-11-02
 areas: [runtime/services (bsd, nifm, am, friend, ldn), runtime/net]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/mk8d-lan-session-2026-11-02-r7: two MK8D instances meet in LAN Play (error 2618-0006 fixed)
@@ -111,3 +111,18 @@ Everything was built and run on this Mac. Not exercised:
 - account (napple-account): a per-installation user id and nickname, so players are told apart in lobbies ("Napple" for everyone today).
 - ipc.c owner: reuse closed domain object ids.
 - Whoever takes Wireless Play next: the station crash above.
+
+## Integration result
+- Date 2026-11-02, merged into main as 33ac45c (branch head e6a4dd9 as handed off), right after net-rooms (its base). No conflicts. Outcome: **Clean**, plus one
+  doc commit `integrate: mk8d-lan-session change note in the r7 change archive table` (the change note was an orphan for `tools/check_docs.py`).
+- No native ports: the errno map, install id (save-root file) and service rows are portable logic; C left as written.
+- `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0, ipc_reference 111 fixtures / app_reachable 1325 / missing 0;
+  `test_svc_lan_play` 21/0; `test_net_room` 45/0 + console B 28/0. No new build warnings.
+- Two-instance LAN Play (How to test 2), one job under the run lock, 75 s, private save copies, local `napple-room serve` 127.0.0.1:31499, the file's A / B
+  input scripts: both rc 0, no `applet: error`. B's frame 2100 lists A's room "Napple 1/12", B joins, and both show the room's character select at frames
+  2400-3900. Unicast Pia traffic to 10.13.0.x:49152: A 2,280 sends, B 2,195. **Verified** (acceptance 2, LAN Play part).
+- Four-title 45 s headless boots, offline and `NAPPLE_NET=host`: SMO, LAS, MK8D, ACNH rc 0, notify-running, `missing_ipc []`, `unsupported_svcs []`,
+  stubbed only `nvdrv:13`.
+- napple-online (landed next) was re-tested on top of this errno change: see its integrator file.
+- Still open (as declared): Wireless Play station crash after Connect, friend AddPlayHistory, the install-id fallback path, `ipc.c` domain id reuse,
+  per-installation user id (napple-account / account.c).

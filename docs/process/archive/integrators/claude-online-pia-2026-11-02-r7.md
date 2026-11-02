@@ -6,7 +6,7 @@ head: 5da70dd
 env: mac
 date: 2026-11-02
 areas: [crates/napple-online, runtime/net (net_online*), runtime/services (offline.c ssl functions, via 7dde717)]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/online-pia-2026-11-02-r7: past SessionKeepFailed to Pia's NAT check; two MK8D instances in one gathering
@@ -147,3 +147,23 @@ status: ready-with-caveats
 2. sfdnsres: hostent IPv4 byte order (still worked around with palindromic virtual addresses).
 3. prepo: pass both buffers to the provider's `report` hook.
 4. infra: the UDP ports above.
+
+## Integration result
+- Date 2026-11-02, merged into main as 683e9bf. Landed head **adf717a** (the orchestrator moved it from 7633f0f; it adds the mk8d-lan-session merge and
+  a045e28, the ReplaceURL fix). Lands after napple-online (193474f) and mk8d-lan-session (e6a4dd9), both already on main, so only this branch's own
+  commits came in. Conflicts: `Cargo.toml` members and `runtime/Makefile` test blocks (same content, different order): main's side kept. Outcome: **Clean**.
+- No native ports (portable Rust server; the glue is BSD sockets). C left as written.
+- `cargo test -p napple-online`: 35 passed. `make -C runtime GFX=napple test-net-online`: test_net_online_client 51/0, test_net_online_ssl 42/0.
+  `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0, ipc_reference 111 / 1325 / missing 0. No new build warnings.
+- **Two MK8D instances through a local napple-online** (How to test 3 + the update's run), one job under the run lock, 70 s each, B 5 s after A,
+  separate save roots and `NAPPLE_ONLINE_STATE_DIR`s, server on 127.0.0.1:8757 with `NAPPLE_ONLINE_NATCHECK_BASE=14025` (the follow-up session holds
+  the default ports), the update's input script. Server: `pid …744 matched into gathering 1 (mode 1, 1 of 12 players)`, `pid …745 matched into
+  gathering 1 (mode 1, 2 of 12 players)`, NAT check types 101 / 102 / 103 answered, SecureConnection 7 (ReplaceURL) for both, MatchMaking 41 for the
+  joiner. **Verified: both instances matched into the same gathering.** Host A: no error, frame 3900 shows the course vote screen (Mario Circuit /
+  Rainbow Road / Athens Dash / Random). Joiner B: error 2618-0502 at 65.7 s (after MatchMakingExt 1 at 42 s), back on the online menu, exactly as
+  the file's update reports. So: no shared race yet.
+- Four-title 45 s headless boots, offline and `NAPPLE_NET=host`: SMO, LAS, MK8D, ACNH rc 0, notify-running, `missing_ipc []`, `unsupported_svcs []`,
+  stubbed only `nvdrv:13`.
+- No change note of its own (the guide `docs/guides/napple-online.md` carries the status); none added.
+- Open (as declared): the joiner's 2618-0502; nifm `GetCurrentIpAddress` byte order (mk8d-lan-session's rows); sfdnsres hostent byte order; prepo
+  second buffer; infra UDP ports (napple-infra 0b6b8e8 adds them).

@@ -15,11 +15,15 @@ Background on how the pieces fit: [architecture](../architecture/overview.md); p
 | [debugging.md](debugging.md) | Crash and hang triage: `CRASH` output, tracing, screenshots, perf log, scripted input, the four reference titles. |
 | [network-providers.md](network-providers.md) | The `OnlineProvider` extension point: what bsd, nifm, sfdnsres, ssl, friend, nsd and prepo ask of it, the C ABI, loading a provider module, the NullProvider. |
 | [online-rooms.md](online-rooms.md) | Napple rooms: local wireless (LDN) and LAN play between Napple instances over the internet through a `napple-room` server; running a server, joining, what is relayed, limits. |
+| [napple-online.md](napple-online.md) | The Napple online service (`crates/napple-online`, `NAPPLE_ONLINE_SERVER`): Napple accounts and tokens, the NEX game server (PRUDP Lite over WebSocket), MK8D's online path, boundaries, deployment. |
+| [napple-account.md](napple-account.md) | The Napple Account server (`crates/napple-account`): sign-in (email, passkeys), devices, JWT/JWKS, E2E save-key exchange, profiles and reserved names, cloud-save metadata, deployment. |
+| [cloud-saves.md](cloud-saves.md) | End-to-end encrypted cloud saves with a Napple Account (`crates/napple-cloud`, `napple account` / `napple saves`): devices, approval and recovery, sync rules, conflicts, wire details, environment variables. |
 | [hardware-simulators.md](hardware-simulators.md) | NFC / amiibo (virtual amiibo, picker contract, optional dumps) and the IR camera simulator, and how the in-game overlay wires them. |
 | [studio.md](studio.md) | Napple Studio: the panes, building for a Mac, iPhone/iPad devices and Simulators, signing modes, bundle ids, the free/paid memory-limit rule, debug flags. |
 | [ios-device-candidate.md](ios-device-candidate.md) | Which iPhone/iPad fits which games: Simulator profiling method, memory figures, picks. |
 | [fuzzing.md](fuzzing.md) | Run the Rust cargo-fuzz targets, the seeded-mutation tests and the C runtime fuzz drivers; fix and record a finding ([findings](../reference/fuzz-findings.md)). |
 | [testing.md](testing.md) | Every test suite, its command, and whether it runs on Linux or only on macOS. |
+| [deploy-servers.md](deploy-servers.md) | Deploy the Napple game servers to AWS at `pretend.napple.lat` and the `napple.lat` DNS: one-time setup, the workflow, rollback, costs, the local test stack. |
 | [testing-graphics.md](testing-graphics.md) | Golden-frame routes per title, the gfx warning and Metal validation gate, contact sheets, approving goldens. |
 
 ### For community contributors

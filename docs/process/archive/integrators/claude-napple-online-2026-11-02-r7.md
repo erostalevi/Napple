@@ -6,7 +6,7 @@ head: f33ae29
 env: mac
 date: 2026-11-02
 areas: [crates/napple-online, runtime/net, runtime/services (account.c, online_provider.h)]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/napple-online-2026-11-02-r7: a Pretendo-style Napple online service (MK8D first)
@@ -153,3 +153,27 @@ Competition and SimpleSearchObject methods are not implemented.
 3. prepo: hand both buffers to the provider's `report` hook (the event payload is in the second one).
 4. infra (napple-infra): napple-online needs only `NAPPLE_ONLINE_HTTP` (TCP, behind Caddy with WebSocket), `NAPPLE_ONLINE_DATA`, optional
    `NAPPLE_ONLINE_PUBLIC_HOST`; no UDP ports.
+
+## Integration result
+- Date 2026-11-02, merged into main as a979903. Landed head **193474f** (the orchestrator moved the head from f7c5b68 to 193474f during integration; the
+  delta is 7dde717, the ssl IoMode / ResultWouldBlock change napple-online listed under Needs, plus docs). So no separate ssl Small fix was needed.
+  Order: after net-rooms and mk8d-lan-session (mk8d was added to the scope mid-run and landed first; this branch was re-merged on top and re-tested).
+- Conflicts, mechanical: `Cargo.toml` members (napple-room + napple-online), `runtime/Makefile` (net-room and net-online test blocks both kept),
+  `docs/archive/changes/README.md` r7 rows. `offline.c` merged cleanly with mk8d-lan-session's nifm / bsd rows (ssl functions only here).
+  `Cargo.lock` auto-merged; `cargo build --workspace --locked` ok. Outcome: **Clean** plus one doc commit (guides index row for `napple-online.md`, r7
+  change-archive row, and the line in `docs/guides/network-providers.md` pointing to the Napple-only service, as "How to integrate" asked).
+- No native ports: the glue is BSD sockets + the host provider's SecureTransport; the server is portable Rust. C left as written.
+- `cargo test -p napple-online`: 31 passed. `cargo build --release -p napple-online` ok.
+- `make -C runtime GFX=napple test-net-online`: test_net_online_client 45/0, test_net_online_ssl 42/0 (also re-run on top of mk8d-lan-session's errno change).
+  `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0, ipc_reference 111 / 1325 / missing 0. No new build warnings.
+- **MK8D Online Play through a local napple-online (How to test 2), verified twice** (before and after the mk8d-lan-session merge): server log
+  `Authentication (10) method 2 -> ok`, `SecureConnection (11) method 1 -> ok`, Utility 7 x2, Ranking 4; runtime log `ID token issued (279 bytes)`,
+  `redirected name g2b309e01-lp1.s.n.srv.nintendo.net`, `port 443 -> 127.0.0.1:8737 (http)`; frame 1800 shows Worldwide / Regional / Friends /
+  Tournaments.
+- Correction to How to test 2: set `NAPPLE_ONLINE_STATE_DIR` to a private directory (or use the same server data directory every run). Without it the
+  client keeps its account link in `~/Library/Application Support/Napple/online/<server>/`, and a second run against a fresh server data dir gets
+  `POST /napple/v1/token -> 401` ("the server issued no token") and MK8D shows 2001-0123. (The link this run created there was removed afterwards.)
+- Four-title 45 s headless boots (on the combined tree with mk8d-lan-session), offline and `NAPPLE_NET=host` without a server: SMO, LAS, MK8D, ACNH rc 0,
+  notify-running, `missing_ipc []`, `unsupported_svcs []`, stubbed only `nvdrv:13`; no `napple:` lines without `NAPPLE_ONLINE_SERVER`.
+- Still unverified (as declared): the https:// client path against a real TLS server, the server behind Caddy, the server on Linux, matchmaking paths
+  other than 40 / 21.2. SessionKeepFailed 2618-0562 is online-pia's (landed next).

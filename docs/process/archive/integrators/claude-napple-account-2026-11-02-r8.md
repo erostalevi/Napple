@@ -6,7 +6,7 @@ head: see `git log -1 claude/napple-account-2026-11-02-r8` (the commit carrying 
 env: mac
 date: 2026-11-02
 areas: [crates/napple-account, docs/guides]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/napple-account-2026-11-02-r8: the Napple Account server (identity, passkeys, devices, JWT/JWKS, E2E key exchange, profiles with reserved names, cloud-save metadata)
@@ -164,3 +164,20 @@ Nothing is unbuilt on macOS. These were never run against the real services; onl
 - **napple-room:** room names shown to others should follow the same reserved-name rules.
 - **Overlay Account tab (frontend):** show 422 `reserved_name` messages; associated domains `webcredentials:napple.lat`
   + `applinks:napple.lat`; a `napple://auth/email` handler.
+
+## Integration result
+- Date 2026-11-02, merged into main as 69edb14 (head 9167b95 as handed off: billing removed, reserved names, admin grants, client wire alignment).
+  First of batch r8, after the r7 items. Conflicts: `Cargo.toml` members only (kept napple-room, napple-online and napple-account); `Cargo.lock`
+  auto-merged and `cargo build --workspace --locked` passes. Outcome: **Clean**, plus one doc commit (guides index row for `napple-account.md`; round
+  r8 section in the change archive with this change note; the unattended-rounds range and its anchors in `docs/index.md` and the process archive moved
+  to r8; `tools/check_docs.py` reported both new docs as orphans before).
+- No native ports (portable Rust on purpose; it deploys to Linux).
+- `cargo test -p napple-account --locked`: 43 passed (21 unit; auth 9, keys 3, names 3, s3 1, saves 6). The workspace `cargo test --workspace --locked`
+  ran green on a tree with this branch and cloud-saves-client.
+- Walkthrough (`cargo build --release -p napple-account --bin napple-account`, `scripts/walkthrough.sh`): exit 0, `upload HTTP 200`, `409`, `201`,
+  the 422 `reserved_name` JSON, `download matches upload: 1`, `204`, `blobs left: 0`; server log shows account created / deleted only.
+- JWKS / profiles as napple-social consumes them: verified live when napple-social landed (see its integrator file): a real access token from this
+  server is accepted by napple-social through `/account/v1/.well-known/jwks.json` and `/account/v1/profiles`; a garbage token gets 401.
+- The cloud-saves-client upload-header mismatch (Findings) was fixed on the client side when cloud-saves-client landed (see its integrator file).
+- Still unverified (as declared): SES, real S3 (virtual-hosted style), IMDSv2, real passkeys, Linux build. napple-online still issues its own HS256
+  tokens (JWKS verification and `prf` → PID mapping are a follow-up).
