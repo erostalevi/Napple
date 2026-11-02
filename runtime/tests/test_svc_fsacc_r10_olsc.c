@@ -74,7 +74,7 @@ int main(void) {
     g_linked = 1;
     outcomes(o, HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "connected and linked (no cloud-save hook)");
     online_provider_install(NULL);
-    CHECK(svc_find(o, 18)->status == IPC_STUB && svc_find(o, 27)->status == IPC_STUB, "18 and 27 stay documented stubs");
+    CHECK(svc_find(o, 18)->status == IPC_IMPL && svc_find(o, 27)->status == IPC_IMPL, "18 and 27 answer through the cloud hooks (test_svc_provider_hooks_olsc)");
     printf("{\"test\":\"svc_fsacc_r10_olsc\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

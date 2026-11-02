@@ -15,6 +15,7 @@
 #define MSG_BYTES 0x100
 #define POINTER_BUFFER_SIZE 0x8000
 #define DOMAIN_MAX 512
+#define IPC_R_DOMAIN_OBJECT_NOT_FOUND ((10u) | (301u << 9)) /* sf::cmif invalid domain object id (module 10, description 301) */
 
 int ksession_connect_named(const char *name, uint64_t *r); /* ksession.c */
 int ksession_is_client(uint32_t h);
@@ -27,6 +28,10 @@ enum { T_CLOSE = 2, T_REQUEST = 4, T_CONTROL = 5, T_REQUEST_CTX = 6, T_CONTROL_C
 typedef struct IpcDomain {
     IpcObject *objects[DOMAIN_MAX + 1]; /* object id -> object (id 1 is the converted root) */
     unsigned next_id, refs;
+    /* Freed ids wait in a FIFO and are handed out again only after every never-used id is gone, oldest first, so a guest that
+     * closes an id twice usually hits an empty slot (an error) instead of the object that reused it. */
+    uint16_t freeq[DOMAIN_MAX];
+    unsigned free_head, free_count;
     pthread_mutex_t lock;
 } IpcDomain;
 typedef struct IpcSession {
@@ -61,6 +66,25 @@ static void object_unref(IpcObject *o) {
         if (o->destroy) o->destroy(o);
         free(o);
     }
+}
+/* Domain object ids. Callers hold d->lock. ids are 1..DOMAIN_MAX; 0 is never valid. */
+static unsigned domain_alloc_locked(IpcDomain *d, IpcObject *o) { /* returns the new id, 0 when DOMAIN_MAX objects are open */
+    unsigned id;
+    if (d->next_id <= DOMAIN_MAX) id = d->next_id++;
+    else if (d->free_count) {
+        id = d->freeq[d->free_head];
+        d->free_head = (d->free_head + 1) % DOMAIN_MAX;
+        d->free_count--;
+    } else return 0;
+    d->objects[id] = o;
+    return id;
+}
+static IpcObject *domain_release_locked(IpcDomain *d, uint32_t id) { /* detaches and returns the object, NULL for an unknown or closed id */
+    if (!id || id > DOMAIN_MAX || !d->objects[id]) return NULL;
+    IpcObject *o = d->objects[id];
+    d->objects[id] = NULL;
+    d->freeq[(d->free_head + d->free_count++) % DOMAIN_MAX] = (uint16_t)id;
+    return o;
 }
 static IpcSession *session_new(IpcObject *o) {
     IpcSession *s = calloc(1, sizeof *s);
@@ -515,11 +539,17 @@ static void dispatch(IpcSession *s, uint32_t *m) {
         memcpy(&oid, payload + 4, 4);
         pthread_mutex_lock(&s->dom->lock);
         target = oid && oid <= DOMAIN_MAX ? s->dom->objects[oid] : NULL;
-        if (target && type == 2) {
-            object_unref(target);
-            s->dom->objects[oid] = NULL;
-            target = NULL;
+        if (type == 2) { /* CloseVirtualHandle: the id returns to the domain's free list */
+            IpcObject *gone = domain_release_locked(s->dom, oid);
             pthread_mutex_unlock(&s->dom->lock);
+            if (gone) {
+                object_unref(gone);
+                return;
+            }
+            /* unknown or already closed id: an error reply, not a crash */
+            LOG("ipc", "domain close of object %u: no such object", oid);
+            c.result = IPC_R_DOMAIN_OBJECT_NOT_FOUND;
+            respond(m, 1, &c, object_ids);
             return;
         }
         pthread_mutex_unlock(&s->dom->lock);
@@ -569,9 +599,9 @@ static void dispatch(IpcSession *s, uint32_t *m) {
     for (unsigned i = 0; i < c.nout_objects; i++) {
         if (s->is_domain) {
             pthread_mutex_lock(&s->dom->lock);
-            if (s->dom->next_id > DOMAIN_MAX) runtime_fail("IPC domain full");
-            s->dom->objects[s->dom->next_id] = c.out_objects[i];
-            object_ids[i] = s->dom->next_id++;
+            unsigned nid = domain_alloc_locked(s->dom, c.out_objects[i]);
+            if (!nid) runtime_fail("IPC domain full (%d objects open)", DOMAIN_MAX);
+            object_ids[i] = nid;
             pthread_mutex_unlock(&s->dom->lock);
         } else ipc_out_move_handle(&c, session_handle(c.out_objects[i]));
     }

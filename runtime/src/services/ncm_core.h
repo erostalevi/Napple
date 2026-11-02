@@ -1,6 +1,6 @@
 /* ncm core: reads the content infos out of a stored ContentMeta blob (portable). The installed layout is the public one (switchbrew "NCM services"): an
  * 8-byte header {u16 extended header size, u16 content count, u16 content meta count, u8 attributes, u8 storage id}, the extended header, then the
- * ContentInfo records (0x18 bytes: ContentId[16], u8 size[6], u8 attributes, u8 type) and the ContentMetaInfo records (0x10 bytes: u64 id, u32 version,
+ * ContentInfo records (0x18 bytes: ContentId[16], u8 size[6], u8 type at 0x16, u8 id offset at 0x17: libnx NcmContentInfo) and the ContentMetaInfo records (0x10 bytes: u64 id, u32 version,
  * u8 type, u8 attributes, 2 bytes padding). Layouts are from the author's memory of that description (unverified). */
 #pragma once
 #include <stddef.h>

@@ -235,3 +235,14 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-11-02-claude-online-support-table-2026-11-02-r10](2026-11-02-claude-online-support-table-2026-11-02-r10.md) | Per-game online support table generated from `compat/online.json`: `docs/reference/online-support.md`, a block in the README Status section, `site/online.json` and an "Online play" section on the landing page. |
 | [2026-11-02-claude-online-friends-2026-11-02-r10](2026-11-02-claude-online-friends-2026-11-02-r10.md) | online-friends: friend:u backed by napple-social through the napple-online wrapper (friend list, presence, join tokens, notifications); napple-online GetPlayingSession from reported friends; MK8D Friends menu opens, its list still empty. |
 | [2026-11-02-claude-ipc-depth-95-2026-11-02-r10](2026-11-02-claude-ipc-depth-95-2026-11-02-r10.md) | ipc-depth-95: IPC command depth 92% to 98% (1264 impl / 61 stub of 1325 reference rows, missing 0): friend:u (friend_core), ssl, nifm / bsd / nsd / sfdnsres, fs / account / olsc, applet / btm / lm / ovln / aoc, bcat / npns / ldn. |
+
+### Round 2026-11-03-r11
+
+| Note | Summary |
+| --- | --- |
+| [2026-11-03-claude-ipc-domain-reuse-2026-11-03-r11](2026-11-03-claude-ipc-domain-reuse-2026-11-03-r11.md) | IPC domain object ids are reused after close; unlinked-account tests. |
+| [2026-11-03-claude-gfx-xfb-tess-audit-2026-11-03-r11](2026-11-03-claude-gfx-xfb-tess-audit-2026-11-03-r11.md) | Tessellation parameter word decode fixed (output primitives, bits 9:8); XFB/tess layouts pinned against the public Maxwell header; ClearTexture mask 0 clears nothing; the four known gfx test skips closed. |
+| [2026-11-03-claude-ipc-bcat-npns-local-2026-11-03-r11](2026-11-03-claude-ipc-bcat-npns-local-2026-11-03-r11.md) | BCAT and npns:u rows backed by local state (task timers, push log, cache usage, notification queue). |
+| [2026-11-03-claude-ipc-fs-mii-ldn-tail-2026-11-03-r11](2026-11-03-claude-ipc-fs-mii-ldn-tail-2026-11-03-r11.md) | fsp-srv ListAccessibleSaveDataOwnerId, Mii image migration store, LDN RecvActionFrame queue, ncm ContentInfo type offset fix. |
+| [2026-11-03-claude-ipc-provider-hooks-2026-11-03-r11](2026-11-03-claude-ipc-provider-hooks-2026-11-03-r11.md) | Friend images/requests, nifm, account and olsc rows through OnlineProvider hooks (NullProvider answers like an offline console). |
+| [2026-11-03-claude-nvdrv-gpu-routing-2026-11-03-r11](2026-11-03-claude-nvdrv-gpu-routing-2026-11-03-r11.md) | nvdrv typed GPU/AS/CTRL-GPU ioctls routed to the node cores; extra documented ioctls added (layouts to verify). |

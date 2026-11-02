@@ -108,6 +108,64 @@ int main(void) {
     arg = 5; build(m, T_REQUEST, 0, &arg, 4, 2, 0, NULL); dispatch(s, m); out = response_payload(m, 1, &res); memcpy(&got, out, 4); CHECK(res == 0 && got == 6, "request addressed to domain object 2");
     { uint8_t close_msg[0x100] = {0}; uint32_t *cm = (uint32_t *)close_msg; uint8_t dh[16] = {2, 0}; uint32_t oid = 2; memcpy(dh + 4, &oid, 4);
       cm[0] = T_REQUEST; cm[1] = 8; memcpy(close_msg + 16, dh, 16); dispatch(s, cm); CHECK(s->dom->objects[2] == NULL, "domain close message releases the object"); }
+
+    /* ---- domain id reuse: a title that makes short-lived objects (MK8D's acc IProfile every 200 ms) must not exhaust the table ---- */
+    { IpcDomain *d = s->dom; uint32_t seen_max = 0; unsigned live = 0, failed0 = g_failed;
+      /* find the first free id from the current state, then churn: open + close one object at a time far past DOMAIN_MAX */
+      for (unsigned i = 0; i < 5 * DOMAIN_MAX; i++) {
+          build(m, T_REQUEST, 5, NULL, 0, 1, 0, NULL); dispatch(s, m); out = response_payload(m, 1, &res);
+          uint32_t id; memcpy(&id, out, 4);
+          CHECK(res == 0 && id >= 2 && id <= DOMAIN_MAX && d->objects[id] && !strcmp(d->objects[id]->iface, "ISub"), "churn %u: new id %u valid", i, id);
+          if (id > seen_max) seen_max = id;
+          uint8_t cl[0x100] = {0}; uint32_t *cm = (uint32_t *)cl; uint8_t dh[16] = {2, 0}; memcpy(dh + 4, &id, 4);
+          cm[0] = T_REQUEST; cm[1] = 8; memcpy(cl + 16, dh, 16); dispatch(s, cm);
+          CHECK(d->objects[id] == NULL, "churn %u: id %u released", i, id);
+          if (g_failed != failed0) break;
+      }
+      CHECK(seen_max <= DOMAIN_MAX, "ids stay within the table over %u create/close cycles", 5 * DOMAIN_MAX);
+      for (unsigned i = 1; i <= DOMAIN_MAX; i++) if (d->objects[i]) live++;
+      CHECK(live == 1, "only the root remains open after churn (%u)", live);
+
+      /* ids stay stable while open: hold 3 objects, churn around them, they keep their id and object */
+      uint32_t held[3]; IpcObject *held_obj[3];
+      for (unsigned i = 0; i < 3; i++) { build(m, T_REQUEST, 5, NULL, 0, 1, 0, NULL); dispatch(s, m); out = response_payload(m, 1, &held[i]), memcpy(&held[i], out, 4); held_obj[i] = d->objects[held[i]]; }
+      CHECK(held[0] != held[1] && held[1] != held[2] && held[0] != held[2], "three open objects have distinct ids");
+      for (unsigned i = 0; i < 3 * DOMAIN_MAX; i++) {
+          pthread_mutex_lock(&d->lock); unsigned id = domain_alloc_locked(d, held_obj[0]); pthread_mutex_unlock(&d->lock); /* any object works as a placeholder */
+          object_ref(held_obj[0]);
+          CHECK(id != held[0] && id != held[1] && id != held[2], "a fresh id never collides with an open one");
+          pthread_mutex_lock(&d->lock); IpcObject *o = domain_release_locked(d, id); pthread_mutex_unlock(&d->lock); object_unref(o);
+          if (g_failed != failed0) break;
+      }
+      CHECK(d->objects[held[0]] == held_obj[0] && d->objects[held[1]] == held_obj[1] && d->objects[held[2]] == held_obj[2], "held ids keep their objects");
+
+      /* exhaustion only when DOMAIN_MAX objects are open at once */
+      IpcObject *ph = IPC_OBJECT("IPh", sub_cmds, NULL, NULL); unsigned got_ids = 0; uint32_t first_free[DOMAIN_MAX + 1];
+      pthread_mutex_lock(&d->lock);
+      for (;;) { object_ref(ph); unsigned id = domain_alloc_locked(d, ph); if (!id) { object_unref(ph); break; } first_free[got_ids++] = id; }
+      pthread_mutex_unlock(&d->lock);
+      unsigned open_now = 0; for (unsigned i = 1; i <= DOMAIN_MAX; i++) if (d->objects[i]) open_now++;
+      CHECK(open_now == DOMAIN_MAX, "allocation fails only once all %d ids are open (%u)", DOMAIN_MAX, open_now);
+      pthread_mutex_lock(&d->lock); IpcObject *rel = domain_release_locked(d, first_free[got_ids / 2]); unsigned again = domain_alloc_locked(d, rel); pthread_mutex_unlock(&d->lock);
+      CHECK(again == first_free[got_ids / 2], "one close frees one slot: the next create gets it back (%u)", again);
+
+      /* closing an unknown / out of range / never-opened id is an error reply, not a crash */
+      uint32_t bad_ids[] = {0, DOMAIN_MAX + 1, 0xffffffffu, 100000};
+      for (unsigned i = 0; i < 4; i++) {
+          uint8_t cl[0x100] = {0}; uint32_t *cm = (uint32_t *)cl; uint8_t dh[16] = {2, 0}; memcpy(dh + 4, &bad_ids[i], 4);
+          cm[0] = T_REQUEST; cm[1] = 8; memcpy(cl + 16, dh, 16); dispatch(s, cm); out = response_payload(cm, 1, &res);
+          CHECK(out && res == IPC_R_DOMAIN_OBJECT_NOT_FOUND, "close of unknown id %#x answers an error result (%#x)", bad_ids[i], res);
+      }
+      /* a stale id closed twice: the second close errors and does not touch another object (the id is not handed out again before the never-used ids) */
+      d->next_id = 3; d->free_count = 0; d->free_head = 0; /* fresh view of the allocator: ids 1,2 in use */
+      for (unsigned i = 3; i <= DOMAIN_MAX; i++) d->objects[i] = NULL;
+      build(m, T_REQUEST, 5, NULL, 0, 1, 0, NULL); dispatch(s, m); uint32_t stale; out = response_payload(m, 1, &res); memcpy(&stale, out, 4);
+      uint8_t cl[0x100] = {0}; uint32_t *cm = (uint32_t *)cl; uint8_t dh[16] = {2, 0}; memcpy(dh + 4, &stale, 4); cm[0] = T_REQUEST; cm[1] = 8; memcpy(cl + 16, dh, 16);
+      dispatch(s, cm); build(m, T_REQUEST, 5, NULL, 0, 1, 0, NULL); dispatch(s, m); uint32_t fresh; out = response_payload(m, 1, &res); memcpy(&fresh, out, 4);
+      CHECK(fresh != stale && d->objects[fresh], "the next create does not take the just-closed id (%u vs %u)", fresh, stale);
+      memcpy(dh + 4, &stale, 4); memset(cl, 0, sizeof cl); cm[0] = T_REQUEST; cm[1] = 8; memcpy(cl + 16, dh, 16); dispatch(s, cm); out = response_payload(cm, 1, &res);
+      CHECK(res == IPC_R_DOMAIN_OBJECT_NOT_FOUND && d->objects[fresh] != NULL, "second close of the stale id errors and leaves the new object %u open", fresh);
+    }
     printf("{\"test\":\"ipc\",\"checked\":%d,\"failed\":%d}\n", g_checked, g_failed);
     return g_failed != 0;
 }

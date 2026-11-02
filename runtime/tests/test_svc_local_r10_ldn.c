@@ -3,7 +3,14 @@
 #include "../src/services/ldn.c"
 #include "svc_test.h"
 #include "online_loopback.h"
+#include <unistd.h>
 
+static void *push_later(void *arg) {
+    uint8_t m[6] = {0}, f[8] = {7};
+    usleep(30000);
+    ldn_push_action_frame((uint64_t)(uintptr_t)arg, m, m, 2400, 1, f, sizeof f);
+    return NULL;
+}
 static IpcObject *new_local(IpcObject *root) {
     IpcCall c;
     svc_call(root, 0, NULL, 0, &c);
@@ -71,7 +78,7 @@ int main(void) {
     Ldn *la = a->state;
     for (unsigned i = 0; i < sizeof local_cmds / sizeof *local_cmds; i++) {
         const IpcCmd *e = &local_cmds[i];
-        CHECK(e->status == (e->cmd == 503 ? IPC_STUB : IPC_IMPL), "row %u %s is %s", e->cmd, e->name, e->cmd == 503 ? "a documented default" : "real");
+        CHECK(e->status == IPC_IMPL, "row %u %s is real", e->cmd, e->name);
     }
     CHECK(svc_find(root, 1) && svc_find(root, 1)->status == IPC_IMPL, "ldn:u 1 CreateClientProcessMonitor is real");
 
@@ -96,6 +103,36 @@ int main(void) {
     settings(afs, 2, 0x30); svc_call(a, 500, afs, sizeof afs, &c);
     CHECK(c.result == 0 && la->action_frame && !memcmp(la->action_frame_settings, afs, sizeof afs), "500 EnableActionFrame keeps the settings");
     svc_call(a, 503, (uint32_t[]){1}, 4, &c); CHECK(c.result == HZ_R_LDN_NETWORK_NOT_AVAILABLE, "503 RecvActionFrame once enabled: nothing has arrived");
+    /* 503 with frames pushed by the provider side */
+    {
+        uint8_t src[6] = {1, 2, 3, 4, 5, 6}, bss[6] = {9, 8, 7, 6, 5, 4}, fr[40], buf[64], big[LDN_ACTION_FRAME_MAX + 1] = {1};
+        for (unsigned i = 0; i < sizeof fr; i++) fr[i] = (uint8_t)(0xa0 + i);
+        uint64_t myid = 0; memcpy(&myid, afs, 8);
+        CHECK(ldn_push_action_frame(myid, src, bss, 2400, 6, fr, sizeof fr) == 1, "a pushed frame is queued for the object that enabled action frames");
+        CHECK(ldn_push_action_frame(myid + 1, src, bss, 2400, 6, fr, sizeof fr) == 0, "...but not for another LocalCommunicationId");
+        CHECK(ldn_push_action_frame(myid, src, bss, 2400, 6, big, sizeof big) == 0 && ldn_push_action_frame(myid, src, bss, 2400, 6, fr, 0) == 0, "an empty or oversized frame is refused");
+        memset(&c, 0, sizeof c); c.in = (const uint8_t *)(uint32_t[]){1}; c.in_size = 4; svc_set_out_buf(&c, buf, sizeof buf); svc_call_c(a, 503, &c);
+        CHECK(c.result == 0 && c.out_size == LDN_ACTION_RECV_OUT_SIZE && !memcmp(c.out, src, 6) && !memcmp(c.out + 6, bss, 6) && SVC_OUT(&c, uint16_t, 0xc) == 2400 &&
+                  SVC_OUT(&c, uint16_t, 0xe) == 6 && SVC_OUT(&c, uint32_t, 0x10) == sizeof fr && !memcmp(buf, fr, sizeof fr), "503 hands out the frame with its source, bssid, channel and size");
+        svc_call(a, 503, (uint32_t[]){1}, 4, &c); CHECK(c.result == HZ_R_LDN_NETWORK_NOT_AVAILABLE, "...once; then the queue is empty again");
+        for (unsigned i = 0; i < LDN_AF_QUEUE_MAX + 3; i++) { fr[0] = (uint8_t)i; ldn_push_action_frame(0, src, bss, 5000, 36, fr, 8); }
+        CHECK(la->afq.count == LDN_AF_QUEUE_MAX && la->afq.dropped == 3, "the queue is bounded: the surplus frames are dropped and counted");
+        uint8_t small[4];
+        memset(&c, 0, sizeof c); c.in = (const uint8_t *)(uint32_t[]){1}; c.in_size = 4; svc_set_out_buf(&c, small, sizeof small); svc_call_c(a, 503, &c);
+        CHECK(c.result == 0 && SVC_OUT(&c, uint32_t, 0x10) == 4 && small[0] == 0, "a short buffer cuts the frame and the size says how much was written; the oldest comes first");
+        memset(&c, 0, sizeof c); c.in = (const uint8_t *)(uint32_t[]){1}; c.in_size = 4; svc_set_out_buf(&c, buf, sizeof buf); svc_call_c(a, 503, &c);
+        CHECK(buf[0] == 1, "FIFO order");
+        svc_call(a, 501, NULL, 0, &c); CHECK(la->afq.count == 0, "DisableActionFrame empties the queue");
+        CHECK(ldn_push_action_frame(0, src, bss, 2400, 6, fr, 8) == 0, "...and nothing is queued while disabled");
+        svc_call(a, 500, afs, sizeof afs, &c);
+        struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0);
+        svc_call(a, 503, (uint32_t[]){0}, 4, &c); clock_gettime(CLOCK_MONOTONIC, &t1);
+        long ms = (t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000;
+        CHECK(c.result == HZ_R_LDN_NETWORK_NOT_AVAILABLE && ms >= LDN_RECV_WAIT_MS - 20 && ms < 2000, "a blocking 503 with nothing queued waits a bounded time (%ld ms)", ms);
+        pthread_t th; pthread_create(&th, NULL, (void *(*)(void *))(void *)push_later, (void *)(uintptr_t)myid);
+        svc_call(a, 503, (uint32_t[]){0}, 4, &c); pthread_join(th, NULL);
+        CHECK(c.result == 0, "a blocking 503 is woken by a push from another thread");
+    }
     svc_call(a, 501, NULL, 0, &c); CHECK(c.result == 0 && !la->action_frame, "501 DisableActionFrame");
     svc_call(a, 503, (uint32_t[]){1}, 4, &c); CHECK(c.result == LDN_R_INVALID_STATE, "503 after Disable: EnableActionFrame must come first");
     svc_call(a, 500, afs, sizeof afs, &c); CHECK(c.result == 0 && la->action_frame, "...enable again");

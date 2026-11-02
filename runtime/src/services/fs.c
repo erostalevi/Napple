@@ -2280,6 +2280,50 @@ static void srv_find_with_filter(IpcObject *s, IpcCall *c) {
     free(r);
     IPC_OUT(c, n);
 }
+/* 84 ListAccessibleSaveDataOwnerId(s32 start index, s32 reserved, u64 program id) -> s32 count + u64 owner ids[] (layout: switchbrew 'Filesystem services'). The
+ * console answers from the FsAccessControl owner list of the caller's npdm, which npdm.c does not parse; the host answers from the save index it keeps: the
+ * distinct non-zero owner ids of the saves of that program (program id 0 = every save). The list is in index order; the count is how many were written. */
+typedef struct {
+    uint64_t prog, ids[64];
+    unsigned n;
+} OwnerList;
+static int owner_collect(const char *root, const SaveMeta *m, void *arg) {
+    (void)root;
+    OwnerList *l = arg;
+    uint64_t prog;
+    memcpy(&prog, m->extra.attr, 8);
+    if ((l->prog && prog != l->prog) || !m->extra.owner_id) return 0;
+    for (unsigned i = 0; i < l->n; i++)
+        if (l->ids[i] == m->extra.owner_id) return 0;
+    if (l->n < 64) l->ids[l->n++] = m->extra.owner_id;
+    return 0;
+}
+static void srv_list_owner_ids(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 0x10) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    int32_t start = IPC_IN(c, int32_t, 0);
+    OwnerList l = {.prog = IPC_IN(c, uint64_t, 8)};
+    if (start < 0) {
+        c->result = R_FS_INVALID_ARGUMENT;
+        return;
+    }
+    pthread_mutex_lock(&g_meta_mu);
+    meta_walk(host_save_dir(), 6, owner_collect, &l);
+    pthread_mutex_unlock(&g_meta_mu);
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    int32_t n = 0;
+    while (b && (unsigned)start + (unsigned)n < l.n && (uint64_t)(n + 1) * 8 <= b->size) {
+        IpcBuf at = *b;
+        at.addr = b->addr + (uint64_t)n * 8;
+        at.size = 8;
+        ipc_write_buf(c, &at, &l.ids[start + n], 8);
+        n++;
+    }
+    IPC_OUT(c, n);
+}
 static void srv_open_reader_filter(IpcObject *s, IpcCall *c) {
     (void)s;
     if (c->in_size < 0x50) {
@@ -2571,8 +2615,7 @@ static const IpcCmd srv_cmds[] = {
     {81, "OpenSaveDataTransferManager", srv_transfer_manager, IPC_IMPL},
     {82, "OpenSaveDataTransferManagerVersion2", srv_transfer_manager_v2, IPC_IMPL},
     {83, "OpenSaveDataTransferProhibiter", srv_transfer_prohibiter, IPC_IMPL},
-    /* 84: the 0x10-byte input is not documented, and the permitted path lists the FsAccessControl save-data owner ids, which npdm.c does not parse */
-    {84, "ListAccessibleSaveDataOwnerId", sysd_err_generic, IPC_STUB},
+    {84, "ListAccessibleSaveDataOwnerId", srv_list_owner_ids, IPC_IMPL},
     {85, "OpenSaveDataTransferManagerForSaveDataRepair", srv_transfer_manager_repair, IPC_IMPL},
     {86, "OpenSaveDataMover", srv_save_mover, IPC_IMPL},
     {87, "OpenSaveDataTransferManagerForRepair", srv_transfer_manager_for_repair, IPC_IMPL},

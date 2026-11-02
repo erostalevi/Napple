@@ -256,6 +256,104 @@ static void manager_load_id_token(IpcObject *s, IpcCall *c) {
     uint32_t v = (uint32_t)n;
     IPC_OUT(c, v);
 }
+/* ---- application authentication, guest login and authorization requests (ipc-provider-hooks r11) ---------------------------------------------
+ * All three go through the provider's ID token (account_id_token, the Napple account's token): a user the provider can issue a token for authenticates, a user
+ * it cannot is answered like the offline console (nifm's no-network result when there is no connection, else the registration-required result). Without
+ * an account_id_token hook (NullProvider, the bare host provider) the objects are not handed out and 102 ends offline, as before. The inputs of 120 / 150
+ * (transfer memory and request parameters) are not documented, so they are ignored; the OAuth authorization code of IAuthorizationRequest::GetAuthorizationCode
+ * needs a Nintendo Account server that Napple does not have, so it fails with the generic error [layouts per switchbrew, unverified]. */
+static int acc_net_up(void) {
+    const OnlineProvider *p = online_provider();
+    int (*net)(void *, OnlineNetInfo *) = ONLINE_FN(p, net_info);
+    OnlineNetInfo ni;
+    memset(&ni, 0, sizeof ni);
+    return net && net(p->ctx, &ni) == 0 && ni.connected;
+}
+/* 0 when the provider issued a token for `uid` (copied to tok, length in *n), else the result the operation ends with. */
+static uint32_t acc_token_result(const uint8_t uid[16], char *tok, size_t cap, size_t *n) {
+    const OnlineProvider *p;
+    size_t (*f)(void *, const uint8_t[16], char *, size_t) = id_token_fn(&p);
+    *n = 0;
+    if (!f || !acc_net_up()) return HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    *n = f(p->ctx, uid, tok, cap);
+    return *n ? 0 : acc_nsa_result(uid);
+}
+typedef struct {
+    uint8_t uid[16], session[16];
+    uint8_t authorized;
+} AccRequest;
+static unsigned g_acc_sessions;
+static void acc_request_init(AccRequest *r, const uint8_t uid[16]) {
+    memcpy(r->uid, uid, 16);
+    memcpy(r->session, uid, 16);
+    uint32_t n = ++g_acc_sessions;
+    r->session[12] ^= (uint8_t)n, r->session[13] ^= (uint8_t)(n >> 8), r->session[14] ^= 0x5a; /* a distinct id per request */
+}
+static void acc_request_session(IpcObject *s, IpcCall *c) {
+    AccRequest *r = s->state;
+    ipc_out(c, r->session, 16);
+}
+static void acc_request_load_token(IpcObject *s, IpcCall *c) {
+    AccRequest *r = s->state;
+    char tok[ACC_ID_TOKEN_MAX];
+    size_t n;
+    uint32_t res = acc_token_result(r->uid, tok, sizeof tok, &n);
+    if (res) {
+        c->result = res;
+        return;
+    }
+    const IpcBuf *b = ipc_out_buf(c, 0);
+    if (b) n = ipc_write_buf(c, b, tok, b->size < n ? b->size : n);
+    uint32_t v = (uint32_t)n;
+    IPC_OUT(c, v);
+}
+/* 10 InvokeWithoutInteractionAsync -> IAsyncResult: the user is authorized when a token can be issued. */
+static void acc_request_invoke(IpcObject *s, IpcCall *c) {
+    AccRequest *r = s->state;
+    char tok[ACC_ID_TOKEN_MAX];
+    size_t n;
+    uint32_t res = acc_token_result(r->uid, tok, sizeof tok, &n);
+    r->authorized = res == 0;
+    ipc_out_object(c, IPC_OBJECT("IAsyncResult", acc_async_cmds, (void *)(uintptr_t)res, NULL));
+}
+static void acc_request_is_authorized(IpcObject *s, IpcCall *c) {
+    AccRequest *r = s->state;
+    uint8_t v = r->authorized;
+    IPC_OUT(c, v);
+}
+static void acc_request_get_id_token(IpcObject *s, IpcCall *c) {
+    AccRequest *r = s->state;
+    if (!r->authorized) {
+        c->result = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+        return;
+    }
+    acc_request_load_token(s, c);
+}
+static const IpcCmd guest_login_cmds[] = {{0, "GetSessionId", acc_request_session, IPC_IMPL}, {11, "LoadIdTokenCache", acc_request_load_token, IPC_IMPL}};
+static const IpcCmd authorization_cmds[] = {
+    {0, "GetSessionId", acc_request_session, IPC_IMPL},
+    {10, "InvokeWithoutInteractionAsync", acc_request_invoke, IPC_IMPL},
+    {19, "IsAuthorized", acc_request_is_authorized, IPC_IMPL},
+    {20, "GetAuthorizationCode", sysd_err_generic, IPC_STUB}, /* an OAuth code needs a Nintendo Account server */
+    {21, "GetIdToken", acc_request_get_id_token, IPC_IMPL},
+};
+static void acc_request_destroy(IpcObject *o) { free(o->state); }
+static IpcObject *acc_request_new(const char *iface, const IpcCmd *cmds, size_t n, const uint8_t uid[16]) {
+    AccRequest *r = calloc(1, sizeof *r);
+    if (!r) return NULL;
+    acc_request_init(r, uid);
+    return ipc_object_new(iface, cmds, n, r, acc_request_destroy);
+}
+/* 150 CreateAuthorizationRequest (IManagerForApplication) -> IAuthorizationRequest */
+static void manager_authorization_request(IpcObject *s, IpcCall *c) {
+    AccManager *m = s->state;
+    const OnlineProvider *p;
+    if (!id_token_fn(&p)) {
+        sysd_err_generic(s, c);
+        return;
+    }
+    ipc_out_object(c, acc_request_new("IAuthorizationRequest", authorization_cmds, sizeof authorization_cmds / sizeof authorization_cmds[0], m ? m->uid : g_user_id));
+}
 /* 160 StoreOpenContext: keeps this manager's user as an open context the next application can load (acc:u0 130 LoadOpenContext). */
 static void manager_store_open_context(IpcObject *s, IpcCall *c) {
     (void)c;
@@ -278,8 +376,8 @@ static const IpcCmd manager_cmds[] = {{0, "CheckAvailability", manager_check, IP
     {2, "EnsureIdTokenCacheAsync", manager_ensure_id_token, IPC_IMPL},
     {3, "LoadIdTokenCacheDeprecated", manager_load_id_token, IPC_IMPL},
     {4, "LoadIdTokenCache", manager_load_id_token, IPC_IMPL},
-    /* 150: IAuthorizationRequest (an OAuth flow with the Nintendo Account server through transfer memory); the input layout is not documented */
-    {150, "CreateAuthorizationRequest", sysd_err_generic, IPC_STUB},
+    /* 150: IAuthorizationRequest; the request parameters (transfer memory) are not documented and are ignored */
+    {150, "CreateAuthorizationRequest", manager_authorization_request, IPC_IMPL},
     {160, "StoreOpenContext", manager_store_open_context, IPC_IMPL},
     {170, "LoadNetworkServiceLicenseKindAsync", manager_license_kind, IPC_IMPL}};
 static void manager_destroy(IpcObject *o) { free(o->state); }
@@ -404,12 +502,16 @@ static void acc_baas_manager(IpcObject *s, IpcCall *c) {
     (void)s;
     ipc_out_object(c, manager_new(c->in_size >= 16 ? ipc_in(c, 0, 16) : g_user_id));
 }
-/* 102 AuthenticateApplicationAsync -> IAsyncContext: authenticates the application (not a user) with the account server. Offline that ends with nifm's
- * no-network result. With a connection (NAPPLE_NET=host) a console would succeed, but the exchange needs an application-authentication provider hook that
- * OnlineProvider lacks, so the answer stays the offline one: the row stays IPC_STUB until such a hook exists. */
+/* 102 AuthenticateApplicationAsync -> IAsyncContext: authenticates the application (not a user) with the account server. A provider that issues the local user's
+ * ID token (the Napple account) authenticates the application the same way: the context ends with success when the token can be issued. Otherwise the answer is
+ * the offline one (nifm's no-network result). */
 static void acc_authenticate_app(IpcObject *s, IpcCall *c) {
     (void)s;
-    out_async(c, HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, 0);
+    const OnlineProvider *p;
+    char tok[ACC_ID_TOKEN_MAX];
+    size_t n;
+    uint32_t res = id_token_fn(&p) ? acc_token_result(g_user_id, tok, sizeof tok, &n) : HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    out_async(c, res, 0);
 }
 /* 103 CheckNetworkServiceAvailabilityAsync [4.0.0+] -> IAsyncContext: whether the user can use network services. The input is not documented: a leading
  * uid is read when present [unverified], else the local user. */
@@ -446,6 +548,15 @@ static void acc_list_open_context_users(IpcObject *s, IpcCall *c) {
     pthread_mutex_unlock(&g_open_ctx_mu);
     ipc_write_buf(c, b, list, b->size < sizeof list ? b->size : sizeof list);
 }
+/* 120 CreateGuestLoginRequest -> IGuestLoginRequest for the local user: handed out when the provider can issue ID tokens, else the generic error as before. */
+static void acc_create_guest_login(IpcObject *s, IpcCall *c) {
+    const OnlineProvider *p;
+    if (!id_token_fn(&p)) {
+        sysd_err_generic(s, c);
+        return;
+    }
+    ipc_out_object(c, acc_request_new("IGuestLoginRequest", guest_login_cmds, sizeof guest_login_cmds / sizeof guest_login_cmds[0], g_user_id));
+}
 static void acc_destroy(IpcObject *o) { free(o->state); }
 static const IpcCmd acc_cmds[] = {
     {0, "GetUserCount", acc_user_count, IPC_IMPL},
@@ -464,12 +575,12 @@ static const IpcCmd acc_cmds[] = {
     {160, "InitializeApplicationInfoV2", acc_initialize, IPC_IMPL},
     {6, "GetProfileDigest", acc_profile_digest, IPC_IMPL},
     {52, "TrySelectUserWithoutInteraction", acc_last_opened, IPC_IMPL}, /* 19.0.0+ name of 51: the one local user (or the last opened one) is selected without a dialog */
-    {102, "AuthenticateApplicationAsync", acc_authenticate_app, IPC_STUB}, /* offline answer only: no application-authentication provider hook */
+    {102, "AuthenticateApplicationAsync", acc_authenticate_app, IPC_IMPL},
     {103, "CheckNetworkServiceAvailabilityAsync", acc_check_nsa_availability, IPC_IMPL},
     {110, "StoreSaveDataThumbnail", acc_store_thumbnail, IPC_IMPL},
     {111, "ClearSaveDataThumbnail", acc_clear_thumbnail, IPC_IMPL},
-    /* 120: IGuestLoginRequest is filled by the Nintendo Account web login (a system applet + server); the transfer-memory input is not documented */
-    {120, "CreateGuestLoginRequest", sysd_err_generic, IPC_STUB},
+    /* 120: IGuestLoginRequest; the transfer-memory input is not documented and is ignored */
+    {120, "CreateGuestLoginRequest", acc_create_guest_login, IPC_IMPL},
     {130, "LoadOpenContext", acc_load_open_context, IPC_IMPL},
     {131, "ListOpenContextStoredUsers", acc_list_open_context_users, IPC_IMPL},
 };

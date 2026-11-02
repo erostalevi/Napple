@@ -82,3 +82,44 @@ void bcat_pack_entry(const BcatFile *f, uint8_t out[BCAT_ENTRY_SIZE]);
  * GetDeliveryCacheStorageUpdateNotifier compares it after each sync to tell whether the storage was updated. 0 without a provider. */
 uint64_t bcat_storage_fingerprint(const BcatProvider *p);
 void bcat_md5(const void *data, size_t n, uint8_t out[16]);
+
+/* ---- local delivery-task state (no network) ----
+ * Delivery timers, subscription flags, the background-service stop flag, the push-notification log and cache-usage counters are plain host state: what the
+ * guest set is what it reads back. A generation counter bumps on every change (a notifier can wait on it). Layouts of the in/out records here are the
+ * author's reading of the switchbrew "BCAT services" table (ids and names are in tests/ipc_reference/IBcatService.txt); sizes of the record fields are
+ * [unverified] and chosen so a guest that passes the documented sizes works. */
+#define BCAT_MAX_TIMERS 16
+#define BCAT_MAX_PUSH_LOG 16
+#define BCAT_PUSH_LOG_ENTRY_SIZE 0x18u /* u64 application id, u64 tick, u32 kind, u32 reserved [unverified] */
+#define BCAT_USAGE_SIZE 0x10u          /* s64 bytes cached, s32 directories, s32 files [unverified] */
+typedef struct {
+    uint64_t key; /* application id (system application id when system != 0) */
+    uint32_t seconds;
+    uint8_t system, subscribed;
+} BcatTimer;
+typedef struct {
+    uint64_t app_id, tick;
+    uint32_t kind;
+} BcatPushLogEntry;
+/* Sets (upserts) the delivery timer of `key`; seconds 0 removes it. Returns 0, or -1 when the table is full. The timer is subscribed. Bumps the generation. */
+int bcat_timer_set(uint64_t key, int system, uint32_t seconds);
+/* Reads a timer: 1 and *seconds when set, 0 otherwise. */
+int bcat_timer_get(uint64_t key, int system, uint32_t *seconds, int *subscribed);
+int bcat_timer_count(void);
+/* Clears the subscription flag of every timer of `key` (both kinds); returns how many changed. */
+int bcat_subscription_clear(uint64_t key);
+/* Registers the system application delivery tasks: one subscribed system timer per id in `ids`, kept if already set. Returns the count registered. */
+int bcat_register_system_tasks(const uint64_t *ids, int n);
+/* StopBackgroundService: drops every timer and latches the stopped flag (a later timer set clears it). */
+void bcat_background_stop(void);
+int bcat_background_stopped(void);
+/* Push-notification log: append (oldest dropped past BCAT_MAX_PUSH_LOG), count, read oldest first, packed with bcat_pack_push_log. */
+void bcat_push_log_add(uint64_t app_id, uint64_t tick, uint32_t kind);
+int bcat_push_log_count(void);
+int bcat_push_log_get(int i, BcatPushLogEntry *out);
+void bcat_pack_push_log(const BcatPushLogEntry *e, uint8_t out[BCAT_PUSH_LOG_ENTRY_SIZE]);
+/* Delivery cache usage from the provider (0/0/0 without one). */
+void bcat_storage_usage(int64_t *bytes, int32_t *dirs, int32_t *files);
+void bcat_pack_usage(int64_t bytes, int32_t dirs, int32_t files, uint8_t out[BCAT_USAGE_SIZE]);
+uint32_t bcat_state_generation(void);
+void bcat_state_reset(void); /* tests, and a new process image */

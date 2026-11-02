@@ -102,3 +102,27 @@ uint32_t ldn_check_action_frame_settings(const uint8_t *in, size_t n);
  * 10 bits and a band index above (2 -> 2400, 5 -> 5000 MHz; 6 -> 6000 is not valid on NX). The two are told apart by the first u16: 24 and 50 are not a valid
  * 20.0.0+ value (band index 0). Returns 0 with the band in MHz and the channel, or -1 when the band is not valid on NX or the channel is 0. */
 int ldn_decode_channel(const uint8_t *in, size_t n, uint16_t *band_mhz, uint16_t *channel);
+
+/* ---- received action frames (503 RecvActionFrame) ----
+ * A bounded FIFO per local-communication object, fed by the provider side (ldn_push_action_frame in ldn.c). A frame is 1..LDN_ACTION_FRAME_MAX bytes (the limit
+ * 502 SendActionFrame uses); a push into a full queue drops the new frame and counts it. */
+#define LDN_ACTION_FRAME_MAX 0x400u
+#define LDN_AF_QUEUE_MAX 16u
+typedef struct {
+    uint8_t src[6], bssid[6];
+    uint16_t band, channel; /* MHz, channel number (ldn_decode_channel's result) */
+    uint32_t size;
+    uint8_t data[LDN_ACTION_FRAME_MAX];
+} LdnActionFrame;
+typedef struct {
+    LdnActionFrame f[LDN_AF_QUEUE_MAX];
+    unsigned head, count;
+    uint64_t dropped;
+} LdnActionQueue;
+/* 0 queued; -1 the frame is empty or larger than LDN_ACTION_FRAME_MAX; -2 the queue is full (frame dropped). */
+int ldn_afq_push(LdnActionQueue *q, const uint8_t src[6], const uint8_t bssid[6], uint16_t band, uint16_t channel, const void *data, size_t n);
+int ldn_afq_pop(LdnActionQueue *q, LdnActionFrame *out); /* 0 with the oldest frame, -1 when empty */
+void ldn_afq_clear(LdnActionQueue *q);
+/* RecvActionFrame's reply struct (0x14 bytes, host layout: the page gives no offsets): src mac at 0, bssid at 6, u16 band at 0xC, u16 channel at 0xE, u32 frame size at 0x10. */
+#define LDN_ACTION_RECV_OUT_SIZE 0x14u
+void ldn_action_recv_encode(const LdnActionFrame *f, uint32_t size, uint8_t out[LDN_ACTION_RECV_OUT_SIZE]);

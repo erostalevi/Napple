@@ -314,3 +314,116 @@ uint64_t bcat_storage_fingerprint(const BcatProvider *p) {
     }
     return h ? h : 1; /* 0 stays "no provider" */
 }
+
+/* ---- local delivery-task state ---- */
+static BcatTimer g_timers[BCAT_MAX_TIMERS];
+static int g_ntimers, g_stopped, g_nlog;
+static BcatPushLogEntry g_log[BCAT_MAX_PUSH_LOG];
+static uint32_t g_gen;
+static BcatTimer *timer_find(uint64_t key, int system) {
+    for (int i = 0; i < g_ntimers; i++)
+        if (g_timers[i].key == key && g_timers[i].system == (system != 0)) return &g_timers[i];
+    return NULL;
+}
+int bcat_timer_set(uint64_t key, int system, uint32_t seconds) {
+    BcatTimer *t = timer_find(key, system);
+    if (!seconds) {
+        if (t) { *t = g_timers[--g_ntimers]; g_gen++; }
+        return 0;
+    }
+    if (!t) {
+        if (g_ntimers == BCAT_MAX_TIMERS) return -1;
+        t = &g_timers[g_ntimers++];
+        t->key = key;
+        t->system = system != 0;
+    }
+    t->seconds = seconds;
+    t->subscribed = 1;
+    g_stopped = 0;
+    g_gen++;
+    return 0;
+}
+int bcat_timer_get(uint64_t key, int system, uint32_t *seconds, int *subscribed) {
+    const BcatTimer *t = timer_find(key, system);
+    if (!t) return 0;
+    if (seconds) *seconds = t->seconds;
+    if (subscribed) *subscribed = t->subscribed;
+    return 1;
+}
+int bcat_timer_count(void) { return g_ntimers; }
+int bcat_subscription_clear(uint64_t key) {
+    int n = 0;
+    for (int i = 0; i < g_ntimers; i++)
+        if (g_timers[i].key == key && g_timers[i].subscribed) { g_timers[i].subscribed = 0; n++; }
+    if (n) g_gen++;
+    return n;
+}
+int bcat_register_system_tasks(const uint64_t *ids, int n) {
+    int done = 0;
+    for (int i = 0; i < n; i++) {
+        BcatTimer *t = timer_find(ids[i], 1);
+        if (!t) {
+            if (g_ntimers == BCAT_MAX_TIMERS) break;
+            t = &g_timers[g_ntimers++];
+            t->key = ids[i];
+            t->system = 1;
+            t->seconds = 3600; /* default interval of a task registered without an explicit timer [unverified] */
+        }
+        t->subscribed = 1;
+        done++;
+    }
+    if (done) { g_stopped = 0; g_gen++; }
+    return done;
+}
+void bcat_background_stop(void) {
+    g_ntimers = 0;
+    g_stopped = 1;
+    g_gen++;
+}
+int bcat_background_stopped(void) { return g_stopped; }
+void bcat_push_log_add(uint64_t app_id, uint64_t tick, uint32_t kind) {
+    if (g_nlog == BCAT_MAX_PUSH_LOG) {
+        memmove(g_log, g_log + 1, (BCAT_MAX_PUSH_LOG - 1) * sizeof g_log[0]);
+        g_nlog--;
+    }
+    g_log[g_nlog++] = (BcatPushLogEntry){app_id, tick, kind};
+    g_gen++;
+}
+int bcat_push_log_count(void) { return g_nlog; }
+int bcat_push_log_get(int i, BcatPushLogEntry *out) {
+    if (i < 0 || i >= g_nlog) return 0;
+    *out = g_log[i];
+    return 1;
+}
+void bcat_pack_push_log(const BcatPushLogEntry *e, uint8_t out[BCAT_PUSH_LOG_ENTRY_SIZE]) {
+    memset(out, 0, BCAT_PUSH_LOG_ENTRY_SIZE);
+    memcpy(out, &e->app_id, 8);
+    memcpy(out + 8, &e->tick, 8);
+    memcpy(out + 16, &e->kind, 4);
+}
+void bcat_storage_usage(int64_t *bytes, int32_t *dirs, int32_t *files) {
+    *bytes = 0;
+    *dirs = *files = 0;
+    const BcatProvider *p = bcat_provider();
+    if (!p || !p->list_dirs || !p->list_files) return;
+    static char names[BCAT_MAX_DIRS][BCAT_NAME_SIZE];
+    static BcatFile fl[BCAT_MAX_FILES]; /* serialized by the single service thread */
+    int nd = p->list_dirs(p->ctx, names, BCAT_MAX_DIRS);
+    if (nd < 0) nd = 0;
+    for (int i = 0; i < nd; i++) {
+        int nf = p->list_files(p->ctx, names[i], fl, BCAT_MAX_FILES);
+        if (nf < 0) continue;
+        (*dirs)++;
+        for (int j = 0; j < nf; j++) { (*files)++; *bytes += (int64_t)fl[j].size; }
+    }
+}
+void bcat_pack_usage(int64_t bytes, int32_t dirs, int32_t files, uint8_t out[BCAT_USAGE_SIZE]) {
+    memcpy(out, &bytes, 8);
+    memcpy(out + 8, &dirs, 4);
+    memcpy(out + 12, &files, 4);
+}
+uint32_t bcat_state_generation(void) { return g_gen; }
+void bcat_state_reset(void) {
+    g_ntimers = g_stopped = g_nlog = 0;
+    g_gen = 0;
+}

@@ -321,6 +321,8 @@ static void t_saves(void) {
     int64_t size = 0x400000, journal = 0x100000;
     memcpy(ci + 0x40, &size, 8);
     memcpy(ci + 0x48, &journal, 8);
+    uint64_t own_a = 0x0100000000ABCD01ull, own_b = 0x0100000000ABCD02ull;
+    memcpy(ci + 0x40 + 0x18, &own_a, 8);
     ci[0x40 + 0x24] = 1; /* user space */
     IpcCall c = call(g_srv, 22, ci, sizeof ci);
     CHECK(c.result == 0, "create an account save (result %#x)", c.result);
@@ -328,6 +330,7 @@ static void t_saves(void) {
     memcpy(attr, &prog, 8);
     attr[0x20] = SAVE_DEVICE;
     memcpy(ci + 0x40, &size, 8);
+    memcpy(ci + 0x40 + 0x18, &own_b, 8);
     ci[0x40 + 0x24] = 1;
     c = call(g_srv, 22, ci, sizeof ci);
     CHECK(c.result == 0, "create a device save");
@@ -364,6 +367,31 @@ static void t_saves(void) {
     svc_call_c(g_srv, 67, &f);
     CHECK(SVC_OUT(&f, int64_t, 0) == 0, "a user filter that does not match: count 0");
     CHECK(call(g_srv, 67, fin, 8).result == R_FS_INVALID_ARGUMENT, "67 with a short request is invalid");
+
+    /* 84 ListAccessibleSaveDataOwnerId {s32 start, s32 reserved, u64 program id} -> s32 count + u64[] */
+    {
+        uint8_t in84[16] = {0};
+        uint64_t ids[4] = {0};
+        memcpy(in84 + 8, &prog, 8);
+        IpcCall l = {0};
+        l.in = in84; l.in_size = sizeof in84;
+        svc_set_out_buf(&l, ids, sizeof ids);
+        svc_call_c(g_srv, 84, &l);
+        CHECK(l.result == 0 && SVC_OUT(&l, int32_t, 0) == 2 && ids[0] != ids[1] && (ids[0] == own_a || ids[1] == own_a) && (ids[0] == own_b || ids[1] == own_b), "84 lists the owner ids of the program's saves");
+        memset(ids, 0, sizeof ids); in84[0] = 1;
+        l = (IpcCall){0}; l.in = in84; l.in_size = sizeof in84; svc_set_out_buf(&l, ids, sizeof ids);
+        svc_call_c(g_srv, 84, &l);
+        CHECK(SVC_OUT(&l, int32_t, 0) == 1 && ids[0] != 0 && ids[1] == 0, "84 honours the start index");
+        in84[0] = 0; uint64_t other = APP + 1; memcpy(in84 + 8, &other, 8);
+        l = (IpcCall){0}; l.in = in84; l.in_size = sizeof in84; svc_set_out_buf(&l, ids, sizeof ids);
+        svc_call_c(g_srv, 84, &l);
+        CHECK(l.result == 0 && SVC_OUT(&l, int32_t, 0) == 0, "84 for a program without saves: count 0");
+        memcpy(in84 + 8, &prog, 8);
+        l = (IpcCall){0}; l.in = in84; l.in_size = sizeof in84; svc_set_out_buf(&l, ids, 8);
+        svc_call_c(g_srv, 84, &l);
+        CHECK(SVC_OUT(&l, int32_t, 0) == 1, "84 is cut to the buffer");
+        CHECK(call(g_srv, 84, in84, 8).result == R_FS_INVALID_ARGUMENT, "84 with a short request is invalid");
+    }
 
     uint8_t fin2[0x50] = {0};
     fin2[0] = 1;

@@ -21,7 +21,7 @@ int ncm_meta_parse(const uint8_t *b, size_t n, NcmMetaView *v) {
 int ncm_meta_find_type(const NcmMetaView *v, uint8_t type, uint8_t id_out[16]) {
     for (unsigned i = 0; i < v->content_count; i++) {
         const uint8_t *e = v->contents + (size_t)i * NCM_CONTENT_INFO_SIZE;
-        if (e[23] == type) {
+        if (e[0x16] == type) {
             memcpy(id_out, e, 16);
             return 0;
         }

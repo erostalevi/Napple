@@ -56,7 +56,8 @@ __attribute__((unused)) static void make_remote(IpcObject *s, IpcCall *c) {
  * without a network service account (NAPPLE_NET=host has no ONLINE_CAP_ACCOUNT) gets NetworkServiceAccountRegistrationRequired [unverified that olsc passes
  * acc's result on]; a linked user would reach the server through a cloud-save provider hook that OnlineProvider lacks, so it is unreachable (the
  * no-network result). The outcome is known at once: the async object is available as soon as it is made. */
-static uint32_t cloud_result(const IpcCall *c) {
+/* 0 when the user of this call is connected and linked to a network account, else the result the operation ends with; uid = the call's leading user id. */
+static uint32_t cloud_gate(const IpcCall *c, uint8_t uid[16]) {
     const OnlineProvider *p = online_provider();
     int (*net)(void *, OnlineNetInfo *) = ONLINE_FN(p, net_info);
     OnlineNetInfo ni;
@@ -65,10 +66,15 @@ static uint32_t cloud_result(const IpcCall *c) {
     int (*info)(void *, const uint8_t[16], OnlineAccountInfo *) = online_has(p, ONLINE_CAP_ACCOUNT) ? ONLINE_FN(p, account_info) : NULL;
     OnlineAccountInfo ai;
     memset(&ai, 0, sizeof ai);
-    uint8_t uid[16] = {0};
+    memset(uid, 0, 16);
     if (c->in_size >= 16) memcpy(uid, ipc_in(c, 0, 16), 16);
     if (!info || info(p->ctx, uid, &ai) != 0 || !ai.linked) return HZ_R_ACC_NSA_REGISTRATION_REQUIRED;
-    return HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    return 0;
+}
+static uint32_t cloud_result(const IpcCall *c) {
+    uint8_t uid[16];
+    uint32_t r = cloud_gate(c, uid);
+    return r ? r : HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
 }
 static void async_get_result(IpcObject *s, IpcCall *c) { c->result = (uint32_t)(uintptr_t)s->state; }
 static void async_cancel(IpcObject *s, IpcCall *c) { /* nothing is in flight; the outcome stays */
@@ -93,6 +99,41 @@ static const IpcCmd async_transfer_cmds[] = {
     {2, "IsAvailable", svc_ret_u8_1, IPC_IMPL},       {3, "GetSystemEvent", svc_ret_event_signaled, IPC_IMPL},
     {100, "GetOperationProgressInfo", async_data_failed, IPC_IMPL},
 };
+/* 18 GetSaveDataBackupInfoCache(uid) -> SaveDataBackupInfo, 27 UploadSaveDataBackupAsync(uid) -> IAsyncTransferRequest (11.0.0+). Neither layout is published
+ * [unverified]; the info is a local 0x20-byte record {u64 size, u64 last backup (unix s), u64 title id, u8 exists, u8 upload pending, pad}. They are answered by the
+ * provider's cloud_backup_info / cloud_backup_upload (the Napple cloud-saves client) for a connected, linked user; a provider without the hook has no cloud
+ * state, so the rows end like the other transfers (no network / registration required, or no-network for a user that could reach it). */
+static void cloud_backup_info(IpcObject *s, IpcCall *c) {
+    uint8_t uid[16];
+    uint32_t r = cloud_gate(c, uid);
+    const OnlineProvider *p = online_provider();
+    int (*info)(void *, const uint8_t[16], OnlineCloudBackup *) = ONLINE_FN(p, cloud_backup_info);
+    if (!r && !info) r = HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    OnlineCloudBackup b;
+    memset(&b, 0, sizeof b);
+    if (!r && info(p->ctx, uid, &b) != 0) memset(&b, 0, sizeof b); /* nothing known: an empty cache */
+    if (r) {
+        (void)s;
+        c->result = r;
+        return;
+    }
+    uint8_t v[0x20] = {0};
+    memcpy(v, &b.size, 8), memcpy(v + 8, &b.last_s, 8), memcpy(v + 16, &b.title_id, 8);
+    v[24] = b.exists, v[25] = b.pending;
+    ipc_out(c, v, sizeof v);
+}
+static void cloud_backup_upload(IpcObject *s, IpcCall *c) {
+    (void)s;
+    uint8_t uid[16];
+    uint32_t r = cloud_gate(c, uid);
+    const OnlineProvider *p = online_provider();
+    uint32_t (*up)(void *, const uint8_t[16], int *) = ONLINE_FN(p, cloud_backup_upload);
+    if (!r) {
+        int done = 0;
+        r = up ? up(p->ctx, uid, &done) : HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
+    }
+    ipc_out_object(c, IPC_OBJECT("IAsyncTransferRequest", async_transfer_cmds, (void *)(uintptr_t)r, NULL));
+}
 /* The object's state is its result (a 32-bit value, never a pointer). */
 static void cloud_async(IpcObject *s, IpcCall *c) {
     (void)s;
@@ -108,14 +149,12 @@ static const IpcCmd olsc_cmds[] = {
     {14, "SetSaveDataBackupSettingEnabled", zero_ok, IPC_IMPL},
     {15, "SetCustomData", zero_ok, IPC_IMPL},
     {16, "DeleteSaveDataBackupSetting", zero_ok, IPC_IMPL},
-    /* 18: neither the input nor the SaveDataBackupInfo output is documented, nor the result of an empty cache */
-    {18, "GetSaveDataBackupInfoCache", sysd_err_generic, IPC_STUB},
+    {18, "GetSaveDataBackupInfoCache", cloud_backup_info, IPC_IMPL},
     {19, "UpdateSaveDataBackupInfoCacheAsync", cloud_async, IPC_IMPL},
     {22, "DeleteSaveDataBackupAsync", cloud_async, IPC_IMPL},
     {25, "ListDownloadableSaveDataBackupInfoAsync", cloud_async, IPC_IMPL},
     {26, "DownloadSaveDataBackupAsync", cloud_async, IPC_IMPL},
-    /* 27 [11.0.0+]: input and returned interface not documented */
-    {27, "UploadSaveDataBackupAsync", sysd_err_generic, IPC_STUB},
+    {27, "UploadSaveDataBackupAsync", cloud_backup_upload, IPC_IMPL},
 };
 static IpcObject *olsc_open(void) { return IPC_OBJECT("olsc:u", olsc_cmds, NULL, NULL); }
 void service_register_olsc(void) { ipc_register_service("olsc:u", olsc_open); }

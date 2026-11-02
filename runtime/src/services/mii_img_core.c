@@ -5,6 +5,7 @@
 
 void miiimg_init(MiiImgDb *d) {
     for (unsigned i = 0; i < d->count; i++) free(d->e[i].data);
+    for (unsigned i = 0; i < d->mcount; i++) free(d->m[i].data);
     memset(d, 0, sizeof *d);
     d->initialized = 1;
 }
@@ -59,10 +60,12 @@ uint8_t *miiimg_generate(const uint8_t uid[16], size_t *out_size) {
     return jpg;
 }
 
-int miiimg_add(MiiImgDb *d, const uint8_t uid[16], const void *image, size_t n) {
+static int put(MiiImgEntry *tab, unsigned *count, const uint8_t uid[16], const void *image, size_t n) {
     if (n > MIIIMG_MAX_IMAGE) return -1;
-    int idx = miiimg_find(d, uid);
-    if (idx < 0 && d->count >= MIIIMG_CAPACITY) return -1;
+    int idx = -1;
+    for (unsigned i = 0; i < *count; i++)
+        if (!memcmp(tab[i].uid, uid, 16)) idx = (int)i;
+    if (idx < 0 && *count >= MIIIMG_CAPACITY) return -1;
     uint8_t *data;
     size_t size = n;
     uint32_t flags = 0;
@@ -77,9 +80,9 @@ int miiimg_add(MiiImgDb *d, const uint8_t uid[16], const void *image, size_t n) 
     }
     JpegInfo info;
     int ok = napjpeg_info(data, size, &info) == JPEGCORE_OK;
-    if (idx < 0) idx = (int)d->count++;
-    else free(d->e[idx].data);
-    MiiImgEntry *e = &d->e[idx];
+    if (idx < 0) idx = (int)(*count)++;
+    else free(tab[idx].data);
+    MiiImgEntry *e = &tab[idx];
     memcpy(e->uid, uid, 16);
     e->width = ok ? (uint32_t)info.width : 0;
     e->height = ok ? (uint32_t)info.height : 0;
@@ -87,6 +90,29 @@ int miiimg_add(MiiImgDb *d, const uint8_t uid[16], const void *image, size_t n) 
     e->flags = flags;
     e->data = data;
     return idx;
+}
+int miiimg_add(MiiImgDb *d, const uint8_t uid[16], const void *image, size_t n) { return put(d->e, &d->count, uid, image, n); }
+unsigned miiimg_migration_count(const MiiImgDb *d) { return d->mcount; }
+int miiimg_migration_add(MiiImgDb *d, const uint8_t uid[16], const void *image, size_t n) { return put(d->m, &d->mcount, uid, image, n); }
+void miiimg_migration_clear(MiiImgDb *d) {
+    for (unsigned i = 0; i < d->mcount; i++) free(d->m[i].data);
+    memset(d->m, 0, sizeof d->m);
+    d->mcount = 0;
+}
+int miiimg_migration_save(MiiImgDb *d) {
+    /* a new id needs a free slot: refuse the whole save up front so a full database never takes half the staged images */
+    unsigned fresh = 0;
+    for (unsigned i = 0; i < d->mcount; i++) fresh += miiimg_find(d, d->m[i].uid) < 0;
+    if (fresh > miiimg_free_slots(d)) return -1;
+    for (unsigned i = 0; i < d->mcount; i++) {
+        int idx = miiimg_find(d, d->m[i].uid);
+        if (idx < 0) idx = (int)d->count++;
+        else free(d->e[idx].data);
+        d->e[idx] = d->m[i]; /* ownership of the image moves over */
+    }
+    memset(d->m, 0, sizeof d->m);
+    d->mcount = 0;
+    return 0;
 }
 int miiimg_delete_index(MiiImgDb *d, unsigned index) {
     if (index >= d->count) return -1;

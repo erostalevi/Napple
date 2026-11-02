@@ -170,6 +170,46 @@ int main(void) {
       bcat_set_provider(&prov);
       CHECK(BCAT_STATUS_DONE == 9, "the Done status is 9"); }
 
+    /* ---- r11: state-backed task rows ---- */
+    {   BcatProvider saved_prov = bcat_provider() ? *bcat_provider() : (BcatProvider){0}; int had_prov = bcat_provider() != NULL; bcat_set_provider(NULL);
+        bcat_state_reset(); uint32_t secs = 0; int sub = 0; uint8_t tin[16];
+        for (unsigned id = 0; id < 7; id++) { static const unsigned ids[7] = {20410, 20500, 30210, 30300, 90202, 90300, 90301};
+            CHECK(svc_find(bsv, ids[id]) && svc_find(bsv, ids[id])->status == IPC_IMPL, "r11 row %u is IPC_IMPL", ids[id]); }
+        uint64_t app = 0x0100000000001234ull; uint32_t iv = 600; memset(tin, 0, sizeof tin); memcpy(tin, &app, 8); memcpy(tin + 8, &iv, 4);
+        svc_call(bsv, 30210, tin, sizeof tin, &c); CHECK(c.result == 0 && bcat_timer_get(app, 0, &secs, &sub) && secs == 600 && sub, "SetDeliveryTaskTimer stores the interval and subscribes");
+        CHECK(!bcat_timer_get(app, 1, NULL, NULL), "...as an application (not system) timer");
+        iv = 900; memcpy(tin + 8, &iv, 4); svc_call(bsv, 30210, tin, sizeof tin, &c); bcat_timer_get(app, 0, &secs, &sub); CHECK(secs == 900 && bcat_timer_count() == 1, "setting again updates in place");
+        svc_call(bsv, 20410, tin, sizeof tin, &c); CHECK(bcat_timer_get(app, 1, &secs, NULL) && secs == 900 && bcat_timer_count() == 2, "SetSystemApplicationDeliveryTaskTimer is a separate system timer");
+        uint32_t g0 = bcat_state_generation(); svc_call(bsv, 90202, tin, 8, &c); bcat_timer_get(app, 0, NULL, &sub);
+        CHECK(c.result == 0 && !sub && bcat_state_generation() != g0, "ClearDeliveryTaskSubscriptionStatus clears the flag and bumps the generation");
+        CHECK(bcat_timer_get(app, 0, &secs, NULL) && secs == 900, "...the timer itself stays");
+        iv = 0; memcpy(tin + 8, &iv, 4); svc_call(bsv, 30210, tin, sizeof tin, &c); CHECK(!bcat_timer_get(app, 0, NULL, NULL), "interval 0 removes the timer");
+        svc_call(bsv, 30300, NULL, 0, &c); CHECK(c.result == 0 && bcat_timer_get(0, 1, &secs, &sub) && sub, "RegisterSystemApplicationDeliveryTasks registers the default system task");
+        { uint64_t ids[2] = {0x0100000000001000ull, 0x0100000000001001ull}; IpcCall rc; memset(&rc, 0, sizeof rc); svc_set_in_buf(&rc, ids, sizeof ids); svc_call_c(bsv, 30300, &rc);
+          CHECK(rc.result == 0 && bcat_timer_get(ids[1], 1, NULL, NULL), "...or the listed ids"); }
+        svc_call(bsv, 20500, NULL, 0, &c); CHECK(c.result == 0 && bcat_timer_count() == 0 && bcat_background_stopped(), "StopBackgroundService drops the timers and latches");
+        iv = 60; memcpy(tin + 8, &iv, 4); svc_call(bsv, 30210, tin, sizeof tin, &c); CHECK(!bcat_background_stopped(), "a new timer restarts the service");
+        for (int i = 0; i < 40; i++) { memcpy(tin, &(uint64_t){(uint64_t)i + 100}, 8); svc_call(bsv, 30210, tin, sizeof tin, &c); }
+        CHECK(c.result != 0 && bcat_timer_count() == BCAT_MAX_TIMERS, "a full timer table is an error");
+        /* push log: empty by default, then what was added, oldest first */
+        uint8_t lb[3 * BCAT_PUSH_LOG_ENTRY_SIZE]; memset(&c, 0, sizeof c); svc_set_out_buf(&c, lb, sizeof lb); svc_call_c(bsv, 90300, &c); CHECK(c.result == 0 && SVC_OUT(&c, int32_t, 0) == 0, "GetPushNotificationLog: empty by default");
+        bcat_push_log_add(7, 111, 1); bcat_push_log_add(8, 222, 2);
+        memset(&c, 0, sizeof c); svc_set_out_buf(&c, lb, sizeof lb); svc_call_c(bsv, 90300, &c); { uint64_t a, t; uint32_t k; memcpy(&a, lb + BCAT_PUSH_LOG_ENTRY_SIZE, 8); memcpy(&t, lb + BCAT_PUSH_LOG_ENTRY_SIZE + 8, 8); memcpy(&k, lb + BCAT_PUSH_LOG_ENTRY_SIZE + 16, 4);
+          CHECK(SVC_OUT(&c, int32_t, 0) == 2 && a == 8 && t == 222 && k == 2, "log entries: app id, tick, kind, oldest first"); }
+        memset(&c, 0, sizeof c); svc_set_out_buf(&c, lb, BCAT_PUSH_LOG_ENTRY_SIZE); svc_call_c(bsv, 90300, &c); CHECK(SVC_OUT(&c, int32_t, 0) == 1, "a small buffer receives what fits");
+        for (int i = 0; i < 20; i++) bcat_push_log_add(1, (uint64_t)i, 0);
+        CHECK(bcat_push_log_count() == BCAT_MAX_PUSH_LOG, "the log is a bounded ring");
+        /* usage: zero without a provider, the provider's totals with one */
+        svc_call(bsv, 90301, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int64_t, 0) == 0 && SVC_OUT(&c, int32_t, 8) == 0, "GetDeliveryCacheStorageUsage: zero without a cache");
+        { char root[] = "/tmp/napple-bcat-usage-XXXXXX"; if (mkdtemp(root)) { char p[256]; FILE *f;
+            snprintf(p, sizeof p, "%s/news", root); mkdir(p, 0700); snprintf(p, sizeof p, "%s/news/a.bin", root); f = fopen(p, "wb"); fwrite("12345", 1, 5, f); fclose(f);
+            snprintf(p, sizeof p, "%s/news/b.bin", root); f = fopen(p, "wb"); fwrite("123", 1, 3, f); fclose(f);
+            snprintf(p, sizeof p, "%s/ev", root); mkdir(p, 0700);
+            BcatProvider up = bcat_dir_provider(root); bcat_set_provider(&up);
+            svc_call(bsv, 90301, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, int64_t, 0) == 8 && SVC_OUT(&c, int32_t, 8) == 2 && SVC_OUT(&c, int32_t, 12) == 2, "usage: 8 bytes, 2 directories, 2 files from the cache");
+            bcat_set_provider(NULL); } }
+        bcat_state_reset(); if (had_prov) bcat_set_provider(&saved_prov); }
+
     /* removing the provider restores the offline answers */
     bcat_set_provider(NULL);
     name(n, "news"); svc_call(dir2, 0, n, sizeof n, &c); CHECK(c.result == HZ_R_BCAT_NOT_FOUND, "no provider: not found again");

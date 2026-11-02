@@ -1,6 +1,12 @@
 /* Unit tests: acc:u0 (local user, profile, application info) and the network-account rows routed through the OnlineProvider. */
 #define NAPPLE_ACCOUNT_TEST 1
 #include "../src/services/account.c"
+/* olsc.c and account.c both define static async_get_result / async_cancel: rename olsc.c's for this single translation unit */
+#define async_get_result olsc_async_get_result
+#define async_cancel olsc_async_cancel
+#include "../src/services/olsc.c" /* the cloud-save rows are exercised below with no linked profile */
+#undef async_get_result
+#undef async_cancel
 #include "svc_test.h"
 #include "online_loopback.h"
 #include <sys/stat.h>
@@ -53,6 +59,45 @@ int main(void) {
     /* a provider table built before the account rows existed: struct_size cuts them off */
     { OnlineProvider old = lb_provider; old.struct_size = offsetof(OnlineProvider, ldn_scan); online_provider_install(&old);
       svc_call(m, 1, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0x4e61707070304e53ULL, "old provider table (no account_info): local id"); }
+
+    /* ---- user not linked to an online profile: every network-account row must answer something defined and bounded, never garbage ---- */
+    { /* result 0x1907C is HZ_RESULT(124, 200). Documented finding: no row produces it today; the unlinked rows answer success-with-local-values or the sf unknown-command result. */
+      CHECK(HZ_RESULT(124, 200) == 0x1907Cu, "0x1907C decodes to module 124 description 200");
+      CHECK(HZ_MODULE(0x1907C) == 124 && HZ_DESC(0x1907C) == 200, "HZ_MODULE/HZ_DESC split 0x1907C");
+      /* a provider that answers account_info successfully but reports linked = 0 behaves like the NullProvider */
+      OnlineProvider unl = lb_provider; memset(&lb, 0, sizeof lb); online_provider_install(&unl);
+      lb.account_linked = 0;
+      for (int variant = 0; variant < 2; variant++) {
+          if (variant == 1) online_provider_install(NULL);
+          svc_call(m, 0, NULL, 0, &c); CHECK(c.result == 0, "unlinked %d: CheckAvailability ok", variant);
+          svc_call(m, 1, NULL, 0, &c); CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == 0x4e61707070304e53ULL, "unlinked %d: GetAccountId is the local id", variant);
+          uint8_t cache[ONLINE_ACCOUNT_CACHE_SIZE + 4]; memset(cache, 0xcc, sizeof cache); memset(&c, 0, sizeof c); svc_set_out_buf(&c, cache, sizeof cache); svc_call_c(m, 130, &c);
+          CHECK(c.result == 0 && SVC_OUT(&c, uint64_t, 0) == 0 && cache[0] == 0 && cache[ONLINE_ACCOUNT_CACHE_SIZE - 1] == 0 && cache[ONLINE_ACCOUNT_CACHE_SIZE] == 0xcc, "unlinked %d: NA cache id 0, zeros, bounded", variant);
+          memset(&c, 0, sizeof c); svc_call_c(m, 130, &c); CHECK(c.result == 0, "unlinked %d: NA cache without an output buffer does not crash", variant);
+          /* 170 became a real async row after the branch was written (it answers an async object whose result is 0x1907C, see test_risk_title); only the others still fail as unknown commands */
+          const unsigned netrows[] = {2, 3, 4, 150};
+          for (unsigned i = 0; i < 4; i++) { svc_call(m, netrows[i], NULL, 0, &c); CHECK(c.result == IPC_R_UNKNOWN_COMMAND && c.nout_objects == 0 && c.out_size == 0, "unlinked %d: row %u fails with the sf unknown-command result, no object, no output", variant, netrows[i]); }
+          svc_call(m, 160, NULL, 0, &c); CHECK(c.result == 0, "unlinked %d: StoreOpenContext is accepted", variant);
+      }
+      /* linking after the fact flips the same session to the provider's values (no cached "unlinked" state) */
+      online_provider_install(&lb_provider); lb.account_linked = 1; svc_call(m, 1, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0x1234abcd5678ef90ull, "linking later is picked up by the same manager object");
+      lb.account_linked = 0; svc_call(m, 1, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0x4e61707070304e53ULL, "unlinking falls back to the local id");
+      /* a provider without ONLINE_CAP_ACCOUNT is never asked */
+      { OnlineProvider nocap = lb_provider; nocap.caps &= ~ONLINE_CAP_ACCOUNT; lb.account_linked = 1; online_provider_install(&nocap);
+        svc_call(m, 1, NULL, 0, &c); CHECK(SVC_OUT(&c, uint64_t, 0) == 0x4e61707070304e53ULL, "a provider without ONLINE_CAP_ACCOUNT: local id even if it would link"); }
+      /* secondary local profiles share the (single) provider account lookup keyed by the primary user: they are unlinked as far as acc is concerned, rows still succeed */
+      online_provider_install(NULL); lb.account_linked = 0;
+      setenv("NAPPLE_PROFILES", "2", 1); profile_count_reset_for_test();
+      { uint8_t second[16]; account_profile_uid(g_user_id, 1, second); svc_call(u, 5, second, 16, &c); CHECK(c.result == 0 && c.nout_objects == 1, "second profile opens without a linked account");
+        svc_call(c.out_objects[0], 1, NULL, 0, &c); CHECK(c.result == 0, "second profile GetBase works unlinked"); }
+      unsetenv("NAPPLE_PROFILES"); profile_count_reset_for_test();
+      /* olsc with no linked profile: the offline cloud answers are the same whether or not a user is linked, and are defined results */
+      { IpcObject *ol = olsc_open(); IpcCall oc;
+        svc_call(ol, 10, NULL, 0, &oc); CHECK(oc.result == HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED, "olsc 10 unlinked: offline result");
+        for (unsigned id = 13; id <= 16; id++) { svc_call(ol, id, NULL, 0, &oc); CHECK(oc.result == 0, "olsc %u unlinked: device-side backup setting call succeeds", id); }
+        const unsigned stubs[] = {18, 19, 22, 25, 26, 27};
+        for (unsigned i = 0; i < 6; i++) { svc_call(ol, stubs[i], NULL, 0, &oc); CHECK(oc.result != IPC_R_UNKNOWN_COMMAND, "olsc %u unlinked: a real row (round-10 made 18/19/22/25/26/27 implemented), not the sf unknown-command result", stubs[i]); } }
+    }
     online_provider_install(NULL);
     { /* ipc-local-stubs: the acc:u0 rows that used to be documented defaults */
         char tmp[200]; snprintf(tmp, sizeof tmp, "%s/svc_acc.XXXXXX", getenv("TMPDIR") ? getenv("TMPDIR") : "/tmp"); CHECK(mkdtemp(tmp) != NULL, "temp dir");

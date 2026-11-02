@@ -31,7 +31,7 @@ static void img_reset(IpcObject *s, IpcCall *c) { /* 100 DeleteFile, 101 Destroy
     miiimg_init(&db);
     pthread_mutex_unlock(&db_lock);
 }
-static void img_ok(IpcObject *s, IpcCall *c) { /* 102 ImportFile, 103 ExportFile and the migration rows: there is no file to export (the database is memory only) */
+static void img_ok(IpcObject *s, IpcCall *c) { /* 102 ImportFile, 103 ExportFile and the file rows: there is no file to export (the database is memory only) */
     (void)s;
     LOGV("mii-img", "command %u (in %u bytes) answered with success", c->cmd, c->in_size);
 }
@@ -108,8 +108,37 @@ static void img_delete(IpcObject *s, IpcCall *c) { /* 17 DeleteImages(u32 index)
     pthread_mutex_unlock(&db_lock);
     if (r) c->result = MIIIMG_R_NOT_FOUND;
 }
+/* 18 AddImageForMigration(u8 unique id[16], JPEG in input buffer 0) -> stages the image; 19 ClearHeaderForMigration -> empties the staging table; 20 SaveHeaderForMigration ->
+ * merges the staged images into the database. The arguments follow 16 AddOrUpdateImage (the migration calls are undocumented beyond their names). */
+static void img_mig_add(IpcObject *s, IpcCall *c) {
+    (void)s;
+    if (c->in_size < 16) {
+        c->result = MIIIMG_R_NOT_FOUND;
+        return;
+    }
+    const IpcBuf *b = ipc_in_buf(c, 0);
+    const void *p = b && b->size ? ipc_buf_ptr(b) : NULL;
+    pthread_mutex_lock(&db_lock);
+    int idx = miiimg_migration_add(img_db(), ipc_in(c, 0, 16), p, p ? (size_t)b->size : 0);
+    pthread_mutex_unlock(&db_lock);
+    if (idx < 0) c->result = MIIIMG_R_FULL;
+}
+static void img_mig_clear(IpcObject *s, IpcCall *c) {
+    (void)s;
+    (void)c;
+    pthread_mutex_lock(&db_lock);
+    miiimg_migration_clear(img_db());
+    pthread_mutex_unlock(&db_lock);
+}
+static void img_mig_save(IpcObject *s, IpcCall *c) {
+    (void)s;
+    pthread_mutex_lock(&db_lock);
+    int r = miiimg_migration_save(img_db());
+    pthread_mutex_unlock(&db_lock);
+    if (r) c->result = MIIIMG_R_FULL;
+}
 /* ids per switchbrew 'Shared Database services' (nn::mii::detail::IImageDatabaseService): 0 Initialize, 10-17 the image calls, 100-104 the file calls, 18-20
- * (19.0.0 / 20.0.0) the migration calls, whose arguments are not documented: documented defaults. */
+ * (19.0.0 / 20.0.0) the migration calls (a staging store, see above). */
 static const IpcCmd img_cmds[] = {
     {0, "Initialize", img_init, IPC_IMPL},
     {10, "Reload", img_init, IPC_IMPL},
@@ -120,9 +149,9 @@ static const IpcCmd img_cmds[] = {
     {15, "LoadImage", img_load_image, IPC_IMPL},
     {16, "AddOrUpdateImage", img_add, IPC_IMPL},
     {17, "DeleteImages", img_delete, IPC_IMPL},
-    {18, "AddImageForMigration", img_ok, IPC_STUB},
-    {19, "ClearHeaderForMigration", img_ok, IPC_STUB},
-    {20, "SaveHeaderForMigration", img_ok, IPC_STUB},
+    {18, "AddImageForMigration", img_mig_add, IPC_IMPL},
+    {19, "ClearHeaderForMigration", img_mig_clear, IPC_IMPL},
+    {20, "SaveHeaderForMigration", img_mig_save, IPC_IMPL},
     {100, "DeleteFile", img_reset, IPC_IMPL},
     {101, "DestroyFile", img_reset, IPC_IMPL},
     {102, "ImportFile", img_ok, IPC_IMPL},
