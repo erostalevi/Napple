@@ -37,11 +37,12 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-# Inbound: HTTP(S) for Caddy (80 is needed for the ACME HTTP-01 challenge and the HTTPS redirect; NEX rides on 443 as WebSocket) and the room port.
+# Inbound: HTTP(S) for Caddy (80 is needed for the ACME HTTP-01 challenge and the HTTPS redirect; NEX rides on 443 as WebSocket), the room port,
+# and napple-online's Pia NAT-check UDP ports (IPv4 and IPv6).
 # No SSH: shell access is SSM Session Manager (`aws ssm start-session --target <instance id>`).
 resource "aws_security_group" "servers" {
   name        = local.name
-  description = "Napple game servers: HTTPS API + NEX over WebSocket, room relay"
+  description = "Napple game servers: HTTPS API + NEX over WebSocket, room relay, NAT check"
   vpc_id      = aws_vpc.main.id
   tags        = { Name = local.name }
 }
@@ -64,6 +65,20 @@ resource "aws_vpc_security_group_ingress_rule" "v4" {
   from_port         = each.value.from
   to_port           = each.value.to
   cidr_ipv4         = "0.0.0.0/0"
+}
+
+resource "aws_vpc_security_group_ingress_rule" "natcheck" {
+  for_each = merge(
+    { for p in var.natcheck_udp_ports : "${p}-v4" => { port = p, v4 = "0.0.0.0/0", v6 = null } },
+    { for p in var.natcheck_udp_ports : "${p}-v6" => { port = p, v4 = null, v6 = "::/0" } },
+  )
+  security_group_id = aws_security_group.servers.id
+  description       = "natcheck ${each.key}"
+  ip_protocol       = "udp"
+  from_port         = each.value.port
+  to_port           = each.value.port
+  cidr_ipv4         = each.value.v4
+  cidr_ipv6         = each.value.v6
 }
 
 resource "aws_vpc_security_group_egress_rule" "all" {

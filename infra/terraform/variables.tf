@@ -92,6 +92,12 @@ variable "data_volume_gb" {
   default     = 1
 }
 
+variable "natcheck_udp_ports" {
+  description = "napple-online's Pia NAT-check ports (UDP): the primary server's 10025, 10125, 33334, 33335 and the secondary's (+1000). They follow NAPPLE_ONLINE_NATCHECK_BASE = 10025; change both together (and infra/docker/compose.yml)."
+  type        = list(number)
+  default     = [10025, 10125, 33334, 33335, 11025, 11125, 34334, 34335]
+}
+
 variable "room_port" {
   description = "napple-room port, opened for TCP and UDP."
   type        = number

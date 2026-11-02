@@ -117,6 +117,13 @@ Evidence files: `side-session-notes/local_67fc7cb9-…/napple-infra-evidence/` (
   the remote command waits `timeout 600 cloud-init status --wait`, checks `/opt/napple` + `docker compose version` (printing the tail of
   `/var/log/napple-bootstrap.log` if first boot failed), SSM `executionTimeout` 1200 s, poll up to ~21 min, roll job timeout 45 min.
   The rendered remote script passes shellcheck; not re-run on AWS from here.
+- **Pia NAT check (orchestrator follow-up, from `claude/online-pia-2026-11-02-r7` 7633f0f `natcheck.rs`/`main.rs`):** napple-online binds UDP
+  10025, 10125, 33334, 33335 and the same +1000 on its HTTP listener's address (`NAPPLE_ONLINE_NATCHECK_BASE`, default 10025; `0` = off) and
+  reads `NAPPLE_ONLINE_PUBLIC_IP` for clients on its own machine. Added: `natcheck_udp_ports` + 16 security-group rules (8 ports x IPv4/IPv6),
+  the 8 UDP mappings and both env vars in compose (public IP = the EIP from `.env`), `EXPOSE`/`ENV` in the image. **Decision:** explicit
+  port mappings (bridge network, Caddy unchanged) rather than `network_mode: host`: Docker's DNAT preserves the client address/port, and a
+  reply from a different published port is masqueraded with that same port, which the check needs. If the NAT check misbehaves live, host
+  networking for `online` is the fallback (Caddy then proxies to the host gateway). Tested only offline (tofu test, compose config).
 - **Decision: take over the hand-made DNS records.** The zone already holds apex A/AAAA, `www` and `*` with exactly the stack's values, so
   `dns_allow_overwrite` now defaults to `true` (workflow variable fallback `true`); otherwise the first apply would fail with "already exists".
 - **Decision: S3 lock files** instead of DynamoDB (the orchestrator asked for fewer resources; supported by the pinned 1.13.5, see above).

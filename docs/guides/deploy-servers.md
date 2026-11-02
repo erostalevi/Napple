@@ -24,7 +24,8 @@ Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.gi
      caddy  :80/:443 tcp, :443 udp ── TLS (automatic certificate for pretend.napple.lat)
         ├─ /room/*  -> room:8081    (napple-room status API, prefix stripped)
         └─ /*       -> online:8080  (napple-online: account/token API, /healthz, and the NEX game server as PRUDP Lite
-                                     over a WebSocket upgrade; no UDP)
+                                     over a WebSocket upgrade)
+     online :10025, 10125, 33334, 33335 + the same +1000 /udp  Pia NAT check (published directly)
      room   :31415/tcp+udp    room protocol (published directly)
    Logs: CloudWatch group /napple/servers. Shell: SSM Session Manager (no SSH port).
 ```
@@ -61,12 +62,15 @@ different names only needs those few files changed.
 | | `NAPPLE_ONLINE_PUBLIC_HOST` | `pretend.napple.lat` | host name clients reach |
 | | `NAPPLE_ONLINE_DATA` | `/var/lib/napple/online` | `accounts.json` and `server.key` (persistent volume) |
 | | `NAPPLE_ONLINE_VERBOSE` | `0` | `1` = log every request |
+| | `NAPPLE_ONLINE_NATCHECK_BASE` | `10025` | first UDP port of the Pia NAT check that titles run before matchmaking: UDP 10025, 10125, 33334, 33335 (primary server) and the same + 1000 (secondary), bound on the listener's address; `0` = off. The security group (`natcheck_udp_ports`) and the compose port list follow 10025: change all three together. |
+| | `NAPPLE_ONLINE_PUBLIC_IP` | the Elastic IP | the address reported for a client on the server's own machine (from `.env`, written by each deploy) |
 | `napple-room serve` | `NAPPLE_ROOM_LISTEN` | `0.0.0.0:31415` | room protocol, TCP (31415/udp is opened too) |
 | | `NAPPLE_ROOM_HTTP` | `0.0.0.0:8081` | plain-HTTP `GET /healthz` -> 200 `ok`, `GET /rooms` (JSON); served as `/room/healthz`, `/room/rooms` |
 | | `NAPPLE_ROOM_DATA` | `/var/lib/napple/room` | accepted, unused (the room server keeps no state); the other `NAPPLE_ROOM_*` limits keep their defaults |
 
-`napple-online` also accepts `NAPPLE_ONLINE_NEX_AUTH`, `NAPPLE_ONLINE_NEX_SECURE` and `NAPPLE_ONLINE_PUBLIC_IP` and logs them as unused, so no NEX
-UDP ports are opened. Both are built with `cargo build --release --locked -p <crate> --bin <crate>` from the workspace root on Linux (arm64 and amd64). They need no
+`napple-online` also accepts `NAPPLE_ONLINE_NEX_AUTH` and `NAPPLE_ONLINE_NEX_SECURE` and logs them as unused: NEX itself needs no UDP port.
+The NAT-check ports are published by Docker (DNAT keeps the client's address and port; a reply from another published port leaves with that
+port, which the check relies on). They are open on IPv4 and IPv6 in the security group; the VPC itself is IPv4-only today. Both are built with `cargo build --release --locked -p <crate> --bin <crate>` from the workspace root on Linux (arm64 and amd64). They need no
 system library beyond libc (no OpenSSL), run as uid 10001 in a read-only container, log to stdout/stderr and exit on SIGTERM.
 Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=pretend.napple.lat:31415`.
 

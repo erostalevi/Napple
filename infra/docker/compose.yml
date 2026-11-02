@@ -1,6 +1,8 @@
 # Napple game servers behind Caddy: https://${NAPPLE_DOMAIN} -> napple-online (account/token API, and the NEX game server as PRUDP Lite over a
 # WebSocket upgrade on the same port; Caddy forwards upgrades and sets X-Forwarded-For), /room/* -> napple-room's status API.
-# Only the room port is published directly; napple-online needs no UDP.
+# Published directly: the room port, and napple-online's Pia NAT-check UDP ports (10025, 10125, 33334, 33335 and the same + 1000, from
+# NAPPLE_ONLINE_NATCHECK_BASE; the security group opens the same list). Docker's DNAT keeps the client's address and port, and replies from
+# another of the published ports leave with that port, which the check relies on.
 #   AWS instance: docker compose -f compose.yml -f compose.aws.yml up -d   (images from ECR, .env written by infra/scripts/roll.sh)
 #   Local Docker: NAPPLE_DOMAIN=localhost docker compose -f compose.yml -f compose.build.yml up --build
 # The env/port contract the two binaries follow: docs/guides/deploy-servers.md#server-contract
@@ -23,6 +25,15 @@ services:
       NAPPLE_ONLINE_PUBLIC_HOST: ${NAPPLE_DOMAIN:-pretend.napple.lat}
       NAPPLE_ONLINE_DATA: /var/lib/napple/online
       NAPPLE_ONLINE_VERBOSE: ${NAPPLE_ONLINE_VERBOSE:-0}
+      NAPPLE_ONLINE_PUBLIC_IP: ${NAPPLE_PUBLIC_IP:-}
+      NAPPLE_ONLINE_NATCHECK_BASE: "10025"
+    ports:
+      - "10025:10025/udp"
+      - "10125:10125/udp"
+      - "33334-33335:33334-33335/udp"
+      - "11025:11025/udp"
+      - "11125:11125/udp"
+      - "34334-34335:34334-34335/udp"
     volumes:
       - online-data:/var/lib/napple/online
     expose: ["8080"]

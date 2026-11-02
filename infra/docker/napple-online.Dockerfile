@@ -24,8 +24,10 @@ RUN apt-get update \
 COPY --from=build /out/napple-online /usr/local/bin/napple-online
 USER 10001:10001
 ENV NAPPLE_ONLINE_HTTP=0.0.0.0:8080 \
-    NAPPLE_ONLINE_DATA=/var/lib/napple/online
-EXPOSE 8080/tcp
+    NAPPLE_ONLINE_DATA=/var/lib/napple/online \
+    NAPPLE_ONLINE_NATCHECK_BASE=10025
+# 8080: HTTP + NEX WebSocket (behind Caddy); UDP: the Pia NAT check (primary server, then the secondary at +1000).
+EXPOSE 8080/tcp 10025/udp 10125/udp 33334/udp 33335/udp 11025/udp 11125/udp 34334/udp 34335/udp
 VOLUME ["/var/lib/napple/online"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/healthz >/dev/null || exit 1
