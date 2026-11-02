@@ -25,7 +25,7 @@ Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.gi
      caddy  :80/:443 tcp, :443 udp ── TLS (automatic certificate for pretend.napple.lat)
         ├─ /room/*              -> room:8081     (napple-room status API, prefix stripped)
         ├─ /account/v1/*        -> account:8082  (napple-account; /account/healthz -> its /healthz)
-        ├─ /social/v1/*         -> social:8083   (napple-social incl. the WebSocket /social/v1/stream; /social/healthz)
+        ├─ /social/v1/*         -> social:8083   (napple-social incl. the WebSocket /social/v1/stream; /social/v1/healthz)
         └─ /*                   -> online:8080   (napple-online: /healthz, and the NEX game server as PRUDP Lite
                                                   over a WebSocket upgrade)
      online :10025, 10125, 33334, 33335 + the same +1000 /udp  Pia NAT check (published directly)
@@ -76,7 +76,7 @@ different names only needs those few files changed.
 | | `NAPPLE_MAIL_PROVIDER` / `NAPPLE_MAIL_FROM` / `NAPPLE_SES_REGION` / `NAPPLE_SES_CONFIG_SET` | `ses` / `no-reply@napple.lat` / the stack region / `napple-transactional` | confirmation and reset codes through SES v2 with the instance role (no keys). SES is in the sandbox until production access is granted: it only delivers to verified recipients. |
 | | `NAPPLE_PHOTO_BUCKET` / `NAPPLE_ACCOUNT_S3_BUCKET` | `napple-photos-<account>-<region>` / `napple-saves-<account>-<region>` | private S3 buckets (profile photos / cloud-save blobs), written by the instance role |
 | | `NAPPLE_ADMIN_EMAILS` | empty | comma list of admin accounts (optional repository variable is not wired: set it in `/opt/napple/.env` if needed) |
-| `napple-social` | `NAPPLE_SOCIAL_BIND` | `0.0.0.0:8083` | `/social/v1/*` (+ WebSocket) and `/healthz`; state in `NAPPLE_SOCIAL_DATA_DIR` (`/var/lib/napple/social`); verifies account JWTs against `NAPPLE_ACCOUNT_URL` (`http://account:8082` inside the compose network) |
+| `napple-social` | `NAPPLE_SOCIAL_BIND` | `0.0.0.0:8083` | `/social/v1/*` (+ WebSocket, health at `/social/v1/healthz`); state in `NAPPLE_SOCIAL_DATA_DIR` (`/var/lib/napple/social`); verifies account JWTs against `NAPPLE_ACCOUNT_URL` (`http://account:8082` inside the compose network) |
 | `napple-online` (added) | `NAPPLE_ACCOUNT_URL`, `NAPPLE_SOCIAL_URL` | `http://account:8082`, `http://social:8083` | JWKS and encounter/stat reporting over the compose network |
 | `napple-room serve` | `NAPPLE_ROOM_LISTEN` | `0.0.0.0:31415` | room protocol, TCP (31415/udp is opened too) |
 | | `NAPPLE_ROOM_HTTP` | `0.0.0.0:8081` | plain-HTTP `GET /healthz` -> 200 `ok`, `GET /rooms` (JSON); served as `/room/healthz`, `/room/rooms` |
@@ -153,7 +153,7 @@ a crate (the workflow triggers on `crates/napple-online/**` and `crates/napple-r
 | bootstrap | mode `bootstrap` only: `infra/scripts/bootstrap.sh apply`. |
 | infra | `tofu fmt -check`, `validate`, the offline mocked plan tests, then `infra/scripts/tofu-servers.sh plan|apply|destroy` against the S3 state. |
 | images | One native build per image (`ubuntu-24.04-arm` for arm64), pushed to ECR as `<repo>:<commit sha>` (immutable tags; a commit already pushed is skipped). |
-| roll | `infra/scripts/roll.sh`: through SSM `send-command`, writes `compose.yml`, `compose.aws.yml`, `Caddyfile` and `.env` into `/opt/napple` on the instance, `docker compose pull && up -d`, prunes week-old images. Then `infra/scripts/smoke.sh https://pretend.<domain>` checks `/healthz`, `/room/healthz`, `/account/healthz` and `/social/healthz`. |
+| roll | `infra/scripts/roll.sh`: through SSM `send-command`, writes `compose.yml`, `compose.aws.yml`, `Caddyfile` and `.env` into `/opt/napple` on the instance, `docker compose pull && up -d`, prunes week-old images. Then `infra/scripts/smoke.sh https://pretend.<domain>` checks `/healthz`, `/room/healthz`, `/account/healthz` and `/social/v1/healthz`. |
 
 Every job runs in the environment `napple-servers`. The workflow has one concurrency group and never cancels a running deploy.
 

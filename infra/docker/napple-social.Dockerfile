@@ -29,7 +29,7 @@ ENV NAPPLE_SOCIAL_BIND=0.0.0.0:8083 \
 EXPOSE 8083/tcp
 VOLUME ["/var/lib/napple/social"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD curl -fsS http://127.0.0.1:8083/healthz >/dev/null || exit 1
+  CMD curl -fsS http://127.0.0.1:8083/social/v1/healthz >/dev/null || exit 1
 STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/napple-social"]
 CMD ["serve"]

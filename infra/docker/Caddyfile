@@ -14,17 +14,13 @@
 	}
 
 	# napple-account (/account/v1/*, prefix kept) and napple-social (/social/v1/*, prefix kept; reverse_proxy forwards the WebSocket upgrade of
-	# /social/v1/stream as is). Health checks without the API prefix.
+	# /social/v1/stream as is). social answers /social/v1/healthz itself; account has /healthz at its root, exposed as /account/healthz.
 	handle_path /account/healthz {
 		rewrite * /healthz
 		reverse_proxy account:8082
 	}
 	handle /account/v1/* {
 		reverse_proxy account:8082
-	}
-	handle_path /social/healthz {
-		rewrite * /healthz
-		reverse_proxy social:8083
 	}
 	handle /social/v1/* {
 		reverse_proxy social:8083 {

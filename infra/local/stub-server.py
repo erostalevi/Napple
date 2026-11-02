@@ -27,7 +27,7 @@ def log(msg):
 
 class Health(http.server.BaseHTTPRequestHandler):
     def do_GET(self):
-        ok = self.path in ("/healthz", "/")
+        ok = self.path in ("/healthz", "/social/v1/healthz", "/")
         body = (f"ok stub {sys.argv[1]}\n" if ok else "not found\n").encode()
         self.send_response(200 if ok else 404)
         self.send_header("Content-Type", "text/plain")

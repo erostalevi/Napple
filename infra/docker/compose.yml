@@ -1,7 +1,7 @@
 # Napple game servers behind Caddy: https://${NAPPLE_DOMAIN} -> napple-online (the NEX game server as PRUDP Lite over a WebSocket upgrade on
 # the same port, /healthz; Caddy forwards upgrades and sets X-Forwarded-For), /account/v1/* -> napple-account, /social/v1/* (incl. the
-# WebSocket /social/v1/stream) -> napple-social, /room/* -> napple-room's status API. account and social also answer /account/healthz and
-# /social/healthz through Caddy. online reaches account and social over the compose network (JWKS, encounters, stats).
+# WebSocket /social/v1/stream) -> napple-social, /room/* -> napple-room's status API. napple-account also answers /account/healthz
+# (its root /healthz) through Caddy; napple-social has /social/v1/healthz. online reaches account and social over the compose network (JWKS, encounters, stats).
 # Published directly: the room port, and napple-online's Pia NAT-check UDP ports (10025, 10125, 33334, 33335 and the same + 1000, from
 # NAPPLE_ONLINE_NATCHECK_BASE; the security group opens the same list). Docker's DNAT keeps the client's address and port, and replies from
 # another of the published ports leave with that port, which the check relies on.

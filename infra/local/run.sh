@@ -140,7 +140,7 @@ echo $! > "$state/room.pid"
 
 ok=1
 wait_healthy account "http://127.0.0.1:$ACCOUNT_PORT/healthz" || ok=0
-wait_healthy social "http://127.0.0.1:$SOCIAL_PORT/healthz" || ok=0
+wait_healthy social "http://127.0.0.1:$SOCIAL_PORT/social/v1/healthz" || ok=0
 wait_healthy online "http://127.0.0.1:$ONLINE_HTTP_PORT/healthz" || ok=0
 wait_healthy room "http://127.0.0.1:$ROOM_HTTP_PORT/healthz" || ok=0
 if [ "$ok" = 0 ]; then "$0" stop >/dev/null; exit 1; fi
