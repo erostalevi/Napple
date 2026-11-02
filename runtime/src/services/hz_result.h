@@ -51,6 +51,8 @@ enum {
 #define HZ_R_HID_NOT_CONNECTED HZ_RESULT(HZ_MOD_HID, 7)                                /* [unverified] */
 #define HZ_R_FRIENDS_NETWORK_SERVICE_ACCOUNT_UNAVAILABLE HZ_RESULT(HZ_MOD_FRIENDS, 15) /* [unverified] */
 #define HZ_R_SSL_NOT_CONNECTED HZ_RESULT(HZ_MOD_SSL, 205)                              /* [unverified] */
+#define HZ_R_SSL_INVALID_ARGUMENT HZ_RESULT(HZ_MOD_SSL, 2)                             /* [unverified] a bad option, size, format or a second client cert */
+#define HZ_R_SSL_NOT_FOUND HZ_RESULT(HZ_MOD_SSL, 3)                                    /* [unverified] an unknown CRL id, certificate id or index */
 
 /* BSD errno values as the Horizon socket service reports them (FreeBSD numbering). */
 enum {
