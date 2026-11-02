@@ -6,7 +6,7 @@ base: orchestrate/2026-11-02-r6
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: handed-off
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_3352261a-bf2a-4f07-a48b-c8b0261a4645 (fresh)
 launched_at: 2026-11-02
@@ -43,3 +43,4 @@ New files `runtime/src/net/` (host provider: `net_host.c`/`.h`, `net_host_sock.c
 Read `orchestrations/ENV-MAC.md` (shared title data read-only, locks, local-only, never ask). Never commit credentials or Nintendo hostnames.
 
 ## Result
+Integrated 2026-11-02 into main as ce05285 (head 80a8880), outcome **Clean** (plus the r6 change-archive row). Acceptance 1, 4, 5 verified on the Mac; acceptance 2 tested in one process (two provider instances); acceptance 3 boots clean with `NAPPLE_NET=host`, and MK8D Online Play ends cleanly once error-applet-output is in (verified on main with it). Details: [integrator file](../integrators/claude-net-host-provider-2026-11-02-r6.md).
