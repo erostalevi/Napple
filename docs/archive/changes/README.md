@@ -259,3 +259,4 @@ Hand-off files of these rounds (assignments and hand-off notes) are in the [proc
 | [2026-11-03-infra-online-r12](2026-11-03-infra-online-r12.md) | infra: napple-account and napple-social in the deploy stack, SES/S3, service tokens. |
 | [2026-11-03-online-tieup-2026-11-03-r12](2026-11-03-online-tieup-2026-11-03-r12.md) | Online end-to-end: scripted account/second-device/cloud-save/friends/tier run, local and live; integration fixes. |
 | [2026-11-03-mk8d-online-race-2026-11-03-r12](2026-11-03-mk8d-online-race-2026-11-03-r12.md) | Two instances on one Mac play peer to peer through napple-online + a room (distinct public addresses, joiner hears existing participants, MatchmakeExtension 49); MK8D pair reaches the race countdown; LDN Scan pacing. |
+| [2026-11-03-ios-memory-swap](2026-11-03-ios-memory-swap.md) | iOS memory: disk-backed swap (file-backed guest heap), memory-pressure trimming, extended-virtual-addressing request, footprint audit and probe. |

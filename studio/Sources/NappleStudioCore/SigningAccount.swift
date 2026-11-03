@@ -29,6 +29,7 @@ public struct ProfileDetails: Equatable, Sendable {
 
     public static let increasedMemory = "com.apple.developer.kernel.increased-memory-limit"
     public static let increasedDebuggableMemory = "com.apple.developer.kernel.increased-debuggable-memory-limit"
+    public static let extendedVirtualAddressing = "com.apple.developer.kernel.extended-virtual-addressing"
 
     public init(name: String = "", teamId: String = "", teamName: String = "", appId: String = "", created: Date? = nil, expires: Date? = nil,
                 xcodeManaged: Bool = false, provisionsAllDevices: Bool = false, deviceCount: Int = 0, entitlements: [String: Bool] = [:]) {
@@ -38,6 +39,7 @@ public struct ProfileDetails: Equatable, Sendable {
 
     public var grantsIncreasedMemory: Bool { entitlements[Self.increasedMemory] == true }
     public var grantsDebuggableMemory: Bool { entitlements[Self.increasedDebuggableMemory] == true }
+    public var grantsExtendedVirtualAddressing: Bool { entitlements[Self.extendedVirtualAddressing] == true }
     public var lifetimeDays: Double? {
         guard let c = created, let e = expires else { return nil }
         return e.timeIntervalSince(c) / 86_400
@@ -121,19 +123,20 @@ public struct IOSEntitlementPlan: Equatable, Sendable {
     public var needsCapability: Bool
 
     /// Rules (no JIT, no private API, nothing else is ever added):
-    /// - paid account: `increased-memory-limit` always, `increased-debuggable-memory-limit` for debug builds;
+    /// - paid account: `increased-memory-limit` and `extended-virtual-addressing` always (the guest window and Metal share the address space),
+    ///   `increased-debuggable-memory-limit` for debug builds;
     ///   when a fixed profile is supplied that lacks the capability the plan says so, and automatic signing (xcodebuild
     ///   -allowProvisioningUpdates) is what turns the capability on for the App ID;
     /// - free or unknown account: nothing is added, the build is normal and the explanation says why.
     public static func make(account: AccountKind, debug: Bool, profile: ProfileDetails? = nil) -> IOSEntitlementPlan {
         switch account {
         case .paid:
-            var e = [ProfileDetails.increasedMemory: true]
+            var e = [ProfileDetails.increasedMemory: true, ProfileDetails.extendedVirtualAddressing: true]
             if debug { e[ProfileDetails.increasedDebuggableMemory] = true }
-            let missing = profile.map { !$0.grantsIncreasedMemory } ?? false
+            let missing = profile.map { !$0.grantsIncreasedMemory || !$0.grantsExtendedVirtualAddressing } ?? false
             let why = missing
-                ? "Your account is a paid developer account, so Napple asks for the Increased Memory Limit capability. The selected provisioning profile does not carry it yet: use automatic signing so Xcode adds the capability to the App ID, or enable it in your Apple Developer account and regenerate the profile."
-                : "Your account is a paid developer account, so the app asks iOS for a higher memory limit (Increased Memory Limit). Big games need it."
+                ? "Your account is a paid developer account, so Napple asks for the Increased Memory Limit and Extended Virtual Addressing capabilities. The selected provisioning profile does not carry both yet: use automatic signing so Xcode adds the capability to the App ID, or enable it in your Apple Developer account and regenerate the profile."
+                : "Your account is a paid developer account, so the app asks iOS for a higher memory limit and a wider address space (Increased Memory Limit, Extended Virtual Addressing). Big games need them."
             return IOSEntitlementPlan(entitlements: e, includesMemory: true, explanation: why, needsCapability: missing)
         case .free:
             return IOSEntitlementPlan(entitlements: [:], includesMemory: false,

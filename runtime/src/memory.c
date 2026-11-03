@@ -13,6 +13,7 @@
 #include <TargetConditionals.h>
 #include <mach/mach.h>
 #include "mach_vm_compat.h"
+#include "swap.h"
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -60,6 +61,8 @@ static uint64_t alias_len, heap_size, alias_bytes;
 static pthread_mutex_t mem_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint8_t alias_state[ALIAS_MAX / PAGE_4K]; /* per 4 KiB: 0 free, 5 physical memory, 6 shared, 0xd transfer */
 static uint8_t alias_stale[ALIAS_MAX / PAGE_4K]; /* unmapped but host page still dirty: zero again when mapped */
+static SwapFile heap_swap, alias_swap; /* NAPPLE_IOS_SWAP: file-backed heap and alias commits (swap.c); fd 0 / size 0 = not in use */
+static int heap_swap_on, alias_swap_on;
 static uint8_t exception_context[0x1000] __attribute__((aligned(0x1000)));
 
 typedef struct {
@@ -367,13 +370,16 @@ static uint64_t alias_map(int unmap, uint64_t addr, uint64_t size) {
         for (uint64_t page = lo; page < hi; page += PAGE_16K) {
             unsigned p = (unsigned)((page - start) / PAGE_4K);
             if (!alias_state[p] && !alias_state[p + 1] && !alias_state[p + 2] && !alias_state[p + 3]) {
-                if (mmap((void *)page, PAGE_16K, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0) != (void *)page)
+                if (alias_swap_on ? swap_decommit(&alias_swap, alias_space, page - start, PAGE_16K)
+                                  : mmap((void *)page, PAGE_16K, PROT_NONE, MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0) != (void *)page)
                     runtime_fail("decommit physical alias page");
                 memset(alias_stale + p, 0, 4);
             }
         }
     } else if (fresh) {
-        if (mprotect((void *)lo, hi - lo, PROT_READ | PROT_WRITE)) runtime_fail("commit physical alias pages");
+        if (swap_enabled() && !alias_swap_on && !alias_swap.size && swap_file_open(&alias_swap, "alias", alias_len) == 0) alias_swap_on = 1;
+        if (alias_swap_on ? !swap_commit(&alias_swap, alias_space, lo - start, hi - lo) : !!mprotect((void *)lo, hi - lo, PROT_READ | PROT_WRITE))
+            runtime_fail("commit physical alias pages");
         for (unsigned i = 0; i < count; i++)
             if (!alias_state[first + i]) {
                 if (alias_stale[first + i]) {
@@ -447,8 +453,14 @@ static void svc_set_heap_size(uint64_t *r) {
         return;
     }
     pthread_mutex_lock(&mem_lock);
-    if (size > heap_size && mprotect(heap + heap_size, size - heap_size, PROT_READ | PROT_WRITE)) runtime_fail("commit heap: %zu bytes", size);
-    if (size < heap_size && mprotect(heap + size, heap_size - size, PROT_NONE)) runtime_fail("decommit heap");
+    if (swap_enabled() && !heap_swap_on && !heap_swap.size && swap_file_open(&heap_swap, "heap", HEAP_CAP) == 0) heap_swap_on = 1;
+    if (size > heap_size) {
+        if (heap_swap_on ? !swap_commit(&heap_swap, heap, heap_size, size - heap_size) : !!mprotect(heap + heap_size, size - heap_size, PROT_READ | PROT_WRITE))
+            runtime_fail("commit heap: %zu bytes", size);
+    }
+    if (size < heap_size) {
+        if (heap_swap_on ? swap_decommit(&heap_swap, heap, size, heap_size - size) : !!mprotect(heap + size, heap_size - size, PROT_NONE)) runtime_fail("decommit heap");
+    }
     heap_size = size;
     pthread_mutex_unlock(&mem_lock);
     LOGV("memory", "SetHeapSize %#zx", size);

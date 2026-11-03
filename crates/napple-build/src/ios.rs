@@ -534,6 +534,12 @@ pub fn sign(app: &Path, work: &Path, s: &Signing, bundle_id: &str) -> Result<Vec
     {
         notes.push("the profile does not grant com.apple.developer.kernel.increased-memory-limit (paid account only): the app runs with the default iOS memory limit, large games may be terminated".into());
     }
+    if !std::fs::read_to_string(&ent)
+        .unwrap_or_default()
+        .contains("extended-virtual-addressing")
+    {
+        notes.push("the profile does not grant com.apple.developer.kernel.extended-virtual-addressing (paid account, capability on the App ID): the app gets the default 6 GiB address window and Metal shares it".into());
+    }
     std::fs::copy(profile, app.join("embedded.mobileprovision"))
         .map_err(|e| BuildError::io("embed the profile", e))?;
     crate::bundle::clear_xattrs(app);

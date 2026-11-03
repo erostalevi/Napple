@@ -7,6 +7,7 @@
 #ifdef __APPLE__
 #include <mach/mach.h>
 #include "mach_vm_compat.h"
+#include "swap.h"
 #endif
 #include <sys/mman.h>
 
@@ -207,7 +208,8 @@ IpcSharedMemory *ipc_shared_memory_new(uint64_t size) {
     IpcSharedMemory *m = calloc(1, sizeof *m);
     if (!m) runtime_fail("shared memory allocation");
     size = (size + PAGE_16K - 1) & ~(PAGE_16K - 1);
-    m->host = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    m->host = size >= (4ULL << 20) ? swap_map_anywhere(size) : NULL; /* big shared memory is file-backed when NAPPLE_IOS_SWAP is on */
+    if (!m->host) m->host = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
     if (m->host == MAP_FAILED) runtime_fail("shared memory mapping of %llu bytes", (unsigned long long)size);
     m->size = size;
     m->refs = 1;

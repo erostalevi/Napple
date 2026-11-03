@@ -91,7 +91,7 @@ test: $(BUILD)/tests/test_media $(BUILD)/tests/test_decoder_vt $(BUILD)/tests/te
 HOST_CC ?= cc
 HOST_BUILD := $(BUILD)/host
 HOST_CFLAGS := -std=gnu11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Wno-format-truncation -Wno-unused-result -Isrc -Isrc/services -Itests/host -pthread
-HOST_KERNEL := src/kernel.c src/threads.c src/ksession.c src/kmsg.c src/kcode.c src/timescale.c tests/host/host_stubs.c
+HOST_KERNEL := src/swap.c src/kernel.c src/threads.c src/ksession.c src/kmsg.c src/kcode.c src/timescale.c tests/host/host_stubs.c
 HOST_LOADER := src/module.c src/dispatch.c src/json.c src/nro.c src/sha256.c src/ipc.c
 HOST_HDRS := $(wildcard src/*.h) $(wildcard tests/host/*.h) tests/check.h
 # media-services (2026-10-26): the portable media engines nvdrv.c now calls (host1x parser, engines, null decoder backend, header parsers, JPEG codec)
@@ -173,6 +173,11 @@ $(HOST_BUILD)/test_kernel_exit: tests/host/test_kernel_exit.c $(HOST_KERNEL) $(H
 	@mkdir -p $(dir $@)
 	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_kernel_exit.c src/ipc.c $(filter-out src/kernel.c,$(HOST_KERNEL)) -o $@
 HOST_TESTS += $(HOST_BUILD)/test_kernel_exit
+# ios-memory-swap: swap region allocator (file-backed commit / decommit, trim, accounting)
+$(HOST_BUILD)/test_swap: tests/host/test_swap.c src/swap.c src/swap.h
+	@mkdir -p $(dir $@)
+	$(HOST_CC) $(HOST_CFLAGS) tests/host/test_swap.c src/swap.c -o $@
+HOST_TESTS += $(HOST_BUILD)/test_swap
 test-host: $(HOST_TESTS)
 	@for t in $^; do echo "== $$t"; ./$$t || exit 1; done
 
