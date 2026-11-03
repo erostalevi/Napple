@@ -2,7 +2,7 @@
 
 The GPU device nodes (`/dev/nvhost-gpu`, `-as-gpu`, `-ctrl-gpu`), the display head (`/dev/nvdisp-disp0/1`) and the host1x multimedia engines
 (`/dev/nvhost-nvdec`, `-vic`, `-nvjpg`, `-msenc`) were written from memory up to 2026-11-01. On 2026-11-02 (branch
-`claude/nvdrv-public-layouts-2026-11-02-r10`) every number, struct size and field offset was compared with public references and the mismatches were
+`nvdrv-public-layouts-2026-11-02-r10`) every number, struct size and field offset was compared with public references and the mismatches were
 fixed. This page is the record: one row per ioctl or method block, with the source that pins it and what the runtime does with it.
 
 The references are used for layout facts only (numbers, sizes, offsets, field meaning). No driver code was copied.
@@ -45,7 +45,7 @@ header for that generation; *not implemented* = refused with NotImplemented on p
 | H | 0x18 | ALLOC_GPFIFO_EX `{u32 num_entries, u32 num_inflight_jobs, u32 flags, u32 reserved[5]}` | 0x20 | nvgpu 123 | derived (new) |
 | H | 0x1A | ALLOC_GPFIFO_EX2 `{u32 num_entries, u32 flags, u32 unk0, fence out, u32 unk1..3}` | 0x20 | libnx | verified |
 | H | 0x1B | KICKOFF_PB (SUBMIT_GPFIFO header; entries in the Ioctl2 buffer) | 0x18 | libnx | verified (new) |
-| G | 0x14 | SET_USER_DATA `{u64}` (type 'G' on the channel fd) | 8 | libnx `_NV_IOW(0x47, 0x14)` | verified in the core; **needs the nvdrv.c routing patch** (integrator file) |
+| G | 0x14 | SET_USER_DATA `{u64}` (type 'G' on the channel fd) | 8 | libnx `_NV_IOW(0x47, 0x14)` | verified in the core; **needs the nvdrv.c routing patch** |
 | G | 0x15 | GET_USER_DATA `{u64}` | 8 | libnx | as above |
 | H | 0x14 / 0x15 | (were SET/GET_USER_DATA here) | - | - | removed: not channel ioctls of type 'H' |
 | H | others (e.g. SET_TIMESLICE) | numbers documented only on switchbrew | - | switchbrew only | not implemented (no reachable public layout) |
@@ -117,7 +117,7 @@ The device used to answer invented ioctls (1 GET_MODE, 2 GET_VBLANK, 3 WAIT_VBLA
 `{u32 cmdbufs, relocs, syncpt_incrs, fences}` + cmdbuf 12 B, reloc 16 B, shift 4 B, incr 20 B `{id, incrs, waitbase, next, prev}`, threshold 4 B),
 `GET_SYNCPOINT` (2, 8 B), `GET_WAITBASE` (3, 8 B), `SET_SUBMIT_TIMEOUT` (7, 4 B), `MAP_CMD_BUFFER` / `UNMAP` (9 / 0xA, `{u32 num, u32 reserved, u8 compressed}` + 8 B
 entries from +12), `SET_NVMAP_FD` / `SET_TIMEOUT` ('H' 1 / 3). Not answered there: `SET_CLK_RATE` (8) and `GET_CLK_RATE` (0x14 before 8.0.0, 0x23 after)
-`{u32 rate, u32 module_id}` (libnx); they are listed for the nvdrv.c owner in the integrator file.
+`{u32 rate, u32 module_id}` (libnx); they are not routed by nvdrv.c yet.
 
 ## Engine methods (`nvdrv_media_regs.h`)
 
@@ -176,7 +176,7 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
 `sizeof` and `offsetof` of every structure above against the constants the code uses, the ioctl command words libnx / tegra_dc_ext encode, the method
 byte offsets of the class headers; then each ioctl / method block is round-tripped through the real `nv_ioctl` handler.
 
-## Round 11 additions (claude/nvdrv-gpu-routing-2026-11-03-r11, integrated onto the round-10 table)
+## Round 11 additions (nvdrv-gpu-routing-2026-11-03-r11, integrated onto the round-10 table)
 The cloud session had no network access to switchbrew or the NVIDIA headers and did not see this table: its layouts are written from memory and are **proposed**, never checked against a source or trace. Status *tested* = unit test (`runtime/tests/test_svc_nvdrv_nodes.c`).
 Rows kept next to the round-10 ones (the round-10 numbers and layouts above stay authoritative; the branch's other rows duplicated them: its 0x17 GET_ERROR_NOTIFICATION is the round-10 row):
 

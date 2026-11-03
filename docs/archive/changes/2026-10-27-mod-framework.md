@@ -1,6 +1,6 @@
-# Mod framework: the `.napmod` format and tooling (2026-10-27, branch claude/mod-framework-2026-10-27)
+# Mod framework: the `.napmod` format and tooling (2026-10-27, branch mod-framework-2026-10-27)
 
-Assignment `orchestrations/mod-framework.md` (batch 2026-10-27-polish, cloud Linux). Community mods and fixes that anyone can create and share. Everything here is the **portable core**; nothing is wired into the build, runtime or UI yet (status words: *tested* = unit/integration test passed on Linux, *unbuilt* = never compiled on macOS, but this crate has no macOS code).
+Assignment assignment `mod-framework` (batch 2026-10-27-polish, cloud Linux). Community mods and fixes that anyone can create and share. Everything here is the **portable core**; nothing is wired into the build, runtime or UI yet (status words: *tested* = unit/integration test passed on Linux, *unbuilt* = never compiled on macOS, but this crate has no macOS code).
 
 ## What was built
 * New crate `crates/napple-mods` (in the workspace; dependencies `serde`, `serde_json`, `sha2`, `zip` without default features, `tempfile` for tests). `napple-cli` gets one line to register `napple mods ...`; `napple-build` was not touched.

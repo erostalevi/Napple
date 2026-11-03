@@ -18,7 +18,7 @@ launched_at: none
 What to achieve and why it matters for Switch-platform coverage (which %Analysis items it closes).
 
 ## Owned paths
-Paths this session may edit. Shared files (`docs/architecture/runtime-services.md`, `COMPATIBILITY.md`, `Cargo.toml`, `Cargo.lock`, top-level Makefiles) are append-only.
+Paths this session may edit. Shared files (`docs/architecture/runtime-services.md`, `COMPATIBILITY.md`, `Cargo.toml`, top-level Makefiles (Cargo.lock is not tracked)) are append-only.
 
 ## Do not touch
 Paths owned by other items of this batch.

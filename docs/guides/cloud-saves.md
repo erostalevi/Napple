@@ -1,7 +1,7 @@
 # Cloud saves (Napple Account, end-to-end encrypted)
 
 One Napple Account on the Mac and the iPhone: a game continues from the same save on both. Saves are encrypted on the device before upload;
-the server (`crates/napple-account`, contract in `orchestrations/ACCOUNT-CONTRACT.md`) stores ciphertext only and never sees a key.
+the server (`crates/napple-account`, contract in `docs/guides/napple-account.md`) stores ciphertext only and never sees a key.
 Nothing syncs unless you sign in. The client is `crates/napple-cloud` (Rust), used by the `napple` CLI and linked into the native runtime
 (`runtime/src/cloud/`).
 

@@ -1,6 +1,6 @@
 # online-support-table (2026-11-02, batch r10): per-game online support table
 
-Branch `claude/online-support-table-2026-11-02-r10` (Linux cloud session, base `main` = `d0d4be9`). Docs and site only; no runtime code.
+Branch `online-support-table-2026-11-02-r10` (Linux cloud session, base `main` = `d0d4be9`). Docs and site only; no runtime code.
 
 Napple's online play runs between Napple players only, through the Napple-run servers at `pretend.napple.lat` (napple-online, napple-room),
 never Nintendo's. This adds a per-game table of what works there, kept as data so later sessions only edit `compat/online.json`.

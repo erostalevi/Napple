@@ -1,6 +1,6 @@
 # 2026-10-26 shader-surface: SULD, SUST, SUATOM and SURED in the Maxwell translator
 
-Branch `claude/shader-surface-2026-10-26-cloud2` (Linux cloud session; nothing here was compiled by Metal). Owner area: `gfx/src/shader/` and the shader text tests.
+Branch `shader-surface-2026-10-26-cloud2` (Linux cloud session; nothing here was compiled by Metal). Owner area: `gfx/src/shader/` and the shader text tests.
 
 ## What changed
 - The surface family no longer ends in the "no image binding in the translator contract" refusal. `src/shader/surface.inc` (included by `maxwell_translate.c`) translates:
@@ -22,7 +22,7 @@ Branch `claude/shader-surface-2026-10-26-cloud2` (Linux cloud session; nothing h
 |---|---|
 | Translation text of every SULD/SUST/SUATOM/SURED variant above | tested (`sh gfx/tests/t_xlate_linux.sh`: ok) |
 | MSL compiles (Metal) | unbuilt: `MSL_COMPILES` / `MSL_COMPILES31` in `t_xlate.m` run on the Mac only |
-| Binding glue in `mtl_shader.m` / `mtl_replay.m` | not done (not mine); exact calls listed in gfx.md section 11 and the integrator file |
+| Binding glue in `mtl_shader.m` / `mtl_replay.m` | not done (not mine); exact calls listed in gfx.md section 11 and the hand-off notes |
 | Encoding against real shaders | proposed |
 
 ## Files

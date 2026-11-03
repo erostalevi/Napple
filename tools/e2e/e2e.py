@@ -36,7 +36,7 @@ TITLES = {
 }
 KNOWN = [
     (re.compile(r"CRASH signal=11 fault=0x8 pc=main\+0x6d65a4"), "ACNH intermittent null dereference in game code (main+0x6d65a4, a singleton whose field was not set yet) about 1 s into a start, seen under host load (kernel-threads note: a start-up ordering race between game threads, not reproduced without load)"),
-    (re.compile(r"sdk\+0xc80730"), "ACNH intermittent guest Break at sdk+0xc80730 about 1 s into a headless start (independent of the fps mode; tracked in the orchestration notes)"),
+    (re.compile(r"sdk\+0xc80730"), "ACNH intermittent guest Break at sdk+0xc80730 about 1 s into a headless start (independent of the fps mode)"),
 ]
 
 

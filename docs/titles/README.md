@@ -1,7 +1,7 @@
 # Titles
 
 Status of the four Testing Material titles. Numbers are scripted/measured (headless unless said) on an Apple M-series Mac, never "played" unless a note says a person did.
-Symptom lookup: [../symptoms.md](../symptoms.md). Status as of 2026-10-26; later branches may have moved it: check the [change archive](../archive/changes/README.md) and the integrator files.
+Symptom lookup: [../symptoms.md](../symptoms.md). Status as of 2026-10-26; later branches may have moved it: check the [change archive](../archive/changes/README.md).
 
 | Title | Id | macOS | iOS Simulator | Note |
 |---|---|---|---|---|
@@ -11,7 +11,7 @@ Symptom lookup: [../symptoms.md](../symptoms.md). Status as of 2026-10-26; later
 | Mario Kart 8 Deluxe (MK8D) | 0100152000022000 | update + DLC runs races at 40-47 fps | 3.0.5 aborts at ~2 s (48-byte colour attachments; time:u fixed) | [0100152000022000](0100152000022000.md) |
 
 ## Building test data without disk pain (all titles)
-The in-place mode writes a `romfs.map` (extents of the NSP files plus AES-CTR parameters) instead of a RomFS copy: about 250 MB per title instead of 5-19 GB. Development only: the map holds keys and host paths, never ship it, and an iOS device bundle needs the real RomFS. Needs the `napple` CLI from a branch with `--update-romfs in-place` (branch `claude/mk8d-64-2026-10-25-titles` at the time of writing).
+The in-place mode writes a `romfs.map` (extents of the NSP files plus AES-CTR parameters) instead of a RomFS copy: about 250 MB per title instead of 5-19 GB. Development only: the map holds keys and host paths, never ship it, and an iOS device bundle needs the real RomFS. Needs the `napple` CLI from a branch with `--update-romfs in-place` (branch `mk8d-64-2026-10-25-titles` at the time of writing).
 ```bash
 cargo build --release -p napple-cli
 target/release/napple build <nsp files or folder> -k "/Users/neto/Documents/Napple/Testing Material/Keys 22.1.0/prod.keys" --firmware "/Users/neto/Documents/Napple/Testing Material/Firmware.22.1.0.zip" --updates latest --dlc all --data-only --update-romfs in-place -o <scratch dir>

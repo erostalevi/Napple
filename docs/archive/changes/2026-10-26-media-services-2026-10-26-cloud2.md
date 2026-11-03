@@ -1,7 +1,7 @@
 # media-services (cloud2, 2026-10-26): media engines, JPEG, Vorbis/Opus
 
-Branch `claude/media-services-2026-10-26-cloud2` (Linux cloud session; base `e856e49`). Everything here is **tested on Linux, unbuilt on macOS and unverified with a real title**.
-Architecture and tables: [runtime-services.md, "Media services"](../../architecture/runtime-services.md). Hand-off: `integrators/claude-media-services-2026-10-26-cloud2.md`.
+Branch `media-services-2026-10-26-cloud2` (Linux cloud session; base `e856e49`). Everything here is **tested on Linux, unbuilt on macOS and unverified with a real title**.
+Architecture and tables: [runtime-services.md, "Media services"](../../architecture/runtime-services.md). Hand-off: the hand-off notes.
 
 ## What changed
 1. **nvdrv multimedia devices** (`nvdrv.c`, new `nvdrv_media_core.[ch]`, `nvdrv_media_regs.h`, `decoder_backend.h`, `decoder_null_core.c`, `codec_headers_core.[ch]`).

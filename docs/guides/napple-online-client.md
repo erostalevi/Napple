@@ -1,6 +1,6 @@
 # Napple Online client core
 
-The runtime-side client of Napple Online (orchestrations/ONLINE-CONTRACT.md): shared sign-in, account/profile/social calls, the local-user to profile
+The runtime-side client of Napple Online (docs/guides/napple-online-client.md): shared sign-in, account/profile/social calls, the local-user to profile
 mapping, and the function table the overlay's Online tab uses. Code: `crates/napple-cloud/src/online/` (Rust) and `runtime/src/online/` (C).
 
 ## Shared credentials

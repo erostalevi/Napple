@@ -151,7 +151,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 - [2026-10-28-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
 
 ## Unattended rounds (2026-10-27-b7 to 2026-11-02-r10)
-Hand-off files of these rounds (orchestrations and integrator files) are in the [process archive](../../process/archive/README.md).
+Hand-off files of these rounds (assignments and hand-off notes) are in the [process archive](../../process/archive/README.md).
 
 ### Batch 2026-10-27-b7 (notes not listed above)
 | Note | Summary |

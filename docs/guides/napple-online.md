@@ -145,7 +145,7 @@ empty (open). Not done: friend requests sent from a game, profile images.
 | 2. Server unit tests | tested (`cargo test -p napple-online`) |
 | 3. Client: Napple tokens, game-server name redirected | verified on MK8D (run log) |
 | 4. MK8D connects, logs in, reaches the online menu | verified on MK8D (needs the ssl IoMode / ResultWouldBlock change of this branch and the bsd Poll timeout fix of net-host-provider) |
-| 4. Worldwide matchmaking | SessionKeepFailed (2618-0562) fixed: verbose gatherings (flags 0x200 / 0x800) announce every join, the joiner's own included. Pia's NAT check passes (natm=1, natf=1). Two instances are matched into one gathering and the joiner gets the host's station URL. Still open: 2618-0006 right after Pia's NatDetectionJob, before any peer-to-peer packet (online-pia integrator file) |
+| 4. Worldwide matchmaking | SessionKeepFailed (2618-0562) fixed: verbose gatherings (flags 0x200 / 0x800) announce every join, the joiner's own included. Pia's NAT check passes (natm=1, natf=1). Two instances are matched into one gathering and the joiner gets the host's station URL. Still open: 2618-0006 right after Pia's NatDetectionJob, before any peer-to-peer packet |
 | 5. Without `NAPPLE_ONLINE_SERVER`: unchanged | tested (unit test; runtime tests) |
 
 Not implemented: DataStore (115), the MK8D tournament ("Competition") and SimpleSearchObject methods, real rankings, friends / presence through

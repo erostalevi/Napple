@@ -1,6 +1,6 @@
 # 2026-10-25 ios-sim-titles: the four titles on the iOS Simulator
 
-Branch claude/ios-sim-2026-10-25-titles. Details and the table of results: `docs/ios.md`, last section.
+Branch ios-sim-2026-10-25-titles. Details and the table of results: `docs/ios.md`, last section.
 
 - Verified on the Simulator (iPhone 17, iOS 26.1): LAS boots to its title screen with video, audio and the touch controller; SMO reaches its Start menu; MK8D base (AArch32) runs the interpreter for about 15 s and then hits the Simulator GPU's 32-byte colour-attachment limit; MK8D with the latest update is a 64-bit build that stops at `time:u:300`; ACNH 3.0.3 (delta RomFS) runs 100 s without a crash and without a first frame (same as macOS at the time of the run; ac-render has fixes in flight).
 - Fixes: a32 sources in build_ios.sh; libvpx for the Simulator in build_ios_deps.sh; depth textures Private on iOS (gfx/src/mtl_tex.m); overlapping Metal buffers for pools above maxBufferLength (gfx/src/mtl_core.m); Simulator heap cap 4 GiB (runtime/src/memory.c); AArch32 titles skipped by `dylibize` (napple-build ios.rs); IPA written with `ditto --norsrc --noextattr --noacl`.

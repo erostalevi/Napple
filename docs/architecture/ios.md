@@ -110,7 +110,7 @@ Result with Super Mario Odyssey: dyld accepts the hand-written dylibs as they ar
 **Not validated by the Simulator:** it runs arm64 code as a macOS process, so device code-signing, AMFI/exec-page rules and the real memory limits are untested; the device path is still unverified.
 Simulator-only workarounds: no MetalFX in the Xcode 27 Simulator SDK; `addPresentedHandler:` / `presentDrawable:afterMinimumDuration:` missing from its headers (the former also at run time); Metal binary archive disabled; the Simulator's phantom "Gamepad (MFi)" does not hide the touch controller.
 
-## Simulator run of the four titles (2026-10-25, branch claude/ios-sim-2026-10-25-titles; Xcode 27.1, iPhone 17 / iOS 26.1 Simulator)
+## Simulator run of the four titles (2026-10-25, branch ios-sim-2026-10-25-titles; Xcode 27.1, iPhone 17 / iOS 26.1 Simulator)
 
 Real libopus and libvpx (v1.14.1) built for the Simulator (`SDK=iphonesimulator VPX=1 tools/build_ios_deps.sh`; the script's libvpx step now uses `--target=arm64-linux-gcc` with the Simulator clang because libvpx's darwin targets force the macOS SDK), then `SDK=iphonesimulator tools/build_ios.sh`, `napple build ... --target ios-sim`, `simctl install/launch`, screenshots through the Simulator tool. Everything below was driven by hand through the touch controller or unattended; none of it was "played".
 

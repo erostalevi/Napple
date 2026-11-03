@@ -1,4 +1,4 @@
-//! A local, in-memory implementation of the account API (orchestrations/ACCOUNT-CONTRACT.md) for tests and offline development.
+//! A local, in-memory implementation of the account API (`docs/guides/napple-account.md`) for tests and offline development.
 //! Not the server (crates/napple-account is): no passkeys, no email delivery, no persistence, opaque random tokens instead of JWTs.
 //!
 //! - Email sign-in: the code is `fixed_code` when set, else random and printed to stdout.

@@ -1,6 +1,6 @@
 # 2026-11-02 core-ordering-kernel (batch 2026-11-02-r4, Mac)
 
-Branch `claude/core-ordering-kernel-2026-11-02-r4`. The 32-bit twin of the r3 race fix (acquire / release for every lifted exclusive, RCsc
+Branch `core-ordering-kernel-2026-11-02-r4`. The 32-bit twin of the r3 race fix (acquire / release for every lifted exclusive, RCsc
 `lda` / `stl`), svcGetInfo 19 / 27, a non-fail summary for svcExitProcess after nnMain returned, index links for the r1-r3 change notes.
 
 ## 1. AArch32 lifter memory ordering (`runtime/src/a32jit/a32lift.c`)

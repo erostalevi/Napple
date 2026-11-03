@@ -1,6 +1,6 @@
 # 2026-11-02 leftovers-a32-viewport-docs (batch 2026-11-02-r5, Mac)
 
-Branch `claude/leftovers-a32-viewport-docs-2026-11-02-r5` (base `orchestrate/2026-11-02-r5` = `2a5dab5`). Three leftovers of round 4: the AArch32
+Branch `leftovers-a32-viewport-docs-2026-11-02-r5` (base `batch/2026-11-02-r5` = `2a5dab5`). Three leftovers of round 4: the AArch32
 interpreter's `lda` / `stl`, per-viewport swizzles, and the docs checker's orphans and stale support tables.
 
 ## 1. Interpreter `lda` / `stl` (`runtime/src/a32/a32_exec.c`)
@@ -39,14 +39,14 @@ interpreter's `lda` / `stl`, per-viewport swizzles, and the docs checker's orpha
   - a geometry program that forwards the triangle and writes index 1 gets viewport 1's in the pass-through (right half, then a horizontal half).
 
 ## 3. Docs
-- `docs/process/archive/README.md` (new): the orchestration and integrator files of rounds r1-r4 per round, with each item's goal. Linked from
+- `docs/process/archive/README.md` (new): the assignment and hand-off notes of rounds r1-r4 per round, with each item's goal. Linked from
   `docs/index.md`. The docs checker's 38 orphans under `docs/process/archive` are gone.
 - `docs/archive/changes/README.md`: a section "Unattended rounds" with every change note of batch b7 that the README did not list, and of rounds
   r1-r5, one line each. `docs/index.md` links that section instead of the r4 nested list. The two r4 notes the checker reported (gfx-views-raster,
   ipc-reference-audit) are in it.
-- Support tables regenerated: `python3 -I tools/support/gen_support.py --refresh-snapshot .claude/skills/percent-analysis/history`
+- Support tables regenerated: `python3 -I tools/support/gen_support.py --refresh-snapshot the private `percent-analysis` tooling
   (snapshot 2026-11-02-8389280, 98.9%; it was 2026-10-26, 91.5%), and the matrix from `compat/matrix.json` (last compat run 2026-10-28).
-  `--refresh-snapshot` without an argument looks for the history at `../.claude/`, the old nested layout; in this flat checkout it has to be given.
+  `--refresh-snapshot` without an argument looks for the history one level up, the old nested layout; in this flat checkout it has to be given.
 - `python3 tools/check_docs.py`: `checked 241 Markdown files: OK` (was 42 problems).
 
 ## Verified here (Mac)

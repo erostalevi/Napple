@@ -1,6 +1,6 @@
 # Tooling (REA, Ghidra, JDK, gh)
 
-Installed 2026-10-20 on macOS 27 / arm64 for the shared-signatures work. Nothing here edits any Claude/agent configuration.
+Installed 2026-10-20 on macOS 27 / arm64 for the shared-signatures work.
 
 | Tool | Version | How installed | Where |
 |---|---|---|---|

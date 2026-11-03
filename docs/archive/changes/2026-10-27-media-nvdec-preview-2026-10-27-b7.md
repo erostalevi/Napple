@@ -1,6 +1,6 @@
 # media-nvdec-preview (2026-10-27, batch b7): MK8D's preview videos play through nvhost-nvdec + VIC
 
-Branch `claude/media-nvdec-preview-2026-10-27-b7` (Mac session, base `6f70b92`). **Verified on this Mac with MK8D (base + update + DLC, headless, audio off, under the
+Branch `media-nvdec-preview-2026-10-27-b7` (Mac session, base `6f70b92`). **Verified on this Mac with MK8D (base + update + DLC, headless, audio off, under the
 game lock): the Grand Prix mode panel and the cc-select panel, green before, now play their preview video cleanly, with no macroblock corruption.**
 
 ## The preview: three faults, none of them the b6 candidates
@@ -42,7 +42,7 @@ Evidence (run logs in the session scratchpad; the frames are in the shared notes
   unverified), and no unimplemented ioctl appeared in the MK8D runs (an unknown one is still logged and listed in the summary). The nvdisp ioctls stay as proposed.
 
 ## Verified / tested / not done
-- Verified (MK8D, this Mac): both preview panels play; 0 NVDEC errors over 240 decodes; golden route result in the integrator file.
+- Verified (MK8D, this Mac): both preview panels play; 0 NVDEC errors over 240 decodes; golden route result in the hand-off notes.
 - Tested: `make -C runtime test test-services test-host` green.
 - Not verified: other titles' nvdec streams (only MK8D sends H.264 to nvhost-nvdec among the test titles); RGB/block-linear VIC output (MK8D uses NV12 pitch
   linear; unit tests only); caps:dc on a title (none of the four test titles opens it).

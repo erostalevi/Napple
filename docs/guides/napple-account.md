@@ -5,7 +5,7 @@
 encrypted save-key exchange, cloud-save version metadata with presigned S3 URLs, player profiles with
 reserved-name rules, and admin grants. There are no paid plans this round (contract decision 2026-11-02):
 every account gets every feature, storage limits are plain config. It never involves Nintendo accounts or servers, and it only ever stores **save
-ciphertext**: never game content, keys or firmware. The shared contract is `orchestrations/ACCOUNT-CONTRACT.md`.
+ciphertext**: never game content, keys or firmware. The shared contract is `docs/guides/napple-account.md`.
 This guide is the API reference, the security and threat model, the data-retention rules and a local walkthrough.
 
 ## Run it locally
@@ -123,7 +123,7 @@ Up to 8 per account (the first is created with the account); the profile is the 
 | `links` | <= 3 of `{kind: discord\|instagram\|x\|web, value}`; `web` must be an `https://` URL (no credentials, ASCII host with a dot), handles are 2-32 of `[A-Za-z0-9_.]` (a leading `@` is dropped) |
 | `icon_id` | built-in icon 0..47 |
 | `photo` | `null` or `{url, updated_at}` (see below) |
-| `tier` | 1..5 visibility tier, default 1 (the table is in `orchestrations/ONLINE-CONTRACT.md`; the rules are the pure function `napple_visibility::can_view`, shared with napple-social) |
+| `tier` | 1..5 visibility tier, default 1 (the table is in `docs/guides/napple-social.md`; the rules are the pure function `napple_visibility::can_view`, shared with napple-social) |
 | `friend_code` | `NP-` + 12 digits, last one a Luhn check digit; assigned automatically (also to profiles inserted by other code paths: SQLite trigger), stable, unique |
 
 `POST /profiles {nickname, icon_id?, bio?, links?, tier?}`; `PATCH /profiles/{id}` takes any subset of

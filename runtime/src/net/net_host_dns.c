@@ -2,7 +2,7 @@
  * any VPN or split-DNS setup apply exactly as for other host programs. A name the guest builds from a template it never filled in (nsd answers names
  * unchanged) simply does not resolve.
  *
- * The console vendor's own domains never resolve here (orchestrator requirement, 2026-11-02): a title must not reach the real online service through
+ * The console vendor's own domains never resolve here (project rule since 2026-11-02): a title must not reach the real online service through
  * this provider. Such a name answers "host not found" (EAI_NONAME), exactly like an offline resolver, unless net_host_redirect_lookup maps it to a
  * configured Napple server (a later item fills that hook; today it maps nothing). */
 #include "net_host.h"

@@ -1,6 +1,6 @@
 # mod-glue-core (2026-10-27, Linux cloud): `napple build --mods`, romfs overlay lookup, control.nacp
 
-Branch `claude/mod-glue-core-2026-10-27`. QoL filler (0 coverage points). Status words: tested = unit/e2e test passes on Linux; nothing here was run on a Mac.
+Branch `mod-glue-core-2026-10-27`. QoL filler (0 coverage points). Status words: tested = unit/e2e test passes on Linux; nothing here was run on a Mac.
 
 ## What changed
 - `crates/napple-mods/src/buildglue.rs` (new): `ModSet` (load/validate/resolve, set key, manifest record, apply, overlay writer).

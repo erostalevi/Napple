@@ -1,7 +1,7 @@
 # nvdrv-public-layouts (2026-11-02-r10): GPU nodes, nvdisp and the media engines checked against public layouts
 
-Branch `claude/nvdrv-public-layouts-2026-11-02-r10`, Linux cloud session (the macOS runtime cannot build here). Integrator file:
-`integrators/claude-nvdrv-public-layouts-2026-11-02-r10.md`. Full per-ioctl table with sources: [`docs/reference/nvdrv-layouts.md`](../../reference/nvdrv-layouts.md).
+Branch `nvdrv-public-layouts-2026-11-02-r10`, Linux cloud session (the macOS runtime cannot build here). hand-off notes:
+the hand-off notes. Full per-ioctl table with sources: [`docs/reference/nvdrv-layouts.md`](../../reference/nvdrv-layouts.md).
 
 ## Why
 The coverage items "/dev/nvhost-gpu, as-gpu, ctrl-gpu", "/dev/nvdisp-disp0", "/dev/nvhost-nvdec, vic, nvjpg, msenc" and "JPEG (nvjpg / caps)" were
@@ -46,7 +46,7 @@ partial because their layouts were written from memory and nothing pinned them. 
   failures, `test_svc_mii.c:35`, `test_svc_nifm_audit.c:54`) are identical on `main` and unrelated. The three touched tests are also clean under ASan +
   UBSan; `check-syntax.sh` clean (gcc, clang).
 - macOS: **unbuilt** (commits marked `unbuilt:`). `nvdrv.c` was not touched; one routing line there is needed for the 'G' user-data ioctls on a GPU channel
-  (patch in the integrator file).
+  (patch in the hand-off notes).
 - Not implemented on purpose (no reachable public layout; switchbrew could not be fetched): as-gpu REMAP, the ctrl-gpu debug / PMU / time-correlation
   ioctls, channel SET_TIMESLICE, nvdisp FLIP / FLIP4 / bandwidth / capture / CRC, NVJPG decode of a header-less scan. Listed per row in the layout table.
 - No title of the four opens nvdisp, nvjpg or msenc, and the GPU nodes are only used when NVN is bypassed, so the X1-generation offsets of NVJPG / MSENC

@@ -44,4 +44,4 @@ Name-only (same id, same behaviour): `IAudioIn` 1, 2, 5, 12, 13; `IAudioOut` 1, 
 - Ids and names of every changed row: switchbrew tables (read 2026-11-02).
 - Return layouts taken from the old handlers and kept: pctl 1018 (no output) and 1062 (one bool), the u8 / u32 words of the nifm settings, GetCurrentSettings = the 12-byte block of GetSafetyLevelSettings (1034).
 - Inferred, unverified against a title: nifm GetAppletInfo's applet and empty argument array, GetRequirement padding, wireless default on (it was effectively off before because the old ids hit another handler), ethernet default off, ectx registrar argument layout (only the first word is logged), the miiimg migration rows, prepo 10106 / 10107 sharing the 10104 / 10105 handler.
-- No real title was seen calling any renumbered row except as listed in the integrator file's boot table.
+- No real title was seen calling any renumbered row except as listed in the hand-off notes's boot table.

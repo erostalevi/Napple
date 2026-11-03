@@ -1,6 +1,6 @@
 # repo-hygiene (2026-10-26 slim batch): root files, layout, legacy removal
 
-Branch `claude/repo-hygiene-2026-10-26-slim`, Linux cloud. No behaviour changes; only repository layout, community files and documentation.
+Branch `repo-hygiene-2026-10-26-slim`, Linux cloud. No behaviour changes; only repository layout, community files and documentation.
 
 ## What changed
 - **Legacy removal.** The base commit (`a744b7f`) is tagged `archive/legacy-projects-2026-10`; `LASRecomp/` (548 files) and `MacNativeGames/` (877 files) were then removed in one commit that names the tag. History stays reachable with `git show archive/legacy-projects-2026-10:LASRecomp/...`.
@@ -8,7 +8,7 @@ Branch `claude/repo-hygiene-2026-10-26-slim`, Linux cloud. No behaviour changes;
 - **`.github/`**: `pull_request_template.md`, `ISSUE_TEMPLATE/bug_report.yml`, `feature_request.yml` (compat-report.yml and config.yml kept), `dependabot.yml` (cargo, github-actions, swift in `/studio`), `CODEOWNERS` (@erostalevi).
 - **README**: badges, mermaid pipeline diagram, per-title status table (every cell copied from `docs/titles/README.md` and `docs/ios.md`), repository layout, FAQ, contribution links, license line.
 - **Tools layout**: `tools/dev_*.sh` and `dev_README.md` to `tools/dev/` (with `synth_keys.m`, which only they use; their `cd "$(dirname "$0")/.."` became `../..`), `rescue_icloud.sh` and `flaky_boot.sh` to `tools/legacy/`, new `tools/README.md` (purpose and requirements for every script; `rescue_icloud.sh` flagged obsolete). Tracked `__pycache__/*.pyc` files removed from the index.
-- **Process folders** (outer repo): `integrators/done/` (37 files) and `orchestrations/done/` (28 files) moved with `git mv` to `docs/process/archive/{integrators,orchestrations}/`; `integrators/` and `orchestrations/` keep `README.md` and `TEMPLATE.md` and point to the archive. The workflow skills under `.claude/skills/napple-*` and `Napple/docs/tooling.md` were updated to the new paths.
+- **Process folders** (outer repo): `hand-off notes/done/` (37 files) and `assignments/done/` (28 files) moved with `git mv` to `docs/process/archive/{hand-off notes,assignments}/`; `hand-off notes/` and `assignments/` keep `README.md` and `TEMPLATE.md` and point to the archive. The workflow skills under the private `napple-` tooling*` and `Napple/docs/tooling.md` were updated to the new paths.
 
 ## Decisions (no questions were asked)
 - Upstream URL for MacNativeGames is not recorded anywhere in the repo, so the README credit points at the tag `archive/legacy-projects-2026-10` instead of inventing a URL.
@@ -19,10 +19,10 @@ Branch `claude/repo-hygiene-2026-10-26-slim`, Linux cloud. No behaviour changes;
 - `docs/process/archive/` is at the OUTER repo root (not under `Napple/docs/`) so it stays out of the public tree and out of docs-consolidate's ownership.
 
 ## Grep evidence (done on the base commit, before removal)
-- `git grep -nI -e LASRecomp -e MacNativeGames -- . ':!LASRecomp' ':!MacNativeGames'` hits only: prose/credits in `Napple/README.md`, `THIRD_PARTY_NOTICES.md`, `gfx/THIRD_PARTY_NOTICES.md`, `docs/*.md`, `docs/changes/*.md`, source comments (`gfx/src/shader/maxwell_translate.c`, `runtime/src/movie.c/.h`), and `.claude/skills/napple-latest` (a read-only report loop guarded by `[ -d "$r/.git" ]`, so a missing folder is skipped). None in any Makefile, `Package.swift`, `Cargo.toml`, `.github/workflows/*`, or markdown link target.
+- `git grep -nI -e LASRecomp -e MacNativeGames -- . ':!LASRecomp' ':!MacNativeGames'` hits only: prose/credits in `Napple/README.md`, `THIRD_PARTY_NOTICES.md`, `gfx/THIRD_PARTY_NOTICES.md`, `docs/*.md`, `docs/changes/*.md`, source comments (`gfx/src/shader/maxwell_translate.c`, `runtime/src/movie.c/.h`), and the private `napple-latest` tooling (a read-only report loop guarded by `[ -d "$r/.git" ]`, so a missing folder is skipped). None in any Makefile, `Package.swift`, `Cargo.toml`, `.github/workflows/*`, or markdown link target.
 - Credits and notices are kept (they name the projects, not the folders).
-- After the moves: `git grep -n 'tools/dev_\|tools/rescue_icloud\|tools/flaky_boot\|tools/synth_keys'` finds only `tools/dev/README.md` (updated) and old change notes (history, left as written). `git grep -n 'integrators/done\|orchestrations/done'` finds nothing outside the archive and the original assignment file `orchestrations/repo-hygiene.md`.
-- `python3 tools/check_docs.py` is green (see integrator file for the final run).
+- After the moves: `git grep -n 'tools/dev_\|tools/rescue_icloud\|tools/flaky_boot\|tools/synth_keys'` finds only `tools/dev/README.md` (updated) and old change notes (history, left as written). `git grep -n 'hand-off notes/done\|assignments/done'` finds nothing outside the archive and the original assignment file assignment `repo-hygiene`.
+- `python3 tools/check_docs.py` is green (see hand-off notes for the final run).
 
 ## Verified vs not
 - tested: `tools/check_docs.py` (links/anchors); `clang-format --style=file` parses `.clang-format`; rustfmt.toml accepted by rustfmt.

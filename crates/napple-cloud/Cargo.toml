@@ -10,7 +10,7 @@ description = "Napple Account client: Keychain secrets, E2E-encrypted cloud save
 crate-type = ["rlib", "staticlib"]
 
 [features]
-# napple-cloud-stub: a local in-memory implementation of orchestrations/ACCOUNT-CONTRACT.md for tests and offline development
+# napple-cloud-stub: a local in-memory implementation of `docs/guides/napple-account.md` for tests and offline development
 stub = ["dep:tiny_http"]
 
 [dependencies]

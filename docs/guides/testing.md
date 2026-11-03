@@ -88,7 +88,7 @@ Run it after every docs change; the `docs` job fails the pull request otherwise.
 ## Whole build: `tools/ci_build.sh`
 `tools/ci_build.sh [output-dir]` (macOS, Apple Silicon): `cargo build --release -p napple-cli`, `make` in `input`, `audio`, `frontend`, `gfx lib adapter`, `runtime`, `packaging`, then (unless `NAPPLE_SKIP_TESTS=1`; failures only warn)
 `cargo test --release && make -C runtime test-host`, then `studio/build_app.sh` and `studio/packaging/make_release.sh` into `dist/`. Env: `NAPPLE_VERSION`, `NAPPLE_BUILD`, `NAPPLE_SIGN_IDENTITY`.
-Needs Xcode command line tools, rustup, `brew install opus libvpx`. `.claude/skills/napple-latest/napple_latest.sh` runs the same commands plus a status survey.
+Needs Xcode command line tools, rustup, `brew install opus libvpx`.
 
 ## iOS
 `SDK=iphonesimulator tools/build_ios_deps.sh && SDK=iphonesimulator tools/build_ios.sh` builds `runtime/build-ios-sim/napple-runtime` for the Simulator (compile and link; nothing is run). See [ios.md](../architecture/ios.md).

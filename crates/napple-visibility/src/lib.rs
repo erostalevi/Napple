@@ -1,4 +1,4 @@
-//! Visibility tiers (`orchestrations/ONLINE-CONTRACT.md`, "Visibility tiers"). The rules live here once; napple-account
+//! Visibility tiers (docs/guides/napple-social.md, "Visibility tiers"). The rules live here once; napple-account
 //! (photo/profile data) and napple-social (search, requests, presence, stats) both call [`can_view`].
 //!
 //! | Tier | Search | Friend req | Profile/presence/stats | Photo+nickname | Lobby real name | Recent | Game friend req |

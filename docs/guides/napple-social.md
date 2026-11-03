@@ -79,7 +79,7 @@ Every error is `{"error": {"code": "...", "message": "..."}}`. 401s carry `WWW-A
 | 404 | `not_found`, `profile_not_found`, `code_not_found`, `request_not_found`, `not_friends` (remove), `not_blocked`, `invite_not_found` |
 | 409 | `request_exists`, `already_friends`, `blocked_by_you`, `friend_limit`, `target_friend_limit`, `too_many_pending`, `target_inbox_full`, `block_limit`, `presence_expired`, `not_joinable`, `too_many_invites` |
 | 410 | `invite_expired` |
-| 422 | `reserved_name`: presence `title_name` / `mode` break the reserved-name rules of `orchestrations/ACCOUNT-CONTRACT.md` ("napple" anywhere, look-alikes included; the `nap-` prefix; invisible characters), or an invite `message` contains "napple" or invisible characters (`src/names.rs`, a copy of napple-account's) |
+| 422 | `reserved_name`: presence `title_name` / `mode` break the reserved-name rules of `docs/guides/napple-account.md` ("napple" anywhere, look-alikes included; the `nap-` prefix; invisible characters), or an invite `message` contains "napple" or invisible characters (`src/names.rs`, a copy of napple-account's) |
 | 429 | `rate_limited` |
 | 503 | `account_unavailable` |
 
@@ -193,7 +193,7 @@ sweeper, server). Tests: `tests/auth.rs`, `tests/friends.rs`, `tests/presence.rs
 ## Visibility tiers, search, lobbies, recent players, reports, stats (round 12)
 
 Every profile has a tier 1..5 owned by napple-account (`tier` in its profile JSON). Social keeps a snapshot (refreshed by the owner's own calls and by
-the service-credential directory lookup, TTL above) and applies the table of `orchestrations/ONLINE-CONTRACT.md` in `src/visibility.rs` (a thin adapter over `crates/napple-visibility`)
+the service-credential directory lookup, TTL above) and applies the table of `docs/guides/napple-social.md` in `src/visibility.rs` (a thin adapter over `crates/napple-visibility`)
 (`can_view(viewer, tier, kind)`; a private copy of the names `crates/napple-visibility` will own). A profile a viewer may not see answers exactly like a missing
 one (404), and **a block hides both ways** at every tier.
 

@@ -1,6 +1,6 @@
 # First iPhone run: which title, how to build and install it
 
-Measured 2026-10-27 on the iOS Simulator (iPhone 17 Simulator, Apple-silicon Mac under heavy load from other sessions), branch `claude/ios-candidate-2026-10-27`. Audio off (`NAPPLE_AUDIO_OFF=1`). Data: Testing Material, keys 22.1.0, firmware 22.1.0. Nothing here has run on a physical iPhone yet.
+Measured 2026-10-27 on the iOS Simulator (iPhone 17 Simulator, Apple-silicon Mac under heavy load from other sessions), branch `ios-candidate-2026-10-27`. Audio off (`NAPPLE_AUDIO_OFF=1`). Data: Testing Material, keys 22.1.0, firmware 22.1.0. Nothing here has run on a physical iPhone yet.
 
 **Recommendation: The Legend of Zelda: Link's Awakening (LAS, `01006BB00C6F0000`, base v0).** It is the only title that boots, renders correctly and plays on the Simulator. A signed device IPA is already built (see below).
 

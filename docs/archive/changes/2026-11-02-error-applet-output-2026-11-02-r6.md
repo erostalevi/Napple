@@ -1,6 +1,6 @@
 # 2026-11-02 error-applet-output (batch 2026-11-02-r6, Mac)
 
-Branch `claude/error-applet-output-2026-11-02-r6` (base `orchestrate/2026-11-02-r6` = `7ea30c3`). net-host-provider found that MK8D's Online Play with
+Branch `error-applet-output-2026-11-02-r6` (base `batch/2026-11-02-r6` = `7ea30c3`). net-host-provider found that MK8D's Online Play with
 `NAPPLE_NET=host` aborts (svcBreak, rc 70) right after the error applet. The cause is not a missing error-applet output. It is the result our am
 answers when a storage channel is empty.
 
@@ -66,7 +66,7 @@ answers when a storage channel is empty.
 |---|---|
 | applet unit tests | `test_svc_applet` 116/0, `_ae` 52/0, `_libs` 290/0 (startup parameter of every mode, PopOutData 0x480 after the error applet, a second PopOutData still 0x480, unimplemented applet 0x2c80), `_host` 539/0, `_am` 67/0, `_web` 219/0, `_album` 63/0 |
 | `make -C runtime GFX=napple test test-services test-ipc-reference` | rc 0 (`ipc_reference` 111 fixtures, missing 0) |
-| MK8D v1376256, Online Play, `NAPPLE_NET=host`, runtime built from this branch merged with `claude/net-host-provider-2026-11-02-r6` (scratch worktree, check only) | rc 0, no Break; `EnsureIdTokenCacheAsync` 0xf601 -> error applet `type 0 (normal), jump-to-settings requested, code 2001-0123` -> PopOutData 0x480 -> the game back on its Online Play menu (screenshots at 27 s and 30 s); the scripted A at 32 s retries Online Play, a second error applet, the menu again (42 s, 50 s). Summary `partial`, "stopped by the run time limit", `missing_ipc []`, `unsupported_svcs []` |
+| MK8D v1376256, Online Play, `NAPPLE_NET=host`, runtime built from this branch merged with `net-host-provider-2026-11-02-r6` (scratch worktree, check only) | rc 0, no Break; `EnsureIdTokenCacheAsync` 0xf601 -> error applet `type 0 (normal), jump-to-settings requested, code 2001-0123` -> PopOutData 0x480 -> the game back on its Online Play menu (screenshots at 27 s and 30 s); the scripted A at 32 s retries Online Play, a second error applet, the menu again (42 s, 50 s). Summary `partial`, "stopped by the run time limit", `missing_ipc []`, `unsupported_svcs []` |
 
 Other checks:
 - **Offline Online Play, scratch merge:** the same script without `NAPPLE_NET`. rc 0, the netConnect applet twice (a registered handler with

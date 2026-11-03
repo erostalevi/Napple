@@ -1,6 +1,6 @@
 # Fuzz findings
 
-Every crash, panic, hang, overflow or unbounded allocation found by the robustness work (2026-10-27, branch `claude/fuzz-hardening-2026-10-27`), with the fix and its regression test. How to run the fuzzers: [fuzzing guide](../guides/fuzzing.md). "Found by": **fuzz** = cargo-fuzz or a C fuzz driver, **mutation** = the seeded-mutation test with its allocation guard, **audit** = read while writing the targets, then reproduced with a hostile input.
+Every crash, panic, hang, overflow or unbounded allocation found by the robustness work (2026-10-27, branch `fuzz-hardening-2026-10-27`), with the fix and its regression test. How to run the fuzzers: [fuzzing guide](../guides/fuzzing.md). "Found by": **fuzz** = cargo-fuzz or a C fuzz driver, **mutation** = the seeded-mutation test with its allocation guard, **audit** = read while writing the targets, then reproduced with a hostile input.
 
 ## Rust
 

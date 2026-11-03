@@ -1,6 +1,6 @@
 # nvjpg-headerless-redo (2026-11-03, round 11)
 
-Header-less NVJPG decode, rebuilt on the real `nvjpg_drv_pic_param_s` layout of round 10. The earlier attempt (`claude/nvjpg-headerless-2026-11-03-r11`) was written
+Header-less NVJPG decode, rebuilt on the real `nvjpg_drv_pic_param_s` layout of round 10. The earlier attempt (`nvjpg-headerless-2026-11-03-r11`) was written
 against the round-9 reduced register model and stays unmerged; only its library half was taken.
 
 - **jpeg_core** (cherry-picked from that branch): `decode_frame` split out of the headered decoder, and `napjpeg_decode_raw_rgba` (`JpegRawParams`: geometry,

@@ -24,7 +24,7 @@ Core Audio and run real games. The process lets both work in parallel without st
 - **percent-analysis**: estimates how much of the Switch platform the pipeline and runtime cover and lists what is missing first.
 
 ## Rules workers follow
-1. Edit only owned paths; shared files (`docs/architecture/runtime-services.md`, `COMPATIBILITY.md`, `Cargo.toml`, `Cargo.lock`, top-level Makefiles) are append-only and minimal.
+1. Edit only owned paths; shared files (`docs/architecture/runtime-services.md`, `COMPATIBILITY.md`, `Cargo.toml`, top-level Makefiles (Cargo.lock is not tracked)) are append-only and minimal.
 2. Never push to `main`, never rewrite history; each session pushes its own branch.
 3. Use honest status words: *verified* (ran here), *tested* (unit test passed), *unbuilt* (never compiled on macOS), *untested*, *proposed*. A feature that is not verified counts as partial.
 4. A Linux session does not fake macOS code: portable logic gets tests, platform glue stays thin and is listed as unbuilt for the integrator.

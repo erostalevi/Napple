@@ -31,9 +31,9 @@ In a cloud checkout the repo root may be the `Napple/` folder itself: then paths
    environment; this becomes the "Built and tested" section of your hand-off file.
 
 ## 2. Ownership and collisions
-- Edit only the paths you own. Shared files (`docs/architecture/runtime-services.md`, `COMPATIBILITY.md`, `Cargo.toml`, `Cargo.lock`, top-level Makefiles): append-only and minimal. Never reformat, rename or reorder.
+- Edit only the paths you own. Shared files (`docs/architecture/runtime-services.md`, `COMPATIBILITY.md`, `Cargo.toml`, top-level Makefiles (Cargo.lock is not tracked)): append-only and minimal. Never reformat, rename or reorder.
 - Need a change in someone else's area? Do not make it. Write it in your hand-off file under "Needs from other areas".
-- New files are fine inside your area. Put your change note in `docs/archive/changes/<date>-<branch>.md`, not in an existing note.
+- New files are fine inside your area. Put your change note in `docs/archive/changes/<date>-<branch-without-claude/>.md`, not in an existing note. Public files (notes, docs, code comments) must not name Claude, sessions, `integrators/` or `orchestrations/`: say "branch <name>" and describe results directly (publish.sh refuses a tree that does).
 - Do not edit `integrators/` files that are not yours, and never edit anything in `orchestrations/`. Do not run `napple-latest`, `napple-integrate` or `percent-analysis`; those belong to other sessions.
 
 ## 3. Behaviour by environment
@@ -58,7 +58,7 @@ In a cloud checkout the repo root may be the `Napple/` folder itself: then paths
 
 ## 4. Finishing (all of this, in this order)
 1. Everything committed on your branch; `git status --short` clean (except files you intentionally leave out; say which).
-2. Your change note in `docs/archive/changes/<date>-<branch>.md`: what changed, what is verified vs not, files.
+2. Your change note in `docs/archive/changes/<date>-<branch-without-claude/>.md` (no Claude/integrator/orchestration wording, see section 2): what changed, what is verified vs not, files.
 3. Your **integrator file**: copy `integrators/TEMPLATE.md` (at the git root; it is the source of truth for the format, the copy below is a fallback if the folder is missing) to `integrators/<branch-with-slashes-as-dashes>.md` and fill every section. Set `orchestration: <name>` in the front matter when you were given an orchestration file (else `none`), and check each item of its "Acceptance" list in "Built and tested here" with an honest status. It must be self-contained: the integrator has no memory of your session.
 4. Commit it (`docs: integrator file for <branch>`) and **push your branch**:
    ```bash

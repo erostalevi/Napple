@@ -46,7 +46,7 @@ if !mods.is_empty() {                                            // new paramete
 }
 ```
 
-Caveats for the integrator:
+Caveats when wiring this in:
 
 * `Nso::parse` checks segment hashes before the hook runs, so patched segments are not re-verified: correct.
 * `tables::build_tables` receives `nso: Some(bytes)` (the original file) and reads symbols and relocations from it. Patches that touch `.dynsym`, `.dynamic` or relocation data would be missed; refuse such patches in the hook (module offsets inside the `DT_*` tables) or pass the patched segments through.

@@ -1,6 +1,6 @@
 # applets-dlc (batch 2026-10-24-plan5): DLC mounting plus error, player select and controller applets
 
-Branch `claude/applets-dlc-2026-10-24-plan5`, Linux cloud. Status: **tested** (Linux mock), **unbuilt** on macOS.
+Branch `applets-dlc-2026-10-24-plan5`, Linux cloud. Status: **tested** (Linux mock), **unbuilt** on macOS.
 
 ## Changed
 - `aoc:u` (misc.c, new aoc_core.[ch]): count/list/base id/prepare from the manifest's `dlc` array; no DLC keeps today's answers.

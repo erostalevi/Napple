@@ -1,6 +1,6 @@
 # gfx-stages-complete (b8, 2026-10-28)
 
-Branch `claude/gfx-stages-complete-2026-10-28-b8`, Mac. Finishes the geometry / tessellation / transform feedback paths of `gfx/src/mtl_stages.inc`.
+Branch `gfx-stages-complete-2026-10-28-b8`, Mac. Finishes the geometry / tessellation / transform feedback paths of `gfx/src/mtl_stages.inc`.
 
 ## What changed
 - **Software tessellator** (`mtl_stages.inc`: `tessgen` / `tesslist` kernels, `tes_soft_capture`, `draw_tessellation`): isolines (GL rules), transform feedback of tess eval output, and a geometry program after tessellation. Plain triangle / quad patches keep Metal's `drawPatches`. Quads and triangles are tessellated as a uniform grid (the hardware's vertices for equal levels with integer spacing, not its ring triangulation); levels capped by `NAPPLE_GFX_SOFT_TESS_MAX` (16) when a tess control program writes them.

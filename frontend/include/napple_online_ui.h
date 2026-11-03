@@ -1,7 +1,7 @@
 /* Napple Online UI API: the function table the runtime (client-core) provides to the frontend overlay's Online tab.
    No link-time coupling: the runtime fills a napple_online_ui_api and hands it over with napple_frontend_set_online_ui();
    with no table installed the overlay uses its built-in stub (canned data, no servers).
-   Contract: orchestrations/ONLINE-CONTRACT.md. All functions are called on the main thread. State getters copy into caller storage.
+   Contract: `docs/guides/napple-social.md`. All functions are called on the main thread. State getters copy into caller storage.
    Async actions return a request id (> 0) at once and later call the completion on the main thread. */
 #ifndef NAPPLE_ONLINE_UI_H
 #define NAPPLE_ONLINE_UI_H

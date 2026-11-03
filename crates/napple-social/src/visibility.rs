@@ -1,4 +1,4 @@
-//! The five visibility tiers of orchestrations/ONLINE-CONTRACT.md. The rules live in `crates/napple-visibility` (shared with
+//! The five visibility tiers of `docs/guides/napple-social.md`. The rules live in `crates/napple-visibility` (shared with
 //! napple-account); this module keeps napple-social's small API (`Tier`, `Kind`, `Viewer`, `can_view`) and delegates to it.
 
 use napple_visibility as nv;

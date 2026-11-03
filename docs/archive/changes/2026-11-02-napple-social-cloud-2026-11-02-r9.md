@@ -1,6 +1,6 @@
 # napple-social (2026-11-02, batch r9): Napple friends and presence service
 
-Branch `claude/napple-social-cloud-2026-11-02-r9` (Linux cloud session, base `main` = `57431a7`). Status: *tested* (Linux, `cargo test -p napple-social`,
+Branch `napple-social-cloud-2026-11-02-r9` (Linux cloud session, base `main` = `57431a7`). Status: *tested* (Linux, `cargo test -p napple-social`,
 40 tests); not deployed, not yet run against the real napple-account.
 
 ## What
@@ -31,4 +31,4 @@ API and data model: [napple-social guide](../../guides/napple-social.md).
 
 ## Files
 `Cargo.toml` (workspace member), `Cargo.lock` (new packages only; no existing version changed), `crates/napple-social/**`, this note,
-`docs/guides/napple-social.md`, `integrators/claude-napple-social-cloud-2026-11-02-r9.md`.
+`docs/guides/napple-social.md`, the hand-off notes.

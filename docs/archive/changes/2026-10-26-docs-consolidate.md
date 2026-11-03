@@ -1,6 +1,6 @@
 # docs-consolidate (2026-10-26, slim batch): one navigable documentation set
 
-Branch `claude/docs-consolidate-2026-10-26-slim`, Linux cloud. Docs only; no source code touched. Statuses: *tested* = a check run here passed.
+Branch `docs-consolidate-2026-10-26-slim`, Linux cloud. Docs only; no source code touched. Statuses: *tested* = a check run here passed.
 
 ## What changed
 - New layout under `docs/`: `index.md`, `architecture/`, `guides/`, `reference/`, `process/`, `archive/changes/`; `symptoms.md` and `titles/` stay in place. Everything moved with `git mv`.
@@ -13,7 +13,7 @@ Branch `claude/docs-consolidate-2026-10-26-slim`, Linux cloud. Docs only; no sou
 - `tools/check_docs.py`: also checks required files, closed code fences and that every document under docs/ is reachable from docs/index.md (orphans). Archived notes are history: their links are not checked, each must be listed in their README.
 - Site: `docs-site/` (mkdocs-material 9.5.50 / mkdocs 1.6.1 pinned, `hooks.py`), `.github/workflows/pages.yml` builds the docs and publishes them under `/docs/` next to the landing page (docs check runs first), `site/index.html` links to `docs/`. Mermaid is rendered by material in the browser.
 - Decisions: the change notes themselves are unchanged; new notes go in `docs/archive/changes/` and get an index line. A hook turns links that leave `docs/` into GitHub links and shows dead links inside archived notes as plain text.
-  `docs/process/archive/` is described but not created (repo-hygiene moves the old integrator and orchestration files there).
+  `docs/process/archive/` is described but not created (repo-hygiene moves the old integration and assignment files there).
 
 ## Verified
 - tested: `python3 tools/check_docs.py` has only the two `README.md:139` failures (links to the old paths; README is repo-hygiene's). All pages, anchors, orphans pass.

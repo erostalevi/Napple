@@ -1,6 +1,6 @@
 # nvdrv media devices (b8): pitches, VP9, NVJPG encode, MSENC
 
-Branch `claude/nvdrv-media-devices-2026-10-28-b8`. Linux cloud session.
+Branch `nvdrv-media-devices-2026-10-28-b8`. Linux cloud session.
 
 ## Changed
 - `nvdrv_media_core.c`: NVDEC records output pitches per surface; VIC input uses them (fallback unchanged). VP9 picture-info pitches (proposed words 20/21, guarded). NVJPG encode mode. MSENC encode through `EncoderBackend`.
