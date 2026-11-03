@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         **Never attach game files, keys, firmware, dumps or anything derived from them**, here or anywhere else. Logs and metadata only.
-        A game that misbehaves: use the *Compatibility report* form. Wrong pixels: use *Graphics bug*. Security problems: see SECURITY.md.
+        A game that misbehaves: use the *Compatibility report* form. Wrong pixels: use *Graphics bug*. Security problems: report them privately (CONTRIBUTING.md, Reporting security problems).
         How to capture the log and the machine details: docs/guides/contributing-report-a-bug.md.
   - type: textarea
     id: what
