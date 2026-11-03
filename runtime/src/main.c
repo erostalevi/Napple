@@ -392,5 +392,7 @@ int main(int argc, char **argv) {
     }
     extern void memlog_start(void);
     memlog_start();
+    extern void mempressure_start(void);
+    mempressure_start();
     return frontend_run(boot, g_cfg.headless, g_cfg.seconds);
 }

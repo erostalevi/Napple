@@ -35,6 +35,11 @@ command depth, NVN API, Maxwell shader ISA, GPU formats, nvdrv, audio, input, co
   verified with a Mario Kart 8 Deluxe pair that matches, connects, votes a course and reaches the race countdown
   ([note](docs/archive/changes/2026-11-03-mk8d-online-race-2026-11-03-r12.md)).
 - `NAPPLE_NET_LOG=2` dumps the first bytes of every datagram.
+- iOS memory: opt-in disk-backed guest memory (`NAPPLE_IOS_SWAP=1`, default off) using unlinked file-backed mappings, which do not count in the process
+  footprint (measured on macOS and the Simulator: 2 GiB dirtied = 2 MB vs 2050 MB anonymous); memory-pressure trimming (kernel pressure source,
+  available-memory poll, UIKit warning); `extended-virtual-addressing` requested next to `increased-memory-limit` for paid accounts; footprint probe
+  (`tools/swap_probe.c`). Nothing verified on a physical device yet
+  ([note](docs/archive/changes/2026-11-03-ios-memory-swap.md), [design](docs/architecture/memory-swap.md)).
 
 ### Changed
 - `napple-online` tells a joiner about every participant already in a verbose gathering (Notification 3001) and answers MatchmakeExtension 49.

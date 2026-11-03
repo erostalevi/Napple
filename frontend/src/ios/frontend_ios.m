@@ -817,6 +817,7 @@ static void fe_hotkey(void *user, int hotkey) {
 
 @interface NappleAppDelegate : UIResponder <UIApplicationDelegate>
 @end
+extern void napple_memory_warning(void) __attribute__((weak_import));
 @implementation NappleAppDelegate
 - (BOOL)application:(UIApplication *)a didFinishLaunchingWithOptions:(NSDictionary *)o {
     (void)a;
@@ -833,6 +834,7 @@ static void fe_hotkey(void *user, int hotkey) {
 - (void)applicationDidReceiveMemoryWarning:(UIApplication *)a {
     (void)a;
     LOGF("iOS memory warning (the game may be terminated; see docs/architecture/ios.md: increased-memory-limit entitlement)");
+    if (napple_memory_warning) napple_memory_warning(); /* runtime/src/mempressure.m: write back swap-backed pages, drop reusable Metal buffers */
 }
 @end
 

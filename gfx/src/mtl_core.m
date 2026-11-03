@@ -183,6 +183,16 @@ void *ring_alloc(ring *r, uint32_t size, uint32_t align, id<MTLBuffer> __autorel
     }
 }
 
+/* Memory pressure (runtime/src/mempressure.m, any thread): the ring chunks parked for reuse are only a cache, so give them back. They are re-created on demand. */
+void gfx_mtl_trim(unsigned level) {
+    if (!level) return;
+    pthread_mutex_lock(&g_ring_mu);
+    NSUInteger n = g_free_chunks.count;
+    [g_free_chunks removeAllObjects];
+    pthread_mutex_unlock(&g_ring_mu);
+    LOGI("memory pressure level %u: released %lu parked scratch chunks", level, (unsigned long)n);
+}
+
 void ring_end(ring *r) {
     pthread_mutex_lock(&g_ring_mu);
     if (!g_free_chunks) g_free_chunks = [NSMutableArray array];
