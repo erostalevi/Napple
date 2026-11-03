@@ -30,6 +30,7 @@ command depth, NVN API, Maxwell shader ISA, GPU formats, nvdrv, audio, input, co
 ## Unreleased
 
 ### Added
+- Napple Studio redesigned: one fixed-size translucent window that shows only the library, an Add / Build side panel for the whole flow (reading, include, Mac or iOS device options, progress with a live log, done, failed), Play with Debug (game plus a console window with its live log), required first-launch keys, and an eight-tab Settings window (key sets create/delete, iPhone & iPad signing and devices, Mii, Amiibo, Online, engine versions with install from GitHub releases and remove, last build log) ([note](docs/archive/changes/2026-11-03-studio-redesign.md)).
 - Two instances on one Mac can play peer to peer through a local `napple-online` and a `napple-room`: each instance's room virtual address is its
   public address (NAT check "local IPv4" field and virtual port, trusted only for clients on the server's machine; `NAPPLE_ONLINE_NATCHECK_LOCALIP`);
   verified with a Mario Kart 8 Deluxe pair that matches, connects, votes a course and reaches the race countdown

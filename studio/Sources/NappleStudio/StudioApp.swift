@@ -30,40 +30,34 @@ struct StudioApp: App {
     @State private var model = AppModel()
 
     var body: some Scene {
-        WindowGroup("Napple Studio", id: "main") {
+        Window("Napple Studio", id: "main") {
             RootView()
                 .environment(model)
-                .onAppear { delegate.model = model; model.refreshLibrary(adoptOutput: true) }
-                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-                    model.refreshLibrary()
-                }
-                .frame(minWidth: 620, minHeight: 520)
+                .onAppear { delegate.model = model; model.refreshLibrary(adoptOutput: true); SettingsDebug.openIfRequested() }
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in model.refreshLibrary() }
         }
-        .defaultSize(width: 760, height: 680)
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: Theme.windowSize.width, height: Theme.windowSize.height)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Add Game…") { model.pickFilesAndAdd() }.keyboardShortcut("o")
+                Button("Add Game…") { model.pickFilesAndAdd() }.keyboardShortcut("o").disabled(model.sets.isEmpty)
                 Divider()
                 Button("Build") { model.startBuild() }.keyboardShortcut("b").disabled(!model.canBuild)
                 Button("Cancel Build") { model.cancelBuild() }.keyboardShortcut(".").disabled(!model.isBuilding)
             }
-            CommandMenu("Go") {
-                ForEach(Array(Pane.allCases.enumerated()), id: \.element) { i, p in
-                    Button(p.title) { model.pane = p }.keyboardShortcut(KeyEquivalent(Character("\(i + 1)")), modifiers: .command)
-                }
-            }
             CommandMenu("Device") {
                 Button("Refresh Devices") { Task { await model.refreshIOS() } }.keyboardShortcut("r")
-                Button("Install on Device…") { model.installFile() }.disabled(model.selectedDevice == nil)
-            }
-            CommandGroup(after: .toolbar) {
-                Button(model.showInspector ? "Hide Log" : "Show Log") { model.showInspector.toggle() }.keyboardShortcut("l", modifiers: [.command, .option])
+                Button("Install .ipa or .app…") { model.installFile() }.disabled(model.selectedDevice == nil)
             }
             CommandGroup(replacing: .help) {
                 Button("Show Build Logs in Finder") { model.showLogsInFinder() }
                 Link("Napple Studio Guide", destination: URL(string: "https://napple.app/guides/studio")!)
             }
         }
-        Settings { SettingsView().environment(model) }
+        WindowGroup("Console", id: "console", for: UUID.self) { $id in
+            if let id { ConsoleWindow(id: id).environment(model) }
+        }
+        .windowResizability(.contentSize)
+        Settings { SettingsRoot().environment(model) }
     }
 }

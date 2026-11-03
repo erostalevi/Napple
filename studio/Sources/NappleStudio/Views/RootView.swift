@@ -1,191 +1,98 @@
 import SwiftUI
+import AppKit
 import UniformTypeIdentifiers
 import NappleStudioCore
 
+/// The one window: the library, and the Add / Build panel sliding in from the right.
 struct RootView: View {
     @Environment(AppModel.self) private var m
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var m = m
-        VStack(spacing: 0) {
-            HeaderBar()
-            if m.pane == .add { StepBar().padding(.top, 4).padding(.bottom, 12).transition(.opacity) }
-            content
-                .frame(maxWidth: 680)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ZStack(alignment: .trailing) {
+            VStack(spacing: 0) {
+                HeaderBar()
+                LibraryView()
+            }
+            .opacity(m.panelOpen ? 0.5 : 1)
+            .allowsHitTesting(!m.panelOpen && !m.showOnboarding)
+            .padding(.trailing, 0)
+
+            if m.panelOpen { PanelHost().transition(.move(edge: .trailing).combined(with: .opacity)) }
+            if m.dropTargeted { DropOverlay() }
+            if m.showOnboarding { OnboardingDialog() } else if m.showLegal { LegalDialog() }
         }
-        .background(Background())
-        .animation(.smooth(duration: 0.25), value: m.pane)
-        .toolbar(removing: .title)
-        .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WindowMaterial().ignoresSafeArea())
         .overlay(alignment: .bottom) { ToastHost() }
-        .overlay { if m.dropTargeted { DropOverlay() } }
+        .animation(.smooth(duration: 0.25), value: m.panelOpen)
+        .animation(.smooth(duration: 0.2), value: m.dropTargeted)
+        .animation(.smooth(duration: 0.2), value: m.toast)
+        .ignoresSafeArea()
         .onDrop(of: [.fileURL], isTargeted: $m.dropTargeted) { providers in
             Task {
                 var urls: [URL] = []
-                for p in providers { if let u = try? await p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) as? Data, let s = URL(dataRepresentation: u, relativeTo: nil) { urls.append(s) } }
+                for p in providers {
+                    if let d = try? await p.loadItem(forTypeIdentifier: UTType.fileURL.identifier) as? Data, let u = URL(dataRepresentation: d, relativeTo: nil) { urls.append(u) }
+                }
                 await m.handleDrop(urls)
             }
             return true
         }
-        .sheet(isPresented: $m.showLegal) { LegalSheet() }
-        .sheet(isPresented: $m.showInspector) { LogSheet() }
-        .sheet(isPresented: Binding(get: { m.needsSetup && m.pane == .add && m.tour == nil }, set: { _ in })) { SetupSheet() }
-        .background(WindowAccessor { m.window = $0 })
-    }
-
-    @ViewBuilder private var content: some View {
-        switch m.pane {
-        case .library: LibraryView().transition(.opacity)
-        case .add: AddGameView().transition(.opacity)
-        case .devices: DevicesView().transition(.opacity)
+        .onChange(of: m.consoleToOpen) { _, id in
+            guard let id else { return }
+            openWindow(id: "console", value: id)
+            m.consoleToOpen = nil
         }
+        .background(WindowAccessor { w in
+            m.window = w
+            WindowAccessor.configure(w)
+        })
     }
 }
 
-struct Background: View {
-    var body: some View {
-        LinearGradient(colors: [Color.accentColor.opacity(0.10), Color.clear], startPoint: .top, endPoint: .center)
-            .background(.background)
-            .ignoresSafeArea()
-    }
-}
-
-/// Top row: where you are, a way back, and the few things that live outside the flow.
+/// Title row: the name, search, Add Game, Settings. The traffic lights sit at the left.
 struct HeaderBar: View {
     @Environment(AppModel.self) private var m
+    @Environment(\.openSettings) private var openSettings
+
     var body: some View {
-        HStack(spacing: 12) {
-            if m.pane == .library {
-                Text("Napple Studio").font(.title2.weight(.semibold))
-            } else {
-                Button { m.goHome() } label: { Label("Games", systemImage: "chevron.left") }
-                    .buttonStyle(.plain).foregroundStyle(.tint).font(.body.weight(.medium))
-                    .disabled(m.isBuilding).accessibilityIdentifier("header.back")
-                if m.pane == .devices { Text("iPhone & iPad").font(.title2.weight(.semibold)) }
-            }
+        @Bindable var m = m
+        HStack(spacing: 10) {
+            Text("Napple Studio").font(.system(size: 15, weight: .semibold)).padding(.leading, 74)
             Spacer()
-            if m.pane == .library {
-                Button { m.pickFilesAndAdd() } label: { Label("Add Game", systemImage: "plus") }
-                    .buttonStyle(.glassProminent).controlSize(.large).accessibilityIdentifier("toolbar.add")
-            }
-            if m.pane != .devices {
-                Button { m.pane = .devices } label: { Image(systemName: "iphone.gen3") }.buttonStyle(.plain).help("iPhone & iPad").accessibilityLabel("iPhone and iPad")
-            }
-            Button { m.showInspector = true } label: { Image(systemName: "text.alignleft") }.buttonStyle(.plain).help("Show the log (⌥⌘L)").accessibilityLabel("Log")
-            SettingsLink { Image(systemName: "gearshape") }.buttonStyle(.plain).help("Settings")
-            Circle().fill(m.cli == nil ? Color.orange : Color.green).frame(width: 8, height: 8)
-                .help(m.cli == nil ? "Engine not found" : (m.engineMessage ?? "Engine ready")).accessibilityLabel(m.cli == nil ? "Engine not found" : "Engine ready")
+            if !m.presentLibrary.isEmpty { SearchField(text: $m.searchText) }
+            Button { m.pickFilesAndAdd() } label: { Label("Add Game", systemImage: "plus").fontWeight(.semibold) }
+                .buttonStyle(.glassProminent).controlSize(.large).disabled(m.sets.isEmpty)
+                .help(Text("Add a game (⌘O)")).accessibilityIdentifier("header.add")
+            HeaderIconButton(symbol: "gearshape", label: "Settings") { openSettings() }.accessibilityIdentifier("header.settings")
         }
-        .font(.title3)
-        .padding(.horizontal, 24).padding(.top, 14).padding(.bottom, 8)
+        .padding(.horizontal, 16).frame(height: 52)
+        .contentShape(.rect)
+        .gesture(WindowDragGesture())
     }
 }
 
-/// 1 Game, 2 Options, 3 Build, 4 Done: the whole Add flow at a glance.
-struct StepBar: View {
-    @Environment(AppModel.self) private var m
-    private static let names: [LocalizedStringKey] = ["Game", "Options", "Build", "Done"]
-    private var current: Int {
-        switch m.phase {
-        case .idle, .planning: 0
-        case .ready: 1
-        case .building: 2
-        case .done: 3
-        case .failed: m.plan == nil ? 0 : 2
-        }
-    }
+struct SearchField: View {
+    @Binding var text: String
+    @FocusState private var focused: Bool
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(0..<4, id: \.self) { i in
-                if i > 0 { Rectangle().fill(i <= current ? Color.accentColor : Color.secondary.opacity(0.25)).frame(height: 2).frame(maxWidth: 60) }
-                VStack(spacing: 4) {
-                    ZStack {
-                        Circle().fill(i <= current ? Color.accentColor : Color.secondary.opacity(0.18)).frame(width: 26, height: 26)
-                        if i < current { Image(systemName: "checkmark").font(.caption.weight(.bold)).foregroundStyle(.white) }
-                        else { Text("\(i + 1)").font(.caption.weight(.semibold)).foregroundStyle(i == current ? Color.white : Color.secondary) }
-                    }
-                    Text(Self.names[i]).font(.caption).foregroundStyle(i == current ? Color.primary : Color.secondary)
-                }
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 12))
+            TextField("Search games", text: $text).textFieldStyle(.plain).focused($focused).frame(width: 150)
+                .accessibilityIdentifier("header.search")
+            if !text.isEmpty {
+                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel(Text("Clear search"))
             }
         }
-        .animation(.smooth, value: current)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Step \(current + 1) of 4")
+        .padding(.horizontal, 10).frame(height: 30)
+        .background(Theme.surface, in: .capsule)
+        .overlay(Capsule().strokeBorder(focused ? Color.accentColor : .clear, lineWidth: 2))
     }
 }
 
-/// The build log, on demand.
-struct LogSheet: View {
-    @Environment(AppModel.self) private var m
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack { Text("Log").font(.headline); Spacer(); Button("Done") { dismiss() }.keyboardShortcut(.defaultAction) }.padding(14)
-            Divider()
-            LogInspector()
-        }
-        .frame(width: 640, height: 460)
-    }
-}
-
-struct ToastHost: View {
-    @Environment(AppModel.self) private var m
-    var body: some View {
-        if let t = m.toast {
-            Text(t).font(.callout).padding(.horizontal, 16).padding(.vertical, 10)
-                .glassEffect(.regular, in: .capsule)
-                .padding(.bottom, 18)
-                .transition(.move(edge: .bottom).combined(with: .opacity))
-                .accessibilityAddTraits(.updatesFrequently)
-                .animation(.snappy, value: m.toast)
-        }
-    }
-}
-
-struct DropOverlay: View {
-    var body: some View {
-        ContentUnavailableView("Drop to add", systemImage: "arrow.down.doc", description: Text("NSP, XCI, NSZ or XCZ files, or folders holding them."))
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(.ultraThinMaterial)
-            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(.tint, style: StrokeStyle(lineWidth: 2, dash: [10, 8])).padding(16))
-            .allowsHitTesting(false)
-    }
-}
-
-struct LegalSheet: View {
-    @Environment(AppModel.self) private var m
-    @Environment(\.dismiss) private var dismiss
-    var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Label("Personal use only", systemImage: "hand.raised").font(.title2.weight(.semibold))
-            Text("Built apps contain content derived from your own game files. Keep them for yourself and never share them, your keys or your firmware.")
-                .fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("I Understand") { m.legalAck = true; dismiss(); m.startBuild() }.buttonStyle(.glassProminent).keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(24).frame(width: 440)
-    }
-}
-
-/// First-run sheet: keys and firmware, once.
-struct SetupSheet: View {
-    @Environment(AppModel.self) private var m
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Welcome to Napple Studio", systemImage: "sparkles").font(.title.weight(.semibold))
-            Text("One quick setup. Add your keys and firmware once, then build as many games as you like.").foregroundStyle(.secondary)
-            KeysetForm(replaceName: nil, saveLabel: "Save and Continue") { m.keysChanged() }
-            HStack { Spacer(); Button("Later") { m.pane = .library } }
-        }
-        .padding(24).frame(width: 560)
-    }
-}
-
-/// Hands the hosting NSWindow to the model (window restoration name, debug screenshots).
+/// Hands the hosting NSWindow to the model and fixes its look: translucent, one size, no zoom or full screen.
 struct WindowAccessor: NSViewRepresentable {
     var onWindow: (NSWindow) -> Void
     func makeNSView(context: Context) -> NSView {
@@ -194,4 +101,23 @@ struct WindowAccessor: NSViewRepresentable {
         return v
     }
     func updateNSView(_ nsView: NSView, context: Context) {}
+
+    @MainActor static func configure(_ w: NSWindow) {
+        w.styleMask.remove(.resizable)
+        w.titlebarAppearsTransparent = true
+        w.titleVisibility = .hidden
+        w.isOpaque = false
+        w.backgroundColor = .clear
+        w.isMovableByWindowBackground = false
+        w.collectionBehavior.insert(.fullScreenNone)
+        w.standardWindowButton(.zoomButton)?.isEnabled = false
+        // The title bar is hidden and the content runs under it, so the frame IS the content: fix the whole frame, keeping the top-left corner.
+        var f = w.frame
+        f.origin.y += f.height - Theme.windowSize.height
+        f.size = Theme.windowSize
+        w.setFrame(f, display: true)
+        w.minSize = Theme.windowSize
+        w.maxSize = Theme.windowSize
+        w.makeFirstResponder(nil)   // no field starts focused
+    }
 }

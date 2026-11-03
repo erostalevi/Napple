@@ -1,26 +1,28 @@
 # Napple Studio
 
 Napple Studio is the Mac app that turns a Switch game file into a native Mac app, keeps the apps it built in a library, and builds, signs, installs and exports the
-same game for iPhone and iPad. It is a SwiftUI app for macOS 26 (Liquid Glass, system typography and symbols, full dark/light, VoiceOver, keyboard navigation,
-window restoration, menu bar commands). Sources: `studio/` (`NappleStudioCore` = testable logic, `NappleStudio` = the app).
+same game for iPhone and iPad. It is a SwiftUI app for macOS 26 (translucent window, system typography and symbols, full dark/light, VoiceOver, keyboard
+navigation, menu bar commands). Sources: `studio/` (`NappleStudioCore` = testable logic, `NappleStudio` = the app).
 
 ## Layout
 
-| Pane | What it does |
+One fixed-size window (1000 x 680, no resizing or full screen) that shows only the library. Everything else opens on top of it.
+
+| Part | What it does |
 |---|---|
-| **Library** | Grid of the Mac apps Studio built (cover art from the app icon, version, size, compatibility dot). Click selects (action bar: Play, Show in Finder), double-click plays, right-click for Copy to Applications, Move to Trash, Locate (for a moved app), Remove. Apps that are moved or renamed in Finder are followed by bookmark; trashed apps leave the library. Search in the toolbar. |
-| **Add Game** | Drop zone (the whole window accepts drops, so does the Dock icon and File > Open) -> plan (base, updates, DLC toggles, destination, blockers) -> build progress with the real stage names and a stage checklist -> done (Play / Install / Show in Finder / notes) or the failure with the reason. |
-| **iPhone & iPad** | Paired devices (`devicectl`) and booted Simulators (`simctl`), the guided signing flow, the memory-limit decision, "Install .ipa or .app…", and the exact command lines Studio runs. |
-| **Log** (inspector, ⌥⌘L) | The live build log with filter, copy, and "show logs in Finder" (`~/Library/Application Support/Napple/logs/build-*.log`). |
-| **Settings** (⌘,) | General (output folder, install/launch after build, legal notice), Keys & Firmware (sets, add/replace/delete), **Mii** (the shared database: list, delete, back up, export, restore, open the folder), **Amiibo** (list source, key file, store folder; nothing is bundled), **Online** (provider module; empty = offline NullProvider), Engine (which `napple` is used). |
-| **Play with Log…** (Library, right-click) | Runs the game through the launcher and streams the runtime log live (filter, copy, stop). The same run the dock icon starts, so what you see is what a player gets. |
+| **Library** | Grid of covers (the app icon, else the name on a colour), edge to edge. Click selects, Play shows on hover and selection, double-click or Return plays. Right-click: Play, Play with Debug, Show in Finder, Move to Trash, Remove from Library. A game whose app is gone is simply not shown (it returns by itself if the app comes back). Search in the header; empty and no-result states. The header holds Add Game and the gear (Settings). |
+| **Add / Build panel** | Slides in from the right for the whole flow. Reading files -> what to include (base, updates, DLC), warnings and blockers (no base game, low disk, engine missing, compatibility notes) -> *This Mac* (save folder, play when done) or *iOS Device* (install to a device or export an .ipa for iPhone or iPad, signing, bundle id, launch after install, debug build) -> build progress with the live log -> done (Play / Show in Finder / notes, install progress and retry for a device) or failed (reason, last log lines, Try Again). Closing the panel during a build keeps it running: the game's cover shows a progress ring and a click reopens the panel. |
+| **Play with Debug** | Starts the game as its own process and opens a console window with its live log: filter, All/Warnings/Errors, follow, clear, copy, save, stop. |
+| **Dialogs** | First launch: keys and firmware are required before anything else. "Personal use only" before the first build. "A build is still running" on quit. Dropping files anywhere in the window starts the Add flow (so do the Dock icon and File > Open). |
+| **Settings** (gear, ⌘,) | Eight tabs: General (output folder, play after build, legal notice), Keys (key sets: create and delete; the set created last is in use), iPhone & iPad (devices, signing mode, team or identity and profile, bundle id prefix, memory limit, install an existing .ipa or .app), Mii, Amiibo, Online, Engine (installed versions with Remove, and releases on GitHub with Install) and Log (the last build log). |
 
 The Mii, Amiibo and Online tabs write `~/Library/Application Support/Napple/system.json` (one contract: the runtime reads it at boot, see [system data folders](../reference/system-data-folders.md)); they use `NappleCLI.swift`, the same code the build uses, and have no second code path. `studio/Sources/NappleStudioBuild` is the same build path without a window (`napple-studio-build`), which `tools/e2e/run.sh` uses.
 
-First launch shows the setup sheet: choose the folder that holds `prod.keys`, `title.keys` and the firmware (Studio finds them), or pick each file. Files are copied to
-`~/Library/Application Support/Napple/keysets/<name>/` (owner-only); key values are never read or logged (only key names are checked).
+First launch asks for the folder that holds `prod.keys`, `title.keys` and the firmware (Studio finds them), or each file. Files are copied to
+`~/Library/Application Support/Napple/keysets/<name>/` (owner-only); key values are never read or logged (only key names are checked). If the keys are deleted
+later the library stays usable, building is paused and a banner points to Settings > Keys.
 
-Menu bar: File > Add Game (⌘O), Build (⌘B), Cancel Build (⌘.); Go > the panes (⌘1-3); Device > Refresh (⌘R), Install on Device; View > Show/Hide Log; Help > logs, this guide.
+Menu bar: File > Add Game (⌘O), Build (⌘B), Cancel Build (⌘.); Device > Refresh (⌘R), Install .ipa or .app; Help > logs, this guide.
 
 ## Building for a Mac
 
@@ -91,5 +93,7 @@ swift test             # NappleStudioCore unit tests (CLI protocol, library, key
 ```
 
 Debug flags of the app binary: `--support-dir <dir>`, `--output-dir <dir>`, `--debug-keys <prod.keys> [--debug-firmware <zip>]`, `--debug-drop <file>`,
-`--debug-ack` (legal notice), `--debug-autobuild` (build and exit 0/1), `--no-engine-setup`, `--pane library|add|devices`, `--debug-tour <dir>`
-(visits every pane and hands the window rectangle to an external `screencapture`; with `--debug-tour-build` it also builds the dropped game: the scripted UI check).
+`--debug-ack` (legal notice), `--debug-autobuild` (build and exit 0/1), `--no-engine-setup`, `--debug-screen <name>` (puts the window in a fixed state with fake data so a
+screen can be photographed without a game or a device: `add`, `add-ios`, `blockers`, `reading`, `building`, `building-closed`, `done`, `failed`, `legal`, `drop`,
+`selected`, `search`, `console`), `--debug-light` (light appearance), `--debug-settings <tab>` (opens Settings on a tab: `general`, `keys`, `devices`, `mii`, `amiibo`,
+`online`, `engine`, `log`). Photograph a window with `screencapture -l <window id>`.

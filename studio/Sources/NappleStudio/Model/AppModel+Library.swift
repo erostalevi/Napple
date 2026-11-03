@@ -9,15 +9,8 @@ extension AppModel {
         let changes = library.refresh()
         reloadItems()
         syncWatcher()
-        guard libraryLoaded else { return }
-        for c in changes {
-            switch c.kind {
-            case .trashed: say(String(localized: "\(c.name) was moved to the Trash, so it left your library."))
-            case .moved: say(String(localized: "Found \(c.name) at its new place."))
-            case .missing: say(String(localized: "\(c.name) can't be found any more. Locate it or remove it from the library."))
-            case .restored: break
-            }
-        }
+        // A game whose app is gone is simply not shown (it comes back by itself if the app returns), so changes need no message.
+        _ = changes
     }
 
     func reloadItems() {
@@ -74,22 +67,36 @@ extension AppModel {
         } catch { say(String(localized: "Could not move it to the Trash: \(error.localizedDescription)")) }
     }
 
-    func locate(_ item: LibraryItem) {
-        guard let app = pick(files: true, dirs: false, message: String(localized: "Choose \(item.entry.name).app"), types: [.application]).first else { return }
-        do { try library.relocate(item.id, to: app); reloadItems(); syncWatcher(); say(String(localized: "Found \(item.entry.name).")) }
-        catch { say(error.localizedDescription) }
+    /// "Play with Debug": starts the game and opens a console window with its live log.
+    func playWithDebug(_ item: LibraryItem) {
+        guard let url = item.url, FileManager.default.fileExists(atPath: url.path) else { say(String(localized: "That app is gone.")); refreshLibrary(); return }
+        if let running = consoles.first(where: { $0.app == url && $0.running }) { consoleToOpen = running.id; return }
+        consoles.removeAll { !$0.running }
+        let c = DebugConsole(name: item.entry.name, app: url)
+        consoles.append(c)
+        c.start()
+        consoleToOpen = c.id
     }
+
+    /// Games whose app exists. Missing ones are not shown.
+    var presentLibrary: [LibraryItem] { libraryItems.filter { $0.status == .present } }
 
     var filteredLibrary: [LibraryItem] {
         let q = searchText.trimmingCharacters(in: .whitespaces)
-        return q.isEmpty ? libraryItems : libraryItems.filter { $0.entry.name.localizedCaseInsensitiveContains(q) || $0.entry.titleId.localizedCaseInsensitiveContains(q) }
+        return q.isEmpty ? presentLibrary : presentLibrary.filter { $0.entry.name.localizedCaseInsensitiveContains(q) || $0.entry.titleId.localizedCaseInsensitiveContains(q) }
     }
 
     /// Cover art: the icon the build stored inside the app (from the game's own metadata).
     static func coverImage(for item: LibraryItem) -> NSImage? {
         guard item.status == .present else { return nil }
+        let key = item.entry.path as NSString
+        if let hit = coverCache.object(forKey: key) { return hit.image }
         let res = URL(fileURLWithPath: item.entry.path).appendingPathComponent("Contents/Resources")
-        for n in ["AppIcon.icns", "icon.icns"] { if let i = NSImage(contentsOf: res.appendingPathComponent(n)) { return i } }
-        return nil
+        var found: NSImage?
+        for n in ["AppIcon.icns", "icon.icns"] { if let i = NSImage(contentsOf: res.appendingPathComponent(n)) { found = i; break } }
+        coverCache.setObject(CoverBox(found), forKey: key)
+        return found
     }
+    private static let coverCache = NSCache<NSString, CoverBox>()
+    private final class CoverBox { let image: NSImage?; init(_ i: NSImage?) { image = i } }
 }

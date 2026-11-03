@@ -4,26 +4,6 @@ import NappleStudioCore
 
 enum Phase: Equatable { case idle, planning, ready, building, done, failed }
 
-/// Sidebar destinations.
-enum Pane: String, Hashable, CaseIterable, Identifiable {
-    case library, add, devices
-    var id: String { rawValue }
-    var title: LocalizedStringKey {
-        switch self {
-        case .library: "Library"
-        case .add: "Add Game"
-        case .devices: "iPhone & iPad"
-        }
-    }
-    var symbol: String {
-        switch self {
-        case .library: "square.grid.2x2"
-        case .add: "plus.square.on.square"
-        case .devices: "iphone.gen3"
-        }
-    }
-}
-
 /// Where a build goes.
 enum Destination: Hashable {
     case mac
@@ -67,31 +47,21 @@ final class AppModel {
     let library: LibraryStore
     let tools: ToolRunner
     var devicesService: DeviceService { DeviceService(tools: tools) }
-    /// The game whose Run view (live runtime log) is open.
-    var runItem: LibraryItem?
 
-    // navigation
-    var pane: Pane = .library
+    // navigation: one window with the library; the Add / Build panel slides in on the right
+    var panelOpen = false
     var selectedLibraryItem: UUID?
-    var showInspector = false
-    var settingsTab = "general"   // selected Settings tab (the debug tour switches it)
+    var settingsTab = "general"   // selected Settings tab
     var toast: String?
     private var toastTask: Task<Void, Never>?
     var dropTargeted = false
     var pendingDrops: [URL] = []
     var showLegal = false
-    /// `--debug-tour-size WxH` (default: the app's default window size) sizes the window the tour photographs.
-    static func tourSize() -> NSSize {
-        let a = CommandLine.arguments
-        if let i = a.firstIndex(of: "--debug-tour-size"), i + 1 < a.count {
-            let p = a[i + 1].split(separator: "x").compactMap { Double($0) }
-            if p.count == 2 { return NSSize(width: p[0], height: p[1]) }
-        }
-        return NSSize(width: 880, height: 580)
-    }
-    /// `--debug-tour <dir>`: visit every pane, write a PNG of the window for each, then quit (scripted UI check).
-    var tour: URL?
-    var window: NSWindow? { didSet { guard let w = window, oldValue == nil else { return }; w.setFrameAutosaveName("NappleStudioMain"); if tour != nil { w.setContentSize(Self.tourSize()); startTour() } } }
+    /// Games started with "Play with Debug": each has a console window with the live log.
+    var consoles: [DebugConsole] = []
+    /// A console the main window should open a window for (it owns the openWindow action).
+    var consoleToOpen: UUID?
+    var window: NSWindow? { didSet { guard let w = window, oldValue == nil else { return }; w.setFrameAutosaveName("NappleStudioMain") } }
 
     // keys
     var sets: [Keyset] = []
@@ -134,7 +104,7 @@ final class AppModel {
         guard let res = Bundle.main.resourceURL else { return }
         let info = Bundle.main.infoDictionary
         let version = [info?["CFBundleShortVersionString"] as? String, info?["CFBundleVersion"] as? String].compactMap { $0 }.joined(separator: "-")
-        engines = EngineInstaller(resources: res).listEngines(bundleVersion: version.isEmpty ? nil : version)
+        engines = EngineInstaller(resources: res, support: keysets.root).listEngines(bundleVersion: version.isEmpty ? nil : version)
         applyEngineChoice()
     }
     /// The picked engine's CLI does the build (it packs its own runtime and launcher into the game); with no (or a vanished) choice the default lookup applies.
@@ -168,7 +138,8 @@ final class AppModel {
     var iosBundlePrefix = UserDefaults.standard.string(forKey: "iosBundlePrefix") ?? BundleIDs.defaultPrefix { didSet { UserDefaults.standard.set(iosBundlePrefix, forKey: "iosBundlePrefix") } }
     var iosDeviceId = UserDefaults.standard.string(forKey: "iosDevice") ?? "" { didSet { UserDefaults.standard.set(iosDeviceId, forKey: "iosDevice") } }
     var iosDebugBuild = UserDefaults.standard.bool(forKey: "iosDebug") { didSet { UserDefaults.standard.set(iosDebugBuild, forKey: "iosDebug") } }
-    var iosInstallAfterBuild = UserDefaults.standard.object(forKey: "iosAutoInstall") as? Bool ?? true { didSet { UserDefaults.standard.set(iosInstallAfterBuild, forKey: "iosAutoInstall") } }
+    /// Choosing a device as the destination means installing on it; this stays true (kept for the build code and old settings).
+    var iosInstallAfterBuild = true
     var iosLaunchAfterInstall = UserDefaults.standard.object(forKey: "iosLaunch") as? Bool ?? true { didSet { UserDefaults.standard.set(iosLaunchAfterInstall, forKey: "iosLaunch") } }
 
     // library
@@ -185,6 +156,8 @@ final class AppModel {
     var autoBuild = false
     static let defaultOutput = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Applications/Napple", isDirectory: true)
     static let logsDir = KeysetManager.defaultRoot.appendingPathComponent("logs", isDirectory: true)
+    /// "Play the game when the build finishes" (Settings > General writes the same key).
+    var playAfterBuild: Bool { UserDefaults.standard.bool(forKey: "playAfterBuild") }
 
     static var matrixURL: URL? {
         var d = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath().deletingLastPathComponent()
@@ -213,26 +186,33 @@ final class AppModel {
                                   firmware: arg("--debug-firmware").map { URL(fileURLWithPath: $0) }, replace: true)
         }
         if let saved = UserDefaults.standard.string(forKey: "destination"), let d = Destination(key: saved) { destination = d }
-        if let p = arg("--pane"), let pane = Pane(rawValue: p) { self.pane = pane }
-        tour = arg("--debug-tour").map { URL(fileURLWithPath: $0) }
         matrix = Self.matrixURL.flatMap { CompatMatrix.load(from: $0) }
         refreshSets()
+        restoreActiveSet()
         refreshLibrary(adoptOutput: true)
         libraryLoaded = true
-        if destination.isIOS || self.pane == .devices { Task { await refreshIOS() } }
+        if destination.isIOS { Task { await refreshIOS() } }
         refreshEngines()
         if !args.contains("--no-engine-setup") { setUpEngine() }
         watcher = DirectoryWatcher { [weak self] in Task { @MainActor in self?.refreshLibrary() } }
         syncWatcher()
         if let d = arg("--debug-drop") { Task { await self.handleDrop([URL(fileURLWithPath: d)]) } }
+        if let s = arg("--debug-screen") { Task { await self.applyDebugScreen(s) } }
     }
 
+    // MARK: keys
+
+    /// True until the first key set exists: the first-launch dialog blocks the window until keys are in.
     var needsSetup: Bool { sets.isEmpty }
+    /// Keys were set up once and deleted since: the library stays usable, building is paused.
+    var keysRemoved: Bool { sets.isEmpty && UserDefaults.standard.bool(forKey: "keysEverSet") }
+    var showOnboarding: Bool { sets.isEmpty && !UserDefaults.standard.bool(forKey: "keysEverSet") }
     var selectedSet: Keyset? { sets.first { $0.name == selectedSetName } ?? sets.first }
     var isBuilding: Bool { phase == .building }
 
     func refreshSets() {
         sets = keysets.list()
+        if !sets.isEmpty { UserDefaults.standard.set(true, forKey: "keysEverSet") }
         if !sets.contains(where: { $0.name == selectedSetName }) { selectedSetName = sets.first?.name ?? "" }
     }
 
@@ -283,24 +263,21 @@ final class AppModel {
     // MARK: adding games
 
     func pickFilesAndAdd() {
+        guard !sets.isEmpty else { say(String(localized: "Add your keys and firmware in Settings first.")); return }
         let urls = pick(files: true, dirs: true, multiple: true, message: String(localized: "Choose game files or folders (.nsp .xci .nsz .xcz)"))
         if !urls.isEmpty { Task { await handleDrop(urls) } }
     }
 
     func handleDrop(_ urls: [URL]) async {
         dropTargeted = false
+        guard !showOnboarding else { return }
         guard phase != .building else { say(String(localized: "A build is running. Wait for it to finish or cancel it first.")); return }
+        guard !sets.isEmpty else { say(String(localized: "Your keys were removed. Add them in Settings to build games.")); return }
         let found = InputExpander.expand(urls)
-        pane = .add
         if found.files.isEmpty {
-            errorText = found.unreadable.isEmpty
+            say(found.unreadable.isEmpty
                 ? String(localized: "No game files in there. Napple reads .nsp, .xci, .nsz and .xcz files, or folders that hold them.")
-                : String(localized: "Those files could not be read. They may have been moved or deleted.")
-            return
-        }
-        guard !sets.isEmpty else {
-            pendingDrops = urls
-            say(String(localized: "Add your keys and firmware first. Your files will be read right after."))
+                : String(localized: "Those files could not be read. They may have been moved or deleted."))
             return
         }
         if phase == .done || phase == .failed { resetPlanState() }
@@ -308,27 +285,35 @@ final class AppModel {
         for u in found.files where !all.contains(where: { $0.standardizedFileURL.path == u.standardizedFileURL.path }) { all.append(u) }
         files = all
         inputNote = found.skippedNote
+        panelOpen = true
         await replan()
     }
 
+    /// Bumped whenever the plan is thrown away, so a plan that finishes late is ignored.
+    @ObservationIgnored private var planGeneration = 0
+
     func resetPlanState() {
         guard phase != .building else { return }
+        planGeneration += 1
         files = []; plan = nil; phase = .idle; errorText = nil; inputNote = nil; progress = nil; clearLog(); notes = []; stagesSeen = []
-        builtApp = nil; builtIPA = nil; builtInfo = nil; builtBytes = nil; compat = nil; installMessage = nil; installing = false; cancelling = false
+        builtApp = nil; builtIPA = nil; builtInfo = nil; builtBytes = nil; compat = nil; installMessage = nil; installing = false; installFailed = false; cancelling = false
         builtSummary = ""; buildDuration = nil
     }
 
     func replan() async {
         errorText = nil
-        guard let set = selectedSet else { errorText = String(localized: "Add keys first in Settings."); return }
+        guard let set = selectedSet else { errorText = String(localized: "Add keys first in Settings."); phase = .failed; return }
         guard let cli else { errorText = CLIError.notFound.localizedDescription; phase = .failed; return }
         phase = .planning
+        let generation = planGeneration
         do {
             let p = try await cli.plan(files: files, keys: set.keysURL)
+            guard generation == planGeneration else { return }
             plan = p; phase = .ready
             compat = p.base.flatMap { matrix?.entry(for: $0.titleId) }
             if autoBuild { autoBuild = false; startBuild() }
         } catch {
+            guard generation == planGeneration else { return }
             plan = nil; phase = .failed; errorText = error.localizedDescription
             finishDebug(1)
         }
@@ -385,98 +370,6 @@ final class AppModel {
         try? FileManager.default.createDirectory(at: Self.logsDir, withIntermediateDirectories: true)
         if let l = latestLog, FileManager.default.fileExists(atPath: l.path) { NSWorkspace.shared.activateFileViewerSelecting([l]) }
         else { NSWorkspace.shared.open(Self.logsDir) }
-    }
-
-    // MARK: debug tour
-
-    /// Writes the window's screen rectangle (top-left origin, points) for an external `screencapture -R`, then waits for `<name>.png` to appear.
-    func snapshot(_ name: String, of target: NSWindow? = nil) async {
-        guard let w = target ?? window, let dir = tour, let screen = w.screen ?? NSScreen.main else { return }
-        let f = w.frame
-        let top = screen.frame.maxY - f.maxY
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        try? "\(Int(f.minX)),\(Int(top)),\(Int(f.width)),\(Int(f.height))".write(to: dir.appendingPathComponent("\(name).rect"), atomically: true, encoding: .utf8)
-        for _ in 0..<100 {
-            if FileManager.default.fileExists(atPath: dir.appendingPathComponent("\(name).png").path) { break }
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
-    }
-
-    private func startTour() {
-        window?.makeKeyAndOrderFront(nil)
-        NSApp.activate()
-        Task { @MainActor in
-            let steps: [(String, () -> Void)] = [
-                ("01-library", { self.pane = .library }),
-                ("02-add", { self.pane = .add }),
-                ("03-devices", { self.pane = .devices; Task { await self.refreshIOS() } }),
-                ("04-log", { self.pane = .add; self.showInspector = true }),
-            ]
-            for (name, go) in steps {
-                go()
-                try? await Task.sleep(nanoseconds: name.hasSuffix("devices") ? 5_000_000_000 : 1_500_000_000)
-                await snapshot(name)
-            }
-            showInspector = false
-            // the Settings window: the Mii, Amiibo and Online tabs over system.json
-            let sw = NSWindow(contentViewController: NSHostingController(rootView: SettingsView().environment(self)))
-            sw.title = "Settings"
-            sw.setFrameOrigin(NSPoint(x: (window?.frame.minX ?? 100) + 40, y: (window?.frame.minY ?? 100) + 40))
-            sw.makeKeyAndOrderFront(nil)
-            for tab in ["mii", "amiibo", "online"] {
-                settingsTab = tab
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                await snapshot("08-settings-\(tab)", of: sw)
-            }
-            sw.close()
-            for _ in 0..<60 where phase == .planning { try? await Task.sleep(nanoseconds: 500_000_000) }
-            if CommandLine.arguments.contains("--debug-fake-done") {   // replays the Simulator flow's state changes without building (crash reproduction)
-                let skip = Set((ProcessInfo.processInfo.environment["NAPPLE_FAKE_SKIP"] ?? "").split(separator: ",").map(String.init))
-                pane = .add
-                plan = PlanResult(base: PlanItem(titleId: "01006BB00C6F0000", version: 0, versionLabel: "v0", size: 6_000_000_000, selected: true, path: "/x"), updates: [], dlc: [], warnings: [])
-                if !skip.contains("compat") { compat = matrix?.entry(for: "01006BB00C6F0000") }
-                destination = .device(devices.first(where: { $0.simulator })?.id ?? devices.first?.id ?? "x")
-                builtSummary = plan?.includedSummary ?? ""
-                if !skip.contains("building") { phase = .building }
-                buildStarted = Date(); stagesSeen = []; clearLog()
-                progress = ProgressEvent(stage: "preflight", percent: 0, message: "Checking keys and firmware")
-                try? await Task.sleep(nanoseconds: 1_500_000_000)
-                for st in ["ingest", "plan", "rewrite", "romfs", "fonts", "bundle", "sign", "done"] {
-                    if !skip.contains("stages") { handle(.progress(ProgressEvent(stage: st, percent: 90, message: "fake \(st)"))) }
-                    if !skip.contains("log") { for i in 0..<40 { handle(.log("line \(st) \(i)")) } }
-                    try? await Task.sleep(nanoseconds: 150_000_000)
-                }
-                builtApp = URL(fileURLWithPath: "/tmp/Fake.app"); builtInfo = nil
-                if !skip.contains("notes") {
-                    notes.append("note: 4 rewritten module(s) packed"); notes.append("note: ios-sim build: ad-hoc signed")
-                    notes.append(String(localized: "Simulator build: ad-hoc signed, no memory entitlement (the Simulator has no memory limit)."))
-                }
-                if !skip.contains("install") { installing = true; installMessage = String(localized: "Installing on iPhone 17…") }
-                if !skip.contains("log") { for l in DeviceService.commandLines(app: builtApp!, bundleId: effectiveBundleId, on: selectedDevice ?? devices[0]) { appendLog("$ " + l) } }
-                try? await Task.sleep(nanoseconds: 2_000_000_000)
-                await Task.yield()
-                if !skip.contains("install") { installMessage = String(localized: "Installed and launched on iPhone 17."); installing = false }
-                buildDuration = buildStarted.map { Date().timeIntervalSince($0) }
-                builtBytes = 6_500_000_000
-                await Task.yield()
-                phase = .done
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                await snapshot("09-fake-done")
-            }
-            if plan != nil { pane = .add; try? await Task.sleep(nanoseconds: 800_000_000); await snapshot("05-plan") }
-            if plan != nil, CommandLine.arguments.contains("--debug-tour-build") {
-                startBuild()
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
-                showInspector = true
-                await snapshot("06-building")
-                showInspector = false
-                for _ in 0..<2400 where phase == .building { try? await Task.sleep(nanoseconds: 500_000_000) }
-                try? await Task.sleep(nanoseconds: 800_000_000)
-                await snapshot(phase == .done ? "07-done" : "07-failed")
-            }
-            if !libraryItems.isEmpty { pane = .library; selectedLibraryItem = libraryItems.first?.id; try? await Task.sleep(nanoseconds: 800_000_000); await snapshot("06-library-selected") }
-            exit(0)
-        }
     }
 
     func finishDebug(_ code: Int32) {

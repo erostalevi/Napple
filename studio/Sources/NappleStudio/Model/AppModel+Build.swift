@@ -13,7 +13,7 @@ extension AppModel {
         return nil
     }
 
-    var canBuild: Bool { plan?.base != nil && phase != .planning && phase != .building && selectedSet != nil && cli != nil }
+    var canBuild: Bool { plan?.base != nil && phase == .ready && selectedSet != nil && cli != nil && diskWarning == nil && destinationBlocker == nil }
 
     func startBuild() {
         guard phase != .building else { return }
@@ -31,7 +31,7 @@ extension AppModel {
         var req = BuildRequest(files: files, keyset: set, updates: plan.selectedUpdateVersions, dlc: plan.selectedDLCIds,
                                target: target.rawValue, output: out, ios: ios0)
         builtSummary = plan.includedSummary
-        phase = .building; pane = .add
+        phase = .building; panelOpen = true
         errorText = nil; notes = []; installMessage = nil; cancelling = false
         builtApp = nil; builtIPA = nil; builtInfo = nil; builtBytes = nil; buildDuration = nil; stagesSeen = []
         buildStarted = Date()
@@ -59,7 +59,9 @@ extension AppModel {
                 // The install/launch step may have handed focus to the Simulator or the device tools: switch screens on a fresh run-loop turn,
                 // never from inside whatever AppKit pass resumed this task.
                 await Task.yield()
-                phase = .done
+                phase = .done; panelOpen = true
+                if isMac, let entry = libraryItems.first(where: { $0.entry.path == result.path }) { selectedLibraryItem = entry.id }
+                if isMac, playAfterBuild { launch(result) }
                 if !NSApp.isActive { DispatchQueue.main.async { NSApp.requestUserAttention(.informationalRequest) } }
                 finishDebug(0)
             } catch {
@@ -67,7 +69,7 @@ extension AppModel {
                     phase = .ready; errorText = nil
                     say(String(localized: "Build cancelled."))
                 } else {
-                    phase = .failed; errorText = error.localizedDescription
+                    phase = .failed; errorText = error.localizedDescription; panelOpen = true
                     if !NSApp.isActive { NSApp.requestUserAttention(.informationalRequest) }
                 }
                 cancelling = false
@@ -77,7 +79,7 @@ extension AppModel {
         }
     }
 
-    private func fail(_ msg: String) { errorText = msg; phase = .failed; finishDebug(1) }
+    private func fail(_ msg: String) { errorText = msg; phase = .failed; panelOpen = true; finishDebug(1) }
 
     func diskPreflight(_ plan: PlanResult) -> String? {
         let need = plan.totalSelectedBytes + 1_000_000_000
@@ -146,10 +148,12 @@ extension AppModel {
 }
 
 extension AppModel {
-    /// Back to the games screen; a finished or failed build is cleared so the next Add starts fresh.
-    func goHome() {
-        guard phase != .building else { return }
-        if phase == .done || phase == .failed { resetPlanState() }
-        pane = .library
+    /// Closes the panel. A running build keeps going (its cover shows the progress and a click reopens the panel); anything else is cleared so the next Add starts fresh.
+    func closePanel() {
+        if phase != .building { resetPlanState() }
+        panelOpen = false
     }
+
+    /// Cover progress for the library tile of the build in flight.
+    var buildFraction: Double { min(max((progress?.percent ?? 0) / 100, 0), 1) }
 }
