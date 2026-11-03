@@ -5,7 +5,7 @@ other support tables; running this file on its own does the same for the online 
 Outputs:
   docs/reference/online-support.md   full table, per-title notes and what each mode means
   README.md                          the short table between <!-- online:begin --> and <!-- online:end --> (nothing else in README is touched)
-  site/online.json                   the same data for the landing page (site/app.js renders it into #online)
+  site/online.json                   the same data as a standalone file (also embedded in site/compat.json by gen_site.py)
 
 Online play in Napple is between Napple players only, through the Napple-run servers (napple-online and napple-room at pretend.napple.lat),
 never Nintendo's.
@@ -186,14 +186,18 @@ def splice_readme(text, block):
     return text[:i] + block + text[j + len(END):]
 
 
+def site_data(data):
+    """The online table as one object: site/online.json, and the "online" part of site/compat.json (gen_site.py)."""
+    return {"schema": 1, "generator": "tools/support/gen_online.py", "source": DATA, "servers": data.get("servers", ""),
+            "last_checked": last_checked(data),
+            "modes": [{"key": k, "label": label, "short": short, "about": about} for k, label, short, about in MODES],
+            "statuses": STATUSES, "backends": BACKENDS,
+            "titles": [{"title_id": t["title_id"], "name": t["name"], "short": t.get("short", ""), "backend": t["backend"],
+                        "modes": {k: t["modes"][k] for k in MODE_KEYS}} for t in titles(data)]}
+
+
 def render_site(data):
-    out = {"schema": 1, "generator": "tools/support/gen_online.py", "source": DATA, "servers": data.get("servers", ""),
-           "last_checked": last_checked(data),
-           "modes": [{"key": k, "label": label, "short": short, "about": about} for k, label, short, about in MODES],
-           "statuses": STATUSES, "backends": BACKENDS,
-           "titles": [{"title_id": t["title_id"], "name": t["name"], "short": t.get("short", ""), "backend": t["backend"],
-                       "modes": {k: t["modes"][k] for k in MODE_KEYS}} for t in titles(data)]}
-    return json.dumps(out, indent=1, sort_keys=True, ensure_ascii=False) + "\n"
+    return json.dumps(site_data(data), indent=1, sort_keys=True, ensure_ascii=False) + "\n"
 
 
 def build(root):
