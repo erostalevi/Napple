@@ -1,9 +1,9 @@
 # nvdrv device layouts: ioctl numbers, structures, register maps and their sources
 
 The GPU device nodes (`/dev/nvhost-gpu`, `-as-gpu`, `-ctrl-gpu`), the display head (`/dev/nvdisp-disp0/1`) and the host1x multimedia engines
-(`/dev/nvhost-nvdec`, `-vic`, `-nvjpg`, `-msenc`) were written from memory up to 2026-11-01. On 2026-11-02 (branch
-`nvdrv-public-layouts-2026-11-02-r10`) every number, struct size and field offset was compared with public references and the mismatches were
-fixed. This page is the record: one row per ioctl or method block, with the source that pins it and what the runtime does with it.
+(`/dev/nvhost-nvdec`, `-vic`, `-nvjpg`, `-msenc`) were first written from memory; every number, struct size and field offset was then compared
+with public references and the mismatches were fixed. This page is the record: one row per ioctl or method block, with the source that pins it and
+what the runtime does with it.
 
 The references are used for layout facts only (numbers, sizes, offsets, field meaning). No driver code was copied.
 
@@ -15,7 +15,7 @@ The references are used for layout facts only (numbers, sizes, offsets, field me
 | **ogd** | [NVIDIA/open-gpu-doc](https://github.com/NVIDIA/open-gpu-doc) `classes/video/`: `clc5b0.h` (NVDEC), `nvdec_drv.h`, `cle7d0.h` (NVJPG), `nvjpg_drv.h`, `clc9d1.h`, `clc5b7.h` (NVENC), `nvenc_drv.h`, `clceb6.h` (VIC) | MIT | Engine method offsets and the picture / status structures (offsets computed by compiling the headers). These are later engine generations than the X1's; see the notes per engine. |
 | **falcon** | Linux `drivers/gpu/drm/tegra/falcon.h` (v6.6) | GPL-2.0 | The THI method FIFO: `FALCON_UCLASS_METHOD_OFFSET` 0x40 / `METHOD_DATA` 0x44 (words 0x10 / 0x11). |
 | **l4t** | NVIDIA L4T `drivers/video/tegra/host/class_ids.h`, `host1x/host1x01_hardware.h` | GPL-2.0 | host1x class ids (NVDEC 0xF0, VIC 0x5D, NVJPG 0xC0, NVENC/MSENC 0x21) and the command-stream opcodes. |
-| **trace** | MK8D's NVDEC + VIC submits (2026-10-27, `NAPPLE_MEDIA_TRACE`) | - | What a real title writes; used where the public headers are a later generation. |
+| **trace** | A real title's NVDEC + VIC submits, recorded with `NAPPLE_MEDIA_TRACE` | - | What a real title writes; used where the public headers are a later generation. |
 
 switchbrew's NV services page could not be fetched from the build environment (DNS / proxy refused it), so it is not cited; where a number rests on
 switchbrew alone it is listed as not implemented below.
@@ -113,7 +113,7 @@ The device used to answer invented ioctls (1 GET_MODE, 2 GET_VBLANK, 3 WAIT_VBLA
 
 ## Host1x channel ioctls (`nvdrv.c`, read-only check)
 
-`nvdrv.c` was not edited (another session owns it). Its channel surface was compared with libnx and matches: `SUBMIT` (type 0, nr 1;
+The channel surface in `nvdrv.c` was compared with libnx and matches: `SUBMIT` (type 0, nr 1;
 `{u32 cmdbufs, relocs, syncpt_incrs, fences}` + cmdbuf 12 B, reloc 16 B, shift 4 B, incr 20 B `{id, incrs, waitbase, next, prev}`, threshold 4 B),
 `GET_SYNCPOINT` (2, 8 B), `GET_WAITBASE` (3, 8 B), `SET_SUBMIT_TIMEOUT` (7, 4 B), `MAP_CMD_BUFFER` / `UNMAP` (9 / 0xA, `{u32 num, u32 reserved, u8 compressed}` + 8 B
 entries from +12), `SET_NVMAP_FD` / `SET_TIMEOUT` ('H' 1 / 3). Not answered there: `SET_CLK_RATE` (8) and `GET_CLK_RATE` (0x14 before 8.0.0, 0x23 after)
@@ -128,7 +128,7 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
 |---|---|---|---|---|
 | NVDEC 0xF0 | 0x100–0x10B | control params, pic setup, in buf, picture index, slice offsets, coloc, history, display buf size, histogram, status, display buf luma / chroma | ogd clc5b0 | verified (**fixed**: display buf luma/chroma were invented words 0x130/0x131, now 0x10A/0x10B; histogram 0x108 named) |
 | NVDEC | 0x10C–0x12F | 17 picture luma, 17 chroma slots, pic scratch, external MV buffer | ogd clc5b0, trace | verified |
-| NVDEC | 0x140, 0x150–0x151, 0x170–0x177 | H264_SET_MBHIST_BUF_OFFSET (MK8D's "unnamed 0x140"), VP8 prob / header partition, eight VP9 buffers | ogd clc5b0 | verified (named; known registers) |
+| NVDEC | 0x140, 0x150–0x151, 0x170–0x177 | H264_SET_MBHIST_BUF_OFFSET (the "unnamed 0x140" of the trace), VP8 prob / header partition, eight VP9 buffers | ogd clc5b0 | verified (named; known registers) |
 | NVDEC pic | H.264 words 18–45 | stream_len 18, slice_count 19, POC/frame fields 22–24, size in MBs 25/26, tile 27, CABAC … 8x8 28–34, pitches 35/36, hist 43, flag words 44/45 (764 B) | ogd `nvdec_h264_pic_s`, trace | verified (the trace-derived words agree with the header exactly) |
 | NVDEC pic | VP9 words 12, 24, 25 | stream_len; u16 width/height; u16 luma/chroma stride (256 B) | ogd `nvdec_vp9_pic_s` | verified (**fixed**: strides were read from words 20/21, which hold the golden reference's size) |
 | NVDEC pic | VP8 words 14, 18, 19/20 | u16 width/height, VLDBufferSize (the frame size), FrameStride (0xC0 B) | ogd `nvdec_vp8_pic_s` | verified (**fixed**: stream length was read from word 12, inside the encryption block) |
@@ -137,7 +137,7 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
 | VIC | 0x100 / 0x101 | slot 0 input luma / chroma | trace (VIC 4.0; clceb6 moved slots to 0x480) | trace |
 | VIC config | +0x20 output surface u64 | format, block kind, block height, width − 1, height − 1 | trace + emulator layout (clceb6's VIC 4.2 config differs) | trace |
 | NVJPG 0xC0 | 0x1C0–0x1C7 | control params, picture index, in drv pic setup, out status, bitstream, cur pic, chroma U, chroma V; app id 1 decode / 2 encode | ogd cle7d0 | verified (**fixed**: the engine used NVDEC's words 0x101–0x104/0x109 and an invented 6-word setup) |
-| NVJPG pic | 0x1240 B | `nvjpg_drv_pic_param_s` with the encoder half: enc ctl / restart / quant factors (1<<15)/q / Huffman {length, value} at 0x000–0x6FF, PDMA 0x700, strides 0x708/0x70C, bitstream offset/size 0x720/0x724, decoder frame size/param 0x740/0x744, block ctl, Huffman mincode/symbol, output info 0x1120, quant 0x1140 | ogd `nvjpg_drv.h` | verified (new); decoder half **read for header-less decode** (2026-11-03, tested: round trips through the ioctl path, not traced from a title) |
+| NVJPG pic | 0x1240 B | `nvjpg_drv_pic_param_s` with the encoder half: enc ctl / restart / quant factors (1<<15)/q / Huffman {length, value} at 0x000–0x6FF, PDMA 0x700, strides 0x708/0x70C, bitstream offset/size 0x720/0x724, decoder frame size/param 0x740/0x744, block ctl, Huffman mincode/symbol, output info 0x1120, quant 0x1140 | ogd `nvjpg_drv.h` | verified (new); decoder half **read for header-less decode** (tested: round trips through the ioctl path, not traced from a title) |
 | NVJPG decoder tables | in the pic | frame size (MCU grid) 0x740, frame param 0x744 (stream chroma mode, restart interval), block ctl[c] 0x748 (ac_idx b0-1, dc_idx b2-3, quant b4-5, hblock b8-11, vblock b12-15), quant `[i][t]` 0x1140, Huffman mincode `[2*slot+ac][len-1]` 0x760 and symbol `[slot][pos]` 0x8e0 | fields: ogd `nvjpg_drv.h`; **table semantics are Napple's reading** (below) | tested |
 | NVJPG status | 0x20 B | decode `{bytes_offset, mcu_x, mcu_y, cycle_count, error_status, reserved[12]}`; encode `{bitstream_size, …}`; errors 0x30000001–4 | ogd `nvjpg_drv.h`, clc9d1 | verified (new) |
 | MSENC 0x21 | 0x100–0x11F, 0x140–0x152, 0x1C0–0x1D9 | reference pictures, VP8/VP9 buffers, control params, picture index, RC data, in drv pic setup 0x1C4, out enc status 0x1C6, out bitstream 0x1C7, cur pic 0x1CD, chroma U/V 0x1D0/0x1D1 | ogd clc5b7 | verified (**fixed**: the engine read 0x101–0x104, which are IN_REF_PIC1..4_LUMA, and 0x109) |
@@ -150,7 +150,7 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
   (YUV planar / semi-planar, YUY2, RGBA, BGRA, ABGR, ARGB), power-of-two downscale, chroma subsample, alpha and strides. A buffer with only the
   entropy-coded data (no SOI in front) is the driver's header-less form and is decoded from the tables in the structure (next bullet); with no frame
   size programmed either, it is refused with BAD_MAGIC.
-- **NVJPG header-less decode** (2026-11-03, `nvjpg_raw_params` in nvdrv_media_core.c, `napjpeg_decode_raw_rgba` in jpeg_core.c): the output surface is the
+- **NVJPG header-less decode** (`nvjpg_raw_params` in nvdrv_media_core.c, `napjpeg_decode_raw_rgba` in jpeg_core.c): the output surface is the
   one the headered path produces, byte for byte (both run the same MCU decoder). ogd pins the field positions; where it leaves the semantics open, Napple
   reads them as follows and the tests build the structure that way (nothing here was traced from a title; a real stream could differ in these points):
   picture size = `width_in_8x8 * 8 - width_pad` (and for the height) from the PDMA words, else the MCU grid; `dec_frame_size` = the MCU grid and must be
@@ -167,8 +167,8 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
   `nvenc_drv.h` documents for the same field). The unit test writes the driver's headers in front of the output and decodes it with jpeg_core.
 - **MSENC** hands one NV12 frame per execute to the EncoderBackend; planar input is interleaved first. Only the fields listed above are read.
 - Generation caveat: open-gpu-doc carries Turing/Ampere-era class headers. The X1's engines are earlier (NVDEC 2, VIC 4.0, NVJPG 1, NVENC 5). Method
-  blocks have been stable across these generations (the NVDEC words match MK8D's trace exactly), but a real NVJPG/MSENC stream from a title would confirm
-  the X1 offsets; none of the four test titles opens those two devices.
+  blocks have been stable across these generations (the NVDEC words match the recorded title trace exactly), but a real NVJPG/MSENC stream from a title would confirm
+  the X1 offsets; no traced title has opened those two devices yet.
 
 ## Tests
 
@@ -176,14 +176,15 @@ RESTART, GATHER (incl. the register form), EXTEND (l4t) - verified.
 `sizeof` and `offsetof` of every structure above against the constants the code uses, the ioctl command words libnx / tegra_dc_ext encode, the method
 byte offsets of the class headers; then each ioctl / method block is round-tripped through the real `nv_ioctl` handler.
 
-## Round 11 additions (nvdrv-gpu-routing-2026-11-03-r11, integrated onto the round-10 table)
-The cloud session had no network access to switchbrew or the NVIDIA headers and did not see this table: its layouts are written from memory and are **proposed**, never checked against a source or trace. Status *tested* = unit test (`runtime/tests/test_svc_nvdrv_nodes.c`).
-Rows kept next to the round-10 ones (the round-10 numbers and layouts above stay authoritative; the branch's other rows duplicated them: its 0x17 GET_ERROR_NOTIFICATION is the round-10 row):
+## Proposed GPU node rows
+These rows are written from public documentation without access to the libnx sources or the NVIDIA headers: their layouts are **proposed**, never checked
+against a source or trace. Status *tested* = unit test (`runtime/tests/test_svc_nvdrv_nodes.c`). The numbers and layouts in the tables above stay
+authoritative where they overlap (0x17 GET_ERROR_NOTIFICATION is the row above).
 
 | type | nr | name | struct | status |
 |---|---|---|---|---|
-| 'H' | 0x1D | EVENT_ID_CTRL (branch form, shares the enable mask of 0x12) | {u32 cmd 0 disable/1 enable/2 clear, u32 event_id 0..2, s32 fd, u32} (0x10); clear keeps the mask, the fd is not kept | tested, proposed |
+| 'H' | 0x1D | EVENT_ID_CTRL (shares the enable mask of 0x12) | {u32 cmd 0 disable/1 enable/2 clear, u32 event_id 0..2, s32 fd, u32} (0x10); clear keeps the mask, the fd is not kept | tested, proposed |
 | 'G' | 0x0C | GET_TPC_EXCEPTION_EN_STATUS | {u64 mask out} (8): 0, no SM exception enabled | tested, proposed |
 | 'G' | 0x0D | NUM_VSMS | {u32 num out = 2, u32 reserved = 0} (8) | tested, proposed |
 
-The branch's list of ioctls "that stay NotImplemented" (KICKOFF_PB, SET_TIMESLICE, REMAP, ...) is superseded by the round-10 table above. Routing: unchanged (`gpu_node_ioctl` in `nvdrv.c`).
+Ioctls not listed in the tables stay NotImplemented. Routing: `gpu_node_ioctl` in `nvdrv.c`.

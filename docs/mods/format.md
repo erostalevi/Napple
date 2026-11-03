@@ -88,7 +88,7 @@ A patch targets one module by **module build id** (the 32-byte id in the NSO hea
 
 ### Cheat opcode table
 
-Napple decodes and runs the opcodes below. They follow Atmosphere's cheat code types 0 to 7 in the forms listed; **this table is Napple's own definition**, written from memory of the Atmosphere format and not yet checked against a real cheat collection, so a cheat from the wild may behave differently until that Mac-side check is done. Anything not listed (key-press conditions, code types 8, 9, A, B, C, FFF, register save/restore) decodes as "unsupported": a cheat that uses one is not run at all (the build and `validate` warn), because a half-run pointer chain would write to the wrong place. Sixteen 64-bit registers `r0..rF` start at zero for every run of a cheat.
+Napple decodes and runs the opcodes below. They follow Atmosphere's cheat code types 0 to 7 in the forms listed; **this table is Napple's own definition**, written from memory of the Atmosphere format and not yet checked against a real cheat collection, so a cheat from the wild may behave differently. Anything not listed (key-press conditions, code types 8, 9, A, B, C, FFF, register save/restore) decodes as "unsupported": a cheat that uses one is not run at all (the build and `validate` warn), because a half-run pointer chain would write to the wrong place. Sixteen 64-bit registers `r0..rF` start at zero for every run of a cheat.
 
 | Words | Meaning |
 |---|---|

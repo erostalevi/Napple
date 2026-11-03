@@ -46,39 +46,68 @@ nav:
       - Overview: architecture/overview.md
       - Module and data formats: architecture/module-format.md
       - Rewriter output: architecture/rewrite-format.md
-      - Compatibility format: architecture/compat-format.md
       - Runtime services: architecture/runtime-services.md
       - Graphics: architecture/gfx.md
       - Audio, input, frontend: architecture/audio-input-frontend.md
       - AArch32: architecture/aarch32.md
       - iOS: architecture/ios.md
       - Studio protocol: architecture/studio-protocol.md
+      - Compatibility format: architecture/compat-format.md
   - Guides:
       - guides/README.md
+      - Napple Studio: guides/studio.md
+      - Bring up a new title: guides/add-game-support.md
+      - Debugging: guides/debugging.md
+      - Hardware simulators: guides/hardware-simulators.md
       - Add an IPC service: guides/add-ipc-service.md
       - Add an svc: guides/add-svc.md
       - Add an NVN function: guides/add-nvn-function.md
       - Add a Maxwell shader op: guides/add-maxwell-shader-op.md
-      - Add game support: guides/add-game-support.md
+      - GPU title scan: guides/gpu-title-scan.md
       - Add signatures: guides/add-signatures.md
-      - Debugging: guides/debugging.md
+      - Network providers: guides/network-providers.md
       - Testing: guides/testing.md
+      - Graphics testing: guides/testing-graphics.md
+      - Fuzzing: guides/fuzzing.md
+      - Report a bug: guides/contributing-report-a-bug.md
+      - Document a title: guides/contributing-document-a-title.md
+      - Report a graphics bug: guides/contributing-report-a-graphics-bug.md
+      - Write a mod or fix: guides/contributing-write-a-mod.md
+      - Community: guides/contributing-community.md
+  - Online:
+      - Napple Online: guides/napple-online.md
+      - Account and profiles: guides/napple-account.md
+      - Friends and tiers: guides/napple-social.md
+      - Cloud saves: guides/cloud-saves.md
+      - Client and overlay: guides/napple-online-client.md
+      - Rooms: guides/online-rooms.md
+      - End-to-end run: guides/online-e2e.md
+      - Deploy the servers: guides/deploy-servers.md
+      - Legal documents: legal/README.md
   - Reference:
       - Subsystem map: reference/subsystems.md
       - CLI: reference/cli.md
       - Environment variables: reference/environment-variables.md
+      - System data folders: reference/system-data-folders.md
+      - nvdrv layouts: reference/nvdrv-layouts.md
       - Glossary: reference/glossary.md
       - Tooling: reference/tooling.md
+      - Fuzz findings: reference/fuzz-findings.md
+      - Feature support: reference/feature-support.md
+      - Open work: todo.md
+      - Symptoms: symptoms.md
   - Mods:
       - mods/README.md
       - Format: mods/format.md
       - Authoring: mods/authoring.md
       - Integration: mods/integration.md
-  - Titles:
+  - Titles and compatibility:
       - titles/README.md
       - Link's Awakening: titles/01006BB00C6F0000.md
       - Super Mario Odyssey: titles/0100000000010000.md
       - Animal Crossing: titles/01006F8002326000.md
       - Mario Kart 8 Deluxe: titles/0100152000022000.md
-      - Symptoms: symptoms.md
+      - Support matrix: reference/support-matrix.md
+      - Online support: reference/online-support.md
+      - Catalogue field reference: reference/catalogue-howto.md
   - Change archive: archive/changes/README.md

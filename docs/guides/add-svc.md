@@ -3,7 +3,7 @@
 ## Goal
 Make a Horizon supervisor call (svc) that the guest issues answer correctly in the runtime, instead of stopping it with
 `unimplemented svc 0x<nn> (<Name>) at <module>+0x<offset>`, or extend what an existing svc supports (a `GetInfo` id, a new mode of `WaitForAddress`...).
-Background: the svc list and its status are in [runtime-services.md](../architecture/runtime-services.md) ("Kernel (svc)" and the 2026-10-24 additions);
+Background: the svc list and its status are in [runtime-services.md](../architecture/runtime-services.md) (kernel section);
 the gate that carries the svc into the host is in [rewrite-format.md](../architecture/rewrite-format.md#host-gate-svc-and-counters).
 
 ## How an svc reaches your code
@@ -54,7 +54,7 @@ the gate that carries the svc into the host is in [rewrite-format.md](../archite
 
 ## The svc mask in the NPDM
 The kernel capability descriptors in `main.npdm` are parsed in `npdm_load` (`runtime/src/npdm.c`) into `g_npdm.svc_mask[6]` (192 bits) and `nsvc_allowed`; the start-up log prints
-`<n> svcs allowed`. In the code read for this guide the mask is used in exactly one place: `GetInfo` id 26 (`IsSvcPermitted`, `kernel.c: svc_get_info`), which answers from it
+`<n> svcs allowed`. In the current code the mask is used in exactly one place: `GetInfo` id 26 (`IsSvcPermitted`, `kernel.c: svc_get_info`), which answers from it
 (true when no NPDM was loaded). **`svc_dispatch` does not enforce it**: a game calling an svc outside its mask reaches the handler anyway. If you add an svc, nothing has to be
 added to the mask; the cross-game table of allowed svcs in `COMPATIBILITY.md` comes from `napple compat run`.
 
@@ -83,7 +83,7 @@ Host tests run the real handlers on any thread through `svc_dispatch`; they are 
 - `test_kernel_ipc.c: test_code_memory` shows argument-validation checks for 0x4B/0x4C using `host_code` (`tests/host/host_stubs.h`); `test_kernel_sched.c` shows tests that use real host threads.
 - Build rules live in `runtime/Makefile` (`HOST_TESTS`, one rule per test, and `HOST_TESTS += $(HOST_BUILD)/test_kernel_sched` as the pattern for a new test). Add a rule like
   `$(HOST_BUILD)/test_x: tests/host/test_x.c $(HOST_KERNEL) $(HOST_HDRS)` and append it to `HOST_TESTS`.
-- Run: `make -C runtime test-host` (the Makefile calls it portable to "any POSIX host"). **Measured on a Linux box for this guide: it does not build there**, because
+- Run: `make -C runtime test-host` (the Makefile calls it portable to "any POSIX host"). **Measured on Linux: it does not build there**, because
   `runtime/src/threads.c` (part of `HOST_KERNEL`) uses Mach APIs (`mach_port_t`, `thread_suspend`...) in the `NAPPLE_PCPROF` code; only `test_ios_dylib` builds. Treat `test-host` as a macOS target
   (`tools/ci_build.sh` runs it on macOS; `.github/workflows/tests.yml` runs `make -C runtime test test-services` and does not include `test-host`).
 - Then run a title with `NAPPLE_SVC_TRACE=1` or `--svc-trace` (logs `0x<nn> <Name> from <module>+0x<offset> x0..x3`, and the result), and, to list every missing svc in one run, `NAPPLE_SVC_LENIENT=1`
@@ -91,11 +91,11 @@ Host tests run the real handlers on any thread through `svc_dispatch`; they are 
 
 ## Common pitfalls
 - **Wrong register convention.** Writing the handler from the libnx prototype instead of the kernel ABI puts outputs in the wrong registers. Compare with a neighbour of the same shape in `kernel.c` or `threads.c`.
-- **Cooperative cores.** Preemption only happens at svc entry (`core_checkpoint`); a handler that blocks without releasing its core starves other threads, and a guest thread that spins without any svc is never
-  time-sliced ([runtime-services.md](../architecture/runtime-services.md), "Kernel scheduling note").
+- **Virtual cores.** A thread holds one of three virtual cores while it runs guest code; a handler that blocks must release its core (`thread_core_away` / `thread_core_back` in `threads.c`), or it starves other threads.
+  Timer preemption exists (slice thread + SIGPROF in guest code, svc-exit checkpoint otherwise), but equal-priority rotation only happens at priority 59, as on Horizon ([runtime-services.md](../architecture/runtime-services.md), kernel scheduling).
 - **Pausing and context.** Several svcs are `partial` on purpose (0x32, 0x33, 0x36...): read their paragraph in `runtime-services.md` before changing semantics; the status words there (*implemented*, *partial*) must stay true.
 - **Unknown values must not guess silently.** Unknown `GetInfo` ids and unsupported svcs are reported (summary note, `unsupported_svcs`) so the compatibility record says what a title needed. Keep that policy.
-- **Address-arbiter results are checked by games.** AC needed `SignalToAddress` type 2 to write `value-2` and `WaitForAddress` type 3 ([titles/01006F8002326000.md](../titles/01006F8002326000.md) and `docs/archive/changes/2026-10-25-ac-render-2026-10-25-titles.md`, item 8).
+- **Address-arbiter results are checked by games.** Every arbiter type must follow the kernel exactly, for example `SignalToAddress` type 2 writes `value-2` and `WaitForAddress` type 3 must be supported; a game that relies on a missing type spins or deadlocks.
 - **Do not assume the mask is enforced** (see above), and do not rely on `known_names[]` to register anything: it is names only.
-- **AArch32 is a second front door.** An svc that works for 64-bit titles but has no `svc_sigs[]` row fails for MK8D 1.0; `QueryMemory` is special-cased in `a32_svc_impl` (40-byte `MemoryInfo`).
+- **AArch32 is a second front door.** An svc that works for 64-bit titles but has no `svc_sigs[]` row fails for 32-bit titles; `QueryMemory` is special-cased in `a32_svc_impl` (40-byte `MemoryInfo`).
 - **Code memory limits.** Code generated at run time runs natively without the AOT rewrite and must not contain `svc`, `x18` or `tpidr` accesses (`kcode.c` header).

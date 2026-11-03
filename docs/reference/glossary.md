@@ -15,8 +15,8 @@ The AArch64 instruction set, which both the Switch's Tegra X1 and Apple Silicon 
 Site detection is in `crates/napple-core/src/analysis/a64.rs`, the rewriter in `crates/napple-rewrite/src/a64.rs`.
 
 **AArch32**
-The 32-bit ARM instruction set (ARM and Thumb-2). Some titles (for example Mario Kart 8 Deluxe) are 32-bit ELF32 modules, which Apple Silicon cannot run. They take a separate path: NTB2 tables,
-an interpreter in `runtime/src/a32/` and an optional ahead-of-time recompiler in `runtime/src/a32jit/`. See [aarch32](../architecture/aarch32.md).
+The 32-bit ARM instruction set (ARM and Thumb-2). Some titles are 32-bit ELF32 modules, which Apple Silicon cannot run. They take a separate path: NTB2 tables, an ahead-of-time
+lifter to AArch64 (`runtime/src/a32jit/`, run by `napple build`) and an svc adapter in `runtime/src/a32/`. An interpreter exists only as a test oracle and in a debug build. See [aarch32](../architecture/aarch32.md).
 
 **AOT (ahead-of-time)**
 Work done at build time rather than at run time. The A64 rewrite, the AArch32 recompiler and the module tables are all produced by `napple build` before the game starts. There is no JIT
@@ -116,7 +116,20 @@ The GPU architecture of the Switch's Tegra X1. Games ship shaders as Maxwell mac
 **MSL (Metal Shading Language)**
 Apple's GPU shader language. The translator produces MSL source which `gfx/src/mtl_shader.m` compiles into Metal pipelines and caches.
 
+## L
+
+**LDN**
+Local wireless play between consoles (`ldn:u`). Napple carries it over the LAN with the host network provider, or over the internet through a `napple-room` server
+([online rooms](../guides/online-rooms.md)).
+
 ## N
+
+**.napmod**
+The shareable package format of mods and per-title fixes: code patches, RomFS replacements, cheats and configuration, tied to module build ids (`crates/napple-mods`; [mods](../mods/README.md)).
+
+**Napple Online**
+The optional community online service: Napple accounts and profiles, friends and visibility tiers, end-to-end encrypted cloud saves and game servers, run by Napple servers
+(never Nintendo's). See [Napple Online](../guides/napple-online.md).
 
 **NACP**
 The control data of a title (names, publisher, display version). The default app name comes from it (`crates/napple-core/src/infrastructure/nacp.rs`).
@@ -163,6 +176,12 @@ The Switch's low-level graphics API. Napple implements the NVN function table on
 **nvnBootstrapLoader**
 The single entry point the game's graphics library uses to obtain every NVN function pointer. Napple overrides it through the HLE table (`gfx/src/core.c`, exposed by `gfx/adapter/gfx_napple.c`), so the SDK's own
 NVN driver is never executed.
+
+## O
+
+**OnlineProvider**
+The interface behind every network service (`bsd`, `nifm`, `sfdnsres`, `ssl`, `friend`, `ldn`, ...). The default NullProvider answers like a console without a connection; `NAPPLE_NET=host`
+selects the built-in host provider, `NAPPLE_ONLINE_PROVIDER` a shared library ([network providers](../guides/network-providers.md)).
 
 ## P
 

@@ -1,4 +1,4 @@
-# Mod framework: library API, build hook and follow-ups
+# Mod framework: library API, build hook and runtime
 
 For contributors. The portable core lives in `crates/napple-mods` (no macOS dependencies, `cargo test -p napple-mods` runs on Linux). User-facing rules are in [format](format.md).
 
@@ -27,60 +27,33 @@ pub fn dry_run_mods_for_module(build_id: &[u8; 32], module: &ModuleBytes, mods: 
 
 `ModuleBytes` holds the three decompressed segments with their memory offsets (`ModuleBytes::from_segments([(off, bytes); 3])`). `apply_mods_to_module` applies, in the given order, every patch of every enabled mod whose build id equals `build_id` (`Selection::enabled && code_patches`, plus per-file and per-block overrides, `@disabled` blocks off), never writes outside a segment, never panics on hostile input, and returns hits, misses, overlaps (later wins), skipped patches and the SHA-256 of the module before and after. Truncation is never applied.
 
-### Exact call site proposal for `napple-build` (a Mac follow-up; `crates/napple-build/src` was read only in this batch)
+### Where the build calls it
 
-`crates/napple-build/src/pipeline.rs`, `rewrite_version`, inside the `par_iter` closure, right after `let nso = Nso::parse(bytes)...` and before the AArch32 check and `napple_rewrite::rewrite_module`:
+`napple build --mods <a.napmod,dir,...>` (comma list, the option may repeat; `--mods-strict` makes a missed patch record fail the build).
 
-```rust
-let mut nso = Nso::parse(bytes).map_err(...)?;                   // was: let nso
-if !mods.is_empty() {                                            // new parameter: &[napple_mods::ResolvedMod]
-    let mut seg = napple_mods::ModuleBytes::from_segments([
-        (nso.text.mem_offset,   std::mem::take(&mut nso.text.data)),
-        (nso.rodata.mem_offset, std::mem::take(&mut nso.rodata.data)),
-        (nso.data.mem_offset,   std::mem::take(&mut nso.data.data)),
-    ]);
-    let rep = napple_mods::apply_mods_to_module(&nso.build_id, &mut seg, mods);
-    [nso.text.data, nso.rodata.data, nso.data.data] = seg.into_segments();
-    progress("mods", ..., &format!("{label} {name}: {} hit(s), {} miss(es)", rep.hits.len(), rep.misses.len()));
-    reports.lock().push((name.clone(), rep));                    // written to modules/<name>.mods.json
-}
-```
+* `napple_mods::buildglue::ModSet` loads and validates every path (a validation error or a mod for another title fails the build, the same id twice fails), resolves with `enabled + code_patches + cheats + shaders` (naming a mod on the command line is the explicit enable), and exposes `key()`, `apply()`, `manifest_json()` and `write_overlay()`.
+* `crates/napple-build/src/pipeline.rs` `rewrite_version_mods` applies the patches right after `Nso::parse` and before the AArch32 check and the AOT rewrite; per-module reports go to `modules/<name>.mods.json`; misses become build notes. AArch32 modules go through `tables32` instead of the rewriter; the same hook works on their segments.
+* The data directory keeps its unpatched build-id name (`<buildid16>`; the launcher and runtime find it by that name). The applied set is in `manifest.json`: `mod_set` (hash of ids, versions, content hashes and selections), `mods` (id, version, content hash, per-module hits and misses), and `mods_overlay`, `mods_cheats`, `mods_config` when present. The RomFS stream cache is keyed by the mod set, so a different set never reuses another set's cache.
+* Every build rewrites the whole `<data dir>/mods` directory (an empty set clears it) and removes stale `modules/*.mods.json`, so a rebuild into the same output folder never keeps an earlier set's overlay, cheats, config or reports. Files: `mods/overlay.json` (one entry per line: `{"path":"/a/b","file":"mods/files/<n>/a/b","size":N}` or `{"delete":"/a/b"}`) plus the copied files below `mods/files/<n>/`, `mods/cheats.txt`, `mods/config.json`. Paths with quotes, backslashes or control characters are refused at build time.
 
-Caveats when wiring this in:
+Caveats of the hook:
 
 * `Nso::parse` checks segment hashes before the hook runs, so patched segments are not re-verified: correct.
-* `tables::build_tables` receives `nso: Some(bytes)` (the original file) and reads symbols and relocations from it. Patches that touch `.dynsym`, `.dynamic` or relocation data would be missed; refuse such patches in the hook (module offsets inside the `DT_*` tables) or pass the patched segments through.
-* The runtime data directory is named by the *unpatched* `main` build id. A patched build needs its own directory (for example `<buildid16>+<modhash8>`) and `manifest.json` should record the mod ids, versions and content hashes that were applied, so a rebuild with a different mod set never reuses a stale `patched.bin`. Build caches must include the content hashes of the mods in their key.
-* A miss in a *requested* patch should fail the build when the user asked for strict mode, and warn otherwise.
-* AArch32 modules (MK8D) go through `tables32` instead of the rewriter; the same hook works on their segments (offsets are file offsets as well).
+* The tables (`tables::build_tables`) are read from the original NSO bytes, so patches that touch `.dynsym`, `.dynamic` or relocation data are not seen by them. Do not patch those areas.
 
-## Status of the build glue (2026-10-27, mod-glue-core)
+## Runtime side
 
-Done (tested on Linux, not verified on a Mac): `napple build --mods <a.napmod,dir,...>` (comma list, option may repeat).
+* **RomFS overlay.** The runtime builds a *virtual RomFS image*: `runtime/src/services/romfs_map.c` `romfs_merge_open` reads the original image through whatever backend serves it (`romfs.bin`, `romfs.map`, delta layer), parses the directory and file tables into a tree, applies `mods/overlay.json` (deletes first, then replacements and additions, so a replacement under a deleted subtree wins, as in `romfs_overlay_lookup`) and generates a fresh header, directory/file tables and hash tables in memory. File data is never copied: every file is an extent of the original image or of a mod file (fds opened on demand, 8 cached). `fs.c` `storage_with_overlay` swaps it in for `OpenDataStorageByCurrentProcess`; any failure serves the original image and logs why. The builder is not involved: re-packing multi-GB images per mod set would need its own cache keys, while the runtime variant costs memory only for the tables and works for all three image backends. Log line: `mods: romfs overlay applied: N replaced, N added, N removed, N skipped`. DLC images (`OpenDataStorageByDataId`) are not overlaid.
+* **Cheats** (see [format](format.md#cheat-opcode-table)): Rust and C interpreters with the same opcode table, loops, registers, pointer chains, conditions; `mods_runtime.c` loads `mods/cheats.txt` and `mods_cheats.c` runs them once per frame from `vi.c`'s vsync thread, over a memory view of the guest address space (main module base, heap, alias, aslr).
+* **Config**: `mods_config_apply_settings` maps `renderScale`, `aspect`, `fpsMode` onto a *copy* of the frontend settings in `app.m` `push_gfx_settings` (the user's `settings.json` is never rewritten); `fixes` are read with `mods_fix_enabled(name, default)` by title-specific code.
+* `NAPPLE_NO_MODS=1` turns the overlay, cheats and config off for a run.
 
-* `napple_mods::buildglue::ModSet` loads and validates every path (a validation error or a mod for another title fails the build, id twice fails), resolves with `enabled + code_patches + cheats + shaders` (naming a mod on the command line is the explicit enable), and exposes `key()`, `apply()`, `manifest_json()` and `write_overlay()`.
-* `pipeline.rs` `rewrite_version_mods` applies the patches right after `Nso::parse` and before the AArch32 check and the AOT rewrite; per module reports go to `modules/<name>.mods.json`; misses become build notes. Tables are still read from the original NSO bytes (see the caveat above: patches on `.dynsym`/`.dynamic`/relocation data are not seen by the tables).
-* The data directory keeps its unpatched name (`<buildid16>`); the applied set is in `manifest.json` (`mod_set` = hash of ids, versions, content hashes and selections; `mods` = id, version, content hash, per-module hits and misses; `mods_overlay` when a romfs overlay exists). The RomFS stream cache directory name includes the mod key, so a different mod set never reuses another set's cache. Building a different mod set into the same output folder rewrites that data directory.
-* `<data dir>/mods/overlay.json` (one entry per line: `{"path":"/a/b","file":"mods/files/<n>/a/b","size":N}` or `{"delete":"/a/b"}`) plus the copied files below `mods/files/<n>/`. Paths with quotes, backslashes or control characters are refused at build time.
-* Runtime: `romfs_overlay_load/lookup/child/free` in `runtime/src/services/romfs_map.c` (portable C; `make -C runtime build/host/test_romfs_overlay`). The lookup is not yet called from `fs.c` (the RomFS is served as a raw IStorage image, so a path-level overlay needs a romfs directory/file reader in front of it, or the builder re-packing the image): open item 2 below.
-* `napple build` also writes `<data dir>/control.nacp` (the raw NACP of the newest version with a control NCA) for ns 400/21/23.
+## Open work
 
-## Status of the runtime (2026-10-28, mods-runtime; tested on Linux, not verified on a Mac)
-
-* **RomFS overlay (done)**: decision: the runtime builds a *virtual RomFS image*; the builder is not involved. `romfs_map.c` `romfs_merge_open` reads the original image through whatever backend serves it (romfs.bin, romfs.map, delta layer), parses the directory and file tables into a tree, applies `mods/overlay.json` (deletes first, then replacements and additions, so a replacement under a deleted subtree wins, as in `romfs_overlay_lookup`) and generates a fresh header, directory/file tables and hash tables in memory. File data is never copied: every file is an extent of the original image or of a mod file (fds opened on demand, 8 cached). `fs.c` `storage_with_overlay` swaps it in for `OpenDataStorageByCurrentProcess`; any failure serves the original image and logs why. Why not re-pack in the builder: the builder would have to read and rewrite multi-GB images for every mod set and would need its own cache keys; the runtime variant costs memory only for the tables and works for all three image backends. Log line: `mods: romfs overlay applied: N replaced, N added, N removed, N skipped`. `NAPPLE_NO_MODS=1` serves the original image. DLC images (`OpenDataStorageByDataId`) are not overlaid.
-* **Build wiring (done)**: `--mods` (CLI), `--mods-strict` (a missed patch record fails the build). The build now rewrites the whole `<data dir>/mods` directory on every build (an empty set clears it) and removes stale `modules/*.mods.json`, so a rebuild into the same output folder never leaves an earlier set's overlay, cheats, config or reports. New files: `mods/cheats.txt`, `mods/config.json`; `manifest.json` gains `mods_cheats` and `mods_config` beside `mods_overlay`. The data directory keeps its unpatched build-id name (the launcher and runtime find it by that name); the applied set is in `manifest.json` (`mod_set`), the RomFS stream cache is keyed by it. Keying the directory name itself would need the launcher/runtime lookup changed (not in this branch's area).
-* **Cheats (done, see [format](format.md#cheat-opcode-table))**: Rust and C interpreters, loops, registers, pointer chains, conditions; `mods_runtime.c` runs them from `vi.c`'s vsync thread.
-* **Config (done)**: `mods_config_apply_settings` maps `renderScale`, `aspect`, `fpsMode` onto a *copy* of the frontend settings in `app.m` `push_gfx_settings` (the user's `settings.json` is never rewritten); `fixes` are read with `mods_fix_enabled(name, default)` by title-specific code (no title consumes one yet).
-
-## Mac follow-up list
-
-1. **Build integration** (done for the CLI, see above; Studio field still open, not this area): add a `--mods <file.napmod|dir>...` option (and a Studio field) to `napple build`; load with `LoadedMod::load`, `validate`, `resolve(Selection)`, call the hook as above, store the reports, and key the data directory and caches by the applied mod set.
-2. **Runtime romfs overlay** (done, see the runtime status above; the text below is the original proposal):  `runtime/src/services/romfs_map.c` (fsp-srv romfs lookup) should resolve paths through an `OverlayMap`. Suggested shape: the build step writes `<datadir>/mods/overlay.json` (`romfs path -> file inside the app bundle`, plus tombstones) and the runtime consults it before the RomFS image for `OpenFile`, `GetEntryType`, directory listings (merge and hide). Keeping this a data file keeps the runtime free of zip code.
-3. **Cheats** (done, see above; the original proposal): the runtime supplies a `CheatMemory` over the guest address space (main module base, heap, alias, aslr) and runs `cheats::run` or a C port at a safe point once per frame; a C port needs the same opcode table (see [format](format.md#cheat-opcode-table)).
-4. **Config** (done, see above): apply `merge`d `ModConfig` as per-title settings (render scale in gfx, aspect, fps mode, fix toggles named by the title page).
-5. **Shaders**: the gfx shader cache looks up `shaders/<hash>.msl` by program hash before translating; compile errors must fall back to the translated shader and log once.
-6. **UI**: Studio and the overlay list installed mods with author, license, hashes, capabilities and warnings from `inspect --json`, the four switches (enabled, code patches, cheats, shaders), per-block toggles, mod order, and the overlay conflicts. Code patches need an explicit second confirmation. `napple mods inspect --json` and `validate --json` are the machine interface.
-7. **Signatures**: a later format version can fill `signature` and verify it against a user-managed key list; the hash manifest already gives the signed digest.
+1. **Shaders**: the gfx shader cache should look up `shaders/<hash>.msl` by program hash before translating; compile errors must fall back to the translated shader and log once.
+2. **UI**: Studio and the overlay list installed mods with author, license, hashes, capabilities and warnings from `inspect --json`, the four switches (enabled, code patches, cheats, shaders), per-block toggles, mod order, and the overlay conflicts. Code patches need an explicit second confirmation. `napple mods inspect --json` and `validate --json` are the machine interface. A Studio field for `--mods` is part of this.
+3. **Signatures**: a later format version can fill `signature` and verify it against a user-managed key list; the hash manifest already gives the signed digest.
+4. **Data directory name**: keying the directory name itself by the mod set (for example `<buildid16>+<modhash8>`) would need the launcher and runtime lookup changed; today one output folder holds one mod set at a time.
 
 ## Tests
 

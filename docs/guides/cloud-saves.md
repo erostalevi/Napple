@@ -1,7 +1,7 @@
 # Cloud saves (Napple Account, end-to-end encrypted)
 
 One Napple Account on the Mac and the iPhone: a game continues from the same save on both. Saves are encrypted on the device before upload;
-the server (`crates/napple-account`, contract in `docs/guides/napple-account.md`) stores ciphertext only and never sees a key.
+the server (`crates/napple-account`, API in [napple-account.md](napple-account.md)) stores ciphertext only and never sees a key.
 Nothing syncs unless you sign in. The client is `crates/napple-cloud` (Rust), used by the `napple` CLI and linked into the native runtime
 (`runtime/src/cloud/`).
 
@@ -33,7 +33,7 @@ napple saves list                    # cloud + local saves and their sync status
 
 ### Storage limits
 
-No paid plans this round (contract: billing not built; every account gets every feature). The server limits storage by configuration
+No paid plans: every account gets every feature. The server limits storage by configuration
 (default 10 GiB per account, 20 versions per title, 64 MiB per version). An upload beyond the quota gets `413 {reason: "quota"}`: the save
 stays on the device, the title shows **not synced: cloud storage full** in `napple saves list`, the runtime logs it and sends a `quota`
 event, and the upload is retried at most hourly (or now with `napple saves push`). Downloads and restores always work.
@@ -70,17 +70,17 @@ Caches, BCAT, temporary and system saves are not synced. Nothing else ever leave
   keychain never shows UI (a locked keychain is an error). iOS: `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
   Follow-up once Studio and the games are signed with one team ID: the data-protection keychain with a shared access group on macOS too.
 
-## Wire details (what the contract leaves open; the client implements these, the stub in `crates/napple-cloud/src/stub.rs` too)
+## Wire details (client side; the stub server in `crates/napple-cloud/src/stub.rs` implements them too)
 
-- Base URL `https://pretend.napple.lat/account/v1` (`NAPPLE_ACCOUNT_URL` overrides). JSON field names as in the contract (snake_case).
+- Base URL `https://pretend.napple.lat/account/v1` (`NAPPLE_ACCOUNT_URL` overrides). JSON field names as in [napple-account.md](napple-account.md) (snake_case).
 - Binary fields (`device.pubkey`, `wrapped_account_key`, recovery `salt`/`wrapped`) are **base64url without padding** (padded or standard
   base64 is accepted when reading).
 - `POST /auth/email/finish` (and `/auth/refresh`) answer `{access_token, refresh_token, expires_in, account_id, device_id}` (a nested
   `tokens` object is accepted too). Refresh tokens rotate: the answer's refresh token replaces the old one.
 - `device.platform`: `macos` for the Mac (CLI, Studio and games share the device), `ios`, `cli` elsewhere.
 - `GET /keys/mine` -> `{wrapped_account_key}`, **404** while the device has no key. `GET /keys/requests` -> `[{device_id, name, platform,
-  pubkey, created_at}]`. `GET /keys/recovery` -> the stored record (**404** if none) — the contract only names the POST; the client needs
-  the GET for `napple account recover`, and uses "no other device and no recovery record" to decide it is the account's first device.
+  pubkey, created_at}]`. `GET /keys/recovery` -> the stored record (**404** if none); the client needs
+  it for `napple account recover`, and uses "no other device and no recovery record" to decide it is the account's first device.
 - Lists may be a bare array or an object holding it (`devices`, `profiles`, `requests`, `versions`, `saves`).
 - `GET /saves/{title}/{profile}/versions` -> `[{version, size, sha256_ciphertext, created_at, device_id}]` (committed versions; an entry with
   `committed: false` is ignored). Title ids are 16 upper-case hex digits.
@@ -89,7 +89,7 @@ Caches, BCAT, temporary and system saves are not synced. Nothing else ever leave
   `sha256_ciphertext` is part of the request. `409 {error, head}` (`head` a number, or `{version}`) when `base_version` is not the head.
   `413 {reason: "quota"[, message]}` when the account's storage is full. Upload: `PUT upload_url` with the blob (`application/octet-stream`), then
   `POST .../versions/{v}/commit {}`. Download: `GET .../versions/{v}` -> `{url}` (presigned GET).
-- `GET /me` -> `{account_id, email, display_name, plan}`; the client ignores `plan` (a placeholder this round).
+- `GET /me` -> `{account_id, email, display_name, plan}`; the client ignores `plan` (a placeholder).
 
 ### Save blob, format 1
 

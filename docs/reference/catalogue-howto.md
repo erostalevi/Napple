@@ -46,4 +46,4 @@ python3 -I tools/support/gen_support.py          # rewrites docs/reference/suppo
 python3 -I tools/support/gen_support.py --check  # exit 1 and the names of stale files; check_docs.py runs it
 python3 tools/check_docs.py                       # links, anchors, orphans, symptoms rows, stale tables
 ```
-Commit the three generated files together with your edit. Do not edit them by hand and do not run `--refresh-snapshot` (that is a maintainer step). Tool tests: `python3 -I tools/support/test_gen_support.py`.
+Commit the three generated files together with your edit. Do not edit them by hand and do not run `--refresh-snapshot` (a release step that updates the coverage snapshot). Tool tests: `python3 -I tools/support/test_gen_support.py`.

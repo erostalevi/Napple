@@ -61,7 +61,7 @@ File header: `{"schema_version": 1, "title_id": ..., "build_id": ..., "signature
    The pull request is opened by the GitHub account `gh` is logged in with; GitHub knows that account. (The design note records that the live `--yes` path was implemented but not exercised against a real fork.)
 
 ## Worked example
-Run on a Linux box for this guide with a **synthetic** 256-byte file of made-up instruction words (not game code), so the output can be reproduced without any game:
+Run on Linux with a **synthetic** 256-byte file of made-up instruction words (not game code), so the output can be reproduced without any game:
 ```
 $ napple sigs resolve synth.bin --title 0100FFFF00000000 --build 00112233445566778899aabbccddeeff --no-rea --work w2 0x40:function:synthetic_fn:0x20
 0x40  local         571808a981f154bea6060bb591943274  (low confidence; no reverser configured; stored as pending-share)

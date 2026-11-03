@@ -55,7 +55,7 @@ iOS builds never load provider modules (no runtime code loading); the iOS app ca
 - Test it the way `runtime/tests/test_svc_online.c` does: `online_loopback.h` is a complete in-memory provider (sockets, DNS, TLS pass-through, friends) that serves a bsd echo
   connection. Run `sh tools/linux-check/run-tests.sh runtime/tests/test_svc_online.c`.
 
-### Additions after version 1 (struct_size-extensible, ipc-depth-rest2, 2026-10-27)
+### Additions after version 1 (struct_size-extensible)
 `ABI_VERSION` stays 1: the table grew at the end, and a module built with the older, smaller `struct_size` simply lacks the new entry points (`ONLINE_FN` returns NULL, the service
 answers like the NullProvider). New capability bits: `ONLINE_CAP_LDN` (1<<7) and `ONLINE_CAP_ACCOUNT` (1<<8).
 - **ldn** (local wireless): `ldn_scan(lcid, out, max)`, `ldn_create(cfg)`, `ldn_destroy`, `ldn_connect(net)`, `ldn_disconnect`, `ldn_get_network(out, &disconnect_reason)`,
@@ -65,10 +65,11 @@ answers like the NullProvider). New capability bits: `ONLINE_CAP_LDN` (1<<7) and
 - **bsd** `DuplicateSocket`, `SendMMsg`, `RecvMMsg` need no new entry point: they use the existing socket calls.
 
 ## Status
-Tested on Linux against the mock IPC layer and the loopback provider; not yet run on macOS or against a title. Argument layouts of the bsd/sfdnsres/ssl/friend commands are from
-memory of the public documentation and unverified. See the [hand-off notes](../archive/changes/2026-10-26-sim-online-2026-10-26-macos1.md).
+The provider ABI and the services over it are tested against the mock IPC layer and the loopback provider (`test_svc_online`); the built-in host provider below is tested on macOS by
+`make -C runtime test-net-host`. Argument layouts of the bsd/sfdnsres/ssl/friend commands follow the public documentation; a row is *verified* only once a title has used it.
+History of the interface: the [change archive](../archive/changes/README.md); the provider-backed services were introduced in the [sim-online note](../archive/changes/2026-10-26-sim-online-2026-10-26-macos1.md).
 
-## The built-in host provider (`NAPPLE_NET=host`, net-host-provider 2026-11-02)
+## The built-in host provider (`NAPPLE_NET=host`)
 
 An opt-in provider that ships with the runtime (`runtime/src/net/`): the title's network traffic goes through the Mac's own network stack. The default stays
 offline; `NAPPLE_NET=host` selects it (`NAPPLE_ONLINE_PROVIDER`, when set, wins, even if its module fails to load). It is **generic transport only**: it
@@ -90,8 +91,7 @@ In this provider's DNS path (sfdnsres, the only place it resolves names) every n
 **host not found** (`EAI_NONAME`), exactly what an offline resolver gives, so a title ends its online attempt as it would with a dead DNS. The one way
 around it is the redirect hook `net_host_redirect_lookup` (`runtime/src/net/net_host.h`): `int (*)(const char *name, char *out, size_t n)`, NULL by default,
 called for every name before the block check. It returns 1 with the name or address of a configured Napple server in `out`, or 0. A redirect whose target
-is itself a blocked name is refused. A later item (napple-online) sets it. A title that connects to a literal IP address bypasses DNS: not covered (no title
-seen doing so).
+is itself a blocked name is refused. Nothing in the runtime sets it by default. A title that connects to a literal IP address bypasses DNS: not covered.
 
 ### ABI additions (struct_size-extensible, `ABI_VERSION` still 1)
 - `tls_add_ca(conn, cert, n)`: trust a guest-imported CA for this connection; `tls_set_verify(conn, option)` with `ONLINE_TLS_VERIFY_PEER_CA` / `_HOST_NAME` / `_DATE`.

@@ -4,8 +4,8 @@ Napple rooms let Napple users play a title's local multiplayer modes together fr
 
 - **Local wireless (LDN)**, the "Wireless Play" / "Local Play" menus. A console hosts a network in the room and the others find it and join it, as
   if they were in the same living room.
-- **LAN play**, for the titles that have a wired-LAN mode (Mario Kart 8 Deluxe: L+R+left stick on the main menu turns "Wireless Play" into "LAN
-  Play"). The room acts as one virtual Ethernet segment: every member gets an address in a private subnet, and broadcasts reach every other member.
+- **LAN play**, for the titles that have a wired-LAN mode (often a hidden menu entry; the [title pages](../titles/README.md) say how each title
+  reaches it). The room acts as one virtual Ethernet segment: every member gets an address in a private subnet, and broadcasts reach every other member.
 
 A small server, `napple-room` (`crates/napple-room/`), relays the traffic between the members of a room. The protocol is Napple's own. Nothing here
 talks to, imitates or needs any Nintendo service: the runtime puts the LDN and LAN data the games already send inside room frames.
@@ -16,7 +16,7 @@ talks to, imitates or needs any Nintendo service: the runtime puts the LDN and L
 2. Every player starts their game with the host network provider and the same room:
 
    ```bash
-   NAPPLE_NET=host NAPPLE_ROOM=rooms.example.net/friday NAPPLE_ROOM_PASSWORD=secret NAPPLE_ROOM_NICK=neto \
+   NAPPLE_NET=host NAPPLE_ROOM=rooms.example.net/friday NAPPLE_ROOM_PASSWORD=secret NAPPLE_ROOM_NICK=player1 \
      runtime/build/napple-runtime <data-dir>
    ```
 
@@ -28,7 +28,7 @@ talks to, imitates or needs any Nintendo service: the runtime puts the LDN and L
 
 Several players on one Mac work too (each runtime has its own virtual address). That is how the tests run.
 
-The variables are listed in [environment variables](../reference/environment-variables.md#napple-rooms-net-rooms-2026-11-02-r7).
+The variables are listed in [environment variables](../reference/environment-variables.md).
 
 ## Running a server
 
@@ -69,13 +69,13 @@ Deployment notes:
   port forwarding.
 - The server is a single stateless process: rooms live while they have members. It runs as any unprivileged user from a read-only filesystem.
   Restart it on failure (launchd, systemd or the container runtime).
-- Bandwidth: everything a member sends is relayed through the server, once per recipient for broadcasts. Mario Kart LAN races are some tens of KiB/s
-  per player; plan for the rate limits above times the members.
+- Bandwidth: everything a member sends is relayed through the server, once per recipient for broadcasts. A LAN race is typically some tens of
+  KiB/s per player; plan for the rate limits above times the members.
 - Latency adds the trip to the server: pick a server close to all players.
 - The server never reads the relayed data, but anyone who knows a room's name (and its password) can join it. Use a password for private games.
   The room protocol is not encrypted.
 - The public deployment at `pretend.napple.lat` runs this binary in a container with `NAPPLE_ROOM_LISTEN=0.0.0.0:31415` and
-  `NAPPLE_ROOM_HTTP=0.0.0.0:8081` (served as `https://pretend.napple.lat/room/healthz` behind the proxy). See the napple-infra hand-off.
+  `NAPPLE_ROOM_HTTP=0.0.0.0:8081` (served as `https://pretend.napple.lat/room/healthz` behind the proxy). See [deploy-servers.md](deploy-servers.md).
 
 ## How it works
 
@@ -107,23 +107,18 @@ others. Frame layout: `crates/napple-room/src/proto.rs`.
 
 Without `NAPPLE_ROOM`, none of this runs and the host provider behaves exactly as before (LDN over the real LAN, real addresses).
 
-## Status (2026-11-02)
+## Tests
 
 - Server: `cargo test -p napple-room` (14 tests: room life cycle, passwords, addresses, unicast / broadcast relay, spoofing, LDN advertise / scan /
   relay, limits, rate limit, keepalive, HTTP health and room list).
 - Runtime: `make -C runtime test-net-room` runs a real server and two consoles (two processes) through the provider: nifm, UDP on the same port from
   both, broadcast, unicast, implicit bind, connected UDP, TCP with 100 kB both ways, LDN scan / join / nodes / advertise / leave / destroy, a member
   quitting.
-- **Mario Kart 8 Deluxe** (update 3.0.5), two headless instances on one Mac in one room (mk8d-lan-session, 2026-11-02):
-  - **LAN Play works.** One instance creates a room; the other sees it in its lobby list, joins it, and both reach the room's character select. Pia
-    traffic flows both ways between 10.13.0.2 and 10.13.0.3.
-  - **Wireless Play (local wireless) partly works.** The host creates its room and the other instance lists and joins it, but the joining instance
-    then crashes inside the game (not diagnosed yet).
-  - How to get there:
-    - LAN Play: A on the title screen, then L+R+left stick together on the main menu, then "LAN Play".
-    - Every player needs their own `--save-root`: that is what makes each instance a different console. Profile names are all "Napple" for now.
-  - The fix that made it work was in bsd, not in rooms: the console's bsd service reports Linux errno numbers, and Napple's reported FreeBSD's, so the
-    game's network library took "nothing to read yet" for a fatal error (error 2618-0006).
+- On a title: run two headless instances on one Mac in one room. Every instance needs its own `--save-root` (that is what makes each a different
+  console). Per-title results are on the [title pages](../titles/README.md) and in the generated [online support](../reference/online-support.md) table.
+
+The bsd service reports Linux errno numbers, as the console's does; a title's network library treats a FreeBSD errno for "nothing to read yet"
+as a fatal error, so this mapping is what LAN sessions depend on.
 
 ## Not done yet
 

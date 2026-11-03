@@ -27,7 +27,7 @@ Conventions used by the code, unless a row says otherwise:
 | `NAPPLE_SVC_LENIENT` | set = on | An unimplemented svc returns `R_NOT_IMPLEMENTED` instead of aborting, to list several unsupported svcs in one run. | `runtime/src/kernel.c` |
 | `NAPPLE_PCPROF` | set = on | Starts a sampler thread that logs the program counters of guest threads (`pcprof` lines) to find where a hung boot spins. | `runtime/src/threads.c` |
 | `NAPPLE_PCPROF_REGS` | set = on (needs `NAPPLE_PCPROF`) | Also logs the registers of the thread with id `0x51` about every 300th sample, for the first 6000 samples. | `runtime/src/threads.c` |
-| `NAPPLE_PEEK` | `<module>+<hex offset>`, for example `main+0x24741f8` | Logs the 8 bytes at that module offset at the points where the runtime calls `runtime_peek`: the `nvnBootstrapLoader` request (`runtime/src/gfx_stub.c`) and the crash report. | `runtime/src/signals.c` |
+| `NAPPLE_PEEK` | `<module>+<hex offset>`, for example `main+0x1234560` | Logs the 8 bytes at that module offset at the points where the runtime calls `runtime_peek`: the `nvnBootstrapLoader` request (`runtime/src/gfx_stub.c`) and the crash report. | `runtime/src/signals.c` |
 | `NAPPLE_WATCH` | `<module>+<hex offset>` | Makes that page read-only and logs every guest store to the 8-byte location (pc, caller, value); the faulting store is decoded and emulated. | `runtime/src/signals.c` |
 | `NAPPLE_WAIT_SECS` | integer seconds | Prints the pid and sleeps that long before the guest starts, to attach a debugger. | `runtime/src/main.c` |
 | `NAPPLE_FS_TRACE` | set = on; value starting with `a` = all reads | Logs RomFS reads of 0x10000 bytes or more (every read when the value starts with `a`). `tools/romfs_lookup.py` maps such log lines to RomFS files. | `runtime/src/services/fs.c` |
@@ -67,7 +67,7 @@ Conventions used by the code, unless a row says otherwise:
 | `NAPPLE_MOVIE_PACE` | `0` or other; default off | Non-zero paces decoded frames by presentation time; `0` (and the default) hands every decoded frame over at once. | `runtime/src/movie.c` |
 | `NAPPLE_MOVIE_NEGATIVE` | `0`, `1`, `2`; default 0 | Negative controls for the probe movie only: `1` swaps U and V, `2` suppresses the format-changed event. | `runtime/src/movie.c` |
 
-### Network providers, amiibo and the IR camera (sim-online)
+### Network providers, amiibo, IR camera and other simulated hardware
 
 The amiibo, key, store, online-provider and Mii-folder variables below can also be set once for every game in `<support>/system.json` (Studio Settings, the overlay's amiibo tab); a variable that is already set wins. See [system data folders](system-data-folders.md#systemjson).
 
@@ -142,14 +142,14 @@ The amiibo, key, store, online-provider and Mii-folder variables below can also 
 | `NAPPLE_SCALE_DIAG` | any | Logs every distinct render target once with the scaling decision (`scale-diag:` lines) and mixed-scale passes. | `gfx/src/mtl_scale.m` |
 | `NAPPLE_OUTPUT_SIZE` | `WxH` | Headless only: size of the drawable (screenshots, scale / aspect tests); default 1280x720. | `runtime/src/main.c` |
 | `NAPPLE_RSCALE` | `0` | `0` disables gfx-level render target scaling (the per-game escape hatch also in the display settings). | `gfx/src/mtl_scale.m` |
-| `NAPPLE_MINIMAL_LAYOUT` | `0` | In the texture layout code, textures with flag `0x200` and no packaged block height use the minimal-layout rule; `0` turns that rule off (a negative control for fresh sessions). Default on. | `gfx/src/tex/napple_layout.c` |
+| `NAPPLE_MINIMAL_LAYOUT` | `0` | In the texture layout code, textures with flag `0x200` and no packaged block height use the minimal-layout rule; `0` turns that rule off (a negative control). Default on. | `gfx/src/tex/napple_layout.c` |
 | `NAPPLE_REC_BUDGET_MB` | integer MB greater than 0; default a quarter of the physical memory | Safety ceiling for recorded command lists. Lists live as long as their command memory (see [gfx](../architecture/gfx.md)); past the ceiling the least recently used are dropped with a warning, which is a bug to investigate. | `gfx/src/api_cmd.c` |
 | `NAPPLE_REC_NO_PACK` | set = on | Keeps idle command lists unpacked (by default lists idle for 12 s are held LZ4-packed). | `gfx/src/api_cmd.c` |
 | `NAPPLE_GFX_ARCHIVE_MAX_MB` | integer MB; default 64 | Size cap of the pipelines archive file: a save over the cap leaves the oldest quarter of the pipelines out of the next one. | `gfx/src/mtl_shader.m` |
 | `NAPPLE_GFX_NO_LOOKAHEAD` | set = on | Disables the submission look-ahead (the prediction pass that starts a submission's unknown pipelines building before the draws reach them). | `gfx/src/mtl_replay.m` |
 | `NAPPLE_GFX_ARCHIVE_SYNC` | set = on | Loads the pipelines archive on the calling thread even when it is over 16 MB (bigger files load in the background). | `gfx/src/mtl_shader.m` |
 | `NAPPLE_POOLLOG` | set = on | Logs pool address queries (`GetBufferAddress`, `Map`, `GetFlags`) and shader-code pool lookups. | `gfx/src/api_memory.c`, `gfx/src/api_program.c` |
-| `NAPPLE_PROGRAM_POOL_OFFSETS` | `0` = off | `nvnProgramSetShaders` calls whose code address is a bare shader-code pool offset (Animal Crossing's window pass) are accepted and resolved at the first draw; `0` restores the old rejection (the game then never binds those programs). | `gfx/src/api_program.c` |
+| `NAPPLE_PROGRAM_POOL_OFFSETS` | `0` = off | `nvnProgramSetShaders` calls whose code address is a bare shader-code pool offset (some titles do this for their window pass) are accepted and resolved at the first draw; `0` restores the old rejection (the title then never binds those programs). | `gfx/src/api_program.c` |
 | `NAPPLE_WINDRAWLOG` | set = on | Logs the pipeline, viewport and scissor of draws into a 1920x1080 sRGB (window) target. | `gfx/src/mtl_replay.m` |
 | `NAPPLE_DEBUG_NOCULL` | set = on | Disables face culling for every draw (bisecting winding problems). | `gfx/src/mtl_replay.m` |
 | `NAPPLE_GFX_MATH` | `safe` (default), `relaxed`, `fast` | Metal shader math mode. `safe` disables fast math; `relaxed` and `fast` use `MTLMathMode` on macOS 15 / iOS 18 or later (`fast` also enables fast math). | `gfx/src/mtl_shader.m` |
@@ -266,32 +266,36 @@ The amiibo, key, store, online-provider and Mii-folder variables below can also 
 | `NAPPLE_SHADER_CORPUS` | directory | `gfx/tests/t_xlate.m` also translates every shader file in that directory. | `gfx/tests/t_xlate.m` |
 | `T_STRICT`, `T_DUMP`, `T_COUNT`, `T_DIRTY_SECS`, `T_ARCH_PASS`, `T_CACHE_PASS`, `T_PK_PASS`, `T_PK_NOSPEC`, `T_STRESS_PASS`, `T_STRESS_THREADS`, `T_STRESS_NO_SHADER_PREWARM`, `T_STRESS_NOFLOOD` | test-specific | Options of the gfx test programs; their meaning is in the test source. | `gfx/tests/nvn_harness.h`, `gfx/tests/t_nvnapi.c`, `gfx/tests/t_dirty.c`, `gfx/tests/t_pso_archive.c`, `gfx/tests/t_triangle.c`, `gfx/tests/t_pipekey.c`, `gfx/tests/t_pipe_stress.c` |
 
+## Media diagnostics (movies, nvdrv media engines, album)
+
+| Variable | Values / default | Effect | Defined in |
+|---|---|---|---|
+| `NAPPLE_MOVIE_MODECTOR` | set = on; default off | Binds the three-argument `movie::Decoder` constructor of the movie library to the host decoder. Off by default: such titles' preview videos go through their own library to nvhost-nvdec + VIC; when on, the title can wait for video the host decoder cannot start (its parameter sets are not in the expected format). | `runtime/src/movie.c` |
+| `NAPPLE_MOVIE_VORBIS` | `0` | Leaves Vorbis movie audio (DecoderType 5) to the title's own library instead of the host decoder (on by default). | `runtime/src/movie.c` |
+| `NAPPLE_MOVIE_TC` | set = on | Logs movie decoder call counters, queue state and the first input buffers every 2 s. | `runtime/src/movie.c` |
+| `NAPPLE_MEDIA_TRACE` | `1` | Debug prints of the nvdrv media path: nvmap allocations and pins, relocations, unresolved device addresses, engine registers at the first executes, NVDEC decodes (slot, NAL types, IDRs), VIC output format and centre samples, engine stats every 60 executes. | `runtime/src/services/nvdrv_media_core.c` |
+| `NAPPLE_NVDEC_DUMP` | file path | Writes the H.264 stream exactly as the decoder backend gets it (the synthesized SPS/PPS at each configure, then every access unit, Annex B), to replay a title's video offline. The file holds game data: keep it out of the repository. | `runtime/src/services/nvdrv_media_core.c` |
+| `NAPPLE_DECODER` | `null` | Keeps the null decoder backend instead of VideoToolbox for nvhost-nvdec (diagnostics). | `runtime/src/services/decoder_vt.c` |
+| `NAPPLE_VIC_DUMP`, `NAPPLE_VIC_DUMP_FRAMES` | path prefix; comma-separated VIC frame numbers, default `1,60,120,240` | Writes the NV12 picture of those VIC executes as `<prefix>-<engine>-<frame>.ppm` (engine: creation order; RGB, BT.601 limited range). The files hold game frames: keep them out of the repository. | `runtime/src/services/nvdrv_media_core.c` |
+| `NAPPLE_CAPS_E2E_PNG`, `NAPPLE_CAPS_E2E_OUT` | PNG path; directory | `runtime/tests/test_svc_caps_e2e` only: a 1280x720 PNG (for example a `NAPPLE_SCREENSHOT` of a headless run) to send through the album round trip instead of the synthetic scene, and a directory that keeps the album JPEG and the decoded frames. | `runtime/tests/test_svc_caps_e2e.c` |
+| `NAPPLE_PREPLOG`, `NAPPLE_T2TLOG`, `NAPPLE_CUBELOG`, `NAPPLE_DEBUG_EQUAL_LEQUAL` | set = on | gfx diagnostics for the look-ahead pass, texture-to-texture copies, cube-map passes and depth EQUAL bisecting. | `gfx/src/mtl_replay.m` |
+
 ## Names mentioned in older notes but not read by current code
 
 `NAPPLE_CLEARLOG`, `NAPPLE_EMPTYTRACE`, `NAPPLE_RC_OFF`, `NAPPLE_UBOLOG` and `NAPPLE_WINTRACE` appear only in archived change notes under `docs/archive/`. No source file
 reads them. `NAPPLE_PACING_FIXED` and `NAPPLE_PACING_GAME` (gfx pacing) and `NAPPLE_AUDIO_E_PROTOCOL` (audio error code) are C enum constants, not environment variables.
 
-| `NAPPLE_MOVIE_MODECTOR` | Bind MK8D's three-argument `movie::Decoder` constructor to the host decoder (off, the default: the preview videos go through the title's own library to nvhost-nvdec + VIC, which play since media-nvdec-preview 2026-10-27; on: the game waits for video the host decoder cannot start, its parameter sets are not in the format). |
-| `NAPPLE_MEDIA_TRACE` | `1`: debug prints of the nvdrv media path to stderr: nvmap allocations and pins, relocations, unresolved device addresses, engine registers at the first executes, NVDEC decodes (slot, NAL types, IDRs), VIC output format and centre samples, engine stats every 60 executes. |
-| `NAPPLE_NVDEC_DUMP` | `<file>`: writes the H.264 stream exactly as the decoder backend gets it (the synthesized SPS/PPS at each configure, then every access unit, Annex B), to replay a title's video offline. The file holds game data: keep it out of the repository. |
-| `NAPPLE_DECODER` | `null`: keep the null decoder backend instead of VideoToolbox for nvhost-nvdec (diagnostics). |
-| `NAPPLE_VIC_DUMP` | `<prefix>`: writes the NV12 picture of the VIC executes listed in `NAPPLE_VIC_DUMP_FRAMES` (comma separated VIC frame numbers, default `1,60,120,240`) as `<prefix>-<engine>-<frame>.ppm` (engine: creation order; RGB, BT.601 limited range). Headless evidence that a title's video decodes; the files hold game frames: keep them out of the repository. |
-| `NAPPLE_MOVIE_VORBIS` | `0`: leave Vorbis movie audio (DecoderType 5) to the title's own library instead of the host decoder (on by default). |
-| `NAPPLE_CAPS_E2E_PNG`, `NAPPLE_CAPS_E2E_OUT` | `runtime/tests/test_svc_caps_e2e` only: a 1280x720 PNG (e.g. a `NAPPLE_SCREENSHOT` of a headless run) to send through the album round trip instead of the synthetic scene, and a directory that keeps the album JPEG and the decoded frames. |
-| `NAPPLE_MOVIE_TC` | Log movie decoder call counters, queue state and the first input buffers every 2 s. |
-| `NAPPLE_PREPLOG`, `NAPPLE_T2TLOG`, `NAPPLE_CUBELOG`, `NAPPLE_DEBUG_EQUAL_LEQUAL` | gfx diagnostics for the look-ahead pass, texture-to-texture copies, cube-map passes and depth EQUAL bisecting. |
-
-### Host network provider (net-host-provider 2026-11-02)
+## Host network provider
 
 | Variable | Values / default | Effect | Defined in |
 |---|---|---|---|
-| `NAPPLE_NET` | `host`, `offline`; unset = offline | `host` selects the built-in host network provider (real sockets, DNS, TLS with the host trust store, nifm connectivity, LDN over the LAN; see [network providers](../guides/network-providers.md#the-built-in-host-provider-napple_nethost-net-host-provider-2026-11-02)). `NAPPLE_ONLINE_PROVIDER`, when set, wins. Any other value is logged and stays offline. | `runtime/src/services/online_core.c`, `runtime/src/net/` |
+| `NAPPLE_NET` | `host`, `offline`; unset = offline | `host` selects the built-in host network provider (real sockets, DNS, TLS with the host trust store, nifm connectivity, LDN over the LAN; see [network providers](../guides/network-providers.md)). `NAPPLE_ONLINE_PROVIDER`, when set, wins. Any other value is logged and stays offline. | `runtime/src/services/online_core.c`, `runtime/src/net/` |
 | `NAPPLE_LDN_PORT` | port; default 11452 | First of the 8 UDP discovery ports a host listens on and a scan probes (host provider LDN). | `runtime/src/net/net_host_ldn.c` |
 | `NAPPLE_LDN_PEERS` | comma-separated IPv4 addresses; unset = none | Extra addresses a scan probes, for networks that drop broadcasts. | `runtime/src/net/net_host_ldn.c` |
 | `NAPPLE_LDN_SCAN_MS` | 1..5000; default 150 | How long a scan waits for hosts to answer. | `runtime/src/net/net_host_ldn.c` |
 | `NAPPLE_NET_LOG` | `1`; unset = off | Host provider: one `net:` line per socket call (socket, bind, connect, setsockopt, send, recv) with arguments and result, never payload bytes. | `runtime/src/net/net_host_sock.c` |
 
-### Napple rooms (net-rooms 2026-11-02-r7)
+## Napple rooms
 
 LDN local wireless and LAN play between Napple instances over the internet, through a `napple-room` server ([online rooms](../guides/online-rooms.md)). Needs `NAPPLE_NET=host`.
 
@@ -303,3 +307,10 @@ LDN local wireless and LAN play between Napple instances over the internet, thro
 | `NAPPLE_VLAN` | `on` (default), `off`, or an IPv4 address | `off`: join the room for LDN only and keep the Mac's own interface for nifm and sockets (LDN hosting then fails: node addresses must be virtual). An address asks the server for that virtual address (kept when free, else another one). | `runtime/src/net/net_room.c` |
 | `NAPPLE_ROOM_LISTEN`, `NAPPLE_ROOM_HTTP`, `NAPPLE_ROOM_SUBNET`, `NAPPLE_ROOM_MAX_MEMBERS`, `NAPPLE_ROOM_MAX_ROOMS`, `NAPPLE_ROOM_MAX_CLIENTS`, `NAPPLE_ROOM_RATE_KBPS`, `NAPPLE_ROOM_RATE_PPS`, `NAPPLE_ROOM_KEEPALIVE`, `NAPPLE_ROOM_QUIET`, `NAPPLE_ROOM_DATA` | see the guide | The `napple-room` **server's** configuration (TCP listen address, HTTP health listener, subnet, limits); flags of the same name override them. Table in [online rooms](../guides/online-rooms.md#running-a-server). | `crates/napple-room/src/main.rs` |
 | `NAPPLE_ROOM_SERVER_BIN` | path | `runtime/tests/test_net_room` only: the napple-room binary to start (default `../target/debug/napple-room`, then `release`). | `runtime/tests/test_net_room.c` |
+
+## Napple Online client and servers
+
+The client variables (`NAPPLE_ONLINE_SERVER`, `NAPPLE_ONLINE_DEBUG`, `NAPPLE_ACCOUNT_URL`, `NAPPLE_ACCOUNT_NAMESPACE`, `NAPPLE_CLOUD*`, `NAPPLE_SOCIAL_URL`, ...) and the server
+configuration (`NAPPLE_ACCOUNT_*`, `NAPPLE_SOCIAL_*`, `NAPPLE_ONLINE_*` of the `napple-account`, `napple-social` and `napple-online` binaries) are listed with their defaults in the
+guides that own them: [Napple Online](../guides/napple-online.md), [account](../guides/napple-account.md), [social](../guides/napple-social.md), [cloud saves](../guides/cloud-saves.md),
+[client](../guides/napple-online-client.md) and [server deployment](../guides/deploy-servers.md).

@@ -1,7 +1,7 @@
 # Symptom index
 
 Look up what you see, find the known cause and fix. Format: one row per symptom: **Symptom**, **Cause**, **Fix**, **Found on** (title or area, change note).
-Add a row when you find a new one (newest at the bottom of its section). Per-subsystem entry points are in [reference.md](reference/subsystems.md); per-title status is in [titles/](titles/README.md).
+Add a row when you find a new one (newest at the bottom of its section). Per-subsystem entry points are in the [subsystem map](reference/subsystems.md); per-title status is in [titles/](titles/README.md).
 `tools/check_docs.py` checks that every link and anchor in these files resolves.
 
 ## Boot, crashes, hangs
@@ -20,7 +20,7 @@ Add a row when you find a new one (newest at the bottom of its section). Per-sub
 | `TextureInitialize: storage out of range (pool .. off .. size ..)` | CUBEMAP_ARRAY layout used depth = layers, but the game's depth is layers x 6 faces; pool allocated for fewer | Cube-array depth = layer-faces (`gfx/src/tex/napple_layout.c` and the one line in `mtl_tex.m`). MK8D still logs a similar one for another texture | Animal Crossing; MK8D open |
 | iOS Simulator: abort in gfx for 48 bytes of colour attachment | The Simulator allows 32 bytes per pixel of render-target storage; MK8D's G-buffer pass needs 48 | Open: needs a gfx fallback (split the pass or drop attachments) | MK8D on iOS Simulator, [ios](architecture/ios.md) |
 | LAS aborts in the movie library on iOS | Needs more than the 3.25 GiB device heap cap; the Simulator uses 4 GiB | Open (decision: trim the low gap or require the increased-memory entitlement) | LAS on iOS, [ios](architecture/ios.md) |
-| Depth textures crash on iOS | Depth textures must not be Shared storage on iOS | `gfx/src/mtl_tex.m` uses Private on iOS | iOS Simulator, ios-sim branch |
+| Depth textures crash on iOS | Depth textures must not be Shared storage on iOS | `gfx/src/mtl_tex.m` uses Private on iOS | iOS Simulator |
 
 ## Rendering
 
@@ -43,11 +43,11 @@ Add a row when you find a new one (newest at the bottom of its section). Per-sub
 | Symptom | Cause | Fix | Found on |
 |---|---|---|---|
 | Title shows "Ver. 1.0.0" for an updated game | `GetDisplayVersion` always returned 1.0.0 | Display version from `napple-app.json` (NACP) when the data directory is the newest version (`services/host_info.c`) | MK8D update |
-| `time:u` cmd 300 not implemented, MK8D latest update stops | Missing `CalculateMonotonicSystemClockBaseTimePoint` | Implemented on the ios-sim and mk8d-64 branches; both add it to `services/time.c`: keep one handler (conflict at integration) | MK8D update |
+| `time:u` cmd 300 not implemented, MK8D latest update stops | Missing `CalculateMonotonicSystemClockBaseTimePoint` | Implemented in `services/time.c` (returns the clock context offset; unverified against hardware) | MK8D update |
 | Updated game: save files appear as a different title's | Base and update share one title save dir on purpose (they are one title) | Not a bug. Device vs account saves are mounted separately (`save/space1/device`, `save/space1/account/<uid>`) | MK8D |
 | Out of disk building an updated title (19 GB RomFS) | The patched RomFS is materialised | `napple build ... --data-only --update-romfs in-place` writes `romfs.map` (268 MB for MK8D). Never ship a map: it holds keys and host paths | MK8D, mk8d-64 |
 | zsh: `NAPPLE_INPUT_SCRIPT="..:$t:A"` turns into a path | `$t:A` is a zsh modifier | Quote or escape `$`; write `15:A,19:A,...` literally | iOS Simulator work |
-| `pgrep -f napple-runtime` finds other sessions' processes | Same binary name | Include the data directory in the pattern; never `pkill` by name | all |
+| `pgrep -f napple-runtime` finds other runs' processes | Same binary name | Include the data directory in the pattern; never `pkill` by name | all |
 
 ## Building
 
@@ -55,5 +55,5 @@ Add a row when you find a new one (newest at the bottom of its section). Per-sub
 |---|---|---|---|
 | codesign fails on a build under `~/Documents` | File Provider extended attributes | Build in `$TMPDIR` as the scripts do, or `xattr -cr` | packaging |
 | `make -C runtime` link fails on a test after adding a debug trace | Guest-stack trace aids referenced from runtime code but not linked in the host tests | Keep trace aids out of files the host tests link, or stub them | ac-render |
-| iOS build misses `a32` symbols | `tools/build_ios.sh` did not compile `runtime/src/a32/*.c` | Fixed on the ios-sim branch | iOS |
+| iOS build misses `a32` symbols | `tools/build_ios.sh` did not compile `runtime/src/a32/*.c` | Fixed: the script compiles them | iOS |
 | `dylibize` fails on an AArch32 (NTB2) title | NTB2 modules are not Mach-O liftable | Skipped for NTB2 | iOS, MK8D |

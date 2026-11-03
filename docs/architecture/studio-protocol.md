@@ -14,7 +14,7 @@ Studio embeds every selected update/DLC; the built app toggles them at runtime. 
 
 Other options (all optional): `--name <app name>` (default: NACP name), `--runtime <path>` / `--launcher <path>` (prebuilt binaries; default: next to `napple`,
 `../libexec/napple`, `../share/napple`, or `runtime/build/napple-runtime` and `packaging/build/napple-launcher` in a checkout), `--make-runtime`
-(runs `make -C runtime` and `make -C packaging` first, checkout only), `--update-romfs materialize|delta`, `--keep-cache`, `--no-sign`, `--data-only`
+(runs `make -C runtime` and `make -C packaging` first, checkout only), `--update-romfs materialize|delta|in-place` (`in-place` with `--data-only`, development only), `--keep-cache`, `--no-sign`, `--data-only`
 (runtime data dirs instead of an .app). `--updates` defaults to `latest`, `--dlc` to `all`; `--title-keys` is accepted but not applied yet (tickets in the NSP/XCI are used).
 Preflight: `napple build --check -k <prod.keys> [--firmware <zip|dir>] [--json]` validates keys/firmware (key names/generations only, never values; exit 1 on problems).
 

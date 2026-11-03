@@ -14,15 +14,14 @@ NTB1 (little endian): `"NTB1"`, u32 version=1, u32 nsym,nrel,ngate,strtab_size; 
 u64 dt_init,dt_fini,init_array,init_array_size,fini_array,fini_array_size; u8 build_id[32]; then `sym[nsym]{u32 name_off,u8 binding,type,defined,pad,u64 value,size}`,
 `rel[nrel]{u64 where,i64 addend,u32 kind,u32 symbol}` (kinds 257/1025/1026/1027; RELR is expanded to RELATIVE),
 `gate[ngate]{u64 ret,u64 original,u32 timer,u32 arg}` and the string table (`timer`: 0 svc, 1 cntpct/cntvct, 2 cntfrq). Now written in process by
-`napple build` (`crates/napple-build/src/tables.rs`, a byte-exact Rust port of `tools/prepare_tables.py`: identical bytes on Super Mario
-Odyssey and Link's Awakening, plus a golden test against the Python output). The patched image/`.gates.tsv`/`.fixups.tsv` formats are the rewriter's.
+`napple build` (`crates/napple-build/src/tables.rs`, a byte-exact Rust port of `tools/prepare_tables.py`, pinned by a golden test against the Python output). The patched image/`.gates.tsv`/`.fixups.tsv` formats are the rewriter's.
 
 Pipeline for development: `napple build <game files> -k <prod.keys> --data-only -o work/games` (no Python, replaces `tools/prepare_game.sh`: writes
 `work/games/<titleid>/<buildid16>/` for the base and every selected update, plus `dlc/`, `system/`, `napple-app.json`; add `--updates none` for the base only).
 Legacy pipeline: `tools/prepare_game.sh <nsp|xci> <prod.keys> [--romfs]` (ExeFS dump via `napple build --dump-exefs`, the Rust
-rewriter `napple rewrite` ([rewrite-format.md](rewrite-format.md); `REWRITER=python` selects the reference stopgap), tables, npdm). Both games boot identically with either rewriter. `napple build --dump-romfs` streams
+rewriter `napple rewrite` ([rewrite-format.md](rewrite-format.md); `REWRITER=python` selects the reference stopgap), tables, npdm). `napple build --dump-romfs` streams
 `romfs.bin`. Keep one game's `romfs.bin` on disk at a time. `tools/make_empty_romfs.py` makes a valid empty image for tests.
-Local change to the rewriter: `ldrsw_table_scan` (jump tables whose bound is not a plain cmp/b.hi), needed by `subsdk0` of both games.
+The Rust rewriter extends the reference with `ldrsw_table_scan` (jump tables whose bound is not a plain cmp/b.hi), which some `subsdk` modules need.
 
 Entry: the runtime calls `nn::init::Start(mainThreadHandle, 0, cb1, cb2)` (or the 3-callback SDK 15 form): `cb1` runs the `sdk`
 module's DT_INIT after nn::os is up, `cb2` runs every other module's DT_INIT before `nnMain`.
@@ -58,7 +57,7 @@ with today's runtime; costs one RomFS of disk per update). `--update-romfs delta
 and no `romfs.bin`; `romfs.reloc` = `"RLC1", u32 count, u64 data_size`, then `count` x `{u64 data_offset, u64 source_offset, u32 source, u32 0}` where
 entry i covers `[data_offset_i, data_offset_{i+1})` (the last to `data_size`) of the patched RomFS data level, `source` 0 = `<base dir>/romfs.bin`
 (`base_dir` in `romfs.json`) and 1 = `patch.bin`. An update without a RomFS of its own gets a clone of the base `romfs.bin`. The runtime composes `read(off)`
-through the table (`open_romfs_delta` in `runtime/src/services/fs.c`). BKTR patching was written against synthetic fixtures first (see [the packaging note](../archive/changes/2026-10-22-packaging.md)); later notes record real update builds.
+through the table (`open_romfs_delta` in `runtime/src/services/fs.c`). BKTR patching is tested against synthetic fixtures and real update builds.
 
 **In-place RomFS (development).** `--update-romfs in-place` (with `--data-only`) writes `romfs.map` instead of a RomFS copy: format `"RMP1"`, u32 file count, u64 extent count, u64 image size; per file a u32 length and a UTF-8 path; per extent 64 bytes
 `{u64 image offset, u64 length, u64 file offset, u64 counter offset, u32 file index, u32 flags (bit 0 AES-CTR), u8 iv_hi[8], u8 key[16]}` (little endian, extents sorted and contiguous from 0).

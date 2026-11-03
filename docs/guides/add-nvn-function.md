@@ -22,7 +22,7 @@ Background: [gfx.md](../architecture/gfx.md) (object model, interface, threading
 ## Files to touch
 | Path | What |
 |---|---|
-| `gfx/src/nvnapi/names.txt` | The name must be in this list, or `names_init` logs `NVN implementation <name> is not in the name table` and ignores it. (523 names today; `g_impl[]` and the counters in `core.c` hold 1024.) |
+| `gfx/src/nvnapi/names.txt` | The name must be in this list, or `names_init` logs `NVN implementation <name> is not in the name table` and ignores it. (537 names today; `g_impl[]` and the counters in `core.c` hold 1024.) |
 | `gfx/src/nvnapi/nvn_protos.h` / `nvn_protos_ext.h` | The `NVNT_<name>` function-pointer typedef. Add to `nvn_protos_ext.h` by hand. |
 | `gfx/src/nvnapi/nvn.h` | Types and enums of the NVN API (read-only reference for argument types). |
 | `gfx/src/api_device.c` | Device, queue, sync, events, `nvnDeviceGetProcAddress`, `nvnDeviceGetInteger`. |
@@ -43,7 +43,7 @@ Background: [gfx.md](../architecture/gfx.md) (object model, interface, threading
      If you add fields, keep `FITS(struct, NVNxxx)` true: the guest reserved a fixed size.
    - *Immediate call* (device, queue, memory pool, texture builder, sync): does its work on the calling thread; Metal objects are created behind it (`api_device.c`, `api_memory.c`, `api_texture.c`).
    - *Command-buffer call* (`nvnCommandBuffer...`): **records**, never touches Metal. The work happens later in the replay thread.
-   - *Accepted and ignored*: write `{ (void)c; ... }` and log once with `LOG_ONCE(NAPPLE_LOG_WARN, ...)` if a game could depend on it (`api_cmd.c: nvnCommandBufferSetViewportSwizzles` is such a no-op).
+   - *Accepted and ignored*: write `{ (void)c; ... }` and log once with `LOG_ONCE(NAPPLE_LOG_WARN, ...)` if a game could depend on it (for example a hint the replay has no use for).
 2. **Add the name** to `names.txt` and, if it has no typedef yet, the typedef to `nvn_protos_ext.h` (pattern: `typedef void (*NVNT_nvnCommandBufferSetColorReductionEnable)(NVNcommandBuffer *c, uint32_t e);`).
 3. **Write the handler** with the `NVN(...)` macro. Mask booleans with `B(x)` (`internal.h`): Switch callers do not zero-extend `NVNboolean`, only the low 8 bits are valid.
 4. **For a recorded command:**
@@ -53,7 +53,7 @@ Background: [gfx.md](../architecture/gfx.md) (object model, interface, threading
       `rec_op` is static in `api_cmd.c`, so recorded calls live there. Outside `BeginRecording`/`EndRecording`, or on a null/finalized buffer, `rec_op` returns a scratch area and warns once, so a stray call is harmless.
    3. Replay it: add a `case OP_X:` to the `switch (h->op)` in `exec_op` (`mtl_replay.m`). State setters update the replay state `S` (viewports in `S.vp`, scissors `S.sc`, blend `S.blend[...]`...) and set
       `g_pk_dirty = 1` when the pipeline key changes; draws, clears and copies call a `do_*` function (`do_draw_arrays`, `do_clear_color`, `do_copy_b2b`). Anything that ends a render pass calls `pass_end()` first.
-5. **Test it** (below), then update the graphics notes if the change alters behaviour games can see.
+5. **Test it** (below), then update [gfx.md](../architecture/gfx.md) if the change alters behaviour games can see.
 
 ## Worked example
 A recorded command with an array payload, modelled on `SetViewports` (record) and `OP_VIEWPORTS` (replay):
@@ -93,13 +93,14 @@ state object round trip is `api_state.c: nvnBlendStateSetBlendTarget` plus `nvnB
 - **Not in `names.txt`.** The handler compiles, the section entry exists, and the lookup still never returns it (or logs `not in the name table`). Add the line.
 - **Missing or wrong typedef.** The compile fails with an incompatible pointer on `chk_<name>`: that is the signature check doing its job; fix the typedef in `nvn_protos_ext.h`, not the cast.
 - **Unextended booleans** (`B(x)`): a game passing a dirty upper half turned conditional state on or off at random.
-- **Command handles outlive command buffers.** A game can `EndRecording`, finalize the buffer, hand its memory to another one and keep calling the handle (Super Mario Odyssey, Mario Kart 8 Deluxe).
-  Recordings are host copies kept in a graveyard under a byte budget (`NAPPLE_REC_BUDGET_MB`, default 1024); releasing them by idle time caused exploded geometry
+- **Command handles outlive command buffers.** A game can `EndRecording`, finalize the buffer, hand its memory to another one and keep calling the handle.
+  A recording lives as long as the command memory it was recorded into (see [gfx.md](../architecture/gfx.md), command-list lifetime); releasing recordings by idle time or a budget caused exploded geometry
   ([symptoms.md](../symptoms.md), Rendering). Never store a pointer to guest memory in a payload that replay reads later without checking it.
-- **Command buffers are touched by several threads.** The recording lists are under one lock (`g_recs_mu`); null and finalized buffers must be tolerated (`cbh_get`/`CBH`), as a crash seen one run in three in
-  Animal Crossing showed ([symptoms.md](../symptoms.md), Boot, crashes).
+- **Command buffers are touched by several threads.** The recording state is under a lock; null and finalized buffers must be tolerated (`cbh_get`/`CBH`), and a game may record into the same command buffer from two threads at once
+  ([symptoms.md](../symptoms.md), Boot, crashes; `gfx/tests/t_cmdshare.c` reproduces the misuse).
 - **Guest garbage.** Games pass odd values once (a pool-relative shader address `0xe00` in `nvnProgramSetShaders`). Validate and reject instead of dereferencing.
 - **Replay state is per-`exec_op`.** Setting `S.*` without `g_pk_dirty = 1` when the value feeds the pipeline key leaves a stale pipeline; ending the pass is needed before copies that cannot happen inside a render pass.
-- **Window origin and depth mode change coordinates.** Viewport, scissor and fragment coordinate follow `nvnDeviceSetWindowOriginMode`; do not negate Y in the vertex shader ([gfx.md](../architecture/gfx.md), section 10).
+- **Window origin and depth mode change coordinates.** Viewport, scissor and fragment coordinate follow `nvnDeviceSetWindowOriginMode`; do not negate Y in the vertex shader ([gfx.md](../architecture/gfx.md), window origin).
+- **Guest objects have the title's size.** A host layout in `obj.h` must fit in `NVN_MIN_<type>` (`FITS`), the smallest size any title allocates; writing past it corrupts the object the title placed next to it ([gfx.md](../architecture/gfx.md), guest object sizes; `t_obj_canary`).
 - **Memory.** Writing into guest memory from the host needs `guest_write_prepare` (gfx dirty tracking write-protects pages that hold textures); a plain `memcpy` into such a page faults or hits `EFAULT`.
 - **Version check.** A game compares `nvnDeviceGetInteger(API_MAJOR/MINOR)` with its build constant; it comes from `game.json` (`nvn_major`/`nvn_minor`) or is detected in `main.c: detect_nvn_version`. A mismatch silently skips graphics start-up.

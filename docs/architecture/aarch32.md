@@ -1,8 +1,8 @@
 # AArch32 (32-bit titles)
 
-Some titles (Mario Kart 8 Deluxe, `0100152000022000`) are 32-bit ARM: the NPDM flags have the 32-bit instruction set bit, the NSOs are ELF32 (`DT_REL`, ARM and Thumb-2 code).
+Some titles are 32-bit ARM: the NPDM flags have the 32-bit instruction set bit, the NSOs are ELF32 (`DT_REL`, ARM and Thumb-2 code).
 Apple silicon cannot run AArch32, and the 64-bit path (the A64 rewriter plus native execution, see [overview](overview.md)) assumes AArch64 guest code at host addresses.
-So these titles use a separate path: ELF32 packaging and an ahead-of-time lifter that translates all of the 32-bit code to AArch64 when `napple build` runs. The shipped runtime has no interpreter (since 2026-10-26); an interpreter exists only as a test oracle and behind a debug build flag.
+So these titles use a separate path: ELF32 packaging and an ahead-of-time lifter that translates all of the 32-bit code to AArch64 when `napple build` runs. The shipped runtime has no interpreter; an interpreter exists only as a test oracle and behind a debug build flag.
 No JIT is used anywhere, so the iOS rules are respected ([ios.md](ios.md)).
 
 ```mermaid
@@ -50,12 +50,13 @@ The shipped runtime contains `a32jit.c` (loads `<data dir>/modules/a32jit.dylib`
 
 **Conditions and IT blocks.** An instruction with a condition is emitted behind a skip branch on the host flags; branches fold the condition into the jump. The IT state is tracked at lift time (a region never starts inside an IT block), so Thumb conditional execution costs nothing at run time.
 
-**Exclusives and barriers.** Every `ldrex`/`strex` form (word, byte, half, dword; ARM and Thumb; plain and `ldaex`/`stlex`) maps to the host's acquire/release exclusives `ldaxr`/`stlxr` (`ldaxrb`/`h`, dword `ldaxp`/`stlxp`), so the monitor semantics are the host's. The plain forms are strengthened too (core-ordering-kernel, 2026-11-02): guest locks written for the Cortex-A57 take a lock with a plain pair and no barrier, and Apple cores run the protected loads ahead of the store-exclusive (the A64 twin is `crates/napple-rewrite/src/ordering.rs`; litmus `tools/soak/litmus_excl_claim.c`). `lda`/`stl` (and the byte/half forms) map to `ldar`/`stlr`: they are RCsc like the guest's, so a release store followed by an acquire load stays in order (the earlier `ldr; dmb ishld` / `dmb ish; str` let the load pass the store); an unaligned address is an alignment fault on both cores. `clrex` is `clrex`; `dmb`/`dsb`/`isb` (decoded as NOPs by the shared decoder; the lifter re-reads the raw word) become `dmb ish`. `runtime/tests/a32jit/excltest.c` pins the emitted instruction for each form (`make -C runtime test-a32`).
+**Exclusives and barriers.** Every `ldrex`/`strex` form (word, byte, half, dword; ARM and Thumb; plain and `ldaex`/`stlex`) maps to the host's acquire/release exclusives `ldaxr`/`stlxr` (`ldaxrb`/`h`, dword `ldaxp`/`stlxp`), so the monitor semantics are the host's. The plain forms are strengthened too: guest locks written for the Cortex-A57 take a lock with a plain pair and no barrier, and Apple cores run the protected loads ahead of the store-exclusive (the A64 twin is `crates/napple-rewrite/src/ordering.rs`; litmus `tools/soak/litmus_excl_claim.c`). `lda`/`stl` (and the byte/half forms) map to `ldar`/`stlr`: they are RCsc like the guest's, so a release store followed by an acquire load stays in order (the earlier `ldr; dmb ishld` / `dmb ish; str` let the load pass the store); an unaligned address is an alignment fault on both cores. `clrex` is `clrex`; `dmb`/`dsb`/`isb` (decoded as NOPs by the shared decoder; the lifter re-reads the raw word) become `dmb ish`. `runtime/tests/a32jit/excltest.c` pins the emitted instruction for each form (`make -C runtime test-a32`).
 
 **Operations that are not inlined.** Everything the lifter cannot express as a few host instructions is passed to `a32_op_exec` as described above: VFP and NEON, the rarer integer forms (saturating, parallel and halfword multiplies, `pkh`, `sat`), CP15 and system register moves, `svc`, `bkpt`/`udf` (faults). `napple rewrite a32 --coverage <modules dir>` prints how many instructions of each module are in that group, per operation, with the first address and encoding of each (the full list is `<work>/j.cov`). It prints `0 interpreter fallbacks` because the construct no longer exists; the count that matters for speed is the out-of-line total.
 
-### Coverage on Mario Kart 8 Deluxe 1.0 (base build)
-See the change note [2026-10-26-a32-full-2026-10-26-macos1](../archive/changes/2026-10-26-a32-full-2026-10-26-macos1.md) for the table with the numbers of the last run.
+### Coverage report
+`napple rewrite a32 --coverage <modules dir>` is the measure of a title: instructions lifted inline, operations left out of line (with the hottest encodings), and the
+"no lifted code" count, which must be 0. Per-title numbers are kept on the title pages ([titles](../titles/README.md)); the history is in the [change archive](../archive/changes/README.md).
 
 ## How to add or change an instruction
 1. The shared decoder (`a32_decode_arm.c` / `a32_decode_thumb.c`) must produce an `A32Insn` for it; add the op/field use to the comment table in `a32_priv.h` if it is new.
@@ -73,8 +74,8 @@ See the change note [2026-10-26-a32-full-2026-10-26-macos1](../archive/changes/2
 `a32jit.dylib` is an ordinary arm64 Mach-O built with `-target arm64-apple-macos13`. For iOS it has to be rebuilt with the iOS target (`-target arm64-apple-ios..`), put into the app's `Frameworks` folder and signed with the app (no JIT entitlement is needed since nothing is generated at run time), and `a32jit_init` must `dlopen` it from the bundle path instead of `<data dir>/modules`. The window base differs on iOS (a 4 GiB reservation needs the increased-memory-limit and extended-virtual-addressing entitlements). The manifest check and the out-of-line operations are unchanged. FEAT_FlagM is present on every A13 and later device.
 
 ## Known limits
-- VFP and NEON are out-of-line operations (each costs a register spill/reload and a call: about 25-40 ns), correct but slow in vector-heavy loops; inline lifting of the hot NEON/VFP instructions is the next step. MK8D executes about 10 million of them per second in races.
+- VFP and NEON are out-of-line operations (each costs a register spill/reload and a call: about 25-40 ns), correct but slow in vector-heavy loops; inline lifting of the hot NEON/VFP instructions is the next step. `NAPPLE_A32_JITSTATS=2` shows which ones dominate a run.
 - The image only contains code the discovery found. A computed jump to an address reached by no recogniser stops the thread; collect addresses with the `A32_INTERP=1` debug runtime and `NAPPLE_A32_JITLOG=<file>`, then rebuild with `A32LIFT_SEEDS=<file>` (or drop the file next to the modules as `a32jit.seeds`).
 - Faults inside lifted code report stale guest registers (they live in host registers at that moment).
 - Callbacks passed to NVN (`SetMemoryCallback`, debug callbacks) are passed as NULL; rendering into a block-compressed texture through an integer view does not copy back.
-- The state of MK8D is kept in [titles/0100152000022000.md](../titles/0100152000022000.md).
+- Per-title state is kept on the [title pages](../titles/README.md).

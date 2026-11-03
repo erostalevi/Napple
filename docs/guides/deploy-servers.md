@@ -33,7 +33,7 @@ Files: `infra/` (containers, OpenTofu stacks, deploy scripts, local stack), `.gi
    Logs: CloudWatch group /napple/servers. Shell: SSM Session Manager (no SSH port).
 ```
 
-**Data buckets and mail (round r12).** The stack creates two private S3 buckets (Block Public Access, TLS only, SSE-S3, no versioning, aborted
+**Data buckets and mail.** The stack creates two private S3 buckets (Block Public Access, TLS only, SSE-S3, no versioning, aborted
 multipart uploads expire after 2 days): `napple-photos-<account>-<region>` and `napple-saves-<account>-<region>`. The instance role gets object
 access on those two only, and `ses:SendEmail`/`ses:SendRawEmail` on the `napple.lat` identity and the `napple-transactional` configuration set only
 (both exist in the account; `tofu` does not manage them). Photos never expire on their own: napple-account deletes them with the profile or account.
@@ -86,7 +86,7 @@ different names only needs those few files changed.
 
 `napple-online` also accepts `NAPPLE_ONLINE_NEX_AUTH` and `NAPPLE_ONLINE_NEX_SECURE` and logs them as unused: NEX itself needs no UDP port.
 The NAT-check ports are published by Docker (DNAT keeps the client's address and port; a reply from another published port leaves with that
-port, which the check relies on). They are open on IPv4 and IPv6 in the security group; the VPC itself is IPv4-only today. Both are built with `cargo build --release --locked -p <crate> --bin <crate>` from the workspace root on Linux (arm64 and amd64). They need no
+port, which the check relies on). They are open on IPv4 and IPv6 in the security group; the VPC itself is IPv4-only today. All four are built with `cargo build --release --locked -p <crate> --bin <crate>` from the workspace root on Linux (arm64 and amd64). They need no
 system library beyond libc (no OpenSSL), run as uid 10001 in a read-only container, log to stdout/stderr and exit on SIGTERM.
 Clients use `NAPPLE_ONLINE_SERVER=https://pretend.napple.lat` and `NAPPLE_ROOM=pretend.napple.lat:31415`.
 
@@ -197,12 +197,12 @@ legacy 12-month free tier 750 instance hours, 750 hours of public IPv4, 30 GB of
 each month. In both cases the only charge that is certain is the hosted zone, $0.50/month. Which program applies is in Billing > Free Tier.
 Leaving it running after the free period costs the list price above.
 
-`t4g.micro` has 1 GB of memory (plus the 1 GB swap file the user data adds): enough for Caddy, the stand-ins and two small Rust servers. If the
+`t4g.micro` has 1 GB of memory (plus the 1 GB swap file the user data adds): enough for Caddy and the four small Rust servers. If the
 real servers need more, set `NAPPLE_INSTANCE_TYPE=t4g.small` (about $12.3/month at list price, also free-tier eligible here).
 
 ## Security notes
 
-- **No game data on the server, ever.** The images contain only the two server binaries (the Dockerfiles copy nothing but `Cargo.toml`,
+- **No game data on the server, ever.** The images contain only the server binaries (the Dockerfiles copy nothing but `Cargo.toml`,
   `rustfmt.toml` and `crates/` into the build stage, and only the binary into the final image). No game files, keys, firmware or title data are
   uploaded, and the servers never ask clients for any. `app.napple.lat` (hosted uploads) was rejected for this reason.
 - Credentials live only in GitHub secrets (or are short-lived, through OIDC). Nothing in `infra/` holds a credential; the instance uses its role.
