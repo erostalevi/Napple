@@ -6,7 +6,7 @@ head: see git log (last hand-off message names it)
 env: mac
 date: 2026-11-03
 areas: [crates/napple-online, runtime/net, docs/guides, compat]
-status: ready-with-caveats
+status: integrated
 ---
 
 # claude/mk8d-online-race-2026-11-03-r12: MK8D online race: joiner fixed, two instances reach the race lobby
@@ -62,3 +62,23 @@ Safe: the address helpers. Design decision: whether the public address for same-
 
 ## Needs from other areas
 - The 120 s run limit is too short for MK8D's online path to the race (boot ~27 s, menus ~20 s, matchmaking ~20 s, char/kart ~25 s, vote): ask the run-lock owner for 180 s for this title, or provide a quicker route (a save with the online menu pre-selected).
+
+## Integration result
+
+- Date: 2026-11-02 (Mac). Merged as `c186b8b` (merge of `041cc9e`), plus `da635a1` (regenerated support tables). Outcome: **Clean** (no code fixes; doc conflicts resolved by hand).
+- Conflicts with main's repository cleanup (main's decisions kept): `compat/online.json` (main's `partial` kept for online_race_or_match, note updated to the
+  verified countdown, checked 2026-11-03: the race itself was not driven, so not `works`); `docs/guides/napple-online.md` (the branch's MK8D section and the
+  old r7 status heading dropped; the guide stays title-neutral with a new "Two instances on one Mac" section, the existing-participants notification and
+  MatchmakeExtension 49 in the tables; MK8D symptoms / causes / input script moved to `docs/titles/0100152000022000.md`). The change note was renamed to
+  `docs/archive/changes/2026-11-03-mk8d-online-race-2026-11-03-r12.md` and rewritten without workflow wording; index row added; LDN Scan pacing documented in
+  `docs/guides/online-rooms.md`; CHANGELOG `Unreleased` entry. No removed file was re-added by the merge.
+- Native ports: none (`ldn.c` scan pacing uses `nanosleep` with the core released: POSIX, fine on macOS).
+- Tests (scratch worktree, same tree as main): `cargo build/test -j2 --workspace` 61 suites, 555 passed, 0 failed, 2 ignored (one earlier run had
+  `napple-cloud online::tests::signup_verify_state_and_friend_actions` fail once; it passed alone and in the full re-run: flaky, not touched by this branch);
+  `make -C runtime GFX=napple test` OK, `test-services` OK (96 suites, 0 failed; `test_svc_ldn` 143/0), `test-ipc-reference` 1325 app-reachable / missing 0,
+  `test-net-online` OK (103 checks / 0), `test-online` (needs `CLOUD=1`) 27/0; `make -C frontend test` OK.
+- Boots (45 s headless, one at a time, plain and `NAPPLE_NET=host`): SMO 2654 / 2658 frames, MK8D 2444 / 2489, LAS 2683 / 2680, ACNH 1322 / 1332; all exit 0, no CRASH.
+- Not run here: the two-instance pair (`pair.sh` needs the session's `base-a` save, which no longer exists, and a ~220 s run for the countdown).
+- Corrections to "How to test": the runtime test targets need `gfx` (`make -C gfx lib adapter`), `audio`, `input`, `frontend` built first and cargo on PATH;
+  `test-online` is only defined with `CLOUD=1`.
+- Still open: Wireless Play joiner crash (`pc=main+0x9a3c84`), MK8D Friends list empty, 2618-0201 flake unstudied, the race itself not driven.

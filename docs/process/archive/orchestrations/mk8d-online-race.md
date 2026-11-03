@@ -6,7 +6,7 @@ base: orchestrate/2026-11-03-r12
 env: mac
 model: claude-opus-5-5
 depends_on: []
-status: launched
+status: integrated
 orchestrator_session: local_67fc7cb9-f351-4dc9-aa12-15775cd6e97a
 session: local_758b1292-20b6-4197-8b16-da4452d4fb81
 launched_at: 2026-11-03
@@ -35,3 +35,5 @@ Pairs run as ONE job under the run lock (<=120 s).
 Shared title data read-only; game runs under `lockf -k /Users/neto/NappleWork/.run.lock` (<=120 s, private --save-root); local only, never push; never ask the user; never commit credentials or Nintendo material. Test-first, small commits.
 
 ## Result
+
+Outcome: Clean (doc conflicts with the repository cleanup resolved toward main). Merged at c186b8b. Joiner 2618-0502 fixed, MatchmakeExtension 49, LDN Scan pacing; a two-instance pair reaches the race countdown (session-verified; not re-run at integration). Open: Wireless Play joiner crash (main+0x9a3c84), Friends list empty, 2618-0201 flake not studied, race not driven to the end. Details: [integrator result](../integrators/claude-mk8d-online-race-2026-11-03-r12.md).
