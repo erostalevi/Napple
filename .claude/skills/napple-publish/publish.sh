@@ -51,7 +51,7 @@ git add -A
 
 # 4. guard: no Claude or workflow vocabulary anywhere else in the public tree (file names and contents)
 ALLOW='^(\.gitignore|tools/support/gen_support\.py)$'   # .gitignore lists the folders; gen_support.py's --refresh-snapshot default path
-HITS=$( { git ls-files | grep -i -E 'claude|orchestrat|integrator' || true; git ls-files -z | xargs -0 grep -lIi -E 'claude|orchestrat|integrator' 2>/dev/null || true; } | grep -v -E "$ALLOW" | sort -u)
+HITS=$( { git ls-files | grep -i -E 'claude|orchestrat|integrator' || true; git ls-files -z | xargs -0 grep -lIi -E 'claude|orchestrat|integrator' 2>/dev/null || true; } | { grep -v -E "$ALLOW" || true; } | sort -u)
 [ -z "$HITS" ] || { echo "public tree still names Claude / the private workflow in:"; echo "$HITS" | head -40; exit 3; }
 
 # 5. the usual checks
