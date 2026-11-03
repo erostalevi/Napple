@@ -83,6 +83,8 @@ iPad keyboards work through the normal key bindings; F1 settings, F2/F3 turbo, F
 The device build reserves a 6 GiB guest window: 0.75 GiB stack and gaps, a 3.25 GiB heap cap, a 1 GiB tail gap (`low_gap_v` in `runtime/src/memory.c`) and a 1 GiB alias region. The Simulator build uses the macOS 4 GiB heap cap (`TARGET_OS_SIMULATOR`).
 Without `extended-virtual-addressing` a single 6 GB reservation succeeds on a phone, but Metal needs address space too; about 5 GB in total is the figure known to work on a phone. A candidate device layout drops the 1 GiB tail gap (0.75 + 3.25 + 1 = 5 GiB); it is not applied because no device run has confirmed it and the purpose of `low_gap_v` is unverified. A title that needs more than 3.25 GiB of guest heap may not run on a non-entitled device.
 
+**Jetsam and the swap.** The footprint (what iOS kills for) is mostly dirty anonymous guest pages. `NAPPLE_IOS_SWAP=1` backs them with unlinked temp files, which the kernel does not count in the footprint, and `runtime/src/mempressure.m` trims on memory warnings. Measurements, policy and the device test procedure: [memory-swap.md](memory-swap.md).
+
 | Variable | Effect |
 |---|---|
 | `NAPPLE_HEAP_CAP_MB=<MB>` | try another guest heap cap; `NAPPLE_HEAP_CAP_MB=3328 NAPPLE_ALIAS_GIB=1` reproduces the 6 GiB device window on the Simulator |

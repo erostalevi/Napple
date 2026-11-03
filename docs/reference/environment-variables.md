@@ -41,6 +41,11 @@ Conventions used by the code, unless a row says otherwise:
 | Variable | Values / default | Effect | Defined in |
 |---|---|---|---|
 | `NAPPLE_ALIAS_GIB` | integer 1..64; default 64 | Size in GiB of the guest alias region to reserve. When set, the reservation does not shrink below this value; when unset it shrinks in 4 GiB steps down to the minimum. Values outside 1..64 abort. | `runtime/src/memory.c` |
+| `NAPPLE_IOS_SWAP` | `1` on; default off | Back the guest heap, the alias region and shared memory >= 4 MiB with unlinked, sparse temp files (`MAP_SHARED`) so dirty pages leave the process footprint and can be written back; works on macOS too, where it is the test bed. See [memory-swap](../architecture/memory-swap.md) |
+| `NAPPLE_SWAP_DIR` | directory; default `$TMPDIR` | Where the swap files are created (and immediately unlinked) |
+| `NAPPLE_MEMPRESSURE` | `0`/`1`; default on for iOS, off elsewhere | Memory-pressure handling: kernel pressure source, `os_proc_available_memory` poll, UIKit memory warning; trims swap-backed pages and parked Metal scratch buffers |
+| `NAPPLE_MEM_WARN_MB`, `NAPPLE_MEM_CRIT_MB` | integers; defaults 800 and 400 | Available-memory thresholds for trim level 1 and level 2 |
+| `NAPPLE_MEM_BUDGET_MB` | integer MB | Pretend per-process limit (available = budget - `phys_footprint`) so the pressure path can be exercised on a Mac or the Simulator |
 | `NAPPLE_FREE_CORES` | set = on | Disables the emulated per-core scheduling (core affinity masks): threads run on any core. | `runtime/src/threads.c` |
 | `NAPPLE_SLICE_MS` | integer ms, default 10 | Time slice of the timer preemption of spinning guest threads (0 turns the timer preemption off). | `runtime/src/threads.c` |
 | `NAPPLE_SVC_RING` | set = on | Post-mortem ring of the last svcs (with the IPC command id and reply result) per thread, dumped on a guest Break and on a crash. | `runtime/src/kernel.c` |

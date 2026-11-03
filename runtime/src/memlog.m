@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include "napple.h"
+#include "swap.h"
 #if TARGET_OS_IOS
 #include <os/proc.h>
 #endif
@@ -25,11 +26,17 @@ static void *memlog_thread(void *arg) {
         mach_msg_type_number_t n = TASK_VM_INFO_COUNT;
         if (task_info(mach_task_self(), TASK_VM_INFO, (task_info_t)&vi, &n) != KERN_SUCCESS) continue;
         unsigned long long avail = 0;
-#if TARGET_OS_IOS
+#if TARGET_OS_IOS && !TARGET_OS_SIMULATOR
         avail = (unsigned long long)os_proc_available_memory();
 #endif
         LOG("memlog", "footprint %llu MB (peak %llu MB) guest-mapped %llu MB metal %llu MB resident %llu MB", MB(vi.phys_footprint), MB(vi.ledger_phys_footprint_peak), MB(memory_used_bytes()),
             MB(gfx_mtl_allocated_bytes()), MB(vi.resident_size));
+        if (swap_enabled()) {
+            SwapStats ss;
+            swap_stats(&ss);
+            LOG("memlog", "swap: backed %llu MB resident %llu MB written-back %llu MB deactivated %llu MB trims %llu", MB(ss.committed), MB(ss.resident), MB(ss.written_back),
+                MB(ss.deactivated), (unsigned long long)ss.trims);
+        }
         if (avail) LOG("memlog", "system still allows %llu MB before the limit", MB(avail));
     }
     return NULL;

@@ -16,6 +16,7 @@ Napple Studio is the graphical front end; mods and the optional Napple Online se
 | [Audio, input, frontend](architecture/audio-input-frontend.md) | The audio, input and frontend libraries and the API the runtime calls |
 | [AArch32 path](architecture/aarch32.md) | 32-bit titles: the build-time lifter and its runtime support |
 | [iOS and iPadOS](architecture/ios.md) | AOT-only target, signed dylib modules, signing and install, memory layout, Simulator limits |
+| [iOS memory: swap and pressure](architecture/memory-swap.md) | disk-backed guest memory, footprint accounting measurements, eviction policy, entitlements, device test procedure |
 | [Studio protocol](architecture/studio-protocol.md) | How Napple Studio drives the `napple` CLI |
 | [Compatibility matrix format](architecture/compat-format.md) | `compat/matrix.json`, stages, statuses |
 

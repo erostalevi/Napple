@@ -6,7 +6,7 @@ private func profile(days: Double, team: String = "TEAM123456", name: String = "
     let c = Date(timeIntervalSince1970: 1_700_000_000)
     return ProfileDetails(name: "p", teamId: team, teamName: name, appId: "\(team).com.napple.x", created: c,
                           expires: c.addingTimeInterval(days * 86_400),
-                          entitlements: memory ? [ProfileDetails.increasedMemory: true] : [:])
+                          entitlements: memory ? [ProfileDetails.increasedMemory: true, ProfileDetails.extendedVirtualAddressing: true] : [:])
 }
 
 @Suite struct AccountTests {
@@ -41,9 +41,9 @@ private func profile(days: Double, team: String = "TEAM123456", name: String = "
 }
 
 @Suite struct MemoryEntitlementTests {
-    @Test func paidReleaseGetsMemoryOnly() {
+    @Test func paidReleaseGetsMemoryEntitlements() {
         let p = IOSEntitlementPlan.make(account: .paid, debug: false)
-        #expect(p.includesMemory && p.entitlements == [ProfileDetails.increasedMemory: true] && !p.needsCapability)
+        #expect(p.includesMemory && p.entitlements == [ProfileDetails.increasedMemory: true, ProfileDetails.extendedVirtualAddressing: true] && !p.needsCapability)
     }
     @Test func paidDebugAlsoGetsDebuggable() {
         let p = IOSEntitlementPlan.make(account: .paid, debug: true)
