@@ -258,3 +258,4 @@ Hand-off files of these rounds (assignments and hand-off notes) are in the [proc
 | [2026-11-03-overlay-social-r12](2026-11-03-overlay-social-r12.md) | overlay social sub-tabs: friends, requests, search, block/report, recent players, stats. |
 | [2026-11-03-infra-online-r12](2026-11-03-infra-online-r12.md) | infra: napple-account and napple-social in the deploy stack, SES/S3, service tokens. |
 | [2026-11-03-online-tieup-2026-11-03-r12](2026-11-03-online-tieup-2026-11-03-r12.md) | Online end-to-end: scripted account/second-device/cloud-save/friends/tier run, local and live; integration fixes. |
+| [2026-11-03-mk8d-online-race-2026-11-03-r12](2026-11-03-mk8d-online-race-2026-11-03-r12.md) | Two instances on one Mac play peer to peer through napple-online + a room (distinct public addresses, joiner hears existing participants, MatchmakeExtension 49); MK8D pair reaches the race countdown; LDN Scan pacing. |

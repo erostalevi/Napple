@@ -362,7 +362,10 @@ impl Server {
                 // (private) URLs: ReplaceURL later names exactly this one, and GetSessionURLs hands out both, so two consoles behind one
                 // address can use the private one.
                 let mut public = c.urls.first().cloned().unwrap_or_else(|| StationUrl::parse("prudp:/"));
-                public.set("address", crate::natcheck::observed_ip(c.peer));
+                // a client on the server's own machine is reported at the address it names itself (its console address: a virtual one when several
+                // instances share the Mac), else at the machine's LAN address; every other client at the address the connection comes from
+                let own = public.get("address").and_then(|a| a.parse::<std::net::Ipv4Addr>().ok());
+                public.set("address", crate::natcheck::public_ip(c.peer, own));
                 public.set("type", 3); // NAT type flags as the server sees the client: reachable at this public address (2) | behind a NAT (1)
                 if !c.urls.contains(&public) {
                     c.urls.push(public.clone());
@@ -455,6 +458,16 @@ impl Server {
         } else {
             vec![]
         };
+        let existing: Vec<u64> = if flags & GATHERING_FLAG_VERBOSE_PARTICIPANTS != 0 {
+            let mut v: Vec<u64> = s.participants.iter().map(|p| p.pid).filter(|p| *p != joiner).collect();
+            v.dedup();
+            v
+        } else {
+            vec![]
+        };
+        for p in existing {
+            self.notify(w, joiner, p, notif::PARTICIPANT_JOINED, gid as u64, p, "", n as u64);
+        }
         for t in targets {
             self.notify(w, t, joiner, notif::PARTICIPANT_JOINED, gid as u64, joiner, msg, n as u64);
         }
@@ -622,7 +635,8 @@ impl Server {
                 let (Ok(gid), Ok(score)) = (r.u32(), r.u8()) else { return bad };
                 self.with_session(gid, |s| s.progress_score = score)
             }
-            41 => match r.u32().ok().and_then(|g| self.session_of(g)) {
+            // 49 (u32 gathering id): MK8D asks for the session again when the vote ends and the race starts; answered like 41
+            41 | 49 => match r.u32().ok().and_then(|g| self.session_of(g)) {
                 Some(s) => Reply::Ok(s.to_bytes()),
                 None => Reply::Err(err::RV_SESSION_VOID),
             },
@@ -1135,6 +1149,9 @@ mod tests {
         let urls = Reader::new(&resp).list(|r| r.string()).unwrap();
         assert_eq!(urls.len(), 2, "the host's private and public URLs");
         assert!(urls[0].contains("address=10.0.0.2"));
+        // MatchmakeExtension 49 (the race start): the session again, like 41
+        let Reply::Ok(again) = srv.secure_call(b, &req(PROTO_MATCHMAKE_EXT, 49, q.buf.clone())) else { panic!("method 49") };
+        assert_eq!(MatchmakeSession::decode(&mut Reader::new(&again)).unwrap().g.id, s1.g.id);
         // NAT traversal: b asks a to probe it
         let mut nt = Writer::new();
         nt.list(&[urls[0].clone()], |w, s| {
@@ -1186,7 +1203,10 @@ mod tests {
         assert_eq!(s2.g.id, s1.g.id);
         // the second join reaches both
         assert_eq!(notification(&rx_a), (200, notif::PARTICIPANT_JOINED, s1.g.id as u64, 200));
+        // the joiner is told about everyone already there (the owner) before its own join: Pia's connect job refuses a station it has not heard of
+        assert_eq!(notification(&rx_b), (100, notif::PARTICIPANT_JOINED, s1.g.id as u64, 100));
         assert_eq!(notification(&rx_b), (200, notif::PARTICIPANT_JOINED, s1.g.id as u64, 200));
+        assert!(rx_b.try_recv().is_err());
     }
 
     #[test]

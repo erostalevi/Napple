@@ -57,6 +57,27 @@ pub fn observed_ip(ip: IpAddr) -> IpAddr {
     .unwrap_or(ip)
 }
 
+/// The public address of a client seen at `peer` that names `own` as its console address: for a client on this machine `own` when it is usable
+/// (not unspecified, loopback, broadcast or multicast), else `observed_ip`.
+pub fn public_ip(peer: IpAddr, own: Option<Ipv4Addr>) -> IpAddr {
+    let loopback = peer.is_loopback() || matches!(peer, IpAddr::V6(v) if v.to_ipv4_mapped().is_some_and(|m| m.is_loopback()));
+    match own {
+        Some(a) if loopback && !a.is_unspecified() && !a.is_loopback() && !a.is_broadcast() && !a.is_multicast() => IpAddr::V4(a),
+        _ => observed_ip(peer),
+    }
+}
+
+/// The address to report for a NAT check message from `from`: the client's own address (the message's "local IPv4" field) when the client is on the
+/// server's machine and names a usable one (the runtime fills it in, NAPPLE_ONLINE_NATCHECK_LOCALIP), else `observed_ip`. Two instances on one Mac, each
+/// with its own virtual address (a room), then have distinct public addresses.
+pub fn reported_ip(from: IpAddr, msg: &[u8]) -> IpAddr {
+    let loopback = from.is_loopback() || matches!(from, IpAddr::V6(v) if v.to_ipv4_mapped().is_some_and(|m| m.is_loopback()));
+    if loopback && msg.len() >= 16 {
+        return public_ip(from, Some(Ipv4Addr::new(msg[12], msg[13], msg[14], msg[15])));
+    }
+    observed_ip(from)
+}
+
 /// Where each NAT check came from: (reported address, external port, when). A console's peer-to-peer station is the socket it runs the NAT check
 /// with, so this is its station's public address. The game server uses it for a host that never published its station (SecureConnection
 /// ReplaceURL): Pia skips that when the server already reports it as reachable.
@@ -83,7 +104,7 @@ pub fn reply(msg: &[u8], from: SocketAddr, server_ip: Ipv4Addr) -> Option<(u32, 
     if !matches!(kind, 1..=5 | 101..=103) {
         return None; // not a NAT check message (MK8D also sends zero-filled and Pia packets to these ports): no answer
     }
-    let ip = match observed_ip(from.ip()) {
+    let ip = match reported_ip(from.ip(), msg) {
         IpAddr::V4(v) => v,
         IpAddr::V6(v) => v.to_ipv4_mapped()?,
     };
@@ -113,7 +134,7 @@ pub fn start(ip: IpAddr, base: u16, verbose: bool) -> std::io::Result<()> {
                 }
                 let Some((kind, r)) = reply(&buf[..n], from, server_ip) else { continue };
                 if on == 0 && matches!(kind, 1 | 101) {
-                    record(observed_ip(from.ip()), from.port());
+                    record(reported_ip(from.ip(), &buf[..n]), from.port());
                 }
                 let via = reply_socket(kind, on);
                 if verbose {
@@ -145,6 +166,27 @@ mod tests {
         let mut pia = vec![0x32, 0xab, 0x98, 0x64];
         pia.extend_from_slice(&[1; 40]);
         assert!(reply(&pia, "1.2.3.4:5".parse().unwrap(), Ipv4Addr::LOCALHOST).is_none(), "a Pia packet: no answer");
+    }
+
+    #[test]
+    fn a_loopback_client_is_reported_at_its_own_address() {
+        let mut m = vec![0, 0, 0, 101];
+        m.extend_from_slice(&[0; 8]);
+        m.extend_from_slice(&[10, 13, 0, 3]);
+        let lo: SocketAddr = "127.0.0.1:50123".parse().unwrap();
+        assert_eq!(reported_ip(lo.ip(), &m), "10.13.0.3".parse::<IpAddr>().unwrap());
+        let (_, r) = reply(&m, lo, Ipv4Addr::LOCALHOST).unwrap();
+        assert_eq!(&r[8..12], &[10, 13, 0, 3], "the reply names that address");
+        // another client's field is ignored: only a machine's own clients are trusted with it
+        let far: SocketAddr = "203.0.113.9:50123".parse().unwrap();
+        assert_eq!(reported_ip(far.ip(), &m), far.ip());
+        assert_eq!(public_ip(lo.ip(), Some(Ipv4Addr::new(10, 13, 0, 2))), "10.13.0.2".parse::<IpAddr>().unwrap(), "Register: the URL's own address");
+        assert_eq!(public_ip(far.ip(), Some(Ipv4Addr::new(10, 13, 0, 2))), far.ip());
+        // zero, loopback or multicast: no claim
+        for own in [[0, 0, 0, 0], [127, 0, 0, 1], [224, 0, 0, 1], [255, 255, 255, 255]] {
+            m[12..16].copy_from_slice(&own);
+            assert_eq!(reported_ip(lo.ip(), &m), observed_ip(lo.ip()));
+        }
     }
 
     #[test]

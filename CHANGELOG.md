@@ -27,6 +27,19 @@ command depth, NVN API, Maxwell shader ISA, GPU formats, nvdrv, audio, input, co
 | 2026-11-02 | 99.3% | host network provider, Napple Online services, IPC command depth 98% |
 | 2026-11-02 | 99.3% | latest, after the Napple Online account, social and overlay work |
 
+## Unreleased
+
+### Added
+- Two instances on one Mac can play peer to peer through a local `napple-online` and a `napple-room`: each instance's room virtual address is its
+  public address (NAT check "local IPv4" field and virtual port, trusted only for clients on the server's machine; `NAPPLE_ONLINE_NATCHECK_LOCALIP`);
+  verified with a Mario Kart 8 Deluxe pair that matches, connects, votes a course and reaches the race countdown
+  ([note](docs/archive/changes/2026-11-03-mk8d-online-race-2026-11-03-r12.md)).
+- `NAPPLE_NET_LOG=2` dumps the first bytes of every datagram.
+
+### Changed
+- `napple-online` tells a joiner about every participant already in a verbose gathering (Notification 3001) and answers MatchmakeExtension 49.
+- LDN Scan takes about 400 ms like the console's instead of answering at once (`NAPPLE_LDN_SCAN_MS`).
+
 ## 2026-11-02 to 2026-11-03: repository cleanup and public site
 
 ### Changed

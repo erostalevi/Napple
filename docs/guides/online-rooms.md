@@ -104,6 +104,8 @@ others. Frame layout: `crates/napple-room/src/proto.rs`.
 - `net_room_ldn.c`: LDN. A hosted network is advertised to the server, a scan asks the server, and the JOIN / ACCEPT / NODES / BYE session of the LAN
   transport travels as room packets. Node addresses are virtual addresses, so the game's own sockets reach the other nodes over the virtual LAN. A
   member that leaves the room leaves the network; the host leaving ends it.
+- `ldn.c` Scan takes time like the console's (about 400 ms for all channels, a third for one): answering at once made scan screens loop at full
+  speed, creating and destroying their networking objects many times a second. `NAPPLE_LDN_SCAN_MS` sets the full-scan time (0 = instant).
 
 Without `NAPPLE_ROOM`, none of this runs and the host provider behaves exactly as before (LDN over the real LAN, real addresses).
 

@@ -125,7 +125,7 @@ The path a NEX title takes, and what Napple answers at each step:
 | NEX login | PRUDP Lite: SYN / CONNECT on port 1 (authentication), RMC Authentication 2 ValidateAndRequestTicketWithCustomData(pid, AuthenticationInfo{token, ngs 4, type 2}) | token verified, Kerberos ticket sealed with a per-login source key returned as `pSourceKey`, secure station URL `prudps:/address=0.0.0.1;port=1;CID=1;PID=2;sid=2;stream=10;type=2` |
 | | SYN / CONNECT on port 2 (secure) with the internal ticket + the Kerberos-encrypted request | ticket checked, CONNECT-ACK carries check + 1 |
 | | SecureConnection 1 Register(station URL), Utility, Ranking calls | public URL with the observed address and RVCID; settings: empty maps; common data kept |
-| matchmaking | MatchmakeExtension AutoMatchmake* | find-or-create a gathering owned and hosted by the caller; verbose gatherings (flags 0x200 / 0x800) announce every join, the joiner's own included (Notification 3001) |
+| matchmaking | MatchmakeExtension AutoMatchmake* | find-or-create a gathering owned and hosted by the caller; verbose gatherings (flags 0x200 / 0x800) announce every join, the joiner's own included, and tell a joiner about every participant already there (Notification 3001) |
 | NAT check | `sfdnsres` (`nncs1-%.n.n.srv.nintendo.net`, `nncs2-%...`), `bsd` UDP Socket, Bind, probe packets | names filled and redirected; the server answers on UDP 10025 / 10125 (nncs1) and 11025 / 11125 (nncs2) |
 | | SecureConnection 7 ReplaceURL (station URL with `natm` / `natf`) | |
 
@@ -143,7 +143,7 @@ The per-title traces (names a title carries, menu inputs, what each title reache
 | `kerberos.rs` | RC4 + HMAC-MD5 blobs, client tickets, the server-only internal ticket, the secure CONNECT check |
 | `rmc.rs`, `nex.rs` | RMC framing, NEX types (String, Buffer, List, Structure with version header, AnyDataHolder, DateTime, StationURL) |
 | `matchmaking.rs` | Gathering / MatchmakeSession (NEX 4.x layout, unknown trailing fields passed through), search criteria, find-or-create, join / leave / owner migration |
-| `server.rs` | Authentication (10), SecureConnection (11), MatchmakeExtension (109), MatchMaking (21), MatchMakingExt (50), NATTraversal (3, probe requests forwarded), Health (18), Utility (110), Ranking (112, common data kept, empty rankings), Notification (14, participant joined / left / ownership changed sent to clients); anything else answers Core::NotImplemented |
+| `server.rs` | Authentication (10), SecureConnection (11), MatchmakeExtension (109; 49, sent when a vote ends, is answered with the session like MatchMaking 41), MatchMaking (21), MatchMakingExt (50), NATTraversal (3, probe requests forwarded), Health (18), Utility (110), Ranking (112, common data kept, empty rankings), Notification (14, participant joined / left / ownership changed sent to clients); anything else answers Core::NotImplemented |
 | `session.rs` | one WebSocket: ports 1 and 2, RMC dispatch, notifications, timers |
 | `crypto.rs` | MD5, SHA-1, HMAC, RC4, base64, hex (SHA-256 from `sha2`) |
 
@@ -166,6 +166,21 @@ With a Napple Account token the online wrapper also serves `friend:u` from [napp
 Friends who play on the same napple-online server appear under their NEX pid, so game-server lookups by friend work; the runtime reports its
 friends' pids to napple-online (`POST /napple/v1/friends`), which answers GetPlayingSession from them. Presence is "playing <title>" with a join
 token `np1:<server key>:<pid>:<app data>`.
+
+## Two instances on one Mac
+
+Two instances on one Mac can play each other through a local napple-online **and a local [napple-room](online-rooms.md)**. Peer-to-peer
+libraries such as Pia identify a station by its IPv4 address only, so two instances behind the Mac's one address look like one console and the
+host refuses the joiner. A room gives each instance its own virtual address, and that address is carried end to end:
+
+- the runtime puts the console address (nifm) in the NAT check message's "local IPv4" field and replaces the reply's external port by the socket's
+  virtual port (`NAPPLE_ONLINE_NATCHECK_LOCALIP` 1 / 0 forces it; unset, it follows the room);
+- the server trusts both only for clients on its own machine (loopback) and uses the Register URL's own address as their public address; remote
+  clients are never affected.
+
+Run it: `napple-room serve --listen 127.0.0.1:31498`, and per instance `NAPPLE_NET=host NAPPLE_ROOM=127.0.0.1:31498/<room>
+NAPPLE_ONLINE_SERVER=...` with its own `--save-root`. Without a room the instances share the Mac's address: that case needs two Macs.
+`NAPPLE_NET_LOG=2` dumps the first 200 bytes of every datagram (debug aid).
 
 ## Tests
 

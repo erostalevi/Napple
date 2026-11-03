@@ -20,13 +20,21 @@
 
 void log_line(const char *tag, const char *fmt, ...) __attribute__((format(printf, 2, 3)));
 
-/* NAPPLE_NET_LOG=1: one line per socket call with its arguments and result (never payload bytes). */
+/* NAPPLE_NET_LOG=1: one line per socket call with its arguments and result (never payload bytes). NAPPLE_NET_LOG=2 also logs the first 200 bytes of every
+ * datagram socket transfer (a debug aid for reading Pia / NAT probe packets; the payload of a stream is never logged). */
 static int net_log = -1;
 #define NHLOG(...)                                                                                                                                             \
     do {                                                                                                                                                       \
-        if (net_log < 0) net_log = getenv("NAPPLE_NET_LOG") && *getenv("NAPPLE_NET_LOG") == '1';                                                            \
+        if (net_log < 0) net_log = getenv("NAPPLE_NET_LOG") ? atoi(getenv("NAPPLE_NET_LOG")) : 0;                                                           \
         if (net_log) log_line("net", __VA_ARGS__);                                                                                                             \
     } while (0)
+static void nh_dump(const char *dir, const void *buf, int64_t r) {
+    if (net_log < 2 || r <= 0) return;
+    char hex[401];
+    size_t m = (size_t)r < 200 ? (size_t)r : 200;
+    for (size_t i = 0; i < m; i++) snprintf(hex + 2 * i, 3, "%02x", ((const uint8_t *)buf)[i]);
+    log_line("net", "  %s %lld bytes: %s", dir, (long long)r, hex);
+}
 static const char *addr_str(const OnlineAddr *a, char *b, size_t n) {
     if (!a) return "-";
     if (a->family == 28) snprintf(b, n, "[v6]:%u", a->port);
@@ -330,6 +338,7 @@ int64_t nh_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, con
     }
     char ab[64];
     NHLOG("send(%d, %zu bytes, flags %#x, to %s) = %lld errno %d", h, n, flags, addr_str(len ? to : NULL, ab, sizeof ab), (long long)r, r < 0 ? *err : 0);
+    if (s->type == SOCK_DGRAM) nh_dump("sent", buf, r < 0 ? 0 : (int64_t)n < r ? (int64_t)n : r);
     nh_sock_put(s);
     return r;
 }
@@ -374,6 +383,7 @@ int64_t nh_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, OnlineAdd
     }
     char ab[64];
     NHLOG("recv(%d, %zu bytes, flags %#x) = %lld errno %d from %s", h, n, flags, (long long)r, r < 0 ? *err : 0, addr_str(r >= 0 ? from : NULL, ab, sizeof ab));
+    if (s->type == SOCK_DGRAM) nh_dump("got", buf, r);
     nh_sock_put(s);
     return r;
 }
