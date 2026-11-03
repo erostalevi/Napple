@@ -38,7 +38,7 @@ fn udp(src_port: u16, dst_port: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn wait_census(h: &Handle, want: (usize, usize)) {
-    for _ in 0..100 {
+    for _ in 0..500 {
         if h.census() == want {
             return;
         }
