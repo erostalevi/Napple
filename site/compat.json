@@ -9,7 +9,7 @@
    "own-servers": "the publisher's own servers, not run by Napple"
   },
   "generator": "tools/support/gen_online.py",
-  "last_checked": "2026-11-02",
+  "last_checked": "2026-11-03",
   "modes": [
    {
     "about": "The game's LAN mode, its broadcast traffic carried between players by a Napple room (napple-room).",
@@ -180,8 +180,8 @@
       "status": "works"
      },
      "online_race_or_match": {
-      "checked": "2026-11-02",
-      "note": "In a two-instance run through a local napple-online the race starts; it has not been played through to the end.",
+      "checked": "2026-11-03",
+      "note": "Two instances on one Mac through a local napple-online and a napple-room: both join, connect peer to peer, vote a course, and the race countdown starts (verified). The race has not been played through to the end.",
       "status": "partial"
      },
      "rankings": {

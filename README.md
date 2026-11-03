@@ -100,7 +100,7 @@ Napple is early and experimental. The `%Analysis` estimate of how much of the Sw
 <summary>Online support per title (generated)</summary>
 
 <!-- online:begin -->
-**Online play** is between Napple players only, through the Napple-run servers at `pretend.napple.lat`, never Nintendo's. Generated from [`compat/online.json`](compat/online.json) (last checked 2026-11-02); what each mode means and the notes per title are in [online support](docs/reference/online-support.md).
+**Online play** is between Napple players only, through the Napple-run servers at `pretend.napple.lat`, never Nintendo's. Generated from [`compat/online.json`](compat/online.json) (last checked 2026-11-03); what each mode means and the notes per title are in [online support](docs/reference/online-support.md).
 
 | Title | Backend | LAN | Local | Matchmaking | Race / match | Friends | Rankings | DataStore |
 |---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
