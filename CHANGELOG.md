@@ -44,7 +44,7 @@ command depth, NVN API, Maxwell shader ISA, GPU formats, nvdrv, audio, input, co
   `--locked`; OpenTofu provider locks stay pinned. `.gitignore` extended (lock files, logs, secrets, `.env`, editor data, local agent configuration).
 - `CODE_OF_CONDUCT.md` and `SECURITY.md`; security reports go through the section in `CONTRIBUTING.md` (private GitHub security advisory or the
   maintainer).
-- Personal tooling (`tools/dev`, `tools/legacy`, the soak driver), game screenshots, the video kit and `.github/CODEOWNERS`.
+- Personal tooling (`tools/dev`, the soak campaign driver), game screenshots, the video kit and `.github/CODEOWNERS`.
 
 ## 2026-11-02 to 2026-11-03: Napple Online
 
