@@ -1,13 +1,13 @@
 # Screenshots
 
-Drop real screenshots here and the landing page picks them up automatically (no code change).
-Missing files are fine: the Studio slots fall back to an illustrated window, game slots are simply hidden.
+Real Napple Studio screenshots for the landing page. The page shows illustrated windows by default; to use a real screenshot, put it here and
+replace the matching `<div class="mock win">` in `site/index.html` with `<img src="assets/screens/<file>" alt="...">` (the page does not probe for
+missing files, so it stays free of 404s).
 
 | File | Shown as |
 |---|---|
 | `studio-drop.png` | Studio, ready to take a game |
 | `studio-build.png` | Studio, build in progress |
 | `studio-done.png` | Studio, app built |
-| `game-1.png` ... `game-4.png` | games running on the runtime (16:9, 1280x720 or larger) |
 
-Only use screenshots of your own games and keep them to title screens / short in-game moments.
+The landing page is about the toolchain: no screenshots of titles here (per-title status lives on `compat.html`).
