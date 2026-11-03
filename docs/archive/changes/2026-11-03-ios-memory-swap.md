@@ -1,4 +1,4 @@
-# iOS memory: disk-backed swap, pressure handling, entitlements, footprint audit (branch ios-memory-swap)
+# iOS memory: disk-backed swap, pressure handling, entitlements, footprint audit
 
 Goal: stop jetsam kills of heavy titles on iPhone. Design, measurements and the device procedure: [architecture/memory-swap.md](../../architecture/memory-swap.md).
 
@@ -14,5 +14,5 @@ Goal: stop jetsam kills of heavy titles on iPhone. Design, measurements and the 
 ## Verified / not
 * Verified on macOS and the iOS Simulator: dirty file-backed pages are `external` and do not count in `phys_footprint` (2 GiB: 2 MB vs 2050 MB); evicted pages read back intact.
 * Verified on macOS: real titles boot with the swap off (unchanged) and on (footprint down, frame counts equal); `make -C runtime GFX=napple test test-services test-ipc-reference`, `test-host` (new `test_swap`), `cargo test --workspace` (555 passed), Studio `MemoryEntitlementTests`.
-* Built for the iOS Simulator (runtime links; needed a stub for a VP8 symbol the prebuilt Simulator libvpx lacks, see the integrator notes).
+* Built for the iOS Simulator (runtime links; needed a stub for a VP8 symbol the prebuilt Simulator libvpx lacks, the prebuilt deps must be rebuilt with VP8, see `tools/build_ios_deps.sh`).
 * **Not verified: anything on a physical iPhone** (device accounting, write-back rate, GPU fault latency). The 30-minute target is a device test; the procedure is in the design note.
