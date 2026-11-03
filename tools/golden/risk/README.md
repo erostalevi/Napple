@@ -1,7 +1,7 @@
 # tools/golden/risk
 
 Expected results of `make -C runtime test-risk-title` (runtime/tests/test_risk_title.c) on the four real titles, from the shared title data
-(`/Users/neto/NappleWork/games`, override with `NAPPLE_WORK`). Verified on the Mac 2026-11-03.
+(`$NAPPLE_WORK/games`). Verified on the Mac 2026-11-03.
 
 | title | build | main.npdm fs_perms | consequence |
 |---|---|---|---|

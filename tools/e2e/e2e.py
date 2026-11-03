@@ -24,7 +24,7 @@ amiibo store are created there, which is also what proves that the second title 
 import argparse, glob, importlib.util, json, os, plistlib, re, shutil, subprocess, sys, tempfile, time, types
 
 ROOT = os.environ.get("NAPPLE_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TESTING = os.environ.get("NAPPLE_TESTING_MATERIAL", "/Users/neto/Documents/Napple/Testing Material")
+TESTING = os.environ.get("NAPPLE_TESTING_MATERIAL", "Testing Material")
 REAL_SUPPORT = os.path.expanduser("~/Library/Application Support/Napple")
 GOLDEN_ROUTES = json.load(open(os.path.join(ROOT, "tools/golden/routes.json")))["titles"]
 AMIIBO_MODEL = "0000000000340102"

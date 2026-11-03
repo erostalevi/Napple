@@ -18,8 +18,7 @@ the repository front page is the [README](../README.md) and the title status is 
 3. [Subsystem map](reference/subsystems.md) (code, tests, debug switches per subsystem), [environment variables](reference/environment-variables.md), [glossary](reference/glossary.md).
 
 **Maintainer** (you integrate and release)
-1. [Parallel-session workflow](process/README.md).
-2. [Change archive](archive/changes/README.md): the dated notes of every round.
+1. [Change archive](archive/changes/README.md): the dated notes of every round.
 3. [Tooling](reference/tooling.md) (REA, Ghidra) and the CI workflows in `.github/workflows/`.
 4. [Deploy the game servers](guides/deploy-servers.md) (`pretend.napple.lat` on AWS, the `napple.lat` DNS, the local test stack).
 
@@ -66,11 +65,7 @@ See the [guide index](guides/README.md).
 - [titles/](titles/README.md): [Link's Awakening](titles/01006BB00C6F0000.md), [Super Mario Odyssey](titles/0100000000010000.md), [Animal Crossing: New Horizons](titles/01006F8002326000.md), [Mario Kart 8 Deluxe](titles/0100152000022000.md).
 - [Symptoms](symptoms.md): symptom, cause, fix, and where it was found.
 
-### Media
-- [YouTube video kit](media/youtube/README.md): script, call to action, shot list, titles and description.
-
 ### Process and history
-- [Parallel-session workflow](process/README.md)
 - [Change archive](archive/changes/README.md), with the [unattended rounds](archive/changes/README.md#unattended-rounds-2026-10-27-b7-to-2026-11-02-r10) (batch b7, rounds r1-r10)
 - [Process archive](process/archive/README.md): orchestration and integrator files of the landed rounds
 - [Legal documents](legal/README.md): Napple Online terms, privacy and report policy (v1)

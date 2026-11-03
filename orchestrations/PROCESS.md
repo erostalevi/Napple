@@ -12,7 +12,7 @@ Core Audio and run real games. The process lets both work in parallel without st
 |---|---|---|
 | Orchestration file | `orchestrations/<name>.md` (git root, outside `Napple/`) | The assignment for one session: goal, owned paths, paths to avoid, environment (`mac` or `linux-cloud`), model, dependencies, acceptance list. Format: `orchestrations/TEMPLATE.md`. Written by the orchestrator, never edited by the worker. |
 | Integrator file | `integrators/<branch-with-dashes>.md` | The hand-off a session writes before it stops: summary, files, what was built and tested (with evidence), what was never compiled on macOS, how to integrate, how to test, what it needs from other areas. Format: `integrators/TEMPLATE.md`. |
-| Change note | [`docs/archive/changes/<date>-<branch>.md`](../archive/changes/README.md) | What changed and what is verified; added to the change archive index. |
+| Change note | [`docs/archive/changes/<date>-<branch>.md`](../docs/archive/changes/README.md) | What changed and what is verified; added to the change archive index. |
 | History | `docs/process/archive/` | Landed orchestration and integrator files (moved there from `orchestrations/done/` and `integrators/done/`). |
 
 ## Skills (in `.claude/skills/`)

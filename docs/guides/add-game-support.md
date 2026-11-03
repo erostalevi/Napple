@@ -76,7 +76,7 @@ Signatures are the only per-build data allowed in the repository, under strict l
      Do not write that anyone "played" it unless a person did. Add the row to `docs/titles/README.md`.
    - A new symptom -> `docs/symptoms.md`.
    - Compatibility record, below.
-   - A change note `docs/archive/changes/<date>-<branch>.md` with a line in `docs/archive/changes/README.md`, as the process page asks ([process/README.md](../process/README.md)).
+   - A change note `docs/archive/changes/<date>-<branch>.md` with a line in `docs/archive/changes/README.md` (see [CONTRIBUTING.md](../../CONTRIBUTING.md#pull-request-flow)).
    - `python3 tools/check_docs.py` must pass (links, anchors, orphans, symptoms rows).
 
 ## Compatibility matrix (`compat/`, `COMPATIBILITY.md`)
@@ -100,7 +100,7 @@ Animal Crossing's TIPC `sm` refusal reply and `IApplicationFunctions` cmd 210 sh
 ## Common pitfalls
 - **Disk.** Do not materialise a 19 GB RomFS for a smoke test; use `--update-romfs in-place` and delete scratch data afterwards.
 - **Wrong directory.** For an updated title the base and the update have different `<buildid16>` directories; the base boots the old version. Read `default` or take the newest.
-- **Shared GPU.** Only one game process should use the GPU at a time; the developer scripts take a lock directory `work/gpu.lock` (`tools/dev/README.md`). `pgrep -f napple-runtime` also matches other sessions' processes:
+- **Shared GPU.** Only one game process should use the GPU at a time. `pgrep -f napple-runtime` also matches other sessions' processes:
   include the data directory in the pattern and never `pkill` by name ([symptoms.md](../symptoms.md), Services and input).
 - **zsh and `$t:A`.** In a script string `"..:$t:A"` becomes a path: write the script literally ([symptoms.md](../symptoms.md)).
 - **Saves.** Base and update share one title save directory on purpose; device and account saves are mounted separately (`save/space1/device`, `save/space1/account/<uid>`). Save data is transactional: a crash discards uncommitted changes.

@@ -5,7 +5,7 @@ Tells you, without playing, which GPU features a Switch title's shader programs 
 ## Run it on a new game
 1. Build the title: `napple build <container> --keys prod.keys` (see [add-game-support](add-game-support.md)).
 2. Either dump what the title really creates, or scan its RomFS (or both):
-   - Runtime dump (needs a Mac; use the game lock): `NAPPLE_AUDIO_DEVICE=0 NAPPLE_GFX_CTL_DUMP=/tmp/ctl-<title> python3 tools/dev/gamelock.py -- <run the title ~45 s>` (create the directory first). Writes `s<stage>-<hash>.ctl` and `.code` per program.
+   - Runtime dump (needs a Mac): `NAPPLE_AUDIO_DEVICE=0 NAPPLE_GFX_CTL_DUMP=/tmp/ctl-<title> <run the title ~45 s>` (create the directory first). Writes `s<stage>-<hash>.ctl` and `.code` per program.
    - RomFS: `napple build ... --dump-romfs` and extract the shader archives (`.bfsha`, `.szs`) into a directory.
 3. Scan: `python3 -I tools/gpu/scan_stages.py scan /tmp/ctl-<title> --title-id 0100XXXXXXXXXXXX -o scans/<title>.json` (several inputs: directories and RomFS images, see below). A directory is walked: `*.ctl` files are decoded directly; any other file (Yaz0 `.szs` is inflated first) is searched for control sections (magic `0x98761234`, 4-aligned, validated like `gfx_control_parse`). Printed JSON: `{title_id, programs, stages:{vs,fs,gs,tcs,tes,cs,xfb,tess_*}, features, not_decodable}`; a short summary goes to stderr.
 4. Choose what to buy/test: `python3 -I tools/gpu/scan_stages.py cover scans/*.json` prints the exact smallest set (up to 20 titles; greedy otherwise) and the features no scanned title covers.

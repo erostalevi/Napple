@@ -15,8 +15,6 @@ Footprint = `phys_footprint` of the app process (what iOS jetsam judges). The Si
 | 3 | ACNH 3.0.3 + DLC | none: aborts in 3 s | - | no frame | - | Blocked on the Simulator: `Texture Cube Array is not supported on this device` (`mtl_tex_get`). A-series devices support cube arrays, so a phone may pass; unverified. 11 GB of data |
 | 4 | MK8D (latest update, AArch64) | none: aborts in 4 s | - | no frame | - | Blocked on the Simulator: `source texture pixelFormat RGBA8Unorm not compatible with texture view pixelFormat RGBA32Uint` (a texture-view usage flag missing in `mtl_tex.m`, gfx owner). 11 GB of data. Not a first-run candidate |
 
-Screenshots (`docs/screenshots/ios-candidate/`): `las-intro`, `las-title`, `las-file-select`, `las-device-layout-difficulty`, `las-marin-room-1`, `las-marin-room-2`, `smo-menu`, `smo-after-A-compiling-shaders-hang`.
-
 ## Memory against the iPhone limit
 
 * LAS in play: **782 MB footprint** (guest-mapped 3.28 GB of virtual size, almost all untouched), 60 fps. Far under the 1.8 GB target. No pool or budget change was needed for LAS; the footprint is dominated by the guest's own touched pages and the 5-6 GB of address space is free (only touched pages count).

@@ -213,8 +213,6 @@ offered (decision, 2026-10-27). `sharpness` 0..1 scales the sharpening of 2 and 
 upscaler fallback), `t_scale_upscale` (upscaler matrix with PSNR and sharpness asserts, writes the contact sheet), `t_scale_table`, `t_display`. Real games:
 `tools/golden/render_scale.py shots|stress` (headless drawable size from `NAPPLE_OUTPUT_SIZE=WxH`).
 
-Evidence: [screenshots of the four titles at 1x / 2x / 4x, 21:9, 9:16 and with each upscaler](../screenshots/render-scale/README.md).
-
 ### 13. Geometry, tessellation and transform feedback (2026-10-27)
 
 Metal has no geometry stage and no transform feedback, and its tessellation is split differently from Maxwell's. The translator (`gfx/src/shader/maxwell_translate.c`) therefore emits compute kernels and vertex functions that read and write plain buffers, and the Metal replay layer wires the passes together. Status: the MSL text is *tested* on Linux (`sh gfx/tests/t_xlate_linux.sh`, `gfx/tests/t_xlate_stages.inc`); every case compiles in Metal (`MSL_COMPILES` in `t_xlate.m`, *tested* on the Mac 2026-10-27), and the replay side is `gfx/src/mtl_stages.inc` (see **Replay** below). All buffer indices and record layouts are macros in `shader/maxwell.h`; the key fields that drive them are in `ShaderKey`.

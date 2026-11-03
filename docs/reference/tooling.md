@@ -51,6 +51,3 @@ Cannot / limits:
   function begins from the middle, and does not discover HLE service names; names must come from humans or from other builds' signatures.
 - Cold start costs several seconds per call (JVM + Ghidra import); fine for per-item resolution, not for whole-module sweeps.
 - Hopper/IDA providers are not installed (licensed products).
-
-## Parallel sessions
-See the [parallel-session workflow](../process/README.md).

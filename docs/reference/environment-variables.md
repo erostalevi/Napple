@@ -257,9 +257,6 @@ The amiibo, key, store, online-provider and Mii-folder variables below can also 
 | Variable | Values / default | Effect | Defined in |
 |---|---|---|---|
 | `REWRITER` | `rust` (default) or `python` | `tools/prepare_game.sh` uses the Rust rewriter, or the reference Python stopgap. | `tools/prepare_game.sh` |
-| `SCRIPT` | input script string | `tools/dev/dev_apptest.sh` passes it as `NAPPLE_INPUT_SCRIPT`. | `tools/dev/dev_apptest.sh` |
-| `SHOT_FRAMES` | comma-separated frames; default `2400,3000,3600` | `tools/dev/dev_apptest.sh` passes it as `NAPPLE_SCREENSHOT_FRAMES`. | `tools/dev/dev_apptest.sh` |
-| `OVERLAY_TAB` | integer | `tools/dev/dev_wintest2.sh` passes it as `NAPPLE_FE_OVERLAY`. | `tools/dev/dev_wintest2.sh` |
 | `DM_RULESET` | default `native` | Ruleset of the reference Python rewriter. | `tools/refpy/patch_nso.py` |
 | `DM_PRIVATE_GATES` | `0` disables; default on | Private gates option of the reference Python rewriter. | `tools/refpy/patch_nso.py` |
 | `FUZZ_DEBUG` | set = on | Prints the first few mismatching samples in the AArch32 fuzzer. | `runtime/tests/a32/fuzz.py` |

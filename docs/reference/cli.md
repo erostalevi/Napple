@@ -364,8 +364,7 @@ Scripts meant to be run directly. Paths are relative to the `Napple/` root; most
 | `studio/build_app.sh` | `studio/build_app.sh [output-dir]` | Builds `NappleStudio.app` (ad-hoc signed), building the CLI, runtime and launcher first when missing. |
 | `studio/packaging/make_release.sh` | `studio/packaging/make_release.sh <dir containing NappleStudio.app>` | Creates the DMG, the zip, and `SHA256SUMS.txt`. |
 
-The `tools/dev/dev_*.sh` scripts are developer test drivers that take a GPU lock (`work/gpu.lock`); their usage is in [tools/dev/README.md](../../tools/dev/README.md).
-`tools/dev/synth_keys.m` and `tools/prepare_tables.py` are specific to one developer machine or are superseded and are not documented here; [tools/README.md](../../tools/README.md) describes every script.
+`tools/prepare_tables.py` is superseded and is not documented here; [tools/README.md](../../tools/README.md) describes every script.
 
 ## napple mods
 

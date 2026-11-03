@@ -57,7 +57,7 @@ How to read it:
 
 ## 4. Hangs and spins
 - `kill -USR1 <pid>` logs every guest thread without stopping the game (`thread_dump_all`): handle, id, priority, core, what it waits on (handles with their types, or an address and key), last svc, call count, the guest call stack,
-  and for a thread that is running guest code its live pc. Works headless (`runtime/src/app.m: install_usr1_dump`). `tools/dev/dev_usr1test.sh <datadir> <secs> <first-usr1-at> <name> [more gaps]` automates dumps at given times.
+  and for a thread that is running guest code its live pc. Works headless (`runtime/src/app.m: install_usr1_dump`).
 - `NAPPLE_PCPROF=1` samples the pc of every running (not waiting) guest thread each millisecond and, every 5 s, logs the hottest pairs as `pcprof: thread 0x.. pc <module>+0x.. : N samples`. A thread that owns nearly all samples in one place
   is a spin: the Animal Crossing Npad reader (`sdk+0x5087xx`) was found this way ([symptoms.md](../symptoms.md)). `NAPPLE_PCPROF_REGS=1` adds register dumps for one thread id hard-coded in `threads.c`.
 - A spin on `WaitSynchronization(handle 0) -> 0xe401` (25 million calls a second) shows with `--svc-trace` and means a reply carried the wrong object/handle ([symptoms.md](../symptoms.md), Animal Crossing boot spin).
@@ -90,7 +90,7 @@ How to read it:
 - `<time>` is **seconds** (a float) after the guest first configures HID, `<hold>` is seconds (default 0.15). (`docs/titles/README.md` calls the first field "frame"; the code reads seconds.)
 - Buttons: `A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN`, and `STICK_L STICK_R` (the stick clicks); sticks: `LS_LEFT LS_UP LS_RIGHT LS_DOWN` and `RS_*`. `L+R` presses a chord atomically (same sample).
 - It injects through the key bindings of `input.json` (the defaults), so the whole input path is exercised. `script: no key bound for event N` means the binding is missing; `script: unknown button X` a typo. The log shows `input script: N events` and each `script: press <button> at <t> s`.
-- In zsh, `"..:$t:A"` is a path modifier: write the script literally ([symptoms.md](../symptoms.md)). Real key events instead of the script: `tools/dev/synth_keys.m` (needs the Accessibility permission), used by `tools/dev/dev_wintest2.sh` and `tools/dev/dev_apptest.sh`.
+- In zsh, `"..:$t:A"` is a path modifier: write the script literally ([symptoms.md](../symptoms.md)).
 
 ## 8. The four reference titles
 Build data without disk pain (in-place RomFS, about 250 MB each) as in [titles/README.md](../titles/README.md#building-test-data-without-disk-pain-all-titles), then:
@@ -106,7 +106,7 @@ Passing: exit 0, `[napple-gfx] stats: frames N` with N in the thousands, no `CRA
 | Animal Crossing: New Horizons | `01006F8002326000` | [page](../titles/01006F8002326000.md) | 3.0.3 + DLC; about 1150-1200 frames in 45 s; frames 0 -> `NAPPLE_PCPROF=1` |
 | Mario Kart 8 Deluxe | `0100152000022000` | [page](../titles/0100152000022000.md) | update + DLC in-place data; `napple-runtime <out>/0100152000022000/fe941ed5ba14be5d --headless --seconds 120`; `NAPPLE_INPUT_SCRIPT="15:A,19:A,...,140:A"` reaches races; 5362 frames in 120 s |
 
-Game files live outside the repository; delete scratch data when done. Only one game process should use the GPU at a time (`tools/dev/README.md`), and `pgrep -f napple-runtime` matches other sessions' runs: include the data directory in the pattern and never `pkill` by name.
+Game files live outside the repository; delete scratch data when done. Only one game process should use the GPU at a time, and `pgrep -f napple-runtime` matches every running instance: include the data directory in the pattern and never `pkill` by name.
 
 ## 9. After the cause is known
 Fix it in the narrowest place (a service handler, an svc, an NVN function), add a unit test where the code is portable ([testing.md](testing.md)), re-run the title, then add a row to [symptoms.md](../symptoms.md)

@@ -82,7 +82,7 @@ UI automation is not run in CI. `studio/build_app.sh` builds the app (part of `t
 ## Docs
 `python3 tools/check_docs.py [--root <Napple dir>]` (no dependencies, no network, exit 0 = ok) checks that every relative link and `#anchor` in the Markdown files resolves, every document under `docs/` is reachable from `docs/index.md` (no orphans;
 `docs/archive/changes/*` is history and only needs a line in its README), the required files exist (`docs/index.md`, `docs/architecture/overview.md`, `docs/guides/README.md`, `docs/reference/cli.md`, `docs/reference/environment-variables.md`,
-`docs/reference/glossary.md`, `docs/process/README.md`, `docs/archive/changes/README.md`, `docs/symptoms.md`), code fences are closed, `docs/symptoms.md` rows have four non-empty cells, and every reference title has `docs/titles/<id>.md`.
+`docs/reference/glossary.md`, `docs/archive/changes/README.md`, `docs/symptoms.md`), code fences are closed, `docs/symptoms.md` rows have four non-empty cells, and every reference title has `docs/titles/<id>.md`.
 Run it after every docs change; the `docs` job fails the pull request otherwise.
 
 ## Whole build: `tools/ci_build.sh`
