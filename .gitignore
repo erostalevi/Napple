@@ -107,3 +107,9 @@ DerivedData/
 .swiftpm/
 *.orig
 *.rej
+
+# Local agent and workflow folders: never part of this repository
+.claude/
+integrators/
+orchestrations/
+docs/process/
