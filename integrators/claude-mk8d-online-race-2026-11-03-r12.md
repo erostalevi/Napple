@@ -2,7 +2,7 @@
 branch: claude/mk8d-online-race-2026-11-03-r12
 orchestration: mk8d-online-race
 base: ac6692c
-head: see git log (hand-off messages name the head)
+head: see git log (last hand-off message names it)
 env: mac
 date: 2026-11-03
 areas: [crates/napple-online, runtime/net, docs/guides, compat]
@@ -20,6 +20,11 @@ status: ready-with-caveats
 - **Not done:** (2) the 2618-0201 flake was not studied (never reproduced in about 25 pair runs today with the room; without a room runs were the same
   "2618-0502 / now refusal" outcome every time; the earlier flake could be load: three of my runs at 40 s ended before matchmaking because the game was slow
   under other sessions' load); (3) Friends list still empty; (4) Wireless Play station crash not diagnosed; the race itself not reached (120 s limit).
+
+## Update (end of session)
+- `ddf044f` `runtime/src/services/ldn.c` + `runtime/tests/test_svc_ldn.c`: an LDN Scan takes ~400 ms for all channels (a third for one channel; `NAPPLE_LDN_SCAN_MS` overrides, 0 = instant) like the console, instead of answering at once. Tested (test_svc_ldn 143/0).
+- **Wireless Play joiner crash (`CRASH signal=11 fault=0x40 pc=main+0x9a3c84`) is NOT fixed.** Reproduces on every joiner run (windowed and headless pairs with a room). A Pia job registered in the worker's job list at menu time is zeroed before the join and dispatched at the join. Details, tools and ruled-out causes: side-session-notes `.../mk8d-online-race-r12/wireless-crash-findings.md`. Wireless Play stays `broken` in `compat/online.json`.
+- Not started: the Friends list (needs client-core's friend hook).
 
 ## Files
 `crates/napple-online/src/server.rs` (existing-participant notifications, public address at Register), `natcheck.rs` (`reported_ip`, `public_ip`),
