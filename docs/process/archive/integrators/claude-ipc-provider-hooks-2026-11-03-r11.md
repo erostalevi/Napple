@@ -1,6 +1,6 @@
 # Integrator: ipc-provider-hooks (2026-11-03-r11)
 
-Branch: `claude/ipc-provider-hooks-2026-11-03-r11` (local only, not pushed). Change note: `docs/archive/changes/2026-11-03-claude-ipc-provider-hooks-2026-11-03-r11.md`.
+Branch: `claude/ipc-provider-hooks-2026-11-03-r11` (local only, not pushed). Change note: `docs/archive/changes/2026-11-03-ipc-provider-hooks-2026-11-03-r11.md`.
 
 ## Rows converted (12 `IPC_STUB` to `IPC_IMPL`)
 **Phase 1 (friends / nifm)**

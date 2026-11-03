@@ -23,7 +23,7 @@ Move the media and host1x items from "tested only" to verified on the Mac (+0.37
 
 ## Owned paths
 `runtime/src/services/{nvdrv.c,nvdrv_media_core.[ch],nvdrv_media_regs.h,nvdrv_nodes_core.[ch],decoder_backend.h,decoder_null_core.c,decoder_vt.c,jpeg_core.[ch],movie_audio_core.[ch],caps.c,caps_core.c,caps_dc.c,codec_headers_core.c,media_gfx_glue.c}`,
-`runtime/src/{movie.c,vt_h264.c}`, their tests in `runtime/tests/`, `docs/archive/changes/2026-11-01-claude-media-live-2026-11-01-r1.md`.
+`runtime/src/{movie.c,vt_h264.c}`, their tests in `runtime/tests/`, `docs/archive/changes/2026-11-01-media-live-2026-11-01-r1.md`.
 
 ## Do not touch
 `gfx/`, `runtime/src/{kernel,thread,threads,dispatch,ksession,kmsg,kcode}.c`, `runtime/src/services/applet*.c`, `audio/`, `orchestrations/`. Need a gfx change (e.g. VIC output surface upload)? Write it under "Needs from other areas".

@@ -82,7 +82,7 @@ status: integrated
   cache handler, so both branches' tests pass (test_svc_friend_r10 207/0; test_svc_online 263/0). This branch's `friend_presence_view` is renamed
   `friend_presence_view_provider`; its now-unused FRIEND_UNAVAILABLE stubs were dropped (they warned). **A human may want to review** that, with a
   friends provider, rows such as GetFriendDetailedInfo / GetProfileList now answer from ipc-depth-95's friend_core cache instead of "unavailable".
-- Docs (missing on the branch): change note `docs/archive/changes/2026-11-02-claude-online-friends-2026-11-02-r10.md`, a "Friends (napple-social)"
+- Docs (missing on the branch): change note `docs/archive/changes/2026-11-02-online-friends-2026-11-02-r10.md`, a "Friends (napple-social)"
   section in `docs/guides/napple-online.md` (env variables, status), r10 change-archive row.
 - `make -C runtime GFX=napple test test-services test-ipc-reference`: rc 0 (missing 0); test-net-online 51/0, 42/0; `cargo test -p napple-online
   -p napple-social --locked` green; `cargo build --workspace --locked` ok. No new warnings.

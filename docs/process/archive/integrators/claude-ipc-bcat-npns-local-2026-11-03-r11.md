@@ -1,6 +1,6 @@
 # Integrator note: claude-ipc-bcat-npns-local-2026-11-03-r11
 
-Branch `claude/ipc-bcat-npns-local-2026-11-03-r11`. Details: `docs/archive/changes/2026-11-03-claude-ipc-bcat-npns-local-2026-11-03-r11.md`.
+Branch `claude/ipc-bcat-npns-local-2026-11-03-r11`. Details: `docs/archive/changes/2026-11-03-ipc-bcat-npns-local-2026-11-03-r11.md`.
 
 ## Rows converted (12, IPC_STUB -> IPC_IMPL)
 IBcatService: 20410, 20500, 30210, 30300, 90202, 90300, 90301. npns:u: 103, 104, 111, 151, 153.

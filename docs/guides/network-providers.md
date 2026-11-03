@@ -66,7 +66,7 @@ answers like the NullProvider). New capability bits: `ONLINE_CAP_LDN` (1<<7) and
 
 ## Status
 Tested on Linux against the mock IPC layer and the loopback provider; not yet run on macOS or against a title. Argument layouts of the bsd/sfdnsres/ssl/friend commands are from
-memory of the public documentation and unverified. See the [hand-off notes](../archive/changes/2026-10-26-claude-sim-online-2026-10-26-macos1.md).
+memory of the public documentation and unverified. See the [hand-off notes](../archive/changes/2026-10-26-sim-online-2026-10-26-macos1.md).
 
 ## The built-in host provider (`NAPPLE_NET=host`, net-host-provider 2026-11-02)
 

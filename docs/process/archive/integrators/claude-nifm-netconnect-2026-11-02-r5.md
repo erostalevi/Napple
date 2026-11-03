@@ -38,7 +38,7 @@ status: integrated
   - `test_svc_offline.c`: two Cancel pins (it tests the same nifm request; the old expectation is now wrong).
   - `test_svc_vi.c`: ConvertScalingMode.
 - Docs:
-  - new `docs/archive/changes/2026-11-02-claude-nifm-netconnect-2026-11-02-r5.md`;
+  - new `docs/archive/changes/2026-11-02-nifm-netconnect-2026-11-02-r5.md`;
   - `docs/architecture/runtime-services.md`: an appended section, and the nifm table row corrected ("empty argument array" was wrong now).
 
 ## Built and tested here

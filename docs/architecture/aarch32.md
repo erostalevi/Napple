@@ -55,7 +55,7 @@ The shipped runtime contains `a32jit.c` (loads `<data dir>/modules/a32jit.dylib`
 **Operations that are not inlined.** Everything the lifter cannot express as a few host instructions is passed to `a32_op_exec` as described above: VFP and NEON, the rarer integer forms (saturating, parallel and halfword multiplies, `pkh`, `sat`), CP15 and system register moves, `svc`, `bkpt`/`udf` (faults). `napple rewrite a32 --coverage <modules dir>` prints how many instructions of each module are in that group, per operation, with the first address and encoding of each (the full list is `<work>/j.cov`). It prints `0 interpreter fallbacks` because the construct no longer exists; the count that matters for speed is the out-of-line total.
 
 ### Coverage on Mario Kart 8 Deluxe 1.0 (base build)
-See the change note [2026-10-26-claude-a32-full-2026-10-26-macos1](../archive/changes/2026-10-26-claude-a32-full-2026-10-26-macos1.md) for the table with the numbers of the last run.
+See the change note [2026-10-26-a32-full-2026-10-26-macos1](../archive/changes/2026-10-26-a32-full-2026-10-26-macos1.md) for the table with the numbers of the last run.
 
 ## How to add or change an instruction
 1. The shared decoder (`a32_decode_arm.c` / `a32_decode_thumb.c`) must produce an `A32Insn` for it; add the op/field use to the comment table in `a32_priv.h` if it is new.

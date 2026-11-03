@@ -24,7 +24,7 @@ Everything in the assignment is built and verified except one part of acceptance
 ## Files
 Branch-only changes (`git diff --stat c33eb7f..HEAD`, c33eb7f = the main merged in):
 - New: `runtime/src/net/net_host.{h,c}`, `net_host_sock.c`, `net_host_dns.c`, `net_host_tls.m`, `net_host_nifm.m`, `net_host_ldn.c`;
-  `runtime/tests/test_net_host_{sock,tls,ldn}.c`; `docs/archive/changes/2026-11-02-claude-net-host-provider-2026-11-02-r6.md`; this file.
+  `runtime/tests/test_net_host_{sock,tls,ldn}.c`; `docs/archive/changes/2026-11-02-net-host-provider-2026-11-02-r6.md`; this file.
 - Changed (owned): `runtime/src/services/online_core.c` (NAPPLE_NET selection, +20), `ldn.c`, `ldn_core.[ch]`, `offline.c` (ssl only: ImportServerPki,
   SetVerifyOption, DoHandshake; done after merging main with nifm-netconnect, as the orchestration allows).
 - Shared, append-only: `runtime/src/services/online_provider.h` (fields appended at the end of `OnlineProvider`, `OnlineLdnNode`, `ONLINE_TLS_VERIFY_*`,

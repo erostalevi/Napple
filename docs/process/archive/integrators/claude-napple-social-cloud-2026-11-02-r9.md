@@ -25,14 +25,14 @@ Full API, WebSocket events, error codes and data model: `docs/guides/napple-soci
   (it only adds entries; no `cargo update` needed), then `cargo test --workspace --locked`.
 - `crates/napple-social/Cargo.toml`, `src/{lib,main,api,auth,clock,codes,config,db,error,hub,ratelimit,stream}.rs`,
   `tests/{auth,friends,presence,invites}.rs`, `tests/common/mod.rs`.
-- `docs/guides/napple-social.md`, `docs/archive/changes/2026-11-02-claude-napple-social-cloud-2026-11-02-r9.md`, this file.
+- `docs/guides/napple-social.md`, `docs/archive/changes/2026-11-02-napple-social-cloud-2026-11-02-r9.md`, this file.
 
 ## Needs a one-line edit outside my scope (the docs CI check fails until done)
 `python3 tools/check_docs.py` (run by `tests.yml` "docs" job) reports both new docs as orphans because I was told not to touch other files. Add:
 1. `docs/guides/README.md`, in the first table (e.g. above `network-providers.md`):
    `| [napple-social.md](napple-social.md) | The Napple friends and presence service (`crates/napple-social`): API, WebSocket events, privacy, data model, running it. |`
 2. `docs/archive/changes/README.md`, a section (or an existing online-services section if another branch added one):
-   `| [2026-11-02-claude-napple-social-cloud-2026-11-02-r9](2026-11-02-claude-napple-social-cloud-2026-11-02-r9.md) | napple-social: friends, presence and invites service for Napple players (REST + WebSocket, SQLite). |`
+   `| [2026-11-02-napple-social-cloud-2026-11-02-r9](2026-11-02-napple-social-cloud-2026-11-02-r9.md) | napple-social: friends, presence and invites service for Napple players (REST + WebSocket, SQLite). |`
 
 I applied exactly these two lines in a scratch edit: `check_docs.py` then reports `checked 205 Markdown files: OK` (reverted before committing).
 Also consider: `docs/reference/environment-variables.md` could list the `NAPPLE_SOCIAL_*` variables, and `docs/guides/network-providers.md` says

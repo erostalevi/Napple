@@ -29,7 +29,7 @@ status: integrated
 - Tests: `gfx/tests/t_int_tex.c` (new), `gfx/tests/t_cube_view.c` (new), `gfx/tests/t_sparse.c`, `gfx/tests/t_xlate.m` (corpus mode + pins), `gfx/tests/t_xlate_stages.inc`
 - `tools/gpu/scan_stages.py`, `tools/gpu/test_scan_stages.py`
 - Shared docs, append-only: `docs/architecture/gfx.md` (one paragraph in section 13), `docs/guides/gpu-title-scan.md` (new section)
-- `docs/archive/changes/2026-11-01-claude-gfx-shader-views-2026-11-01-r2.md` (new)
+- `docs/archive/changes/2026-11-01-gfx-shader-views-2026-11-01-r2.md` (new)
 - Not touched: `mtl_replay.m`, `mtl_stages.inc`, `api_*.c` (other than `api_memory.c`), `core.c`, `nvnapi/`, `mtl_present.m`, `runtime/`, `orchestrations/`. The `gfx/Makefile` test list needed no change (it uses a wildcard).
 
 ## Built and tested here

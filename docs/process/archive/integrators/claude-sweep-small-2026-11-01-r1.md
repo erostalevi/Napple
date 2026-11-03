@@ -22,7 +22,7 @@ Every layout question was settled against public reference code read during the 
 Not done: **NCA2 / NCA0 retail validation** (all 39 NCAs in the material are NCA3; stays synthetic-tested); XCZ with a real dump (same NCZ code path, no XCI with NCZ in the material).
 
 ## Files
-`git diff --stat df2f318..HEAD`: audio (`audren.c`, `audin_mic.c`, `audin_source.c`, `internal.h`, `napple_audio.h`, tests), input (`hid_shm.c`, `input.c`, `napple_input.h`, `test_styles.c`), napple-core (`nca.rs` +`Nca::ctr_sections`, `ticket.rs` comment, new tests `nsz_real.rs`, `ticket_real.rs`, `nca_versions_real.rs`), runtime bcat (`bcat_core.[ch]`, `tests/test_svc_bcat.c`), `docs/archive/changes/2026-11-01-claude-sweep-small-2026-11-01-r1.md`, this file. No shared files touched, nothing deleted.
+`git diff --stat df2f318..HEAD`: audio (`audren.c`, `audin_mic.c`, `audin_source.c`, `internal.h`, `napple_audio.h`, tests), input (`hid_shm.c`, `input.c`, `napple_input.h`, `test_styles.c`), napple-core (`nca.rs` +`Nca::ctr_sections`, `ticket.rs` comment, new tests `nsz_real.rs`, `ticket_real.rs`, `nca_versions_real.rs`), runtime bcat (`bcat_core.[ch]`, `tests/test_svc_bcat.c`), `docs/archive/changes/2026-11-01-sweep-small-2026-11-01-r1.md`, this file. No shared files touched, nothing deleted.
 
 ## Built and tested here
 | Item | Status | Evidence |

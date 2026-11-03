@@ -25,7 +25,7 @@ status: integrated
 - `gfx/src/shader/maxwell.h`: `ShaderTexture.separate` / `sep_cbuf` / `sep_offset`, the `SEP_*_C2_*` constants, the `tex_*_slots` comment.
 - `gfx/src/mtl_shader.m`: `TRANSLATOR_VERSION` 17.
 - Tests: `gfx/tests/t_d24_readback.c` (new), `gfx/tests/t_sep_sampler.c` (new), `gfx/tests/t_int_tex.c` (cases 4-6), `gfx/tests/t_xlate.m` (pins).
-- Docs: `docs/architecture/gfx.md` (one paragraph in section 13), `docs/archive/changes/2026-11-01-claude-gfx-replay-gaps-2026-11-01-r3.md`.
+- Docs: `docs/architecture/gfx.md` (one paragraph in section 13), `docs/archive/changes/2026-11-01-gfx-replay-gaps-2026-11-01-r3.md`.
 - Not touched: `obj.h`, `api_*.c`, `nvnapi/`, `runtime/`, `orchestrations/`. No API-side change was needed: the separate binds already reach the replay as `OP_BIND_SEPTEX` / `OP_BIND_SEPSAMP`.
 
 ## Built and tested here

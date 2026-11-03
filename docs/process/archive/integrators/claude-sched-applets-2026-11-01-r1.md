@@ -33,7 +33,7 @@ status: integrated
 - `runtime/src/services/applet_web_core.{c,h}` (html-document resolve, web_manual_path, web_manual_lang, applet_web_open_manual)
 - `runtime/tests/test_svc_applet_web.c` (real-layout and manual tests)
 - `tools/soak/soak.py`
-- Docs: `docs/archive/changes/2026-11-01-claude-sched-applets-2026-11-01-r1.md` (new) + `docs/archive/changes/img/2026-11-01-sched-applets-smo-manual.jpg`
+- Docs: `docs/archive/changes/2026-11-01-sched-applets-2026-11-01-r1.md` (new) + `docs/archive/changes/img/2026-11-01-sched-applets-smo-manual.jpg`
   (new); `docs/architecture/runtime-services.md` (two appended paragraphs); `docs/todo.md` (ACNH start flake section only).
 - No shared build files touched.
 

@@ -38,7 +38,7 @@ status: integrated
   PopInteractiveInData, TryPopFromAppletBoundChannel), `applet_lib_core.[ch]` (`AppletErrorInfo` extended, `applet_error_parse` per mode,
   `applet_error_type_name`, describe / code text).
 - Tests: `runtime/tests/test_svc_applet.c`, `test_svc_applet_ae.c`, `test_svc_applet_host.c`, `test_svc_applet_libs.c`.
-- `docs/archive/changes/2026-11-02-claude-error-applet-output-2026-11-02-r6.md` (new), this file.
+- `docs/archive/changes/2026-11-02-error-applet-output-2026-11-02-r6.md` (new), this file.
 - Not touched: `runtime/src/net/`, `offline*.c`, `online_core.c`, `account*.c`, `crates/`, `gfx/`, `orchestrations/`. `runtime/tests/fuzz/t_libapplet.c`
   compiles unchanged (the `applet_error_parse` signature is kept).
 

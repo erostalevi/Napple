@@ -17,7 +17,7 @@ status: integrated
 - Not done: `ns:am2`/`ns:vm`/`ncm`/`lr`/`miiimg`/`caps:c`-style system-only interfaces got fixtures with `app_reachable=n` and no new rows (an application cannot reach them); `ipc.c` and the fixture runner are ipc-depth-hid's. `ns:ec`, `friend:*`/`nifm:a|s`/`bsd:s|a` siblings share the interface fixtures of their `:u` form.
 
 ## Files
-`runtime/src/services/`: new `sys_default.h`; rows added in `account.c bcat.c caps.c fs.c ldn.c lm.c misc.c ngc.c offline.c olsc.c ovln.c pdm.c push.c sfdnsres.c time.c vi.c`. `runtime/tests/ipc_reference/*.txt` (69 new), `runtime/tests/test_svc_sysdef_offline.c` (new), `test_svc_time.c test_svc_pctl.c test_svc_bcat.c` (extended; the aoc-rows-are-all-IMPL check now expects the seven default rows as documented defaults), `docs/archive/changes/2026-11-01-claude-ipc-depth-sys-2026-11-01-r2.md`. No shared file touched, `runtime/Makefile` untouched (the new test is picked up by the `test_svc_*` wildcard).
+`runtime/src/services/`: new `sys_default.h`; rows added in `account.c bcat.c caps.c fs.c ldn.c lm.c misc.c ngc.c offline.c olsc.c ovln.c pdm.c push.c sfdnsres.c time.c vi.c`. `runtime/tests/ipc_reference/*.txt` (69 new), `runtime/tests/test_svc_sysdef_offline.c` (new), `test_svc_time.c test_svc_pctl.c test_svc_bcat.c` (extended; the aoc-rows-are-all-IMPL check now expects the seven default rows as documented defaults), `docs/archive/changes/2026-11-01-ipc-depth-sys-2026-11-01-r2.md`. No shared file touched, `runtime/Makefile` untouched (the new test is picked up by the `test_svc_*` wildcard).
 
 ## Built and tested here
 | Item | Status | Evidence |

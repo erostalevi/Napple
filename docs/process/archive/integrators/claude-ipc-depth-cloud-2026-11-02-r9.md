@@ -7,7 +7,7 @@ status: integrated
 
 # Integrator notes: claude/ipc-depth-cloud-2026-11-02-r9
 
-Cloud worker on Linux. Base: `main` = `57431a7`. The change note is `docs/archive/changes/2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9.md`. Every code commit
+Cloud worker on Linux. Base: `main` = `57431a7`. The change note is `docs/archive/changes/2026-11-02-ipc-depth-cloud-2026-11-02-r9.md`. Every code commit
 starts with `unbuilt:`: none of this was compiled on macOS.
 
 ## Summary

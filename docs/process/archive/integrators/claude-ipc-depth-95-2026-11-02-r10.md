@@ -17,7 +17,7 @@ Work: friend:u (43 rows, friend_core.c), ssl (25), nifm/bsd/nsd/sfdnsres (35), f
 bcat/npns/ldn (20), plus prepo ReadAll* read-back, lm accessor, aoc IAsyncData, nsd GetSettingUrl, SetLcdBacklighOffEnabled via lbl (11).
 Five parts were done by subagents in worktrees, branches claude/ipc-depth-95-r10-{net,ssl,fsacc,applet,local} (merged here; per-row reports in
 the session scratchpad part-*.md, summarised below). 62 rows stay IPC_STUB, each with its reason in the table comment.
-Main (e412e99) merged; change note docs/archive/changes/2026-11-02-claude-ipc-depth-95-2026-11-02-r10.md and a runtime-services.md section written. Merge conflicts: hz_result.h (both appends kept) and account.c (IManagerForApplication 2/3/4 take main's napple-online id-token rows; this branch's 160/170 stay).
+Main (e412e99) merged; change note docs/archive/changes/2026-11-02-ipc-depth-95-2026-11-02-r10.md and a runtime-services.md section written. Merge conflicts: hz_result.h (both appends kept) and account.c (IManagerForApplication 2/3/4 take main's napple-online id-token rows; this branch's 160/170 stay).
 
 ## Decisions
 - Merged local claude/ipc-depth-cloud-2026-11-02-r9 first (it converts rows in push.c/misc.c/bcat.c/vi.c); integrate it before this branch.

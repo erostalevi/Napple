@@ -5,7 +5,7 @@
 //! orders only later stores), so a thread can read the protected data as it was before the previous owner's release. The
 //! Cortex-A57 practically never does this; Apple cores do. Measured on an M5 with ACNH 1.0.0's job-claim lock
 //! (`main+0x19b65d4`): about 1 in 2000-8000 claims took items another thread had already claimed, the cause of its
-//! two-threads-record-one-command-buffer crash; with `ldaxr` none did (docs/archive/changes/2026-11-01-claude-acnh-race-atomics-2026-11-01-r3.md).
+//! two-threads-record-one-command-buffer crash; with `ldaxr` none did (docs/archive/changes/2026-11-01-acnh-race-atomics-2026-11-01-r3.md).
 //!
 //! The pass gives every `ldxr`..`stxr` pair acquire/release ordering in place (bit 15, `ldaxr`/`stlxr`, same for byte,
 //! halfword and pair forms). It only strengthens ordering, so it is correct for any code; it touches a load only when an

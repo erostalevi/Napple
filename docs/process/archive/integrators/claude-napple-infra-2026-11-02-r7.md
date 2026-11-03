@@ -40,7 +40,7 @@ the runtime: the napple-online session's acceptance). `app.napple.lat` is delibe
 `git diff --stat 91c5b2e..HEAD`: all new except the link lines.
 - New: `infra/**` (README, .gitignore, docker/ 9 files, terraform/ 10 files + bootstrap/ 5 files + 2 test files + 2 provider lock files, aws/ 2 JSON,
   scripts/ 5, local/ 2), `.github/workflows/deploy-servers.yml`, `site/CNAME`, `docs/guides/deploy-servers.md`,
-  `docs/archive/changes/2026-11-02-claude-napple-infra-2026-11-02-r7.md`, this file.
+  `docs/archive/changes/2026-11-02-napple-infra-2026-11-02-r7.md`, this file.
 - Shared, append-only: `docs/guides/README.md` (one table row), `docs/index.md` (one line, Maintainer list item 4),
   `docs/archive/changes/README.md` (new `### Round 2026-11-02-r7` section with one row).
 - Not touched: `crates/`, `runtime/`, other workflows, `orchestrations/`, `Cargo.toml`.

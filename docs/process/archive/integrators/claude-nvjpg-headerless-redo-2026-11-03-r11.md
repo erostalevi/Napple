@@ -20,7 +20,7 @@ The branch is cut from main (35fa084), NOT from the worktree's starting commit f
 
 ## Files
 runtime/src/services/nvdrv_media_core.c (nvjpg_huff, nvjpg_raw_params, nvjpg_decode branch), jpeg_core.[ch], tests/jpeg_strip.h, test_svc_jpeg_raw.c, test_svc_nvdrv_media.c (+22 checks),
-docs/reference/nvdrv-layouts.md, docs/architecture/runtime-services.md, docs/archive/changes/2026-11-03-claude-nvjpg-headerless-redo-2026-11-03-r11.md (+ README row).
+docs/reference/nvdrv-layouts.md, docs/architecture/runtime-services.md, docs/archive/changes/2026-11-03-nvjpg-headerless-redo-2026-11-03-r11.md (+ README row).
 
 ## Built and tested here (macOS, GFX=napple)
 | Item | Status | Evidence (before = main 35fa084 -> after) |

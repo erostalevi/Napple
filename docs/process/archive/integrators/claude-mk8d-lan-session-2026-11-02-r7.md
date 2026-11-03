@@ -28,7 +28,7 @@ status: integrated
 
 ## Files
 - New: `runtime/src/services/install_id_core.{c,h}`, `runtime/tests/test_svc_lan_play.c`,
-  `docs/archive/changes/2026-11-02-claude-mk8d-lan-session-2026-11-02-r7.md`, this file.
+  `docs/archive/changes/2026-11-02-mk8d-lan-session-2026-11-02-r7.md`, this file.
 - Changed:
   - `runtime/src/services/bsd_core.{c,h}` (errno map).
   - `runtime/src/services/offline.c`: bsd replies, nifm 15, friend 10700.

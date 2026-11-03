@@ -317,4 +317,4 @@ curl -s $API/saves -H "authorization: Bearer $AT"
 
 The scripted version is `crates/napple-account/scripts/walkthrough.sh` (all of the above plus the 409 and 422
 cases, a second title, the download check and account deletion; `BIN=<path to napple-account>`, runs on port 18082 in a temp
-dir and cleans up). Its 2026-11-02 output is in `docs/archive/changes/2026-11-02-claude-napple-account-2026-11-02-r8.md`.
+dir and cleans up). Its 2026-11-02 output is in `docs/archive/changes/2026-11-02-napple-account-2026-11-02-r8.md`.

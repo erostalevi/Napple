@@ -29,7 +29,7 @@ status: integrated
 - `gfx/src/obj.h`, `gfx/src/api_{cmd,device,memory,program,state,texture,window}.c`
 - new `gfx/src/api_objtrace.c`
 - `gfx/tests/t_nvn_ext_prog.c`, new `gfx/tests/t_obj_canary.c` and `gfx/tests/t_nvn_canary_gen.py`
-- `docs/architecture/gfx.md` (one appended section, 14), `docs/archive/changes/2026-11-01-claude-nvn-object-layouts-2026-11-01-r3.md`, this file
+- `docs/architecture/gfx.md` (one appended section, 14), `docs/archive/changes/2026-11-01-nvn-object-layouts-2026-11-01-r3.md`, this file
 
 `gfx/Makefile` is untouched: the wildcard picks up the new source and test. No `mtl_*`, `shader/` or `runtime/` changes, and no field that `mtl_*` reads moved (`tex_t.s`, `win_t.*`, `sync_t`, `view_t` are unchanged). Prototypes are unchanged, so the a32 table needs no regeneration.
 

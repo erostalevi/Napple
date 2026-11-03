@@ -52,7 +52,7 @@ All five acceptance items are done, including the two (4, 5) the orchestration a
   - `gfx/src/mtl_stages.inc` (+1: `sep_slot_masks` in `stage_key_masks`);
   - `gfx/src/obj.h` (enum: `OP_VP_SWIZZLE`, `OP_PROVOKING` before `OP_COUNT`).
 - Tests: `t_stencil_sample.c` (cube cases), `t_int_tex.c` (7-10), `t_sep_sampler.c` (3-4), `t_xlate.m` (pins), new `t_vp_swizzle.c`, new `t_provoking.c`.
-- Docs: `docs/architecture/gfx.md` (one paragraph in section 13, before "Rare control/system ops"), `docs/archive/changes/2026-11-02-claude-gfx-views-raster-2026-11-02-r4.md`.
+- Docs: `docs/architecture/gfx.md` (one paragraph in section 13, before "Rare control/system ops"), `docs/archive/changes/2026-11-02-gfx-views-raster-2026-11-02-r4.md`.
 - Not touched: `gfx/src/nvnapi/`, `runtime/`, `orchestrations/`, any `obj.h` struct.
 
 ## Built and tested here

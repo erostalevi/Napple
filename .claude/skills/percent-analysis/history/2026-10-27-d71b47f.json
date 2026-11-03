@@ -848,7 +848,7 @@
     "stub": 125
    },
    "adjust": -0.03,
-   "adjust_reason": "ipc-depth-rest (2026-10-27-claude-ipc-depth-rest.md) moved 64 class-(c) rows (offline/no-radio documented no-ops) to IPC_IMPL without new behaviour: offline answers count as partial, not impl",
+   "adjust_reason": "ipc-depth-rest (2026-10-27-ipc-depth-rest.md) moved 64 class-(c) rows (offline/no-radio documented no-ops) to IPC_IMPL without new behaviour: offline answers count as partial, not impl",
    "judged_ratio": 0.8598,
    "judged_points": 4.3,
    "unverified": 0,

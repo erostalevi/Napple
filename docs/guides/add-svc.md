@@ -95,7 +95,7 @@ Host tests run the real handlers on any thread through `svc_dispatch`; they are 
   time-sliced ([runtime-services.md](../architecture/runtime-services.md), "Kernel scheduling note").
 - **Pausing and context.** Several svcs are `partial` on purpose (0x32, 0x33, 0x36...): read their paragraph in `runtime-services.md` before changing semantics; the status words there (*implemented*, *partial*) must stay true.
 - **Unknown values must not guess silently.** Unknown `GetInfo` ids and unsupported svcs are reported (summary note, `unsupported_svcs`) so the compatibility record says what a title needed. Keep that policy.
-- **Address-arbiter results are checked by games.** AC needed `SignalToAddress` type 2 to write `value-2` and `WaitForAddress` type 3 ([titles/01006F8002326000.md](../titles/01006F8002326000.md) and `docs/archive/changes/2026-10-25-claude-ac-render-2026-10-25-titles.md`, item 8).
+- **Address-arbiter results are checked by games.** AC needed `SignalToAddress` type 2 to write `value-2` and `WaitForAddress` type 3 ([titles/01006F8002326000.md](../titles/01006F8002326000.md) and `docs/archive/changes/2026-10-25-ac-render-2026-10-25-titles.md`, item 8).
 - **Do not assume the mask is enforced** (see above), and do not rely on `known_names[]` to register anything: it is names only.
 - **AArch32 is a second front door.** An svc that works for 64-bit titles but has no `svc_sigs[]` row fails for MK8D 1.0; `QueryMemory` is special-cased in `a32_svc_impl` (40-byte `MemoryInfo`).
 - **Code memory limits.** Code generated at run time runs natively without the AOT rewrite and must not contain `svc`, `x18` or `tpidr` accesses (`kcode.c` header).

@@ -21,7 +21,7 @@ Close `gpu_fixed/MSAA / resolve` and `gpu_fixed/texture views / sparse` (+0.15 p
 - Texture views Metal cannot express (`mtl_tex.m view_valid` falls back to the whole texture): implement copies/aliases for the common cases (format reinterpretation within a size class, layer/level subsets); sparse textures via Metal sparse heaps on Apple silicon where an NVN title asks for them, or a documented safe fallback.
 
 ## Owned paths
-`gfx/src/{mtl_replay.m,mtl_tex.m,api_texture.c,api_program.c,mtl_present.m,mtl_priv.h,obj.h,mtl_scale.m}`, new tests in `gfx/tests/` (not the stage tests), `docs/archive/changes/2026-11-01-claude-gfx-msaa-views-2026-11-01-r1.md`.
+`gfx/src/{mtl_replay.m,mtl_tex.m,api_texture.c,api_program.c,mtl_present.m,mtl_priv.h,obj.h,mtl_scale.m}`, new tests in `gfx/tests/` (not the stage tests), `docs/archive/changes/2026-11-01-gfx-msaa-views-2026-11-01-r1.md`.
 `mtl_replay.m` includes `mtl_stages.inc` (owned by gfx-stages-live): do not edit the .inc.
 
 ## Do not touch

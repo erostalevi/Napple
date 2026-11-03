@@ -31,7 +31,7 @@ Close gpu_fixed/depth/stencil formats, the 6 nvn/nvnCommandBufferBindSeparate* s
 5. Integrator file lists the verified.json keys to flip.
 
 ## Starting points
-`mtl_replay.m:2497` + `copy_d24_to_tex`; `mtl_replay.m:3275-3284`; `api_cmd.c:742-753`, `api_device.c:83-84` (read only); integer-texture paragraph of `docs/archive/changes/2026-11-01-claude-gfx-shader-views-2026-11-01-r2.md`; `mtl_tex.m mtl_tex_int_kind`; `maxwell_translate.c` "bindless texture handle is not a constant buffer load".
+`mtl_replay.m:2497` + `copy_d24_to_tex`; `mtl_replay.m:3275-3284`; `api_cmd.c:742-753`, `api_device.c:83-84` (read only); integer-texture paragraph of `docs/archive/changes/2026-11-01-gfx-shader-views-2026-11-01-r2.md`; `mtl_tex.m mtl_tex_int_kind`; `maxwell_translate.c` "bindless texture handle is not a constant buffer load".
 
 ## Env notes
 Read `orchestrations/ENV-MAC.md` first (shared title data, locks, local-only, never ask). Shared title data in `/Users/neto/NappleWork/games/` predates the rewriter ordering fix (acnh-race-atomics, being integrated); rebuilt data for it is in `/Users/neto/NappleWork/games-r3/` — use either; never overwrite either.

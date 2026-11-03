@@ -1,6 +1,6 @@
 # claude-ipc-fs-mii-ldn-tail-2026-11-03-r11
 
-Branch: `claude/ipc-fs-mii-ldn-tail-2026-11-03-r11` (local only, not pushed). Change note: `docs/archive/changes/2026-11-03-claude-ipc-fs-mii-ldn-tail-2026-11-03-r11.md`.
+Branch: `claude/ipc-fs-mii-ldn-tail-2026-11-03-r11` (local only, not pushed). Change note: `docs/archive/changes/2026-11-03-ipc-fs-mii-ldn-tail-2026-11-03-r11.md`.
 
 ## Rows converted
 | Service | Cmd | Test |

@@ -25,7 +25,7 @@ Turn these %Analysis items from partial to impl, each with a test, or verified w
 
 ## Owned paths
 `audio/` (except `audio/src/engine.c` debug hook: keep it), `input/`, `crates/napple-core/src/infrastructure/{ncz.rs,nca.rs,ticket.rs,ticket/}`, `crates/napple-build/src/container.rs`,
-`runtime/src/services/bcat.c`, `bcat_core.[ch]`, tests next to them, `docs/archive/changes/2026-11-01-claude-sweep-small-2026-11-01-r1.md`.
+`runtime/src/services/bcat.c`, `bcat_core.[ch]`, tests next to them, `docs/archive/changes/2026-11-01-sweep-small-2026-11-01-r1.md`.
 
 ## Do not touch
 `gfx/`, `runtime/src/` other than the bcat files, other `runtime/src/services/*`, `frontend/`, `studio/`, `orchestrations/`.

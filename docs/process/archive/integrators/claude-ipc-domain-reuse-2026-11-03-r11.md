@@ -1,6 +1,6 @@
 # Integrator note: claude-ipc-domain-reuse-2026-11-03-r11
 
-Branch: `claude/ipc-domain-reuse-2026-11-03-r11` (from `main`). Change note: `docs/archive/changes/2026-11-03-claude-ipc-domain-reuse-2026-11-03-r11.md`.
+Branch: `claude/ipc-domain-reuse-2026-11-03-r11` (from `main`). Change note: `docs/archive/changes/2026-11-03-ipc-domain-reuse-2026-11-03-r11.md`.
 
 ## Summary
 1. `runtime/src/ipc.c`: closed domain object ids are reused (never-used ids first, then FIFO of freed ids); closing an unknown id answers an error result instead of aborting; full only at 512 open.

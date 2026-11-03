@@ -19,7 +19,7 @@ Close the media AAC/VP8 gap (media −0.02 adjustment), give the guest a clean e
 
 ## Owned paths
 `runtime/src/movie.c`, `runtime/src/services/{movie_audio_core.[ch],codec_headers_core.c,decoder_vt.c,decoder_null_core.c,decoder_backend.h,media_gfx_glue.c}`, `runtime/src/main.c`, `input/`, `tools/golden/`,
-`runtime/tests/test_svc_movie*.c`, `test_media*`, `test_decoder_vt.c`, existing rows of `docs/architecture/runtime-services.md` for audren perf, hid GC styles and bcat (only those rows), `docs/archive/changes/2026-11-01-claude-sweep-media-r2-2026-11-01-r2.md`.
+`runtime/tests/test_svc_movie*.c`, `test_media*`, `test_decoder_vt.c`, existing rows of `docs/architecture/runtime-services.md` for audren perf, hid GC styles and bcat (only those rows), `docs/archive/changes/2026-11-01-sweep-media-r2-2026-11-01-r2.md`.
 
 ## Do not touch
 ipc-depth-sys / ipc-depth-hid service files, `nvdrv*.c`, `jpeg_core.c`, `ipc.c`, gfx, sched-applets paths (kernel/thread/dispatch..., applet*.c, frontend/src, tools/soak), `orchestrations/`.

@@ -34,7 +34,7 @@ status: integrated
 - `gfx/src/mtl_tex.m` (view classification, GfxAlias, flush, diagnostics), `gfx/src/mtl_priv.h` (GfxTex.aliases / wgen, alias API), `gfx/src/mtl_replay.m`
   (write generation bumps, alias flush / pass split, ds slot masks, readback upload, MSAA logs, ResolveDepthBuffer doc), `gfx/src/api_program.c` (comment).
 - New tests: `gfx/tests/t_view_copy.m`, `t_view_copy_draw.c`, `t_sample_shading.c`, `t_sparse.c`.
-- `docs/archive/changes/2026-11-01-claude-gfx-msaa-views-2026-11-01-r1.md`, this file.
+- `docs/archive/changes/2026-11-01-gfx-msaa-views-2026-11-01-r1.md`, this file.
 - No shared files touched. `mtl_stages.inc`, `api_cmd.c`, `shader/`, `mtl_shader.m` untouched.
 
 ## Built and tested here

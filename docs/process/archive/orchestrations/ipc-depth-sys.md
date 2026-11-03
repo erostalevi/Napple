@@ -19,7 +19,7 @@ Same job as ipc-depth-hid (parallel) for the other half of the services: a comma
 
 ## Owned paths
 `runtime/src/services/{fs.c,vi*.c,time*.c,account*.c,ns*.c,ncm*.c,pdm*.c,olsc*.c,bcat*.c,mii*.c,mii_img*.c,caps*.c,ldn*.c,offline*.c,online_core.c,sfdnsres*.c,misc.c,ngc*.c,ectx.c,lm.c,ovln.c,push.c,pl.c,sysconfig_core.c}` (pctl rows live in misc/offline: yours),
-their `runtime/tests/test_svc_*.c`, `runtime/tests/ipc_reference/<interface>.txt` for these interfaces, `docs/archive/changes/2026-11-01-claude-ipc-depth-sys-2026-11-01-r2.md`. `runtime/Makefile`, `docs/architecture/runtime-services.md`: append only.
+their `runtime/tests/test_svc_*.c`, `runtime/tests/ipc_reference/<interface>.txt` for these interfaces, `docs/archive/changes/2026-11-01-ipc-depth-sys-2026-11-01-r2.md`. `runtime/Makefile`, `docs/architecture/runtime-services.md`: append only.
 
 ## Do not touch
 `runtime/src/ipc.c` and `runtime/tests/test_ipc_reference.c` (ipc-depth-hid writes the runner), ipc-depth-hid's service files (hid, hidbus, irs, audio, audin, audrec, psm, lbl, apm, settings, setfd, spsm, fgm, btm), `applet*.c`, `nvdrv*.c`, `jpeg_core.c`, media files (`movie_audio_core.c`, `codec_headers_core.c`, `decoder_*`, `media_gfx_glue.c`), sched-applets paths, `orchestrations/`.

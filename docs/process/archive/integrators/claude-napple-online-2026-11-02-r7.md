@@ -40,7 +40,7 @@ Competition and SimpleSearchObject methods are not implemented.
 ## Files
 - New: `crates/napple-online/` (Cargo.toml, src/{lib,main,accounts,crypto,http,kerberos,matchmaking,nex,prudp,rmc,server,session}.rs).
 - New: `runtime/src/net/net_online.h`, `net_online.c`, `net_online_http.c`; `runtime/tests/test_net_online_client.c`.
-- New: `docs/guides/napple-online.md`, `docs/archive/changes/2026-11-02-claude-napple-online-2026-11-02-r7.md`, this file.
+- New: `docs/guides/napple-online.md`, `docs/archive/changes/2026-11-02-napple-online-2026-11-02-r7.md`, this file.
 - Changed by orchestrator decision (net-host-provider is frozen): the **ssl functions** of `runtime/src/services/offline.c` only
   (`ssl_set_io_mode`, `ssl_handshake`, `ssl_read`, `ssl_write`). They hand IoMode to the provider's `tls_set_io_mode` and answer a would-block read
   or write with `HZ_R_SSL_WOULD_BLOCK` (2123-0204, new in `hz_result.h`). Test `runtime/tests/test_net_online_ssl.c` (7dde717). Nothing in the

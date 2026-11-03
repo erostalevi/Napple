@@ -23,7 +23,7 @@ Close `gpu_fixed/transform feedback`, `gpu_fixed/geometry shaders`, `gpu_fixed/t
 
 ## Owned paths
 `gfx/src/mtl_stages.inc`, `gfx/src/api_cmd.c`, `gfx/src/stages.h`, `gfx/src/shader/` (whole), `gfx/src/mtl_shader.m`, `gfx/tests/{t_stages.c,t_xlate_stages.inc,t_control.c}` and new stage tests, `tools/gpu/`,
-`docs/archive/changes/2026-11-01-claude-gfx-stages-live-2026-11-01-r1.md`.
+`docs/archive/changes/2026-11-01-gfx-stages-live-2026-11-01-r1.md`.
 
 ## Do not touch
 `gfx/src/{mtl_replay.m,mtl_tex.m,api_texture.c,api_program.c,mtl_present.m}` (owned by gfx-msaa-views; needed edits go to "Needs from other areas"), `runtime/`, `orchestrations/`.

@@ -25,7 +25,7 @@ status: integrated
 
 ## Files
 `git diff --stat 79415f0..HEAD`: 56 files. New: `runtime/tests/test_ipc_reference.c`, `runtime/tests/ipc_reference/*.txt` (30),
-`docs/archive/changes/2026-11-01-claude-ipc-depth-hid-2026-11-01-r2.md`, this file. Changed (owned): `runtime/src/services/{hid.c,hid_core.c,hid_core.h,
+`docs/archive/changes/2026-11-01-ipc-depth-hid-2026-11-01-r2.md`, this file. Changed (owned): `runtime/src/services/{hid.c,hid_core.c,hid_core.h,
 audio.c,audrec.c,audrec_core.c,audrec_core.h,settings.c,psm.c,lbl.c,lbl_core.h,spsm.c,btm.c,fgm.c}`, `runtime/tests/test_svc_{hid,hidcore,audio,audrec,
 settings,lbl,spsm,psm,btm}.c`. Shared, append-only: `runtime/Makefile` (test_ipc_reference rules, `test`/`test-host` prerequisites, `test-ipc-reference`),
 `docs/architecture/runtime-services.md` (new section at the end). `runtime/src/ipc.c` was not changed.

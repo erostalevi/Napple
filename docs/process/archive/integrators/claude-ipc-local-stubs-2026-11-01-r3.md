@@ -20,7 +20,7 @@ status: integrated
 
 ## Files
 `git diff --stat 84cb5a6..HEAD`: 35 files, +2421 / -107.
-- New: `runtime/src/services/romfs_read.{c,h}`, `runtime/tests/romfs_fixture.h`, `runtime/tests/test_svc_{fs_local,lm,local_offline}.c`, `docs/archive/changes/2026-11-01-claude-ipc-local-stubs-2026-11-01-r3.md`.
+- New: `runtime/src/services/romfs_read.{c,h}`, `runtime/tests/romfs_fixture.h`, `runtime/tests/test_svc_{fs_local,lm,local_offline}.c`, `docs/archive/changes/2026-11-01-ipc-local-stubs-2026-11-01-r3.md`.
 - Changed services: `fs.c` (+700), `caps.c`, `time.c`, `account.c`, `offline.c`, `pdm.c`, `ngc.c`, `ngc_core.[ch]` (word list capacity 4096 -> 8192, `ngc_words_add_ngword`), `misc.c`, `vi.c`, `lm.c`, `audio.c`, `btm.c`.
 - Changed audio: `audio/src/audout.c`, `audio/include/napple_audio.h` (**outside the listed owned paths** `audio/src + audio/tests`: two declarations, `napple_audout_set_volume/get_volume`, are required by the runtime), `audio/tests/test_audout.c`.
 - Changed tests: `test_svc_{account,aoc,audio,btm,caps,ngc,pctl,pdm,time,vi}.c` (extended; the r2 assertions that pinned the documented defaults of the converted rows were replaced by the real behaviour; `test_svc_pctl.c` aoc row expectations: 200 and 302 are now real).

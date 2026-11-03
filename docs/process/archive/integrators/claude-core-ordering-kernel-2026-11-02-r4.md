@@ -31,7 +31,7 @@ status: integrated
 - Shared, append-only: `runtime/Makefile`: excltest rule + `test-a32-order` (a prerequisite of `test-a32`, after the test-a32 block);
   `test_kernel_exit` rule + `HOST_TESTS +=` (just before `test-host: $(HOST_TESTS)`)
 - Docs: `docs/architecture/aarch32.md` (exclusives and barriers paragraph), `docs/index.md` (links only),
-  `docs/archive/changes/2026-11-02-claude-core-ordering-kernel-2026-11-02-r4.md` (new)
+  `docs/archive/changes/2026-11-02-core-ordering-kernel-2026-11-02-r4.md` (new)
 - Not touched: `crates/napple-rewrite/`, `runtime/src/a32/`, `runtime/src/services/`, `runtime/src/threads.c`, `gfx/`, shared `NappleWork/games/`, `orchestrations/`.
 
 ## Built and tested here

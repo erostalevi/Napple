@@ -39,7 +39,7 @@ mode) implementing `orchestrations/ACCOUNT-CONTRACT.md` as of `orchestrate/2026-
   - `src/*.rs`, 21 modules
   - `tests/{auth,keys,names,saves,s3}.rs` and `tests/common/mod.rs`
   - `scripts/walkthrough.sh`
-- New docs: `docs/guides/napple-account.md`, `docs/archive/changes/2026-11-02-claude-napple-account-2026-11-02-r8.md`, this file.
+- New docs: `docs/guides/napple-account.md`, `docs/archive/changes/2026-11-02-napple-account-2026-11-02-r8.md`, this file.
 - Shared files, append-only:
   - `Cargo.toml`: one member appended, `"crates/napple-account"`.
   - `Cargo.lock`: packages added only. No existing package version changed, checked by diffing the (name, version) sets.

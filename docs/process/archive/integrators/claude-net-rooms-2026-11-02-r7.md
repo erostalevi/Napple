@@ -32,7 +32,7 @@ status: integrated
 `git diff --stat c44af84..HEAD` (excluding the r6 merge):
 - New: `crates/napple-room/{Cargo.toml, src/lib.rs, src/proto.rs, src/server.rs, src/client.rs, src/main.rs, tests/room.rs}`,
   `runtime/src/net/net_room.h`, `net_room.c`, `net_room_vlan.c`, `net_room_ldn.c`, `runtime/tests/test_net_room.c`, `docs/guides/online-rooms.md`,
-  `docs/archive/changes/2026-11-02-claude-net-rooms-2026-11-02-r7.md`, this file.
+  `docs/archive/changes/2026-11-02-net-rooms-2026-11-02-r7.md`, this file.
 - Changed (hooks, additive): `runtime/src/net/net_host_sock.c`, `runtime/src/net/net_host_ldn.c`, `runtime/src/net/net_host.c`.
 - Shared, append-only: `Cargo.toml` (workspace member), `Cargo.lock` (the new package), `runtime/Makefile` (test rules at the end),
   `docs/reference/environment-variables.md` (new section after the host-provider table), `docs/guides/README.md` (one row).

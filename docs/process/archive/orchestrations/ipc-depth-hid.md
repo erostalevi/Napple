@@ -19,7 +19,7 @@ A command with no row stops the runtime (`runtime/src/ipc.c:381`), and the depth
 
 ## Owned paths
 `runtime/src/services/{hid.c,hid_core.[ch],hidbus*.c,hidbus_core.h,irs*.c,irs_core.h,audio.c,audin*.c,audrec*.c,psm*.c,lbl*.c,apm*.c,settings*.c,setfd*.c,spsm.c,fgm.c,btm.c}`, `runtime/src/ipc.c`,
-new `runtime/tests/test_ipc_reference.c` and `runtime/tests/ipc_reference/<interface>.txt` for these interfaces, their `runtime/tests/test_svc_*.c`, `docs/archive/changes/2026-11-01-claude-ipc-depth-hid-2026-11-01-r2.md`.
+new `runtime/tests/test_ipc_reference.c` and `runtime/tests/ipc_reference/<interface>.txt` for these interfaces, their `runtime/tests/test_svc_*.c`, `docs/archive/changes/2026-11-01-ipc-depth-hid-2026-11-01-r2.md`.
 `runtime/Makefile` and `docs/architecture/runtime-services.md`: append only.
 
 ## Do not touch

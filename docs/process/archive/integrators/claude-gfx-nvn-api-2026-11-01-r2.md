@@ -24,7 +24,7 @@ status: integrated
 ## Files
 `git diff --stat 79415f0..HEAD`: `gfx/src/nvnapi/{names.txt,nvn_protos_ext.h}`, `gfx/src/{api_cmd.c,api_device.c,api_program.c,api_texture.c,api_state.c,mtl_replay.m}`,
 `tools/gen_a32_nvn.py`, `runtime/src/a32/a32_nvn_sigs.inc` (regenerated only), new `gfx/tests/{t_nvn_ext.c,t_nvn_ext_prog.c,t_msaa_copy.c}`,
-`docs/archive/changes/2026-11-01-claude-gfx-nvn-api-2026-11-01-r2.md`, this file. No shared files; `gfx/Makefile` untouched (tests are picked up by wildcard).
+`docs/archive/changes/2026-11-01-gfx-nvn-api-2026-11-01-r2.md`, this file. No shared files; `gfx/Makefile` untouched (tests are picked up by wildcard).
 
 ## Built and tested here
 | Item | Status | Evidence |

@@ -31,7 +31,7 @@ status: integrated
 `git diff --stat 79415f0..d8b1493`: `runtime/src/movie.c`, `runtime/src/services/movie_audio_core.[ch]`, `runtime/src/main.c`,
 `input/include/napple_input.h`, `input/src/hid_shm.c`, `input/tests/test_styles.c`, `tools/golden/routes.json` (LAS route only).
 New tests: `runtime/tests/test_svc_movie_host.c`, `runtime/tests/test_svc_guest_exit.c`; extended: `runtime/tests/test_svc_movie_audio.c`.
-Docs: `docs/archive/changes/2026-11-01-claude-sweep-media-r2-2026-11-01-r2.md` (new). Shared, edited in place (only the assigned rows):
+Docs: `docs/archive/changes/2026-11-01-sweep-media-r2-2026-11-01-r2.md` (new). Shared, edited in place (only the assigned rows):
 `docs/architecture/runtime-services.md` (audren:u, bcat:u, hid, audin:u rows of the small-gaps table) and `docs/reference/environment-variables.md`
 (`NAPPLE_AUDIN_SOURCE` row corrected; `NAPPLE_NPAD_DEVICE_TYPES` and `NAPPLE_MOVIE_AAC` rows added under it). Nothing deleted.
 

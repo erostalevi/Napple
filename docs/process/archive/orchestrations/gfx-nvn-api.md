@@ -19,7 +19,7 @@ launched_at: 2026-11-01
 
 ## Owned paths
 `gfx/src/nvnapi/` (names.txt, nvn_protos*.h), `gfx/tools/gen_nvn_tables.sh`, `gfx/src/{api_cmd.c,api_device.c,api_program.c,api_texture.c,api_state.c,api_window.c,core.c,mtl_replay.m}`,
-`tools/gen_a32_nvn.py`, `runtime/src/a32/a32_nvn_sigs.inc` (regenerate only), new `gfx/tests/t_nvn_ext*.c` and `t_msaa_*`, `docs/archive/changes/2026-11-01-claude-gfx-nvn-api-2026-11-01-r2.md`. `gfx/Makefile` test list: append only.
+`tools/gen_a32_nvn.py`, `runtime/src/a32/a32_nvn_sigs.inc` (regenerate only), new `gfx/tests/t_nvn_ext*.c` and `t_msaa_*`, `docs/archive/changes/2026-11-01-gfx-nvn-api-2026-11-01-r2.md`. `gfx/Makefile` test list: append only.
 
 ## Do not touch
 `gfx/src/shader/`, `mtl_shader.m`, `mtl_tex.m`, `mtl_priv.h`, `api_memory.c`, `dirty.c`, `tex_xfer.c`, `mtl_stages.inc`, `mtl_present.m` (gfx-shader-views owns most of these: ask through "Needs from other areas");

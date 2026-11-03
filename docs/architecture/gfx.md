@@ -136,7 +136,7 @@ Pending: runtime/ has no loader yet (empty directory when this was written). Whe
 - The adapter builds its override table lazily: the runtime registers overrides before `gfx_init`.
 - Window origin: "lower-left" (the NVN default) changes only window coordinates (viewport, scissor, fragment coordinate y = H - y_top via the rscale table); NDC +y renders to the top row in both modes. The former vertex-shader Y negation produced upside-down images in real games and was removed.
 - `CopyTextureToTexture` with a different size or format is done by a draw (format conversion and scaling); depth/MSAA/3D variants are still not implemented.
-- A recorded command list stays valid as long as the command memory it was recorded into: it ends when the game finalizes the handle, when another list is recorded at the same command-memory address, or when the pool holding that memory is finalized (never with its command buffer, by idle time or by a memory budget; Super Mario Odyssey replays lists for minutes). Idle lists are held LZ4-packed. See the [2026-10-26 gfx-correctness note](../archive/changes/2026-10-26-claude-gfx-correctness-2026-10-26-macos1.md).
+- A recorded command list stays valid as long as the command memory it was recorded into: it ends when the game finalizes the handle, when another list is recorded at the same command-memory address, or when the pool holding that memory is finalized (never with its command buffer, by idle time or by a memory budget; Super Mario Odyssey replays lists for minutes). Idle lists are held LZ4-packed. See the [2026-10-26 gfx-correctness note](../archive/changes/2026-10-26-gfx-correctness-2026-10-26-macos1.md).
 - Headless runs pace presents at the swap interval so the guest runs at real speed.
 - New host API: `napple_gfx_texture_info`, `napple_gfx_texture_write_rgba` (video decoders).
 - Per-game: `nvn_major/nvn_minor` from `game.json`.
@@ -207,7 +207,7 @@ offered (decision, 2026-10-27). `sharpness` 0..1 scales the sharpening of 2 and 
 
 **Per-title table.** `mtl_scale_table.m`, format in its header: `{"titles": {"<title id>": {"disable", "max_scale", "min_div", "skip": [[w,h]], "force": [[w,h]],
 "report_aspect"}}}`; built in defaults plus an optional file named by `NAPPLE_RSCALE_TABLE`. The mod / fix system will ship the same format. See
-`docs/archive/changes/2026-10-27-claude-render-scale-2026-10-27.md` for what the audit of the four titles put in it.
+`docs/archive/changes/2026-10-27-render-scale-2026-10-27.md` for what the audit of the four titles put in it.
 
 **Tests.** `make -C gfx test`: `t_scale_math` (factors 0.5 / 1 / 1.5 / 2 / 4 / 1.37, allocation sizes, viewport and scissor conversion, rscale entries, budget, fit rectangles,
 upscaler fallback), `t_scale_upscale` (upscaler matrix with PSNR and sharpness asserts, writes the contact sheet), `t_scale_table`, `t_display`. Real games:

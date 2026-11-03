@@ -31,7 +31,7 @@ Not done: AAC (no title creates a type 4 decoder, so no hookup), nvjpg/msenc/nvd
 - `runtime/src/services/nvdrv_media_regs.h` (+2): `NVDEC_SET_UNNAMED_0x140`.
 - `runtime/src/movie.c` (+29): Vorbis level lines (`pcm_level`), `#include <math.h>`.
 - `runtime/tests/test_svc_nvdrv_media.c` (+7): 3 checks. New: `runtime/tests/test_svc_caps_e2e.c` (picked up by `test-services` automatically).
-- Docs: new `docs/archive/changes/2026-11-01-claude-media-live-2026-11-01-r1.md`. Shared, append-only: `docs/architecture/runtime-services.md` (new
+- Docs: new `docs/archive/changes/2026-11-01-media-live-2026-11-01-r1.md`. Shared, append-only: `docs/architecture/runtime-services.md` (new
   section at the end), `docs/reference/environment-variables.md` (3 rows added after `NAPPLE_DECODER`).
 - Not in the repo: `work` symlink at the worktree root (git-excluded).
 

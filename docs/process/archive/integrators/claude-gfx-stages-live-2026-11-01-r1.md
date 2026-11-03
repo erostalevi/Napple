@@ -27,7 +27,7 @@ status: integrated
 - Tests: `gfx/tests/t_stages.c` (2e gated, 2f), `gfx/tests/t_stages_dumped.c` (**new**), `gfx/tests/t_xlate_stages.inc`, `gfx/tests/t_control.c`.
 - `tools/gpu/scan_stages.py`, `tools/gpu/test_scan_stages.py`.
 - Shared docs, append-only: `docs/architecture/gfx.md` (one paragraph in section 13, before "Rare control/system ops"), `docs/guides/gpu-title-scan.md` (new section + table appended after the b7 reference line, plus 6 words in step 3).
-- `docs/archive/changes/2026-11-01-claude-gfx-stages-live-2026-11-01-r1.md` (new).
+- `docs/archive/changes/2026-11-01-gfx-stages-live-2026-11-01-r1.md` (new).
 - Not touched: `mtl_replay.m`, `mtl_tex.m`, `api_texture.c`, `api_program.c`, `mtl_present.m`, `runtime/`, `orchestrations/`. `api_cmd.c` needed no change.
 
 ## Built and tested here

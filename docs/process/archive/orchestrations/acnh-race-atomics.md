@@ -22,14 +22,14 @@ sched-applets (r1) showed the ACNH base command-buffer overlap (11 of 40 starts;
 Find which one with targeted traces and minimal guest-pattern unit tests; fix it generically (no per-game patch); prove with the soak.
 
 ## Owned paths
-`crates/napple-rewrite/` (whole), `runtime/src/kernel.c` sync svcs, `runtime/src/{thread.c,threads.c,kcode.c,signals.c,hle_stack.c}`, `tools/soak/`, their tests, `docs/todo.md` ACNH start flake section, `docs/archive/changes/2026-11-01-claude-acnh-race-atomics-2026-11-01-r3.md`.
+`crates/napple-rewrite/` (whole), `runtime/src/kernel.c` sync svcs, `runtime/src/{thread.c,threads.c,kcode.c,signals.c,hle_stack.c}`, `tools/soak/`, their tests, `docs/todo.md` ACNH start flake section, `docs/archive/changes/2026-11-01-acnh-race-atomics-2026-11-01-r3.md`.
 If the rewrite output format changes, title data must be rebuilt: build into `/Users/neto/NappleWork/games-r3/` (never overwrite the shared `games/`), under the build lock.
 
 ## Do not touch
 `gfx/`, `runtime/src/services/`, `audio/`, `input/`, `frontend/`, `orchestrations/`.
 
 ## Starting points
-sched-applets' change note `docs/archive/changes/2026-11-01-claude-sched-applets-2026-11-01-r1.md`, its integrator file, `docs/todo.md` (ACNH start flake), `NAPPLE_GFX_CBTRACE=1`, `tools/soak/soak.py --lockf`, `docs/architecture/rewrite-format.md`.
+sched-applets' change note `docs/archive/changes/2026-11-01-sched-applets-2026-11-01-r1.md`, its integrator file, `docs/todo.md` (ACNH start flake), `NAPPLE_GFX_CBTRACE=1`, `tools/soak/soak.py --lockf`, `docs/architecture/rewrite-format.md`.
 
 ## Acceptance
 1. Root cause identified with evidence (trace showing the broken atomic/sync step), or each suspect ruled out with evidence.

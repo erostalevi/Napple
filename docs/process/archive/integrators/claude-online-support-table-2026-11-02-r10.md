@@ -17,7 +17,7 @@ Base: `main` at `d0d4be9`. One commit. Docs, data, generator and landing page on
   `--check` covers all three, so `tools/check_docs.py` fails on a stale block.
 - `site/index.html`, `site/app.js`, `site/style.css`: `#online` section + nav link, rendered from `online.json`.
 - `tools/support/test_gen_support.py`: 4 new tests (9 total, all pass).
-- Change note `docs/archive/changes/2026-11-02-claude-online-support-table-2026-11-02-r10.md`.
+- Change note `docs/archive/changes/2026-11-02-online-support-table-2026-11-02-r10.md`.
 
 ## Outside the listed files (needed for check_docs)
 - `docs/archive/changes/README.md`: a new `### Round 2026-11-02-r10` table with one row. The orphan check requires every change note to be

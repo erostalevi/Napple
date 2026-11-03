@@ -41,7 +41,7 @@ status: integrated
 - New `applet_capture_host.c`.
 - New test `runtime/tests/test_svc_applet_am.c`.
 - Docs:
-  - new `docs/archive/changes/2026-11-02-claude-am-stubs-legal-2026-11-02-r4.md`;
+  - new `docs/archive/changes/2026-11-02-am-stubs-legal-2026-11-02-r4.md`;
   - appended a section to `docs/architecture/runtime-services.md`;
   - `docs/reference/environment-variables.md`: two rows added (`NAPPLE_EXIT_GRACE_MS`, `NAPPLE_DEBUG_SAVE_SCREENSHOT`).
 

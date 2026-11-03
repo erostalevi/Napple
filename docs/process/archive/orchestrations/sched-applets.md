@@ -20,13 +20,13 @@ launched_at: 2026-11-01
 
 ## Owned paths
 `runtime/src/{kernel.c,thread.c,threads.c,dispatch.c,ksession.c,kmsg.c,kcode.c,signals.c,timescale.c,hle_stack.c}`, `runtime/src/services/{applet.c,applet_ae.c,applet_core.[ch],applet_lib_core.[ch],applet_web_core.[ch],applet_album_core.[ch],applet_ui.h}`,
-`frontend/src/` (applet sheets), their tests, `tools/soak/`, `docs/archive/changes/2026-11-01-claude-sched-applets-2026-11-01-r1.md`. `docs/todo.md`: you may update the "ACNH start flake" section only.
+`frontend/src/` (applet sheets), their tests, `tools/soak/`, `docs/archive/changes/2026-11-01-sched-applets-2026-11-01-r1.md`. `docs/todo.md`: you may update the "ACNH start flake" section only.
 
 ## Do not touch
 `gfx/`, `runtime/src/services/` other than applet*, `runtime/src/movie.c`, `audio/`, `input/`, `orchestrations/`.
 
 ## Starting points
-`docs/todo.md` (ACNH start flake), `docs/archive/changes/2026-10-28-claude-gfx-recorder-flake-2026-10-28-b8.md`, `docs/architecture/runtime-services.md` (kernel/scheduler, applets), `tools/soak/`, `gfx/tests/t_cmdshare.c`.
+`docs/todo.md` (ACNH start flake), `docs/archive/changes/2026-10-28-gfx-recorder-flake-2026-10-28-b8.md`, `docs/architecture/runtime-services.md` (kernel/scheduler, applets), `tools/soak/`, `gfx/tests/t_cmdshare.c`.
 
 ## Acceptance
 1. `make -C runtime test` passes.

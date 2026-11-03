@@ -29,7 +29,7 @@ status: integrated
 - Tests: `runtime/tests/test_svc_applet.c`, `test_svc_applet_host.c` (ids updated to the fixed numbering), `test_svc_applet_web.c`, `runtime/tests/host/test_input_script.c` (new)
 - New fixtures: `runtime/tests/ipc_reference/{appletOE,IApplicationProxy,ICommonStateGetter,ISelfController,IWindowController,IAudioController,IDisplayController,ILibraryAppletCreator,ILibraryAppletAccessor,IStorageAccessor,IApplicationFunctions,IDebugFunctions}.txt`
 - Shared, append-only: `runtime/Makefile` (one host-test rule for `test_input_script` after `test_kernel_sched`; needed to run the input_script test), `docs/architecture/runtime-services.md` (am section)
-- Docs: `docs/archive/changes/2026-11-01-claude-am-depth-applets-2026-11-01-r3.md` (new)
+- Docs: `docs/archive/changes/2026-11-01-am-depth-applets-2026-11-01-r3.md` (new)
 - Not touched: existing fixtures, `test_ipc_reference.c`, other service files, kernel files, `gfx/`, `tools/golden/routes.json`.
 
 ## Built and tested here

@@ -18,10 +18,10 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-10-20-compat-matrix](2026-10-20-compat-matrix.md) | Per-game, per-stage compatibility matrix (`napple-compat`) and NPDM/NACP parsers. |
 | [2026-10-21-rewriter](2026-10-21-rewriter.md) | Generic A64 NSO rewriter: x18, TLS registers and svc/counters through a host gate. |
 | [2026-10-22-packaging](2026-10-22-packaging.md) | `napple build`: one-process pipeline to a locally signed `.app`, no Python. |
-| [2026-10-24-claude-nsz-zstd-2026-10-24-plan11](2026-10-24-claude-nsz-zstd-2026-10-24-plan11.md) | NSZ/XCZ ingest (zstd NCZ streaming and block forms). |
-| [2026-10-24-claude-sysdata-firmware-2026-10-24-plan10](2026-10-24-claude-sysdata-firmware-2026-10-24-plan10.md) | Firmware data archives written to `sysdata/` and served by `fsp-srv`. |
-| [2026-10-26-claude-nx-rewriter-2026-10-26-nx](2026-10-26-claude-nx-rewriter-2026-10-26-nx.md) | Rewriter correctness and size fixes from the nxnative review (jump tables and others). |
-| [2026-10-26-claude-mk8d-64-2026-10-25-titles](2026-10-26-claude-mk8d-64-2026-10-25-titles.md) | MK8D update and DLC on the 64-bit path, in-place RomFS (`romfs.map`), A32 start-up faults. |
+| [2026-10-24-nsz-zstd-2026-10-24-plan11](2026-10-24-nsz-zstd-2026-10-24-plan11.md) | NSZ/XCZ ingest (zstd NCZ streaming and block forms). |
+| [2026-10-24-sysdata-firmware-2026-10-24-plan10](2026-10-24-sysdata-firmware-2026-10-24-plan10.md) | Firmware data archives written to `sysdata/` and served by `fsp-srv`. |
+| [2026-10-26-nx-rewriter-2026-10-26-nx](2026-10-26-nx-rewriter-2026-10-26-nx.md) | Rewriter correctness and size fixes from the nxnative review (jump tables and others). |
+| [2026-10-26-mk8d-64-2026-10-25-titles](2026-10-26-mk8d-64-2026-10-25-titles.md) | MK8D update and DLC on the 64-bit path, in-place RomFS (`romfs.map`), A32 start-up faults. |
 
 ## Runtime core, kernel and services
 | Note | Summary |
@@ -32,12 +32,12 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-10-24-loader-kernel](2026-10-24-loader-kernel.md) | Guest IPC, code memory, NRO loading, host1x channels, save data management (Linux-written). |
 | [2026-10-24-services-unbuilt](2026-10-24-services-unbuilt.md) | 24 new HLE services and deeper commands, written unbuilt on Linux. |
 | [2026-10-24-services-VERIFY](2026-10-24-services-VERIFY.md) | Verification prompt for the Mac session that builds the services branch. |
-| [2026-10-24-claude-services-verify-2026-10-24-plan5](2026-10-24-claude-services-verify-2026-10-24-plan5.md) | Result of that verification: services build and tests on macOS. |
+| [2026-10-24-services-verify-2026-10-24-plan5](2026-10-24-services-verify-2026-10-24-plan5.md) | Result of that verification: services build and tests on macOS. |
 | [2026-10-24-applets-dlc](2026-10-24-applets-dlc.md) | DLC mounting (`aoc:u`) and the error, player-select and controller applets. |
 | [2026-10-24-applets-real](2026-10-24-applets-real.md) | Software keyboard config parsing, controller applet answers. |
-| [2026-10-24-claude-cloud-small-2026-10-24-plan11](2026-10-24-claude-cloud-small-2026-10-24-plan11.md) | `ncm` as real in-memory tables, `caps`, audren performance metrics. |
-| [2026-10-24-claude-tipc-dispatch-2026-10-24-plan8](2026-10-24-claude-tipc-dispatch-2026-10-24-plan8.md) | TIPC request dispatch in `ipc.c`. |
-| [2026-10-24-claude-fonts-fallback-2026-10-24-plan7](2026-10-24-claude-fonts-fallback-2026-10-24-plan7.md) | Placeholder shared font when `system/fonts` is missing. |
+| [2026-10-24-cloud-small-2026-10-24-plan11](2026-10-24-cloud-small-2026-10-24-plan11.md) | `ncm` as real in-memory tables, `caps`, audren performance metrics. |
+| [2026-10-24-tipc-dispatch-2026-10-24-plan8](2026-10-24-tipc-dispatch-2026-10-24-plan8.md) | TIPC request dispatch in `ipc.c`. |
+| [2026-10-24-fonts-fallback-2026-10-24-plan7](2026-10-24-fonts-fallback-2026-10-24-plan7.md) | Placeholder shared font when `system/fonts` is missing. |
 | [2026-10-24-cleanup-small-plan6](2026-10-24-cleanup-small-plan6.md) | Follow-ups of the services round: result-code constants and verification on a Mac. |
 | [2026-10-24-guest-handle](2026-10-24-guest-handle.md) | AC "request on handle 0" abort: sm GetServiceHandle refusal over TIPC. |
 | [2026-10-24-boot-crash](2026-10-24-boot-crash.md) | Module-init SIGSEGV that did not reproduce (no source change). |
@@ -51,12 +51,12 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-10-23-crash-and-gfx-round3](2026-10-23-crash-and-gfx-round3.md) | LAS crash on leaving Marin's house, graphics backlog, SMO. |
 | [2026-10-23-smo-round](2026-10-23-smo-round.md) | SMO black world and deformed characters: command-buffer handle lifetime, crash fixes. |
 | [2026-10-24-nvn-pipeline](2026-10-24-nvn-pipeline.md) | Pipeline-build hang, more NVN entry points and pipeline features. |
-| [2026-10-24-claude-nvn-getters-2026-10-24-plan5](2026-10-24-claude-nvn-getters-2026-10-24-plan5.md) | NVN getters/setters visible to the coverage scanner, transform feedback and GL-sync entries. |
+| [2026-10-24-nvn-getters-2026-10-24-plan5](2026-10-24-nvn-getters-2026-10-24-plan5.md) | NVN getters/setters visible to the coverage scanner, transform feedback and GL-sync entries. |
 | [2026-10-24-shader-isa](2026-10-24-shader-isa.md) | Maxwell ISA gaps (LDS/STS, TLD, TXD, atomics, VOTE and more). |
 | [2026-10-24-shader-isa-INTEGRATE](2026-10-24-shader-isa-INTEGRATE.md) | How the shader ISA branch was landed. |
 | [2026-10-25-nx-shader](2026-10-25-nx-shader.md) | Translator items from the nxnative review (VMNMX and others), SMO glitch triage. |
 | [2026-10-26-nx-gfx](2026-10-26-nx-gfx.md) | Animal Crossing window pass investigation; wrapped up early. |
-| [2026-10-26-claude-gfx-correctness-2026-10-26-macos1](2026-10-26-claude-gfx-correctness-2026-10-26-macos1.md) | gfx correctness (macOS-100% batch 1): command-list lifetime, block-compressed render targets, D24/integer MSAA, golden-frame harness, ACNH window-pass root cause. |
+| [2026-10-26-gfx-correctness-2026-10-26-macos1](2026-10-26-gfx-correctness-2026-10-26-macos1.md) | gfx correctness (macOS-100% batch 1): command-list lifetime, block-compressed render targets, D24/integer MSAA, golden-frame harness, ACNH window-pass root cause. |
 
 ## Audio, input, media
 | Note | Summary |
@@ -64,7 +64,7 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-10-21-audio-input-frontend](2026-10-21-audio-input-frontend.md) | The audio, input and frontend static libraries and their C headers. |
 | [2026-10-24-audio-i3dl2-audin-review](2026-10-24-audio-i3dl2-audin-review.md) | I3DL2 reverb fixes, `audin:u`, audren review. |
 | [2026-10-24-audio-small](2026-10-24-audio-small.md) | `audrec:u`, svc 0x23, shader IMAD and LEA; reverb already present. |
-| [2026-10-24-claude-media-h264-2026-10-24-plan5](2026-10-24-claude-media-h264-2026-10-24-plan5.md) | VideoToolbox H.264 decoder for the movie library. |
+| [2026-10-24-media-h264-2026-10-24-plan5](2026-10-24-media-h264-2026-10-24-plan5.md) | VideoToolbox H.264 decoder for the movie library. |
 | [2026-10-24-h264-decoder-type](2026-10-24-h264-decoder-type.md) | Decoder type to mime table read from the movie library. |
 | [2026-10-24-verify-media-dlc](2026-10-24-verify-media-dlc.md) | Scripted checks of H.264, DLC and a flaky guest Break. |
 
@@ -74,9 +74,9 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-10-24-ac-boot-spin](2026-10-24-ac-boot-spin.md) | Boot-thread spin on a never-signalled system event fixed, `ngc:u` added. |
 | [2026-10-24-ac-games](2026-10-24-ac-games.md) | Animal Crossing past its aborts, delta RomFS, DLC check. |
 | [2026-10-24-ac-shaders](2026-10-24-ac-shaders.md) | "Loading shaders" screen is not shader work: the game submits no shader. |
-| [2026-10-24-claude-ac-boot-crash-2026-10-24-plan8](2026-10-24-claude-ac-boot-crash-2026-10-24-plan8.md) | AC v0 SIGSEGV from the NVN API version check. |
-| [2026-10-24-claude-ac-services-2026-10-24-plan9](2026-10-24-claude-ac-services-2026-10-24-plan9.md) | Service blockers for Animal Crossing (`fsp-srv` 202 and others). |
-| [2026-10-25-claude-ac-render-2026-10-25-titles](2026-10-25-claude-ac-render-2026-10-25-titles.md) | AC 3.0.3 main loop and first frames; Npad lifo reader loop. |
+| [2026-10-24-ac-boot-crash-2026-10-24-plan8](2026-10-24-ac-boot-crash-2026-10-24-plan8.md) | AC v0 SIGSEGV from the NVN API version check. |
+| [2026-10-24-ac-services-2026-10-24-plan9](2026-10-24-ac-services-2026-10-24-plan9.md) | Service blockers for Animal Crossing (`fsp-srv` 202 and others). |
+| [2026-10-25-ac-render-2026-10-25-titles](2026-10-25-ac-render-2026-10-25-titles.md) | AC 3.0.3 main loop and first frames; Npad lifo reader loop. |
 | [2026-10-25-perf-las-live](2026-10-25-perf-las-live.md) | LAS slowdowns measured in live play. |
 
 ## AArch32 (Mario Kart 8 Deluxe)
@@ -106,49 +106,49 @@ Status words in the notes: *verified* (ran on a Mac), *tested* (unit test passed
 | [2026-10-26-docs-consolidate](2026-10-26-docs-consolidate.md) | Slim batch: docs restructured into architecture, guides, reference, process and archive; mkdocs site; docs check extended. |
 | [2026-10-26-mac-slim](2026-10-26-mac-slim.md) | Slim batch (Mac): Obj-C and Swift warnings zero, smaller runtime, shader cache cap, `napple clean`, Makefile dependency tracking. |
 | [2026-10-26-f64-isa](2026-10-26-f64-isa.md) | Bit-exact double precision (DADD/DMUL/DFMA/DSETP/DMNMX/DSET, 64-bit conversions) for the Maxwell translator and the 40-item rare-ISA audit. |
-| [2026-10-26-claude-support-tables-2026-10-26-cloud2](2026-10-26-claude-support-tables-2026-10-26-cloud2.md) | Generated support matrix, feature-support table and site JSON with a `--check` staleness guard. |
-| [2026-10-26-claude-media-services-2026-10-26-cloud2](2026-10-26-claude-media-services-2026-10-26-cloud2.md) | nvdrv multimedia engines (NVDEC/VIC/NVJPG/MSENC) over a DecoderBackend, portable JPEG codec, caps album images, Vorbis/Opus movie audio (cloud, Linux-tested). |
+| [2026-10-26-support-tables-2026-10-26-cloud2](2026-10-26-support-tables-2026-10-26-cloud2.md) | Generated support matrix, feature-support table and site JSON with a `--check` staleness guard. |
+| [2026-10-26-media-services-2026-10-26-cloud2](2026-10-26-media-services-2026-10-26-cloud2.md) | nvdrv multimedia engines (NVDEC/VIC/NVJPG/MSENC) over a DecoderBackend, portable JPEG codec, caps album images, Vorbis/Opus movie audio (cloud, Linux-tested). |
 | [2026-10-26-runtime-depth](2026-10-26-runtime-depth.md) | Stub IPC rows become real behaviour with host tests: hid, bcat, audio, psm, lbl, settings, apm, pdm, pctl/aoc and part of spsm/ovln/ectx/fgm/olsc/time/ns/ncm/ngc. |
 | [2026-10-26-shader-surface](2026-10-26-shader-surface.md) | SULD/SUST/SUATOM/SURED translated to Metal image calls, with the image binding contract. |
 | [2026-10-26-mii-firmware](2026-10-26-mii-firmware.md) | Mii data and services from the firmware (default Miis, shared Mii database, mii:u/mii:e), the real Mii Maker applet booted as a child process or in-process library. |
-| [2026-10-26-claude-studio-redo-2026-10-26](2026-10-26-claude-studio-redo-2026-10-26.md) | Napple Studio rebuilt from zero (Liquid Glass), iOS install/IPA export, per-title bundle ids, free/paid memory-limit rule; amiibo and IR camera tabs in the in-game overlay. |
-| [2026-10-27-claude-render-scale-2026-10-27](2026-10-27-claude-render-scale-2026-10-27.md) | Render scale 10..800 %, output fit incl. integer scale, built-in upscaler (FSR-like, CAS), MetalFX fallback, budget, per-title rule table, two render-pass fixes found at non-1x scales. |
-| [2026-10-27-claude-contributor-kit-2026-10-27](2026-10-27-claude-contributor-kit-2026-10-27.md) | Contributor kit: legal rules and DCO sign-off in CONTRIBUTING, issue forms, PR template, contributor guides, catalogue field reference, labels and Discussions proposal, issue-form check (cloud, Linux-tested). |
-| [2026-10-27-claude-youtube-script-2026-10-27](2026-10-27-claude-youtube-script-2026-10-27.md) | YouTube video kit under `docs/media/youtube/`: shooting script, call to action, shot list, titles/thumbnails/description. Docs only. |
+| [2026-10-26-studio-redo-2026-10-26](2026-10-26-studio-redo-2026-10-26.md) | Napple Studio rebuilt from zero (Liquid Glass), iOS install/IPA export, per-title bundle ids, free/paid memory-limit rule; amiibo and IR camera tabs in the in-game overlay. |
+| [2026-10-27-render-scale-2026-10-27](2026-10-27-render-scale-2026-10-27.md) | Render scale 10..800 %, output fit incl. integer scale, built-in upscaler (FSR-like, CAS), MetalFX fallback, budget, per-title rule table, two render-pass fixes found at non-1x scales. |
+| [2026-10-27-contributor-kit-2026-10-27](2026-10-27-contributor-kit-2026-10-27.md) | Contributor kit: legal rules and DCO sign-off in CONTRIBUTING, issue forms, PR template, contributor guides, catalogue field reference, labels and Discussions proposal, issue-form check (cloud, Linux-tested). |
+| [2026-10-27-youtube-script-2026-10-27](2026-10-27-youtube-script-2026-10-27.md) | YouTube video kit under `docs/media/youtube/`: shooting script, call to action, shot list, titles/thumbnails/description. Docs only. |
 | [2026-10-27-mod-framework](2026-10-27-mod-framework.md) | The shareable `.napmod` mod and fix format: IPS/IPS32/pchtxt patches, cheats, romfs overlay, config, shader files, trust model, `napple mods` CLI and the pre-rewrite apply hook (portable core, Linux-tested). |
-| [2026-10-27-claude-small-gaps-2026-10-27](2026-10-27-claude-small-gaps-2026-10-27.md) | Nine small catalog items: personalized tickets, IVFC verification, NCA2/NCA0, NCZ edge, audren performance history, audin sources/mic, GC/Palma/NES styles, irs rows, bcat provider (cloud, Linux-tested). |
-| [2026-10-27-claude-ipc-depth-rest-2026-10-27](2026-10-27-claude-ipc-depth-rest-2026-10-27.md) | 137 more stub IPC rows become real behaviour with host tests: offline (mm, friend, nifm, nsd, prepo, ssl, nfc), btm, hidbus, ldn, ns, ncm, sfdnsres, ngc, push. |
+| [2026-10-27-small-gaps-2026-10-27](2026-10-27-small-gaps-2026-10-27.md) | Nine small catalog items: personalized tickets, IVFC verification, NCA2/NCA0, NCZ edge, audren performance history, audin sources/mic, GC/Palma/NES styles, irs rows, bcat provider (cloud, Linux-tested). |
+| [2026-10-27-ipc-depth-rest-2026-10-27](2026-10-27-ipc-depth-rest-2026-10-27.md) | 137 more stub IPC rows become real behaviour with host tests: offline (mm, friend, nifm, nsd, prepo, ssl, nfc), btm, hidbus, ldn, ns, ncm, sfdnsres, ngc, push. |
 | [2026-10-27-fps-unlock-2026-10-27](2026-10-27-fps-unlock-2026-10-27.md) | Present rate (fps_mode: game / display / custom / uncapped) decoupled from game speed: guest vsync and game clocks unchanged, vsync setting drives the layer, frame-trace gate. |
-| [2026-10-27-claude-media-nvdrv-2026-10-27](2026-10-27-claude-media-nvdrv-2026-10-27.md) | Vorbis out-of-band headers (on by default), nvdisp-disp0/1 query ioctls, nvdrv stub rows 7 -> 1, DecoderBackend ABI 1 frozen with SPS/PPS/vpcC hand-off for a VideoToolbox backend (cloud, Linux-tested). |
+| [2026-10-27-media-nvdrv-2026-10-27](2026-10-27-media-nvdrv-2026-10-27.md) | Vorbis out-of-band headers (on by default), nvdisp-disp0/1 query ioctls, nvdrv stub rows 7 -> 1, DecoderBackend ABI 1 frozen with SPS/PPS/vpcC hand-off for a VideoToolbox backend (cloud, Linux-tested). |
 - [2026-10-27-tie-up.md](2026-10-27-tie-up.md): tie-up: one system data root, Studio Mii/Amiibo/Online panes, amiibo loader, Mii Maker host, camera/microphone entitlements, `tools/e2e` end-to-end run per title.
-| [2026-10-27-claude-content-real-2026-10-27](2026-10-27-claude-content-real-2026-10-27.md) | NSZ/XCZ written by the nsz tool, NCA2/NCA0 after hactool, personalized tickets through `Container::load`: fixtures, round trips, and the XCI header offsets the real writer exposed (cloud, Linux-tested). |
-- [2026-10-27-claude-applets-host-2026-10-27.md](2026-10-27-claude-applets-host-2026-10-27.md): generic library applet host: handler registry, firmware applet table, interactive channel, swkbd inline, applet.c + applet_ae.c stub rows 84 -> 10 (tested on Linux).
+| [2026-10-27-content-real-2026-10-27](2026-10-27-content-real-2026-10-27.md) | NSZ/XCZ written by the nsz tool, NCA2/NCA0 after hactool, personalized tickets through `Container::load`: fixtures, round trips, and the XCI header offsets the real writer exposed (cloud, Linux-tested). |
+- [2026-10-27-applets-host-2026-10-27.md](2026-10-27-applets-host-2026-10-27.md): generic library applet host: handler registry, firmware applet table, interactive channel, swkbd inline, applet.c + applet_ae.c stub rows 84 -> 10 (tested on Linux).
 | [2026-10-27-mod-glue-core](2026-10-27-mod-glue-core.md) | `napple build --mods` (patches before the AOT rewrite, manifest record, mod-set cache key, mods/overlay.json), runtime romfs overlay lookup in romfs_map.c, control.nacp in every data dir (cloud, Linux-tested). |
-- [2026-10-27-claude-shader-stages-2026-10-27.md](2026-10-27-claude-shader-stages-2026-10-27.md): translator side of geometry, tessellation and transform feedback stages, OUT/VABSDIFF4/TXA/IMADSP (Metal-compiled on the Mac).
-- [2026-10-27-claude-small-catalog-2026-10-27.md](2026-10-27-claude-small-catalog-2026-10-27.md): audren performance, npad style bits, IR tera/pointing processors, bcat layouts.
-- [2026-10-27-claude-ipc-depth-rest2-2026-10-27.md](2026-10-27-claude-ipc-depth-rest2-2026-10-27.md): remaining stub IPC rows (account, vi, ns, settings, offline, miiimg) and network rows through OnlineProvider.
+- [2026-10-27-shader-stages-2026-10-27.md](2026-10-27-shader-stages-2026-10-27.md): translator side of geometry, tessellation and transform feedback stages, OUT/VABSDIFF4/TXA/IMADSP (Metal-compiled on the Mac).
+- [2026-10-27-small-catalog-2026-10-27.md](2026-10-27-small-catalog-2026-10-27.md): audren performance, npad style bits, IR tera/pointing processors, bcat layouts.
+- [2026-10-27-ipc-depth-rest2-2026-10-27.md](2026-10-27-ipc-depth-rest2-2026-10-27.md): remaining stub IPC rows (account, vi, ns, settings, offline, miiimg) and network rows through OnlineProvider.
 
-- [2026-10-27-claude-applets-rare-2026-10-27.md](2026-10-27-claude-applets-rare-2026-10-27.md): HLE web / offline web and photo viewer / album library applets over the handler registry, applet_ui.h hooks (tested on Linux, unbuilt on macOS).
+- [2026-10-27-applets-rare-2026-10-27.md](2026-10-27-applets-rare-2026-10-27.md): HLE web / offline web and photo viewer / album library applets over the handler registry, applet_ui.h hooks (tested on Linux, unbuilt on macOS).
 - [2026-10-27-kernel-threads.md](2026-10-27-kernel-threads.md): kernel-threads: timer preemption of spinning guest threads (SMO stall fixed), LAS save-commit race (0x35f202), post-mortem svc ring, ACNH load-only null deref documented.
 - [2026-10-27-gfx-depth-views.md](2026-10-27-gfx-depth-views.md): ResolveDepthBuffer, depth/stencil texture views, SetSampleShading side table, SetDebugLabel, gfx warning fixes.
-- [2026-10-27-claude-ios-candidate-2026-10-27.md](2026-10-27-claude-ios-candidate-2026-10-27.md): iOS Simulator profiling, memlog, handheld default on iOS, build_ios fixes (iOS-only code paths; guide `docs/guides/ios-device-candidate.md`).
-- [2026-10-27-claude-fuzz-hardening-2026-10-27.md](2026-10-27-claude-fuzz-hardening-2026-10-27.md): seeded-mutation tests and cargo-fuzz / C fuzz drivers for the untrusted-input parsers; 26 findings fixed with regression tests (cloud, Linux-tested).
-- [2026-10-27-claude-ipc-polish-2026-10-27.md](2026-10-27-claude-ipc-polish-2026-10-27.md): IPC command depth toward 100% (remaining stub rows, titles' known-call list, check_known_calls on every list).
-- [2026-10-27-claude-shader-rare-ops-2026-10-27.md](2026-10-27-claude-shader-rare-ops-2026-10-27.md): the last 18 rare Maxwell ops and stencil texture bindings in the translator (ShaderKey.stencil_slots).
-- [2026-10-27-claude-build-content-2026-10-27-b6.md](2026-10-27-claude-build-content-2026-10-27-b6.md): NSZ/XCZ zstd containers and HtmlDocument extraction to `<data-dir>/html` (cloud, tested on Linux).
-- [2026-10-27-claude-media-mac-2026-10-27-b6.md](2026-10-27-claude-media-mac-2026-10-27-b6.md): VideoToolbox DecoderBackend, MK8D's NVDEC/VIC stream shape, movie audio and JPEG (Mac; the Grand Prix preview panel still shows no video).
+- [2026-10-27-ios-candidate-2026-10-27.md](2026-10-27-ios-candidate-2026-10-27.md): iOS Simulator profiling, memlog, handheld default on iOS, build_ios fixes (iOS-only code paths; guide `docs/guides/ios-device-candidate.md`).
+- [2026-10-27-fuzz-hardening-2026-10-27.md](2026-10-27-fuzz-hardening-2026-10-27.md): seeded-mutation tests and cargo-fuzz / C fuzz drivers for the untrusted-input parsers; 26 findings fixed with regression tests (cloud, Linux-tested).
+- [2026-10-27-ipc-polish-2026-10-27.md](2026-10-27-ipc-polish-2026-10-27.md): IPC command depth toward 100% (remaining stub rows, titles' known-call list, check_known_calls on every list).
+- [2026-10-27-shader-rare-ops-2026-10-27.md](2026-10-27-shader-rare-ops-2026-10-27.md): the last 18 rare Maxwell ops and stencil texture bindings in the translator (ShaderKey.stencil_slots).
+- [2026-10-27-build-content-2026-10-27-b6.md](2026-10-27-build-content-2026-10-27-b6.md): NSZ/XCZ zstd containers and HtmlDocument extraction to `<data-dir>/html` (cloud, tested on Linux).
+- [2026-10-27-media-mac-2026-10-27-b6.md](2026-10-27-media-mac-2026-10-27-b6.md): VideoToolbox DecoderBackend, MK8D's NVDEC/VIC stream shape, movie audio and JPEG (Mac; the Grand Prix preview panel still shows no video).
 - [2026-10-27-glue-up.md](2026-10-27-glue-up.md): glue-up pass on the Mac: web/album applets and stencil view slots hooked, fs log rows, timescale flake, deterministic a32jit, every suite and the e2e/golden/Studio runs; the bigger-work list for the next round.
-- [2026-10-27-claude-runtime-small-2026-10-27-b6.md](2026-10-27-claude-runtime-small-2026-10-27-b6.md): vi producer transactions (TransactParcel rows implemented), npad style helpers (GameCube/Palma/NES in the system policy), tests for the unused core API; audin/audren already covered elsewhere.
-- [2026-10-27-claude-applets-frontend-2026-10-27.md](2026-10-27-claude-applets-frontend-2026-10-27.md): AppKit sheets for the controller, error, player select, web (WKWebView) and album applets, scripted headless answers, `make -C frontend test-sheets`.
-- [2026-10-27-claude-gfx-features-2026-10-27-b6.md](2026-10-27-claude-gfx-features-2026-10-27-b6.md): replay of transform feedback, geometry shaders (compute emulation) and tessellation (TCS kernel + drawPatches); stencil view sampled in a shader test.
-- [2026-10-28-claude-runtime-small-2-2026-10-27-b7.md](2026-10-28-claude-runtime-small-2-2026-10-27-b7.md): test_timescale measured jump bound, audin mic permission hook, Linux ipc fuzz target builds again; the other runtime-small-2 items were already in place (tested, not verified)
-| [2026-10-27-claude-mods-runtime-2026-10-27-b7](2026-10-27-claude-mods-runtime-2026-10-27-b7.md) | Mods in the runtime: merged RomFS image for the path-level overlay (fs.c), cheat VM with loops/registers/pointer chains (Rust + C twin) run per frame, mod config applied to the run's settings, `--mods-strict`, stale mods files cleared on rebuild (cloud, Linux-tested). |
-- [2026-10-27-claude-media-nvdec-preview-2026-10-27-b7.md](2026-10-27-claude-media-nvdec-preview-2026-10-27-b7.md): MK8D's preview videos play through nvhost-nvdec + VIC (VIC config at 0x1c2, NVDEC slot from curr_pic_idx, 15 reference frames in the synthesized SPS); decoder pitch, real VIC layout, caps:dc DecodeJpeg.
-- [2026-10-28-claude-gpu-title-scanner-2026-10-28-b8.md](2026-10-28-claude-gpu-title-scanner-2026-10-28-b8.md): tools/gpu/scan_stages.py (control-section stage scan, RomFS scan, set-cover of titles); tested on synthetic sections, not verified on real titles
-- [2026-10-28-claude-gfx-recorder-flake-2026-10-28-b8.md](2026-10-28-claude-gfx-recorder-flake-2026-10-28-b8.md): ACNH start crash: command buffer host parts by slot+generation, locked recording state, NAPPLE_GFX_CBTRACE tracer, t_cmdshare; guest double-job race still open
-- [2026-10-28-claude-gfx-stages-complete-2026-10-28-b8.md](2026-10-28-claude-gfx-stages-complete-2026-10-28-b8.md): software tessellator (isolines, TES XFB, GS after tess), gs_run refactor, control-section length fix
-- [2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-claude-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
-- [2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-claude-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
+- [2026-10-27-runtime-small-2026-10-27-b6.md](2026-10-27-runtime-small-2026-10-27-b6.md): vi producer transactions (TransactParcel rows implemented), npad style helpers (GameCube/Palma/NES in the system policy), tests for the unused core API; audin/audren already covered elsewhere.
+- [2026-10-27-applets-frontend-2026-10-27.md](2026-10-27-applets-frontend-2026-10-27.md): AppKit sheets for the controller, error, player select, web (WKWebView) and album applets, scripted headless answers, `make -C frontend test-sheets`.
+- [2026-10-27-gfx-features-2026-10-27-b6.md](2026-10-27-gfx-features-2026-10-27-b6.md): replay of transform feedback, geometry shaders (compute emulation) and tessellation (TCS kernel + drawPatches); stencil view sampled in a shader test.
+- [2026-10-28-runtime-small-2-2026-10-27-b7.md](2026-10-28-runtime-small-2-2026-10-27-b7.md): test_timescale measured jump bound, audin mic permission hook, Linux ipc fuzz target builds again; the other runtime-small-2 items were already in place (tested, not verified)
+| [2026-10-27-mods-runtime-2026-10-27-b7](2026-10-27-mods-runtime-2026-10-27-b7.md) | Mods in the runtime: merged RomFS image for the path-level overlay (fs.c), cheat VM with loops/registers/pointer chains (Rust + C twin) run per frame, mod config applied to the run's settings, `--mods-strict`, stale mods files cleared on rebuild (cloud, Linux-tested). |
+- [2026-10-27-media-nvdec-preview-2026-10-27-b7.md](2026-10-27-media-nvdec-preview-2026-10-27-b7.md): MK8D's preview videos play through nvhost-nvdec + VIC (VIC config at 0x1c2, NVDEC slot from curr_pic_idx, 15 reference frames in the synthesized SPS); decoder pitch, real VIC layout, caps:dc DecodeJpeg.
+- [2026-10-28-gpu-title-scanner-2026-10-28-b8.md](2026-10-28-gpu-title-scanner-2026-10-28-b8.md): tools/gpu/scan_stages.py (control-section stage scan, RomFS scan, set-cover of titles); tested on synthetic sections, not verified on real titles
+- [2026-10-28-gfx-recorder-flake-2026-10-28-b8.md](2026-10-28-gfx-recorder-flake-2026-10-28-b8.md): ACNH start crash: command buffer host parts by slot+generation, locked recording state, NAPPLE_GFX_CBTRACE tracer, t_cmdshare; guest double-job race still open
+- [2026-10-28-gfx-stages-complete-2026-10-28-b8.md](2026-10-28-gfx-stages-complete-2026-10-28-b8.md): software tessellator (isolines, TES XFB, GS after tess), gs_run refactor, control-section length fix
+- [2026-10-28-nvdrv-media-devices-2026-10-28-b8.md](2026-10-28-nvdrv-media-devices-2026-10-28-b8.md): NVDEC/VIC pitches, VP9, NVJPG encode, MSENC encoder backend (VideoToolbox H.264)
+- [2026-10-28-nvdrv-device-nodes-2026-10-28-b8.md](2026-10-28-nvdrv-device-nodes-2026-10-28-b8.md): state-tracked ioctls for nvhost-gpu, nvhost-as-gpu, nvhost-ctrl-gpu
 
 ## Unattended rounds (2026-10-27-b7 to 2026-11-02-r10)
 Hand-off files of these rounds (orchestrations and integrator files) are in the [process archive](../../process/archive/README.md).
@@ -156,105 +156,105 @@ Hand-off files of these rounds (orchestrations and integrator files) are in the 
 ### Batch 2026-10-27-b7 (notes not listed above)
 | Note | Summary |
 |---|---|
-| [2026-10-27-claude-applets-on-title-2026-10-27-b7](2026-10-27-claude-applets-on-title-2026-10-27-b7.md) | The b6 applet sheets in front of a running title, an e2e step, the sheet input / focus fix. |
-| [2026-10-27-claude-gfx-stages-real-2026-10-27-b7](2026-10-27-claude-gfx-stages-real-2026-10-27-b7.md) | Stage parameters from the GLSLC control section, the rest of the geometry / tessellation / transform feedback replay, MSAA views and resolves. |
-| [2026-10-28-claude-applets-live-2026-10-27-b7](2026-10-28-claude-applets-live-2026-10-27-b7.md) | swkbd header / sub / guide text, per-profile account rows, player select (Linux, tested). |
-| [2026-10-28-claude-content-real-2-2026-10-27-b7](2026-10-28-claude-content-real-2-2026-10-27-b7.md) | Container and content gaps left after b6 (Linux, tested). |
+| [2026-10-27-applets-on-title-2026-10-27-b7](2026-10-27-applets-on-title-2026-10-27-b7.md) | The b6 applet sheets in front of a running title, an e2e step, the sheet input / focus fix. |
+| [2026-10-27-gfx-stages-real-2026-10-27-b7](2026-10-27-gfx-stages-real-2026-10-27-b7.md) | Stage parameters from the GLSLC control section, the rest of the geometry / tessellation / transform feedback replay, MSAA views and resolves. |
+| [2026-10-28-applets-live-2026-10-27-b7](2026-10-28-applets-live-2026-10-27-b7.md) | swkbd header / sub / guide text, per-profile account rows, player select (Linux, tested). |
+| [2026-10-28-content-real-2-2026-10-27-b7](2026-10-28-content-real-2-2026-10-27-b7.md) | Container and content gaps left after b6 (Linux, tested). |
 
 ### Round 2026-11-01-r1
 | Note | Summary |
 |---|---|
-| [2026-11-01-claude-sched-applets-2026-11-01-r1](2026-11-01-claude-sched-applets-2026-11-01-r1.md) | Two Horizon scheduler divergences fixed; swkbd and the offline web applet verified on real titles. |
-| [2026-11-01-claude-gfx-msaa-views-2026-11-01-r1](2026-11-01-claude-gfx-msaa-views-2026-11-01-r1.md) | MSAA views, copy-backed texture views, sample shading, depth resolve, sparse. |
-| [2026-11-01-claude-gfx-stages-live-2026-11-01-r1](2026-11-01-claude-gfx-stages-live-2026-11-01-r1.md) | The four titles scanned for stage programs, the GLSLC geometry vertex handle fix, real programs through the replay. |
-| [2026-11-01-claude-media-live-2026-11-01-r1](2026-11-01-claude-media-live-2026-11-01-r1.md) | Video, movie audio and album JPEG verified on real titles. |
-| [2026-11-01-claude-sweep-small-2026-11-01-r1](2026-11-01-claude-sweep-small-2026-11-01-r1.md) | Seven small items: audren performance metrics, audin, npad, content, bcat. |
+| [2026-11-01-sched-applets-2026-11-01-r1](2026-11-01-sched-applets-2026-11-01-r1.md) | Two Horizon scheduler divergences fixed; swkbd and the offline web applet verified on real titles. |
+| [2026-11-01-gfx-msaa-views-2026-11-01-r1](2026-11-01-gfx-msaa-views-2026-11-01-r1.md) | MSAA views, copy-backed texture views, sample shading, depth resolve, sparse. |
+| [2026-11-01-gfx-stages-live-2026-11-01-r1](2026-11-01-gfx-stages-live-2026-11-01-r1.md) | The four titles scanned for stage programs, the GLSLC geometry vertex handle fix, real programs through the replay. |
+| [2026-11-01-media-live-2026-11-01-r1](2026-11-01-media-live-2026-11-01-r1.md) | Video, movie audio and album JPEG verified on real titles. |
+| [2026-11-01-sweep-small-2026-11-01-r1](2026-11-01-sweep-small-2026-11-01-r1.md) | Seven small items: audren performance metrics, audin, npad, content, bcat. |
 
 ### Round 2026-11-01-r2
 | Note | Summary |
 |---|---|
-| [2026-11-01-claude-gfx-nvn-api-2026-11-01-r2](2026-11-01-claude-gfx-nvn-api-2026-11-01-r2.md) | The 14 missing NVN entry points, refused MSAA branches, the ACNH program hash. |
-| [2026-11-01-claude-gfx-shader-views-2026-11-01-r2](2026-11-01-claude-gfx-shader-views-2026-11-01-r2.md) | The four titles' shader corpus through the translator and Metal, integer sampled textures, cube and sparse views. |
-| [2026-11-01-claude-ipc-depth-hid-2026-11-01-r2](2026-11-01-claude-ipc-depth-hid-2026-11-01-r2.md) | IPC reference lists and their runner; the missing hid / audio / system-device rows. |
-| [2026-11-01-claude-ipc-depth-sys-2026-11-01-r2](2026-11-01-claude-ipc-depth-sys-2026-11-01-r2.md) | Reference fixtures and a row for every application-reachable command of the system / offline services. |
-| [2026-11-01-claude-sweep-media-r2-2026-11-01-r2](2026-11-01-claude-sweep-media-r2-2026-11-01-r2.md) | Movie AAC / VP8 / ARGB, clean guest exit, npad device types, the LAS golden route. |
+| [2026-11-01-gfx-nvn-api-2026-11-01-r2](2026-11-01-gfx-nvn-api-2026-11-01-r2.md) | The 14 missing NVN entry points, refused MSAA branches, the ACNH program hash. |
+| [2026-11-01-gfx-shader-views-2026-11-01-r2](2026-11-01-gfx-shader-views-2026-11-01-r2.md) | The four titles' shader corpus through the translator and Metal, integer sampled textures, cube and sparse views. |
+| [2026-11-01-ipc-depth-hid-2026-11-01-r2](2026-11-01-ipc-depth-hid-2026-11-01-r2.md) | IPC reference lists and their runner; the missing hid / audio / system-device rows. |
+| [2026-11-01-ipc-depth-sys-2026-11-01-r2](2026-11-01-ipc-depth-sys-2026-11-01-r2.md) | Reference fixtures and a row for every application-reachable command of the system / offline services. |
+| [2026-11-01-sweep-media-r2-2026-11-01-r2](2026-11-01-sweep-media-r2-2026-11-01-r2.md) | Movie AAC / VP8 / ARGB, clean guest exit, npad device types, the LAS golden route. |
 
 ### Round 2026-11-01-r3
 | Note | Summary |
 |---|---|
-| [2026-11-01-claude-acnh-race-atomics-2026-11-01-r3](2026-11-01-claude-acnh-race-atomics-2026-11-01-r3.md) | ACNH start crash: guest spinlocks without acquire ordering, fixed in the AOT rewrite (`ordering.rs`). |
-| [2026-11-01-claude-am-depth-applets-2026-11-01-r3](2026-11-01-claude-am-depth-applets-2026-11-01-r3.md) | am reference fixtures and rows, the remaining offline web document kinds, applets on real titles. |
-| [2026-11-01-claude-gfx-replay-gaps-2026-11-01-r3](2026-11-01-claude-gfx-replay-gaps-2026-11-01-r3.md) | D24 / D24S8 readback, separate texture / sampler handles, integer 3D / cube / multisample textures. |
-| [2026-11-01-claude-ipc-local-stubs-2026-11-01-r3](2026-11-01-claude-ipc-local-stubs-2026-11-01-r3.md) | 66 documented-default stubs of local services turned into real behaviour, IAudioOut gain. |
-| [2026-11-01-claude-nvn-object-layouts-2026-11-01-r3](2026-11-01-claude-nvn-object-layouts-2026-11-01-r3.md) | Guest-visible NVN objects kept within the titles' object sizes (`NVN_MIN_*`, `t_obj_canary`). |
+| [2026-11-01-acnh-race-atomics-2026-11-01-r3](2026-11-01-acnh-race-atomics-2026-11-01-r3.md) | ACNH start crash: guest spinlocks without acquire ordering, fixed in the AOT rewrite (`ordering.rs`). |
+| [2026-11-01-am-depth-applets-2026-11-01-r3](2026-11-01-am-depth-applets-2026-11-01-r3.md) | am reference fixtures and rows, the remaining offline web document kinds, applets on real titles. |
+| [2026-11-01-gfx-replay-gaps-2026-11-01-r3](2026-11-01-gfx-replay-gaps-2026-11-01-r3.md) | D24 / D24S8 readback, separate texture / sampler handles, integer 3D / cube / multisample textures. |
+| [2026-11-01-ipc-local-stubs-2026-11-01-r3](2026-11-01-ipc-local-stubs-2026-11-01-r3.md) | 66 documented-default stubs of local services turned into real behaviour, IAudioOut gain. |
+| [2026-11-01-nvn-object-layouts-2026-11-01-r3](2026-11-01-nvn-object-layouts-2026-11-01-r3.md) | Guest-visible NVN objects kept within the titles' object sizes (`NVN_MIN_*`, `t_obj_canary`). |
 
 ### Round 2026-11-02-r4
 | Note | Summary |
 |---|---|
-| [2026-11-02-claude-am-stubs-legal-2026-11-02-r4](2026-11-02-claude-am-stubs-legal-2026-11-02-r4.md) | Title legal pages, am stub rows made real, the offline network-connection applet. |
-| [2026-11-02-claude-core-ordering-kernel-2026-11-02-r4](2026-11-02-claude-core-ordering-kernel-2026-11-02-r4.md) | Acquire / release for every lifted AArch32 exclusive, `lda` / `stl` as `ldar` / `stlr`, svcGetInfo 19 / 27, ExitProcess after nnMain. |
-| [2026-11-02-claude-gfx-views-raster-2026-11-02-r4](2026-11-02-claude-gfx-views-raster-2026-11-02-r4.md) | Stencil cube views, the remaining integer views, separate-texture slot masks, viewport swizzles, provoking vertex. |
-| [2026-11-02-claude-ipc-reference-audit-2026-11-02-r4](2026-11-02-claude-ipc-reference-audit-2026-11-02-r4.md) | 65 IPC rows whose name differed from the reference fixture resolved. |
+| [2026-11-02-am-stubs-legal-2026-11-02-r4](2026-11-02-am-stubs-legal-2026-11-02-r4.md) | Title legal pages, am stub rows made real, the offline network-connection applet. |
+| [2026-11-02-core-ordering-kernel-2026-11-02-r4](2026-11-02-core-ordering-kernel-2026-11-02-r4.md) | Acquire / release for every lifted AArch32 exclusive, `lda` / `stl` as `ldar` / `stlr`, svcGetInfo 19 / 27, ExitProcess after nnMain. |
+| [2026-11-02-gfx-views-raster-2026-11-02-r4](2026-11-02-gfx-views-raster-2026-11-02-r4.md) | Stencil cube views, the remaining integer views, separate-texture slot masks, viewport swizzles, provoking vertex. |
+| [2026-11-02-ipc-reference-audit-2026-11-02-r4](2026-11-02-ipc-reference-audit-2026-11-02-r4.md) | 65 IPC rows whose name differed from the reference fixture resolved. |
 
 ### Round 2026-11-02-r5
 | Note | Summary |
 |---|---|
-| [2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5](2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5.md) | Interpreter `lda` / `stl` seq_cst with the alignment fault, per-viewport swizzles, these archive indexes. |
-| [2026-11-02-claude-nifm-netconnect-2026-11-02-r5](2026-11-02-claude-nifm-netconnect-2026-11-02-r5.md) | nifm Cancel keeps a rejected request's result, GetAppletInfo storages, the real NetConnect output (MK8D Online Play: one applet per attempt), vi ConvertScalingMode. |
+| [2026-11-02-leftovers-a32-viewport-docs-2026-11-02-r5](2026-11-02-leftovers-a32-viewport-docs-2026-11-02-r5.md) | Interpreter `lda` / `stl` seq_cst with the alignment fault, per-viewport swizzles, these archive indexes. |
+| [2026-11-02-nifm-netconnect-2026-11-02-r5](2026-11-02-nifm-netconnect-2026-11-02-r5.md) | nifm Cancel keeps a rejected request's result, GetAppletInfo storages, the real NetConnect output (MK8D Online Play: one applet per attempt), vi ConvertScalingMode. |
 
 ### Round 2026-11-02-r6
 | Note | Summary |
 |---|---|
-| [2026-11-02-claude-net-host-provider-2026-11-02-r6](2026-11-02-claude-net-host-provider-2026-11-02-r6.md) | Opt-in macOS host network provider (`NAPPLE_NET=host`): BSD sockets, host resolver with the console vendor's domains refused, TLS with the host trust store, nifm from the host, LDN over the LAN. |
-| [2026-11-02-claude-error-applet-output-2026-11-02-r6](2026-11-02-claude-error-applet-output-2026-11-02-r6.md) | Empty applet storage channels answer NoDataInChannel 0x480 (the SDK aborted on 0x680 after every error applet), unimplemented applets end Canceled 0x2c80, every error applet mode decoded (MK8D Online Play with `NAPPLE_NET=host` returns to its menu). |
-| [2026-11-02-claude-gfx-multi-viewport-2026-11-02-r6](2026-11-02-claude-gfx-multi-viewport-2026-11-02-r6.md) | Viewport / scissor / depth-range arrays on the encoder, viewport index and layer outputs, layered passes on demand. |
+| [2026-11-02-net-host-provider-2026-11-02-r6](2026-11-02-net-host-provider-2026-11-02-r6.md) | Opt-in macOS host network provider (`NAPPLE_NET=host`): BSD sockets, host resolver with the console vendor's domains refused, TLS with the host trust store, nifm from the host, LDN over the LAN. |
+| [2026-11-02-error-applet-output-2026-11-02-r6](2026-11-02-error-applet-output-2026-11-02-r6.md) | Empty applet storage channels answer NoDataInChannel 0x480 (the SDK aborted on 0x680 after every error applet), unimplemented applets end Canceled 0x2c80, every error applet mode decoded (MK8D Online Play with `NAPPLE_NET=host` returns to its menu). |
+| [2026-11-02-gfx-multi-viewport-2026-11-02-r6](2026-11-02-gfx-multi-viewport-2026-11-02-r6.md) | Viewport / scissor / depth-range arrays on the encoder, viewport index and layer outputs, layered passes on demand. |
 
 ### Round 2026-11-02-r7
 | Note | Summary |
 |---|---|
-| [2026-11-02-claude-napple-infra-2026-11-02-r7](2026-11-02-claude-napple-infra-2026-11-02-r7.md) | AWS auto-deploy of the game servers to `pretend.napple.lat` (OpenTofu, Docker + Caddy, a workflow that skips without secrets), `napple.lat` DNS to GitHub Pages, the native local test stack. |
-| [2026-11-02-claude-net-rooms-2026-11-02-r7](2026-11-02-claude-net-rooms-2026-11-02-r7.md) | Napple rooms: the `napple-room` relay server (own protocol, std only) and the runtime client (`NAPPLE_ROOM`): virtual LAN and LDN between Napple instances over the internet. |
-| [2026-11-02-claude-mk8d-lan-session-2026-11-02-r7](2026-11-02-claude-mk8d-lan-session-2026-11-02-r7.md) | bsd replies use the console's (Linux) errno numbers (MK8D 2618-0006 fixed), nifm GetCurrentIpConfigInfo, a per-installation GetPseudoDeviceId, friend 10700, ldn GetSecurityParameter; two MK8D instances meet in a LAN Play room through napple-room. |
-| [2026-11-02-claude-napple-online-2026-11-02-r7](2026-11-02-claude-napple-online-2026-11-02-r7.md) | napple-online: Napple-run accounts/tokens and a NEX game server (PRUDP Lite over WebSocket), runtime client glue (`NAPPLE_ONLINE_SERVER`), ssl IoMode + ResultWouldBlock; MK8D reaches its online menu. |
+| [2026-11-02-napple-infra-2026-11-02-r7](2026-11-02-napple-infra-2026-11-02-r7.md) | AWS auto-deploy of the game servers to `pretend.napple.lat` (OpenTofu, Docker + Caddy, a workflow that skips without secrets), `napple.lat` DNS to GitHub Pages, the native local test stack. |
+| [2026-11-02-net-rooms-2026-11-02-r7](2026-11-02-net-rooms-2026-11-02-r7.md) | Napple rooms: the `napple-room` relay server (own protocol, std only) and the runtime client (`NAPPLE_ROOM`): virtual LAN and LDN between Napple instances over the internet. |
+| [2026-11-02-mk8d-lan-session-2026-11-02-r7](2026-11-02-mk8d-lan-session-2026-11-02-r7.md) | bsd replies use the console's (Linux) errno numbers (MK8D 2618-0006 fixed), nifm GetCurrentIpConfigInfo, a per-installation GetPseudoDeviceId, friend 10700, ldn GetSecurityParameter; two MK8D instances meet in a LAN Play room through napple-room. |
+| [2026-11-02-napple-online-2026-11-02-r7](2026-11-02-napple-online-2026-11-02-r7.md) | napple-online: Napple-run accounts/tokens and a NEX game server (PRUDP Lite over WebSocket), runtime client glue (`NAPPLE_ONLINE_SERVER`), ssl IoMode + ResultWouldBlock; MK8D reaches its online menu. |
 
 ### Round 2026-11-02-r8
 | Note | Summary |
 |---|---|
-| [2026-11-02-claude-napple-account-2026-11-02-r8](2026-11-02-claude-napple-account-2026-11-02-r8.md) | napple-account: the Napple Account server (email magic link + passkeys, devices, Ed25519 JWT + JWKS, E2E save-key exchange, profiles with reserved names and admin grants, cloud-save metadata with presigned S3 URLs); no billing. |
-| [2026-11-02-claude-cloud-saves-client-2026-11-02-r8](2026-11-02-claude-cloud-saves-client-2026-11-02-r8.md) | cloud-saves-client: end-to-end encrypted cloud saves (crates/napple-cloud: Keychain store, HPKE key wrap, 24-word recovery, deterministic AES-256-GCM blobs, sync engine, runtime FFI), runtime pull-before-mount / push-after-commit hooks, `napple account` / `napple saves` CLI. |
+| [2026-11-02-napple-account-2026-11-02-r8](2026-11-02-napple-account-2026-11-02-r8.md) | napple-account: the Napple Account server (email magic link + passkeys, devices, Ed25519 JWT + JWKS, E2E save-key exchange, profiles with reserved names and admin grants, cloud-save metadata with presigned S3 URLs); no billing. |
+| [2026-11-02-cloud-saves-client-2026-11-02-r8](2026-11-02-cloud-saves-client-2026-11-02-r8.md) | cloud-saves-client: end-to-end encrypted cloud saves (crates/napple-cloud: Keychain store, HPKE key wrap, 24-word recovery, deterministic AES-256-GCM blobs, sync engine, runtime FFI), runtime pull-before-mount / push-after-commit hooks, `napple account` / `napple saves` CLI. |
 
 ### Round 2026-11-02-r9
 | Note | Summary |
 |---|---|
-| [2026-11-02-claude-napple-social-cloud-2026-11-02-r9](2026-11-02-claude-napple-social-cloud-2026-11-02-r9.md) | napple-social: friends, presence and invites service for Napple players (REST + WebSocket, SQLite). |
-| [2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9](2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9.md) | ipc-depth-cloud: 98 IPC rows made real (11 stub to impl, 87 new impl rows): set:sys settings store, time, vi display settings, aoc purchase events, notif:a alarms, pctl PIN / rating / free communication, pdm, lbl, ncm. |
+| [2026-11-02-napple-social-cloud-2026-11-02-r9](2026-11-02-napple-social-cloud-2026-11-02-r9.md) | napple-social: friends, presence and invites service for Napple players (REST + WebSocket, SQLite). |
+| [2026-11-02-ipc-depth-cloud-2026-11-02-r9](2026-11-02-ipc-depth-cloud-2026-11-02-r9.md) | ipc-depth-cloud: 98 IPC rows made real (11 stub to impl, 87 new impl rows): set:sys settings store, time, vi display settings, aoc purchase events, notif:a alarms, pctl PIN / rating / free communication, pdm, lbl, ncm. |
 
 ### Round 2026-11-02-r10
 | Note | Summary |
 |---|---|
-| [2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10](2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10.md) | nvdrv-public-layouts: GPU nodes, nvdisp (tegra_dc_ext) and NVDEC / VIC / NVJPG / MSENC on layouts checked against public sources (libnx, L4T, open-gpu-doc); mismatches fixed, every struct pinned by tests. |
-| [2026-11-02-claude-online-support-table-2026-11-02-r10](2026-11-02-claude-online-support-table-2026-11-02-r10.md) | Per-game online support table generated from `compat/online.json`: `docs/reference/online-support.md`, a block in the README Status section, `site/online.json` and an "Online play" section on the landing page. |
-| [2026-11-02-claude-online-friends-2026-11-02-r10](2026-11-02-claude-online-friends-2026-11-02-r10.md) | online-friends: friend:u backed by napple-social through the napple-online wrapper (friend list, presence, join tokens, notifications); napple-online GetPlayingSession from reported friends; MK8D Friends menu opens, its list still empty. |
-| [2026-11-02-claude-ipc-depth-95-2026-11-02-r10](2026-11-02-claude-ipc-depth-95-2026-11-02-r10.md) | ipc-depth-95: IPC command depth 92% to 98% (1264 impl / 61 stub of 1325 reference rows, missing 0): friend:u (friend_core), ssl, nifm / bsd / nsd / sfdnsres, fs / account / olsc, applet / btm / lm / ovln / aoc, bcat / npns / ldn. |
+| [2026-11-02-nvdrv-public-layouts-2026-11-02-r10](2026-11-02-nvdrv-public-layouts-2026-11-02-r10.md) | nvdrv-public-layouts: GPU nodes, nvdisp (tegra_dc_ext) and NVDEC / VIC / NVJPG / MSENC on layouts checked against public sources (libnx, L4T, open-gpu-doc); mismatches fixed, every struct pinned by tests. |
+| [2026-11-02-online-support-table-2026-11-02-r10](2026-11-02-online-support-table-2026-11-02-r10.md) | Per-game online support table generated from `compat/online.json`: `docs/reference/online-support.md`, a block in the README Status section, `site/online.json` and an "Online play" section on the landing page. |
+| [2026-11-02-online-friends-2026-11-02-r10](2026-11-02-online-friends-2026-11-02-r10.md) | online-friends: friend:u backed by napple-social through the napple-online wrapper (friend list, presence, join tokens, notifications); napple-online GetPlayingSession from reported friends; MK8D Friends menu opens, its list still empty. |
+| [2026-11-02-ipc-depth-95-2026-11-02-r10](2026-11-02-ipc-depth-95-2026-11-02-r10.md) | ipc-depth-95: IPC command depth 92% to 98% (1264 impl / 61 stub of 1325 reference rows, missing 0): friend:u (friend_core), ssl, nifm / bsd / nsd / sfdnsres, fs / account / olsc, applet / btm / lm / ovln / aoc, bcat / npns / ldn. |
 
 ### Round 2026-11-03-r11
 
 | Note | Summary |
 | --- | --- |
-| [2026-11-03-claude-ipc-domain-reuse-2026-11-03-r11](2026-11-03-claude-ipc-domain-reuse-2026-11-03-r11.md) | IPC domain object ids are reused after close; unlinked-account tests. |
-| [2026-11-03-claude-gfx-xfb-tess-audit-2026-11-03-r11](2026-11-03-claude-gfx-xfb-tess-audit-2026-11-03-r11.md) | Tessellation parameter word decode fixed (output primitives, bits 9:8); XFB/tess layouts pinned against the public Maxwell header; ClearTexture mask 0 clears nothing; the four known gfx test skips closed. |
-| [2026-11-03-claude-ipc-bcat-npns-local-2026-11-03-r11](2026-11-03-claude-ipc-bcat-npns-local-2026-11-03-r11.md) | BCAT and npns:u rows backed by local state (task timers, push log, cache usage, notification queue). |
-| [2026-11-03-claude-ipc-fs-mii-ldn-tail-2026-11-03-r11](2026-11-03-claude-ipc-fs-mii-ldn-tail-2026-11-03-r11.md) | fsp-srv ListAccessibleSaveDataOwnerId, Mii image migration store, LDN RecvActionFrame queue, ncm ContentInfo type offset fix. |
-| [2026-11-03-claude-ipc-provider-hooks-2026-11-03-r11](2026-11-03-claude-ipc-provider-hooks-2026-11-03-r11.md) | Friend images/requests, nifm, account and olsc rows through OnlineProvider hooks (NullProvider answers like an offline console). |
-| [2026-11-03-claude-nvdrv-gpu-routing-2026-11-03-r11](2026-11-03-claude-nvdrv-gpu-routing-2026-11-03-r11.md) | nvdrv typed GPU/AS/CTRL-GPU ioctls routed to the node cores; extra documented ioctls added (layouts to verify). |
-| [2026-11-03-claude-nvjpg-headerless-redo-2026-11-03-r11](2026-11-03-claude-nvjpg-headerless-redo-2026-11-03-r11.md) | NVJPG header-less decode on the real nvjpg_drv_pic_param_s layout (decoder tables + entropy segment), jpeg_core raw decode, round-trip tests. |
-| [2026-11-03-claude-account-profiles-2026-11-03-r12](2026-11-03-claude-account-profiles-2026-11-03-r12.md) | napple-account: profiles (unique nicknames, bio/links/icon/tier, friend code), sanitized photo pipeline; new napple-visibility crate (can_view tier table). |
-| [2026-11-03-claude-account-auth-ses-2026-11-03-r12](2026-11-03-claude-account-auth-ses-2026-11-03-r12.md) | napple-account: email + password accounts with emailed codes, SES/SMTP mailers; passkeys and magic links removed. |
+| [2026-11-03-ipc-domain-reuse-2026-11-03-r11](2026-11-03-ipc-domain-reuse-2026-11-03-r11.md) | IPC domain object ids are reused after close; unlinked-account tests. |
+| [2026-11-03-gfx-xfb-tess-audit-2026-11-03-r11](2026-11-03-gfx-xfb-tess-audit-2026-11-03-r11.md) | Tessellation parameter word decode fixed (output primitives, bits 9:8); XFB/tess layouts pinned against the public Maxwell header; ClearTexture mask 0 clears nothing; the four known gfx test skips closed. |
+| [2026-11-03-ipc-bcat-npns-local-2026-11-03-r11](2026-11-03-ipc-bcat-npns-local-2026-11-03-r11.md) | BCAT and npns:u rows backed by local state (task timers, push log, cache usage, notification queue). |
+| [2026-11-03-ipc-fs-mii-ldn-tail-2026-11-03-r11](2026-11-03-ipc-fs-mii-ldn-tail-2026-11-03-r11.md) | fsp-srv ListAccessibleSaveDataOwnerId, Mii image migration store, LDN RecvActionFrame queue, ncm ContentInfo type offset fix. |
+| [2026-11-03-ipc-provider-hooks-2026-11-03-r11](2026-11-03-ipc-provider-hooks-2026-11-03-r11.md) | Friend images/requests, nifm, account and olsc rows through OnlineProvider hooks (NullProvider answers like an offline console). |
+| [2026-11-03-nvdrv-gpu-routing-2026-11-03-r11](2026-11-03-nvdrv-gpu-routing-2026-11-03-r11.md) | nvdrv typed GPU/AS/CTRL-GPU ioctls routed to the node cores; extra documented ioctls added (layouts to verify). |
+| [2026-11-03-nvjpg-headerless-redo-2026-11-03-r11](2026-11-03-nvjpg-headerless-redo-2026-11-03-r11.md) | NVJPG header-less decode on the real nvjpg_drv_pic_param_s layout (decoder tables + entropy segment), jpeg_core raw decode, round-trip tests. |
+| [2026-11-03-account-profiles-2026-11-03-r12](2026-11-03-account-profiles-2026-11-03-r12.md) | napple-account: profiles (unique nicknames, bio/links/icon/tier, friend code), sanitized photo pipeline; new napple-visibility crate (can_view tier table). |
+| [2026-11-03-account-auth-ses-2026-11-03-r12](2026-11-03-account-auth-ses-2026-11-03-r12.md) | napple-account: email + password accounts with emailed codes, SES/SMTP mailers; passkeys and magic links removed. |
 | [2026-11-03-social-tiers](2026-11-03-social-tiers.md) | napple-social: five visibility tiers, tier-aware search, request rules, lobbies with ghost aliases, recent players, reports, stats. |
-| [2026-11-03-claude-online-identity-2026-11-03-r12](2026-11-03-claude-online-identity-2026-11-03-r12.md) | napple-online: account JWT logins (JWKS), ghost aliases, 30-day match log with admin report lookup, encounters/stats reported to napple-social. |
-| [2026-11-03-claude-client-core-2026-11-03-r12](2026-11-03-claude-client-core-2026-11-03-r12.md) | Napple Online client core: shared credentials, auth/profile/social client, profile mapping, overlay table, friend-service hooks. |
+| [2026-11-03-online-identity-2026-11-03-r12](2026-11-03-online-identity-2026-11-03-r12.md) | napple-online: account JWT logins (JWKS), ghost aliases, 30-day match log with admin report lookup, encounters/stats reported to napple-social. |
+| [2026-11-03-client-core-2026-11-03-r12](2026-11-03-client-core-2026-11-03-r12.md) | Napple Online client core: shared credentials, auth/profile/social client, profile mapping, overlay table, friend-service hooks. |
 | [2026-11-03-overlay-account-r12](2026-11-03-overlay-account-r12.md) | overlay Online tab: UI API header, tab shell, account/profile screens, canned-data stub. |
-| [2026-11-03-claude-legal-pages-r12](2026-11-03-claude-legal-pages-r12.md) | legal pages: terms, privacy and report policy (v1). |
-| [2026-11-03-claude-overlay-social-r12](2026-11-03-claude-overlay-social-r12.md) | overlay social sub-tabs: friends, requests, search, block/report, recent players, stats. |
+| [2026-11-03-legal-pages-r12](2026-11-03-legal-pages-r12.md) | legal pages: terms, privacy and report policy (v1). |
+| [2026-11-03-overlay-social-r12](2026-11-03-overlay-social-r12.md) | overlay social sub-tabs: friends, requests, search, block/report, recent players, stats. |
 | [2026-11-03-infra-online-r12](2026-11-03-infra-online-r12.md) | infra: napple-account and napple-social in the deploy stack, SES/S3, service tokens. |
-| [2026-11-03-claude-online-tieup-2026-11-03-r12](2026-11-03-claude-online-tieup-2026-11-03-r12.md) | Online end-to-end: scripted account/second-device/cloud-save/friends/tier run, local and live; integration fixes. |
+| [2026-11-03-online-tieup-2026-11-03-r12](2026-11-03-online-tieup-2026-11-03-r12.md) | Online end-to-end: scripted account/second-device/cloud-save/friends/tier run, local and live; integration fixes. |

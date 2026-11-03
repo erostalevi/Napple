@@ -281,7 +281,7 @@ static void core_checkpoint(void) {
  * {59, 59, 59, 63}): only threads of priority 59 share an application core in slices. Threads of any other priority keep their core against
  * an equal-priority thread until they block or yield. Slicing every priority (the first version of this code) made ACNH's prio-44 job workers
  * lose their core for 10 ms inside their job windows, which hardware never does, and two threads then recorded one command buffer
- * (docs/archive/changes/2026-11-01-claude-sched-applets-2026-11-01-r1.md). A guest thread that spins in user code (a flag poll, a try-lock loop) never reaches
+ * (docs/archive/changes/2026-11-01-sched-applets-2026-11-01-r1.md). A guest thread that spins in user code (a flag poll, a try-lock loop) never reaches
  * an svc, so on its own the cooperative scheduler would keep the core for good and starve the waiter (SMO: a prio-47 thread spinning on core
  * 0 while the prio-44 main thread waited). The slice thread looks at every core a few ms apart; when a thread waits for a core that its owner
  * should give up, it sends the owner SIGPROF. The handler (on the thread's signal stack) switches only when the interrupted pc is guest code

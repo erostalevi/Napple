@@ -29,7 +29,7 @@ status: integrated
 - `runtime/src/threads.c` (NAPPLE_ARB_TRACE; diagnostics only, off by default), `runtime/src/signals.c` (flush on crash)
 - `runtime/tests/host/test_light_event.c` (new), `runtime/Makefile` (one appended host-test rule)
 - `tools/soak/arbtrace.py`, `tools/soak/litmus_excl_claim.c` (new)
-- Docs: `docs/archive/changes/2026-11-01-claude-acnh-race-atomics-2026-11-01-r3.md` (new), `docs/todo.md` (ACNH section), `docs/architecture/rewrite-format.md` (one bullet)
+- Docs: `docs/archive/changes/2026-11-01-acnh-race-atomics-2026-11-01-r3.md` (new), `docs/todo.md` (ACNH section), `docs/architecture/rewrite-format.md` (one bullet)
 
 ## Built and tested here
 | Item | Status | Evidence |

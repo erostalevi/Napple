@@ -60,7 +60,7 @@ status: integrated
 - `docs/architecture/gfx.md`: a new paragraph after "Views and raster state", plus two stale sentences fixed:
   - the geometry section's "are the replay's to honour";
   - the viewport swizzle text: r5's "Needs" wording, now applied.
-- `docs/archive/changes/2026-11-02-claude-gfx-multi-viewport-2026-11-02-r6.md` (new).
+- `docs/archive/changes/2026-11-02-gfx-multi-viewport-2026-11-02-r6.md` (new).
 - Not touched: `gfx/src/obj.h`, `gfx/src/nvnapi/`, `runtime/`, `crates/`, `orchestrations/`, `api_state.c`. The viewport / scissor / depth-range
   setters already record and replay all 16 indices (`OP_VIEWPORTS` / `OP_SCISSORS` / `OP_DEPTH_RANGES` with `first` + `n`).
 
@@ -150,7 +150,7 @@ status: integrated
   ### Round 2026-11-02-r6
   | Note | Summary |
   |---|---|
-  | [2026-11-02-claude-gfx-multi-viewport-2026-11-02-r6](2026-11-02-claude-gfx-multi-viewport-2026-11-02-r6.md) | Viewport / scissor / depth-range arrays on the encoder, viewport index and layer outputs, layered passes on demand. |
+  | [2026-11-02-gfx-multi-viewport-2026-11-02-r6](2026-11-02-gfx-multi-viewport-2026-11-02-r6.md) | Viewport / scissor / depth-range arrays on the encoder, viewport index and layer outputs, layered passes on demand. |
   ```
 - `.claude/skills/percent-analysis/verified.json`:
   - viewport arrays (`nvnCommandBufferSetViewports` / `SetScissors` / `SetDepthRanges` with first > 0) and layered rendering: tested;

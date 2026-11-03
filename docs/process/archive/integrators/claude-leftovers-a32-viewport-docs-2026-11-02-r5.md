@@ -43,7 +43,7 @@ status: integrated
 - Docs:
   - `docs/index.md` (links), `docs/archive/changes/README.md` (section appended), `docs/process/archive/README.md` (new);
   - generated: `docs/reference/support-matrix.md`, `feature-support.md`, `support-data.json`, and its input `tools/support/data/coverage-snapshot.json`;
-  - `docs/archive/changes/2026-11-02-claude-leftovers-a32-viewport-docs-2026-11-02-r5.md` (new).
+  - `docs/archive/changes/2026-11-02-leftovers-a32-viewport-docs-2026-11-02-r5.md` (new).
 - Not touched: `runtime/src/services/`, `runtime/src/a32jit/`, `obj.h`, `gfx/src/nvnapi/`, shared title data, `orchestrations/`.
 
 ## Built and tested here

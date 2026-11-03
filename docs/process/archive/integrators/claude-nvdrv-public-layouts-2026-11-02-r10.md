@@ -8,7 +8,7 @@ status: integrated
 # Integrator: nvdrv-public-layouts (2026-11-02-r10)
 
 Branch: `claude/nvdrv-public-layouts-2026-11-02-r10` (from `main` at `d0d4be9`). Linux cloud session: nothing here was compiled on macOS; every commit
-subject starts with `unbuilt:`. Change note: `docs/archive/changes/2026-11-02-claude-nvdrv-public-layouts-2026-11-02-r10.md`. Layout table with
+subject starts with `unbuilt:`. Change note: `docs/archive/changes/2026-11-02-nvdrv-public-layouts-2026-11-02-r10.md`. Layout table with
 per-row sources and status: `docs/reference/nvdrv-layouts.md`.
 
 ## Summary

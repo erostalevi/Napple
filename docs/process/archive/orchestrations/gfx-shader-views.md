@@ -18,7 +18,7 @@ launched_at: 2026-11-01
 Close `gpu_fixed/texture views / sparse` and the ACNH cube-view fallback, and run every real shader program of the four titles through the translator and Metal compiler to find and fix the `fail()` paths real programs hit. Expected +0.09 pts plus corpus findings.
 
 ## Owned paths
-`gfx/src/shader/`, `gfx/src/{mtl_shader.m,mtl_tex.m,mtl_priv.h,mtl_interp.*,api_memory.c,dirty.c,tex_xfer.c}`, `gfx/src/tex/`, `tools/gpu/`, `gfx/tests/{t_xlate*,t_view_copy*,t_tex_views.m,t_sparse.c}` and new tests, `docs/archive/changes/2026-11-01-claude-gfx-shader-views-2026-11-01-r2.md`. `gfx/Makefile` test list: append only.
+`gfx/src/shader/`, `gfx/src/{mtl_shader.m,mtl_tex.m,mtl_priv.h,mtl_interp.*,api_memory.c,dirty.c,tex_xfer.c}`, `gfx/src/tex/`, `tools/gpu/`, `gfx/tests/{t_xlate*,t_view_copy*,t_tex_views.m,t_sparse.c}` and new tests, `docs/archive/changes/2026-11-01-gfx-shader-views-2026-11-01-r2.md`. `gfx/Makefile` test list: append only.
 
 ## Do not touch
 gfx-nvn-api's paths (`gfx/src/nvnapi/`, `api_cmd.c`, `api_device.c`, `api_program.c`, `api_texture.c`, `api_state.c`, `api_window.c`, `core.c`, `mtl_replay.m`; ask for hooks via "Needs from other areas"), `mtl_stages.inc`, `mtl_present.m`, `runtime/`, `orchestrations/`.
