@@ -25,7 +25,7 @@ Both reach the same `IpcCmd` handler with the same `IpcCall`; you do not write t
   descriptors (no header, no alignment), and the reply carries the result code as its first raw word (`respond_tipc()`). No domains, no control requests.
   Objects passed as arguments arrive as copy handles; objects you return leave as move handles.
 - What differs for you: nothing in the handler, except `c->type >= 16` (16 is `T_TIPC_BASE`, private to `ipc.c`) and the layout of the `sm` error reply
-  (`sm_tipc_error_layout`). The Animal Crossing 3.0.x SDK uses TIPC for `sm`. Both paths are covered by `runtime/tests/test_ipc.c`.
+  (`sm_tipc_error_layout`). Newer SDKs (for example 55.x) use TIPC for `sm`. Both paths are covered by `runtime/tests/test_ipc.c`.
 
 ## Files to touch
 Each path below exists today.
@@ -110,9 +110,9 @@ service sources, both are dropped. On Linux `tools/linux-check/run-tests.sh` com
 | Linux | `sh tools/linux-check/run-tests.sh` (or `... runtime/tests/test_svc_demo.c`) | the test and the `*_core.c` logic against the mock |
 | Linux | `sh tools/linux-check/check-syntax.sh runtime/src/services/demo.c` | `-fsyntax-only` with gcc and clang over stub headers |
 
-Measured on a Linux box for this guide: `run-tests.sh` ran 29 of the 32 `test_svc_*.c` files with 0 failures; `test_svc_fs`, `test_svc_fs_dataid` (need `romfs_map.c`) and
+Measured on Linux: `run-tests.sh` runs every `test_svc_*.c` file with 0 failures except three; `test_svc_fs`, `test_svc_fs_dataid` (need `romfs_map.c`) and
 `test_svc_time` (needs `host_symbols_register`) do not link against the mock. Passing the Linux run says the C is well formed and the core logic matches the test; it
-says nothing about the real `ipc.c` or a game. A command id or layout written from memory stays *unverified* until a title uses it: say so in the header comment
+says nothing about the real `ipc.c` or a game. A command id or layout taken from the public documentation stays *unverified* until a title uses it: say so in the header comment
 of the file (`mii.c`, `hz_result.h` do) and in the `runtime-services.md` row.
 
 Then boot a title that uses the service (see [add-game-support.md](add-game-support.md)) and read `ipc:` lines with `NAPPLE_TRACE_IPC=all`
@@ -124,11 +124,11 @@ Then boot a title that uses the service (see [add-game-support.md](add-game-supp
 - **The NPDM list gates the name.** Registering a service the game's NPDM does not list changes nothing for that game. Conversely a game may probe several names
   (`pctl`, `pctl:s`, `pctl:r`, `pctl:a`) and expect the refusal of some.
 - **A refusal over TIPC must keep the success layout** with a move handle 0 (`sm_tipc_error_layout`), otherwise the SDK reads a request word as "success, handle 0" and aborts
-  with "request on handle 0" ([symptoms.md](../symptoms.md), Animal Crossing 3.0.x).
-- **Return a handle where the real reply has one.** `IApplicationFunctions` cmd 210 once returned an object where the reply carries a copy handle to an event, and the guest spun on
-  `WaitSynchronization(handle 0)` ([symptoms.md](../symptoms.md), Animal Crossing boot spin). Events: `svc_ret_event` (never signalled) or `svc_ret_event_signaled`.
+  with "request on handle 0" ([symptoms.md](../symptoms.md), Services and input).
+- **Return a handle where the real reply has one.** A command that returns an object where the real reply carries a copy handle to an event makes the guest spin on
+  `WaitSynchronization(handle 0)` ([symptoms.md](../symptoms.md); `IApplicationFunctions` cmd 210 was such a case). Events: `svc_ret_event` (never signalled) or `svc_ret_event_signaled`.
   A never-signalled event that the game waits on without timeout blocks forever; an `appletOE` message event that was never de-asserted was once a service bug
-  ([runtime-services.md](../architecture/runtime-services.md), "Kernel scheduling note").
+  ([runtime-services.md](../architecture/runtime-services.md), kernel scheduling).
 - **Duplicate names override.** The last `ipc_register_service` with the same first 8 characters wins. `audin:u` is registered by `audio.c`; `audin.c` is kept for its unit test only
   (comment in `services_init`). The registry holds 128 services and names up to 11 characters (`Service.name[12]`), compared on 8.
 - **Do not write into guest memory with `memcpy` from a handler** when `ipc_write_buf` can do it: a host-side write into a page that gfx write-protected makes a kernel `read()` fail
@@ -136,6 +136,6 @@ Then boot a title that uses the service (see [add-game-support.md](add-game-supp
 - **The response is limited to 0x100 bytes** (`IpcCall.out`, `MSG_BYTES`); larger results go into an output buffer.
 - **Keep trace aids out of the core and out of files the host tests link.** A debug helper referenced from runtime code but not linked by the host tests broke `make -C runtime`
   ([symptoms.md](../symptoms.md), Building).
-- **Do not change a shared handler without a second look.** Both `ios-sim` and `mk8d-64` once added `time:u` cmd 300 and conflicted ([symptoms.md](../symptoms.md), Services and input);
+- **Do not add a command twice.** Two branches that each add the same command id conflict at merge time ([symptoms.md](../symptoms.md), Services and input);
   `grep` the table for the id before adding it.
-- **Honest status.** The services added in `services-2026-10-24` were written on Linux and never run on a console; see the status words in `docs/archive/changes/2026-10-24-services-VERIFY.md`.
+- **Honest status.** Service rows written from the public documentation and tested only against the IPC mock are *tested*, not *verified*; only a command a title actually issued is verified. Keep the status word of the row in [runtime-services.md](../architecture/runtime-services.md) true.

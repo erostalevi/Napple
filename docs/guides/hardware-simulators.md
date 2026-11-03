@@ -43,14 +43,14 @@ needed.
   trimming window, written into the game's transfer memory and returned by `GetImageTransferProcessorState`). Tera plugin, pointing/Dpd, IR LED and extended transfer are accepted and
   produce nothing while a source exists.
 - **Shared memory**: one 0x800-byte slot per controller id; each state is guarded by a seqlock (`seq` odd while writing). A pump thread (about 60 Hz) runs only while a processor runs.
-  Layout and config structs are from memory and unverified (`irs_core.h`).
+  Layout and config structs follow the public documentation and are unverified against a title (`irs_core.h`).
 - **Access**: the source's `request_access` is called when a game starts its first processor, never before; denied = "sensor not connected", pending = processors run on dark frames
   until the answer. With no source every processor reports the sensor as not connected (the previous behaviour).
 - **Sources**: the frontend's webcam (see below), or `NAPPLE_IR_SOURCE=blob:x,y,r[,dx,dy]` / `dark` / `flat:v` for headless runs and tests.
 - **Webcam adapter**: `irs_adapter_rgb_to_ir` converts an RGB(A)/BGR(A) camera frame to near-IR-like grayscale (luminance, centred 4:3 crop, box resample, optional mirror, percentile contrast
   stretch, optional threshold or binarize).
 
-## Mac wiring (done: `frontend/src/simulators.m`, 2026-10-26 studio-redo)
+## Mac wiring (`frontend/src/simulators.m`)
 
 Both simulators live in the game's own overlay (F1 or the controller Home button), on the **Game/System** tab (amiibo and IR camera sections); the persistent settings (list source, key file, store) are also in Napple Studio > Settings > Amiibo.
 

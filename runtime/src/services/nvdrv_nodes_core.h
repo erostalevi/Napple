@@ -22,7 +22,7 @@
  *   The "nr-99 rule": Switch nr = L4T nvgpu nr - 99 for every channel ioctl libnx confirms in that range (107..111 -> 0x08..0x0C); it is applied to
  *   113..117 (ENABLE..EVENT_ID_CTRL) and 123 (ALLOC_GPFIFO_EX). These numbers are derived, not confirmed by a Switch source (see the layout table).
  * nvhost-gpu type 'G' (0x47) on the channel fd: 0x14 SET_USER_DATA{u64}(8)  0x15 GET_USER_DATA{u64}(8)                              [libnx: _NV_IOW(0x47,0x14)]
- *   (nvgpu_chan_ioctl_typed; nvdrv.c must route type 'G' on a gpu channel fd to it, see integrators/claude-nvdrv-public-layouts-2026-11-02-r10.md)
+ *   (nvgpu_chan_ioctl_typed; nvdrv.c must route type 'G' on a gpu channel fd to it, see docs/reference/nvdrv-layouts.md)
  * nvhost-as-gpu type 'A' (0x41):
  *   0x01 BIND_CHANNEL{s32 fd}(4)  0x02 ALLOC_SPACE{u32 pages,u32 page_size,u32 flags,u32 pad,u64 offset|align}(0x18)               [libnx]
  *   0x03 FREE_SPACE{u64 offset,u32 pages,u32 page_size}(0x10)  0x05 UNMAP_BUFFER{u64 offset}(8)                                     [libnx]

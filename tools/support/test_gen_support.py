@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Tests for gen_support.py: python3 -I tools/support/test_gen_support.py   (stdlib unittest, offline)."""
+import json
 import shutil
 import subprocess
 import sys
@@ -10,7 +11,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 GEN = HERE / "gen_support.py"
-INPUTS = ["compat/matrix.json", "compat/online.json", "docs/titles", "tools/support/data/coverage-snapshot.json", "README.md"]
+INPUTS = ["compat/matrix.json", "compat/online.json", "docs/titles", "tools/support/data/coverage-snapshot.json", "README.md",
+          "site"]
 
 
 def run(root, *args):
@@ -82,6 +84,38 @@ class SupportTables(unittest.TestCase):
         r = run(self.tmp, "--check")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("online:begin", r.stderr)
+
+    def test_compat_json_and_site_blocks(self):
+        self.assertEqual(run(self.tmp).returncode, 0)
+        data = json.loads((self.tmp / "site/compat.json").read_text())
+        self.assertEqual({t["title_id"] for t in data["titles"]}, {p.stem for p in (self.tmp / "docs/titles").glob("0*.md")})
+        self.assertTrue(data["online"]["titles"])
+        page = (self.tmp / "site/compat.html").read_text()
+        for t in data["titles"]:
+            self.assertIn(t["title_id"], page)  # the static fallback lists every title
+        snap = json.loads((self.tmp / "tools/support/data/coverage-snapshot.json").read_text())
+        self.assertIn(f"≈ {snap['final_percent']}%", (self.tmp / "site/index.html").read_text())
+        idx = self.tmp / "site/index.html"
+        idx.write_text(idx.read_text().replace("<b>98%</b>", "<b>50%</b>", 1))
+        r = run(self.tmp, "--check")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("site/index.html", r.stdout)
+
+    def test_compat_html_without_markers_is_rejected(self):
+        page = self.tmp / "site/compat.html"
+        page.write_text(page.read_text().replace("<!-- compat:begin -->", "", 1))
+        r = run(self.tmp)
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("compat:begin", r.stderr)
+
+    def test_broken_site_link_fails_check(self):
+        run(self.tmp)
+        self.assertEqual(run(self.tmp, "--check").returncode, 0)
+        (self.tmp / "site/compat.js").unlink()
+        self.assertIn("missing file compat.js", run(self.tmp, "--check").stdout)
+        page = self.tmp / "site/compat.html"
+        page.write_text(page.read_text().replace('href="#titles"', 'href="#no-such-anchor"', 1))
+        self.assertIn("missing anchor #no-such-anchor", run(self.tmp, "--check").stdout)
 
     def test_committed_tables_are_current(self):
         r = run(ROOT, "--check")

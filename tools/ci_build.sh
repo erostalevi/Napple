@@ -13,7 +13,7 @@ step() { printf '\n==> %s\n' "$*"; }
 
 cd "$ROOT"
 step "CLI (napple)"
-cargo build --release -p napple-cli --locked
+cargo build --release -p napple-cli
 
 step "libraries: input, audio, frontend, gfx"
 make -C input -j"$JOBS"
@@ -28,7 +28,7 @@ make -C packaging
 
 if [ -z "${NAPPLE_SKIP_TESTS:-}" ]; then
   step "tests (non-blocking)"
-  { cargo test --release --locked && make -C runtime test-host; } || echo "::warning::tests failed, the build is still published"
+  { cargo test --release && make -C runtime test-host; } || echo "::warning::tests failed, the build is still published"
 fi
 
 step "Napple Studio.app"

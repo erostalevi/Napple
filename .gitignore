@@ -3,9 +3,14 @@
 *.nsp
 *.nsz
 *.xci
+*.xcz
 *.nca
+*.ncz
 *.nso
+*.nro
 *.romfs
+romfs.bin
+romfs.map
 Firmware*.zip
 Testing Material/
 
@@ -18,6 +23,8 @@ target/
 **/.build/
 *.a
 *.o
+*.so
+*.dylib
 *.dSYM/
 dist/
 studio/dist/
@@ -25,13 +32,84 @@ out-ios-link*/
 build-ios-deps/
 *.pyc
 __pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
 
-# Local working data
+# Lock files and resolved dependency pins (cargo / swift / npm regenerate them locally)
+Cargo.lock
+**/Cargo.lock
+Package.resolved
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+poetry.lock
+Pipfile.lock
+*.lock
+# OpenTofu provider locks are pinned on purpose (infra/.gitignore)
+!.terraform.lock.hcl
+
+# Local working data and logs
 work/
 extracted/
 .venv/
+venv/
+*.log
+*.trace
+*.profraw
+*.core
+
+# Secrets and local environment
+.env
+.env.*
+*.pem
+*.p12
+*.mobileprovision
+*.tfvars
+!*.example.tfvars
+.cargo/config
+.cargo/config.toml
+.secrets/
+
+# Personal notes and local tool configuration
+AWS.md
+NOTES.md
+TODO.local.md
+*.local.md
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+.claude/worktrees/
+.claude/settings.local.json
+.cursor/
+.aider*
+.continue/
+.copilot/
 
 # Editor and OS leftovers
 .DS_Store
+.AppleDouble
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+*.code-workspace
+*.xcuserstate
+xcuserdata/
+*.xcworkspace/xcuserdata/
+DerivedData/
+.swiftpm/
 *.orig
 *.rej
+
+# Local agent and workflow folders: never part of this repository
+.claude/
+integrators/
+orchestrations/
+docs/process/

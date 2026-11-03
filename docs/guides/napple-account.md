@@ -3,10 +3,10 @@
 `crates/napple-account` (binary `napple-account`) is Napple's own account service at
 `https://pretend.napple.lat/account/v1`: one identity across Mac, iPhone and the CLI, the end-to-end
 encrypted save-key exchange, cloud-save version metadata with presigned S3 URLs, player profiles with
-reserved-name rules, and admin grants. There are no paid plans this round (contract decision 2026-11-02):
-every account gets every feature, storage limits are plain config. It never involves Nintendo accounts or servers, and it only ever stores **save
-ciphertext**: never game content, keys or firmware. The shared contract is `orchestrations/ACCOUNT-CONTRACT.md`.
-This guide is the API reference, the security and threat model, the data-retention rules and a local walkthrough.
+reserved-name rules, and admin grants. There are no paid plans: every account gets every feature, and storage limits are plain
+configuration. It never involves Nintendo accounts or servers, and it only ever stores **save ciphertext**: never game content, keys or firmware.
+This guide is the API contract the clients ([cloud saves](cloud-saves.md), the [client core](napple-online-client.md)), [napple-social](napple-social.md)
+and [napple-online](napple-online.md) rely on: the API reference, the security and threat model, the data-retention rules and a local walkthrough.
 
 ## Run it locally
 
@@ -69,7 +69,7 @@ without padding (standard base64 and padding are accepted on input). Times are u
 
 ### Sign-in and tokens
 
-`device` everywhere is `{"name": "Neto's Mac", "platform": "macos" | "ios" | "cli", "pubkey": "<X25519 public key, 32 bytes>"}`.
+`device` everywhere is `{"name": "My Mac", "platform": "macos" | "ios" | "cli", "pubkey": "<X25519 public key, 32 bytes>"}`.
 Signing in again with the same device public key is the same device (it keeps its wrapped save key).
 
 | Endpoint | Body -> answer |
@@ -109,7 +109,7 @@ again (same device key, so it keeps its save key).
 | `GET /profiles`, `POST /profiles`, `GET/PATCH /profiles/{id}`, `DELETE /profiles/{id}[?delete_saves=true]` | see "Profiles" below |
 | `GET /devices`, `DELETE /devices/{id}` | revoke = sign out everywhere + drop its wrapped key |
 
-`plan` is the static placeholder `{"name": "free", "features": {}}` (no paid plans this round; clients keep the
+`plan` is the static placeholder `{"name": "free", "features": {}}` (no paid plans; clients keep the
 field for later). `storage` is `{quota, used, versions_per_title, max_version_bytes}` from server config.
 
 ### Profiles
@@ -123,7 +123,7 @@ Up to 8 per account (the first is created with the account); the profile is the 
 | `links` | <= 3 of `{kind: discord\|instagram\|x\|web, value}`; `web` must be an `https://` URL (no credentials, ASCII host with a dot), handles are 2-32 of `[A-Za-z0-9_.]` (a leading `@` is dropped) |
 | `icon_id` | built-in icon 0..47 |
 | `photo` | `null` or `{url, updated_at}` (see below) |
-| `tier` | 1..5 visibility tier, default 1 (the table is in `orchestrations/ONLINE-CONTRACT.md`; the rules are the pure function `napple_visibility::can_view`, shared with napple-social) |
+| `tier` | 1..5 visibility tier, default 1 (the table is in [napple-social](napple-social.md#visibility-tiers-search-lobbies-recent-players-reports-stats); the rules are the pure function `napple_visibility::can_view`, shared with napple-social) |
 | `friend_code` | `NP-` + 12 digits, last one a Luhn check digit; assigned automatically (also to profiles inserted by other code paths: SQLite trigger), stable, unique |
 
 `POST /profiles {nickname, icon_id?, bio?, links?, tier?}`; `PATCH /profiles/{id}` takes any subset of
@@ -229,7 +229,7 @@ From the server host: `napple-account admin grant owner@napple.lat owner_napple`
 ## Security model
 
 - **Passwords.** Argon2id (m=64 MiB, t=3, p=1, PHC string with per-hash salt) on a blocking thread; policy: >= 10
-  characters, not in the bundled common list, not the email. No passkeys and no magic links (removed in r12).
+  characters, not in the bundled common list, not the email. No passkeys and no magic links.
   Email ownership is proved with a code (10 min, single use, 5 attempts per code, at most 20 guesses per address
   per hour, stored as HMAC with a per-process key: a restart voids codes in flight).
 - **No enumeration.** Signup, reset start, login and reset finish answer identically for known and unknown
@@ -275,13 +275,13 @@ From the server host: `napple-account admin grant owner@napple.lat owner_napple`
 - **Hourly retention job**: pending uploads older than a day (and their objects), expired codes, stale lockouts, unconfirmed
   signups older than a day (with their pending password hash) and refresh tokens, the deletion queue.
 - **Versions**: the newest `NAPPLE_SAVE_VERSIONS` per (title, profile); older ones are deleted on the next commit.
-- **S3 bucket** (napple-infra): SSE-S3, block public access, versioning with "delete noncurrent versions after 7
+- **S3 bucket** (see [deploy-servers](deploy-servers.md)): SSE-S3, block public access, versioning with "delete noncurrent versions after 7
   days" and "abort incomplete multipart uploads after 1 day". Deleted saves are therefore gone from S3 within 7 days.
 - **Logs** contain account and device ids, never emails or secrets.
 
-## Deployment notes (for napple-infra)
+## Deployment notes
 
-- Image: `cargo build --release --locked -p napple-account --bin napple-account`; no system libraries beyond libc
+- Image: `cargo build --release -p napple-account --bin napple-account`; no system libraries beyond libc
   (rustls + ring, bundled SQLite). Read-only container, uid 10001, writes only under `NAPPLE_ACCOUNT_DATA`.
 - Caddy: `handle /account/* { reverse_proxy account:8082 }` **without** stripping the prefix, ahead of the catch-all
   that goes to napple-online; set `NAPPLE_ACCOUNT_TRUST_PROXY=1`.
@@ -308,13 +308,14 @@ AT=<access_token from the answer>
 curl -s $API/me -H "authorization: Bearer $AT"
 P=$(curl -s $API/profiles -H "authorization: Bearer $AT" | python3 -c 'import json,sys;print(json.load(sys.stdin)["profiles"][0]["profile_id"])')
 printf 'pretend ciphertext' > blob; SHA=$(shasum -a 256 blob | cut -d' ' -f1)
-curl -s -X POST $API/saves/01006BB00C6F0000/$P/versions -H "authorization: Bearer $AT" -H 'content-type: application/json' \
+TITLE=<16 hex digit title id>
+curl -s -X POST $API/saves/$TITLE/$P/versions -H "authorization: Bearer $AT" -H 'content-type: application/json' \
   -d "{\"base_version\":0,\"size\":18,\"sha256_ciphertext\":\"$SHA\"}"
 # PUT the file to upload_url with the upload_headers, then:
-curl -s -X POST $API/saves/01006BB00C6F0000/$P/versions/1/commit -H "authorization: Bearer $AT"
+curl -s -X POST $API/saves/$TITLE/$P/versions/1/commit -H "authorization: Bearer $AT"
 curl -s $API/saves -H "authorization: Bearer $AT"
 ```
 
 The scripted version is `crates/napple-account/scripts/walkthrough.sh` (all of the above plus the 409 and 422
 cases, a second title, the download check and account deletion; `BIN=<path to napple-account>`, runs on port 18082 in a temp
-dir and cleans up). Its 2026-11-02 output is in `docs/archive/changes/2026-11-02-claude-napple-account-2026-11-02-r8.md`.
+dir and cleans up).

@@ -32,8 +32,7 @@ Note the frame numbers of the good and the bad frame, and the input script that 
 
 ## 4. Golden frames and the gfx tests
 The graphics tests under `gfx/tests/` (`make -C gfx test`, macOS only) compare small synthetic scenes drawn through the NVN API with expected results; `make -C gfx tests` builds them without running. If a bug can be shown by a few NVN calls on synthetic data, a failing test in that style is the best report ([testing.md](testing.md)).
-Golden-frame comparison for the four reference titles is being added by the graphics maintainers; when it lands its README under `tools/golden/` is the reference and you will be able to attach a frame diff.
-<!-- TODO(gfx-correctness): link tools/golden/README.md here once it is on main. -->
+For a title that has golden-frame routes (`tools/golden/routes.json`, run with `tools/golden/golden.py`), run the route and attach the frame diff it writes; [testing-graphics.md](testing-graphics.md) explains the routes, the contact sheets and how goldens are approved.
 
 ## 5. Write the report
 Game, title id, version; Napple build; Mac and display; the scene and how to reach it; frame numbers; the warnings from step 1; what it should look like; and whether it is every run. Open it with the *Graphics bug* form.

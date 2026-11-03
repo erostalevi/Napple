@@ -197,7 +197,24 @@ static void l_state_event(IpcObject *s, IpcCall *c) {
     ipc_out_copy_handle(c, r);
 }
 /* 102/103 Scan(...) -> s16 count, NetworkInfo array in buffer 0. The filter argument is not read: the provider filters by the title's local communication id. */
+/* A scan takes time on the console: it listens on each channel for about 100 ms (all three for channel 0). Answering at once makes a title's scan screen
+ * loop at full speed, creating and destroying its networking objects tens of times a second (MK8D's Wireless Play lobby crashed on a stale job one of
+ * those rounds left behind). NAPPLE_LDN_SCAN_MS overrides the time for a full scan (default 400, 0 = instant). */
+static void scan_pace(const IpcCall *c, uint64_t t0_ns) {
+    const char *e = getenv("NAPPLE_LDN_SCAN_MS");
+    int64_t full = e && *e ? atoi(e) : 400;
+    uint16_t channel = c->in_size >= 2 ? IPC_IN(c, uint16_t, 0) : 0;
+    int64_t want = channel ? full / 3 : full;
+    int64_t left = want - (int64_t)((runtime_now_ns() - t0_ns) / 1000000u);
+    if (left <= 0) return;
+    int tok;
+    thread_core_away(&tok);
+    struct timespec ts = {left / 1000, (long)(left % 1000) * 1000000L};
+    nanosleep(&ts, NULL);
+    thread_core_back(&tok);
+}
 static void l_scan(IpcObject *s, IpcCall *c) {
+    uint64_t t0 = runtime_now_ns();
     uint32_t r = ldn_apply(st(s), LDN_OP_SCAN);
     if (r) {
         c->result = r;
@@ -215,6 +232,7 @@ static void l_scan(IpcObject *s, IpcCall *c) {
         if (max > ONLINE_LDN_MAX_NETWORKS) max = ONLINE_LDN_MAX_NETWORKS;
         int got = max ? scan(p->ctx, l->cfg.local_communication_id, nets, max) : 0;
         if (got < 0) {
+            scan_pace(c, t0);
             c->result = HZ_R_LDN_NETWORK_NOT_AVAILABLE;
             return;
         }
@@ -226,6 +244,7 @@ static void l_scan(IpcObject *s, IpcCall *c) {
         }
         n = (int16_t)got;
     }
+    scan_pace(c, t0);
     IPC_OUT(c, n);
 }
 static void l_open_ap(IpcObject *s, IpcCall *c) { apply(s, c, LDN_OP_OPEN_AP); }

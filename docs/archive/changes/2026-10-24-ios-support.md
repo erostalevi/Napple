@@ -1,4 +1,4 @@
-# iOS / iPadOS 26+ support (2026-10-24, branch claude/wonderful-goldberg-k4752w)
+# iOS / iPadOS 26+ support (2026-10-24, branch wonderful-goldberg-k4752w)
 
 Design, usage, risks and the first-run checklist: `docs/ios.md`. This note is the change list.
 

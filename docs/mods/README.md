@@ -6,7 +6,7 @@ A `.napmod` is a small zip that anyone can create and share: a game fix, a wides
 |---|---|---|
 | [Format](format.md) | everyone | The layout of a `.napmod`, `mod.json`, every component, the cheat opcode table, limits and the trust model |
 | [Authoring](authoring.md) | mod makers | Write a pchtxt or IPS fix, find a build id, test it, pack and publish |
-| [Integration](integration.md) | contributors | The library API, the `napple-build` hook with its exact call site, and the Mac follow-up list |
+| [Integration](integration.md) | contributors | The library API, the build hook, the runtime side (RomFS overlay, cheats, config) and what is still open |
 | [Example mod](examples/synthetic-fix/mod.json) | everyone | A made-up fix for a made-up title with every component (`examples/synthetic-fix/`, plus `examples/synthetic-module.bin` to try it on) |
 
 Quick look, with the example mod:
@@ -21,4 +21,4 @@ napple mods apply    synthetic-fix.napmod --image docs/mods/examples/synthetic-m
 
 Three rules sit under everything: mods are **unsigned by default** (trust the author, not the file), **code patches stay off until you enable them**, and Napple **never downloads a mod by itself**. A mod must not contain game data or keys; `napple mods validate` warns about extracted assets and refuses key files.
 
-Status: the portable core (parsers, validation, packing, patch application, CLI) is implemented and unit tested on Linux. The build integration, the runtime romfs lookup, the in-app UI and the shader hook are Mac follow-ups listed in [Integration](integration.md).
+Status: the portable core (parsers, validation, packing, patch application, CLI), `napple build --mods`, the runtime RomFS overlay, cheats and per-title config are implemented and unit tested. The shader replacement hook, the in-app UI and signatures are open; see [Integration](integration.md).

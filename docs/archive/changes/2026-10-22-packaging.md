@@ -7,7 +7,7 @@ base game (+ selected updates + DLC) into a locally ad-hoc-signed `<Name>.app` w
 docs/runtime-modules.md ("App bundle layout and launch contract").
 
 ## Files
-- `crates/napple-build/src/`: `lib.rs` (dispatch), `cli.rs` (arguments), `pipeline.rs` (orchestration), `tables.rs` (NTB1 writer), `bktr.rs` (BKTR RomFS),
+- `crates/napple-build/src/`: `lib.rs` (dispatch), `cli.rs` (arguments), `pipeline.rs` (assignment), `tables.rs` (NTB1 writer), `bktr.rs` (BKTR RomFS),
   `container.rs` (raw NCA/ticket access), `control.rs` (NACP name/version/icon), `firmware.rs` + `zipread.rs` + `sysdata.rs` (firmware, fonts, version),
   `stream.rs` (RomFS streaming + cache), `bundle.rs` (Info.plist, icns, signing, tool discovery), `check.rs` (`--check`), `util.rs` (progress, cancel,
   disk space, clones), `json.rs`, `error.rs`, `legacy.rs` (the old `--dump-exefs/--dump-romfs`, unchanged).

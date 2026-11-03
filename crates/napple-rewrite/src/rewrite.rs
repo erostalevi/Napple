@@ -1,4 +1,4 @@
-//! Orchestration: scan, group exclusive windows, then rewrite every remaining site.
+//! Driver: scan, group exclusive windows, then rewrite every remaining site.
 use crate::a64;
 use crate::error::{RewriteError, Unhandled};
 use crate::image::ModuleImage;

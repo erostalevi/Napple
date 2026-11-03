@@ -1,6 +1,6 @@
 # 2026-10-26 runtime-depth: stub command rows become real behaviour, with host tests
 
-Branch claude/runtime-depth-2026-10-26-macos1 (Linux cloud session; assignment orchestrations/runtime-depth.md). Base b48737f.
+Branch runtime-depth-2026-10-26-macos1 (Linux cloud session; assignment assignment `runtime-depth`). Base b48737f.
 
 ## Result
 The scan's "IPC: command depth (impl vs stub)" went from 52% (524 implemented / 494 stub rows) to **68%** (695 / 327) (domain points 2.6 → 3.4 of 5). Stub rows (`IPC_STUB`) in the

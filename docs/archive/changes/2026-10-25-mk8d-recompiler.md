@@ -1,4 +1,4 @@
-# MK8D ahead-of-time AArch32 -> AArch64 recompiler (branch claude/mk8d-recompiler-2026-10-25-titles, Mac)
+# MK8D ahead-of-time AArch32 -> AArch64 recompiler (branch mk8d-recompiler-2026-10-25-titles, Mac)
 
 ## What it is
 `runtime/src/a32jit/` (C, shares the interpreter's decoder `src/a32/a32_decode_*.c`) lifts the ARM / Thumb-2 code of the AArch32 modules to AArch64 **assembly**; clang builds it into an ordinary dylib (`<data dir>/modules/a32jit.dylib` + `a32jit.manifest`). Nothing is generated at run time, so the image can be signed like any dylib (iOS forbids JIT). Mixed mode: the runtime interprets anything without a lifted block and every instruction the lifter does not lift natively calls the interpreter for exactly that instruction, so the image never needs to be complete to be correct.

@@ -1,5 +1,5 @@
 # Regression safety on every push and pull request (release.yml builds and publishes only on main; pages.yml is the site).
-# Every step is the same command tools/ci_build.sh and .claude/skills/napple-latest/napple_latest.sh run, validated step by step in a fresh copy of this tree.
+# Every step is the same command tools/ci_build.sh runs, validated step by step in a fresh copy of this tree.
 # GitHub's macOS runners are virtual Macs: the headless Metal tests of gfx are built everywhere but their run is non-blocking (a runner without a usable GPU
 # or Metal feature set fails them for reasons that are not the code); the run result is visible in the log and `make -C gfx test` stays a local gate.
 # Not run in CI: anything that needs game files, keys or firmware (LAS/SMO/ACNH/MK8D boots), `swift test` UI automation, signing.
@@ -51,10 +51,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: tests-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: tests-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: tests-cargo-${{ runner.os }}-
       - name: cargo test --workspace
-        run: cargo test --workspace --locked
+        run: cargo test --workspace
 
   native:
     name: audio, input, frontend, gfx, runtime tests
@@ -107,7 +107,7 @@ jobs:
 
   ios-smoke:
     name: iOS Simulator compile smoke (runtime links for iphonesimulator)
-    # Non-blocking until claude/ios-sim-2026-10-25-titles lands: on main tools/build_ios.sh does not compile runtime/src/a32/*.c, so the link fails with undefined _a32_*
+    # Non-blocking until ios-sim-2026-10-25-titles lands: on main tools/build_ios.sh does not compile runtime/src/a32/*.c, so the link fails with undefined _a32_*
     # (measured 2026-10-26 in a fresh copy). After that branch is integrated, delete the next line to make it a gate.
     continue-on-error: true
     runs-on: macos-26

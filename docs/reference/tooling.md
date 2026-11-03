@@ -1,17 +1,18 @@
 # Tooling (REA, Ghidra, JDK, gh)
 
-Installed 2026-10-20 on macOS 27 / arm64 for the shared-signatures work. Nothing here edits any Claude/agent configuration.
+Optional tools for resolving signatures ([add signatures](../guides/add-signatures.md)) and sharing them. None of them is needed to build or run a game.
+Versions are the ones the adapter was verified with; newer releases are expected to work.
 
 | Tool | Version | How installed | Where |
 |---|---|---|---|
-| Node | 26.7.0 | already present (nvm) | `~/.nvm` |
+| Node | 26.7.0 | any Node install (nvm, Homebrew) | on `PATH` |
 | REA (`rea-agents`, MIT) | 6.7.0 | `npm install --prefix work/tools rea-agents` | `work/tools/node_modules/.bin/rea` (git-ignored) |
 | Ghidra | 12.1.4 | `brew install ghidra` (it is a **formula**; there is no cask) | `/opt/homebrew/opt/ghidra/libexec` |
 | JDK | OpenJDK 21.0.13 | pulled in by the Ghidra formula (`openjdk@21`) | `/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home` |
-| GitHub CLI `gh` | 2.102.1 | `brew install gh` | `/opt/homebrew/bin/gh` (NOT authenticated, nothing pushed) |
+| GitHub CLI `gh` | 2.102.1 | `brew install gh` | `/opt/homebrew/bin/gh`; only `napple sigs share --yes` uses it, and it must be authenticated by you |
 
-`npx rea-agents setup` was deliberately NOT run (it edits agent configs). The npm install printed a warning that
-the `frida` dependency has an install script that was not run; Frida features are unused here.
+Do not run `npx rea-agents setup`: it edits agent configuration files and is not needed. The npm install warns that the `frida` dependency has an install script
+that was not run; Frida features are unused.
 
 ## Environment REA needs
 
@@ -36,8 +37,8 @@ rea function work/tooltest/t.raw 0x0 --target-format raw-binary --architecture a
     --provider ghidra --format json
 ```
 The last form returns function body ranges, assembly and decompiled pseudocode (`return param_1 + param_2 + 3;`).
-This is what `ReaCliReverser` runs. Real data: on a 64 KiB slice of Link's Awakening `main` starting at a function
-start, REA/Ghidra returned the function boundary in about 12 s (whole `napple sigs resolve` run).
+This is what `ReaCliReverser` runs. On a 64 KiB slice of a game's `main` starting at a function start, a whole `napple sigs resolve` run
+takes about 12 s, most of it Ghidra's cold start.
 
 ## What REA/Ghidra can and cannot do here
 
@@ -51,6 +52,3 @@ Cannot / limits:
   function begins from the middle, and does not discover HLE service names; names must come from humans or from other builds' signatures.
 - Cold start costs several seconds per call (JVM + Ghidra import); fine for per-item resolution, not for whole-module sweeps.
 - Hopper/IDA providers are not installed (licensed products).
-
-## Parallel sessions
-See the [parallel-session workflow](../process/README.md).

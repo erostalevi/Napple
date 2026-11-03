@@ -4,7 +4,7 @@ Per-game status of online and local multiplayer on Napple. **Generated** by `too
 
 **Online play is between Napple players only**, through the Napple-run servers at `pretend.napple.lat` (napple-online for accounts and the game servers, napple-room for LAN Play and local wireless rooms). Napple never connects to Nintendo's servers, and Napple players cannot meet players on a console. See [network providers](../guides/network-providers.md) and [deploying the servers](../guides/deploy-servers.md).
 
-Last checked: 2026-11-02. Statuses: `works`, `partial`, `broken`, `untested`; `-` (unsupported) means the game has no such mode.
+Last checked: 2026-11-03. Statuses: `works`, `partial`, `broken`, `untested`; `-` (unsupported) means the game has no such mode.
 
 ## By title
 
@@ -54,7 +54,7 @@ Backend `nex`: NEX, the game-server protocol of most first-party games; served b
 | LAN Play | works | LAN Play through a local napple-room: two instances verified in the same room (one creates it, the other lists and joins it; both reach its character select). | 2026-11-02 |
 | Local wireless | broken | Local wireless (LDN) through a room: the station crashes right after joining. | 2026-11-02 |
 | Online matchmaking | works | Through a local napple-online: login, the online menu, and two instances matched into one gathering (verified). | 2026-11-02 |
-| Online race / match | partial | In a two-instance run through a local napple-online the race starts; it has not been played through to the end. | 2026-11-02 |
+| Online race / match | partial | Two instances on one Mac through a local napple-online and a napple-room: both join, connect peer to peer, vote a course, and the race countdown starts (verified). The race has not been played through to the end. | 2026-11-03 |
 | Friends | partial | A friend shows as joinable; the friend list on the Friends menu is still empty. | 2026-11-02 |
 | Rankings | untested | Time trial rankings; not tried yet. | 2026-11-02 |
 | DataStore | untested | Ghost upload and download; not tried yet. | 2026-11-02 |

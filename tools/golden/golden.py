@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))                    # the Napple/ repository root
 MANIFEST = json.load(open(os.path.join(HERE, "routes.json")))
 DEFAULT_GOLDEN = os.path.expanduser("~/Library/Application Support/Napple/goldens")
-TESTING = "/Users/neto/Documents/Napple/Testing Material"
+TESTING = os.environ.get("NAPPLE_TESTING_MATERIAL", "Testing Material")
 
 
 def titles_for(sel):

@@ -111,7 +111,7 @@ int main(void) {
     }
     /* Metal runs the function per sample (the key and [[sample_id]] work: the draw above rendered with the per-sample pipeline), but its [[position]] and default
      * interpolants stay at the pixel centre: the sample's own position needs get_sample_position(sample_id) and [[sample_perspective]] varyings in the translated
-     * fragment function (gfx/src/shader/maxwell_translate.c; patch handed over in integrators/claude-gfx-msaa-views-2026-11-01-r1.md). Known gap until then. */
+     * fragment function (gfx/src/shader/maxwell_translate.c; see docs/archive/changes/2026-11-01-gfx-msaa-views-2026-11-01-r1.md). Known gap until then. */
     KNOWN(distinct, "sample shading: the samples hold different positions (inputs evaluated at each sample)");
     KNOWN(mean > 3.45f && mean < 3.55f, "sample positions average to the pixel centre: %g", mean);
     return h_finish("t_sample_shading", &h);

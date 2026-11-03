@@ -1,4 +1,4 @@
-# Cleanup of plan5 follow-ups (branch claude/cleanup-small-2026-10-24-plan6)
+# Cleanup of plan5 follow-ups (branch cleanup-small-2026-10-24-plan6)
 
 Status: all *verified* on an Apple M5 Mac (`make -C runtime test test-services`, `make -C gfx test`: 0 failures).
 

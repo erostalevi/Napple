@@ -47,20 +47,20 @@ In order, `crash()`:
 How to read it:
 - `pc=<module>+0x<off>` is the guest module and the offset **in the original image** (`main`, `sdk`, `subsdk0`...). A pc in `runtime` or an unnamed address means host code crashed.
   `python3 tools/addr2sym.py <data-dir> main+0x<off>` prints the nearest exported symbol from `modules/<name>.tables` (NSOs are stripped: only exports have names).
-- `fault=0x38`, `0x3e74` and similar small addresses mean a null object plus a field offset: find who should have created the object (the Mii case in [symptoms.md](../symptoms.md) was a null singleton built from a service answer).
+- `fault=0x38`, `0x3e74` and similar small addresses mean a null object plus a field offset: find who should have created the object (often a singleton built from a service answer; see [symptoms.md](../symptoms.md)).
 - `nearest region ... prot` tells whether the address is unmapped, mapped read-only, or inside a reservation (`esr` bit 6 distinguishes write from read in `guest_fault`).
 - The frame chain follows x29; a leaf function crash loses its own frame, use `lr` first.
 - `NAPPLE_PEEK=<module>+0x<off>` logs the 8 bytes there at crash time (`runtime_peek`); `NAPPLE_WATCH=<module>+0x<off>` logs every guest write to a location with pc, caller and value.
-- AArch32 titles: the crash handler also prints the interpreter's CPU state (`a32_crash_report`); `NAPPLE_A32_TRACE=1` runs one instruction at a time and dumps the last 4096 pcs when the guest calls Break (slow); `NAPPLE_A32_SVCTRACE=1` traces svcs.
-- Flaky crashes: run the same boot repeatedly (`for i in 1 2 3 4 5; do tools/boot_test.sh <titleid> 12; done`: one exit code and log tail per run). The Animal Crossing command-buffer race was found this way
-  ([symptoms.md](../symptoms.md), "one run in three").
+- AArch32 titles: the crash handler also prints the guest CPU state (`a32_crash_report`); `NAPPLE_A32_TRACE=1` runs one instruction at a time and dumps the last 4096 pcs when the guest calls Break (slow, debug runtime); `NAPPLE_A32_SVCTRACE=1` traces svcs.
+- Flaky crashes: run the same boot repeatedly (`for i in 1 2 3 4 5; do tools/boot_test.sh <titleid> 12; done`: one exit code and log tail per run) and compare the failing runs; races between guest threads
+  usually show up this way ([symptoms.md](../symptoms.md)).
 
 ## 4. Hangs and spins
 - `kill -USR1 <pid>` logs every guest thread without stopping the game (`thread_dump_all`): handle, id, priority, core, what it waits on (handles with their types, or an address and key), last svc, call count, the guest call stack,
-  and for a thread that is running guest code its live pc. Works headless (`runtime/src/app.m: install_usr1_dump`). `tools/dev/dev_usr1test.sh <datadir> <secs> <first-usr1-at> <name> [more gaps]` automates dumps at given times.
+  and for a thread that is running guest code its live pc. Works headless (`runtime/src/app.m: install_usr1_dump`).
 - `NAPPLE_PCPROF=1` samples the pc of every running (not waiting) guest thread each millisecond and, every 5 s, logs the hottest pairs as `pcprof: thread 0x.. pc <module>+0x.. : N samples`. A thread that owns nearly all samples in one place
-  is a spin: the Animal Crossing Npad reader (`sdk+0x5087xx`) was found this way ([symptoms.md](../symptoms.md)). `NAPPLE_PCPROF_REGS=1` adds register dumps for one thread id hard-coded in `threads.c`.
-- A spin on `WaitSynchronization(handle 0) -> 0xe401` (25 million calls a second) shows with `--svc-trace` and means a reply carried the wrong object/handle ([symptoms.md](../symptoms.md), Animal Crossing boot spin).
+  is a spin, typically an SDK reader waiting for a value a service or the HID writer never provides ([symptoms.md](../symptoms.md)). `NAPPLE_PCPROF_REGS=1` adds register dumps for one thread id hard-coded in `threads.c`.
+- A spin on `WaitSynchronization(handle 0) -> 0xe401` (millions of calls a second) shows with `--svc-trace` and means a reply carried the wrong object/handle (a copy handle was expected; [symptoms.md](../symptoms.md)).
 - `NAPPLE_FREE_CORES=1` disables the three virtual application cores; if a hang disappears, suspect a blocking service that does not release its core ([add-svc.md](add-svc.md)).
 
 ## 5. Tracing IPC and services
@@ -77,7 +77,7 @@ How to read it:
   `kill -USR2 <pid>` captures the next 4 presented frames into `NAPPLE_CAPTURE_DIR` (default the current directory) as `cap<serial>-<frame>.png` and enables per-draw diagnostics for them.
 - Commands: `NAPPLE_NVNTRACE=1` prints each recorded op number (`[nvntrace] cb <ptr> op <n>`), `NAPPLE_GFX_CMDTRACE=1` the lifetime of recordings (handles), `NAPPLE_GFX_LOG=0..3` the gfx log level (0 error, 1 warn, 2 info = default, 3 debug).
   `NAPPLE_DRAWLOG=<frame>` or `<from>-<to>` prints every draw of those frames (`NAPPLE_DRAWLOG_QUIET=1` keeps only pass dumps, `_RT`, `_RT_ALL`, `_TEX`, `_UBO=<words>` add detail); bisect a wrong object by skipping draws with `NAPPLE_DEBUG_SKIP_VS`;
-  `NAPPLE_SCALE_DIAG=1` finds passes that mix scaled and unscaled attachments; `NAPPLE_NO_ORPHAN=1` disables the stopgap present pick (see [titles/01006F8002326000.md](../titles/01006F8002326000.md)).
+  `NAPPLE_SCALE_DIAG=1` finds passes that mix scaled and unscaled attachments; `NAPPLE_NO_ORPHAN=1` disables the stopgap present pick.
 - Shaders: `NAPPLE_SHADER_DUMP=<dir>` writes programs that fail to translate; with `NAPPLE_SHADER_DUMP_HASH=<hash hex>` also a given one; `NAPPLE_SAVE_MSL=1` annotates generated MSL with pcs; `NAPPLE_SHADER_PROBE` shows registers as colour ([add-maxwell-shader-op.md](add-maxwell-shader-op.md)).
 - Performance: `NAPPLE_PERF_LOG=1` prints every 5 s
   `[perf] fps <f> maxgap_ms <ms> gpu_ms_max <ms> out_ms <ms> shown_fps <f> frames <n> | pipes+<n> shaders+<n> pipewait_ms+<n> skipped+<n> pending <n> | blockbuild_ms+<n> max <n> | cmdrecs live <n>` (`gfx/src/mtl_present.m`).
@@ -87,26 +87,20 @@ How to read it:
 
 ## 7. Scripted input
 `NAPPLE_INPUT_SCRIPT="5.0:A,12:PLUS:0.3,20:LS_UP:1.5"` (`runtime/src/input_script.c`): comma-separated events `<time>:<button>[:<hold>]`.
-- `<time>` is **seconds** (a float) after the guest first configures HID, `<hold>` is seconds (default 0.15). (`docs/titles/README.md` calls the first field "frame"; the code reads seconds.)
+- `<time>` is **seconds** (a float) after the guest first configures HID, `<hold>` is seconds (default 0.15). A time or hold written as `f<N>` (for example `f600:A:f10`) is a frame count; `NAPPLE_INPUT_SCRIPT_FRAMES=1` reads every plain number as frames.
 - Buttons: `A B X Y L R ZL ZR PLUS MINUS LEFT UP RIGHT DOWN`, and `STICK_L STICK_R` (the stick clicks); sticks: `LS_LEFT LS_UP LS_RIGHT LS_DOWN` and `RS_*`. `L+R` presses a chord atomically (same sample).
 - It injects through the key bindings of `input.json` (the defaults), so the whole input path is exercised. `script: no key bound for event N` means the binding is missing; `script: unknown button X` a typo. The log shows `input script: N events` and each `script: press <button> at <t> s`.
-- In zsh, `"..:$t:A"` is a path modifier: write the script literally ([symptoms.md](../symptoms.md)). Real key events instead of the script: `tools/dev/synth_keys.m` (needs the Accessibility permission), used by `tools/dev/dev_wintest2.sh` and `tools/dev/dev_apptest.sh`.
+- In zsh, `"..:$t:A"` is a path modifier: write the script literally ([symptoms.md](../symptoms.md)).
 
-## 8. The four reference titles
-Build data without disk pain (in-place RomFS, about 250 MB each) as in [titles/README.md](../titles/README.md#building-test-data-without-disk-pain-all-titles), then:
+## 8. Booting a title for a check
+Build data without disk pain (in-place RomFS, a few hundred MB per title) as in [titles/README.md](../titles/README.md#building-test-data-without-disk-pain-all-titles), then:
 ```bash
 runtime/build/napple-runtime <scratch>/<TITLEID>/<buildid16> --headless --seconds 45 --save-root /tmp/napple-save
 ```
 Passing: exit 0, `[napple-gfx] stats: frames N` with N in the thousands, no `CRASH`. Take the newest version directory for an updated title.
+Each title page in [titles/](../titles/README.md) gives the exact run line, the input script that reaches its menus, the expected frame count and its known flaky starts.
 
-| Title | Id | Page | Notes taken from the page |
-|---|---|---|---|
-| Link's Awakening | `01006BB00C6F0000` | [page](../titles/01006BB00C6F0000.md) | 2290-2723 frames in 45 s headless; needs fonts for text; `NAPPLE_INPUT_SCRIPT` reaches the file select |
-| Super Mario Odyssey | `0100000000010000` | [page](../titles/0100000000010000.md) | 1921-2232 frames in 45 s; `NAPPLE_INPUT_SCRIPT="30:A:0.3,45:A:0.3,60:A:0.3"` boots the first kingdom; NVN 53.x |
-| Animal Crossing: New Horizons | `01006F8002326000` | [page](../titles/01006F8002326000.md) | 3.0.3 + DLC; about 1150-1200 frames in 45 s; frames 0 -> `NAPPLE_PCPROF=1` |
-| Mario Kart 8 Deluxe | `0100152000022000` | [page](../titles/0100152000022000.md) | update + DLC in-place data; `napple-runtime <out>/0100152000022000/fe941ed5ba14be5d --headless --seconds 120`; `NAPPLE_INPUT_SCRIPT="15:A,19:A,...,140:A"` reaches races; 5362 frames in 120 s |
-
-Game files live outside the repository; delete scratch data when done. Only one game process should use the GPU at a time (`tools/dev/README.md`), and `pgrep -f napple-runtime` matches other sessions' runs: include the data directory in the pattern and never `pkill` by name.
+Game files live outside the repository; delete scratch data when done. Only one game process should use the GPU at a time, and `pgrep -f napple-runtime` matches every running instance: include the data directory in the pattern and never `pkill` by name.
 
 ## 9. After the cause is known
 Fix it in the narrowest place (a service handler, an svc, an NVN function), add a unit test where the code is portable ([testing.md](testing.md)), re-run the title, then add a row to [symptoms.md](../symptoms.md)

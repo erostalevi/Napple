@@ -77,12 +77,12 @@ Each target file `t_<name>.c` defines `int fuzz_<name>(const uint8_t *, size_t)`
 
 ### Commands (from the repository root)
 
-    make -C Napple/runtime fuzz-build                      # all drivers -> runtime/build/fuzz/<name>_mut
-    make -C Napple/runtime fuzz-smoke                      # regression tests + a short deterministic run of every driver (seed 1)
-    make -C Napple/runtime fuzz-run FUZZ_SECONDS=300       # 300 s of mutation fuzzing per target, in parallel (-jN); logs in build/fuzz/logs
-    make -C Napple/runtime fuzz-run-jpeg FUZZ_SECONDS=300  # one target
-    make -C Napple/runtime fuzz-run FUZZ_ENGINE=libfuzzer  # libFuzzer instead (needs clang + libclang-rt-dev; corpora in build/fuzz/corpus-<name>)
-    make -C Napple/runtime fuzz-regress                    # the regression tests of every fixed finding (also quick enough for CI)
+    make -C runtime fuzz-build                      # all drivers -> runtime/build/fuzz/<name>_mut
+    make -C runtime fuzz-smoke                      # regression tests + a short deterministic run of every driver (seed 1)
+    make -C runtime fuzz-run FUZZ_SECONDS=300       # 300 s of mutation fuzzing per target, in parallel (-jN); logs in build/fuzz/logs
+    make -C runtime fuzz-run-jpeg FUZZ_SECONDS=300  # one target
+    make -C runtime fuzz-run FUZZ_ENGINE=libfuzzer  # libFuzzer instead (needs clang + libclang-rt-dev; corpora in build/fuzz/corpus-<name>)
+    make -C runtime fuzz-regress                    # the regression tests of every fixed finding (also quick enough for CI)
 
 Needs `clang` with the sanitizer runtimes (Ubuntu: `apt install clang libclang-rt-dev`; `libopus-dev` for the Opus path). `FZ_CC=` picks the compiler.
 `FUZZ_SEED`, `FUZZ_SMOKE_ITERS` (default 4000) tune the runs. `fuzz-smoke` takes about 20-30 s in total and is not part of `test` / `test-services`.

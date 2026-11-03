@@ -98,8 +98,10 @@ int main(void) {
         svc_call(sta, 300, NULL, 0, &c);
         { uint8_t list[LDN_NETINFO_SIZE * 2]; uint8_t sf[0x68] = {0}; memcpy(sf + 8, &lc, 8); memset(list, 0, sizeof list); memset(&c, 0, sizeof c); c.in = sf; c.in_size = sizeof sf; svc_set_out_buf(&c, list, sizeof list); svc_call_c(sta, 102, &c);
           CHECK(c.result == 0 && SVC_OUT(&c, int16_t, 0) == 1 && !memcmp(list + 0x27, "loopback-ldn", 12) && !memcmp(list + 0x26a, "advertise", 9), "Scan returns the hosted network with its advertise data");
-          uint64_t other = lc + 1; memcpy(sf + 8, &other, 8); memset(&c, 0, sizeof c); c.in = sf; c.in_size = sizeof sf; svc_set_out_buf(&c, list, sizeof list); svc_call_c(sta, 102, &c);
+          uint64_t other = lc + 1; memcpy(sf + 8, &other, 8); memset(&c, 0, sizeof c); c.in = sf; c.in_size = sizeof sf; svc_set_out_buf(&c, list, sizeof list);
+          struct timespec t0, t1; clock_gettime(CLOCK_MONOTONIC, &t0); svc_call_c(sta, 102, &c); clock_gettime(CLOCK_MONOTONIC, &t1);
           CHECK(c.result == 0 && SVC_OUT(&c, int16_t, 0) == 0, "Scan for another game's id finds nothing");
+          CHECK((t1.tv_sec - t0.tv_sec) * 1000 + (t1.tv_nsec - t0.tv_nsec) / 1000000 >= 350, "a full scan takes time (about 400 ms), like the console's");
           memset(&c, 0, sizeof c); svc_call_c(sta, 102, &c); CHECK(c.result == 0 && c.out_size == 2 && SVC_OUT(&c, int16_t, 0) == 0, "Scan without an output buffer is a count of 0");
           memcpy(sf + 8, &lc, 8); memset(&c, 0, sizeof c); c.in = sf; c.in_size = sizeof sf; svc_set_out_buf(&c, list, sizeof list); svc_call_c(sta, 102, &c);
           uint8_t bad[LDN_NETINFO_SIZE]; memcpy(bad, list, sizeof bad); bad[0x27] = 'X';

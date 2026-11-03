@@ -1,4 +1,4 @@
-# AArch32 (MK8D): measurements and recompiler plan (Mac session, branch claude/aarch32-recompiler-2026-10-25, based on claude/exciting-davinci-unv0aa 74c7d30)
+# AArch32 (MK8D): measurements and recompiler plan (Mac session, branch aarch32-recompiler-2026-10-25, based on exciting-davinci-unv0aa 74c7d30)
 
 ## Measured on the real game (Mario Kart 8 Deluxe base v0, `napple build --dump-exefs`)
 - NPDM flags 0x04 = 32-bit instruction set, 32-bit address space. 8 modules, all ELF32 (Elf32_Dyn, DT_REL): rtld, main, sdk, subsdk0..4.

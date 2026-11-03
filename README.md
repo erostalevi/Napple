@@ -2,86 +2,105 @@
 
 <h1><img src="site/assets/icon.png" alt="" width="56" height="56" align="absmiddle">&nbsp;Napple</h1>
 
-**Turn a Switch game you own into a native Apple Silicon app.**
+**An ahead-of-time recompiler and runtime that turns a Switch game you own into a native Apple Silicon app.**
 
-Ahead-of-time ARM64 rewrite · Horizon HLE · NVN → Metal · no emulator, no JIT
-
-![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Apple%20Silicon-black)
-![core](https://img.shields.io/badge/core-Rust%202024-orange)
-![runtime](https://img.shields.io/badge/runtime-C%20%2B%20Objective--C-blue)
-![studio](https://img.shields.io/badge/studio-SwiftUI-red)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+![platform](https://img.shields.io/badge/platform-macOS%20%7C%20Apple%20Silicon-black)
 ![status](https://img.shields.io/badge/status-early%20%2F%20experimental-yellow)
 [![tests](https://github.com/erostalevi/NappleCloudRepo/actions/workflows/tests.yml/badge.svg)](.github/workflows/tests.yml)
 
 </div>
 
----
+> [!IMPORTANT]
+> **Legal notice.** Napple is an independent project. It is not affiliated with, endorsed by or sponsored by Nintendo.
+> It contains no Nintendo code, keys, firmware or games. To use it you must own the console and the games and supply your own legitimately dumped
+> keys, firmware and titles; Napple never downloads game content, keys or firmware and circumvents nothing for you. Do not use it for piracy, and do not share what it builds.
+> Its optional online features talk only to Napple-run servers and never contact Nintendo's. Full text: [Legal](#legal).
 
-## What is this?
+## What it is
 
-The Switch and every Apple Silicon Mac are both ARM64. So instead of emulating the console, Napple **runs the game's own machine code natively** and
-rewrites, ahead of time, only the few things macOS forbids: the reserved `x18` register, the thread-pointer register, `svc` system calls and the
-timer-counter registers. Everything the game asks the console OS for is answered by a Horizon high-level-emulation runtime, and the GPU API (NVN)
-is translated to Metal.
+Napple is a toolchain, not an emulator. The Switch and every Apple Silicon Mac both run ARM64 code, so Napple keeps the game's own machine code,
+rewrites ahead of time the few instructions macOS does not allow, and links the result against a runtime that re-implements the console's operating
+system services and graphics API on macOS. The output is a standalone, locally signed `.app` (or an iOS / iPadOS app) built from your own copy of a game.
 
-The result is a **standalone, locally signed `.app`** built from your own copy of the game. No JIT is needed, which also keeps the door open for iOS/iPadOS.
+It has three parts:
 
-```mermaid
-flowchart TD
-    in["your files: game (XCI / NSP / NSZ) + prod.keys + firmware"] --> ingest
-    subgraph build["build time (napple CLI / Napple Studio)"]
-        ingest["1 ingest: container parse, NCA decrypt, ExeFS / RomFS, updates + DLC"] --> analyze["2 analyze: NSO load, function discovery, patch-site scan"]
-        analyze --> resolve["3 resolve: signature lookup, reverse-engineering fallback"]
-        resolve --> rewrite["4 rewrite: AArch64 rewriter (x18, TPIDR, svc, counters, 4K to 16K pages)"]
-        rewrite --> package["5 package: .app = runtime + per-game patch table, ad-hoc signed locally"]
-    end
-    package --> run
-    subgraph run["run time (napple-runtime)"]
-        loader["loader"] --- kernel["Horizon kernel + HLE services"]
-        kernel --- gfx["NVN to Metal (gfx)"]
-        kernel --- av["audio, input, saves"]
-    end
+- **`napple` CLI** (Rust, `crates/`): ingest, analysis, rewrite and packaging.
+- **Runtime** (C and Objective-C, `runtime/`, `gfx/`, `audio/`, `input/`, `frontend/`): loader, Horizon kernel, HLE services, NVN on Metal, audio, input and the in-game overlay.
+- **Napple Studio** (SwiftUI, `studio/`): a Mac app that drives the CLI: drop a game on the window, get an app.
+
+Napple is game-agnostic: knowledge about a specific game lives in data (signatures, patch tables), never in per-game code.
+
+## How it works
+
+1. **Ingest**: open XCI / NSP / NSZ / XCZ containers, decrypt NCAs with your keys, merge the base game, updates and DLC.
+2. **Analyze**: load the NSO modules, read symbols and relocations, find every instruction that needs a rewrite.
+3. **Resolve**: match known functions against shared signature data (`knownSignatures/`).
+4. **Rewrite**: patch AArch64 code ahead of time: the reserved `x18` register, thread-pointer registers, `svc` system calls, timer counters, 4 KiB to 16 KiB pages. 32-bit code is lifted to AArch64.
+5. **Package**: write the patched modules and data next to the runtime in an ad-hoc signed `.app` (or a signed iOS bundle).
+6. **Run**: the loader maps the modules; a Horizon kernel and HLE IPC services answer system calls; NVN is translated to Metal with a Maxwell shader translator; audio, input, saves, applets and media decoding run on macOS frameworks.
+
+There is no interpreter or JIT at run time. Details: [architecture overview](docs/architecture/overview.md).
+
+## How to use
+
+**Requirements.** An Apple Silicon Mac (Napple Studio needs macOS 26), the Xcode command line tools, a Rust toolchain (2024 edition) and
+`brew install opus libvpx`. For each game: your own dump of the game (plus updates and DLC if you want them), your `prod.keys` and, for the
+system fonts, your firmware.
+
+**Build the toolchain.**
+
+```sh
+cargo build --release -p napple-cli
+make -C audio && make -C input && make -C frontend && make -C gfx && make -C gfx adapter
+make -C runtime
+make -C packaging
+studio/build_app.sh          # optional: Napple Studio -> studio/dist/NappleStudio.app
 ```
 
-Per-game knowledge lives only in **data** (signatures, patch tables), never in per-game code branches. Napple is meant to be game-agnostic.
+`tools/ci_build.sh` runs the same sequence. Prebuilt binaries: every commit to `main` publishes a release (`Napple-Studio.dmg` and
+`Napple-macOS-arm64.zip`), built by [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
-## Highlights
+**Prepare and run a title.**
 
-- **Native speed.** Guest code executes directly on the CPU; there is no interpreter or recompiler at run time.
-- **Horizon kernel + HLE services.** Threads, scheduling, memory, sessions and IPC, plus a broad set of system services, with offline answers for the online ones, or Napple Online when you are signed in.
-- **NVN → Metal.** A GPU layer with a Maxwell shader-ISA translator, NVN pipeline and format support, MSAA, indirect draws, query objects and more.
-- **Audio and input.** Audio renderer (reverb, delay, compressor, limiter, Opus) over Core Audio; GameController input with rumble, keyboard and mouse mapping.
-- **Saves, updates and DLC.** Save data lives in `~/Library/Application Support/Napple/<titleId>`. Base game, updates and DLC packs are merged in any container, in any order.
-- **Napple Online (optional).** Account, profiles with visibility tiers, friends, end-to-end encrypted cloud saves and an in-game Online tab, see [Napple Online](#napple-online).
-- **Napple Studio.** A small SwiftUI app: drop a game on the window, watch the pipeline run, install the result.
-- **Compatibility matrix.** Every game and every pipeline stage is tracked with evidence, see [`COMPATIBILITY.md`](COMPATIBILITY.md).
+```sh
+target/release/napple plan  <game files or folder> -k prod.keys               # what will be built (base, updates, DLC, blockers)
+target/release/napple build <game files or folder> -k prod.keys --firmware <firmware> -o ~/Apps
+open ~/Apps/<Name>.app
+```
 
-## Legal, up front
+Or open **Napple Studio**, add your keys and firmware once, and drop the game onto the window. iOS builds use `--target ios` with your own signing
+identity. Saves live in `~/Library/Application Support/Napple/<titleId>`.
 
-- You need to **own the game** and supply **your own `prod.keys` and firmware**. Nothing is downloaded, bundled or committed. Ever.
-- Keys, firmware and game files are needed **only at build time**. The produced app is self-contained, but it contains game-derived content, so it is **for your personal use only**. Napple does not condone sharing builds.
-- The repository contains no game bytes, keys or firmware. The compatibility matrix is metadata only.
-- Napple is not affiliated with or endorsed by Nintendo.
+**Guides.** [Napple Studio](docs/guides/studio.md), [CLI reference](docs/reference/cli.md), [environment variables](docs/reference/environment-variables.md),
+[debugging](docs/guides/debugging.md), [symptoms](docs/symptoms.md), [mods](docs/mods/README.md). Everything else is indexed in [docs/index.md](docs/index.md).
+
+**Tests.**
+
+```sh
+cargo test --workspace
+make -C runtime test test-services test-host
+make -C gfx test && make -C frontend test
+python3 tools/check_docs.py
+```
+
+## Online
+
+Napple Online is optional: an account with up to 8 profiles and per-profile visibility tiers, friends and presence, end-to-end encrypted cloud saves,
+an in-game Online tab, and multiplayer between Napple players through Napple-run servers. Signed out, everything works offline.
+See the [Napple Online guide](docs/guides/napple-online.md) and [cloud saves](docs/guides/cloud-saves.md).
 
 ## Status
 
-Napple is early and moving fast. This is the state of the four titles used for testing, taken from [`docs/titles/README.md`](docs/titles/README.md)
-(measured by scripted runs on an Apple Silicon Mac; a title is only called "played" where a person did) and [`docs/architecture/ios.md`](docs/architecture/ios.md):
+Napple is early and experimental. The `%Analysis` estimate of how much of the Switch platform surface the pipeline and runtime cover is **about 99.3%**
+(2026-11-02; [coverage by feature](docs/reference/feature-support.md)). Coverage is not compatibility: what runs, per title and per pipeline stage, is in
+[COMPATIBILITY.md](COMPATIBILITY.md), the [support matrix](docs/reference/support-matrix.md) and the [title notes](docs/titles/README.md).
 
-| Title | macOS | iPhone (device) | iOS Simulator | Details |
-|---|---|---|---|---|
-| Link's Awakening (LAS) | plays, ~58 fps headless, 60 fps live | **plays perfectly**, 60 fps at 1x render (iPhone 16 Pro Max) | title screen | [LAS](docs/titles/01006BB00C6F0000.md) |
-| Super Mario Odyssey (SMO) | plays, 60 fps live | plays at 60 fps at 1x render (iPhone 16 Pro Max), then **runs out of memory and crashes after about a minute** | start menu | [SMO](docs/titles/0100000000010000.md) |
-| Animal Crossing: New Horizons (ACNH) | boots through the opening and shows its picture (stopgap present), ~30 fps | not tried yet | stops before the first frame | [ACNH](docs/titles/01006F8002326000.md) |
-| Mario Kart 8 Deluxe (MK8D) | update + DLC runs races at 40-47 fps | not tried yet | stops (colour attachment limit / `time:u`) | [MK8D](docs/titles/0100152000022000.md) |
-
-The iPhone results were played by a person on an iPhone 16 Pro Max (2026-11-02); the iOS memory limit is the open issue for SMO
-([`docs/architecture/ios.md`](docs/architecture/ios.md)). Each title page lists what is still open. Per-stage results are in the
-[compatibility matrix](COMPATIBILITY.md); symptoms and fixes are in [`docs/symptoms.md`](docs/symptoms.md).
+<details>
+<summary>Online support per title (generated)</summary>
 
 <!-- online:begin -->
-**Online play** is between Napple players only, through the Napple-run servers at `pretend.napple.lat`, never Nintendo's. Generated from [`compat/online.json`](compat/online.json) (last checked 2026-11-02); what each mode means and the notes per title are in [online support](docs/reference/online-support.md).
+**Online play** is between Napple players only, through the Napple-run servers at `pretend.napple.lat`, never Nintendo's. Generated from [`compat/online.json`](compat/online.json) (last checked 2026-11-03); what each mode means and the notes per title are in [online support](docs/reference/online-support.md).
 
 | Title | Backend | LAN | Local | Matchmaking | Race / match | Friends | Rankings | DataStore |
 |---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
@@ -93,123 +112,54 @@ The iPhone results were played by a person on an iPhone 16 Pro Max (2026-11-02);
 `-` means the game has no such mode.
 <!-- online:end -->
 
-The table below is an **estimate of how much of the Switch platform surface the pipeline and runtime cover** (not per-game compatibility), produced by the `%Analysis` scanner:
-
-| Area | Coverage |
-|---|---|
-| CPU: AOT A64 rewrite | 100% |
-| Loader: NSO / NRO / modules / relocations | 100% |
-| Kernel: svcs + scheduling | 100% |
-| IPC: HLE service coverage | 100% |
-| IPC: command depth (implemented vs. stubbed) | 98% |
-| GPU: Maxwell shader ISA | 100% |
-| GPU: NVN API surface | 99% |
-| GPU: formats + pipeline features | 98% |
-| GPU: nvdrv / host1x devices | 92% |
-| Audio | 100% |
-| Input | 99% |
-| Content: containers, crypto, updates, DLC | 99% |
-| Saves + storage | 100% |
-| Library applets | 100% |
-| Video / media decode | 97% |
-| **Overall** | **≈ 99.3%** (2026-11-02, %Analysis, commit 2da952e; every row at 92% or above, only generic Switch coverage counts) |
-
-Napple Online below is a product feature, not Switch platform surface: it moves this score only where it closed catalog gaps (friend / nifm / ldn / bcat / account command rows), and the score is held back by what is not proven on a title yet (Wireless Play join, an empty in-game Friends list). Coverage is not compatibility: a long tail of command depth, shader corner cases and GPU behaviour is exactly what real games trip over first.
-
-## Napple Online
-
-Napple Online is an optional service run by Napple at `pretend.napple.lat` (account and social servers are live there). It is for **Napple players only**: it never involves Nintendo's accounts or servers. Nothing is required: signed out, a game plays exactly as before.
-
-- **Account.** Create a Napple Account with an email, a password and an emailed 6-digit code (terms and 13+ confirmed at sign-up). One sign-in is shared by every Napple game on the Mac, and by the CLI (`napple account`).
-- **Profiles.** An account holds up to 8 profiles (nickname, icon, photo, bio). A signed-in Mac plays as its profile: the game sees that profile as the online identity.
-- **Visibility tiers.** Each profile has a tier from 1 to 5: Public, Friends (searchable), Friends (hidden), Private and Ghost. The tier decides who can find it by search or friend code, send a friend request, see its card, presence and stats, and whether it leaves any trace in lobbies or recent players. A block hides both ways at every tier.
-- **Friends.** Friend codes, friend requests, a friend list, presence ("playing X, joinable"), recent players, blocking and reports, through `napple-social` ([guide](docs/guides/napple-social.md)).
-- **Cloud saves.** End-to-end encrypted: saves are encrypted on your device before upload and the server only holds ciphertext; a 24-word recovery code is the way back if every device is lost. A second Mac or an iPhone joins by approval ([guide](docs/guides/cloud-saves.md)).
-- **In-game Online tab.** The settings overlay has an Online tab for sign-in, profiles, tier, friends, requests, search, recent, blocked and stats, driven by the same client core as the CLI ([client guide](docs/guides/napple-online-client.md)).
-- **Napple to Napple play.** LAN Play and local wireless go through a Napple room; matchmaking runs on `napple-online` ([rooms](docs/guides/online-rooms.md), [server](docs/guides/napple-online.md)). Terms, privacy and report policy: [`docs/legal/`](docs/legal/README.md).
-- **Verified.** A scripted 60-check end-to-end run (sign-up, second device, cloud save, friends, every tier, delete) passes locally and against the live servers ([guide](docs/guides/online-e2e.md)).
-
-**Not done yet.** Mario Kart 8 Deluxe: a race starts in a two-instance local run, but Wireless Play (local wireless through a room) still crashes right after joining, and the Friends menu list is still empty (a friend does show as joinable). Sign-up email goes out through Amazon SES, which is still in sandbox: production access is pending, so on the live servers only pre-verified addresses receive the code for now. The other titles are untested online.
-
-## Download
-
-Every commit to `main` publishes a release (`.github/workflows/release.yml`): **Napple-Studio.dmg** (drag to Applications; Studio sets up the engine and
-`NAPPLE_HOME` / `NAPPLE_CLI` on first launch) and **Napple-macOS-arm64.zip** (Studio + `bin/` + `install.sh`). Landing page source: `site/` (GitHub Pages via `pages.yml`).
-
-## Quick start
-
-> Requires an Apple Silicon Mac, Xcode command line tools, a Rust toolchain (2024 edition), and your own keys and game.
-
-```sh
-# 1. build the toolchain
-cargo build --release -p napple-cli
-make -C runtime            # Horizon runtime
-make -C packaging          # launcher
-
-# 2. (optional) the GUI
-studio/build_app.sh        # → studio/dist/NappleStudio.app
-
-# 3. use the CLI
-target/release/napple ingest <game.xci|.nsp|.nsz> -k prod.keys
-target/release/napple plan   <game> -k prod.keys
-target/release/napple decomp <game> -k prod.keys -o out/ --updates latest --dlc all
-```
-
-Or just open **Napple Studio**, give it your keys once, and drop a game onto the window.
-
-Run the tests:
-
-```sh
-cargo test                 # Rust core
-make -C runtime test test-services  # runtime, on macOS
-make -C runtime test-host  # portable kernel / loader / service tests, any POSIX host
-```
-
-## Repository layout
-
-| Path | What lives there |
-|---|---|
-| `crates/` | Rust workspace: `napple-core` (containers, NCA crypto, content/update/DLC), `napple-rewrite` (AArch64 rewriter), `napple-sigs` (signatures), `napple-build` (`.app` packaging), `napple-compat` (matrix tooling), `napple-cli` (the `napple` command) |
-| `runtime/` | loader, Horizon kernel, HLE services (C, with the Mach/Cocoa parts in Objective-C) |
-| `gfx/` | NVN to Metal, Maxwell shader translator, texture layouts |
-| `audio/` · `input/` · `frontend/` | audio renderer, controllers, windowing and settings overlay |
-| `studio/` | Napple Studio (SwiftUI) and its packaging assets (dmg, icons) |
-| `packaging/` | the app launcher placed inside every produced `.app` |
-| `compat/` | compatibility data (`matrix.json`); `COMPATIBILITY.md` is generated from it |
-| `knownSignatures/` | shared signature data used by the resolve stage |
-| `docs/` | architecture, formats, protocols, per-title notes and per-change notes |
-| `site/` | landing page (GitHub Pages, `pages.yml`) |
-| `tools/` | build, test and diagnostic scripts, see [`tools/README.md`](tools/README.md) (`dev/` drivers, `legacy/` leftovers) |
-| `.github/` | CI workflows, issue and pull request templates, Dependabot, CODEOWNERS |
-
-Start with [`docs/architecture/overview.md`](docs/architecture/overview.md). Service coverage is listed in [`docs/architecture/runtime-services.md`](docs/architecture/runtime-services.md).
+</details>
 
 ## Contributing
 
-Issues, compatibility reports and pull requests are welcome: see [`CONTRIBUTING.md`](CONTRIBUTING.md), [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) and
-[`SECURITY.md`](SECURITY.md). Compatibility results should name the stage, the evidence and the services or NVN calls that were missing.
-Please never attach game files, keys or firmware, to an issue or anywhere else. Notable changes are listed in [`CHANGELOG.md`](CHANGELOG.md).
+Bug reports, compatibility reports and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: it has the legal rules, the
+sign-off (DCO), the build and test steps and how to report a security problem privately. Never attach game files, keys or firmware to anything.
+Notable changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
-## FAQ
+## Legal
 
-**Is this an emulator?** No. The guest's ARM64 code runs directly on the CPU after an ahead-of-time rewrite of the few instructions macOS forbids; the console OS and GPU API are
-re-implemented (HLE, NVN to Metal). See [`docs/architecture/overview.md`](docs/architecture/overview.md).
+- **No affiliation.** Napple is an independent, community project. It is not affiliated with, endorsed by, sponsored by or approved by Nintendo.
+  Nintendo Switch, Joy-Con, amiibo, NVN and the names of games are trademarks of their respective owners and are used here only to describe
+  compatibility (nominative use).
+- **No Nintendo material.** This repository contains no Nintendo code, SDK, keys, firmware, games or game assets. The runtime is written from public
+  documentation, observed behaviour and permissively licensed or original code; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+- **Your own copy only.** You must own the console and the games and dump your keys, firmware and titles yourself. Napple never downloads game content,
+  keys or firmware and does not circumvent anything on its own; it only processes files you supply, on your machine. An app built by Napple contains game-derived
+  content and is for your personal use only: do not distribute it. Napple does not support piracy.
+- **Online.** Napple Online is a separate, optional service run by Napple. It never contacts Nintendo's servers and never asks for Nintendo account
+  credentials. Its [terms](docs/legal/terms.md), [privacy policy](docs/legal/privacy.md) and [report policy](docs/legal/report-policy.md) are in
+  [docs/legal/](docs/legal/README.md).
+- **Takedown and copyright requests.** Use the takedown section of the [report and takedown policy](docs/legal/report-policy.md#takedown-requests-content-or-copyright)
+  (`legal@napple.lat`), or contact the maintainer privately through GitHub. Content found to infringe is removed promptly.
+- **No warranty.** The software is provided "as is", without warranty of any kind (see [LICENSE](LICENSE)).
 
-**Does it include games, keys or firmware?** No, never. You supply your own, and only the build step needs them.
+## Credits
 
-**Which games work?** The four titles in the status table are the ones under test; the rest is unknown. Napple is game-agnostic, but only those four have been run.
+Napple builds on the work of these projects and people. Full notices, which must be kept with any distribution, are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [gfx/THIRD_PARTY_NOTICES.md](gfx/THIRD_PARTY_NOTICES.md).
 
-**Does it run on Intel Macs, Windows or Linux?** The product targets Apple Silicon Macs. The Rust crates and the portable tests also build on Linux (CI and `tools/linux-check/`),
-but the runtime, graphics and Studio are macOS-only.
+| Project | Author | License | Used for |
+|---|---|---|---|
+| [Ryujinx](https://github.com/Ryujinx/Ryujinx) (Ryujinx.Audio) | Ryujinx Team and Contributors | MIT | audio renderer formats and effect algorithms |
+| MacNativeGames | MacNativeGames contributors | MIT | runtime structure (threads, gates, relocation, memory layout), audio mixer, Opus wrapper, rumble, movie decoder host |
+| d2r-mobile | jhaizhou | MIT | NSO rewriter stopgap (`tools/refpy/`), gate and thread-entry assembly, texture layout and deswizzle code |
+| LASRecomp | Peiikai | MIT | Maxwell shader translator base, keyboard / controller binding design |
+| [nxnative](https://github.com/seedds/nxnative) | seedds | MIT | test and documentation ideas, rewriter edge cases, block-compressed render targets (designs, no code copied) |
+| [envytools](https://github.com/envytools/envytools) | Red Hat Inc. and contributors | MIT | Maxwell instruction encodings (facts only) |
+| [deko3d](https://github.com/devkitPro/deko3d) | fincs | zlib | texture block-linear layout |
+| nvn.h | h1k421 | MIT | NVN type definitions |
+| [bcdec](https://github.com/iOrange/bcdec) | iOrange | MIT / public domain | block-compressed texture decoding |
+| [stb_vorbis](https://github.com/nothings/stb) | Sean Barrett | public domain / MIT | Vorbis movie audio |
+| [libnx](https://github.com/switchbrew/libnx) | switchbrew | ISC | public description of HIPC / CMIF framing (no code included) |
+| [libopus](https://opus-codec.org), [libvpx](https://chromium.googlesource.com/webm/libvpx) | Xiph.Org, the WebM project | BSD 3-clause | Opus and VP9 decoding (linked, not copied) |
 
-**Does it run on iPhone or iPad?** Yes, on a real device: on an iPhone 16 Pro Max, Link's Awakening plays perfectly at 60 fps (1x render), and Super Mario Odyssey runs at 60 fps but runs out of memory and crashes after about a minute (being worked on). See [`docs/architecture/ios.md`](docs/architecture/ios.md).
+Rust and Swift dependencies are pulled by cargo and SwiftPM under their own licenses; `unicorn-engine` (GPL-2.0) is a test-only dev-dependency loaded
+dynamically and is not part of any build output.
 
-**Why is my game slow or glitchy?** Check [`docs/symptoms.md`](docs/symptoms.md) and the title page, then open a compatibility report.
+## License
 
-## Credits and license
-
-Napple stands on the shoulders of open projects: audio renderer formats and effect algorithms adapted from **Ryujinx.Audio**, and runtime structure and controller
-approaches adapted from **MacNativeGames** (MIT; an earlier project from the same lineage, whose full history is kept at the git tag `archive/legacy-projects-2026-10`), both MIT. Full notices are in [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) (and
-[`gfx/THIRD_PARTY_NOTICES.md`](gfx/THIRD_PARTY_NOTICES.md)) and must be kept with any distribution.
-
-Napple is released under the MIT license, see [`LICENSE`](LICENSE). Copyright (c) 2026 Eros J. Talevi.
+Napple is released under the [MIT License](LICENSE). Copyright (c) 2026 Eros J. Talevi. Third-party code keeps its own license, as listed above.

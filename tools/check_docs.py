@@ -13,7 +13,7 @@ from urllib.parse import unquote
 
 TITLES = ["01006BB00C6F0000", "0100000000010000", "01006F8002326000", "0100152000022000"]
 REQUIRED = ["docs/index.md", "docs/architecture/overview.md", "docs/guides/README.md", "docs/reference/cli.md", "docs/reference/environment-variables.md",
-            "docs/reference/glossary.md", "docs/process/README.md", "docs/archive/changes/README.md", "docs/symptoms.md"]
+            "docs/reference/glossary.md", "docs/archive/changes/README.md", "docs/symptoms.md"]
 HISTORY = ("docs/archive/changes/",)
 SKIP_DIRS = {"target", "node_modules", ".build", "build", "dist", "site", "third_party", ".git"}
 

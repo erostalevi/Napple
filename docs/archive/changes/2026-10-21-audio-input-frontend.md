@@ -1,6 +1,6 @@
 # Change: audio, input and frontend libraries
 
-Date: 2026-10-21. Owner: audio/input/frontend engineer. Interface for integrators: `docs/audio-input-frontend-interface.md`.
+Date: 2026-10-21. Owner: audio/input/frontend engineer. Interface for hand-off notes: `docs/audio-input-frontend-interface.md`.
 
 ## Objective
 

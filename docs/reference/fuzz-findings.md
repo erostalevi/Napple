@@ -1,6 +1,6 @@
 # Fuzz findings
 
-Every crash, panic, hang, overflow or unbounded allocation found by the robustness work (2026-10-27, branch `claude/fuzz-hardening-2026-10-27`), with the fix and its regression test. How to run the fuzzers: [fuzzing guide](../guides/fuzzing.md). "Found by": **fuzz** = cargo-fuzz or a C fuzz driver, **mutation** = the seeded-mutation test with its allocation guard, **audit** = read while writing the targets, then reproduced with a hostile input.
+Every crash, panic, hang, overflow or unbounded allocation found by fuzzing the parsers of untrusted input, with the fix and its regression test. How to run the fuzzers: [fuzzing guide](../guides/fuzzing.md). "Found by": **fuzz** = cargo-fuzz or a C fuzz driver, **mutation** = the seeded-mutation test with its allocation guard, **audit** = read while writing the targets, then reproduced with a hostile input.
 
 ## Rust
 
@@ -40,7 +40,7 @@ No finding (clean in the mutation tests and the fuzz budget): PFS0/HFS0/XCI, NCA
 | 18 | ipc (bsd) | Select timeout overflow on guest int64 values | `services/offline.c` | `regress_ipc.c` |
 | 19 | ipc (time) | guest time snapshot arithmetic overflow | `services/time_core.c:time_snapshot_span`, `services/time.c` | `regress_ipc.c` (span only; `st_user_clock_difference`, `st_monotonic_base` have no embedded test) |
 
-Not present in the C runtime, so nothing to fuzz: WebArgs TLV and IPS patching (IPS lives in Rust: `napple-mods`). `libapplet` (library-applet storages) is the closest TLV-like parser. The `ipc` fixes came from the first fuzz rounds and are a start, not a complete sweep of the services (the target reached about 2000 edges); `hid_core` and `audio` decoders are not covered, `fs.c` command handlers only through `ipc`.
+Not present in the C runtime, so nothing to fuzz: WebArgs TLV and IPS patching (IPS lives in Rust: `napple-mods`). `libapplet` (library-applet storages) is the closest TLV-like parser. The `ipc` fixes are a start, not a complete sweep of the services (the target reached about 2000 edges); `hid_core` and `audio` decoders are not covered, `fs.c` command handlers only through `ipc`.
 
 ### Budgets run (mutation driver, ASan + UBSan, 300 s per target after the last fix to that target)
 

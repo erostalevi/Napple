@@ -20,7 +20,7 @@ on:
       - "crates/napple-account/**"
       - "crates/napple-social/**"
       - "infra/**"
-      - "Cargo.lock"
+      - "Cargo.toml"
       - ".github/workflows/deploy-servers.yml"
   workflow_dispatch:
     inputs:

@@ -1,7 +1,8 @@
 # Third-party notices
 
-Napple reuses and adapts code from MIT-licensed projects. The notices below must be kept with any distribution.
-(Created by the audio/input/frontend work because the file did not exist yet; the runtime engineer may extend it.)
+Napple reuses and adapts code from permissively licensed projects. The notices below must be kept with any distribution.
+Third-party code inside `gfx/` (NVN header, Maxwell translator base, texture layout code, bcdec) is listed in
+[gfx/THIRD_PARTY_NOTICES.md](gfx/THIRD_PARTY_NOTICES.md), with the license texts in `gfx/third_party/`.
 
 ## Ryujinx.Audio (MIT)
 

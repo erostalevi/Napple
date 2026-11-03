@@ -10,7 +10,7 @@
     "lan_play": {"status": "works", "note": "LAN Play through a local napple-room: two instances verified in the same room (one creates it, the other lists and joins it; both reach its character select).", "checked": "2026-11-02"},
     "local_wireless": {"status": "broken", "note": "Local wireless (LDN) through a room: the station crashes right after joining.", "checked": "2026-11-02"},
     "online_matchmaking": {"status": "works", "note": "Through a local napple-online: login, the online menu, and two instances matched into one gathering (verified).", "checked": "2026-11-02"},
-    "online_race_or_match": {"status": "partial", "note": "In a two-instance run through a local napple-online the race starts; it has not been played through to the end.", "checked": "2026-11-02"},
+    "online_race_or_match": {"status": "partial", "note": "Two instances on one Mac through a local napple-online and a napple-room: both join, connect peer to peer, vote a course, and the race countdown starts (verified). The race has not been played through to the end.", "checked": "2026-11-03"},
     "friends": {"status": "partial", "note": "A friend shows as joinable; the friend list on the Friends menu is still empty.", "checked": "2026-11-02"},
     "rankings": {"status": "untested", "note": "Time trial rankings; not tried yet.", "checked": "2026-11-02"},
     "datastore": {"status": "untested", "note": "Ghost upload and download; not tried yet.", "checked": "2026-11-02"}

@@ -1,7 +1,8 @@
 # Napple Online client core
 
-The runtime-side client of Napple Online (orchestrations/ONLINE-CONTRACT.md): shared sign-in, account/profile/social calls, the local-user to profile
-mapping, and the function table the overlay's Online tab uses. Code: `crates/napple-cloud/src/online/` (Rust) and `runtime/src/online/` (C).
+The runtime-side client of Napple Online: shared sign-in, account/profile/social calls, the local-user to profile mapping, and the function table
+the overlay's Online tab uses. Code: `crates/napple-cloud/src/online/` (Rust) and `runtime/src/online/` (C). Server side:
+[Napple Account](napple-account.md), [napple-social](napple-social.md), [napple-online](napple-online.md).
 
 ## Shared credentials
 `<NAPPLE_HOME>/online/credentials.json` (`NAPPLE_HOME` default `~/Library/Application Support/Napple`), mode 0600, read by every Napple game on the Mac:
@@ -17,7 +18,7 @@ A 401 on refresh signs this Mac out (credentials cleared).
 ## Profile mapping
 `<NAPPLE_HOME>/online/profile_map.json`: `{"default": "<profile_id>", "users": {"<uid hex>": "<profile_id>"}}`. The local Switch user takes its entry,
 else `default`, else the account's first profile, which is recorded as `default` (no linking step). `switch_profile` writes the user's entry.
-The friend service (net_online_social.c) gets the profile through `napple_account_profile_id()` unless `NAPPLE_SOCIAL_PROFILE` is set.
+The friend service (`net_online_social.c`) gets the profile through `napple_account_profile_id()` unless `NAPPLE_SOCIAL_PROFILE` is set.
 
 ## C API
 - Overlay table: `napple_online_runtime_start(home, account_url, social_url, uid_hex)` returns the `napple_online_ui_api` of
@@ -25,7 +26,7 @@ The friend service (net_online_social.c) gets the profile through `napple_accoun
   (every `NAPPLE_ONLINE_POLL_MS`, default 30 s, and after every action). Completions and the change callback are queued: the host calls
   `napple_online_ui_pump()` on its main thread each frame. State getters read the cache.
 - Game side: strong `napple_account_access_token()` / `napple_account_profile_id()` start the client lazily; when the Mac is signed in the
-  friend service (ONLINE_CAP_FRIENDS) switches on by itself and shows the profile's Napple friends and presence. Signed out: nothing changes
+  friend service (`ONLINE_CAP_FRIENDS`) switches on by itself and shows the profile's Napple friends and presence. Signed out: nothing changes
   and no file or directory is created.
 - Rust FFI (`napple_online_*`, JSON in/out): open, act, refresh, state, access_token, profile_id, free.
 
@@ -40,10 +41,17 @@ accept/decline by the pending request found for that profile; remove `DELETE /fr
 invite `POST /invites`; join accepts the friend's live invite, else returns the join token of their presence; report `POST /reports`;
 approve_device wraps the account key to the pending device (`/keys/requests`, `/keys/grant`); revoke_device `DELETE /devices/{id}`; delete_account `DELETE /me`.
 
+## Wiring in the runtime and the overlay
+- `runtime/src/app.m` (windowed Mac runs): `register_online_ui()` calls `napple_online_runtime_start(NULL,NULL,NULL,NULL)`, hands the table to
+  `napple_frontend_set_online_ui()` and pumps `napple_online_ui_pump()` from a 0.1 s main-run-loop timer. Without `CLOUD=1` the weak defaults in
+  `app.m` return NULL and the overlay keeps its stub. Headless runs do not start the client until the friend service asks for a token (lazy start
+  in `online_ui.c`).
+- `frontend/src/overlay_online.m`: the Online tab registers the six social sub-tabs (`napple_online_social_init`, host toast = the game view
+  toast, text input = the software keyboard bar awaited with a nested run loop) and keeps its own change callback on the table so
+  `napple_online_social_changed` raises the friend-request toasts while the overlay is closed. Invite toasts
+  (`napple_online_social_invite_event`) need a feed from the client: the table has no invite event yet.
+
 ## Tests
 `cargo test -p napple-cloud online` (credentials, concurrent refresh, sign-in flow against a fake server) and
-`make -C runtime test-online` (the table against a fake account+social server in C).
-
-## Wiring (integrated, batch r12)
-- `runtime/src/app.m` (windowed Mac runs): `register_online_ui()` calls `napple_online_runtime_start(NULL,NULL,NULL,NULL)`, hands the table to `napple_frontend_set_online_ui()` and pumps `napple_online_ui_pump()` from a 0.1 s main-run-loop timer. Without `CLOUD=1` the weak defaults in app.m return NULL and the overlay keeps its stub. Headless runs do not start the client until the friend service asks for a token (lazy start in `online_ui.c`).
-- `frontend/src/overlay_online.m`: the shell registers the six social sub-tabs (`napple_online_social_init`, host toast = the game view toast, text input = the software keyboard bar awaited with a nested run loop) and keeps its own change callback on the table so `napple_online_social_changed` raises the friend-request toasts while the overlay is closed. Invite toasts (`napple_online_social_invite_event`) still need a feed from the client (no invite event in the table yet).
+`make -C runtime test-online` (the table against a fake account+social server in C). The full flow against real servers is
+[the end-to-end test](online-e2e.md).

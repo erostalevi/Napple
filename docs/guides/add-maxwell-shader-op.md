@@ -22,7 +22,7 @@ Background: [gfx.md](../architecture/gfx.md), "Decision 1" (why a native transla
 |---|---|
 | `gfx/src/shader/maxwell_translate.c` | The new `else if (OPM(...))` branch in `emit_insn`; new `Ctx` flags if the op needs a prelude in the generated source. |
 | `gfx/src/shader/maxwell.h` | Only if the generated MSL needs a new binding or `ShaderInfo`/`ShaderKey` field (then also `mtl_shader.m` and `mtl_replay.m`, which bind them). |
-| `gfx/src/mtl_shader.m` | `#define TRANSLATOR_VERSION` (currently 8): **bump it when the generated MSL changes**, which invalidates the disk caches (`pipelines-v<N>.metalar`, per-shader caches). |
+| `gfx/src/mtl_shader.m` | `#define TRANSLATOR_VERSION` (currently 20): **bump it when the generated MSL changes**, which invalidates the disk caches (`pipelines-v<N>.metalar`, per-shader caches). |
 | `gfx/tests/t_xlate.m` | The translator test: assembler helpers (`i_*`), `XL_OK` / `XL_REFUSE` / `HAS` macros, numeric execution tests (`run_fs_u4`, macOS only). |
 | `gfx/tests/nvn_test.h` | Shared helpers `ins_exit`, `ins_mov32i`, `ins_ald`, `ins_ast`, `build_shader`, `PT_BITS`. |
 | `gfx/tests/t_xlate_linux.sh` | Builds and runs `t_xlate` without Metal. |
@@ -43,23 +43,23 @@ There is no corpus directory in the repository: shaders extracted from games are
    - Refuse cleanly what you do not implement: `fail(c, "<op>.<modifier> is not supported")`. A translation failure only skips the draws that use the shader; a wrong translation draws garbage.
 4. **Carry state if needed.** Condition-code carries use `c->uses_cc` and a `cc` variable (see ISCADD, IMAD, LEA); new generated helpers need a `Ctx` flag and a line in the program assembly after the `// MSL source` marker.
 5. **Bump `TRANSLATOR_VERSION`** in `mtl_shader.m`.
-6. **Add tests** (below) and a note in the graphics notes if the op was found in a game.
+6. **Add tests** (below), and record the title and shader hash in that title's page if the op was found in a game.
 
 ## Worked example
 `VMNMX` (video min/max) is a complete, recent case; the branch is in `maxwell_translate.c` (search `// VMNMX`), its test is in `gfx/tests/t_xlate.m`.
-- Found in Animal Crossing: fragment shader `23e43e94e45bb1d5` at 0x3e8 holds `0x3b34056060470100`, and the old log read "unknown instruction 3b34056060470100" ([symptoms.md](../symptoms.md), Rendering).
+- Found in a game's fragment shader: the word `0x3b34056060470100` at 0x3e8, and the log read "unknown instruction 3b34056060470100" ([symptoms.md](../symptoms.md), Rendering).
 - The branch: `else if (OPM(0x3a00000000000000ull, 0xfe00000000000000ull)) {  // VMNMX ...` reads A bits 36..38 and sign 48, B bits 28..30 and sign 49, B from a register when bit 50 else an immediate 16 at bit 20, MX bit 56,
   D-format 54, SAT 55, the second video op 51..53, CC 47 (`fail` for `.CC`); it selects bytes or halves, does `max`/`min` in 64 bits and merges with `insert_bits(...)` or `min`/`max` with Rc, then `r<d> = res`.
 - The tests in `t_xlate.m`:
   1. an assembler helper, `i_vmnmx(d, a, b, c, asel, asg, bsel, bsg, bvid, mx, vop, dfmt, sat)`, builds a word from the fields (`| PT_BITS` makes the predicate PT);
   2. a golden check that the real word translates and the MSL has the expected text:
      ```c
-     XL_OK(vm, STAGE_FRAGMENT, z, 0xf, "VMNMX from Animal Crossing", 0x3b34056060470100ull, ins_exit());
+     XL_OK(vm, STAGE_FRAGMENT, z, 0xf, "VMNMX from a game shader", 0x3b34056060470100ull, ins_exit());
      CHECK(HAS(vm, "long vr = max(va, vb);") && HAS(vm, "res = max(res, vc);") && HAS(vm, "r0 = res;"), "VMNMX MAX, U32: three-way unsigned maximum");
      ```
      `XL_OK` translates with `xl_ins` and (on macOS) compiles the MSL with Metal; `XL_REFUSE(var, stage, key, omap, why, label, ...)` asserts that an unsupported form is refused with a given message;
   3. under `#ifdef __APPLE__`, numeric execution: `run_fs_u4(vm->msl, o, 0)` runs the fragment shader on a 1x1 `RGBA32Uint` target and compares registers r0..r3 (mov32i the inputs, run the op, `EXIT`).
-Another model for a smaller op: `// ISCADD32I` (a two-line branch) and `// IMAD` (several encodings, honest comment "Bit layout from memory; no real word in the LAS or SMO corpora").
+Another model for a smaller op: `// ISCADD32I` (a two-line branch) and `// IMAD` (several encodings, with an honest comment that the bit layout is from memory and no real word was found in the corpora).
 
 ## How to test
 - **Linux, no Metal:** `sh gfx/tests/t_xlate_linux.sh` compiles `tests/t_xlate.m` as C together with `src/shader/maxwell_translate.c` and runs every translation and text assertion; Metal compile checks are skipped and counted. Measured on a Linux box:
@@ -68,8 +68,8 @@ Another model for a smaller op: `// ISCADD32I` (a two-line branch) and `// IMAD`
   To run only this test: `make -C gfx build/tests/t_xlate && gfx/build/tests/t_xlate`.
 - **Corpus of real shaders (kept outside the repository):** set `NAPPLE_SHADER_CORPUS=<dir>` to a directory of extracted shaders, each `<name>.bin` (code) with a `<name>.ctl` (control section, whose word at +0x700 is the code length),
   stage chosen from the file name (`_ps.` fragment, `_cs.` compute, otherwise vertex). `t_xlate` then prints `corpus: N shaders, M translated, K compile with Metal` and fails below 95 % translated or if any translated shader fails the Metal compile.
-  The titles' pages quote results of this mode as corpus guards (`t_las`, `t_smo`; [titles/01006BB00C6F0000.md](../titles/01006BB00C6F0000.md), [titles/0100000000010000.md](../titles/0100000000010000.md)); no file of those names exists in `gfx/tests/`.
-  Produce the files with `NAPPLE_SHADER_DUMP` while running a title you own; do not commit them.
+  The [title notes](../titles/README.md) quote results of this mode per title.
+  Produce the files with `NAPPLE_SHADER_DUMP` while running a title you own, or extract a title's whole corpus with `tools/gpu/scan_stages.py extract` ([gpu-title-scan.md](gpu-title-scan.md)); do not commit them.
 - **In a game:** run the title and check that the `could not be translated` line is gone and the picture is right. `NAPPLE_GFX_MATH=safe|relaxed|fast` selects the MSL math mode (default `safe`); `NAPPLE_SHADER_PROBE`
   (see `mtl_shader.m`, `mtl_replay.m`) shows chosen registers as the fragment colour after one instruction, and `NAPPLE_DEBUG_SKIP_VS` bisects vertex programs ([debugging.md](debugging.md)).
 
@@ -77,9 +77,9 @@ Another model for a smaller op: `// ISCADD32I` (a two-line branch) and `// IMAD`
 - **First match wins.** A broad `OPM` placed earlier silently swallows your new opcode; place narrow masks first, and run the existing tests (they pin the older ops).
 - **NaN semantics.** Maxwell's ordered not-equal is false when either operand is NaN, while MSL `!=` is true: the translator emits `(a < b) || (a > b)` for FSETP/FSET/FCMP NE and `precise::fmin/fmax` for FMNMX
   ([symptoms.md](../symptoms.md), Rendering).
-- **Bounds on constant buffers.** Register-indexed constant-buffer reads past the bound size return 0 on hardware; use `cbuf_ref(..., dyn, ...)`, which emits `cbr(cb, size, off)`, never a raw index (SMO's garbage bones).
+- **Bounds on constant buffers.** Register-indexed constant-buffer reads past the bound size return 0 on hardware; use `cbuf_ref(..., dyn, ...)`, which emits `cbr(cb, size, off)`, never a raw index (a raw index produced garbage skinning bones in a game).
 - **Layouts "from memory".** Several branches say so in their comment and have no real word in the corpora they were checked against. Keep that honesty in new comments, and make the unverified forms `fail()` instead of guessing.
 - **Carries and 64-bit math.** `.CC`/`.X` forms need the `cc` variable; if you do not model them, refuse them.
 - **Cache invalidation.** Forgetting `TRANSLATOR_VERSION` leaves old MSL in `pipelines-v<N>.metalar` and the per-shader cache; the symptom is "my fix does nothing" on a machine that already ran the title.
-- **Metal limits.** Threadgroup memory above 32 KB is refused (`shared memory of %u bytes exceeds Metal's 32 KB threadgroup limit`); there is no geometry stage (OUT is refused) and no f64 (DMNMX is refused); surface instructions are translated to texture reads, writes and atomics (see gfx.md section 11; INC, DEC, EXCH, CAS and 64-bit / float surface atomics are refused).
+- **Metal limits.** Threadgroup memory above 32 KB is refused (`shared memory of %u bytes exceeds Metal's 32 KB threadgroup limit`); `OUT` is only accepted in geometry programs, which run as compute kernels ([gfx.md](../architecture/gfx.md)); there is no f64 (DMNMX is refused); surface instructions are translated to texture reads, writes and atomics (see the surface images section of gfx.md; INC, DEC, EXCH, CAS and 64-bit / float surface atomics are refused).
 - **Stage-specific state.** Fragment shaders depend on the vertex shader's outputs through `ShaderKey.vs_out_mask`; a change that alters when varyings are read can change which variants are built (pipeline stutter, [symptoms.md](../symptoms.md)).

@@ -42,8 +42,6 @@ Everything that touches game data expects files you dumped yourself under `work/
 |---|---|---|
 | `long_run_perf.sh` | Headless long run with `NAPPLE_PERF_LOG=1`; reports stalled windows, pipeline builds and RSS. Uses `long_monitor.sh`. | macOS, built runtime, a prepared game |
 | `long_monitor.sh` | Samples RSS, threads and CPU of a running `napple-runtime` every N seconds. | macOS or Linux, `ps` |
-
-## dev/
-
-Developer test drivers (not part of the product): GPU-lock wrapper, windowed and packaged-app runs with injected key events, thread dumps via `SIGUSR1`.
-See [`dev/README.md`](dev/README.md). `dev/synth_keys.m` is the key injector the drivers use (macOS, needs Accessibility permission for the terminal).
+| `soak/arbtrace.py` | Prints a `NAPPLE_ARB_TRACE` ring (address-arbiter events, `runtime/src/threads.c`) by thread, address or time window. | Python 3 |
+| `soak/litmus_excl_claim.c` | Litmus test for exclusive load/store ordering on the host (plain `ldxr` against `ldaxr`), the evidence behind the rewriter's acquire/release exclusives. | Apple Silicon, clang |
+| `fps/frame_trace.py` | Headless frame-trace gate for the fps modes (game clock, guest vsync and presented frames per wall second). | macOS, built runtime, prepared titles |

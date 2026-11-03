@@ -100,5 +100,5 @@ per-directory fsync. Commits of a file a game is still writing are torn exactly 
 
 ## Branch
 The request named branch `worktree-loader-kernel`, which does not exist in this checkout or on the remote. The session's assigned branch is
-`claude/clever-galileo-sq7426`. The commit is on that branch, and a local branch `worktree-loader-kernel` points at the same commit.
+`clever-galileo-sq7426`. The commit is on that branch, and a local branch `worktree-loader-kernel` points at the same commit.
 Nothing is pushed.

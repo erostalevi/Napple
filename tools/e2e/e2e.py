@@ -24,7 +24,7 @@ amiibo store are created there, which is also what proves that the second title 
 import argparse, glob, importlib.util, json, os, plistlib, re, shutil, subprocess, sys, tempfile, time, types
 
 ROOT = os.environ.get("NAPPLE_ROOT") or os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-TESTING = os.environ.get("NAPPLE_TESTING_MATERIAL", "/Users/neto/Documents/Napple/Testing Material")
+TESTING = os.environ.get("NAPPLE_TESTING_MATERIAL", "Testing Material")
 REAL_SUPPORT = os.path.expanduser("~/Library/Application Support/Napple")
 GOLDEN_ROUTES = json.load(open(os.path.join(ROOT, "tools/golden/routes.json")))["titles"]
 AMIIBO_MODEL = "0000000000340102"
@@ -36,7 +36,7 @@ TITLES = {
 }
 KNOWN = [
     (re.compile(r"CRASH signal=11 fault=0x8 pc=main\+0x6d65a4"), "ACNH intermittent null dereference in game code (main+0x6d65a4, a singleton whose field was not set yet) about 1 s into a start, seen under host load (kernel-threads note: a start-up ordering race between game threads, not reproduced without load)"),
-    (re.compile(r"sdk\+0xc80730"), "ACNH intermittent guest Break at sdk+0xc80730 about 1 s into a headless start (independent of the fps mode; tracked in the orchestration notes)"),
+    (re.compile(r"sdk\+0xc80730"), "ACNH intermittent guest Break at sdk+0xc80730 about 1 s into a headless start (independent of the fps mode)"),
 ]
 
 

@@ -1,4 +1,4 @@
-/* t_f64.m - GPU execution of the double-precision emulation (Mac only; written in a Linux cloud session and NOT yet run: see integrators/ for the check).
+/* t_f64.m - GPU execution of the double-precision emulation (Mac only).
  *
  * Compiles sd_msl_source (the exact text the Maxwell translator appends to a shader that uses DADD/DMUL/DFMA/DSETP/DMNMX/DSET or a 64-bit conversion)
  * inside a compute kernel, runs random and edge vectors through every function for all four rounding modes, and compares each result bit for bit

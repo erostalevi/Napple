@@ -1,462 +1,523 @@
 # Runtime services and kernel surface
 
-The runtime (`runtime/`) hosts a rewritten game in one process: the guest's AArch64 code runs natively, `svc` and counter
-reads go through `runtime_gate` (rewritten ahead of time), and the services below answer the IPC the SDK issues. Services are
-implemented at IPC level (HIPC/CMIF, with domains), so SDK-version differences do not matter, except for the few host
-overrides of guest imports (NVN, `nv::` graphics memory) listed at the end.
+The runtime (`runtime/`) hosts a rewritten game in one process: the guest's AArch64 code runs natively, `svc` and counter reads go through
+`runtime_gate` (rewritten ahead of time), and the services below answer the IPC the SDK issues. Services are implemented at IPC level
+(HIPC/CMIF and TIPC, with domains), so SDK-version differences do not matter, except for the few host overrides of guest imports (NVN, `nv::`
+graphics memory, the movie decoder) described in [Graphics](gfx.md) and under [Media](#media) below.
 
-Policy: a service or command that is not implemented stops the runtime with its name and id, records it in the compat
-summary (`missing_ipc`) and the trace. A stub (marked `STUB` in the command tables) answers a documented safe default.
-`NAPPLE_IPC_LENIENT=1` returns an error result instead of stopping, to enumerate more gaps in one run;
-`NAPPLE_SVC_LENIENT=1` does the same for svcs. The service manager refuses services outside the NPDM access list, like the
-real one (the SDK falls back, e.g. `pctl` then `pctl:s`, `pctl:r`, `pctl:a`).
+This page describes the current state. The history of each change is in the [change archive](../archive/changes/README.md).
+
+## Policy
+
+- A service or command that is not implemented stops the runtime with its name and id, records it in the compat summary (`missing_ipc`) and the
+  trace. `NAPPLE_IPC_LENIENT=1` returns an error result instead of stopping, to enumerate more gaps in one run; `NAPPLE_SVC_LENIENT=1` does the
+  same for svcs.
+- Command tables mark each row `IPC_IMPL` (real answer, or the console's own offline answer with the reason in a comment) or `IPC_STUB` (a
+  documented safe default). The remaining stub rows each carry their reason in the table: no public layout, a missing provider hook, or a host
+  feature Napple lacks.
+- The service manager refuses services outside the NPDM access list, like the real one (the SDK falls back, e.g. `pctl` then `pctl:s`, `pctl:r`,
+  `pctl:a`). A service is only reachable when the game's NPDM lists it.
+- Network-facing services answer through the [`OnlineProvider`](../guides/network-providers.md). With the default NullProvider they give the
+  answers of a console with no network.
+- Layout caveats: where a command layout was taken from public documentation and has not been seen in a title's traffic it is marked
+  [unverified] in the source; layouts with no public description at all are marked **proposed**. Those marks are kept below where they apply.
 
 ## Kernel (svc)
 
-Implemented: 0x01-0x06 memory (SetHeapSize, permissions, MapMemory as a copying stack mapping, QueryMemory), 0x07 ExitProcess,
-0x08-0x10 threads, 0x11/0x12/0x17 events, 0x13/0x14 shared memory (remap, or copy when not host-page aligned), 0x15
-CreateTransferMemory, 0x16 CloseHandle, 0x18/0x19 WaitSynchronization/Cancel, 0x1A-0x1D mutex and condition variable, 0x1E
-GetSystemTick, 0x1F ConnectToNamedPort (`sm:` only), 0x21/0x22 SendSyncRequest, 0x24/0x25 ids, 0x26 Break (reported with guest
-backtrace), 0x27 OutputDebugString, 0x29 GetInfo (ids 0-28), 0x2A/0x2B cache flush (no-op), 0x2C/0x2D MapPhysicalMemory,
-0x30/0x31/0x37 resource limits (plausible constants), 0x32 SetThreadActivity (existence check only), 0x34/0x35 address
-arbiter, 0x45 CreateEvent, 0x51/0x52 transfer memory map (no-op: services read guest memory directly).
-Virtual cores: three application cores, a thread holds one while it runs guest code (`NAPPLE_FREE_CORES=1` disables).
+| svc | Name | Status | Notes |
+|---|---|---|---|
+| 0x01-0x06 | SetHeapSize, SetMemoryPermission, SetMemoryAttribute, MapMemory, UnmapMemory, QueryMemory | implemented | MapMemory is a copying stack mapping |
+| 0x07 | ExitProcess | implemented | |
+| 0x08-0x10 | threads | implemented | see [Scheduling](#scheduling) |
+| 0x11, 0x12, 0x17 | events | implemented | |
+| 0x13, 0x14 | Map/UnmapSharedMemory | implemented | remap, or copy when not host-page aligned |
+| 0x15 | CreateTransferMemory | implemented | |
+| 0x16 | CloseHandle | implemented | |
+| 0x18, 0x19 | WaitSynchronization, CancelSynchronization | implemented | |
+| 0x1A-0x1D | mutex and condition variable | implemented | |
+| 0x1E | GetSystemTick | implemented | 19.2 MHz, see [Frame pacing](#frame-pacing-and-timing) |
+| 0x1F | ConnectToNamedPort | implemented | `sm:` and guest ports |
+| 0x20 | SendSyncRequestLight | partial | seven words in w1..w7 |
+| 0x21, 0x22 | SendSyncRequest(WithUserBuffer) | implemented | host services; guest sessions partial (below) |
+| 0x24, 0x25 | GetProcessId, GetThreadId | implemented | |
+| 0x26 | Break | implemented | reported with guest backtrace |
+| 0x27 | OutputDebugString | implemented | |
+| 0x29 | GetInfo | implemented | ids 0-28 |
+| 0x2A, 0x2B | cache flush | implemented | no-op |
+| 0x2C, 0x2D | Map/UnmapPhysicalMemory | implemented | |
+| 0x2E | GetDebugFutureThreadInfo | implemented | InvalidHandle: an application has no debug objects |
+| 0x2F | GetLastThreadInfo | partial | the thread that held the caller's virtual core before it: {fp, sp, lr, pc}, its TLR, flag 1 when it is inside an svc (else the frame of its last svc); NoThread when none, or with `NAPPLE_FREE_CORES=1` |
+| 0x30, 0x31, 0x37 | resource limits | implemented | plausible constants |
+| 0x32 | SetThreadActivity | partial | pause / resume are real: a paused thread stops at its next svc boundary, without its core, until resumed; a thread blocked in an svc is stopped already; pausing waits up to 50 ms. A thread spinning in guest code without svcs keeps running |
+| 0x33 | GetThreadContext3 | partial | from the gate's register area: x0..x28 (guest x18 from its slot), fp, lr, sp, pc = svc site + 4, nzcv, fpcr/fpsr, q0..q31, tpidr. InvalidState for a thread still running guest code, Busy on the calling thread |
+| 0x34, 0x35 | WaitForAddress, SignalToAddress | implemented | address arbiter |
+| 0x36 | SynchronizePreemptionState | partial | clears the TLR interrupt flag and takes a deferred switch; a thread with a non-zero TLR disable count is not switched until it issues this svc |
+| 0x3C, 0x3D | KernelDebug, ChangeKernelTraceState | implemented | no-ops |
+| 0x40, 0x41 | CreateSession, AcceptSession | partial | guest-to-guest IPC (below) |
+| 0x42 | ReplyAndReceiveLight | partial | replies first when bit 31 of w1 is set (flag position from the public kernel sources, not checked on hardware) |
+| 0x43, 0x44 | ReplyAndReceive(WithUserBuffer) | partial | guest-to-guest IPC (below) |
+| 0x45 | CreateEvent | implemented | |
+| 0x4B, 0x4C | CreateCodeMemory, ControlCodeMemory | partial | `kcode.c`, below |
+| 0x50 | CreateSharedMemory | implemented | size and permission checks; zeroed host pages; the remote permission is not enforced |
+| 0x51, 0x52 | Map/UnmapTransferMemory | implemented | no-op: services read guest memory directly |
+| 0x70-0x72 | CreatePort, ManageNamedPort, ConnectToPort | partial | guest ports |
+
 Everything else is unsupported and reported by number and name.
 
+**Guest-to-guest IPC** (`ksession.c`, message copy `kmsg.c`): IPC between threads of the game. There is one address space and one handle table,
+so copy and move handles pass through with the sender's handle values (a copy handle is shared, not duplicated), A/B/W descriptors keep their
+addresses, X data is copied into the receiver's receive list for list modes 2 and above (modes 0/1 keep the sender's address), and the pid field
+gets 0x80. A server session is signaled while a request waits and none is being served, or once its client is closed.
+
+**Code memory** (`kcode.c`, aliases in `memory.c`): argument, permission, size and state checks as in KCodeMemory. Map (RW, state CodeOut 0x15)
+and MapToOwner (R/RX, GeneratedCode 0x14) share the source heap pages through `mach_vm_remap`. Both addresses must be 16 KiB aligned (otherwise
+InvalidAddress), and alias addresses must lie in the free parts of the guest reservation. Code generated at run time runs without the AOT rewrite,
+so it must not use svc, x18 or tpidr/tpidrro. The source heap stays accessible. QueryMemory reports the aliases but does not trim the surrounding
+free range.
+
+## Scheduling
+
+- Virtual cores: three application cores; a thread holds one while it runs guest code (`NAPPLE_FREE_CORES=1` disables the limit). The main thread
+  starts pinned to its NPDM ideal core.
+- Preemption (`threads.c`): a slice thread plus SIGPROF while the thread is in guest code, and a checkpoint at svc exit otherwise. A
+  better-priority thread waiting for a core takes it within a few ms.
+- Equal-priority threads rotate every 10 ms **only at priority 59**, the preemption priority of the application cores (Horizon's
+  RotateScheduledQueue with {59, 59, 59, 63}). Threads of other priorities keep their core against an equal-priority thread until they block or
+  yield, as on hardware.
+- A thread preempted by a better one keeps the head of its priority (it resumes before equal-priority threads that queued meanwhile); woken,
+  yielding and rotated threads go to the back.
+
+| Variable | Effect |
+|---|---|
+| `NAPPLE_SLICE_MS=<n>` | slice length (0 = no timer preemption) |
+| `NAPPLE_SLICE_ALL=1` | every priority rotates (old behaviour) |
+| `NAPPLE_PREEMPT_SIGNAL=0` | switch only at svc boundaries |
+| `NAPPLE_THREAD_LOG=1` | log CreateThread / StartThread / SetThreadCoreMask / SetThreadPriority |
+| `NAPPLE_THREAD_STATS=1` | per-thread switch and GetCurrentProcessorNumber counts in the quit-time thread dump |
+
 ## IPC services
+
+One row per service; status words: *implemented* (state or logic behind every answer, unit tested), *partial* (some rows real, the rest
+documented defaults), *stub* (accepted with a safe offline default).
+
+### System, settings and account
 
 | Service | Status | Notes |
 |---|---|---|
 | `sm:` | implemented | Initialize, GetServiceHandle; NPDM access list enforced |
-| `lm` | implemented | log packets forwarded to the runtime log |
-| `apm` | implemented | per-mode performance configuration remembered; every id accepted in both modes (the docked/handheld marks of the unverified clock table in `apm_core.c` are documentation only: Link's Awakening sets a "docked" id in handheld mode and stops if refused); CPU overclock flag read back; host never changes its own speed |
-| `appletOE` | implemented / stubs | proxy with ICommonStateGetter, ISelfController, IWindowController, IAudioController, IDisplayController, ILibraryAppletCreator (storage), IApplicationFunctions; focus message queued at launch; stubs: sleep locks, screenshot permission, home button, recording, media state |
-| `fsp-srv` | implemented | RomFS as IStorage over `romfs.bin`; save data and sdcard as host directories; save data of type account/device/system/cache is transactional (see "Save data"); RomFS also as an IFileSystem (2, 9, 7, 10 Rom/Data; Control from `control.nacp`, Manual from `html/`), data storages by program id (201, 205), save info by filter (67, 68), internal storage (64), commit ids (616), SD card / access log state; stubs (documented defaults): auto save data creation, free space of a save (1 GiB), the network save transfer family, game card, rights ids; see "ipc-local-stubs" below |
-| `set` / `set:sys` | implemented | language list, region from the host language (`NAPPLE_REGION` overrides), colour set (`NAPPLE_COLOR_SET`), time zone name (`NAPPLE_TIMEZONE`, default UTC), firmware 18.1.0 (`settings_core.c`) |
-| `acc:u0` | implemented / stubs | one offline user; profile digest (6), save-data thumbnail store / clear (110, 111) and TrySelectUserWithoutInteraction (52) are real; the network-account rows (id token, authorization, guest login, open context) are documented defaults |
-| `aoc:u` | tested | add-on content from the `dlc` array of `manifest.json`; DLC romfs mounted through `fsp-srv` command 30 (see the aoc:u section below); 302 UpdateCachedList re-reads the manifest, 200 keeps the required ids; the e-shop manager rows (100, 101, 110) and host setup (300, 301) are documented defaults |
-| `pctl` | implemented | parental controls off: no restriction, safety level 0, every confirm-permission call succeeds (documented answers; ids per switchbrew since ipc-reference-audit: 1018 IsFreeCommunicationAvailable, 1035 GetCurrentSettings, 1061 / 1062 / 1065 stereo vision, 1451 StartPlayTimer) |
-| `time:u/s/a` | implemented | clock contexts in the shared memory block, time zone = host (or UTC / the host zone picked with SetDeviceLocationName); the clock operation event fires on SetCurrentTime / SetSystemClockContext; the auto-correction updated time is kept |
-| `hid` | implemented / stubs | shared memory + configuration through `input/` (libnapple_input); SendVibrationValue(s) / GetActualVibrationValue / GetVibrationDeviceInfo drive CoreHaptics rumble; every row is implemented: debug pad (player 1's pad), gesture (recogniser in `input/src/gesture.c` over the touch stream), six-axis at-rest from the sensor sample, npad assignment (deactivate, disconnect, swap, merge, LR mode), capture assignment, keyboard lock keys, touch resolution, console six-axis record, active vibration device list, xpad = none; section offsets for gesture/console six-axis and the debug pad state layout are unverified |
-| `vi:u` | implemented / stubs | display, layer (android Parcel native window), vsync event thread; indirect layers use the same binder driver (103) and 2460 sizes the image buffer; IHOSBinderDriver answers every IGraphicBufferProducer transaction with a dummy success (the SDK of Super Mario Odyssey creates an android::Surface eagerly; NVN never uses it) |
-
-| `pl:u` / `pl:s` | implemented | shared fonts from `<app-support>/system/fonts` (see "Shared fonts"); zero-size fonts when absent |
-| `audren:u`, `audout:u`, `hwopus` | implemented | over libnapple_audio; audout buffer count / played samples / flush are real, audio device events fire on `audio_device_changed()`, manual-execution renderer renders on `ExecuteAudioRendererRendering`, the renderer's performance frame follows the v1 (REV1-4, 0x10 header) / v2 (REV5+, 0x20 header with `PERF` magic) layout (unverified); `GetReleasedAudioOutBuffer` zero-fills unused tags (the SDK returns the first tag without checking the count); hwopus calls `guest_write_prepare` on the PCM buffer |
-| `audin:u` | implemented (silent) | over libnapple_audio (`napple_audin_*`): one device "BuiltInHeadset", OpenAudioIn(Auto), IAudioIn 0-6, 8, 9, 11-14; buffers are filled in real time with silence because no capture source is installed (no microphone access, no `NSMicrophoneUsageDescription`). `OpenAudioInProtocolSpecified` (5) and the UAC appends (IAudioIn 7, 10) are not implemented |
-| `nvdrv`, `nvdrv:a/s/t` | partial | `/dev/nvmap` (create/alloc/free/param/get_id/from_id as bookkeeping on guest memory), `/dev/nvhost-ctrl` (syncpoints, events), host1x channels `nvhost-nvdec/vic/msenc/nvjpg` parse SUBMIT command buffers as host1x streams and run them on register-level engines (NVDEC to a `DecoderBackend`, VIC NV12 to RGBA, NVJPG real JPEG decode; see "Media services" at the end); submits complete instantly and syncpoints advance. Movie playback is still decoded by `movie.c`, see below. Every other device/ioctl is refused and listed in `missing_ipc` as `nvdrv:ioctl <path> <cmd>` |
-| `mm:u` | stub | multimedia clock requests accepted |
-| `friend:u` (+v/m/s/a), `nifm:u` (+a/s), `bsd:u` (+s/a), `nsd:u` (+a), `ssl`, `prepo:u` (+a/m/s), `nfp:user`/`nfc:user` | stubs (offline) | friends: empty lists; nifm: requests never accepted, connection "disconnected"; bsd: RegisterClient/Close succeed, every network call answers {-1, ENETDOWN}; nsd: environment "lp1", names resolve to themselves; ssl: contexts/connections creatable, nothing can handshake; prepo: reports dropped; nfp: initialised, no devices |
-| `csrng` | implemented | host `arc4random_buf` |
-
-Not implemented yet (reported loudly when a game asks): `mii:u`, `ns`/`ns:am2`, `ncm`, `lbl`, `psm`, `caps:*`, `spsm`, `set:fd`, swkbd applet (library applet storage), `sfdnsres`, other nvdrv devices.
-
-## Save data (`fsp-srv`, `runtime/src/services/fs.c`)
-Horizon save data is transactional and the host mirrors that so a quit or crash in the middle of a save cannot corrupt it.
-`OpenSaveDataFileSystem` maps `<save-root>/<titleid>/save/space<N>/<type>[/<user>]` (the *live* directory the game writes into). For types account,
-device, system and cache a sibling `<live>.committed` holds the last committed snapshot and `<live>.napple-journal` marks the root as transactional.
-- **Commit** (`IFileSystem::Commit`, `nn::fs::CommitSaveData`): `tmp := clone(live)` (APFS `clonefile`, recursive copy elsewhere), `committed -> .previous`,
-  `tmp -> committed`, remove `.previous`, `sync()`. A crash at any step leaves either the old or the new snapshot.
-- **First open in a process** (recovery): finish an interrupted swap (`.previous` back to `committed` when `committed` is missing), delete stale temporaries,
-  then `live := clone(committed)`, built in `<live>.restoring` first so a failed restore never destroys the live directory. Uncommitted work of a previous run is
-  discarded, like on the console. A directory without marker and snapshot is a pre-journal save: it becomes the first committed state (no data is lost on
-  upgrade). Marker without snapshot = nothing was ever committed: empty.
-- Open file descriptors keep pointing at the live directory (it is never swapped), so a game that keeps a save file open across a commit keeps working;
-  writes after the commit are uncommitted until the next commit.
-- The process reports, when it stops, which roots still had uncommitted changes (`fs: save ...: changes since the last commit are discarded`).
-- bcat and temporary storage are plain directories. `NAPPLE_FS_TRACE=1` logs CreateFile/DeleteFile/Rename/Commit with the host path.
-Both games call Commit: Link's Awakening 5x at start-up (nothing pending) and after saving; Super Mario Odyssey creates `File1.bin`/`Common.bin` and commits.
-Unit tests: `make -C runtime test` (`runtime/tests/test_fs_journal.c`: commit, rollback, interrupted commit, nested directories, adoption of old saves, open fds).
-
-## Frame pacing and game speed
-All guest time derives from one host clock: `GetSystemTick` and `cntpct_el0` are `mach_absolute_time` scaled to 19.2 MHz (`runtime_guest_ticks`, factor 12/625 on
-nanoseconds), `cntfrq_el0` reads 19200000, `time:u` steady clock uses the same ticks, so every guest-visible clock agrees. The only periodic source is the
-vsync event of `vi:u` (`vi.c`): a thread with absolute deadlines (`next += period`, no drift; a stall longer than 8 periods resynchronises instead of bursting),
-period from `gfx_vsync_period_ns()` read on every tick (60 Hz unless the frame-rate setting changes it).
-### Timing: three rates (2026-10-27, fps-unlock-timing)
-Three rates are kept apart, and only the first two can ever change what the game feels like:
-1. **Game clock / guest cadence**: `timescale.c`. The virtual vsync of `vi.c` fires every `TS_GAME_VSYNC_NS` (1/60 s) divided by the Speed control and nothing else
-   (`timescale_vsync_period_ns`); every guest clock follows the same scale. A title at swap interval 2 simply waits two vsyncs (30 Hz game logic). The deadline stepper
-   `timescale_deadline_step` is shared by `vi.c` and the tests.
-2. **Speed** (`speed_percent`, turbo, slow motion, `speed_mode`): the only control that makes the game faster or slower.
-3. **Present rate** (`fps_mode`): a HOST property, `timescale_set_fps`. 0 game pacing, 1 match the display refresh (ProMotion 120 Hz), 2 custom N (`fps_cap`, 15..999),
-   3 uncapped (`CAMetalLayer.displaySyncEnabled = NO`). It decides which finished game frames the presenter shows and is never read by the guest clocks. Above the game's
-   frame rate the display repeats the last image (frame generation, `mtl_interp.m`, can fill in-between images); real extra game frames need a per-title timestep patch
-   (a later per-title package). Below it (custom 30) the presenter drops frames. `vsync` off lets the layer present as soon as an image is ready (tearing possible), it
-   too never touches game speed. `gfx_vsync_period_ns()` is always the game's 16.67 ms. In `mtl_present.m` the guest-visible frame time is `swap interval / 60 / speed` in
-   every mode; the headless path (no layer) therefore always runs the game at its real speed whatever `fps_mode` says.
-Settings: `settings.json` has `fps_mode` (+ `fps_cap` as the custom rate). Files from before it stored `fps_cap` as a rate the guest was paced by (speed scaled with it):
-they migrate on load (0 -> game pacing, 1000 -> uncapped, N -> custom N and, when the file has no `speed_percent`, Speed = N/60 so the old feel is kept explicitly).
-Headless: `NAPPLE_FPS_MODE=0..3`, `NAPPLE_FPS_HZ=<N>` (mode 2); `NAPPLE_SPEED=<factor>` is the speed. `NAPPLE_FRAME_TRACE=<file.csv>` writes `kind,real_ns,game_clock_ns` for
-every guest vsync (V) and presented frame (P); `tools/fps/frame_trace.py` runs the title x mode matrix and asserts game clock 1.00 +-0.02 per wall second, guest vsync 60 Hz
-+-3 % and presents never above vsync. Unit test: `runtime/tests/test_timescale.c` (10 simulated seconds at present rates 30/60/144/999/display/uncapped: identical vsync
-count and game clock, +-0.1 %). The statistics overlay (F9) shows `game` fps (guest frames) and `shown` fps (presented images) separately.
-## Shared fonts (`pl:u`)
-The system fonts are Nintendo data and are never shipped. Extract them once from the user's own firmware:
-`napple build --dump-fonts <Firmware.zip|dir> -k <prod.keys> -o "~/Library/Application Support/Napple/system/fonts"` (system data titles
-0100000000000810..0815; each .bfttf is decoded: every u32 XOR 0x06186249, then {magic 0x18029A7F, u32 big-endian size, TTF}). The service lays the
-fonts out in a 0x1100000-byte shared memory as {0x18029A7F, size ^ 0x49621806, TTF} and reports the offset of the TTF itself. Type mapping
-(libnx PlSharedFontType): 0 std, 1 zh-CN, 2 zh-CN extension, 3 zh-TW, 4 Korean, 5 Nintendo extension, by file name.
-
-## Host movie decoder (`runtime/src/movie.c`)
-The SDK media library (`movie::Decoder`, Android MediaCodec over NvMM/NVDEC) is replaced for VP9 by libvpx: the constructor and the 17 virtual
-methods are bound by symbol name through `host_symbols_register`, so the library's own vtable slots land on the host code; other decoder types
-(Vorbis audio unless `NAPPLE_MOVIE_VORBIS=1`, H.264) are forwarded to the library's original code. Mode 1 (buffer) returns NV12 in the client's Buffer; mode 2 (NVN texture, used
-by Link's Awakening) converts to RGBA and writes into the game's NVNtexture through `gfx_texture_write_rgba` (block-linear swizzle, dirty tracking).
-Adapted from MacNativeGames (MIT), see THIRD_PARTY_NOTICES.md. H.264 is decoded through VideoToolbox (see the H.264 paragraph at the end).
-
-## Per-game data (`game.json` in the data directory)
-`{"title_name":..., "nvn_major":..., "nvn_minor":...}`. The NVN API version is checked by the game against its build-time constant
-(Super Mario Odyssey: major == 53, minor >= 13, found at `sead::GameFrameworkNx::initializeGraphicsSystem`; Link's Awakening accepts 55.15).
-Without the right value the game silently skips graphics initialisation.
-
-## Kernel scheduling note
-Virtual cores are cooperative with priority preemption at svc entry (`threads.c: core_checkpoint`): a thread that holds a core and never issues an svc (a pure busy wait on
-a variable) is not time-sliced, unlike the real kernel's 10 ms slices. No title spins like that today (the one earlier case, the applet message event that was never
-de-asserted in LAS, was a service bug). If one appears the design is a watchdog thread that signals a core owner after 20 ms without an svc while a thread of equal or
-better priority waits, with the handler allowed to switch only while the thread is in guest code. Not implemented: no evidence, and signal-based preemption risks deadlocks
-inside the runtime.
-Update (kernel-threads 2026-10-27, sched-applets 2026-11-01): timer preemption exists (`threads.c`, slice thread + SIGPROF in guest code, svc-exit checkpoint
-otherwise). A better-priority thread waiting for a core takes it within a few ms; equal-priority threads rotate every 10 ms **only at priority 59**, the preemption
-priority of the application cores (Horizon's RotateScheduledQueue with {59, 59, 59, 63}). Threads of other priorities keep their core against an equal-priority
-thread until they block or yield, as on hardware. A thread preempted by a better one keeps the head of its priority (it resumes before equal-priority
-threads that queued meanwhile); woken, yielding and rotated threads go to the back. The main thread starts pinned to its npdm ideal core. `NAPPLE_SLICE_MS=<n>` (0 = off), `NAPPLE_SLICE_ALL=1`
-(old behaviour: every priority rotates), `NAPPLE_PREEMPT_SIGNAL=0` (switch only at svc boundaries), `NAPPLE_THREAD_LOG=1` (CreateThread / StartThread /
-SetThreadCoreMask / SetThreadPriority), `NAPPLE_THREAD_STATS=1` (per-thread switch and GetCurrentProcessorNumber counts in the quit-time thread dump).
-
-## Debug aids
-`NAPPLE_INPUT_SCRIPT="10:A,12:PLUS:0.3,30:L+R:0.8"` scripted key presses (`+` joins a chord that is pressed atomically; the script uses the bindings of input.json); `NAPPLE_INPUT_LOG=1` logs every change of player 1's merged state; `kill -USR1 <pid>` dumps every guest thread (state, wait, backtrace) without stopping; `NAPPLE_OP_MODE=docked|handheld`; `NAPPLE_AUDIO_VOLUME=0.05` with `NAPPLE_AUDIO_DEVICE=1` for audible tests at low volume; `NAPPLE_FE_OVERLAY=<tab>` opens the overlay at start and `NAPPLE_FE_VIEWSHOT=<png>:<secs>` renders it to a PNG; `tools/dev/synth_keys.m` posts real CGEvents (see docs/archive/changes/2026-10-23-input-audio-runtime-round2.md); `NAPPLE_SCREENSHOT=<prefix>` + `NAPPLE_SCREENSHOT_FRAMES=1,60,...` PNG of presented frames;
-`NAPPLE_WATCH=main+0x24741f8` logs every guest write to a location; `NAPPLE_PEEK`, `NAPPLE_FS_TRACE=1`, `NAPPLE_WAIT_SECS`, `NAPPLE_MOVIE_HOST=0`, `NAPPLE_AUDIO_DEVICE=1`.
-
-## Kernel, loader, nvdrv and fs additions (2026-10-24)
-Written and unit tested on Linux (see [the note](../archive/changes/2026-10-24-loader-kernel.md)); the host tests and later Mac rounds are recorded in the change archive. Status per item: **implemented**
-(semantics of the public Horizon kernel / system modules), **partial** (limits listed).
-
-Kernel svcs:
-- 0x40 CreateSession, 0x41 AcceptSession, 0x43 ReplyAndReceive, 0x44 ReplyAndReceiveWithUserBuffer, 0x70 CreatePort, 0x71 ManageNamedPort,
-  0x72 ConnectToPort; SendSyncRequest(WithUserBuffer) and ConnectToNamedPort on guest objects (`ksession.c`, message copy `kmsg.c`):
-  **partial**. Guest-to-guest IPC between threads of the game. One address space and one handle table, so copy and move handles pass through
-  with the sender's handle values (a copy handle is shared, not duplicated), A/B/W descriptors keep their addresses, X data is copied into the
-  receiver's receive list for list modes 2 and above (modes 0/1 keep the sender's address), the pid field gets 0x80. A server session is
-  signaled while a request waits and none is being served, or once its client is closed.
-- 0x20 SendSyncRequestLight, 0x42 ReplyAndReceiveLight: **partial**. Seven words in w1..w7; ReplyAndReceiveLight replies first when bit 31 of
-  w1 is set (the flag position is taken from the public kernel sources, not checked on hardware).
-- 0x36 SynchronizePreemptionState: **partial**. Clears the TLR interrupt flag and takes a deferred switch. Preemption only happens at svc entry
-  (cooperative cores). A thread with a non-zero TLR disable count is pinned there: the kernel sets interrupt_flag, the switch waits for this svc.
-- 0x32 SetThreadActivity (pause / resume now real), 0x33 GetThreadContext3: **partial**. A paused thread stops at its next svc boundary,
-  without its core, until resumed; a thread blocked in an svc is stopped already. Pausing waits up to 50 ms for that. Because scheduling is
-  cooperative, a thread spinning in guest code without svcs keeps running, and GetThreadContext3 on it answers InvalidState. The context comes
-  from the gate's register area: x0..x28 (guest x18 from its slot), fp, lr, sp, pc = svc site + 4, nzcv, fpcr/fpsr, q0..q31, tpidr.
-  GetThreadContext3 on the calling thread answers Busy.
-- 0x2F GetLastThreadInfo: **partial**. The thread that held the caller's virtual core before it: {fp, sp, lr, pc}, its TLR, and flag 1 when it
-  is inside an svc (else the frame of its last svc). NoThread when none, or with `NAPPLE_FREE_CORES=1`.
-- 0x2E GetDebugFutureThreadInfo (InvalidHandle: an application has no debug objects), 0x3C KernelDebug, 0x3D ChangeKernelTraceState
-  (no-ops): **implemented**.
-- 0x4B CreateCodeMemory, 0x4C ControlCodeMemory (`kcode.c`, aliases in `memory.c`): **partial**. Argument, permission, size and state checks
-  as in KCodeMemory. Map (RW, state CodeOut 0x15) and MapToOwner (R/RX, GeneratedCode 0x14) share the source heap pages through mach_vm_remap.
-  Both addresses must be 16 KiB aligned (otherwise InvalidAddress), and alias addresses must lie in the free parts of the guest reservation.
-  Code generated at run time runs without the AOT rewrite, so it must not use svc, x18 or tpidr/tpidrro. The source heap stays accessible.
-  QueryMemory reports the aliases but does not trim the surrounding free range.
-- 0x50 CreateSharedMemory: **implemented**. Size and permission checks; zeroed host pages; the remote permission is not enforced.
-
-Loader:
-- `ldr:ro` / `ro:1` (`ro.c`, checks in `nro.c`): **partial**. RegisterProcessHandle, RegisterModuleInfo / RegisterProcessModuleInfo,
-  UnregisterModuleInfo, MapManualLoadModuleMemory, UnmapManualLoadModuleMemory, with the ro module's checks and results. NRR checks: magic,
-  size, program id and mask, kind (User for ldr:ro, JitPlugin for ro:1), hash list bounds; signatures are not verified. NRO checks: header,
-  sizes as passed, page-aligned contiguous sections, sha256 listed in a registered NRR, not already loaded. What gets mapped is the image
-  `napple build` rewrote ahead of time from every `*.nro` in the RomFS (`<data-dir>/nro/<module id>.{patched.bin,tables}`, manifest key
-  `nro`), found by module id. It is relocated like the static modules (host overrides first, then every loaded module, NROs included) and its
-  gates join the dispatch index. An NRO without such an image stops the runtime (`NAPPLE_IPC_LENIENT=1`: InvalidNro). Closing the session
-  unloads its modules. The guest's own nn::ro relocation pass then runs over the mapped image. RELA entries are idempotent, but an import the
-  runtime bound to a host override may be rebound by that pass to the guest's original function (the SDK's behaviour here is unchecked).
-  The guest's bss buffer is unused (bss is part of the image). Like the static modules, an NRO whose text end and data start share a 16 KiB
-  page fails to seal ("text overlaps data").
-- Multi-module: up to 128 modules (was 31), slots of unloaded NROs are reused, and the gate index is rebuilt and published atomically on
-  load/unload.
-
-nvdrv host1x channels (`/dev/nvhost-nvdec`, `-vic`, `-nvjpg`, `-msenc`, host1x classes 0xF0 / 0x5D / 0xC0 / 0x21): **partial**.
-'H' SET_NVMAP_FD, SET_TIMEOUT; SUBMIT (command buffers must lie in live nvmap handles; syncpoint increments land at once; fence thresholds
-returned); GET_SYNCPOINT (allocated per channel and index from id 32 up, released on close); GET_WAITBASE (0); SET_SUBMIT_TIMEOUT;
-MAP/UNMAP_CMD_BUFFER (one stable 32-bit device address per nvmap handle). Bad sizes, unknown handles and out-of-range indexes answer
-BadParameter; other ioctls stay NotImplemented and are listed in the summary. The SUBMIT layout changed to the documented one: syncpoint
-increments are 0x14 bytes and fences are u32 thresholds (earlier code used 0x10 and {id, value}). Command buffers with a mapped address are executed since media-services (2026-10-26), see "Media services".
-
-fsp-srv save data (`fs.c`): **partial**.
-- 21/25/28 Delete (by id, by space and id, by attribute), 22/23/35 CreateSaveDataFileSystem (plain / by system save id / with hash salt),
-  32 ExtendSaveDataFileSystem (sizes only grow), 33 DeleteCacheStorage, 34 GetCacheStorageSize, 52 OpenSaveDataFileSystemBySystemSaveDataId,
-  57/58 ReadSaveDataFileSystemExtraData(BySaveDataSpaceId), 59/66 WriteSaveDataFileSystemExtraData(WithMask), 60/61/62 OpenSaveDataInfoReader
-  (all / by space / cache only; ISaveDataInfoReader::ReadSaveDataInfo), 69/70/71 extra data by attribute (read, masked write, masked read).
-- Each save keeps its extra data (0x200 bytes) and id in `<root>.napple-meta`. Ids come from the root path, stable across runs but not the
-  console's. A save opened before it was created gets an implicit record, and a later Create fills it in and succeeds. Create on a real
-  record answers PathAlreadyExists.
-- IFileSystem GetTotalSpaceSize / GetFreeSpaceSize of a save created with a size: that size, and size minus 16 KiB blocks in use. Other
-  file systems still report 1 GiB. Quotas are reported, not enforced on writes.
-- Temporary storage is emptied at its first mount in a process. Bcat storage is a plain directory, as before. 53
-  OpenReadOnlySaveDataFileSystem is now read-only and answers TargetNotFound for a save that does not exist (it used to mount writable and
-  create it).
-- Argument order: commands taking (space, attribute) accept either order (space-first with zero padding, or attribute-first), since SDK
-  versions differ.
-- Journal review fixes: Commit clears the dirty flag before the snapshot under the journal lock, so a write racing with the commit is not
-  lost from the report, and a failed commit keeps it. A failed rename of the new snapshot also removes the temporary. CleanDirectoryRecursively
-  marks the root dirty. Deleting a save resets its journal, so a recreated root starts fresh. A 17th transactional root is logged (it is not
-  transactional).
-
-Tests: `make -C runtime test-host` (any POSIX host, e.g. Linux) builds the portable kernel, loader and service code with `tests/host`
-stand-ins: test_kernel_ipc, test_loader, test_nvdrv, test_fs_savedata, test_fs_journal.
-
-## Services added in the services round (2026-10-24)
-This section was written on Linux, where `runtime/` does not build, and unit-tested against an IPC mock (`tools/linux-check/`). It was later built and its tests run on macOS
-([verification](../archive/changes/2026-10-24-claude-services-verify-2026-10-24-plan5.md), [cleanup](../archive/changes/2026-10-24-cleanup-small-plan6.md)); the build and tests passed, but
-**no command id, argument layout or result description was checked against a console**: they follow the public documentation as the author remembered it, and only commands a title
-actually issued are verified by running it. Treat per-row statuses below as the authority.
-Status words: *real* = state or logic behind the answer, covered by a unit test; *partial* = some commands real, the data source or the rest default;
-*stub* = accepted with a safe offline default. Services are only reachable when the game's NPDM lists them.
-
-| Service | Status | Notes |
-|---|---|---|
-| `mii:u` | partial | read-only database: the local player's Mii plus six default Miis (CharInfo 0x58); GetCount, Get, Get1, UpdateLatest, BuildRandom (a default of the requested gender), BuildDefault, FindIndex, GetIndex; no editing, no StoreData variants |
-| `caps:su` | partial | every save call succeeds and adds an in-memory album entry (64 max, oldest dropped); a save with a 1280x720 RGBA input buffer is stored as JPEG (size and hash in the entry); refused after `SetScreenShotPermission(Disable)` |
-| `caps:u` | partial | in-memory album: lists saved entries, delete removes it, unknown entries report not found; an entry with an image sizes to its JPEG, LoadAlbumFile gives the JPEG, 110 the decoded 1280x720 RGBA, 120 / session 5 the 320x180 RGBA thumbnail; entries without an image yield 0 bytes; the 5-variant album lists (144-147) list the same album; movie read streams (2001-2005) read entries stored as movies (tested on Linux, unverified on Mac) |
-| `psm` | implemented | state-change events (session and charge-info) fire on `psm_host_power_changed()` and toggled emulation, controller power supply acquire/release counted; battery percentage, charger type, voltage state, enough-power, charging flags from a configured host situation (docked = AC; `NAPPLE_BATTERY="NN[,ac|battery]"`), not the Mac's battery |
-| `lbl` | real | brightness (clamped), saved vs current vs applied brightness (Save/Load), switch, dimming, auto brightness, VR brightness and VR apply, ambient sensor value and reflection delay level read back; nothing reaches the display; no light sensor (`IsAmbientLightSensorAvailable` = false) |
-| `ncm` | partial | in-memory content-meta database (Set/Get/Remove/Has/HasAll/List/ListApplication/GetLatestContentMetaKey/GetSize/GetPatchId) and content storage (placeholders, Register, Has, Delete, counts, sizes); starts empty, nothing persisted, no content files (GetPath is empty); unverified layouts; GetContentIdByType/ListContentInfo/HasContent/ListContentMetaInfo/LookupOrphanContent stay stubs |
-| `ns:am2`, `ns:ec` | partial | language conversion/selection with regional fallbacks and free/total space (statvfs of the save volume) are real; no application records; control data not found; e-commerce fails offline |
+| `lm` | implemented | log packets forwarded to the runtime log; the accessor is the retail no-op |
+| `set` | implemented | language list and code, region from the host language (`NAPPLE_REGION` overrides), 11 GetDeviceNickName (`NAPPLE_DEVICE_NICKNAME`, default "Napple"), 12 GetKeyCodeMapByPort, US key code map (`settings_keycode_map`); language, region, quest flag and nickname follow the `set:sys` store and fall back to the host values |
+| `set:sys` | implemented | keeps what Set* writes for the life of the process (`sysset_core.c`); colour set (`NAPPLE_COLOR_SET`), 53 time zone location name (`NAPPLE_TIMEZONE`, default UTC), 62 GetDebugModeFlag (retail), 77 nickname, 79 product model (Nx), serial number from `NAPPLE_SERIAL` (else `XAW00000000000`), firmware version 18.1.0 (`settings_core.c`) |
+| `set:fd` | implemented | in-memory settings items with key iterator; not persisted and not read back by `set:sys` |
+| `acc:u0` | implemented | one offline user, plus "Player N" users with `NAPPLE_PROFILES=<2..8>` (uid last byte + index; `account_core.c`), reported by GetUserCount / ListAllUsers / GetUserExistence / GetProfile and offered to player select; profile digest (6), save-data thumbnail store / clear (110, 111), TrySelectUserWithoutInteraction (52); `InitializeApplicationInfo*` remembered per connection; network-account rows (id token, authorization, guest login) go through `OnlineProvider.account_info`; async contexts follow the provider's account state (0x1907C for an unlinked user); open contexts 160 / 130 / 131 |
+| `pctl` | implemented | parental controls off: no restriction, safety level 0, every confirm-permission call succeeds; keeps a local PIN code, the temporary unlock, the default rating organization (from `NAPPLE_REGION`), the free-communication list and the last-change time (`pctl_core.c`); ids per switchbrew: 1018 IsFreeCommunicationAvailable, 1035 GetCurrentSettings, 1061 / 1062 / 1065 stereo vision, 1451 StartPlayTimer |
+| `time:u/s/a` | implemented | clock contexts in the shared memory block; time zone = host IANA zone (or UTC, or the zone picked with SetDeviceLocationName); clock operation event fires on SetCurrentTime / SetSystemClockContext; automatic correction kept; LoadTimeZoneRule and rule-aware ToCalendarTime / ToPosixTime; ParseTimeZoneBinary turns TZif data into a fixed-offset rule at the standard offset (DST dropped); ClockSnapshot 400 / 401, 500 / 501; ISteadyClock 100 GetRtcValue, 101, 102, 200 GetInternalOffset |
+| `apm` | implemented | per-mode performance configuration remembered; every id is accepted in both modes (a title may set a "docked" id in handheld mode and stop if refused; the docked/handheld marks of the unverified clock table in `apm_core.c` are documentation only); CPU overclock flag read back; the host never changes its own speed |
+| `psm` | implemented | state-change events (session and charge-info) fire on `psm_host_power_changed()` and toggled emulation; controller power supply acquire / release counted; battery percentage, charger type, voltage state, enough-power and charging flags from a configured situation (docked = AC; `NAPPLE_BATTERY="NN[,ac|battery]"`), not the Mac's battery; 18 |
+| `lbl` | implemented | brightness (clamped), saved vs current vs applied (Save/Load), switch (also driven by applet SetLcdBacklighOffEnabled), dimming, auto brightness, VR brightness and VR apply, ambient sensor value and reflection delay level read back; 20 / 22, 26 EnableVrMode, 27-29; nothing reaches the display; no light sensor (`IsAmbientLightSensorAvailable` = false) |
+| `spsm` | implemented | always awake (the host never sleeps: sleep requests return at once, no power message pending); 0-5 |
+| `fgm` | implemented | offline answers (`fgm::IRequest`) |
+| `ovln:snd` | implemented | per-sender queues |
+| `pdm:qry` | implemented | play statistics of the running title (one launch, minutes since start), 4 / 5; events 8-12; QueryLastPlayTime (17) per requested title; 18 / 19; no play log is kept, so other titles and event queries answer empty like a freshly reset console |
+| `notif:a` | implemented | up to 8 alarms with their parameters (`notif_core.c`); they never fire (no HOME menu) |
+| `ns:am2`, `ns:ec` | implemented | language conversion / selection with regional fallbacks, free / total space (statvfs of the save volume), application record list of the running title, `GetApplicationControlData` and the content-path rows read `<data-dir>/control.nacp`; e-commerce fails offline |
 | `ns:vm` | stub | never needs a vulnerability update |
-| `sfdnsres` | partial | error strings real; every lookup fails like a resolver with no server |
-| `spsm` | implemented | always awake (the host never sleeps: sleep requests return at once, no power message pending) |
-| `bcat:u` | implemented | name validation, passphrase size check and progress record real; the delivery cache is always empty (a console with no network), sync finishes at once with the offline result, background tasks are accepted and never scheduled |
-| `ldn:u` | partial | initialize/open/create/station state machine with legal-transition checks and a state-change event; no radio: scans empty, connect fails |
-| `irs` | stub | camera handles and a zeroed shared memory; processors report sensor not connected |
-| `audin:u` | partial | one input device, parameter negotiation, buffer queue; appended buffers are zero-filled (silence) and complete at once |
-| `hidbus` | stub | no device is ever found |
-| `pdm:qry` | implemented | play statistics of the running title (one launch, minutes since start), also under the 10.0.0+ ids 4 / 5; QueryLastPlayTime (17) answers per requested title; no play log is kept, so other titles and event queries answer empty like a freshly reset console |
-| `set:fd` | real | in-memory settings items with key iterator; not persisted and not read back by `set:sys` |
-| `olsc:u`, `ectx:aw`, `fgm`, `ovln:snd` | implemented (offline answers) | `olsc:u` and `ectx:aw` ids follow switchbrew since ipc-reference-audit (olsc 0 / 10 / 13-16 / 18-27, ectx 0 CreateContextRegistrar + IContextRegistrar::Complete, 1 CommitContext); unlisted ids fail loudly. `btm:u` stays stub (BLE hardware simulation belongs to sim-online) |
+| `ncm` | implemented | in-memory content-meta database (Set/Get/Remove/Has/HasAll/List/ListApplication/GetLatestContentMetaKey/GetSize/GetPatchId, 19 / 22 / 23) and content storage (placeholders, Register, Has, Delete, counts, sizes); content infos parsed from the stored meta (`ncm_core.c`); starts empty, nothing persisted, no content files (GetPath is empty); layouts [unverified] |
+| `ngc` | implemented | `ngc_core.c`: the firmware NgWord archive (`sysdata/0100000000000806.bin`, about 3000 words, `ngc_words_add_ngword`) plus an optional user list `NAPPLE_NGC_WORDLIST`; nothing is shipped |
+| `olsc:u` | implemented | offline answers; ids per switchbrew (0 / 10 / 13-16 / 18-27); async contexts follow the provider's account state; unlisted ids fail loudly |
+| `ectx:aw` | implemented | 0 CreateContextRegistrar + IContextRegistrar::Complete, 1 CommitContext |
+| `csrng` | implemented | host `arc4random_buf` |
+| `mii:u`, `mii:e` | implemented | one Mii database for every title: `<support root>/system/mii/MiiDatabase.dat` (or `NAPPLE_MII_DIR`; the App Group container on iOS), up to 100 Miis plus the six defaults built in code (`mii_core.c`, CharInfo 0x58); `mii:e` adds the editor commands. See [system data folders](../reference/system-data-folders.md) |
+| `miiimg` | implemented | in-memory image database with generated 96x96 faces (`mii_img_core.c`); ids 10-17 and 100-104 |
+| `pl:u`, `pl:s` | implemented | shared fonts, see [Shared fonts](#shared-fonts-plu); zero-size fonts when absent |
 
-Depth changes to existing services (IPC_STUB rows before → after, from the command tables): `appletOE` 87 → 55 (the guest's settings are stored and read
-back: master volumes, VR mode, auto sleep, idle detection, screenshot permission, cpu boost, home-button blocking, ...); `hid` 30 → 21 (six-axis fusion and
-zero drift per handle, player LED pattern, joy hold type, handheld mode, home-button protection, vibration permission now silences rumble, communication
-mode, styles read back); `time:*` 12 → 8 (LoadTimeZoneRule and rule-aware ToCalendarTime/ToPosixTime, ClockSnapshot 400/401, 500/501, automatic
-correction, device location = host IANA zone); `offline.c` stays 146 stub rows but `bsd:u` has a descriptor table with per-call errno, `nifm` requests
-finish rejected with a result, `ssl` handshakes fail, `friend` notification Pop on an empty queue fails; `misc.c` (aoc, pctl) unchanged.
-
-## aoc:u and the error / player select / controller library applets (applets-dlc-2026-10-24-plan5)
-
-Supersedes the `aoc:u` row above (stub) and the library applet answers; status of everything here is *tested* on Linux against the IPC mock; built and tested on macOS in the later verification round.
-
-* **aoc:u** reads the `dlc` array of `<data-dir>/manifest.json` (written by `napple build`: `title_id`, `version`, `dir` relative to the manifest, `romfs`, `default_enabled`). Entries with `default_enabled` false, a title id outside `application id + 0x1000 + 1..0xfff`, or a duplicate index are dropped. `ListAddOnContent` returns the 1-based indices (title id minus the base id) sorted; `PrepareAddOnContent(index)` succeeds only for a kept index. No DLC (no array, bad JSON, no manifest) keeps the old answers (count 0, empty list, Prepare fails). Mounting: `fsp-srv` command 30 `OpenDataStorageByDataId(u8 storage, u64 data id)` serves the DLC's `romfs.bin` as a read-only `IStorage` (same object as the base RomFS); unknown ids answer `R_FS_NOT_FOUND_DATA`. Core: `aoc_core.[ch]`; manifest reading and the commands: `misc.c`. Command layouts and the `R_AOC_NOT_FOUND` result (module 2, description 1) are [unverified].
-* **Library applets** (`applet.c`, answers in `applet_lib_core.[ch]`): all three are answered as if the user confirmed with the one profile / pad, so a headless run continues.
-  * error (0xe): dismissed (success, no output); the header type, jump flag and first argument word are logged and put in the run summary (`summary_note`). A jump-to-settings request is not followed.
-  * player select (0x10): success with the only profile (`g_user_id`): output `{u64 result = 0; u8 uid[16]}` (0x18). Cancel (result 2) exists in the core but nothing selects it yet.
-  * controller support (0xc): `player_count_min..max` from the argument header (unset = 1..4), players = min clamped to max; single mode reports npad 0 (Player 1) as the selected id, otherwise `0xffffffff`. Output `{s32 players; u32 selected_id; u32 result = 0}` (0xC).
-  Struct layouts follow libnx as remembered and are [unverified] against a title.
-
-`audrec:u` (audio-small, 2026-10-24): `OpenFinalOutputRecorder` returns an `IFinalOutputRecorder` that records silence (48 kHz stereo PCM16); appended buffers are zero-filled and complete at once, with end times as a running frame count. Command ids and layouts from memory, unverified. Core: `audrec_core.[ch]`.
-
-H.264 movies (2026-10-24, media-h264): `movie.c` also hosts `video/avc` decoders through VideoToolbox (`src/vt_h264.c`). Annex B or AVCC access units, SPS/PPS taken in-band (or csd via `vth264_config`), output packed NV12 into the same slots/pacing as VP9, B-frame reordering by pts (depth 2; 0 for baseline). The DecoderType value for AVC is 1, read from the movie library ([note](../archive/changes/2026-10-24-h264-decoder-type.md)): `NAPPLE_MOVIE_H264_TYPE` overrides. `vt_h264.c` also has `jpeg_decode_rgba` / `jpeg_encode_rgba` (ImageIO); nvjpg and caps use the portable `jpeg_core` instead (below).
-
-ac-services (2026-10-24, plan9): `fsp-srv` cmd 202 `OpenDataStorageByDataId` shares cmd 30's handler: DLC data ids resolve through `aoc_data_id_romfs`; any other id is a system data archive served from `<data-dir>/sysdata/<id as 16 hex>.bin` when that file exists, else `NOT_FOUND_DATA` (0x7d202). Nothing creates `sysdata/` yet, so system data (e.g. id 0100000000000823, storage 3, asked by the v0 AC build) is still missing. `ICommonStateGetter` cmd 900 `SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled` is accepted as a no-op (stub). Tests: `test_svc_fs`, `test_svc_applet`.
-
-sysdata-firmware (2026-10-24, plan10): `napple build --firmware` now writes every firmware data archive for title ids 0100000000000800-0FFF that has a RomFS (≤64 MiB; 40 on 22.1.0, ~300 MB) as `<title dir>/sysdata/<id16hex>.bin` (the raw RomFS image). fs.c `OpenDataStorageByDataId` looks in `<data-dir>/sysdata/` then `<data-dir>/../sysdata/` (data-dir is the build-id directory). AC v0 now gets 0100000000000823 (98324 bytes) and boots past it; the next stop is an SDK abort after `nfp:user` opens (SetTerminateResult 0x2a2).
-
-sim-online (2026-10-26, branch `claude/sim-online-2026-10-26-macos1`; supersedes the offline rows for `friend`, `nifm`, `bsd`, `nsd`, `ssl`, `prepo`, `nfp:user`/`nfc:user`, `sfdnsres` and `irs` above; status is **tested on Linux** against the IPC mock, not yet run on macOS or a title; all command layouts are from memory of the public documentation and unverified):
+### File system and content
 
 | Service | Status | Notes |
 |---|---|---|
-| `bsd:u`/`:s`/`:a` | implemented over [`OnlineProvider`](../guides/network-providers.md) | guest descriptors map to provider sockets (`bsd_core.c`); Socket, Select, Poll, Recv, RecvFrom, Send, SendTo, Accept, Bind, Connect, GetPeerName, GetSockName, GetSockOpt, SetSockOpt, Listen, Ioctl (FIONBIO), Fcntl (O_NONBLOCK), Shutdown, ShutdownAllSockets, Write, Read, Close; with the NullProvider the errno answers are the previous offline ones |
-| `nifm:u`/`:a`/`:s` | implemented over the provider | Submit asks `net_connect`; Accepted/Free states, `GetCurrentIpAddress`, connection status (IGeneralService 18), wireless / ethernet settings (16 / 17, 19 / 20), `IsAnyInternetRequestAccepted`; NullProvider rejects with "communication disabled"; IRequest `GetResult`, `GetRequirement`, `GetRevision`, `GetAppletInfo` (a failed request names the `netConnect` library applet, id 0x0f, mode 0, and lists its CommonArguments and `{0, Result, Uuid}` storages; Cancel keeps a rejected request's result, nifm-netconnect r5) answer like an offline console (ipc-reference-audit) |
-| `sfdnsres` | implemented over the provider | GetHostByName/Addr, GetAddrInfo, GetNameInfo (+WithOptions) serialise provider answers; NullProvider: TRY_AGAIN / EAI_AGAIN |
-| `ssl` | implemented over the provider | handshake, Read, Write, Pending through `tls_*`; NullProvider: not connected |
-| `friend:*` | partial | friend count/list/ids and `UpdateUserPresence` from the provider; notifications still empty |
-| `nsd:u`/`:a`, `prepo:*` | provider hooks | `nsd_resolve` (identity by default), `report` (dropped by default) |
-| `nfp:user`, `nfc:user`, `nfc:mf:u` | implemented over [`NfcTagSource`](../guides/hardware-simulators.md) | virtual amiibo state machine, structures, application area, events; no reader unless a frontend or `NAPPLE_AMIIBO` installs one (then the old "no device" answers stay) |
-| `irs` | implemented over `IrFrameSource` | moment, clustering, image transfer on 320x240 frames; no source = sensor not connected as before |
+| `fsp-srv` | implemented | RomFS as IStorage over `romfs.bin` (or the in-place `romfs.map`, or the mod overlay, see [Mods](#mods-runtime)); RomFS as a read-only IFileSystem (`romfs_read.[ch]`: GetEntryType, OpenFile -> IFile over the storage extent, OpenDirectory); content types (`FileSystemProxyType`): Rom and Data serve the RomFS of the program id (application, its update, a DLC, or a `sysdata/` archive), Control serves `control.nacp`, Manual serves `<data-dir>/html`, others "path not found"; data storages by program id (201, 205); 202 OpenDataStorageByDataId (below); 30 OpenGameCardStorage; save data and SD card as host directories ([Save data](#save-data)); save info by filter (67, 68); internal storage (64); commit ids (616); SD card / access log state; access-checked rows follow the title's `main.npdm` FS permission bits (PermissionDenied without the bit). Documented defaults: auto save data creation, the save data transfer family, game card, rights ids; 1003 / 1005 / 1006 are accepted no-ops |
+| `aoc:u` | implemented | add-on content from the `dlc` array of `manifest.json` (below); 302 UpdateCachedList re-reads the manifest, 200 keeps the required ids, 13; 100 / 101 hand out an IPurchaseEventManager that keeps delivery targets (its event never fires, nothing can be popped); contents service manager; host add-on content setup (300, 301) is a documented default |
+| `bcat:u` | implemented | delivery cache from a provider (`bcat_set_provider`; `NAPPLE_BCAT_DIR` = folder provider; the folder may be plain or hold the console's delivery-cache save layout `directories.meta` / `files.meta` / `files/`, detected automatically); sync requests succeed at once; Open/Read/GetCount, file Open/Read/GetSize/GetDigest (MD5) and EnumerateDeliveryCacheDirectory; progress `Done` is status 9; notifier, suspension, delivery list, 20101; name validation and passphrase size check. No provider: an always-empty cache (a console with no network). No server code in the repository |
 
-IPC command depth (`IPC_IMPL` / `IPC_STUB` rows): `offline.c` 1 / 146 -> 106 / 80, `irs.c` 1 / 17 -> 11 / 7, `sfdnsres.c` 2 / 12 -> 10 / 4.
+**DLC.** `aoc:u` reads the `dlc` array of `<data-dir>/manifest.json` (written by `napple build`: `title_id`, `version`, `dir` relative to the
+manifest, `romfs`, `default_enabled`). Entries with `default_enabled` false, a title id outside `application id + 0x1000 + 1..0xfff`, or a duplicate
+index are dropped. `ListAddOnContent` returns the 1-based indices (title id minus the base id) sorted; `PrepareAddOnContent(index)` succeeds only
+for a kept index. No DLC (no array, bad JSON, no manifest) keeps count 0, an empty list and a failing Prepare. Core: `aoc_core.[ch]`; manifest
+reading and the commands: `misc.c`. The `R_AOC_NOT_FOUND` result (module 2, description 1) is [unverified].
 
-## Media services (2026-10-26, media-services; tested on Linux, unbuilt and unverified on the Mac)
-Portable cores (`runtime/src/services/*_core.c`, no macOS headers; unit tests in `runtime/tests/test_svc_*.c` and `tests/host/test_nvdrv.c`):
+**Data storages.** `fsp-srv` 202 `OpenDataStorageByDataId(u8 storage, u64 data id)` serves a DLC's `romfs.bin` (through `aoc_data_id_romfs`) as a
+read-only IStorage. Any other id is a system data archive served from `<data-dir>/sysdata/<id as 16 hex>.bin`, then `<data-dir>/../sysdata/`
+(data-dir is the build-id directory); otherwise `NOT_FOUND_DATA` (0x7d202). `napple build --firmware` writes every firmware data archive for title
+ids 0100000000000800-0FFF that has a RomFS of at most 64 MiB (about 40 archives, ~300 MB on firmware 22.1.0) as `<title dir>/sysdata/<id16hex>.bin`
+(the raw RomFS image).
 
-| Piece | Files | What it does |
-|---|---|---|
-| host1x engines | `nvdrv_media_core.[ch]`, `nvdrv_media_regs.h` | Parses command buffers: SETCL (with register mask), INCR, NONINCR, MASK, IMM, RESTART, GATHER (command gather and register gather, depth 4), EXTEND; writes engine registers; EXECUTE (offset 0xC0) runs the engine. Malformed op or unmapped gather fails the SUBMIT (BadParameter); a failed decode is only counted and written to the status structure. Writes to registers outside the map are counted (`MediaStats.unknown_regs`) and summarised on close, so a real title's trace fixes the map |
-| `nvdrv.c` wiring | `nvdrv.c` | SUBMIT reads each command buffer whose nvmap handle has a mapped address (`guest_ptr`), applies relocations (word = (target iova + offset) >> shift) to a copy, runs it on the channel's engine under the nvdrv lock. Handles without an address behave as before (accepted, nothing run). Surfaces are addressed by device address >> 8 (MAP_CMD_BUFFER iovas) |
-| NVDEC (0xF0) | same | application id = codec (H.264 3, VP8 5, H.265 7, VP9 9), picture-info, bitstream and output surfaces (display buffer or per-picture-index slots), execute -> `DecoderBackend.decode`, status structure (error, width, height, macroblocks) |
-| VIC (0x5D) | same | slot 0 NV12 -> RGBA8 / BGRA8 / RGBX8 / NV12 (BT.601 limited), pitch- or block-linear output, from the real config structure's output surface word (+0x20; methods 0x1c1 control, 0x1c2 config, as the public emulator sources name them; since media-nvdec-preview 2026-10-27, which replaced the reduced 9-word structure); NV12 copy when no config is readable |
-| NVJPG (0xC0) | same + `jpeg_core.[ch]` | baseline JPEG (all samplings, restart intervals, grey) to RGBA or NV12, optional scaling and pitch, status (error, size). Real `nvjpg_drv_pic_param_s` (0x1240 B); decodes a JPEG file in the bitstream buffer or, with no SOI, the header-less entropy segment from the structure's decoder tables (frame size, block ctl, quant, Huffman mincode/symbol; `napjpeg_decode_raw_rgba`), pixel-identical; encode produces the entropy segment (see [nvdrv-layouts](../reference/nvdrv-layouts.md)) |
-| MSENC (0x21) | same | executes accepted, status says no bitstream |
-| DecoderBackend | `decoder_backend.h`, `decoder_null_core.c` | frames in (codec, picture-info, bitstream, output planes), NV12 out; default null backend takes the size from the codec headers and writes a deterministic grey. The Mac VideoToolbox/libvpx backend is not written yet: it implements the struct and calls `decoder_backend_install` at start-up |
-| Codec headers | `codec_headers_core.[ch]` | H.264 SPS (incl. cropping, high-profile scaling lists), VP9 uncompressed header, VP8 frame tag, H.265 SPS skeleton (size only) |
-| Movie audio | `movie_audio_core.[ch]`, `third_party/stb_vorbis.c`, `movie.c` | Vorbis (raw packets wrapped into Ogg pages for stb_vorbis push-data; headers in-band or as Xiph csd-0) and Opus (libopus, `-DNAPPLE_HAVE_OPUS`) to interleaved s16 PCM. `movie.c` hosts type 5 / PCM / buffer mode decoders on it, on by default (`NAPPLE_MOVIE_VORBIS=0` turns it off), headers out of band (csd-0..2) or in band. The movie library has no Opus decoder type (DecoderTypeToMime / IsDecoderTypeSupported cover 1..5), so Opus stays core-only (hwopus is separate) |
-| JPEG caps | `caps_core.[ch]`, `caps.c`, `jpeg_core` | see the caps rows above |
-
-ioctl table of the multimedia channels (type 0 unless noted; all layouts as in the nvdrv.c comment): 'H' 0x01 SET_NVMAP_FD, 'H' 0x03 SET_TIMEOUT, 0x01 SUBMIT, 0x02 GET_SYNCPOINT, 0x03 GET_WAITBASE, 0x07 SET_SUBMIT_TIMEOUT, 0x09 MAP_CMD_BUFFER, 0x0A UNMAP_CMD_BUFFER.
-Everything else on these devices is still refused by number (NotImplemented, listed in the summary). **The register offsets, the codec ids and the reduced VIC structure
-are written from memory of the public driver sources and were never checked against a real title**; the Mac check is to run the four titles with `-v` (`NAPPLE_VERBOSE=1`),
-read the `nvdrv` data lines and the "writes to registers outside the known map" summary, and fix `nvdrv_media_regs.h` (the only place offsets live).
-Known limits: NVDEC output is pitch-linear NV12 (the hardware writes block-linear); decode runs inside the nvdrv lock; no H.264 parameter-set synthesis from the picture-info structure (the null backend never needs it, a real backend does).
-
-Media devices, b8 (2026-10-28, nvdrv-media-devices; tested on Linux, VideoToolbox parts unbuilt): (1) **Pitches.** NVDEC records the pitch it wrote each output surface with (by surface register); VIC reads its input surface back with that pitch instead of guessing 256-aligned vs packed (no hint: the old guess). H.264 pitches come from picture-info words 35/36; VP9 from words 20/21 (`NVDEC_VP9_W_PITCH_*`, **proposed**, ignored unless >= the key frame width, multiple of 16, <= 0x10000). (2) **VP9.** Goes through the `DecoderBackend` (null backend: sized grey picture). The VideoToolbox backend refuses VP9 (open returns NULL, status error 1) unless `NAPPLE_VT_VP9=1` and VideoToolbox reports a VP9 decoder; the VP9 session code (vpcC from `configure`, superframes split with `vp9_superframe_split`) has never run. (3) **NVJPG encode.** Pic-setup structure of 12 words with word 6 = 1: RGBA8 in (pitch word 9), JPEG out, quality, 4:2:0 flag; status error/width/height/bytes. (4) **MSENC.** `EncoderBackend` (`decoder_backend.h`; null encoder = fake Annex B, VideoToolbox H.264 in `decoder_vt.c`, `NAPPLE_ENCODER=null` keeps the null one). Reduced setup structure at 0x101 (width, height, pitches, bitrate, fps, flags, out capacity), NV12 input 0x102/0x103, output 0x104, status 0x109 (error, bytes, IDR flag, frame count); registers are **proposed**, the real NVENC method map is unknown.
-
-Depth changes (runtime-depth, 2026-10-26, IPC_STUB rows before → after; scan "IPC: command depth" 52% → 68%): `hid` 24 → 0, `audio.c` 10 → 0, `bcat` 21 → 0, `psm` 9 → 0,
-`lbl` 9 → 0, `settings` 4 → 0, `apm` 2 → 0, `pdm` 6 → 0, `misc.c` (pctl, aoc) 17 → 0, `olsc` 23 → 0, `spsm`/`ovln`/`ectx`/`fgm` → 0, `ns` 22 → 7, `ncm` 7 → 4, `time` 8 → 0,
-`audin` 2 → 0, `ngc` 4 → 2. Rows that stay stubs on purpose are listed in `docs/archive/changes/2026-10-26-runtime-depth.md` with the reason (needs a hardware simulation,
-a data drop, build-layout data, or belongs to another area).
-
-small-gaps (2026-10-27, branch `claude/small-gaps-2026-10-27`; status **tested on Linux**, nothing run on macOS or a title; layouts from memory of the public documentation, unverified; supersedes the `audin:u`, `bcat:u` and `irs` rows above and the performance note of the `audren:u` row):
+### Input, display and audio
 
 | Service | Status | Notes |
 |---|---|---|
-| `audin:u` | implemented | the first OpenAudioIn installs the capture source named by `NAPPLE_AUDIN_SOURCE` (silence, `tone:HZ[:AMP]`, `file:PATH`, `mic`; `audio/src/audin_source.c`). Since sweep-small (2026-11-01) the default (unset) is **auto**: the microphone (`audin_mic.c`, an AUHAL input unit feeding a 48 kHz mono ring; a real capture verified on the Mac) when the process may use it, silence when permission is denied, cannot be asked or the start fails; never a failure. Decision kept in sweep-media r2: auto stays the default (the generated apps carry NSMicrophoneUsageDescription); `NAPPLE_AUDIN_SOURCE=silence` forces it off |
-| `audren:u` | implemented | the performance frame is kept in a history of `performance_frame_count` frames (1 when 0) until a RequestUpdate brings a buffer; whole frames are handed over oldest first and chained through next_offset, the chain ends at a null header. Layouts since sweep-small (2026-11-01, matched against public reference code): format 1 (REV1..4) header 0x18, entry / detail 0x10; format 2 (REV5 and later) header 0x30, entry / detail 0x18; PERF magic in both. Tested per revision (REV1, 3, 4, 5, 7, 9, 11, 12; `make -C audio test`); no test title supplies a performance buffer (SMO REV3, MK8D REV1, ACNH REV15, LAS REV7 all boot with `performance_frame_count` 0), so the written buffer is not verified on a title. Modelled costs unverified |
-| `bcat:u` | implemented | delivery cache comes from a provider (`bcat_set_provider`; `NAPPLE_BCAT_DIR` = folder provider): sync requests succeed at once, Open/Read/GetCount, file Open/Read/GetSize/GetDigest (MD5) and EnumerateDeliveryCacheDirectory read from it. Since sweep-small (2026-11-01) the folder may also hold the console's delivery-cache save layout (`directories.meta` / `files.meta` / `files/`), detected automatically; plain folders still work. Progress `Done` is status 9 (was 6). No provider = the offline answers as before. No server code in the repository. Tested (`test_svc_bcat` 137 checks); no test title reads a delivery cache |
-| `irs` | implemented over `IrFrameSource` | ActivateIrsensor, SetFunctionLevel, ActivateIrsensorWithFunctionLevel, RunImageTransferExProcessor (the transfer processor) and RunIrLedProcessor are no longer stubs; tera plugin (310) and pointing/DPD (312) remain stubs |
-| `hid` | implemented | GameCube, Palma, NES / Famicom (Lark), SNES (Lucia), N64 (Lagon) and Mega Drive (Lager) styles are selected when the title announces them (alone, or by the player's binding style); GC and the retro pads report through the FullKey lifo, handheld Lark through the Handheld lifo, Palma through its own. GC trigger lifo at 0x4228 of the npad entry (libnx `HidNpadInternalState`; values clamped to 0x7fff), Lark / Lucia / Lager type words at 0x43E0, `HidNpadButton` bits 28..34 (Palma, verification, HandheldLeftB, N64 C buttons). Device-type bits (libnx `HidDeviceTypeBits`) for every style since sweep-media r2 (2026-11-01): Pro Controller FullKey, handheld HandheldLeft \| HandheldRight, Joy-Con pair JoyLeft \| JoyRight, single Joy-Con its side, retro / GC / Palma their own bit; `NAPPLE_NPAD_DEVICE_TYPES=0` keeps the standard styles at 0. Tested (`make -C input test`, styles 51 checks); no test title uses the retro styles |
+| `hid` | implemented | shared memory and configuration through `input/` (libnapple_input); SendVibrationValue(s) / GetActualVibrationValue / GetVibrationDeviceInfo drive CoreHaptics rumble (vibration permission silences it); debug pad (player 1's pad), gesture (recogniser in `input/src/gesture.c` over the touch stream), six-axis (fusion and zero drift per handle, at-rest from the sensor sample, accelerometer parameters / play mode, unaltered passthrough, seven six-axis sensor state, forced console six-axis, npad IMU), npad assignment (deactivate, disconnect, swap, merge, LR mode, SingleWithDestination in place), player LED pattern, joy hold type, handheld mode, home-button protection, communication mode, capture assignment, keyboard lock keys, touch resolution and emulation, digitizer, mouse library version, USB full-key, battery and interface queries (from the backend's active style), GC ERM rumble, permit-vibration sessions, active vibration device list, xpad-era commands (no xpad: empty lists, lifo handles refused), Palma operation model (handle = npad id of a pad reporting the Palma style; operations complete at once and signal the event; data layouts [unverified]); 133-136 follow the reference ids, Clear (136) takes only the aruid and clears every style. Styles: below |
+| `hidbus` | implemented | handle-checked "not connected" answers; no device is ever found |
+| `irs` | implemented over `IrFrameSource` | moment, clustering, image transfer on 320x240 frames; ActivateIrsensor, SetFunctionLevel, ActivateIrsensorWithFunctionLevel, RunImageTransferExProcessor, RunIrLedProcessor; tera plugin (310) and pointing / DPD (312) stay stubs; no source = sensor not connected |
+| `nfp:user`, `nfc:user`, `nfc:mf:u`, `nfp:sys`, `nfc:sys` | implemented over [`NfcTagSource`](../guides/hardware-simulators.md) | virtual amiibo state machine, structures, application area, events; no reader unless a frontend or `NAPPLE_AMIIBO` installs one (then "no device"); the `:sys` interfaces return the same simulated interfaces as the user services |
+| `btm:u` | implemented | scan and connection state, no radio; IBtmUserCore 1, 2, 19 BleDisconnect, 20 BleGetConnectionState, 21 AcquireBlePairingEvent, 22-37; 1 / 2 scan filter parameters are `IPC_STUB` zeros; everything needing a connection fails "not connected" |
+| `vi:u` (`vi:s`, `vi:m`) | implemented | display, layer (Android Parcel native window), vsync event thread ([Frame pacing](#frame-pacing-and-timing)); layer table, scaling modes, display enable, binder refcounts and the system / manager display rows (`vi_core.c`); indirect layers use the same binder driver (103), 2460 sizes the image buffer, 2450 / 2451 image maps return a transparent frame; IHOSBinderDriver TransactParcel / TransactParcelAuto keep per-binder IGraphicBufferProducer slot bookkeeping but carry no pixels (the graphics back end never uses the producer; an SDK may create an `android::Surface` eagerly); ISystemDisplayService / IManagerDisplayService keep gamma, contrast, CMU, RGB range, content type, magnification, alpha and power state (the host window is not affected); 2102 ConvertScalingMode |
+| `audren:u` | implemented | over libnapple_audio; manual-execution renderer renders on `ExecuteAudioRendererRendering`; audio device events fire on `audio_device_changed()`; IAudioRenderer 12 / 13 voice drop; IAudioDevice 13 answers the master volume (before 13.0.0) or the active output device name (13.0.0+), 14-21. Performance frames are kept in a history of `performance_frame_count` frames (1 when 0) until a RequestUpdate brings a buffer; whole frames are handed over oldest first, chained through next_offset, ending at a null header. Layouts: format 1 (REV1..4) header 0x18, entry / detail 0x10; format 2 (REV5+) header 0x30, entry / detail 0x18; PERF magic in both (tested per revision with `make -C audio test`; modelled costs [unverified]) |
+| `audout:u` | implemented | buffer count, played samples and flush are real; `GetReleasedAudioOutBuffer` zero-fills unused tags (the SDK returns the first tag without checking the count); IAudioOut 12 / 13 volume is a real per-stream gain (`napple_audout_set_volume`, clamped to 0..1, applied before the mix) |
+| `audin:u` | implemented | over libnapple_audio (`napple_audin_*`): one device "BuiltInHeadset", OpenAudioIn(Auto), 5 OpenAudioInProtocolSpecified, IAudioIn 0-14 including the UAC appends 7 / 10. The first OpenAudioIn installs the capture source named by `NAPPLE_AUDIN_SOURCE` (`silence`, `tone:HZ[:AMP]`, `file:PATH`, `mic`; `audio/src/audin_source.c`). Default (unset) is auto: the microphone (`audin_mic.c`, an AUHAL input unit feeding a 48 kHz mono ring) when the process may use it (generated apps carry `NSMicrophoneUsageDescription`), silence when permission is denied, cannot be asked, or the start fails; never a failure |
+| `audrec:u` | implemented | `OpenFinalOutputRecorder` returns an `IFinalOutputRecorder` that records silence (48 kHz stereo PCM16); appended buffers are zero-filled and complete at once, with end times as a running frame count; 10 / 11. Core: `audrec_core.[ch]`; layouts [unverified] |
+| `hwopus` | implemented | calls `guest_write_prepare` on the PCM buffer; hwopus 8 / 9 and IHardwareOpusDecoder 8 / 9 |
+| `mm:u` | implemented | multimedia clock request table |
+| `caps:su` | implemented | every save call succeeds and adds an in-memory album entry (64 max, oldest dropped); a save with a 1280x720 RGBA input buffer is stored as JPEG (size and hash in the entry); refused after `SetScreenShotPermission(Disable)` |
+| `caps:u` | implemented | in-memory album: lists saved entries (also the 5-variant lists 144-147), delete removes, unknown entries report not found; an entry with an image sizes to its JPEG, LoadAlbumFile gives the JPEG, 110 the decoded 1280x720 RGBA, 120 / session 5 the 320x180 RGBA thumbnail; entries without an image yield 0 bytes; movie read streams (2001-2005) read entries stored as movies; 142 / 143 |
+| `caps:dc` | implemented | 3001 DecodeJpeg through `jpeg_core` |
 
-IPC command depth: `irs.c` 11 / 7 -> 16 / 2 rows (`IPC_IMPL` / `IPC_STUB`).
+**Npad styles.** GameCube, Palma, NES / Famicom (Lark), SNES (Lucia), N64 (Lagon) and Mega Drive (Lager) styles are selected when the title
+announces them (alone, or by the player's binding style); GC and the retro pads report through the FullKey lifo, handheld Lark through the Handheld
+lifo, Palma through its own. GC trigger lifo at 0x4228 of the npad entry (libnx `HidNpadInternalState`; values clamped to 0x7fff), Lark / Lucia /
+Lager type words at 0x43E0, `HidNpadButton` bits 28..34 (Palma, verification, HandheldLeftB, N64 C buttons). Device-type bits (libnx
+`HidDeviceTypeBits`) for every style: Pro Controller FullKey, handheld HandheldLeft | HandheldRight, Joy-Con pair JoyLeft | JoyRight, single Joy-Con
+its side, retro / GC / Palma their own bit; `NAPPLE_NPAD_DEVICE_TYPES=0` keeps the standard styles at 0. `hid_core` carries the style constants;
+the system common policy supports all pad styles. Section offsets for gesture / console six-axis and the debug pad state layout are [unverified].
+Tests: `make -C input test`.
 
-Depth changes (ipc-depth-rest, 2026-10-27, IPC_STUB rows before → after; supersedes the stale `mm:u`, `hidbus`, `btm:u` and `ncm` rows above): `offline.c` 89 → 3 (mm clock
-request table, friend/nifm/nsd/prepo/ssl/nfc state; left as stubs: `DuplicateSocket`, `RecvMMsg`, `SendMMsg`), `btm` 14 → 0 (scan and connection state, still no radio), `hidbus` 12 → 0
-(handle-checked "not connected" answers), `ldn` 10 → 0 (access point advertise data / accept policy / filter in `ldn_core.c`; network queries stay "not available"), `ns` 7 → 3
-(application record list of the running title; `GetApplicationControlData` and the two content-path rows need build-layout data), `ncm` 4 → 0 (content infos parsed from the stored
-meta by `ncm_core.c`), `sfdnsres` 4 → 0, `ngc` 2 → 0 (`ngc_core.c`; real matching with a user-supplied `NAPPLE_NGC_WORDLIST`, nothing is shipped), `push` 1 → 0. Inventory and reasons:
-`docs/archive/changes/2026-10-27-claude-ipc-depth-rest-2026-10-27.md`. Layouts of the new rows are the author's memory of the public documentation (unverified); tested on Linux only.
+### Network (through the OnlineProvider)
 
-### media-nvdrv (2026-10-27): Vorbis out-of-band headers, nvdisp-disp0, nvdrv rows, frozen DecoderBackend contract
-
-Status of everything here: *tested* on Linux (`tools/linux-check`), *unbuilt* on macOS, never run against the SDK movie library or a real title.
-
-| Piece | Where | What |
+| Service | Status | Notes |
 |---|---|---|
-| Vorbis out-of-band headers | `movie_audio_core` `vorbispcm_set_headers_csd`, `movie.c` Configure | the format's `csd-0..2` buffers are read in Configure: one Xiph bundle, three single packets, or identification + setup (the empty comment header is synthesised, Android MediaCodec layout). A rejected header leaves the collection untouched. Audio packets before the headers are still dropped with one log line. **On by default** now (`MOVIE_VORBIS_DEFAULT 1`); `NAPPLE_MOVIE_VORBIS=0` is the opt-out |
-| `/dev/nvdisp-disp0`, `-disp1` | `nvdrv_media_core` `nvdisp_*`, `nvdrv.c` `DEV_DISP` | query surface only, **proposed ABI** (no public nvdisp ABI): type `'D'`, nr 1 GET_MODE (1280x720@60 handheld), 2 GET_VBLANK, 3 WAIT_VBLANK (never blocks, strictly increasing), 4 GET_SYNCPT (26 / 27), 5 GET_STATUS. Other ioctls stay NotImplemented and are listed in `missing_ipc` |
-| `nvdrv` command rows | `nvdrv.c` | `IPC_STUB` rows 7 -> 1: QueryEvent, MapSharedMemory, GetStatus, SetAruid, DumpGraphicsMemoryInfo (verbose log of the nvmap totals), InitializeDevtools are implemented answers with the reason in the table; `Unknown13` stays a stub (no public description) |
-| DecoderBackend ABI 1 | `decoder_backend.h` | frozen: `open/close/decode` + optional `reset/configure`, `abi` field checked by `decoder_backend_install` (returns -1 on mismatch), call order and the synchronous in-decode-order rule are in the header comment |
-| Parameter-set hand-off | `nvdrv_media_core` `nvdec_configure`, `codec_headers_core` | H.264 SPS+PPS found in the NVDEC bitstream and VP9 key-frame configs reach `configure()` once per change (reset first); `DecoderConfig` carries the NAL units, the Annex B form for `vth264_config` and the vpcC record. `MediaStats.configures` counts them. The writers `h264_build_sps/pps` exist for the day the NVDEC picture-info layout is known (SPS/PPS synthesis for streams without in-band sets); they are tested only as round trips through the parsers |
+| `bsd:u`, `bsd:s`, `bsd:a` | implemented | guest descriptors map to provider sockets (`bsd_core.c`): Socket, Select, Poll, Recv, RecvFrom, Send, SendTo, Accept, Bind, Connect, GetPeerName, GetSockName, GetSockOpt, SetSockOpt, Listen, Ioctl (FIONBIO), Fcntl (O_NONBLOCK), Shutdown, ShutdownAllSockets(how), Write, Read, Close, DuplicateSocket (aliases the descriptor), 28 GetResourceStatistics, 29 RecvMMsg / 30 SendMMsg (FreeBSD LP64 mmsghdr arrays), 31 EventFd, core mask. `RegisterClient` answers 0 (a nonzero id broke a title's boot). NullProvider: every network call answers {-1, ENETDOWN} |
+| `nifm:u`, `nifm:a`, `nifm:s` | implemented | Submit asks `net_connect`; Accepted / Free states, `GetCurrentIpAddress`, IGeneralService 15 SetWirelessCommunicationEnabled, 16 / 17 IsWirelessCommunicationEnabled and settings, 18 GetInternetConnectionStatus, 19 / 20, 28, 34, 40, 41, 43, 57, `IsAnyInternetRequestAccepted`; profile store, scan request (0 access points), sleep / wake / shutdown over live requests, telemetry event; IRequest GetResult, GetRequirement, GetRevision, GetAppletInfo, 16-21, 23-25 and Cancel ([netConnect](#network-connection-applet-0x0f)). NullProvider rejects with "communication disabled" |
+| `sfdnsres` | implemented | GetHostByName / Addr, GetAddrInfo, GetNameInfo (+WithOptions) serialise provider answers; error strings; resolver options; Query / Fetch / CancelQuery. NullProvider: TRY_AGAIN / EAI_AGAIN |
+| `ssl` | implemented | handshake, Read, Write, Pending, Peek, Poll through `tls_*`; verify errors and per-connection options; ISslConnection 19 FlushSessionCache, 20-21 renegotiation mode; context PKI and CRL ids kept; ISslContext 6; the certificate-list rows agree (an empty built-in list). NullProvider: not connected |
+| `nsd:u`, `nsd:a` | implemented | `nsd_resolve` hook (identity by default; environment "lp1"), application environment type (default lp), GetSettingUrl |
+| `friend:u` (+v/m/s/a) | implemented | `friend_core.c` keeps the console's per-user state: play history, in-person requests, own presence, the user setting with an installation friend code. Cache rows need a linked network service account (provider `account_info`) and answer from the provider's friend list; sync rows also need `ONLINE_CAP_FRIENDS` and a connection; `UpdateUserPresence` goes to the provider. Offline: "no network service account" |
+| `prepo:u` (+a/m/s) | implemented | `report` hook (dropped by default); reports kept for ReadAll*; ids 10100-10107, 20100-20103, 30300, 90100 |
+| `ldn:u` | implemented | initialize / open / create / station state machine with legal-transition checks and a state-change event; access point advertise data, accept policy and filter (`ldn_core.c`); configuration rows and client process monitor; network rows routed through the provider (`ONLINE_CAP_LDN`); no provider: scans empty, connect fails |
+| `npns` | implemented | suspend state and receiver |
+| `push` | implemented | |
 
-Tests: `test_svc_movie_audio` 37 checks, `test_svc_nvdrv_media` 115 checks (Linux).
-## Library applet host (applets-host, 2026-10-27)
+Rows that stay documented defaults because they need something the host does not provide: BAAS / id tokens without a provider, the save data
+transfer family, game card, rights ids, `GetBleScanFilterParameter` (2), ILogger 11, host add-on content setup, `nvdrv` 13 (no public description).
+Online accounts, friends, rooms and cloud saves are described in the [Napple Online guide](../guides/napple-online.md).
 
-Supersedes the `appletOE` row above and the library applet notes of the plan5 section: `applet.c` + `applet_ae.c` went from 84 to 10 `IPC_STUB` rows (`appletOE` 68 → 7, `appletAE` 16 → 3; kept stubs with reasons are listed in the change note). Status: *tested* on Linux (`runtime/tests/linux/run_applet.sh`: `test_svc_applet`, `_libs`, `_host`, `_ae`); *unbuilt* on macOS. Layouts of rows marked [unverified] in the sources are the author's memory of the public documentation.
+## Save data
 
-* **Handler registry**: `libapplet_register_handler(id, handler)` (`applet_lib_core.h`) answers a library applet id before any built-in answer; the handler sees the pushed and interactive storages and returns output storages on both channels.
-* **Firmware applet table**: `libapplet_program_for(id)` maps applet ids 0x0A–0x1A to the firmware program ids (`0100000000001001`…); a firmware applet runs through the host (child process / in-process) when `libapplet_firmware_enabled` says so: the Mii Maker (0x12) by default, any other entry with `NAPPLE_FIRMWARE_APPLET_IDS=0x11,controller,…` or `NAPPLE_FIRMWARE_APPLETS=all`; `NAPPLE_FIRMWARE_APPLETS=0` turns all off. Without the firmware the built-in (HLE) answer is used.
-* **Interactive channel**: `PushInteractiveInData` / `PopInteractiveOutData` / `GetPopInteractiveOutDataEvent` are real; a firmware applet gets `iin<N>.bin`, answers `iout<N>.bin` (`PopInteractiveInData` / `PushInteractiveOutData` of `applet_ae.c`); output storages are a queue (`out0..out7`), `GetResult` returns the applet's exit result (`result.txt`).
-* **Built-in applets**: swkbd foreground and inline (background mode: replies over the interactive channel until Finalize), controller support (connected pads, min/max, `NAPPLE_CONTROLLER_SUPPORT=cancel|strict`), player select (profile list from `applet_set_profile_lister`, `NAPPLE_PLAYER_SELECT=<index>|cancel`), error applet (frontend hook `applet_set_error_hook`, default none → the generic alert).
-* **State rows**: sleep lock + event, fatal section, window visibility / foreground rights / GPU time slice, auto sleep override, illuminance (`NAPPLE_ILLUMINANCE=<lux>` makes the sensor present), capture image slots (`applet_capture_set_source` registers the frame source; none = opaque black), host events (`applet_signal_gpu_error`, `applet_signal_friend_invitation`, `applet_display_resolution_changed`).
-Depth changes (ipc-depth-rest2, 2026-10-27, IPC_STUB rows before → after, scan count over the owned files 29 → 2): `account` 8 → 0 (network-account rows routed through `OnlineProvider.account_info`,
-NullProvider answers unchanged; `InitializeApplicationInfo*` remembered per connection), `vi` 8 → 2 (layer table, scaling modes, display enable, binder refcounts and the system/manager display
-rows in `vi_core.c`; `TransactParcel`/`TransactParcelAuto` stay stubs: the graphics back end never uses the producer), `mii_img` 4 → 0 (in-memory image database with generated 96x96 faces,
-`mii_img_core.c`), `ns` 3 → 0 (`GetApplicationControlData` and the content-path rows read `<data_dir>/control.nacp`), `settings` 3 → 0 (US key code map, `settings_keycode_map`), `offline.c` 3 → 0
-(`DuplicateSocket` aliases the descriptor in `bsd_core.c`; `SendMMsg`/`RecvMMsg` marshal FreeBSD LP64 mmsghdr arrays), `ldn` network rows routed through the provider (`ONLINE_CAP_LDN`).
-`bsd:u` `RegisterClient` still answers 0 (a nonzero id broke SMO boot). Layouts are the author's memory of the public documentation (unverified); tested on Linux only. See
-`docs/archive/changes/2026-10-27-claude-ipc-depth-rest2-2026-10-27.md`.
+`fsp-srv`, `runtime/src/services/fs.c`. Horizon save data is transactional and the host mirrors that, so a quit or crash in the middle of a save
+cannot corrupt it.
 
+- `OpenSaveDataFileSystem` maps `<save-root>/<titleid>/save/space<N>/<type>[/<user>]` (the *live* directory the game writes into). For types
+  account, device, system and cache a sibling `<live>.committed` holds the last committed snapshot and `<live>.napple-journal` marks the root as
+  transactional. A 17th transactional root is logged (it is not transactional).
+- **Commit** (`IFileSystem::Commit`, `nn::fs::CommitSaveData`): `tmp := clone(live)` (APFS `clonefile`, recursive copy elsewhere), `committed ->
+  .previous`, `tmp -> committed`, remove `.previous`, `sync()`. A crash at any step leaves either the old or the new snapshot. Commit clears the
+  dirty flag before the snapshot under the journal lock, so a write racing with the commit is not lost from the report, and a failed commit keeps
+  it. A failed rename of the new snapshot also removes the temporary.
+- **First open in a process** (recovery): finish an interrupted swap (`.previous` back to `committed` when `committed` is missing), delete stale
+  temporaries, then `live := clone(committed)`, built in `<live>.restoring` first so a failed restore never destroys the live directory.
+  Uncommitted work of a previous run is discarded, like on the console. A directory without marker and snapshot is a pre-journal save: it becomes
+  the first committed state. Marker without snapshot = nothing was ever committed: empty.
+- Open file descriptors keep pointing at the live directory (it is never swapped), so a game that keeps a save file open across a commit keeps
+  working; writes after the commit are uncommitted until the next commit.
+- When the process stops it reports which roots still had uncommitted changes (`fs: save ...: changes since the last commit are discarded`).
+- Management commands: 21 / 25 / 28 Delete (by id, by space and id, by attribute), 22 / 23 / 35 CreateSaveDataFileSystem (plain / by system save
+  id / with hash salt), 32 ExtendSaveDataFileSystem (sizes only grow), 33 DeleteCacheStorage, 34 GetCacheStorageSize, 52
+  OpenSaveDataFileSystemBySystemSaveDataId, 53 OpenReadOnlySaveDataFileSystem (read-only; TargetNotFound for a save that does not exist), 57 / 58
+  ReadSaveDataFileSystemExtraData(BySaveDataSpaceId), 59 / 66 WriteSaveDataFileSystemExtraData(WithMask), 60 / 61 / 62 OpenSaveDataInfoReader (all /
+  by space / cache only; ISaveDataInfoReader::ReadSaveDataInfo), 69 / 70 / 71 extra data by attribute (read, masked write, masked read).
+- Each save keeps its extra data (0x200 bytes) and id in `<root>.napple-meta`. Ids come from the root path: stable across runs but not the
+  console's. A save opened before it was created gets an implicit record, and a later Create fills it in and succeeds; Create on a real record
+  answers PathAlreadyExists. Deleting a save resets its journal, so a recreated root starts fresh. CleanDirectoryRecursively marks the root dirty.
+- GetTotalSpaceSize / GetFreeSpaceSize of a save created with a size: that size, and size minus 16 KiB blocks in use; other file systems report
+  1 GiB. Quotas are reported, not enforced on writes.
+- Temporary storage is emptied at its first mount in a process; bcat storage is a plain directory.
+- Argument order: commands taking (space, attribute) accept either order (space-first with zero padding, or attribute-first), since SDK versions
+  differ.
+- `NAPPLE_FS_TRACE=1` logs CreateFile / DeleteFile / Rename / Commit with the host path.
 
-### Web and album library applets (applets-rare, 2026-10-27)
-* **Web / offline web (0x13, 0x17)**: `applet_web_core.c` parses the WebArgs TLV storage and answers `WebCommonReturnValue` (exit reason + last URL). Offline documents resolve under the HtmlDocument root (`applet_web_set_html_root` / `NAPPLE_HTML_ROOT`) and reach the frontend as `file://` URLs through `applet_ui_open_web`; with no hook the user leaves at once on the requested page. Legal-information and system-data documents are an error exit (firmware romfs).
-* **Photo viewer / album (0x15)**: `applet_album_core.c` lists the caps album (`applet_album_set_source`), shows decoded images through `applet_ui_show_image`, and in select mode returns the picked entry. Both register through `libapplet_register_handler` (`applet_web_register`, `applet_album_register`). Layouts are [unverified].
-IPC polish (ipc-polish, 2026-10-27, IPC_STUB rows 16 → 7, impl 1136 → 1145): `applet.c` 7 → 1 (kept: `GetSystemSharedLayerHandle`, only reachable after `IsSystemBufferSharingEnabled` says yes, which it never does), `applet_ae.c` 3 → 0 (`nfc:sys`/`nfp:sys` moved to `offline.c`: `CreateSystemInterface` returns the same simulated interfaces as the user services; the dead `miiimg` placeholder is gone, `mii_img.c` owns that service). Rows that were already the console's offline answer are now `IPC_IMPL` with the reason in a comment: `IsSystemBufferSharingEnabled` (failing result for an unprivileged process), `PopLaunchParameter`, `EnsureSaveData`, `GetPreviousProgramIndex` (-1), `NotifyMessageToHomeMenuForDebug` (no Home menu process, both applet files). `GetSaveDataSize` now reads `UserAccountSaveDataSize`/`JournalSize` from `control.nacp` (32 MiB each without it). Remaining stubs (7): `applet` 42, `nvdrv` 13 (no public description), `vi` `TransactParcel`/`TransactParcelAuto` (the graphics back end bypasses the producer), `fs` 1003/1005/1006 (fs.c was owned by another session in this batch: accepted no-ops/log mode, should become `IPC_IMPL` with a comment). `bsd:u` `RegisterClient` still answers 0. `tests/linux/known_calls_titles.txt` lists the commands the four reference titles call; `check_known_calls.py` fails when one disappears or is a stub (except the documented `vi` rows). See `docs/archive/changes/2026-10-27-claude-ipc-polish-2026-10-27.md`.
+Online cloud saves build on the committed snapshots: see [cloud saves](../guides/cloud-saves.md).
 
-runtime-small (b6, 2026-10-27, Linux, tested not verified): `vi` `TransactParcel`/`TransactParcelAuto` are `IPC_IMPL` (per-binder IGraphicBufferProducer slot bookkeeping in `vi_core.c`, still no pixels), `hid_core` carries the npad style constants/helpers (system common policy now supports all pad styles incl. GameCube/Palma/NES). See `docs/archive/changes/2026-10-27-claude-runtime-small-2026-10-27-b6.md`.
+## Loader
 
-VideoToolbox DecoderBackend (media-mac, 2026-10-27): `services/decoder_vt.c` installs a `DecoderBackend` named `videotoolbox` from a constructor (H.264 only through `vt_h264.c`; `NAPPLE_DECODER=null` keeps the null backend; host/Linux builds never compile it). `decode()` is synchronous: each request is decoded and flushed, so the frame of this access unit is in the guest surface when it returns. The nvdrv engine now understands the SDK's real stream shape: registers arrive as THI method/data pairs (`INCR 0x10 count 2`), DPB output slots are registers 0x10c+idx (luma) / 0x11d+idx (chroma), the H.264 sequence is described by the picture-info structure only (the slice NAL units carry no SPS/PPS), so `nvdec_synth_h264` writes the SPS/PPS from it (word map in `nvdrv_media_regs.h`). VIC: slot-0 input luma/chroma 0x100/0x101, config 0x1c1, output luma/chroma 0x1c8/0x1c9; with no readable config the execute copies NV12 to the NV12 output surfaces. `media_write_prepare` (set by `media_gfx_glue.c`) tells gfx before the host writes a surface. Since media-nvdec-preview (2026-10-27, b7): VIC 0x1c1 is the control word and 0x1c2 the config structure (output surface word at +0x20; MK8D outputs NV12 pitch linear), the NVDEC output slot is `curr_pic_idx` of the H.264 picture-info structure (0x103 is a frame counter), the synthesized SPS claims 15 reference frames (16 makes VideoToolbox evict a live reference), `DecodeRequest` carries the guest's row pitches, and `caps:dc` 3001 DecodeJpeg decodes through `jpeg_core`. MK8D's mode and cc-select preview panels play (verified).
+- `ldr:ro` / `ro:1` (`ro.c`, checks in `nro.c`): **partial**. RegisterProcessHandle, RegisterModuleInfo / RegisterProcessModuleInfo,
+  UnregisterModuleInfo, MapManualLoadModuleMemory, UnmapManualLoadModuleMemory, with the ro module's checks and results. NRR checks: magic, size,
+  program id and mask, kind (User for `ldr:ro`, JitPlugin for `ro:1`), hash list bounds; signatures are not verified. NRO checks: header, sizes as
+  passed, page-aligned contiguous sections, sha256 listed in a registered NRR, not already loaded.
+- What gets mapped is the image `napple build` rewrote ahead of time from every `*.nro` in the RomFS (`<data-dir>/nro/<module id>.{patched.bin,tables}`,
+  manifest key `nro`), found by module id. It is relocated like the static modules (host overrides first, then every loaded module, NROs included)
+  and its gates join the dispatch index. An NRO without such an image stops the runtime (`NAPPLE_IPC_LENIENT=1`: InvalidNro). Closing the session
+  unloads its modules.
+- The guest's own nn::ro relocation pass then runs over the mapped image. RELA entries are idempotent, but an import the runtime bound to a host
+  override may be rebound by that pass to the guest's original function (the SDK's behaviour here is unchecked). The guest's bss buffer is unused
+  (bss is part of the image). Like the static modules, an NRO whose text end and data start share a 16 KiB page fails to seal ("text overlaps data").
+- Up to 128 modules; slots of unloaded NROs are reused, and the gate index is rebuilt and published atomically on load / unload.
 
-Library applet UI (applets-frontend, 2026-10-27): the controller (0xc) and player select (0x10) applets ask the frontend through `applet_controller_ask` / `applet_player_select_ask` (hooks `applet_set_controller_ui`, `applet_set_player_select_ui`; -2 = no UI, keep the headless answer), the error applet through `applet_set_error_hook`, web through `applet_ui_open_web` and the album through `applet_ui_show_image` (answer 1 select, 0 next, -1 close; `applet_ui_album_selecting()` says whether the viewer may select). The Mac frontend registers sheets for all of them (`frontend/src/applet_sheets.m`, `register_applet_sheets` in `app.m`). Scripted answers win over any sheet: `NAPPLE_CONTROLLER_SUPPORT`, `NAPPLE_PLAYER_SELECT`, `NAPPLE_WEB_ANSWER` (back | closed | requested | error | n), `NAPPLE_ALBUM_PICK` (index | first | next | none), `NAPPLE_SWKBD_ANSWER`. See `docs/archive/changes/2026-10-27-claude-applets-frontend-2026-10-27.md`.
+## nvdrv
 
-Mods runtime (mods-runtime, 2026-10-27 b7, Linux, tested not verified): `fs.c` `storage_with_overlay` replaces the RomFS IStorage by a virtual image (`romfs_map.c` `romfs_merge_open`: original tables + `<data-dir>/mods/overlay.json`, file data stays an extent of the original or of the mod file); `mods_runtime.c` loads `mods/cheats.txt` and `mods/config.json`, `mods_cheats.c` is the cheat VM, run once per frame from the `vi` vsync thread; `app.m` applies the mod config to a copy of the settings. `NAPPLE_NO_MODS=1` turns it all off.
+`nvdrv`, `nvdrv:a/s/t` (`nvdrv.c`). Layouts and their public sources: [nvdrv layouts](../reference/nvdrv-layouts.md). Every device or ioctl that is
+not handled is refused (NotImplemented) and listed in `missing_ipc` as `nvdrv:ioctl <path> <cmd>`. The first Open of each device path is written
+to the run summary.
 
-Applets live (applets-live, 2026-10-27 b7, Linux, tested not verified): the swkbd KeyboardConfig header/sub/guide texts are parsed in `applet_lib_core.c` (`AppletSwkbdConfig`, `applet_utf16le_to_utf8`) and passed to `frontend_text_input` on the inline path too. `account_core.c` holds the profile list (`NAPPLE_PROFILES=<2..8>` adds "Player N" users, uid last byte +index); `account.c` reports them in `GetUserCount`/`ListAllUsers`/`GetUserExistence`/`GetProfile` and registers `applet_set_profile_lister`, so player select offers them (cancel via `NAPPLE_PLAYER_SELECT=cancel`). applet `GetSystemSharedLayerHandle` (42) is `IPC_IMPL`: a failing 0x1480 like 41 (no placeholder handles). Offline web resolve decodes percent escapes (then rejects `..`, backslash, NUL) and refuses symlinks leaving the `<data-dir>/html` tree. `tests/linux/run_applet.sh` now links the web/album/caps/jpeg cores. See `docs/archive/changes/2026-10-28-claude-applets-live-2026-10-27-b7.md`.
-Applets on titles (sched-applets, 2026-11-01, Mac, verified): swkbd normal mode on Link's Awakening's new-file name (title needs L+R; the keyboard opens at about 109 s on a fresh save): KeyboardConfig parsed (initial "Link", length 1..8, invalid-flags 0x12c; header/sub/guide words are all zero in LAS's config, `NAPPLE_VERBOSE=1` dumps them), `NAPPLE_SWKBD_ANSWER` returned and read back by the game (its next call passes it as the initial text). ACNH's name entry is the game's own keyboard, not swkbd. Offline web: an OfflineHtmlPage path is relative to `html-document/` of the HtmlDocument romfs (`<data-dir>/html/html-document/<name>.htdocs/html/<RegionLang>/...`, SMO and MK8D); `web_manual_path` / `applet_web_open_manual` open a title's manual the way the HOME menu does, `NAPPLE_OPEN_MANUAL=<secs>[:<RegionLang>]` triggers it (SMO's manual shown in the web sheet). See `docs/archive/changes/2026-11-01-claude-sched-applets-2026-11-01-r1.md`.
+| Device | Status | What it does |
+|---|---|---|
+| `/dev/nvmap` | partial | create / alloc / free / param / get_id / from_id as bookkeeping on guest memory |
+| `/dev/nvhost-ctrl` | partial | syncpoints, events |
+| `/dev/nvhost-nvdec`, `-vic`, `-nvjpg`, `-msenc` (host1x classes 0xF0 / 0x5D / 0xC0 / 0x21) | partial | SUBMIT command buffers run as host1x streams on register-level engines ([Media](#media)); submits complete at once and syncpoints advance |
+| `/dev/nvhost-gpu`, `/dev/nvhost-as-gpu`, `/dev/nvhost-ctrl-gpu` | partial | state-tracked nodes (below); no channel executes, NVN is HLE |
+| `/dev/nvdisp-disp0`, `-disp1` | partial | query surface only, **proposed** ABI (no public nvdisp ABI): type `'D'`, nr 1 GET_MODE (1280x720@60 handheld), 2 GET_VBLANK, 3 WAIT_VBLANK (never blocks, strictly increasing), 4 GET_SYNCPT (26 / 27), 5 GET_STATUS |
 
-### nvdrv-device-nodes (2026-10-28-b8): state-tracked GPU device nodes
+Command rows: QueryEvent, MapSharedMemory, GetStatus, SetAruid, DumpGraphicsMemoryInfo (verbose log of the nvmap totals) and InitializeDevtools
+are implemented answers; `Unknown13` stays a stub (no public description).
 
-Status: *tested* on Linux (`runtime/tests/linux/run.sh nvdrv_nodes`, 105 checks), *unbuilt* on macOS. Portable state machines in `nvdrv_nodes_core.c/.h`, wired into `nvdrv.c` (`DEV_GPU_CHAN/AS/CTRL`). No channel executes (NVN is HLE), so these stay **partial**: they answer with consistent state, ordering errors and sensible values. All layouts are **proposed** (author's memory of the public nvgpu uapi / switchbrew, unverified against real traces). Routing: `nvdrv.c` `do_ioctl` sends every ioctl on these fds to `gpu_node_ioctl`, which checks the type byte ('H'/'A'/'G') against the node kind and calls the core (the typed ioctls were already routed in b8; the older task text claiming they answer NotImplemented was stale). Unknown ioctls and wrong types stay `NotImplemented` (compat summary); `nvdisp-disp0` already had its query surface (media-nvdrv above) and is unchanged.
+**Multimedia channel ioctls** (type 0 unless noted): 'H' 0x01 SET_NVMAP_FD, 'H' 0x03 SET_TIMEOUT, 0x01 SUBMIT (command buffers must lie in live
+nvmap handles; syncpoint increments are 0x14 bytes and land at once; fences are u32 thresholds), 0x02 GET_SYNCPOINT (allocated per channel and
+index from id 32 up, released on close), 0x03 GET_WAITBASE (0), 0x07 SET_SUBMIT_TIMEOUT, 0x09 MAP_CMD_BUFFER / 0x0A UNMAP_CMD_BUFFER (one stable
+32-bit device address per nvmap handle). Bad sizes, unknown handles and out-of-range indexes answer BadParameter. SUBMIT reads each command buffer
+whose nvmap handle has a mapped address (`guest_ptr`), applies relocations (word = (target iova + offset) >> shift) to a copy and runs it on the
+channel's engine under the nvdrv lock; handles without an address are accepted and nothing runs. Surfaces are addressed by device address >> 8
+(MAP_CMD_BUFFER iovas).
+
+**GPU nodes** (`nvdrv_nodes_core.c/.h`, routed by `gpu_node_ioctl`, which checks the type byte 'H' / 'A' / 'G' against the node kind). They answer
+with consistent state, ordering errors and sensible values. Layouts are **proposed** (public nvgpu uapi / switchbrew, unverified against traces).
 
 | Node | Ioctls (type, nr) | State kept |
 |---|---|---|
-| `/dev/nvhost-gpu` | 'H' 1 SET_NVMAP_FD, 3 SET_TIMEOUT, 8 SUBMIT_GPFIFO, 9 ALLOC_OBJ_CTX, 0xB ZCULL_BIND, 0xC SET_ERROR_NOTIFIER, 0xD SET_PRIORITY (50/100/150), 0x14/0x15 SET/GET_USER_DATA, 0x17 GET_ERROR_NOTIFICATION (r11), 0x1A ALLOC_GPFIFO_EX2, 0x1D EVENT_ID_CTRL (r11) | bound address space, gpfifo ring, object classes (one each of the six advertised classes), fence = a dynamic syncpoint owned by the fd (SUBMIT with FENCE_GET bumps it, visible through nvhost-ctrl SYNCPT_READ) |
+| `/dev/nvhost-gpu` | 'H' 1 SET_NVMAP_FD, 3 SET_TIMEOUT, 8 SUBMIT_GPFIFO, 9 ALLOC_OBJ_CTX, 0xB ZCULL_BIND, 0xC SET_ERROR_NOTIFIER, 0xD SET_PRIORITY (50/100/150), 0x14 / 0x15 SET / GET_USER_DATA, 0x17 GET_ERROR_NOTIFICATION, 0x1A ALLOC_GPFIFO_EX2, 0x1D EVENT_ID_CTRL | bound address space, gpfifo ring, object classes (one each of the six advertised classes), fence = a dynamic syncpoint owned by the fd (SUBMIT with FENCE_GET bumps it, visible through nvhost-ctrl SYNCPT_READ) |
 | `/dev/nvhost-as-gpu` | 'A' 9 INITIALIZE_EX, 1 BIND_CHANNEL, 8 GET_VA_REGIONS, 2 ALLOC_SPACE, 3 FREE_SPACE, 4 MAP_BUFFER_EX, 5 UNMAP_BUFFER | VA range (default 0x4000000..128 GiB, split 4 GiB, 64K big pages), reservations, mappings of live nvmap handles (fixed offsets only inside a reservation, no overlaps) |
-| `/dev/nvhost-ctrl-gpu` | 'G' 1 ZCULL_GET_CTX_SIZE, 2 ZCULL_GET_INFO, 3 ZBC_SET_TABLE, 4 ZBC_QUERY_TABLE, 5 GET_CHARACTERISTICS (unchanged values), 6 GET_TPC_MASKS, 7 FLUSH_L2, 0x14 GET_GPU_TIME, 0xC GET_TPC_EXCEPTION_EN_STATUS and 0xD NUM_VSMS (r11) | ZBC colour/depth tables (16 each, identical entries shared), L2 flush count, monotonic GPU clock |
+| `/dev/nvhost-ctrl-gpu` | 'G' 1 ZCULL_GET_CTX_SIZE, 2 ZCULL_GET_INFO, 3 ZBC_SET_TABLE, 4 ZBC_QUERY_TABLE, 5 GET_CHARACTERISTICS, 6 GET_TPC_MASKS, 7 FLUSH_L2, 0xC GET_TPC_EXCEPTION_EN_STATUS, 0xD NUM_VSMS, 0x14 GET_GPU_TIME | ZBC colour / depth tables (16 each, identical entries shared), L2 flush count, monotonic GPU clock |
 
-Round 11 (2026-11-03, tested on Linux, 120 checks, unbuilt on macOS): the four ioctls marked r11 above; layouts in [nvdrv-layouts](../reference/nvdrv-layouts.md), still **proposed**. Refused ioctls and reasons are listed there.
+Ordering: ALLOC_GPFIFO_EX2 needs a bound address space (InvalidState); ALLOC_OBJ_CTX / ZCULL_BIND / SUBMIT_GPFIFO need the gpfifo; closing an
+address space unbinds its channels; closing a channel frees its fence syncpoint.
 
-Ordering: ALLOC_GPFIFO_EX2 needs a bound address space (InvalidState), ALLOC_OBJ_CTX / ZCULL_BIND / SUBMIT_GPFIFO need the gpfifo; closing an address space unbinds its channels; closing a channel frees its fence syncpoint.
+## Media
 
-### media-live (2026-11-01, r1): media verified on real titles
-Verified on the Mac ([note](../archive/changes/2026-11-01-claude-media-live-2026-11-01-r1.md)): MK8D's preview video through nvhost-nvdec (H.264, VideoToolbox) + VIC (NV12 pitch linear), 300 decodes and 0 errors in a 110 s menu run, frames dumped with `NAPPLE_VIC_DUMP`; LAS's opening movie through `movie.c` (VP9 1920x1080 on libvpx in NVN texture mode + Vorbis 48 kHz 6-channel on stb_vorbis, out-of-band headers, default on), 6600 frames, 0 errors; SMO and ACNH boot unchanged with movie audio on. The caps album round trip (caps:su save -> caps:u list -> accessor LoadAlbumFile -> caps:dc / ImageIO decode) is verified end to end on real MK8D frames by `test_svc_caps_e2e` (no title of the four opens caps). nvdrv now logs the first Open of each device path into the run summary: MK8D opens nvhost-ctrl, nvmap, nvhost-nvdec, nvhost-vic; LAS, SMO and ACNH open no device. No title of the four opens nvdisp-disp0, nvjpg or msenc (still tested only). The engine class's THI word 0 (INCR_SYNCPT) is no longer counted as an unknown register.
+### Host movie decoder (`runtime/src/movie.c`)
 
-### IPC reference lists (ipc-depth-hid, 2026-11-01-r2)
-`runtime/tests/ipc_reference/<interface>.txt` lists, per interface, the command ids a title can send: `id<TAB>name<TAB>min_fw<TAB>y|n`, first line
-`# interface <name> (<source>)` where `<name>` is the interface string the runtime gives the object (the first argument of `IPC_OBJECT`, e.g. `hid`,
-`IAudioDevice`, `audren:u`, matched exactly; `# alias <iface>` and `# table <file.c>:<table>` comment directives help when the binding cannot be read from
-the source). `y` = reachable by an application on firmware up to 22.x (removed commands stay `y`); `n` = system/debug only, Switch 2, 23.0.0+ or unnamed.
-`runtime/tests/test_ipc_reference.c` (part of `make test` and `make test-host`; `make test-ipc-reference` for detail, `-v` also lists rows absent from the
-reference and name differences) reads the command tables from the sources and fails when an app-reachable id has no row. Lists from switchbrew / libnx
-(ids, names, firmware only). This package's lists: hid (148 app-reachable ids, all with rows), IAppletResource, IActiveVibrationDeviceList, hidbus, irs,
-audren:u / IAudioRenderer / IAudioDevice, audout:u / IAudioOut, audin:u / IAudioIn, audrec:u / IFinalOutputRecorder, hwopus / IHardwareOpusDecoder, psm /
-IPsmSession, apm / apm::ISession, fgm / fgm::IRequest (renamed from IRequest, which nifm also uses), lbl, spsm, set, set:sys (partial), set:fd and its
-iterator, btm:u / IBtmUserCore. Rows added or renumbered in this round:
-* `hid`: 86 rows (all `IPC_IMPL`): six-axis fusion get, accelerometer parameters/play mode, unaltered passthrough, the xpad-era commands (no xpad: empty
-  lists, lifo handles refused), SingleWithDestination (in place, never reassigned), GC ERM rumble, permit-vibration sessions, vibration in bool / mode
-  [mode layout unverified], seven six-axis sensor (state kept, no samples written), forced console six-axis, npad IMU, USB full-key, battery and
-  interface queries (from the backend's active style), the Palma operation model (handle = npad id of a pad reporting the Palma style; operations
-  complete at once and signal the event; data layouts unverified), touch emulation, digitizer, mouse library version. **133-136 were one id low** (133
-  answered the center clamp, 136 was missing); Clear (136) takes only the aruid and clears every style.
-* audio: IAudioDevice 13 answers the master volume (before 13.0.0) or the active output device name (13.0.0+, the request carries an output buffer), 14-21;
-  IAudioRenderer 12/13 voice drop; IAudioOut 12/13 volume (a real per-stream gain in libnapple_audio, `napple_audout_set_volume`, clamped to 0..1 and applied before the mix); IAudioIn
-  7/10 UAC appends (supersedes the "not implemented" note in the table above); audin:u 5; hwopus 8/9; IHardwareOpusDecoder 8/9; IFinalOutputRecorder 10/11.
-  OpenAudioIn records the Mac microphone when the process may use it, silence otherwise (`NAPPLE_AUDIN_SOURCE` overrides).
-* `set` 11 is GetDeviceNickName (was a key code map; `NAPPLE_DEVICE_NICKNAME`, default "Napple"), 12 GetKeyCodeMapByPort; `set:sys` time zone name moved
-  62 → 53, 62 is GetDebugModeFlag (retail), 77 nickname, 79 product model (Nx). psm 18; lbl 26 EnableVrMode (renamed), 27-29; spsm 0-5 named after
-  switchbrew + 4/5; IBtmUserCore 19-21 renumbered (19 BleDisconnect, 20 BleGetConnectionState, 21 AcquireBlePairingEvent) and 1, 2, 22-37 added
-  (1/2 scan filter parameters are `IPC_STUB` zeros; everything needing a connection fails "not connected").
-See `docs/archive/changes/2026-11-01-claude-ipc-depth-hid-2026-11-01-r2.md`.
+The SDK media library (`movie::Decoder`, Android MediaCodec over NvMM/NVDEC) is replaced by host decoders: the constructor and the 17 virtual
+methods are bound by symbol name through `host_symbols_register`, so the library's own vtable slots land on the host code. Decoder types the host
+does not take are forwarded to the library's original code.
 
-## ipc-local-stubs (2026-11-01-r3)
-66 of the documented-default `IPC_STUB` rows of the local services became real `IPC_IMPL` rows (each has a unit test). New portable module `romfs_read.[ch]` parses a RomFS image's directory and file tables through a read callback; `fs.c` uses it to hand the RomFS out as an `IFileSystem` (read-only: `GetEntryType`, `OpenFile` -> IFile over the storage extent, `OpenDirectory`) and `ngc.c` to read the firmware NgWord archive (`sysdata/0100000000000806.bin`: ~3000 words, `ngc_words_add_ngword`). fsp-srv content types (`FileSystemProxyType`): Rom and Data serve the RomFS of the program id (the application, its update title, a DLC, or a `sysdata/` archive), Control serves `control.nacp`, Manual serves `<data-dir>/html`, the others are "path not found". Rows still documented defaults: everything that needs the network (BAAS / id tokens, cloud saves, friends, nifm requests, bsd and ssl I/O, bcat sync), the save data transfer family, game card, rights ids, `GetBleScanFilterParameter(2)`, ILogger 11, `ConvertScalingMode`, `GetIndirectLayerImageMap`, host add-on content setup. Note: `docs/archive/changes/2026-11-01-claude-ipc-local-stubs-2026-11-01-r3.md`.
+- **VP9** on libvpx. Mode 1 (buffer) returns NV12 in the client's Buffer; mode 2 (NVN texture) converts to RGBA and writes into the game's
+  NVNtexture through `gfx_texture_write_rgba` (block-linear swizzle, dirty tracking). Adapted from MacNativeGames (MIT), see THIRD_PARTY_NOTICES.md.
+- **H.264** (`video/avc`) through VideoToolbox (`src/vt_h264.c`): Annex B or AVCC access units, SPS/PPS in-band (or csd via `vth264_config`),
+  packed NV12 output into the same slots and pacing as VP9, B-frame reordering by pts (depth 2; 0 for baseline). The DecoderType value for AVC is 1,
+  read from the movie library; `NAPPLE_MOVIE_H264_TYPE` overrides. `vt_h264.c` also has `jpeg_decode_rgba` / `jpeg_encode_rgba` (ImageIO).
+- **Vorbis** (type 5, PCM, buffer mode; `movie_audio_core.[ch]`, `third_party/stb_vorbis.c`): raw packets wrapped into Ogg pages for stb_vorbis
+  push-data. Headers in band, or out of band in Configure (`vorbispcm_set_headers_csd`): the format's `csd-0..2` buffers as one Xiph bundle, three
+  single packets, or identification + setup (the empty comment header is synthesised, Android MediaCodec layout). A rejected header leaves the
+  collection untouched; audio packets before the headers are dropped with one log line. On by default (`MOVIE_VORBIS_DEFAULT 1`);
+  `NAPPLE_MOVIE_VORBIS=0` turns it off.
+- **Opus** decodes in the core (libopus, `-DNAPPLE_HAVE_OPUS`) but the movie library has no Opus decoder type (DecoderTypeToMime /
+  IsDecoderTypeSupported cover 1..5), so it stays core-only; `hwopus` is separate.
+- `NAPPLE_MOVIE_HOST=0` leaves the SDK's own decoder in place.
 
-### am interfaces: reference and depth (am-depth-applets, 2026-11-01-r3)
-Switchbrew reference fixtures (`runtime/tests/ipc_reference/`) cover the application-facing am interfaces: `appletOE`, `IApplicationProxy`, `ICommonStateGetter`,
-`ISelfController`, `IWindowController`, `IAudioController`, `IDisplayController`, `ILibraryAppletCreator`, `ILibraryAppletAccessor`, `IStorageAccessor`,
-`IApplicationFunctions`, `IDebugFunctions` (the am `IStorage` shares its name with the fs fixture and is not listed separately). Ids marked `n` are debug-only,
-Switch 2 only, newer than 22.x, system-applet services or unnamed; every `y` id has a row (`test_ipc_reference`: missing 0). Rows were renumbered to the
-switchbrew / libnx ids (IApplicationFunctions copyright 100-102, GetPreviousProgramIndex 123, ExecuteProgram 120, GetGpuErrorDetectedSystemEvent 130,
-GetFriendInvitationStorageChannelEvent 140; ILibraryAppletAccessor PresetLibraryAppletGpuTimeSliceZero 60). Requests for things one runtime cannot do
-(another application or program, the movie maker, child applets) answer the am result 0x1480; empty storage channels answer 0x680; preference setters are
-no-ops (`IPC_STUB`). Offline web: document kinds legal information (`<data-dir>/legal`, `NAPPLE_LEGAL_ROOT`) and system data (firmware archive
-`<data-dir>/../sysdata/<id>.bin`, extracted once by `web_romfs_extract`); `NAPPLE_OPEN_WEB_DOC=<secs>:<kind>:<id>:<path>`. Scripted input:
-`NAPPLE_INPUT_SCRIPT` times and holds may be frames (`f600:A:f10`, or `NAPPLE_INPUT_SCRIPT_FRAMES=1`).
+### host1x engines
 
-## ipc-reference-audit (2026-11-02-r4)
-Every "is named X, the reference says Y" note of `test_ipc_reference runtime -v` was resolved (65 of 67; the two left are in `applet.c`, see the integrator file). Where a row sat at the wrong id the id was fixed and its unit test moved: `pctl` 1018 / 1035 / 1061 / 1062 / 1451 (+ new 1065), `pdm:qry` (statistics 4 / 5, events 8-12, the invented 1 / 2 / 6 / 7 gone), `ISteadyClock` (100 GetRtcValue, 101, 102, 200 GetInternalOffset; the test offset is real), `bsd:u` 28 GetResourceStatistics / 29 RecvMMsg / 30 SendMMsg / 31 EventFd, `ISslConnection` 19 FlushSessionCache / 20-21 renegotiation mode, `IGeneralService` 15-20 (SetWirelessCommunicationEnabled, IsWirelessCommunicationEnabled, GetInternetConnectionStatus = 18), `fsp-srv` 30 OpenGameCardStorage (was a duplicate of 202), `miiimg` (10-17 and 100-104), `olsc:u` (the guessed rows 1-9, 11, 12 removed), `ectx:aw`, `prepo:u` (10100-10107, 20100-20103, 30300, 90100), `aoc:u` 13. Name-only: audio Start / Stop / GetReleased*Buffers / SetDeviceGain, bcat 30200 / 30201 / 90100, ISslContext 6, ldn 100 / 101 / 104 / 402, caps 142 / 143, irs 312, sfdnsres 8. 17 documented-default rows became real (nifm IRequest 16-21, 23-25, IGeneralService 19, 20, 28, 34, 40, 41, 43, 57); the full list and the evidence per row are in the change note.
+Portable cores (`runtime/src/services/*_core.c`, no macOS headers).
 
-### am-stubs-legal (2026-11-02, r4): legal pages, am rows made real, offline NetConnect
-[Note](../archive/changes/2026-11-02-claude-am-stubs-legal-2026-11-02-r4.md). napple-build writes a title's LegalInformation content (CNMT type 5) to `<data-dir>/legal/`, so ApplicationLegalInformation pages open in the web sheet (verified on LAS: its IP-notices page). Made real: IApplicationFunctions 70 / 71 / 310 (ExitRequested message, then a clean stop after a 3 s grace, `NAPPLE_EXIT_GRACE_MS`), 180 / 181 (launch-required version, persisted per title, only raised), 110 / 111 (play statistics of the running title), 34 / 36 (full-license answers); ISelfController 120 SaveCurrentScreenshot (current frame into the caps album; verified on LAS with `NAPPLE_DEBUG_SAVE_SCREENSHOT`); IDisplayController 28 TakeScreenShotOfOwnLayerEx; ICommonStateGetter 1004 / 1005 (panel 137 x 77 mm, 1280 x 720). The capture slots now read the graphics back end's last completed frame (`applet_capture_host.c`). Network-connection applet (0x0f): finishes normally with the not-connected result (2110-1111) in its output storage ([unverified] layout).
+| Piece | Files | What it does |
+|---|---|---|
+| host1x stream | `nvdrv_media_core.[ch]`, `nvdrv_media_regs.h` | parses command buffers: SETCL (with register mask), INCR, NONINCR, MASK, IMM, RESTART, GATHER (command gather and register gather, depth 4), EXTEND; registers arrive as THI method / data pairs (`INCR 0x10 count 2`); EXECUTE (offset 0xC0) runs the engine. A malformed op or unmapped gather fails the SUBMIT (BadParameter); a failed decode is counted and written to the status structure. Writes to registers outside the map are counted (`MediaStats.unknown_regs`, THI word 0 INCR_SYNCPT excluded) and summarised on close. `nvdrv_media_regs.h` is the only place register offsets live |
+| NVDEC (0xF0) | same | application id = codec (H.264 3, VP8 5, H.265 7, VP9 9); picture-info, bitstream and output surfaces; DPB output slots are registers 0x10c+idx (luma) / 0x11d+idx (chroma), the output slot is `curr_pic_idx` of the H.264 picture-info structure (0x103 is a frame counter); execute -> `DecoderBackend.decode`; status structure (error, width, height, macroblocks). The H.264 sequence is described by the picture-info structure only (slice NAL units carry no SPS/PPS), so `nvdec_synth_h264` writes the SPS/PPS from it (word map in `nvdrv_media_regs.h`; the synthesized SPS claims 15 reference frames, since 16 makes VideoToolbox evict a live reference). Parameter sets found in the bitstream and VP9 key-frame configs reach `configure()` once per change (reset first; `MediaStats.configures`). NVDEC records the pitch it wrote each output surface with; H.264 pitches come from picture-info words 35 / 36, VP9 from words 20 / 21 (`NVDEC_VP9_W_PITCH_*`, **proposed**, ignored unless >= the key frame width, multiple of 16, <= 0x10000) |
+| VIC (0x5D) | same | slot-0 input luma / chroma 0x100 / 0x101 (read back with the pitch NVDEC recorded, else the old 256-aligned / packed guess), 0x1c1 control word, 0x1c2 config structure (output surface word at +0x20), output luma / chroma 0x1c8 / 0x1c9; NV12 -> RGBA8 / BGRA8 / RGBX8 / NV12 (BT.601 limited), pitch- or block-linear output; NV12 copy when no config is readable. `NAPPLE_VIC_DUMP` dumps output frames |
+| NVJPG (0xC0) | same + `jpeg_core.[ch]` | baseline JPEG (all samplings, restart intervals, grey) to RGBA or NV12, optional scaling and pitch, status (error, size). Real `nvjpg_drv_pic_param_s` (0x1240 B); decodes a JPEG file in the bitstream buffer or, with no SOI, the header-less entropy segment from the structure's decoder tables (`napjpeg_decode_raw_rgba`), pixel-identical. Encode: pic-setup structure of 12 words with word 6 = 1: RGBA8 in (pitch word 9), JPEG out, quality, 4:2:0 flag; status error / width / height / bytes |
+| MSENC (0x21) | same | `EncoderBackend`: reduced setup structure at 0x101 (width, height, pitches, bitrate, fps, flags, out capacity), NV12 input 0x102 / 0x103, output 0x104, status 0x109 (error, bytes, IDR flag, frame count); registers **proposed** (the real NVENC method map is unknown) |
+| Codec headers | `codec_headers_core.[ch]` | H.264 SPS (incl. cropping, high-profile scaling lists), VP9 uncompressed header, VP8 frame tag, H.265 SPS skeleton (size only); writers `h264_build_sps/pps` |
+| JPEG caps | `caps_core.[ch]`, `caps.c`, `jpeg_core` | the caps services above |
 
-### nifm-netconnect (2026-11-02, r5): nifm Cancel, netConnect's storages, the real NetConnect output
-[Note](../archive/changes/2026-11-02-claude-nifm-netconnect-2026-11-02-r5.md). The evidence is the MK8D update's nnSdk and the firmware's netConnect applet; addresses are in the note.
-- **Cancel:** IRequest Cancel releases and resets only an accepted request. A rejected one keeps its result, because the SDK cancels before HandleNetworkRequestResult asks GetAppletInfo.
-- **GetAppletInfo:** for a failed request it lists what netConnect reads, since the SDK pushes only the listed storages: CommonArguments, then `{u32 0; Result; Uuid}` (0x18 bytes), then -1.
-- **NetConnect (0x0f) output:** one storage `{u32 0; Result}`, as netConnect writes it. The Result is 2110-0190 (ErrorHandlingCompleted; the title resubmits) when a connection was made, and 2110-2900 when the user left without one. Offline, the host answers 2900. The old `{2110-1111, 0}` read as Result 0, which the SDK turns into 0190, so titles retried.
-- **Verified** on MK8D Online Play offline: one CreateLibraryApplet 0xf per attempt, no retry, back to the menu.
-- Filler: vi 2102 ConvertScalingMode is real.
+### Decoder and encoder backends
 
-### ipc-depth-cloud (2026-11-02, r9): set:sys store, pctl local settings, notif:a alarms, display settings
-[Note](../archive/changes/2026-11-02-claude-ipc-depth-cloud-2026-11-02-r9.md). Status: tested on Linux, unbuilt on macOS. IPC depth went from 1473 impl / 257 stub to 1571 impl / 246 stub (11 stub rows converted, 87 new rows).
-- **set:sys** keeps what Set* writes for the life of the process (`sysset_core.c`), and Get* reads it back. set GetLanguageCode / GetRegionCode / GetQuestFlag / GetDeviceNickName and set:sys GetColorSetId / GetDeviceTimeZoneLocationName follow the store and fall back to the host values. The serial number comes from `NAPPLE_SERIAL`, else `XAW00000000000`.
-- **notif:a** keeps up to 8 alarms with their parameters (`notif_core.c`). They never fire, because there is no HOME menu.
-- **pctl** keeps a local PIN code, the temporary unlock, the default rating organization (from `NAPPLE_REGION`), the free-communication list and the last-change time (`pctl_core.c`).
-- **aoc 100 / 101** hand out an IPurchaseEventManager: it keeps delivery targets, its event never fires and nothing can be popped.
-- **vi display settings:** ISystemDisplayService and IManagerDisplayService keep gamma, contrast, CMU, RGB range, content type, magnification, alpha and power state. The host window is not affected. The indirect layer image maps (2450 / 2451) return a transparent frame.
-- **time:** ParseTimeZoneBinary turns TZif data into a fixed-offset rule at the zone's standard offset (DST is dropped).
-- **Other new rows:** pdm 18 / 19, lbl 20 / 22, ncm meta 19 / 22 / 23, bcat 20101.
+- `DecoderBackend` ABI 1 (`decoder_backend.h`, frozen): `open/close/decode` plus optional `reset/configure`; the `abi` field is checked by
+  `decoder_backend_install` (-1 on mismatch); call order and the synchronous in-decode-order rule are in the header comment. Frames in (codec,
+  picture-info, bitstream, output planes, the guest's row pitches in `DecodeRequest`), NV12 out.
+- Null backend (`decoder_null_core.c`): size from the codec headers, a deterministic grey picture. `NAPPLE_DECODER=null` selects it.
+- VideoToolbox backend (`services/decoder_vt.c`, installed from a constructor, never compiled on host / Linux builds): H.264 through `vt_h264.c`.
+  `decode()` is synchronous: each request is decoded and flushed, so the frame is in the guest surface when it returns. VP9 is refused (open returns
+  NULL, status error 1) unless `NAPPLE_VT_VP9=1` and VideoToolbox reports a VP9 decoder (vpcC from `configure`, superframes split with
+  `vp9_superframe_split`; this path has not been exercised).
+- `EncoderBackend`: null encoder (fake Annex B) or VideoToolbox H.264 (`decoder_vt.c`); `NAPPLE_ENCODER=null` keeps the null one.
+- `media_write_prepare` (set by `media_gfx_glue.c`) tells gfx before the host writes a surface.
 
-### ipc-depth-95 (2026-11-02, r10): friend store, ssl/nifm/bsd/sfdnsres depth, fs permission checks, applet restarts
-[Note](../archive/changes/2026-11-02-claude-ipc-depth-95-2026-11-02-r10.md). Status: tested on the Mac (full runtime gate), verified with four-title boots offline and with `NAPPLE_NET=host`. IPC depth (scan.py) 92% -> 98.02%: reference rows 1264 impl / 61 stub, missing 0.
-- **friend:u** (`friend_core.c`): the console's per-user state is kept: play history, in-person requests, own presence and the user setting with an installation friend code. Cache rows need a linked network service account (provider `account_info`) and answer from the provider's friend list; sync rows also need `ONLINE_CAP_FRIENDS` and a connection. Offline: unchanged ("no network service account").
-- **ssl:** Peek / Poll / verify errors / per-connection options are real; context PKI and CRL ids are kept; the certificate-list rows agree (an empty built-in list).
-- **nifm:** profile store, scan request (0 access points), sleep / wake / shutdown over live requests, telemetry event. **bsd:** eventfd descriptors, ShutdownAllSockets(how), core mask. **sfdnsres:** resolver options, Query / Fetch / CancelQuery. **nsd:** application environment type (default lp), GetSettingUrl.
-- **fs:** fsp-srv access-checked rows follow the title's main.npdm FS permission bits (PermissionDenied without the bit). **account / olsc:** async contexts whose result follows the provider's account state (0x1907C for an unlinked user); open contexts (160 / 130 / 131).
-- **applet:** ExecuteProgram / CreateApplication*AndRequestToStart restart the running program (macOS `execv`, user channel carried over); HDCP, GPU-error abort delay, system button, Home short press, PrepareForJit; SetLcdBacklighOffEnabled drives lbl's switch state.
-- **ldn / npns / bcat / prepo / lm / ovln / btm / aoc:** ldn configuration rows and client process monitor; npns suspend state and receiver; bcat notifier, suspension, delivery list; prepo keeps reports for ReadAll*; lm accessor (retail no-op); ovln per-sender queues; btm documented constants; aoc contents service manager.
-- 61 reference rows stay `IPC_STUB` (no public layout, a missing provider hook, or a host feature Napple lacks); each has its reason in the table.
+Known limits: NVDEC output is pitch-linear NV12 (the hardware writes block-linear); decode runs inside the nvdrv lock. The H.264 NVDEC + VIC NV12
+path is checked against real SDK streams; VP9 through NVDEC, NVJPG, MSENC and nvdisp are tested with synthetic streams only.
+
+## Library applets and the am interfaces
+
+`applet.c` (appletOE: ICommonStateGetter, ISelfController, IWindowController, IAudioController, IDisplayController, ILibraryAppletCreator,
+ILibraryAppletAccessor, IStorageAccessor, IApplicationFunctions, IDebugFunctions), `applet_ae.c` (appletAE side used by firmware applets), answers in
+`applet_lib_core.[ch]`.
+
+**State rows.** A focus message is queued at launch. The guest's settings are stored and read back: master volumes, VR mode, auto sleep and its
+override, idle detection, screenshot permission, CPU boost, home-button blocking, sleep lock + event, fatal section, window visibility, foreground
+rights, GPU time slice, HDCP, GPU-error abort delay, system button, Home short press, PrepareForJit. Illuminance: `NAPPLE_ILLUMINANCE=<lux>` makes
+the sensor present. Capture image slots read the graphics back end's last completed frame (`applet_capture_host.c`; `applet_capture_set_source`,
+none = opaque black). Host events: `applet_signal_gpu_error`, `applet_signal_friend_invitation`, `applet_display_resolution_changed`.
+
+**Notable rows.**
+
+| Interface | Rows |
+|---|---|
+| IApplicationFunctions | 34 / 36 full-license answers; 70 / 71 / 310 ExitRequested message, then a clean stop after a 3 s grace (`NAPPLE_EXIT_GRACE_MS`); 100-102 copyright; 110 / 111 play statistics of the running title; 120 ExecuteProgram and CreateApplication*AndRequestToStart restart the running program (macOS `execv`, user channel carried over); 123 GetPreviousProgramIndex (-1); 130 GetGpuErrorDetectedSystemEvent; 140 GetFriendInvitationStorageChannelEvent; 180 / 181 launch-required version (persisted per title, only raised); PopLaunchParameter, EnsureSaveData (offline answers); GetSaveDataSize reads `UserAccountSaveDataSize` / `JournalSize` from `control.nacp` (32 MiB each without it) |
+| ISelfController | 120 SaveCurrentScreenshot (current frame into the caps album; `NAPPLE_DEBUG_SAVE_SCREENSHOT` triggers it); SetLcdBacklighOffEnabled drives lbl's switch state |
+| IDisplayController | 28 TakeScreenShotOfOwnLayerEx |
+| ICommonStateGetter | 900 SetRequestExitToLibraryAppletAtExecuteNextProgramEnabled (no-op); 1004 / 1005 panel 137 x 77 mm, 1280 x 720 |
+| ILibraryAppletAccessor | 60 PresetLibraryAppletGpuTimeSliceZero |
+| system buffer sharing | IsSystemBufferSharingEnabled answers the failing result of an unprivileged process; GetSystemSharedLayerHandle (41, 42) fails with 0x1480 |
+
+Requests one runtime cannot satisfy (another application or program, the movie maker, child applets) answer the am result 0x1480; empty storage
+channels answer 0x680; preference setters are no-ops (`IPC_STUB`). NotifyMessageToHomeMenuForDebug answers like a console with no Home menu
+process.
+
+**Handler registry.** `libapplet_register_handler(id, handler)` (`applet_lib_core.h`) answers a library applet id before any built-in answer; the
+handler sees the pushed and interactive storages and returns output storages on both channels.
+
+**Firmware applets.** `libapplet_program_for(id)` maps applet ids 0x0A-0x1A to the firmware program ids (`0100000000001001`...). A firmware applet
+runs through the host (child process or in process) when `libapplet_firmware_enabled` says so: the Mii Maker (0x12) by default, any other entry
+with `NAPPLE_FIRMWARE_APPLET_IDS=0x11,controller,...` or `NAPPLE_FIRMWARE_APPLETS=all`; `NAPPLE_FIRMWARE_APPLETS=0` turns all off. Without the
+firmware the built-in answer is used. Interactive channel: `PushInteractiveInData` / `PopInteractiveOutData` / `GetPopInteractiveOutDataEvent` are
+real; a firmware applet gets `iin<N>.bin` and answers `iout<N>.bin` (`PopInteractiveInData` / `PushInteractiveOutData` of `applet_ae.c`); output
+storages are a queue (`out0..out7`); `GetResult` returns the applet's exit result (`result.txt`).
+
+**Built-in applets.**
+
+| Applet (id) | Answer |
+|---|---|
+| software keyboard | foreground and inline (background mode replies over the interactive channel until Finalize). The KeyboardConfig header / sub / guide texts, initial text, length limits and invalid-character flags are parsed (`AppletSwkbdConfig`, `applet_utf16le_to_utf8`) and passed to `frontend_text_input`; `NAPPLE_VERBOSE=1` dumps them. `NAPPLE_SWKBD_ANSWER` scripts the answer |
+| controller support (0x0c) | `player_count_min..max` from the argument header (unset = 1..4); connected pads; single mode reports npad 0 as the selected id, otherwise `0xffffffff`; output `{s32 players; u32 selected_id; u32 result = 0}` (0xC). `NAPPLE_CONTROLLER_SUPPORT=cancel|strict` |
+| player select (0x10) | profile list from `applet_set_profile_lister`; output `{u64 result; u8 uid[16]}` (0x18), result 2 = cancel. `NAPPLE_PLAYER_SELECT=<index>|cancel` |
+| error (0x0e) | dismissed (success, no output) unless the frontend hook (`applet_set_error_hook`) shows it; header type, jump flag and first argument word are logged and put in the run summary (`summary_note`); a jump-to-settings request is not followed |
+| network connection (0x0f) | see below |
+| web / offline web (0x13, 0x17) | `applet_web_core.c` parses the WebArgs TLV storage and answers `WebCommonReturnValue` (exit reason + last URL); see below |
+| photo viewer / album (0x15) | `applet_album_core.c` lists the caps album (`applet_album_set_source`), shows decoded images through `applet_ui_show_image`, and in select mode returns the picked entry |
+
+Web and album register through `libapplet_register_handler` (`applet_web_register`, `applet_album_register`). Struct layouts follow libnx and are
+[unverified] where the source says so.
+
+**Offline web documents.** An OfflineHtmlPage path is relative to `html-document/` of the HtmlDocument RomFS (`<data-dir>/html/html-document/<name>.htdocs/html/<RegionLang>/...`),
+also settable with `applet_web_set_html_root` / `NAPPLE_HTML_ROOT`, and reaches the frontend as a `file://` URL through `applet_ui_open_web`; with
+no hook the user leaves at once on the requested page. Resolution decodes percent escapes, then rejects `..`, backslash and NUL, and refuses
+symlinks leaving the `<data-dir>/html` tree. Legal information: `napple build` writes a title's LegalInformation content (CNMT type 5) to
+`<data-dir>/legal/` (`NAPPLE_LEGAL_ROOT` overrides). System data documents come from the firmware archive `<data-dir>/../sysdata/<id>.bin`, extracted
+once by `web_romfs_extract`. `web_manual_path` / `applet_web_open_manual` open a title's manual the way the HOME menu does. Triggers for tests:
+`NAPPLE_OPEN_MANUAL=<secs>[:<RegionLang>]`, `NAPPLE_OPEN_WEB_DOC=<secs>:<kind>:<id>:<path>`.
+
+### Network connection applet (0x0f)
+
+- nifm IRequest **Cancel** releases and resets only an accepted request. A rejected one keeps its result, because the SDK cancels before
+  HandleNetworkRequestResult asks GetAppletInfo.
+- **GetAppletInfo** for a failed request names the netConnect applet (id 0x0f, mode 0) and lists what it reads, since the SDK pushes only the
+  listed storages: CommonArguments, then `{u32 0; Result; Uuid}` (0x18 bytes), then -1.
+- **Output:** one storage `{u32 0; Result}`, as netConnect writes it. The Result is 2110-0190 (ErrorHandlingCompleted; the title resubmits) when a
+  connection was made, and 2110-2900 when the user left without one. Offline, the host answers 2900. (An output of 0 would be turned into 0190 by
+  the SDK and make the title retry.)
+
+### Frontend hooks
+
+The controller (0x0c) and player select (0x10) applets ask the frontend through `applet_controller_ask` / `applet_player_select_ask` (hooks
+`applet_set_controller_ui`, `applet_set_player_select_ui`; -2 = no UI, keep the headless answer), the error applet through
+`applet_set_error_hook`, web through `applet_ui_open_web` and the album through `applet_ui_show_image` (answer 1 select, 0 next, -1 close;
+`applet_ui_album_selecting()` says whether the viewer may select). The Mac frontend registers sheets for all of them
+(`frontend/src/applet_sheets.m`, `register_applet_sheets` in `app.m`). Scripted answers win over any sheet: `NAPPLE_CONTROLLER_SUPPORT`,
+`NAPPLE_PLAYER_SELECT`, `NAPPLE_WEB_ANSWER` (back | closed | requested | error | n), `NAPPLE_ALBUM_PICK` (index | first | next | none),
+`NAPPLE_SWKBD_ANSWER`.
+
+## Frame pacing and timing
+
+All guest time derives from one host clock: `GetSystemTick` and `cntpct_el0` are `mach_absolute_time` scaled to 19.2 MHz (`runtime_guest_ticks`,
+factor 12/625 on nanoseconds), `cntfrq_el0` reads 19200000, and the `time:u` steady clock uses the same ticks, so every guest-visible clock agrees.
+The only periodic source is the vsync event of `vi:u` (`vi.c`): a thread with absolute deadlines (`next += period`, no drift; a stall longer than 8
+periods resynchronises instead of bursting).
+
+Three rates are kept apart, and only the first two can change what the game feels like:
+
+1. **Game clock / guest cadence** (`timescale.c`). The virtual vsync fires every `TS_GAME_VSYNC_NS` (1/60 s) divided by the Speed control and
+   nothing else (`timescale_vsync_period_ns`); every guest clock follows the same scale. A title at swap interval 2 waits two vsyncs (30 Hz game
+   logic). The deadline stepper `timescale_deadline_step` is shared by `vi.c` and the tests.
+2. **Speed** (`speed_percent`, turbo, slow motion, `speed_mode`): the only control that makes the game faster or slower.
+3. **Present rate** (`fps_mode`): a host property, `timescale_set_fps`. 0 game pacing, 1 match the display refresh (ProMotion 120 Hz), 2 custom N
+   (`fps_cap`, 15..999), 3 uncapped (`CAMetalLayer.displaySyncEnabled = NO`). It decides which finished game frames the presenter shows and is never
+   read by the guest clocks. Above the game's frame rate the display repeats the last image (frame generation, `mtl_interp.m`, can fill
+   in-between images); real extra game frames need a per-title timestep patch. Below it (custom 30) the presenter drops frames. `vsync` off lets
+   the layer present as soon as an image is ready (tearing possible); it never touches game speed either. `gfx_vsync_period_ns()` is always the
+   game's 16.67 ms. In `mtl_present.m` the guest-visible frame time is `swap interval / 60 / speed` in every mode; the headless path (no layer)
+   therefore always runs the game at its real speed whatever `fps_mode` says.
+
+Settings: `settings.json` has `fps_mode` (+ `fps_cap` as the custom rate). Older files that stored `fps_cap` as a rate the guest was paced by
+migrate on load (0 -> game pacing, 1000 -> uncapped, N -> custom N and, when the file has no `speed_percent`, Speed = N/60 so the old feel is kept
+explicitly). Headless: `NAPPLE_FPS_MODE=0..3`, `NAPPLE_FPS_HZ=<N>` (mode 2); `NAPPLE_SPEED=<factor>` is the speed. `NAPPLE_FRAME_TRACE=<file.csv>`
+writes `kind,real_ns,game_clock_ns` for every guest vsync (V) and presented frame (P); `tools/fps/frame_trace.py` runs the title x mode matrix and
+asserts game clock 1.00 +-0.02 per wall second, guest vsync 60 Hz +-3 % and presents never above vsync. Unit test: `runtime/tests/test_timescale.c`
+(10 simulated seconds at present rates 30/60/144/999/display/uncapped: identical vsync count and game clock, +-0.1 %). The statistics overlay (F9)
+shows `game` fps (guest frames) and `shown` fps (presented images) separately.
+
+## Shared fonts (`pl:u`)
+
+The system fonts are Nintendo data and are never shipped. Extract them once from the user's own firmware:
+`napple build --dump-fonts <Firmware.zip|dir> -k <prod.keys> -o "~/Library/Application Support/Napple/system/fonts"` (system data titles
+0100000000000810..0815; each .bfttf is decoded: every u32 XOR 0x06186249, then {magic 0x18029A7F, u32 big-endian size, TTF}). The service lays
+the fonts out in a 0x1100000-byte shared memory as {0x18029A7F, size ^ 0x49621806, TTF} and reports the offset of the TTF itself. Type mapping
+(libnx PlSharedFontType): 0 std, 1 zh-CN, 2 zh-CN extension, 3 zh-TW, 4 Korean, 5 Nintendo extension, by file name. Without the fonts zero-size
+fonts are served and titles render no text.
+
+## Per-game data (`game.json`)
+
+`game.json` in the data directory: `{"title_name":..., "nvn_major":..., "nvn_minor":...}`. A title checks the NVN API version
+(`nvnDeviceGetInteger(API_MAJOR/MINOR)`) against its build-time constant and silently skips graphics initialisation when it does not match, so the
+runtime passes the title's version to gfx (0,0 = 55.15). See [Graphics](gfx.md).
+
+## Mods runtime
+
+`fs.c` `storage_with_overlay` replaces the RomFS IStorage by a virtual image (`romfs_map.c` `romfs_merge_open`: original tables +
+`<data-dir>/mods/overlay.json`; file data stays an extent of the original or of the mod file). `mods_runtime.c` loads `mods/cheats.txt` and
+`mods/config.json`; `mods_cheats.c` is the cheat VM, run once per frame from the `vi` vsync thread; `app.m` applies the mod config to a copy of
+the settings. `NAPPLE_NO_MODS=1` turns it all off. Format and authoring: [mods](../mods/README.md).
+
+## IPC reference lists
+
+`runtime/tests/ipc_reference/<interface>.txt` lists, per interface, the command ids a title can send: `id<TAB>name<TAB>min_fw<TAB>y|n`, first
+line `# interface <name> (<source>)`, where `<name>` is the interface string the runtime gives the object (the first argument of `IPC_OBJECT`, e.g.
+`hid`, `IAudioDevice`, `audren:u`, matched exactly); `# alias <iface>` and `# table <file.c>:<table>` comment directives help when the binding cannot
+be read from the source. `y` = reachable by an application on firmware up to 22.x (removed commands stay `y`); `n` = system / debug only, Switch 2,
+23.0.0+, system-applet services or unnamed. Lists come from switchbrew / libnx (ids, names, firmware only).
+
+`runtime/tests/test_ipc_reference.c` (part of `make test` and `make test-host`; `make test-ipc-reference` for detail; `-v` also lists rows absent
+from the reference and name differences) reads the command tables from the sources and fails when an app-reachable id has no row. Covered
+interfaces include hid, IAppletResource, IActiveVibrationDeviceList, hidbus, irs, the audio interfaces, psm, apm, fgm (`fgm::IRequest`, distinct
+from nifm's IRequest), lbl, spsm, set, set:sys, set:fd, btm:u / IBtmUserCore, and the application-facing am interfaces (`appletOE`,
+`IApplicationProxy`, `ICommonStateGetter`, `ISelfController`, `IWindowController`, `IAudioController`, `IDisplayController`,
+`ILibraryAppletCreator`, `ILibraryAppletAccessor`, `IStorageAccessor`, `IApplicationFunctions`, `IDebugFunctions`; the am `IStorage` shares its name
+with the fs fixture).
+
+`tests/linux/known_calls_titles.txt` lists the commands the reference titles call; `check_known_calls.py` fails when one disappears or becomes a
+stub. Current coverage numbers are in [feature support](../reference/feature-support.md).
+
+## Debug aids
+
+| Variable / action | Effect |
+|---|---|
+| `NAPPLE_INPUT_SCRIPT="10:A,12:PLUS:0.3,30:L+R:0.8"` | scripted key presses (seconds after HID is configured : button [: hold]); `+` joins a chord pressed atomically; uses the bindings of input.json; times and holds may be frames (`f600:A:f10`, or `NAPPLE_INPUT_SCRIPT_FRAMES=1`) |
+| `NAPPLE_INPUT_LOG=1` | logs every change of player 1's merged state |
+| `kill -USR1 <pid>` | dumps every guest thread (state, wait, backtrace) without stopping |
+| `NAPPLE_OP_MODE=docked|handheld` | operation mode |
+| `NAPPLE_AUDIO_VOLUME=0.05`, `NAPPLE_AUDIO_DEVICE=1` | audible tests at low volume |
+| `NAPPLE_FE_OVERLAY=<tab>`, `NAPPLE_FE_VIEWSHOT=<png>:<secs>` | open the overlay at start; render it to a PNG |
+| `tools/dev/synth_keys.m` | posts real CGEvents |
+| `NAPPLE_SCREENSHOT=<prefix>`, `NAPPLE_SCREENSHOT_FRAMES=1,60,...` | PNG of presented frames |
+| `NAPPLE_WATCH=main+0x<offset>` | logs every guest write to a location |
+| `NAPPLE_PEEK`, `NAPPLE_WAIT_SECS` | memory peek, wait diagnostics |
+| `NAPPLE_FS_TRACE=1` | file system trace |
+| `NAPPLE_MOVIE_HOST=0` | keep the SDK movie decoder |
+| `NAPPLE_VERBOSE=1` (`-v`) | verbose log, including the `nvdrv` data lines and the media register summary |
+
+The full list is in [environment variables](../reference/environment-variables.md).
+
+## Tests
+
+- `make -C runtime test` (macOS): the service and kernel unit tests, including `test_fs_journal.c` (commit, rollback, interrupted commit, nested
+  directories, adoption of old saves, open fds), `test_timescale.c`, `test_ipc_reference.c`, `test_svc_*` (e.g. `test_svc_fs`, `test_svc_applet`,
+  `test_svc_bcat`, `test_svc_nfp`, `test_svc_amiibo`, `test_svc_caps_e2e`, `test_svc_movie_audio`, `test_svc_nvdrv_media`).
+- `make -C runtime test-host` (any POSIX host): the portable kernel, loader and service code with `tests/host` stand-ins: `test_kernel_ipc`,
+  `test_loader`, `test_nvdrv`, `test_fs_savedata`, `test_fs_journal`.
+- Linux harness (`tools/linux-check/`, IPC mock): `runtime/tests/linux/run_applet.sh` (`test_svc_applet`, `_libs`, `_host`, `_ae`, with the web /
+  album / caps / jpeg cores), `runtime/tests/linux/run.sh nvdrv_nodes`.
+- `make -C audio test`, `make -C input test` for the library sides.
+
+History of these subsystems: [change archive](../archive/changes/README.md).

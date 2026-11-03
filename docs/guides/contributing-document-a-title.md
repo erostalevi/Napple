@@ -37,11 +37,11 @@ An Apple Silicon Mac, the Xcode command line tools, Rust and the build from [CON
    python3 -I tools/support/gen_support.py
    python3 tools/check_docs.py
    ```
-   Commit the three regenerated files in `docs/reference/` with your change. `check_docs.py` fails on a broken link, an orphan page or a stale table.
+   Commit the regenerated files (the tables in `docs/reference/` and the data files the generator names) with your change. `check_docs.py` fails on a broken link, an orphan page or a stale table.
 8. **Pull request.** Sign off your commits (`git commit -s`), fill in the template, tick "Catalogue / title page / docs only". `compat/matrix.json` and `COMPATIBILITY.md` come from the tool; if they changed more than your title, say why.
 
 ## What a maintainer will check
 Title id equals the file name; every claim has a command or a log line behind it; no game bytes, no key material, no absolute paths from your machine; status words are honest; the generated tables are fresh.
 
 ## Pitfalls
-Updated games have several `<buildid16>` directories (the base boots the old version). Do not materialise 19 GB of RomFS. One game process at a time uses the GPU. More in [add-game-support.md](add-game-support.md#common-pitfalls).
+Updated games have several `<buildid16>` directories (the base boots the old version). Do not materialise a full patched RomFS (tens of GB for a large title). One game process at a time uses the GPU. More in [add-game-support.md](add-game-support.md#common-pitfalls).

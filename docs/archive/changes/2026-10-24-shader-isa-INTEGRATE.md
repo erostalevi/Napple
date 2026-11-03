@@ -1,13 +1,13 @@
-# Integration notes: shader ISA round (`claude/adoring-dirac-ng6iif`)
+# Integration notes: shader ISA round (`adoring-dirac-ng6iif`)
 
 For whoever merges this branch into `main`. Read `2026-10-24-shader-isa.md` (same folder) for what the round adds; this file only covers how to land it.
 
 ## Branch
-- Branch: `refs/heads/claude/adoring-dirac-ng6iif`, pushed to `origin`. Commits on top of `main` (1f4b902):
+- Branch: `refs/heads/adoring-dirac-ng6iif`, pushed to `origin`. Commits on top of `main` (1f4b902):
   - `9501a91` shader: LDS/STS, TLD, TXD, atomics, VOTE, CS2R and fewer fail() paths (cloud session, Linux, untested on Metal)
   - `ebdbe59` shader: Metal-verify the ISA round; TLD 1D lod fix; corpus re-run (this Mac)
   - plus the commit that adds this file (docs only)
-- Local worktree: `.claude/worktrees/adoring-dirac` (can be removed after the merge).
+- Local worktree: `a local worktree` (can be removed after the merge).
 - Already verified on this Mac (Apple M5): `make -C Napple/gfx test` passes, including 41 Metal compile checks in `t_xlate`.
 
 ## Files touched
@@ -25,7 +25,7 @@ For whoever merges this branch into `main`. Read `2026-10-24-shader-isa.md` (sam
 ## Steps
 ```bash
 git checkout main
-git merge --no-ff refs/heads/claude/adoring-dirac-ng6iif
+git merge --no-ff refs/heads/adoring-dirac-ng6iif
 make -C Napple/gfx clean test
 ```
 Then the corpus checks (each must print `N shaders, N translated, N compile with Metal` and `t_xlate: ok`):

@@ -1,4 +1,4 @@
-//! Copy of `crates/napple-account/src/names.rs` (reserved-name rules of orchestrations/ACCOUNT-CONTRACT.md, "Reserved names"), kept
+//! Copy of `crates/napple-account/src/names.rs` (reserved-name rules of docs/guides/napple-account.md, "Reserved names and grants"), kept
 //! identical apart from this header and `check_text` at the end, so napple-social builds and deploys without the account crate.
 //! Change both copies together.
 //!

@@ -12,7 +12,7 @@ use napple_core::infrastructure::nso::Nso;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
-/// Bytes of patch area per rewritten site, measured: LAS 39-40, ACNH sdk 43 (docs/archive/changes/2026-10-26-claude-nx-rewriter-2026-10-26-nx.md).
+/// Bytes of patch area per rewritten site, measured: LAS 39-40, ACNH sdk 43 (docs/archive/changes/2026-10-26-nx-rewriter-2026-10-26-nx.md).
 /// Jump-table landing pads come on top (ACNH main: 151 B/site), so this is a floor; `--survey-exact` runs the real rewriter.
 const EST_BYTES_PER_SITE: usize = 40;
 

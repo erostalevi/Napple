@@ -2,7 +2,7 @@
 
 No source change. The reported `CRASH signal=11 fault=0x38 pc=main+0x111e000` (x0=0, pc==lr) at module init could not be reproduced.
 
-## What was run (Mac, arm64, branch claude/boot-crash-2026-10-24-plan6 at 1570a78)
+## What was run (Mac, arm64, branch boot-crash-2026-10-24-plan6 at 1570a78)
 - Rebuilt gfx + runtime from this checkout (`make -C gfx`, `make -C runtime`).
 - `runtime/build/napple-runtime <Napple/work/games/<id>/<hash>> --headless --seconds N` for LAS (01006BB00C6F0000) and SMO (0100000000010000):
   - 45 s, both run concurrently: 0 CRASH lines. LAS: 2304 gfx frames, movie decoder ran (2400 movie frames, ~0.8 ms/frame), audio renderer opened (null sink). SMO: 2206 frames, 183920 draws, audio renderer opened.

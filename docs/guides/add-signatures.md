@@ -61,7 +61,7 @@ File header: `{"schema_version": 1, "title_id": ..., "build_id": ..., "signature
    The pull request is opened by the GitHub account `gh` is logged in with; GitHub knows that account. (The design note records that the live `--yes` path was implemented but not exercised against a real fork.)
 
 ## Worked example
-Run on a Linux box for this guide with a **synthetic** 256-byte file of made-up instruction words (not game code), so the output can be reproduced without any game:
+Run on Linux with a **synthetic** 256-byte file of made-up instruction words (not game code), so the output can be reproduced without any game:
 ```
 $ napple sigs resolve synth.bin --title 0100FFFF00000000 --build 00112233445566778899aabbccddeeff --no-rea --work w2 0x40:function:synthetic_fn:0x20
 0x40  local         571808a981f154bea6060bb591943274  (low confidence; no reverser configured; stored as pending-share)
@@ -81,7 +81,7 @@ and a `patch-site` in module `sdk` from provenance `rea`. `napple sigs lookup 01
 
 ## How to test
 - `cargo test -p napple-sigs` (offline, no game, runs on Linux: 40 tests in this tree) covers hash stability, validator rejections, store round trips, layered precedence, the resolver, the REA adapter against a fake `rea`, the share plan and
-  that the committed `_examples` validate (`validate.rs: committed_examples_validate`). `cargo test --workspace --locked` is what CI runs on macOS (`.github/workflows/tests.yml`, job `rust`).
+  that the committed `_examples` validate (`validate.rs: committed_examples_validate`). `cargo test --workspace` is what CI runs on macOS (`.github/workflows/tests.yml`, job `rust`).
 - **Real files under `knownSignatures/<TITLEID>/` are not covered by a CI test** (the unit test reads only `_examples`; repository loads revalidate at run time). Before a pull request run
   `napple sigs validate` on every file you add, and `napple sigs lookup <TITLEID> <BUILDID>` from the repository root to see that the layered store loads it (a file with a wrong path or mismatched ids is reported as an error).
 - If you change the format: update `schema.json`, the README table, the `_examples` file and the tests together.

@@ -1,4 +1,4 @@
-//! napple-cloud: the client side of the Napple Account (orchestrations/ACCOUNT-CONTRACT.md, docs/guides/cloud-saves.md).
+//! napple-cloud: the client side of the Napple Account (`docs/guides/napple-account.md`, docs/guides/cloud-saves.md).
 //!
 //! - `store`: secrets (tokens, the device X25519 key, the account save key) in the Keychain on macOS/iOS, files elsewhere.
 //! - `keys`: HPKE wrap/unwrap of the account save key, recovery code (BIP-39 words + Argon2id).

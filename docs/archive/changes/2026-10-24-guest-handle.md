@@ -1,4 +1,4 @@
-# 2026-10-24 guest-handle: AC 3.0.x "request on handle 0" abort (branch claude/guest-handle-2026-10-24-plan10)
+# 2026-10-24 guest-handle: AC 3.0.x "request on handle 0" abort (branch guest-handle-2026-10-24-plan10)
 
 ## Root cause
 AC 3.0.1/3.0.3 (NVN 55.15 SDK) talk to sm over TIPC. Its GetServiceHandle (sdk+0x159070) sends the request, then reads the reply at fixed positions

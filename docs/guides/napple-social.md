@@ -2,12 +2,13 @@
 
 `crates/napple-social` is the Napple friends and presence service: Napple's own community service for Napple players, run by Napple at
 `pretend.napple.lat`. It never talks to Nintendo and contains no Nintendo endpoints, tokens or protocol code. It gives every Napple player profile a
-friend code, a friend list, presence ("playing Kart Racer, joinable") and session invites, over REST JSON plus one WebSocket for live updates.
+friend code, a friend list, presence ("playing <title>, joinable") and session invites, over REST JSON plus one WebSocket for live updates.
 
 Identity comes from the Napple Account service (`napple-account`): it issues the access tokens and owns the accounts and their player profiles. The
 social graph is per **profile** (the in-game identity), not per account: one account has up to 8 profiles and each has its own friends.
 
-Related: the game-side extension point that will consume this is [network providers](network-providers.md) (`friend:u` presence and friend lists).
+Related: the game side consumes it through the `friend:u` service of the runtime's [online glue](napple-online.md#friends-napple-social) on top of
+the [network providers](network-providers.md); the overlay's Online tab through the [client core](napple-online-client.md).
 
 ## Run it
 
@@ -79,7 +80,7 @@ Every error is `{"error": {"code": "...", "message": "..."}}`. 401s carry `WWW-A
 | 404 | `not_found`, `profile_not_found`, `code_not_found`, `request_not_found`, `not_friends` (remove), `not_blocked`, `invite_not_found` |
 | 409 | `request_exists`, `already_friends`, `blocked_by_you`, `friend_limit`, `target_friend_limit`, `too_many_pending`, `target_inbox_full`, `block_limit`, `presence_expired`, `not_joinable`, `too_many_invites` |
 | 410 | `invite_expired` |
-| 422 | `reserved_name`: presence `title_name` / `mode` break the reserved-name rules of `orchestrations/ACCOUNT-CONTRACT.md` ("napple" anywhere, look-alikes included; the `nap-` prefix; invisible characters), or an invite `message` contains "napple" or invisible characters (`src/names.rs`, a copy of napple-account's) |
+| 422 | `reserved_name`: presence `title_name` / `mode` break the reserved-name rules of [napple-account](napple-account.md#reserved-names-and-grants) ("napple" anywhere, look-alikes included; the `nap-` prefix; invisible characters), or an invite `message` contains "napple" or invisible characters (`src/names.rs`, a copy of napple-account's) |
 | 429 | `rate_limited` |
 | 503 | `account_unavailable` |
 
@@ -190,11 +191,11 @@ Code map: `src/auth.rs` (JWT, JWKS, profile check), `src/db.rs` (schema, queries
 `src/hub.rs` (connections and events), `src/codes.rs` (friend codes), `src/ratelimit.rs`, `src/config.rs`, `src/lib.rs` (router, auth extractor,
 sweeper, server). Tests: `tests/auth.rs`, `tests/friends.rs`, `tests/presence.rs`, `tests/invites.rs` (harness in `tests/common/mod.rs`).
 
-## Visibility tiers, search, lobbies, recent players, reports, stats (round 12)
+## Visibility tiers, search, lobbies, recent players, reports, stats
 
 Every profile has a tier 1..5 owned by napple-account (`tier` in its profile JSON). Social keeps a snapshot (refreshed by the owner's own calls and by
-the service-credential directory lookup, TTL above) and applies the table of `orchestrations/ONLINE-CONTRACT.md` in `src/visibility.rs` (a thin adapter over `crates/napple-visibility`)
-(`can_view(viewer, tier, kind)`; a private copy of the names `crates/napple-visibility` will own). A profile a viewer may not see answers exactly like a missing
+the service-credential directory lookup, TTL above) and applies the table below in `src/visibility.rs`, a thin adapter over
+`crates/napple-visibility` (`can_view(viewer, tier, kind)`, the same pure function napple-account uses). A profile a viewer may not see answers exactly like a missing
 one (404), and **a block hides both ways** at every tier.
 
 | Tier | Search / friend code | Friend request | Card (nickname, icon, photo) | Presence, stats | Lobby | Recent |
@@ -205,12 +206,12 @@ one (404), and **a block hides both ways** at every tier.
 | 4 Private | nobody | nobody | friends | friends | real | yes |
 | 5 Ghost | nobody | nobody | nobody | nobody (friends too) | bot alias | no trace |
 
-Existing friendships survive a tier change; a ghost's friends see it offline with no title and get no presence events. `GET /me` now also returns `tier` and `photo`.
+Existing friendships survive a tier change; a ghost's friends see it offline with no title and get no presence events. `GET /me` also returns `tier` and `photo`.
 
 | Method and path | Body / query | Answer |
 |---|---|---|
 | `GET /search?q=` | nickname prefix (>= 2 chars, case-insensitive) or friend code | `{results: [{profile, friend_status, can_friend_request}]}`, max 20, tiers 1-2 only, self and blocks excluded |
-| `POST /friend-requests` | `{friend_code}` **or** `{profile_id, lobby_id?}` | as before; tiers 3-5 answer 404 `code_not_found` / `profile_not_found` unless the shared-lobby proof holds (tier 3 only) |
+| `POST /friend-requests` | `{friend_code}` **or** `{profile_id, lobby_id?}` | as above; tiers 3-5 answer 404 `code_not_found` / `profile_not_found` unless the shared-lobby proof holds (tier 3 only) |
 | `GET /profiles/{id}/public` | | `{profile, friend_status, can_friend_request, presence?, stats_visible?}`; presence only when the viewer may see details |
 | `POST /stats` | `{title_id, deltas: {key: int}}` | own counters for the title (keys `[a-z0-9_.]` up to 48 chars, <= 16 per call, <= 32 per title, deltas within +-1e9) |
 | `GET /profiles/{id}/stats?title_id=` | | `{profile_id, titles: {TITLE: {key: n}}}`, details-tier filtered |

@@ -1,4 +1,4 @@
-# 2026-10-27 gfx-depth-views (branch claude/gfx-depth-views-2026-10-27)
+# 2026-10-27 gfx-depth-views (branch gfx-depth-views-2026-10-27)
 
 Changes (gfx only):
 - `nvnCommandBufferResolveDepthBuffer` is real: recorded as an `OP_BARRIER` with the private bit `BARRIER_RESOLVE_DEPTH`; the replay flushes pending clears and ends the open pass so the depth of the pass is stored before a later sample or copy. MSAA depth resolve itself stays `Downsample` (StoreAndMultisampleResolve, depth and stencil).
