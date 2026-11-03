@@ -281,7 +281,7 @@ From the server host: `napple-account admin grant owner@napple.lat owner_napple`
 
 ## Deployment notes (for napple-infra)
 
-- Image: `cargo build --release --locked -p napple-account --bin napple-account`; no system libraries beyond libc
+- Image: `cargo build --release -p napple-account --bin napple-account`; no system libraries beyond libc
   (rustls + ring, bundled SQLite). Read-only container, uid 10001, writes only under `NAPPLE_ACCOUNT_DATA`.
 - Caddy: `handle /account/* { reverse_proxy account:8082 }` **without** stripping the prefix, ahead of the catch-all
   that goes to napple-online; set `NAPPLE_ACCOUNT_TRUST_PROXY=1`.

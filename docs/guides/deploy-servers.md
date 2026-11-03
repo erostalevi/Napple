@@ -203,7 +203,7 @@ real servers need more, set `NAPPLE_INSTANCE_TYPE=t4g.small` (about $12.3/month 
 ## Security notes
 
 - **No game data on the server, ever.** The images contain only the two server binaries (the Dockerfiles copy nothing but `Cargo.toml`,
-  `Cargo.lock` and `crates/` into the build stage, and only the binary into the final image). No game files, keys, firmware or title data are
+  `rustfmt.toml` and `crates/` into the build stage, and only the binary into the final image). No game files, keys, firmware or title data are
   uploaded, and the servers never ask clients for any. `app.napple.lat` (hosted uploads) was rejected for this reason.
 - Credentials live only in GitHub secrets (or are short-lived, through OIDC). Nothing in `infra/` holds a credential; the instance uses its role.
 - The OIDC trust policy only accepts this repository's environment `napple-servers` (limited to `main` by its branch rule) and `main`. The deploy

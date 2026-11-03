@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # napple-online (accounts/tokens HTTP API + the NEX game server, PRUDP Lite over WebSocket on the same port) as a small non-root Linux image.
-# Build context: the repository root (only Cargo.toml, Cargo.lock and crates/ are sent, see napple-online.Dockerfile.dockerignore).
+# Build context: the repository root (only Cargo.toml and crates/ are sent, see napple-online.Dockerfile.dockerignore).
 #   docker buildx build -f infra/docker/napple-online.Dockerfile --platform linux/arm64,linux/amd64 -t napple-online .
 # Each platform compiles natively (QEMU under buildx for the non-native one); the deploy workflow builds arm64 on an arm64 runner.
 ARG RUST_IMAGE=rust:1.99-slim-bookworm
@@ -8,11 +8,11 @@ ARG RUNTIME_IMAGE=debian:bookworm-slim
 
 FROM ${RUST_IMAGE} AS build
 WORKDIR /src
-COPY Cargo.toml Cargo.lock rustfmt.toml ./
+COPY Cargo.toml rustfmt.toml ./
 COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
-    cargo build --release --locked -p napple-online --bin napple-online \
+    cargo build --release -p napple-online --bin napple-online \
  && install -D -m 0755 target/release/napple-online /out/napple-online
 
 FROM ${RUNTIME_IMAGE}

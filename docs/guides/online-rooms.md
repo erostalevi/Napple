@@ -33,7 +33,7 @@ The variables are listed in [environment variables](../reference/environment-var
 ## Running a server
 
 ```bash
-cargo build --release --locked -p napple-room --bin napple-room
+cargo build --release -p napple-room --bin napple-room
 NAPPLE_ROOM_LISTEN=0.0.0.0:31415 NAPPLE_ROOM_HTTP=0.0.0.0:8081 target/release/napple-room
 ```
 

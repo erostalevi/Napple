@@ -51,10 +51,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: tests-cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
+          key: tests-cargo-${{ runner.os }}-${{ hashFiles('**/Cargo.toml') }}
           restore-keys: tests-cargo-${{ runner.os }}-
       - name: cargo test --workspace
-        run: cargo test --workspace --locked
+        run: cargo test --workspace
 
   native:
     name: audio, input, frontend, gfx, runtime tests

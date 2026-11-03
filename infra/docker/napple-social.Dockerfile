@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 # napple-social (friends, presence, search, stats and the WebSocket stream, /social/v1) as a small non-root Linux image.
-# Build context: the repository root (only Cargo.toml, Cargo.lock and crates/ are sent, see napple-social.Dockerfile.dockerignore).
+# Build context: the repository root (only Cargo.toml and crates/ are sent, see napple-social.Dockerfile.dockerignore).
 #   docker buildx build -f infra/docker/napple-social.Dockerfile --platform linux/arm64,linux/amd64 -t napple-social .
 # Each platform compiles natively (QEMU under buildx for the non-native one); the deploy workflow builds arm64 on an arm64 runner.
 ARG RUST_IMAGE=rust:1.99-slim-bookworm
@@ -8,11 +8,11 @@ ARG RUNTIME_IMAGE=debian:bookworm-slim
 
 FROM ${RUST_IMAGE} AS build
 WORKDIR /src
-COPY Cargo.toml Cargo.lock rustfmt.toml ./
+COPY Cargo.toml rustfmt.toml ./
 COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/src/target,sharing=locked \
-    cargo build --release --locked -p napple-social --bin napple-social \
+    cargo build --release -p napple-social --bin napple-social \
  && install -D -m 0755 target/release/napple-social /out/napple-social
 
 FROM ${RUNTIME_IMAGE}

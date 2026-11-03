@@ -9,7 +9,7 @@ CI (`.github/workflows/tests.yml`, on every pull request and push to `main`, plu
 | Job | Runner | Command(s) | Blocking |
 |---|---|---|---|
 | `docs` | ubuntu-latest | `python3 tools/check_docs.py` | yes |
-| `rust` | macos-26 | `cargo test --workspace --locked` | yes |
+| `rust` | macos-26 | `cargo test --workspace` | yes |
 | `native` | macos-26 | `make -C input test`, `make -C audio test`, `make -C frontend test`, `make -C gfx lib adapter`, `make -C gfx tests`, `make -C gfx test`, `make -C runtime test test-services` | yes, except `make -C gfx test` (`continue-on-error`: a virtual-Mac runner may lack a usable GPU; it stays a local gate) |
 | `studio` | macos-26 | `swift test --package-path studio` | yes |
 | `ios-smoke` | macos-26 | `SDK=iphonesimulator tools/build_ios_deps.sh`, `SDK=iphonesimulator tools/build_ios.sh` (compile and link only) | no (`continue-on-error` until the `a32` sources are compiled by `tools/build_ios.sh`) |
@@ -20,7 +20,7 @@ Not in CI: anything that needs game files, keys or firmware (boots of the refere
 | Suite | Command | Linux | macOS |
 |---|---|---|---|
 | Docs | `python3 tools/check_docs.py` | yes (CI runs it on Linux) | yes |
-| Rust workspace | `cargo test --workspace --locked` | yes (measured: every test binary reports ok) | yes (CI) |
+| Rust workspace | `cargo test --workspace` | yes (measured: every test binary reports ok) | yes (CI) |
 | Rust lints | `cargo clippy --workspace` | runs; measured: fails with 4 `clippy::never_loop` errors in `napple-build` (`firmware.rs`, `legacy.rs`, `pipeline.rs` x2). Not part of CI | same code, same lints |
 | Runtime unit tests | `make -C runtime test` | no | yes (CI) |
 | Runtime service tests | `make -C runtime test-services` | no (see `tools/linux-check` for the portable subset) | yes (CI) |
@@ -37,7 +37,7 @@ Not in CI: anything that needs game files, keys or firmware (boots of the refere
 ## Rust (`cargo test`, clippy)
 - Workspace members (`Cargo.toml`): `napple-core`, `napple-cli`, `napple-rewrite`, `napple-compat`, `napple-sigs`, `napple-build`. Unit tests sit next to the code (`#[cfg(test)]`); integration tests in
   `crates/napple-build/tests/` (`e2e.rs`, `cancel.rs`, `golden/`), `crates/napple-core/tests/ingest.rs`, `crates/napple-rewrite/tests/`. None needs a real game: fixtures are synthetic.
-- `cargo test --workspace --locked` is the CI command (`--locked`: `Cargo.lock` must not change). One package: `cargo test -p napple-sigs` (40 tests, offline). On a shared machine set `CARGO_TARGET_DIR` to keep `target/` out of the tree.
+- `cargo test --workspace` is the CI command (`Cargo.lock` is not committed; cargo resolves the newest compatible versions). One package: `cargo test -p napple-sigs` (40 tests, offline). On a shared machine set `CARGO_TARGET_DIR` to keep `target/` out of the tree.
 - `cargo clippy --workspace`: see the matrix; fix new warnings you introduce, and do not treat the four existing `never_loop` errors as yours.
 
 ## Runtime (macOS)
@@ -86,8 +86,8 @@ UI automation is not run in CI. `studio/build_app.sh` builds the app (part of `t
 Run it after every docs change; the `docs` job fails the pull request otherwise.
 
 ## Whole build: `tools/ci_build.sh`
-`tools/ci_build.sh [output-dir]` (macOS, Apple Silicon): `cargo build --release -p napple-cli --locked`, `make` in `input`, `audio`, `frontend`, `gfx lib adapter`, `runtime`, `packaging`, then (unless `NAPPLE_SKIP_TESTS=1`; failures only warn)
-`cargo test --release --locked && make -C runtime test-host`, then `studio/build_app.sh` and `studio/packaging/make_release.sh` into `dist/`. Env: `NAPPLE_VERSION`, `NAPPLE_BUILD`, `NAPPLE_SIGN_IDENTITY`.
+`tools/ci_build.sh [output-dir]` (macOS, Apple Silicon): `cargo build --release -p napple-cli`, `make` in `input`, `audio`, `frontend`, `gfx lib adapter`, `runtime`, `packaging`, then (unless `NAPPLE_SKIP_TESTS=1`; failures only warn)
+`cargo test --release && make -C runtime test-host`, then `studio/build_app.sh` and `studio/packaging/make_release.sh` into `dist/`. Env: `NAPPLE_VERSION`, `NAPPLE_BUILD`, `NAPPLE_SIGN_IDENTITY`.
 Needs Xcode command line tools, rustup, `brew install opus libvpx`. `.claude/skills/napple-latest/napple_latest.sh` runs the same commands plus a status survey.
 
 ## iOS
@@ -124,7 +124,7 @@ unless `--keep-apps`. Nothing from the Testing Material is copied into the repos
 ## Which tests to run for a change
 | You changed | Run |
 |---|---|
-| `crates/*` | `cargo test --workspace --locked` |
+| `crates/*` | `cargo test --workspace` |
 | `knownSignatures/` | `napple sigs validate <file>`, `cargo test -p napple-sigs` ([add-signatures.md](add-signatures.md)) |
 | `runtime/src/services/*` | `make -C runtime test-services` (Mac) or `sh tools/linux-check/run-tests.sh` (Linux) |
 | `runtime/src/kernel.c`, `threads.c`, `ipc.c`, `memory.c`, `ksession.c` | `make -C runtime test test-host` (Mac) |
