@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Compatibility · Napple</title>
+<meta name="description" content="Per-title status and online support of programs recompiled with Napple, as reported by its developers on their own Macs. Titles are not distributed.">
+<meta name="theme-color" content="#120c1a">
+<meta name="napple-repo" content="erostalevi/napple">
+<link rel="icon" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="bg" aria-hidden="true"></div>
+
+<header class="nav">
+  <a class="brand" href="./"><img src="assets/favicon.png" alt="" width="28" height="28"> Napple</a>
+  <nav>
+    <a href="./">Home</a>
+    <a href="#titles">Titles</a>
+    <a href="#online">Online</a>
+    <a class="keep" href="compat.html" aria-current="page">Compatibility</a>
+    <a href="docs/">Docs</a>
+    <a class="pill" href="./#download">Download</a>
+  </nav>
+</header>
+
+<main id="top">
+  <section class="page-head">
+    <p class="eyebrow">Compatibility lists</p>
+    <h1>How titles behave on Napple</h1>
+    <div class="intro">
+      <p><b>Reported, not guaranteed.</b> These statuses are reported by the Napple developers and community from runs on their own Apple Silicon Macs
+        (scripted runs, and play by a person where it says so). Other Macs, versions and updates can behave differently.</p>
+      <p><b>No titles are distributed.</b> Napple ships no games, keys or firmware; every entry was built from a copy its tester owns. Napple is not affiliated with Nintendo.</p>
+      <p>The lists are generated from the repository (<code>compat/matrix.json</code>, the title notes and <code>compat/online.json</code>) by
+        <code>tools/support/gen_support.py</code>. Platform coverage, which is about the toolchain rather than titles, is on the <a href="./#covers">home page</a>.</p>
+    </div>
+  </section>
+
+  <section id="titles" class="sec">
+    <h2>Titles</h2>
+    <p class="sub">Per-title state on macOS, with the result of each pipeline stage, measured performance and what is still open. iOS is deferred; its last recorded Simulator result is shown for reference.</p>
+    <div class="filters" id="filters" hidden>
+      <label class="sr" for="q">Filter titles</label>
+      <input id="q" type="search" placeholder="Filter by name or title id" autocomplete="off">
+      <label class="sr" for="stage">Stage status</label>
+      <select id="stage">
+        <option value="">Any stage status</option>
+        <option value="boot:pass">Boots</option>
+        <option value="graphics:pass">Graphics pass</option>
+        <option value="any:partial">Has a partial stage</option>
+        <option value="any:untested">Has an untested stage</option>
+      </select>
+    </div>
+    <div class="tcards" id="title-cards" hidden></div>
+    <ul class="legend" id="stage-legend" hidden></ul>
+    <p class="fine" id="compat-meta"></p>
+  </section>
+
+  <section id="online" class="sec">
+    <h2>Online support</h2>
+    <p class="sub">Napple Online is between Napple players only, through the Napple-run servers at <code>pretend.napple.lat</code>. Napple never contacts Nintendo servers,
+      and Napple players cannot meet players on a console. Status per title and mode:</p>
+    <div class="online" id="online-grid" hidden></div>
+    <dl class="online-modes" id="online-modes" hidden></dl>
+    <p class="fine" id="online-meta"></p>
+  </section>
+
+  <section id="static" class="sec">
+<!-- compat:begin -->
+<div class="fallback" id="compat-fallback">
+<p class="fine">Static copy of <a href="compat.json">compat.json</a>. Matrix last run 2026-10-28T10:44:44Z; online statuses last checked 2026-11-02.</p>
+<h3>Titles (macOS)</h3>
+<div class="tbl"><table><thead><tr><th>Title</th><th>Version</th><th>Boot</th><th>Graphics</th><th>Audio</th><th>Input</th><th>Saves</th><th>State</th></tr></thead><tbody>
+<tr><td><a href="docs/titles/01006F8002326000/">Animal Crossing: New Horizons</a><br><code>01006F8002326000</code></td><td>1.0.0</td><td>partial</td><td>partial</td><td>untested</td><td>partial</td><td>untested</td><td>version 3.0.3 (+3 DLC) boots through the whole opening (Timmy&#x27;s dialogue, the Nook Inc. counter, the name-entry keyboard) and shows its picture through the game&#x27;s own window pass (2026-10-26: `nvnProgramSetShaders` with pool-offset code addresses is accepted, see the gfx-correctness note; the stopgap present is gone; Timmy and Tommy and other skinned meshes appeared once the translator read ...</td></tr>
+<tr><td><a href="docs/titles/01006BB00C6F0000/">Link&#x27;s Awakening</a><br><code>01006BB00C6F0000</code></td><td>1.0.0</td><td>pass</td><td>pass</td><td>partial</td><td>partial</td><td>pass</td><td>plays on macOS (the most mature title); reaches its title screen on the iOS Simulator.</td></tr>
+<tr><td><a href="docs/titles/0100152000022000/">Mario Kart 8 Deluxe</a><br><code>0100152000022000</code></td><td>1.0.0</td><td>pass</td><td>partial</td><td>untested</td><td>partial</td><td>untested</td><td>v3.0.5 (update v1376256 + Booster Course Pass DLC) boots and races headless on the normal 64-bit path at 40-47 fps (title, menus, cup select, races). The base 1.0 build is AArch32 and runs through the lifted `a32jit.dylib` (written by `napple build`) at 52-60 fps in headless menus and the attract race; the runtime has no interpreter (2026-10-26, a32-full).</td></tr>
+<tr><td><a href="docs/titles/0100000000010000/">Super Mario Odyssey</a><br><code>0100000000010000</code></td><td>1.0.0</td><td>pass</td><td>partial</td><td>partial</td><td>partial</td><td>partial</td><td>plays on macOS (intro, menus, Cascade Kingdom); start menu on the iOS Simulator (a touch A did not visibly advance).</td></tr>
+</tbody></table></div>
+<h3>Online (Napple to Napple)</h3>
+<div class="tbl"><table><thead><tr><th>Title</th><th>Backend</th><th>LAN</th><th>Local</th><th>Matchmaking</th><th>Race / match</th><th>Friends</th><th>Rankings</th><th>DataStore</th></tr></thead><tbody>
+<tr><td>Animal Crossing: New Horizons</td><td>nex</td><td>untested</td><td>untested</td><td>untested</td><td>untested</td><td>untested</td><td>-</td><td>untested</td></tr>
+<tr><td>Link&#x27;s Awakening</td><td>none</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td></tr>
+<tr><td>Mario Kart 8 Deluxe</td><td>nex</td><td>works</td><td>broken</td><td>works</td><td>partial</td><td>partial</td><td>untested</td><td>untested</td></tr>
+<tr><td>Super Mario Odyssey</td><td>nex</td><td>-</td><td>-</td><td>-</td><td>-</td><td>-</td><td>untested</td><td>untested</td></tr>
+</tbody></table></div>
+<p class="fine"><code>-</code> means the game has no such mode.</p>
+</div>
+<!-- compat:end -->
+  </section>
+</main>
+
+<footer>
+  <div class="f-row">
+    <span class="brand"><img src="assets/favicon.png" alt="" width="22" height="22"> Napple</span>
+    <span class="links">
+      <a href="./">Home</a>
+      <a href="./#download">Download</a>
+      <a href="compat.html">Compatibility</a>
+      <a href="docs/">Documentation</a>
+      <a href="terms.html">Terms</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="report.html">Reports</a>
+      <a id="gh-link" href="https://github.com/erostalevi/napple" rel="noopener">GitHub</a>
+    </span>
+  </div>
+  <p>MIT licensed. Napple is an independent project, not affiliated with or endorsed by Nintendo, and distributes no games, keys or firmware.</p>
+</footer>
+<script src="app.js"></script>
+<script src="compat.js"></script>
+</body>
+</html>
