@@ -94,3 +94,39 @@ They are kept as written: paths, line numbers and statuses are those of the time
 | online-support-table | [online-support-table.md](orchestrations/online-support-table.md) | [claude-online-support-table-2026-11-02-r10.md](integrators/claude-online-support-table-2026-11-02-r10.md) | generated per-game online support table (README block, reference page, landing page) |
 | ipc-depth-95 | [ipc-depth-95.md](orchestrations/ipc-depth-95.md) | [claude-ipc-depth-95-2026-11-02-r10.md](integrators/claude-ipc-depth-95-2026-11-02-r10.md) | IPC command depth 92% to 98% (friend, ssl, net, fs/account, applet, bcat/ldn rows) |
 | online-friends | [online-friends.md](orchestrations/online-friends.md) | [claude-online-friends-2026-11-02-r10.md](integrators/claude-online-friends-2026-11-02-r10.md) | friend:u backed by napple-social; MK8D friends online / joinable, Friends menu list still empty |
+
+## Round 2026-11-03-r11
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| gfx-xfb-tess-audit | [gfx-xfb-tess-audit.md](orchestrations/gfx-xfb-tess-audit.md) | [claude-gfx-xfb-tess-audit-2026-11-03-r11.md](integrators/claude-gfx-xfb-tess-audit-2026-11-03-r11.md) |  |
+| ipc-bcat-npns-local | [ipc-bcat-npns-local.md](orchestrations/ipc-bcat-npns-local.md) | [claude-ipc-bcat-npns-local-2026-11-03-r11.md](integrators/claude-ipc-bcat-npns-local-2026-11-03-r11.md) |  |
+| ipc-domain-reuse | [ipc-domain-reuse.md](orchestrations/ipc-domain-reuse.md) | [claude-ipc-domain-reuse-2026-11-03-r11.md](integrators/claude-ipc-domain-reuse-2026-11-03-r11.md) |  |
+| ipc-fs-mii-ldn-tail | [ipc-fs-mii-ldn-tail.md](orchestrations/ipc-fs-mii-ldn-tail.md) | [claude-ipc-fs-mii-ldn-tail-2026-11-03-r11.md](integrators/claude-ipc-fs-mii-ldn-tail-2026-11-03-r11.md) |  |
+| ipc-provider-hooks | [ipc-provider-hooks.md](orchestrations/ipc-provider-hooks.md) | [claude-ipc-provider-hooks-2026-11-03-r11.md](integrators/claude-ipc-provider-hooks-2026-11-03-r11.md) |  |
+| ipc-risk-mac-checks | [ipc-risk-mac-checks.md](orchestrations/ipc-risk-mac-checks.md) | [claude-ipc-risk-mac-checks-2026-11-03-r11.md](integrators/claude-ipc-risk-mac-checks-2026-11-03-r11.md) |  |
+| media-synthetic-streams | [media-synthetic-streams.md](orchestrations/media-synthetic-streams.md) | [claude-media-synthetic-streams-2026-11-03-r11.md](integrators/claude-media-synthetic-streams-2026-11-03-r11.md) |  |
+| nvdrv-gpu-routing | [nvdrv-gpu-routing.md](orchestrations/nvdrv-gpu-routing.md) | [claude-nvdrv-gpu-routing-2026-11-03-r11.md](integrators/claude-nvdrv-gpu-routing-2026-11-03-r11.md) |  |
+| nvjpg-headerless-redo | [nvjpg-headerless.md](orchestrations/nvjpg-headerless.md) | [claude-nvjpg-headerless-redo-2026-11-03-r11.md](integrators/claude-nvjpg-headerless-redo-2026-11-03-r11.md) |  |
+| nvn-api-tail | [nvn-api-tail.md](orchestrations/nvn-api-tail.md) | [claude-nvn-api-tail-2026-11-03-r11.md](integrators/claude-nvn-api-tail-2026-11-03-r11.md) |  |
+| nvn-viewport-swizzles | [nvn-viewport-swizzles.md](orchestrations/nvn-viewport-swizzles.md) | [claude-nvn-viewport-swizzles-2026-11-03-r11.md](integrators/claude-nvn-viewport-swizzles-2026-11-03-r11.md) |  |
+
+## Round 2026-11-03-r12
+
+| Item | Orchestration | Integrator file | Goal |
+|---|---|---|---|
+| account-auth-ses | [account-auth-ses.md](orchestrations/account-auth-ses.md) | [claude-account-auth-ses-2026-11-03-r12.md](integrators/claude-account-auth-ses-2026-11-03-r12.md) |  |
+| account-profiles | [account-profiles.md](orchestrations/account-profiles.md) | [claude-account-profiles-2026-11-03-r12.md](integrators/claude-account-profiles-2026-11-03-r12.md) |  |
+| client-core | [client-core.md](orchestrations/client-core.md) | [claude-client-core-2026-11-03-r12.md](integrators/claude-client-core-2026-11-03-r12.md) |  |
+| infra-online | [infra-online.md](orchestrations/infra-online.md) | [claude-infra-online-2026-11-03-r12.md](integrators/claude-infra-online-2026-11-03-r12.md) |  |
+| legal-pages | [legal-pages.md](orchestrations/legal-pages.md) | [claude-legal-pages-2026-11-03-r12.md](integrators/claude-legal-pages-2026-11-03-r12.md) |  |
+| mk8d-online-race | [mk8d-online-race.md](orchestrations/mk8d-online-race.md) | [claude-mk8d-online-race-2026-11-03-r12.md](integrators/claude-mk8d-online-race-2026-11-03-r12.md) |  |
+| online-identity | [online-identity.md](orchestrations/online-identity.md) | [claude-online-identity-2026-11-03-r12.md](integrators/claude-online-identity-2026-11-03-r12.md) |  |
+| online-tieup | [online-tieup.md](orchestrations/online-tieup.md) | [claude-online-tieup-2026-11-03-r12.md](integrators/claude-online-tieup-2026-11-03-r12.md) |  |
+| overlay-account | [overlay-account.md](orchestrations/overlay-account.md) | [claude-overlay-account-2026-11-03-r12.md](integrators/claude-overlay-account-2026-11-03-r12.md) |  |
+| overlay-social | [overlay-social.md](orchestrations/overlay-social.md) | [claude-overlay-social-2026-11-03-r12.md](integrators/claude-overlay-social-2026-11-03-r12.md) |  |
+| social-tiers | [social-tiers.md](orchestrations/social-tiers.md) | [claude-social-tiers-2026-11-03-r12.md](integrators/claude-social-tiers-2026-11-03-r12.md) |  |
+
+## Branch claude/ios-memory-swap-31951e
+
+- [claude-ios-memory-swap-31951e.md](integrators/claude-ios-memory-swap-31951e.md): iOS opt-in disk-backed swap memory, memory-pressure trimming, entitlements (no orchestration file).

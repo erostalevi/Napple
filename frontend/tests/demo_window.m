@@ -7,6 +7,10 @@
 #include "napple_input.h"
 
 static napple_frontend *g_fe;
+static void stats(void *u, char *out, size_t cap) {
+    (void)u;
+    snprintf(out, cap, "60.0 fps   GPU 4.2 ms   latency 21 ms");
+}
 static void render(void *u) {
     (void)u;
     id<MTLDevice> dev = MTLCreateSystemDefaultDevice();
@@ -43,14 +47,14 @@ static void render(void *u) {
     });
     if (getenv("NAPPLE_DEMO_OVERLAY"))
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ napple_frontend_show_overlay(g_fe, 1); });
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 20 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ napple_frontend_request_quit(g_fe); });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)((getenv("NAPPLE_DEMO_SECONDS") ? atof(getenv("NAPPLE_DEMO_SECONDS")) : 20) * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{ napple_frontend_request_quit(g_fe); });
 }
 int main(void) {
     @autoreleasepool {
         napple_input *in;
         napple_input_create(&(napple_input_config){.title_id = "0000000000000001", .use_game_controller = 1}, &in);
         napple_input_start(in);
-        napple_frontend_config c = {.title_id = "0000000000000001", .title_name = "Napple Demo", .input = in, .callbacks = {.on_ready = render}};
+        napple_frontend_config c = {.title_id = "0000000000000001", .title_name = "Napple Demo", .input = in, .callbacks = {.on_ready = render, .stats_text = stats}};
         g_fe = napple_frontend_create(&c);
         napple_manifest_dlc dlc[1] = {{"0000000000000A01", "Demo DLC"}};
         napple_manifest_update up[2] = {{"1.2.0", "Update 1.2.0"}, {"1.1.0", ""}};

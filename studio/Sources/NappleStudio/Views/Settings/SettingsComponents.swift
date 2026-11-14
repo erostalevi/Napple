@@ -57,7 +57,7 @@ struct SettingsRadioRow: View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: selected ? "largecircle.fill.circle" : "circle")
-                    .foregroundStyle(selected ? Color.accentColor : .secondary).font(.title3).frame(width: 22)
+                    .foregroundStyle(selected ? Theme.brand : .secondary).font(.title3).frame(width: 22)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).foregroundStyle(.primary)
                     if let detail { Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true) }
@@ -103,7 +103,7 @@ struct SettingsPathRow: View {
     }
 }
 
-/// system.json editing for the Mii, Amiibo and Online tabs: every change reloads the file first, so tabs never overwrite each other's keys.
+/// system.json editing for the Mii and Amiibo tabs: every change reloads the file first, so tabs never overwrite each other's keys.
 @MainActor
 @Observable
 final class SettingsSystemModel {

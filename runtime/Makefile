@@ -245,65 +245,9 @@ test-net-host: $(NET_TESTS)
 test-services: $(NET_TESTS)
 .PHONY: test-net-host
 
-# net-rooms (2026-11-02-r7): Napple rooms (NAPPLE_ROOM) against a real napple-room server (crates/napple-room, built here with cargo) and two consoles (the
-# test process and a forked child). Part of `make test-services`; alone: `make test-net-room`
-CARGO ?= $(shell command -v cargo 2>/dev/null || ls $(HOME)/.cargo/bin/cargo $(HOME)/.rustup/toolchains/*/bin/cargo 2>/dev/null | head -1)
-ROOM_TESTS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_net_room*.c))
-../target/debug/napple-room: $(wildcard ../crates/napple-room/src/*.rs) ../crates/napple-room/Cargo.toml
-	cd .. && $(CARGO) build -q -p napple-room
-$(ROOM_TESTS): $(BUILD)/tests/%: tests/%.c tests/check.h tests/svc_test.h src/net/net_room.h src/net/net_host.h $(BUILD)/tests/stubs.o $(OBJ) | ../target/debug/napple-room
-	$(CC) $(CFLAGS) $< $(BUILD)/tests/stubs.o $(filter-out $(call svc_included,$<),$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
-test-net-room: $(ROOM_TESTS)
-	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
-test-services: $(ROOM_TESTS)
-.PHONY: test-net-room
-
-# napple-online (2026-11-02-r7): the Napple online client glue (NAPPLE_ONLINE_SERVER) against a fake server on localhost. Part of `make test-services`;
-# alone: `make test-net-online`
-NETONLINE_TESTS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_net_online_*.c))
-$(BUILD)/tests/test_net_online_%: tests/test_net_online_%.c tests/check.h tests/svc_test.h src/net/net_online.h $(BUILD)/tests/stubs.o $(OBJ)
-	$(CC) $(CFLAGS) $< $(BUILD)/tests/stubs.o $(filter-out $(call svc_included,$<),$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
-test-net-online: $(NETONLINE_TESTS)
-	@for t in $^; do case $$t in *.o) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
-test-services: $(NETONLINE_TESTS)
-.PHONY: test-net-online
-
-# Cloud saves (cloud-saves-client 2026-11-02-r8, docs/guides/cloud-saves.md): runtime/src/cloud/*.c and the Rust sync engine crates/napple-cloud
-# (target/release/libnapple_cloud.a, built here with cargo). Linked into the runtime and the applet dylib only (through LDFLAGS); the unit tests
-# keep the weak no-op hooks of main.c and services/fs.c. CLOUD=0, or no cargo on PATH, builds without cloud saves.
-CLOUD ?= $(if $(shell command -v cargo 2>/dev/null),1,0)
-ifeq ($(CLOUD),1)
-CLOUD_OBJ := $(patsubst src/%.c,$(BUILD)/%.o,$(wildcard src/cloud/*.c))
-CLOUD_LIB := $(ROOT)/target/release/libnapple_cloud.a
-$(CLOUD_OBJ): CFLAGS += -I$(ROOT)/crates/napple-cloud/include
-LDFLAGS += $(CLOUD_OBJ) $(CLOUD_LIB) -framework Security
-$(BUILD)/napple-runtime build-lib/libnapple-applet.dylib: $(CLOUD_OBJ) $(CLOUD_LIB)
-$(CLOUD_LIB): $(wildcard $(ROOT)/crates/napple-cloud/src/*.rs $(ROOT)/crates/napple-cloud/src/*/*.rs) $(ROOT)/crates/napple-cloud/Cargo.toml
-	cd $(ROOT) && MACOSX_DEPLOYMENT_TARGET=$${MACOSX_DEPLOYMENT_TARGET:-14.0} cargo build --release -p napple-cloud --lib
-endif
-
 # ipc-risk-mac-checks (r11): the real-title risk checks (execv restart, npdm FS bits, unlinked acc); needs the shared title data, so it is not in `test`.
 $(BUILD)/tests/test_risk_title: tests/test_risk_title.c tests/check.h tests/svc_test.h $(BUILD)/tests/stubs.o $(OBJ)
 	$(CC) $(CFLAGS) tests/test_risk_title.c $(BUILD)/tests/stubs.o $(filter-out $(BUILD)/services/applet.o $(BUILD)/services/account.o $(BUILD)/services/fs.o,$(TESTOBJ)) $(GFX_LIBS) $(FRAMEWORKS) $(EXTRA_LIBS) -o $@
 test-risk-title: $(BUILD)/tests/test_risk_title
 	./$<
 .PHONY: test-risk-title
-
-# Napple Online client core (client-core 2026-11-03-r12, docs/guides/napple-online-client.md): runtime/src/online/ implements the overlay's
-# napple_online_ui_api over the Rust client in crates/napple-cloud (same CLOUD=1 condition and link as src/cloud/). Strong napple_account_access_token /
-# napple_account_profile_id come with it, which switches the friend service on for a signed-in Mac. Tests: a fake account+social server on localhost
-# (`make test-online`, part of `make test-services`).
-ifeq ($(CLOUD),1)
-ONLINE_OBJ := $(BUILD)/online/online_ui.o
-$(ONLINE_OBJ): CFLAGS += -I$(ROOT)/crates/napple-cloud/include -I$(ROOT)/frontend/include
-LDFLAGS += $(ONLINE_OBJ)
-$(BUILD)/napple-runtime build-lib/libnapple-applet.dylib: $(ONLINE_OBJ)
-ONLINE_TESTS := $(patsubst tests/%.c,$(BUILD)/tests/%,$(wildcard tests/test_online_*.c))
-$(ONLINE_TESTS): $(BUILD)/tests/%: tests/%.c tests/check.h src/online/online_ui.h $(ONLINE_OBJ) $(BUILD)/json.o $(CLOUD_LIB)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -I$(ROOT)/crates/napple-cloud/include -I$(ROOT)/frontend/include -Isrc/online $< $(ONLINE_OBJ) $(BUILD)/json.o $(CLOUD_LIB) -framework Security -framework CoreFoundation -o $@
-test-online: $(ONLINE_TESTS)
-	@for t in $^; do case $$t in *.o|*.a) continue;; esac; echo "== $$t"; ./$$t || exit 1; done
-test-services: $(ONLINE_TESTS)
-.PHONY: test-online
-endif

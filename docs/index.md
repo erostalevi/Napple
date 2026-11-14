@@ -2,7 +2,7 @@
 
 Napple is an ahead-of-time recompiler and runtime that turns a Switch game you own into a native app for macOS on Apple Silicon and for iOS / iPadOS.
 At build time it ingests the game, rewrites its AArch64 code and packages a locally signed `.app`; at run time a Horizon kernel and HLE service layer hosts the code, and NVN calls run on Metal.
-Napple Studio is the graphical front end; mods and the optional Napple Online service are add-ons. The repository front page is the [README](../README.md).
+Napple Studio is the graphical front end; mods are an add-on; Napple has no accounts or online services (local play, split-screen and LAN remain). The repository front page is the [README](../README.md).
 
 ## Architecture
 
@@ -27,22 +27,6 @@ The [guide index](guides/README.md) lists every guide.
 - Contributor guides: [add an IPC service](guides/add-ipc-service.md), [add an svc](guides/add-svc.md), [add an NVN function](guides/add-nvn-function.md), [add a Maxwell shader op](guides/add-maxwell-shader-op.md), [scan a title's GPU stages](guides/gpu-title-scan.md), [add signatures](guides/add-signatures.md), [network providers](guides/network-providers.md), [testing](guides/testing.md), [graphics testing](guides/testing-graphics.md), [fuzzing](guides/fuzzing.md).
 - Community contributions (no code needed): [report a bug](guides/contributing-report-a-bug.md), [document a title](guides/contributing-document-a-title.md), [report a graphics bug](guides/contributing-report-a-graphics-bug.md), [write a mod or fix](guides/contributing-write-a-mod.md), [labels, Discussions, conduct](guides/contributing-community.md); the legal rules and sign-off are in [CONTRIBUTING.md](../CONTRIBUTING.md).
 
-## Online
-
-Napple Online is optional and runs on Napple's own servers (`pretend.napple.lat`), never on Nintendo's.
-
-| Page | What it covers |
-|---|---|
-| [Napple Online](guides/napple-online.md) | Overview, boundaries, the game server (`napple-online`), how a title gets online |
-| [Account and profiles](guides/napple-account.md) | `napple-account`: email-code sign-up, devices, tokens, up to 8 profiles, reserved names |
-| [Friends and visibility tiers](guides/napple-social.md) | `napple-social`: friends, presence, visibility tiers 1-5, search, lobbies, reports |
-| [Cloud saves](guides/cloud-saves.md) | End-to-end encrypted cloud saves: devices, approval and recovery, sync and conflicts |
-| [Client and overlay](guides/napple-online-client.md) | The Mac-side client, shared credentials, the in-game overlay Online tab |
-| [Rooms](guides/online-rooms.md) | `napple-room`: local wireless and LAN play between Napple instances |
-| [End-to-end run](guides/online-e2e.md) | The scripted Online end-to-end check |
-| [Deploy the servers](guides/deploy-servers.md) | AWS deployment at `pretend.napple.lat`, DNS, the local test stack |
-| [Legal documents](legal/README.md) | Napple Online terms, privacy and report policy |
-
 ## Reference
 
 | Page | What it covers |
@@ -65,7 +49,11 @@ Napple Online is optional and runs on Napple's own servers (`pretend.napple.lat`
 
 ## Titles and compatibility
 
-- [COMPATIBILITY.md](../COMPATIBILITY.md) (the stage matrix), the [title notes](titles/README.md) ([Link's Awakening](titles/01006BB00C6F0000.md), [Super Mario Odyssey](titles/0100000000010000.md), [Animal Crossing: New Horizons](titles/01006F8002326000.md), [Mario Kart 8 Deluxe](titles/0100152000022000.md)), and the generated [support matrix](reference/support-matrix.md), [online support](reference/online-support.md) and [catalogue field reference](reference/catalogue-howto.md).
+- [COMPATIBILITY.md](../COMPATIBILITY.md) (the stage matrix), the [title notes](titles/README.md) ([Link's Awakening](titles/01006BB00C6F0000.md), [Super Mario Odyssey](titles/0100000000010000.md), [Animal Crossing: New Horizons](titles/01006F8002326000.md), [Mario Kart 8 Deluxe](titles/0100152000022000.md)), and the generated [support matrix](reference/support-matrix.md) and [catalogue field reference](reference/catalogue-howto.md).
+
+## Legal
+
+- [Legal documents](legal/README.md): terms of use and privacy notice.
 
 ## History
 

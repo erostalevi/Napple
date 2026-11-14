@@ -8,7 +8,7 @@ These apply to every issue, pull request, discussion, screenshot, log and mod. A
 
 1. **No keys, firmware, game data or dumps.** Never post or commit `prod.keys`, `title.keys`, firmware, game containers (`.nsp`, `.xci`, `.nsz`, `.nca`, `.nso`, `.nro` of a retail game), RomFS contents, extracted textures, models, audio or shader binaries, amiibo dumps, or memory dumps.
 2. **No Nintendo code.** Do not paste decompiled or disassembled game or SDK code, and do not contribute anything written by looking at leaked source or tools. Napple's runtime is written from public documentation, observed behaviour and permissively licensed or original code; reference-only projects are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Code from a GPL project cannot be copied in.
-3. **Never Nintendo's servers.** Napple Online talks only to Napple-run servers (or your own). Do not contribute code that contacts Nintendo's servers, uses Nintendo account credentials or copies Nintendo server code.
+3. **Never Nintendo's servers.** Napple has no online services and never contacts Nintendo. Do not contribute code that contacts Nintendo's servers, uses Nintendo account credentials or copies Nintendo server code.
 4. **You own what you send.** Only submit work you wrote, or work whose license allows MIT and that you credit (and add to `THIRD_PARTY_NOTICES.md`).
 5. **Logs, title ids, versions, build ids and screenshots of your own screen are fine.** Remove personal paths and anything derived from keys first. Small screenshots that show a bug are fine; bulk captures of game content are not.
 6. **You need to own the game** to document or test it. Napple does not help you get one.

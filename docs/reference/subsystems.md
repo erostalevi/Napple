@@ -57,9 +57,9 @@ One entry per subsystem: what it does, where the code is, how to test it, which 
 - Code: `runtime/src/services/applet.c`, `applet_ae.c`, `applet_lib_core.c`, `applet_web_core.c`, `applet_album_core.c`; sheets in `frontend/src/applet_sheets.m`.
 - Test: `runtime/tests/linux/run_applet.sh`, `make -C runtime test`. Scripted answers: `NAPPLE_SWKBD_ANSWER`, `NAPPLE_PLAYER_SELECT`, `NAPPLE_CONTROLLER_SUPPORT`, `NAPPLE_WEB_ANSWER`, `NAPPLE_ALBUM_PICK`.
 
-## Network and Napple Online
-- Code: `runtime/src/services/online_core.c` (provider interface), `runtime/src/net/` (host provider, rooms, online client glue), `crates/napple-online`, `napple-account`, `napple-social`, `napple-room`, `napple-cloud`.
-- Test: `cargo test --workspace`, `make -C runtime test`, the end-to-end run in [online-e2e](../guides/online-e2e.md). Debug: `NAPPLE_NET_LOG=1`. Guides: [network providers](../guides/network-providers.md), [Napple Online](../guides/napple-online.md).
+## Network
+- Code: `runtime/src/services/online_core.c` (provider interface), `runtime/src/net/` (host provider, LDN over the LAN).
+- Test: `cargo test --workspace`, `make -C runtime test`. Debug: `NAPPLE_NET_LOG=1`. Guides: [network providers](../guides/network-providers.md).
 
 ## Mods
 - Code: `crates/napple-mods` (format, apply, convert), `runtime/src/mods_runtime.c`, `mods_cheats.c` (cheat VM), `services/romfs_map.c` (RomFS overlay). Test: `cargo test -p napple-mods`. Off switch: `NAPPLE_NO_MODS=1`. Docs: [mods](../mods/README.md).

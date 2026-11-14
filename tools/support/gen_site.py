@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Site outputs of the support generator (offline, stdlib only). Called by gen_support.py, which writes and --checks them with the other tables.
 
-  site/compat.json    per-title status (macOS stages, state, performance, known issues, iOS) and the online table, for site/compat.html
+  site/compat.json    per-title status (macOS stages, state, performance, known issues, iOS) for site/compat.html
                       (site/compat.js renders it client-side)
   site/compat.html    only the static fallback between <!-- compat:begin --> and <!-- compat:end -->: the same lists as plain tables,
                       shown when JavaScript or the JSON fetch is unavailable
@@ -46,24 +46,23 @@ def note_url(tid):
     return f"docs/titles/{tid}/"  # mkdocs use_directory_urls: docs/titles/<id>.md is served at /docs/titles/<id>/
 
 
-def compat_data(last_run, titles, snap, online):
+def compat_data(last_run, titles, snap):
     return {"schema": 1, "generator": "tools/support/gen_support.py (module gen_site.py)",
-            "sources": ["compat/matrix.json", "docs/titles/*.md", "compat/online.json"],
+            "sources": ["compat/matrix.json", "docs/titles/*.md"],
             "matrix_last_run": last_run, "platform": "macOS on Apple Silicon (iOS deferred)",
             "stages": [{"key": k, "label": label} for k, label in STAGES], "stage_statuses": STAGE_STATUSES,
             "titles": [{"title_id": t["title_id"], "name": t["name"], "version": t["version"], "in_matrix": t["in_matrix"],
                         "state": t["macos"]["state"], "stages": {k: t["macos"][k] or "n/t" for k, _ in STAGES},
                         "performance": t["performance"], "known_issues": t["known_issues"], "ios": t["ios"],
-                        "note": note_url(t["title_id"]) if t["note"] else None} for t in sorted(titles, key=lambda t: t["name"].lower())],
-            "online": online}
+                        "note": note_url(t["title_id"]) if t["note"] else None} for t in sorted(titles, key=lambda t: t["name"].lower())]}
 
 
 def render_compat_block(data):
     stage_head = "".join(f"<th>{E(label)}</th>" for _, label in STAGES)
     L = [COMPAT_MARK[0],
          '<div class="fallback" id="compat-fallback">',
-         f'<p class="fine">Static copy of <a href="compat.json">compat.json</a>. Matrix last run {E(data["matrix_last_run"] or "never")}; '
-         f'online statuses last checked {E(data["online"]["last_checked"])}.</p>',
+         f'<p class="fine">Static copy of <a href="compat.json">compat.json</a>. Matrix last run {E(data["matrix_last_run"] or "never")}.'
+         "</p>",
          '<h3>Titles (macOS)</h3>',
          f'<div class="tbl"><table><thead><tr><th>Title</th><th>Version</th>{stage_head}<th>State</th></tr></thead><tbody>']
     for t in data["titles"]:
@@ -71,16 +70,9 @@ def render_compat_block(data):
         cells = "".join(f'<td>{E(t["stages"][k])}</td>' for k, _ in STAGES)
         L.append(f'<tr><td>{name}<br><code>{E(t["title_id"])}</code></td><td>{E(t["version"] or "")}</td>{cells}<td>{E(t["state"])}</td></tr>')
     L.append("</tbody></table></div>")
-    on = data["online"]
-    mode_head = "".join(f'<th>{E(m["short"])}</th>' for m in on["modes"])
-    L += ['<h3>Online (Napple to Napple)</h3>',
-          f'<div class="tbl"><table><thead><tr><th>Title</th><th>Backend</th>{mode_head}</tr></thead><tbody>']
-    for t in on["titles"]:
-        cells = "".join(f'<td>{"-" if t["modes"][m["key"]]["status"] == "unsupported" else E(t["modes"][m["key"]]["status"])}</td>'
-                        for m in on["modes"])
-        L.append(f'<tr><td>{E(t["name"])}</td><td>{E(t["backend"])}</td>{cells}</tr>')
-    L += ["</tbody></table></div>", '<p class="fine"><code>-</code> means the game has no such mode.</p>', "</div>", COMPAT_MARK[1]]
+    L += ["</tbody></table></div>", "</div>", COMPAT_MARK[1]]
     return "\n".join(L)
+
 
 
 def render_coverage_block(snap):
@@ -105,12 +97,12 @@ def splice(path_label, text, marks, block):
     return text[:i] + block + text[j + len(e):]
 
 
-def build(root, last_run, titles, snap, online):
-    data = compat_data(last_run, titles, snap, online)
+def build(root, last_run, titles, snap):
+    data = compat_data(last_run, titles, snap)
     outs = {COMPAT_JSON: json.dumps(data, indent=1, sort_keys=True, ensure_ascii=False) + "\n"}
     for rel, marks, block in [(COMPAT_HTML, COMPAT_MARK, render_compat_block(data)), (INDEX_HTML, COVERAGE_MARK, render_coverage_block(snap))]:
         p = root / rel
-        if p.exists():
+        if p.exists() and marks[0] in p.read_text():  # a page without the markers is hand-written
             outs[rel] = splice(rel, p.read_text(), marks, block)
     return outs
 

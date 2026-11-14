@@ -10,10 +10,19 @@ extension AppModel {
         NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
         if CommandLine.arguments.contains("--debug-light") { NSApp.appearance = NSAppearance(named: .aqua) }
-        defer {
-            let line = "debug-screen \(name): canBuild=\(canBuild) cli=\(cli != nil) set=\(selectedSet?.name ?? "-") disk=\(diskWarning ?? "ok") blocker=\(destinationBlocker ?? "none") key=\(window?.isKeyWindow ?? false)\n"
-            FileHandle.standardError.write(Data(line.utf8))
-        }
+        applyDebugState(name)
+        let line = "debug-screen \(name): canBuild=\(canBuild) cli=\(cli != nil) set=\(selectedSet?.name ?? "-") disk=\(diskWarning ?? "ok") blocker=\(destinationBlocker ?? "none") key=\(window?.isKeyWindow ?? false)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+    }
+
+    /// Resets what the screens below change, so states can be visited one after another.
+    func resetDebugState() {
+        phase = .idle; panelOpen = false; plan = nil; files = []; errorText = nil; notes = []; log = []; progress = nil
+        builtApp = nil; builtBytes = nil; buildDuration = nil; buildStarted = nil; searchText = ""; dropTargeted = false; showLegal = false
+        selectedLibraryItem = nil; pickedMods = []; installMessage = nil; installFailed = false; installing = false
+    }
+
+    func applyDebugState(_ name: String) {
         let base = PlanItem(titleId: "010093801237C000", version: 0, versionLabel: "v2.1.0", size: 4_400_000_000, selected: true, path: "/x/base.nsp")
         let update = PlanItem(titleId: "010093801237C800", version: 65536, versionLabel: "v2.1.0", size: 310_000_000, selected: true, path: "/x/upd.nsp")
         let dlc = PlanItem(titleId: "010093801237D001", version: 0, versionLabel: "v0", size: 12_000_000, selected: false, path: "/x/dlc.nsp")
@@ -45,8 +54,9 @@ extension AppModel {
             errorText = "The firmware in your key set is older than this game needs (20.1.0 required, 19.0.1 found). Add a newer firmware in Settings, then try again."
             log = ["$ napple build Metroid Dread.nsp", "preflight: keys ok", "error: firmware 19.0.1 is older than required 20.1.0", "build FAILED"]
         case "console": if let item = presentLibrary.first { playWithDebug(item) }
-        case "selected": selectedLibraryItem = presentLibrary.first?.id
+        case "selected": selectedLibraryItem = filteredLibrary.first?.id
         case "search": searchText = "pokemon"
+        case "add-mods": pickedMods = [URL(fileURLWithPath: "/x/60fps.napmod"), URL(fileURLWithPath: "/x/hd-textures")]; ready(fakePlan(updates: [update], dlc: [dlc]))
         case "legal": showLegal = true
         case "drop": dropTargeted = true
         default: break

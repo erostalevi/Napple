@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import NappleStudioCore
 
-/// The right-hand panel: one place for the whole Add / Build flow, switching on the build phase.
+/// The Add / Build flow in the inspector: one place for the whole Add / Build flow, switching on the build phase.
 struct PanelHost: View {
     @Environment(AppModel.self) private var m
     var body: some View {
@@ -15,11 +15,7 @@ struct PanelHost: View {
             case .failed: FailedPanel()
             }
         }
-        .frame(width: Theme.panelWidth)
-        .frame(maxHeight: .infinity)
-        .background(.regularMaterial)
-        .overlay(alignment: .leading) { Rectangle().fill(Theme.hairline).frame(width: 1) }
-        .shadow(color: .black.opacity(0.28), radius: 18, x: -6, y: 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .animation(.smooth(duration: 0.25), value: m.phase)
     }
 }
@@ -55,7 +51,7 @@ struct PanelHeader<Trailing: View>: View {
         HStack(spacing: 14) {
             Group {
                 if skeleton { RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Theme.surfaceStrong) }
-                else { CoverView(image: nil, name: title, seed: m.plan?.base?.titleId ?? title).clipShape(.rect(cornerRadius: 12, style: .continuous)) }
+                else { CoverView(image: nil, name: title, seed: m.plan?.base?.titleId ?? title, showsName: false, radius: 12) }
             }
             .frame(width: 56, height: 56)
             VStack(alignment: .leading, spacing: 3) {
@@ -75,15 +71,6 @@ struct PanelHeader<Trailing: View>: View {
 extension PanelHeader where Trailing == EmptyView {
     init(title: String, subtitle: String? = nil, subtitleColor: Color = .secondary, skeleton: Bool = false) {
         self.init(title: title, subtitle: subtitle, subtitleColor: subtitleColor, skeleton: skeleton) { EmptyView() }
-    }
-}
-
-/// Compatibility status as a dot and a word.
-struct CompatBadge: View {
-    let entry: CompatEntry
-    var body: some View {
-        HStack(spacing: 6) { StatusDot(color: entry.status.color); Text(entry.status.label).font(.caption) }
-            .accessibilityElement(children: .combine)
     }
 }
 
@@ -150,7 +137,8 @@ struct LogWell: View {
             .onChange(of: shown.count) { if filter.isEmpty { proxy.scrollTo("end", anchor: .bottom) } }
             .onAppear { proxy.scrollTo("end", anchor: .bottom) }
         }
-        .background(.black.opacity(0.30), in: .rect(cornerRadius: Theme.cardRadius, style: .continuous))
+        .background(Theme.well, in: .rect(cornerRadius: Theme.cardRadius, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).strokeBorder(Theme.hairline))
         .overlay { if lines.isEmpty { Text("Build output appears here, line by line.").font(.caption).foregroundStyle(.tertiary) } }
     }
     static func tone(_ l: String) -> Color {

@@ -119,17 +119,12 @@ Apple's GPU shader language. The translator produces MSL source which `gfx/src/m
 ## L
 
 **LDN**
-Local wireless play between consoles (`ldn:u`). Napple carries it over the LAN with the host network provider, or over the internet through a `napple-room` server
-([online rooms](../guides/online-rooms.md)).
+Local wireless play between consoles (`ldn:u`). Napple carries it over the local network with the host network provider.
 
 ## N
 
 **.napmod**
 The shareable package format of mods and per-title fixes: code patches, RomFS replacements, cheats and configuration, tied to module build ids (`crates/napple-mods`; [mods](../mods/README.md)).
-
-**Napple Online**
-The optional community online service: Napple accounts and profiles, friends and visibility tiers, end-to-end encrypted cloud saves and game servers, run by Napple servers
-(never Nintendo's). See [Napple Online](../guides/napple-online.md).
 
 **NACP**
 The control data of a title (names, publisher, display version). The default app name comes from it (`crates/napple-core/src/infrastructure/nacp.rs`).

@@ -1,13 +1,24 @@
 # Changelog
 
 All notable changes to Napple are recorded here, following [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This file tracks what the tool gained:
-pipeline stages, runtime subsystems, services, formats, graphics features, online services and project infrastructure. It does not track per-game
-compatibility; that lives in the generated [support matrix](docs/reference/support-matrix.md) and [online support](docs/reference/online-support.md) tables.
+pipeline stages, runtime subsystems, services, formats, graphics features and project infrastructure. It does not track per-game
+compatibility; that lives in the generated [support matrix](docs/reference/support-matrix.md) table.
 
 Napple has no hand-curated releases yet. Every commit to `main` that touches code publishes a release tagged `v0.1.<workflow run number>` (see
 `.github/workflows/release.yml`; the `0.1` part is `MAJOR_MINOR` in that file, and docs- or site-only commits are skipped), so a version number identifies a
 build, not a feature set. Until a stable version scheme exists, entries are grouped into dated milestones, newest first. Detailed per-change notes (what was
 done, why, what was verified and what was not) are indexed in [docs/archive/changes/README.md](docs/archive/changes/README.md).
+
+## 2026-11-13: offline beta
+
+### Removed
+- All online functionality: the Napple Account, social, online, room and visibility server crates, the cloud-saves client, the `napple account` and `napple saves`
+  commands, the overlay Online tab and Studio's Online settings, the `infra/` AWS stack and its deploy workflow, and the online support tables. Napple has no
+  servers, accounts or telemetry; local play, split-screen and LAN play remain.
+- The AWS resources of the former `pretend.napple.lat` servers (EC2, EIP, volumes, VPC, ECR, S3 buckets, IAM roles, SES mail stack).
+
+### Changed
+- Landing page, in-game overlay and Napple Studio redone from scratch for a beta release; the legal pages describe an offline tool.
 
 ## Platform coverage (%Analysis)
 

@@ -28,6 +28,7 @@ struct BuildPanel: View {
                 ProgressView(value: m.buildFraction).progressViewStyle(.linear).animation(.smooth(duration: 0.25), value: m.buildFraction)
                 Text(m.progress?.message ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     .accessibilityIdentifier("build.progress")
+                StageSteps(seen: m.stagesSeen, current: m.progress?.stage ?? "preflight")
                 Text("This can take a few minutes. You can keep using your Mac.").font(.caption).foregroundStyle(.secondary)
             }
             VStack(alignment: .leading, spacing: 8) {
@@ -164,5 +165,51 @@ struct FailedPanel: View {
                 Button("Choose Files…") { m.resetPlanState(); m.pickFilesAndAdd() }.buttonStyle(.glassProminent).controlSize(.large).keyboardShortcut(.defaultAction)
             }
         }
+    }
+}
+
+
+/// The stages seen so far as a row of chips: finished ones ticked, the current one with a spinner.
+struct StageSteps: View {
+    let seen: [String]
+    let current: String
+    var body: some View {
+        let stages = seen.isEmpty ? [current] : seen
+        FlowRow(spacing: 6) {
+            ForEach(Array(stages.enumerated()), id: \.offset) { _, s in
+                let active = s == current
+                HStack(spacing: 4) {
+                    if active { ProgressView().controlSize(.mini) } else { Image(systemName: "checkmark").font(.system(size: 9, weight: .bold)) }
+                    Text(AppModel.stageName(s)).font(.caption)
+                }
+                .padding(.horizontal, 8).padding(.vertical, 3)
+                .foregroundStyle(active ? Color.primary : Color.secondary)
+                .background(active ? Theme.brand.opacity(0.16) : Theme.surface, in: .capsule)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(Text("\(AppModel.stageName(s)), \(active ? "in progress" : "done")"))
+            }
+        }
+    }
+}
+
+/// Lays children out left to right and wraps them to the next line when the row is full.
+struct FlowRow: Layout {
+    var spacing: CGFloat = 6
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        arrange(proposal.width ?? 320, subviews).size
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        for (i, f) in arrange(bounds.width, subviews).frames.enumerated() { subviews[i].place(at: CGPoint(x: bounds.minX + f.minX, y: bounds.minY + f.minY), proposal: ProposedViewSize(f.size)) }
+    }
+    private func arrange(_ width: CGFloat, _ subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+        var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0, maxX: CGFloat = 0
+        var frames: [CGRect] = []
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x > 0, x + s.width > width { x = 0; y += rowH + spacing; rowH = 0 }
+            frames.append(CGRect(origin: CGPoint(x: x, y: y), size: s))
+            x += s.width + spacing; rowH = max(rowH, s.height); maxX = max(maxX, x - spacing)
+        }
+        return (CGSize(width: maxX, height: y + rowH), frames)
     }
 }

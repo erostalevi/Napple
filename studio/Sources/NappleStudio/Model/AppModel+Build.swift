@@ -29,7 +29,7 @@ extension AppModel {
 
         let ios0 = iosOptions()
         var req = BuildRequest(files: files, keyset: set, updates: plan.selectedUpdateVersions, dlc: plan.selectedDLCIds,
-                               target: target.rawValue, output: out, ios: ios0)
+                               target: target.rawValue, output: out, ios: ios0, mods: pickedMods)
         builtSummary = plan.includedSummary
         phase = .building; panelOpen = true
         errorText = nil; notes = []; installMessage = nil; cancelling = false

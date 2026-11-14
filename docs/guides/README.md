@@ -1,6 +1,6 @@
 # Guides
 
-How-to pages for building and running Napple, for the common code changes, for Napple Online and for community contributions. The contributor guides each have a goal, the files to touch, steps, a worked example from existing code, how to test and the known pitfalls.
+How-to pages for building and running Napple, for the common code changes, and for community contributions. The contributor guides each have a goal, the files to touch, steps, a worked example from existing code, how to test and the known pitfalls.
 Background on how the pieces fit: [architecture](../architecture/overview.md); per-subsystem entry points: [subsystems](../reference/subsystems.md); known problems by symptom: [symptoms](../symptoms.md).
 
 ## Build and run
@@ -24,18 +24,6 @@ Background on how the pieces fit: [architecture](../architecture/overview.md); p
 | [testing.md](testing.md) | Every test suite, its command, and whether it runs on Linux or only on macOS; the end-to-end run. |
 | [testing-graphics.md](testing-graphics.md) | Golden-frame routes, the gfx warning and Metal validation gate, contact sheets, approving goldens. |
 | [fuzzing.md](fuzzing.md) | Run the Rust cargo-fuzz targets, the seeded-mutation tests and the C runtime fuzz drivers; fix and record a finding ([findings](../reference/fuzz-findings.md)). |
-
-## Online
-| Guide | One line |
-|---|---|
-| [napple-online.md](napple-online.md) | The Napple Online service (`crates/napple-online`, `NAPPLE_ONLINE_SERVER`): accounts and tokens, the game server (PRUDP Lite over WebSocket), boundaries, deployment. |
-| [napple-account.md](napple-account.md) | The Napple Account server (`crates/napple-account`): accounts (email + password, emailed codes), devices, JWT/JWKS, E2E save-key exchange, profiles and reserved names, cloud-save metadata. |
-| [napple-social.md](napple-social.md) | The friends and presence service (`crates/napple-social`): API, WebSocket events, visibility tiers, data model, running it. |
-| [cloud-saves.md](cloud-saves.md) | End-to-end encrypted cloud saves (`crates/napple-cloud`, `napple account` / `napple saves`): devices, approval and recovery, sync rules, conflicts, wire details. |
-| [napple-online-client.md](napple-online-client.md) | The Mac-side client (`crates/napple-cloud` online module + `runtime/src/online`): shared credentials, profile map, the overlay function table. |
-| [online-rooms.md](online-rooms.md) | Napple rooms: local wireless (LDN) and LAN play between Napple instances over the internet through a `napple-room` server; running a server, joining, what is relayed, limits. |
-| [online-e2e.md](online-e2e.md) | The scripted Online end-to-end run (sign-up, second device, cloud save, friends, tiers, delete) locally and live, overlay screenshots. |
-| [deploy-servers.md](deploy-servers.md) | Deploy the servers to AWS at `pretend.napple.lat` and the `napple.lat` DNS: one-time setup, the workflow, rollback, costs, the local test stack. |
 
 ## Community contributions
 | Guide | One line |

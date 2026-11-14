@@ -10,6 +10,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include "fe_internal.h"
+#include "fe_ui.h"
 #include "napple_audio.h"
 
 struct napple_frontend {
@@ -256,7 +257,9 @@ static CVReturn link_cb(CVDisplayLinkRef l, const CVTimeStamp *n, const CVTimeSt
     NSTextField *_noticeText;
     NSProgressIndicator *_noticeSpin;
     BOOL _turboHeld, _turboToggle, _slowToggle, _hudApplied;
-    NSTextField *_toast, *_stats;
+    NSVisualEffectView *_toastView;
+    NSImageView *_toastIcon;
+    NSTextField *_toastText, *_stats;
     NSUInteger _toastSerial;
 }
 - (instancetype)init {
@@ -347,27 +350,82 @@ static CVReturn link_cb(CVDisplayLinkRef l, const CVTimeStamp *n, const CVTimeSt
 /* ---- speed / display hot keys ---- */
 static const int kSpeedSteps[] = NAPPLE_SPEED_STEPS;
 static const int kSuperSteps[] = {100, 150, 200, 300};
+static NSString *toast_auto_symbol(NSString *t) {
+    NSString *l = t.lowercaseString;
+    if ([l containsString:@"turbo"]) return @"hare.fill";
+    if ([l containsString:@"slow"]) return @"tortoise.fill";
+    if ([l containsString:@"speed"]) return @"gauge.with.dots.needle.67percent";
+    if ([l containsString:@"frame generation"]) return @"film";
+    if ([l containsString:@"supersampling"]) return @"sparkles";
+    if ([l containsString:@"screenshot"]) return @"camera.fill";
+    if ([l containsString:@"hud"] || [l containsString:@"statistics"]) return @"speedometer";
+    return nil;
+}
 - (void)toast:(NSString *)text {
-    if (!self.gameView) return;
-    if (!_toast) {
-        _toast = fe_label(@"", 15, YES);
-        _toast.textColor = NSColor.whiteColor;
-        _toast.drawsBackground = YES;
-        _toast.backgroundColor = [NSColor colorWithWhite:0 alpha:0.55];
-        _toast.wantsLayer = YES;
-        _toast.layer.cornerRadius = 6;
-        _toast.alignment = NSTextAlignmentCenter;
-        [self.gameView addSubview:_toast];
+    [self toast:text symbol:toast_auto_symbol(text)];
+}
+/* A small vibrant pill at the top centre of the game view: fades and drops in, fades out after a moment; a new toast replaces the current one. */
+- (void)toast:(NSString *)text symbol:(NSString *)sym {
+    if (!self.gameView || !text.length) return;
+    if (!_toastView) {
+        NSVisualEffectView *v = [[NSVisualEffectView alloc] initWithFrame:NSZeroRect];
+        v.material = NSVisualEffectMaterialHUDWindow;
+        v.blendingMode = NSVisualEffectBlendingModeWithinWindow;
+        v.state = NSVisualEffectStateActive;
+        v.wantsLayer = YES;
+        v.layer.masksToBounds = YES;
+        _toastIcon = [NSImageView new];
+        _toastIcon.contentTintColor = NSColor.controlAccentColor;
+        _toastText = fe_text(@"", FETypeBody, nil);
+        _toastText.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+        [v addSubview:_toastIcon];
+        [v addSubview:_toastText];
+        v.accessibilityRole = NSAccessibilityStaticTextRole;
+        _toastView = v;
+        [self.gameView addSubview:v];
     }
-    _toast.stringValue = [NSString stringWithFormat:@"  %@  ", text];
-    [_toast sizeToFit];
+    [self.gameView addSubview:_toastView positioned:NSWindowAbove relativeTo:nil];
+    NSImage *img = sym ? fe_symbol(sym, 14, NSFontWeightSemibold) : nil;
+    _toastIcon.image = img;
+    _toastIcon.hidden = img == nil;
+    _toastText.stringValue = text;
+    [_toastText sizeToFit];
+    CGFloat ih = 18, iw = img ? 18 : 0, gap = img ? 7 : 0, padx = 16, h = 34;
+    CGFloat w = padx * 2 + iw + gap + _toastText.frame.size.width;
     NSRect b = self.gameView.bounds;
-    _toast.frame = NSMakeRect(14, NSMaxY(b) - _toast.frame.size.height - 14, _toast.frame.size.width, _toast.frame.size.height + 4);
-    _toast.hidden = NO;
-    _toast.alphaValue = 1;
+    NSRect target = NSMakeRect(NSMidX(b) - w / 2, NSMaxY(b) - h - 18, w, h);
+    _toastIcon.frame = NSMakeRect(padx, (h - ih) / 2, iw, ih);
+    _toastText.frame = NSMakeRect(padx + iw + gap, (h - _toastText.frame.size.height) / 2, _toastText.frame.size.width, _toastText.frame.size.height);
+    _toastView.layer.cornerRadius = h / 2;
+    _toastView.accessibilityLabel = text;
+    NSAccessibilityPostNotificationWithUserInfo(NSApp, NSAccessibilityAnnouncementRequestedNotification, @{NSAccessibilityAnnouncementKey : text});
+    BOOL anim = !fe_reduce_motion() && self.window.isVisible;
+    _toastView.hidden = NO;
+    if (anim && _toastView.alphaValue < 0.5) {
+        _toastView.alphaValue = 0;
+        _toastView.frame = NSOffsetRect(target, 0, 8);
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *c) {
+            c.duration = 0.18;
+            self->_toastView.animator.alphaValue = 1;
+            self->_toastView.animator.frame = target;
+        }];
+    } else {
+        _toastView.frame = target;
+        _toastView.alphaValue = 1;
+    }
     NSUInteger serial = ++_toastSerial;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.6 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        if (serial == self->_toastSerial) self->_toast.hidden = YES;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.9 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        if (serial != self->_toastSerial) return;
+        if (!anim) {
+            self->_toastView.hidden = YES;
+            return;
+        }
+        [NSAnimationContext runAnimationGroup:^(NSAnimationContext *c) {
+            c.duration = 0.25;
+            self->_toastView.animator.alphaValue = 0;
+        } completionHandler:^{
+            if (serial == self->_toastSerial) self->_toastView.hidden = YES;
+        }];
     });
 }
 - (void)updateSpeed {
@@ -524,6 +582,19 @@ static const int kSuperSteps[] = {100, 150, 200, 300};
     NSMenuItem *q = [app addItemWithTitle:[@"Quit " stringByAppendingString:name] action:@selector(menuQuit:) keyEquivalent:@"q"];
     q.target = self;
     appItem.submenu = app;
+    NSMenuItem *panelItem = [NSMenuItem new];
+    [bar addItem:panelItem];
+    NSMenu *panel = [[NSMenu alloc] initWithTitle:@"Overlay"];
+    static NSString *const tabs[] = {@"Audio and Video", @"FPS and Speed", @"Controls", @"Game and System", @"Status"};
+    for (int i = 0; i < 5; i++) {
+        NSMenuItem *it = [panel addItemWithTitle:tabs[i] action:@selector(menuTab:) keyEquivalent:[NSString stringWithFormat:@"%d", i + 1]];
+        it.target = self;
+        it.tag = i;
+    }
+    [panel addItem:NSMenuItem.separatorItem];
+    NSMenuItem *foc = [panel addItemWithTitle:@"Focus Panel Controls" action:@selector(menuFocusPanel:) keyEquivalent:@"0"];
+    foc.target = self;
+    panelItem.submenu = panel;
     NSMenuItem *viewItem = [NSMenuItem new];
     [bar addItem:viewItem];
     NSMenu *view = [[NSMenu alloc] initWithTitle:@"View"];
@@ -543,6 +614,13 @@ static const int kSuperSteps[] = {100, 150, 200, 300};
 - (void)menuOverlay:(id)s {
     (void)s;
     [self toggleOverlay];
+}
+- (void)menuTab:(NSMenuItem *)s {
+    fe_overlay_goto_tab(self, (int)s.tag);
+}
+- (void)menuFocusPanel:(id)s {
+    (void)s;
+    fe_overlay_focus_controls(self);
 }
 - (void)menuQuit:(id)s {
     (void)s;
@@ -652,11 +730,8 @@ static const int kSuperSteps[] = {100, 150, 200, 300};
 - (void)showOverlay:(BOOL)show {
     if (show == self.overlayVisible) return;
     self.overlayVisible = show;
-    self.overlayView.hidden = !show;
-    if (show) {
-        fe_overlay_place(self);
-        fe_overlay_refresh(self);
-    } else self.overlayPadMode = NO;
+    fe_overlay_set_visible(self, show);
+    if (!show) self.overlayPadMode = NO;
     [self refreshOverlayInputMode];
     if (!show) [self resignToGame];
     if (self.cfg.callbacks.on_overlay) self.cfg.callbacks.on_overlay(self.cfg.callbacks.user, show);

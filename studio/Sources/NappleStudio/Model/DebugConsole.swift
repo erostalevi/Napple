@@ -39,6 +39,9 @@ final class DebugConsole: Identifiable {
         }
     }
 
+    /// Screenshot tour only: shows sample lines without starting a game.
+    func debugFill(_ l: [String]) { lines = l; exitCode = 0 }
+
     func stop() { run?.stop() }
     func clear() { lines.removeAll() }
 

@@ -50,7 +50,20 @@ final class AppModel {
 
     // navigation: one window with the library; the Add / Build panel slides in on the right
     var panelOpen = false
-    var selectedLibraryItem: UUID?
+    var selectedLibraryItem: UUID? { didSet { if oldValue != selectedLibraryItem { loadDetails() } } }
+    var viewMode: LibraryViewMode = LibraryViewMode(rawValue: UserDefaults.standard.string(forKey: "libraryView") ?? "") ?? .grid {
+        didSet { UserDefaults.standard.set(viewMode.rawValue, forKey: "libraryView") }
+    }
+    var sort: LibrarySort = LibrarySort(rawValue: UserDefaults.standard.string(forKey: "librarySort") ?? "") ?? .recent {
+        didSet { UserDefaults.standard.set(sort.rawValue, forKey: "librarySort") }
+    }
+    /// The first-run guide (keys, engine, first game) is done or was skipped.
+    var onboardingDone: Bool { didSet { UserDefaults.standard.set(onboardingDone, forKey: "onboardingDone") } }
+    var onboardingStep = 0
+    /// Details of the selected game (embedded versions, mods, saves); loaded off the main thread when the selection changes.
+    var selectedDetails: GameDetails?
+    /// Mods chosen for the next build (`napple build --mods`); cleared with the plan.
+    var pickedMods: [URL] = []
     var settingsTab = "general"   // selected Settings tab
     var toast: String?
     private var toastTask: Task<Void, Never>?
@@ -181,6 +194,8 @@ final class AppModel {
             ?? UserDefaults.standard.string(forKey: "outputDir").map { URL(fileURLWithPath: $0) } ?? Self.defaultOutput
         autoBuild = args.contains("--debug-autobuild")
         legalAck = args.contains("--debug-ack") || UserDefaults.standard.bool(forKey: "legalAck")
+        // existing installs (keys set up once, or games built) skip the guide; --debug-welcome shows it again
+        onboardingDone = !args.contains("--debug-welcome") && (UserDefaults.standard.bool(forKey: "onboardingDone") || UserDefaults.standard.bool(forKey: "keysEverSet"))
         if let k = arg("--debug-keys") {
             _ = try? keysets.save(name: "Debug", keys: URL(fileURLWithPath: k), titleKeys: nil,
                                   firmware: arg("--debug-firmware").map { URL(fileURLWithPath: $0) }, replace: true)
@@ -191,6 +206,7 @@ final class AppModel {
         restoreActiveSet()
         refreshLibrary(adoptOutput: true)
         libraryLoaded = true
+        if !onboardingDone, !args.contains("--debug-welcome"), !libraryItems.isEmpty { onboardingDone = true }
         if destination.isIOS { Task { await refreshIOS() } }
         refreshEngines()
         if !args.contains("--no-engine-setup") { setUpEngine() }
@@ -202,11 +218,9 @@ final class AppModel {
 
     // MARK: keys
 
-    /// True until the first key set exists: the first-launch dialog blocks the window until keys are in.
-    var needsSetup: Bool { sets.isEmpty }
     /// Keys were set up once and deleted since: the library stays usable, building is paused.
     var keysRemoved: Bool { sets.isEmpty && UserDefaults.standard.bool(forKey: "keysEverSet") }
-    var showOnboarding: Bool { sets.isEmpty && !UserDefaults.standard.bool(forKey: "keysEverSet") }
+    var showOnboarding: Bool { !onboardingDone }
     var selectedSet: Keyset? { sets.first { $0.name == selectedSetName } ?? sets.first }
     var isBuilding: Bool { phase == .building }
 
@@ -263,14 +277,13 @@ final class AppModel {
     // MARK: adding games
 
     func pickFilesAndAdd() {
-        guard !sets.isEmpty else { say(String(localized: "Add your keys and firmware in Settings first.")); return }
+        guard !sets.isEmpty else { say(String(localized: "Add your keys and firmware first.")); onboardingStep = 0; showKeysSetup(); return }
         let urls = pick(files: true, dirs: true, multiple: true, message: String(localized: "Choose game files or folders (.nsp .xci .nsz .xcz)"))
         if !urls.isEmpty { Task { await handleDrop(urls) } }
     }
 
     func handleDrop(_ urls: [URL]) async {
         dropTargeted = false
-        guard !showOnboarding else { return }
         guard phase != .building else { say(String(localized: "A build is running. Wait for it to finish or cancel it first.")); return }
         guard !sets.isEmpty else { say(String(localized: "Your keys were removed. Add them in Settings to build games.")); return }
         let found = InputExpander.expand(urls)
@@ -285,6 +298,7 @@ final class AppModel {
         for u in found.files where !all.contains(where: { $0.standardizedFileURL.path == u.standardizedFileURL.path }) { all.append(u) }
         files = all
         inputNote = found.skippedNote
+        onboardingDone = true
         panelOpen = true
         await replan()
     }
@@ -297,6 +311,7 @@ final class AppModel {
         planGeneration += 1
         files = []; plan = nil; phase = .idle; errorText = nil; inputNote = nil; progress = nil; clearLog(); notes = []; stagesSeen = []
         builtApp = nil; builtIPA = nil; builtInfo = nil; builtBytes = nil; compat = nil; installMessage = nil; installing = false; installFailed = false; cancelling = false
+        pickedMods = []
         builtSummary = ""; buildDuration = nil
     }
 

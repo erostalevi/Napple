@@ -3,33 +3,26 @@ import AppKit
 import UniformTypeIdentifiers
 import NappleStudioCore
 
-/// The one window: the library, and the Add / Build panel sliding in from the right.
+/// The one window: the library in the middle, and on the right an inspector that shows either the selected game or the Add / Build flow.
+/// The window resizes freely (down to `Theme.minWindowSize`); the first run shows the welcome guide instead.
 struct RootView: View {
     @Environment(AppModel.self) private var m
     @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         @Bindable var m = m
-        ZStack(alignment: .trailing) {
-            VStack(spacing: 0) {
-                HeaderBar()
-                LibraryView()
-            }
-            .opacity(m.panelOpen ? 0.5 : 1)
-            .allowsHitTesting(!m.panelOpen && !m.showOnboarding)
-            .padding(.trailing, 0)
-
-            if m.panelOpen { PanelHost().transition(.move(edge: .trailing).combined(with: .opacity)) }
-            if m.dropTargeted { DropOverlay() }
-            if m.showOnboarding { OnboardingDialog() } else if m.showLegal { LegalDialog() }
+        ZStack {
+            if m.showOnboarding { WelcomeView().transition(.opacity) } else { MainView().transition(.opacity) }
+            if m.dropTargeted && !m.showOnboarding { DropOverlay() }
+            if m.showLegal && !m.showOnboarding { LegalDialog() }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(WindowMaterial().ignoresSafeArea())
+        .frame(minWidth: Theme.minWindowSize.width, minHeight: Theme.minWindowSize.height)
+        .background(Backdrop())
         .overlay(alignment: .bottom) { ToastHost() }
-        .animation(.smooth(duration: 0.25), value: m.panelOpen)
+        .tint(Theme.brand)
+        .animation(.smooth(duration: 0.3), value: m.showOnboarding)
         .animation(.smooth(duration: 0.2), value: m.dropTargeted)
         .animation(.smooth(duration: 0.2), value: m.toast)
-        .ignoresSafeArea()
         .onDrop(of: [.fileURL], isTargeted: $m.dropTargeted) { providers in
             Task {
                 var urls: [URL] = []
@@ -52,47 +45,78 @@ struct RootView: View {
     }
 }
 
-/// Title row: the name, search, Add Game, Settings. The traffic lights sit at the left.
-struct HeaderBar: View {
+/// Library + toolbar + inspector.
+struct MainView: View {
     @Environment(AppModel.self) private var m
-    @Environment(\.openSettings) private var openSettings
+
+    private var inspectorShown: Binding<Bool> {
+        Binding(get: { m.panelOpen || m.selectedItem != nil },
+                set: { if !$0 { if m.panelOpen { m.closePanel() } else { m.selectedLibraryItem = nil } } })
+    }
+
+    private var subtitle: String {
+        let n = m.presentLibrary.count
+        let games = n == 0 ? String(localized: "No games yet") : n == 1 ? String(localized: "1 game") : String(localized: "\(n) games")
+        return "\(games) · Beta"
+    }
 
     var body: some View {
         @Bindable var m = m
-        HStack(spacing: 10) {
-            Text("Napple Studio").font(.system(size: 15, weight: .semibold)).padding(.leading, 74)
-            Spacer()
-            if !m.presentLibrary.isEmpty { SearchField(text: $m.searchText) }
-            Button { m.pickFilesAndAdd() } label: { Label("Add Game", systemImage: "plus").fontWeight(.semibold) }
-                .buttonStyle(.glassProminent).controlSize(.large).disabled(m.sets.isEmpty)
-                .help(Text("Add a game (⌘O)")).accessibilityIdentifier("header.add")
-            HeaderIconButton(symbol: "gearshape", label: "Settings") { openSettings() }.accessibilityIdentifier("header.settings")
-        }
-        .padding(.horizontal, 16).frame(height: 52)
-        .contentShape(.rect)
-        .gesture(WindowDragGesture())
-    }
-}
-
-struct SearchField: View {
-    @Binding var text: String
-    @FocusState private var focused: Bool
-    var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary).font(.system(size: 12))
-            TextField("Search games", text: $text).textFieldStyle(.plain).focused($focused).frame(width: 150)
-                .accessibilityIdentifier("header.search")
-            if !text.isEmpty {
-                Button { text = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }.buttonStyle(.plain).accessibilityLabel(Text("Clear search"))
+        LibraryView()
+            .navigationTitle("Napple Studio")
+            .navigationSubtitle(subtitle)
+            .searchable(text: $m.searchText, placement: .toolbar, prompt: Text("Search games"))
+            .toolbar {
+                ToolbarItem(placement: .navigation) { BetaBadge() }
+                ToolbarItemGroup {
+                    Picker("View", selection: $m.viewMode) {
+                        ForEach(LibraryViewMode.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelStyle(.iconOnly).help(Text("Show the library as a grid or a list"))
+                    .accessibilityIdentifier("toolbar.viewMode")
+                    Menu {
+                        Picker("Sort by", selection: $m.sort) {
+                            ForEach(LibrarySort.allCases) { Label(LocalizedStringKey($0.label), systemImage: $0.symbol).tag($0) }
+                        }
+                    } label: { Label("Sort", systemImage: "arrow.up.arrow.down") }
+                        .help(Text("Sort the library")).accessibilityIdentifier("toolbar.sort")
+                }
+                ToolbarSpacer(.fixed)
+                ToolbarItem {
+                    Button { m.pickFilesAndAdd() } label: { Label("Add Game", systemImage: "plus") }
+                        .help(Text("Add a game (⌘O)")).accessibilityIdentifier("toolbar.add")
+                }
+                ToolbarItem {
+                    Button { m.openSettings() } label: { Label("Settings", systemImage: "gearshape") }
+                        .help(Text("Settings (⌘,)")).accessibilityIdentifier("toolbar.settings")
+                }
+                ToolbarItem {
+                    Button { inspectorShown.wrappedValue.toggle() } label: { Label("Details", systemImage: "sidebar.trailing") }
+                        .help(Text("Show or hide the details")).disabled(m.selectedItem == nil && !m.panelOpen)
+                        .accessibilityIdentifier("toolbar.inspector")
+                }
             }
-        }
-        .padding(.horizontal, 10).frame(height: 30)
-        .background(Theme.surface, in: .capsule)
-        .overlay(Capsule().strokeBorder(focused ? Color.accentColor : .clear, lineWidth: 2))
+            .inspector(isPresented: inspectorShown) {
+                InspectorHost()
+                    .inspectorColumnWidth(min: Theme.inspectorWidth.min, ideal: Theme.inspectorWidth.ideal, max: Theme.inspectorWidth.max)
+            }
     }
 }
 
-/// Hands the hosting NSWindow to the model and fixes its look: translucent, one size, no zoom or full screen.
+/// Right-hand inspector: the Add / Build flow while it is open, otherwise the selected game.
+struct InspectorHost: View {
+    @Environment(AppModel.self) private var m
+    var body: some View {
+        Group {
+            if m.panelOpen { PanelHost() }
+            else if let item = m.selectedItem { GameDetailView(item: item) }
+            else { Color.clear }
+        }
+        .animation(.smooth(duration: 0.2), value: m.panelOpen)
+    }
+}
+
+/// Hands the hosting NSWindow to the model and sets its sizes. The window keeps the system look (toolbar, Liquid Glass) and its saved frame.
 struct WindowAccessor: NSViewRepresentable {
     var onWindow: (NSWindow) -> Void
     func makeNSView(context: Context) -> NSView {
@@ -103,21 +127,8 @@ struct WindowAccessor: NSViewRepresentable {
     func updateNSView(_ nsView: NSView, context: Context) {}
 
     @MainActor static func configure(_ w: NSWindow) {
-        w.styleMask.remove(.resizable)
-        w.titlebarAppearsTransparent = true
-        w.titleVisibility = .hidden
-        w.isOpaque = false
-        w.backgroundColor = .clear
-        w.isMovableByWindowBackground = false
-        w.collectionBehavior.insert(.fullScreenNone)
-        w.standardWindowButton(.zoomButton)?.isEnabled = false
-        // The title bar is hidden and the content runs under it, so the frame IS the content: fix the whole frame, keeping the top-left corner.
-        var f = w.frame
-        f.origin.y += f.height - Theme.windowSize.height
-        f.size = Theme.windowSize
-        w.setFrame(f, display: true)
-        w.minSize = Theme.windowSize
-        w.maxSize = Theme.windowSize
+        w.contentMinSize = Theme.minWindowSize
+        w.tabbingMode = .disallowed
         w.makeFirstResponder(nil)   // no field starts focused
     }
 }

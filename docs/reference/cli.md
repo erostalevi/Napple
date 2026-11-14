@@ -25,7 +25,7 @@ files: base game, updates and DLC (XCI/NSP), any order, one or several files.
 
 Subcommands implemented in other crates take the rest of the arguments unchanged: `napple rewrite` (`crates/napple-rewrite/src/cli.rs`), `napple compat` (`crates/napple-compat/src/lib.rs`),
 `napple sigs` (`crates/napple-sigs/src/cli.rs`), `napple build` (`crates/napple-build/src/cli.rs`, `crates/napple-build/src/lib.rs`), `napple mods` (`crates/napple-mods/src/cli.rs`),
-`napple clean` (`crates/napple-cli/src/clean.rs`) and `napple account` / `napple saves` (`crates/napple-cli/src/cloud.rs`).
+and `napple clean` (`crates/napple-cli/src/clean.rs`).
 
 Running `napple` with no arguments, with an unknown first word, or without `-k` and at least one file for `ingest`/`plan`/`decomp` prints the usage text to stderr and exits with `2`. `napple --help` does the same.
 
@@ -379,31 +379,3 @@ napple mods apply <mod> --image <file> --build-id <hex> [--layout <text_end>,<ro
 napple mods convert <in> <out> [--build-id <hex>]          (.pchtxt, .json and .ips in either direction)
 napple mods build-id <file.nso>
 ```
-
-## napple account and napple saves (Napple Online)
-
-The client side of [Napple Online](../guides/napple-online.md) accounts and [cloud saves](../guides/cloud-saves.md) (`crates/napple-cli/src/cloud.rs`, over `crates/napple-cloud`). Nothing is sent anywhere until you sign in.
-
-```
-usage: napple account <command>
-  login [--email E] [--code C] [--server URL] [--name DEVICE]   sign in with an emailed code (this Mac becomes a device)
-  logout                         sign out (local saves and restore points stay)
-  status                         account, device, key and sync state
-  devices [revoke <device-id>]   devices of the account, and devices waiting for approval
-  approve [<device-id>]          give waiting devices the cloud save key (end-to-end encryption)
-  recover [--phrase "24 words"]  unlock this device with the recovery code instead of an approval
-  profiles [add <nickname>]      Napple player profiles (up to 8)
-  link <profile-id> [--user N|UID]  link a local user (default: the first) to a profile
-environment: NAPPLE_ACCOUNT_URL (server), NAPPLE_ACCOUNT_NAMESPACE (another sign-in on this machine), NAPPLE_SUPPORT_DIR
-
-usage: napple saves <command> [--save-root DIR] [--user N|UID]
-  list                     cloud and local saves with their sync status
-  pull <title-id>          download the newest cloud save (the local one is kept as a restore point if it differs)
-  push <title-id>          upload the local save
-  history <title-id>       cloud versions and local restore points
-  restore <title-id> <version | restore-point file>   make an older save current (and upload it)
-  enable <title-id> | disable <title-id>              turn syncing a title on or off (default on)
-```
-
-`--save-root` is the games' save root (default `~/Library/Application Support/Napple`, as the runtime's `--save-root`). Server-side commands (`napple-account`, `napple-social`,
-`napple-online`, `napple-room`) are separate binaries; see [deploy the servers](../guides/deploy-servers.md).

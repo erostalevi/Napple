@@ -29,7 +29,7 @@ static NSTextField *small_note(NSString *t) {
     NSTextField *n = fe_label(t, 10, NO);
     n.textColor = NSColor.secondaryLabelColor;
     n.lineBreakMode = NSLineBreakByWordWrapping;
-    n.preferredMaxLayoutWidth = 300;
+    n.preferredMaxLayoutWidth = 356;
     return n;
 }
 static NSStackView *vpage(void) {
@@ -37,7 +37,7 @@ static NSStackView *vpage(void) {
     s.orientation = NSUserInterfaceLayoutOrientationVertical;
     s.alignment = NSLayoutAttributeLeading;
     s.spacing = 8;
-    s.edgeInsets = NSEdgeInsetsMake(12, 12, 12, 12);
+    s.edgeInsets = NSEdgeInsetsMake(0, 0, 0, 0);
     return s;
 }
 static NSStackView *hrow(NSArray<NSView *> *views) {
@@ -181,7 +181,7 @@ static NSTextField *amiibo_field(NSString *value, NSString *placeholder) {
     f.placeholderString = placeholder;
     f.controlSize = NSControlSizeSmall;
     f.font = [NSFont systemFontOfSize:11];
-    [f.widthAnchor constraintEqualToConstant:318].active = YES;
+    [f.widthAnchor constraintEqualToConstant:356].active = YES;
     return f;
 }
 
@@ -200,7 +200,7 @@ NSView *fe_amiibo_page(NappleFE *fe) {
     search.placeholderString = @"Search amiibo";
     search.controlSize = NSControlSizeSmall;
     search.font = [NSFont systemFontOfSize:11];
-    [search.widthAnchor constraintEqualToConstant:318].active = YES;
+    [search.widthAnchor constraintEqualToConstant:356].active = YES;
     [p addArrangedSubview:search];
 
     NSTableView *table = [[NSTableView alloc] initWithFrame:NSMakeRect(0, 0, 318, 240)];
@@ -224,7 +224,7 @@ NSView *fe_amiibo_page(NappleFE *fe) {
     sv.hasVerticalScroller = YES;
     sv.drawsBackground = NO;
     sv.borderType = NSBezelBorder;
-    [sv.widthAnchor constraintEqualToConstant:318].active = YES;
+    [sv.widthAnchor constraintEqualToConstant:356].active = YES;
     [sv.heightAnchor constraintEqualToConstant:240].active = YES;
     [p addArrangedSubview:sv];
 

@@ -11,7 +11,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 GEN = HERE / "gen_support.py"
-INPUTS = ["compat/matrix.json", "compat/online.json", "docs/titles", "tools/support/data/coverage-snapshot.json", "README.md",
+INPUTS = ["compat/matrix.json", "docs/titles", "tools/support/data/coverage-snapshot.json", "README.md",
           "site"]
 
 
@@ -50,46 +50,10 @@ class SupportTables(unittest.TestCase):
         note.write_text(note.read_text().replace("**State:** plays", "**State:** crashes", 1))
         self.assertEqual(run(self.tmp, "--check").returncode, 1)
 
-    def test_online_outputs_written_and_checked(self):
-        self.assertEqual(run(self.tmp).returncode, 0)
-        for rel in ["docs/reference/online-support.md", "site/online.json"]:
-            self.assertTrue((self.tmp / rel).exists(), rel)
-        readme = self.tmp / "README.md"
-        readme.write_text(readme.read_text().replace("| works |", "| broken |", 1))
-        r = run(self.tmp, "--check")
-        self.assertEqual(r.returncode, 1)
-        self.assertIn("README.md", r.stdout)
-        self.assertEqual(run(self.tmp).returncode, 0)
-        self.assertEqual(run(self.tmp, "--check").returncode, 0)
-
-    def test_online_data_change_makes_outputs_stale(self):
-        run(self.tmp)
-        data = self.tmp / "compat/online.json"
-        data.write_text(data.read_text().replace('"status": "broken"', '"status": "works"', 1))
-        r = run(self.tmp, "--check")
-        self.assertEqual(r.returncode, 1)
-        for rel in ["online-support.md", "README.md", "site/online.json"]:
-            self.assertIn(rel, r.stdout)
-
-    def test_online_invalid_status_is_rejected(self):
-        data = self.tmp / "compat/online.json"
-        data.write_text(data.read_text().replace('"status": "broken"', '"status": "kinda"', 1))
-        r = run(self.tmp)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("kinda", r.stderr)
-
-    def test_readme_without_markers_is_rejected(self):
-        readme = self.tmp / "README.md"
-        readme.write_text(readme.read_text().replace("<!-- online:begin -->", "", 1))
-        r = run(self.tmp, "--check")
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("online:begin", r.stderr)
-
     def test_compat_json_and_site_blocks(self):
         self.assertEqual(run(self.tmp).returncode, 0)
         data = json.loads((self.tmp / "site/compat.json").read_text())
         self.assertEqual({t["title_id"] for t in data["titles"]}, {p.stem for p in (self.tmp / "docs/titles").glob("0*.md")})
-        self.assertTrue(data["online"]["titles"])
         page = (self.tmp / "site/compat.html").read_text()
         for t in data["titles"]:
             self.assertIn(t["title_id"], page)  # the static fallback lists every title
@@ -101,20 +65,13 @@ class SupportTables(unittest.TestCase):
         self.assertEqual(r.returncode, 1)
         self.assertIn("site/index.html", r.stdout)
 
-    def test_compat_html_without_markers_is_rejected(self):
-        page = self.tmp / "site/compat.html"
-        page.write_text(page.read_text().replace("<!-- compat:begin -->", "", 1))
-        r = run(self.tmp)
-        self.assertNotEqual(r.returncode, 0)
-        self.assertIn("compat:begin", r.stderr)
-
     def test_broken_site_link_fails_check(self):
         run(self.tmp)
         self.assertEqual(run(self.tmp, "--check").returncode, 0)
         (self.tmp / "site/compat.js").unlink()
         self.assertIn("missing file compat.js", run(self.tmp, "--check").stdout)
         page = self.tmp / "site/compat.html"
-        page.write_text(page.read_text().replace('href="#titles"', 'href="#no-such-anchor"', 1))
+        page.write_text(page.read_text().replace("</body>", '<a href="#no-such-anchor">x</a></body>', 1))
         self.assertIn("missing anchor #no-such-anchor", run(self.tmp, "--check").stdout)
 
     def test_committed_tables_are_current(self):

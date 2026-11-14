@@ -4,15 +4,11 @@
   docs/reference/support-matrix.md    per-title status per platform (macOS now, iOS deferred)
   docs/reference/feature-support.md   feature coverage by domain from the newest coverage snapshot
   docs/reference/support-data.json    the same data for the site (mkdocs copies it to /docs/reference/support-data.json)
-  docs/reference/online-support.md    per-game online support, from compat/online.json (module gen_online.py; its docstring has the schema)
-  README.md                           only the online block between <!-- online:begin --> and <!-- online:end -->
-  site/online.json                    the online data as a standalone file
-  site/compat.json                    per-title status + the online table for the compatibility page (module gen_site.py; site/compat.js renders it)
+  site/compat.json                    per-title status for the compatibility page (module gen_site.py; site/compat.js renders it)
   site/compat.html                    only the static fallback tables between <!-- compat:begin --> and <!-- compat:end -->
   site/index.html                     only the coverage block between <!-- coverage:begin --> and <!-- coverage:end --> (from the snapshot)
 
 Inputs: compat/matrix.json (read only), docs/titles/*.md (state, open items, numbers, iOS column of the table in docs/titles/README.md),
-compat/online.json (the online table) and
 tools/support/data/coverage-snapshot.json (a trimmed copy of the newest .claude/skills/percent-analysis/history snapshot; refresh it with --refresh-snapshot).
 Title names and ids only; the matrix holds metadata, never game bytes.
 
@@ -37,7 +33,6 @@ def _load(name):  # loaded by path: python3 -I does not put this directory on sy
     return mod
 
 
-gen_online = _load("gen_online")
 gen_site = _load("gen_site")
 
 OUTPUTS = ["docs/reference/support-matrix.md", "docs/reference/feature-support.md", "docs/reference/support-data.json"]
@@ -184,8 +179,7 @@ def render_matrix(last_run, titles):
     L += ["", "## iOS (deferred)", "", "| Title | Id | Last recorded iOS Simulator result |", "|---|---|---|"]
     for t in titles:
         L.append(f"| {cell(t['name'])} | `{t['title_id']}` | {cell(t['ios'])} |")
-    L += ["", "See also [COMPATIBILITY.md](../../COMPATIBILITY.md) (the full matrix with stage evidence), the [coverage by feature](feature-support.md), "
-          "the machine-readable [support-data.json](support-data.json) and the [online support](online-support.md) table (generated from `compat/online.json`).", ""]
+    L += ["", "See also [COMPATIBILITY.md](../../COMPATIBILITY.md) (the full matrix with stage evidence), the [coverage by feature](feature-support.md) [support-data.json](support-data.json).", ""]
     return "\n".join(L)
 
 
@@ -240,10 +234,9 @@ def build(root):
                                       "points": d["judged_points"], "items": counts_of(snap["items"].get(d["key"], {}))} for d in snap["domains"]],
                          "missing": [{"domain": k, "item": n, "status": s} for k in sorted(snap["items"]) for n, s in sorted(snap["items"][k].items()) if s != "impl"],
                          "priorities": snap["priorities"]}}
-    online = gen_online.build(root)
-    site = gen_site.build(root, last_run, titles, snap, gen_online.site_data(gen_online.load(root)))
+    site = gen_site.build(root, last_run, titles, snap)
     return {OUTPUTS[0]: render_matrix(last_run, titles), OUTPUTS[1]: render_features(snap),
-            OUTPUTS[2]: json.dumps(data, indent=1, sort_keys=True) + "\n", **online, **site}
+            OUTPUTS[2]: json.dumps(data, indent=1, sort_keys=True) + "\n", **site}
 
 
 def main(argv=None):

@@ -15,7 +15,7 @@
 > **Legal notice.** Napple is an independent project. It is not affiliated with, endorsed by or sponsored by Nintendo.
 > It contains no Nintendo code, keys, firmware or games. To use it you must own the console and the games and supply your own legitimately dumped
 > keys, firmware and titles; Napple never downloads game content, keys or firmware and circumvents nothing for you. Do not use it for piracy, and do not share what it builds.
-> Its optional online features talk only to Napple-run servers and never contact Nintendo's. Full text: [Legal](#legal).
+> Napple is fully offline: no accounts, no servers, no telemetry, and it never contacts Nintendo's. Full text: [Legal](#legal).
 
 ## What it is
 
@@ -84,11 +84,10 @@ make -C gfx test && make -C frontend test
 python3 tools/check_docs.py
 ```
 
-## Online
+## Local and LAN play
 
-Napple Online is optional: an account with up to 8 profiles and per-profile visibility tiers, friends and presence, end-to-end encrypted cloud saves,
-an in-game Online tab, and multiplayer between Napple players through Napple-run servers. Signed out, everything works offline.
-See the [Napple Online guide](docs/guides/napple-online.md) and [cloud saves](docs/guides/cloud-saves.md).
+Napple has no online services: no accounts, no servers, no cloud saves, no telemetry. Games run locally, with split-screen / local multiplayer,
+LAN play between Macs on the same network, controllers, mods and display options. Saves stay on your disk.
 
 ## Status
 
@@ -96,23 +95,6 @@ Napple is early and experimental. The `%Analysis` estimate of how much of the Sw
 (2026-11-02; [coverage by feature](docs/reference/feature-support.md)). Coverage is not compatibility: what runs, per title and per pipeline stage, is in
 [COMPATIBILITY.md](COMPATIBILITY.md), the [support matrix](docs/reference/support-matrix.md) and the [title notes](docs/titles/README.md).
 
-<details>
-<summary>Online support per title (generated)</summary>
-
-<!-- online:begin -->
-**Online play** is between Napple players only, through the Napple-run servers at `pretend.napple.lat`, never Nintendo's. Generated from [`compat/online.json`](compat/online.json) (last checked 2026-11-03); what each mode means and the notes per title are in [online support](docs/reference/online-support.md).
-
-| Title | Backend | LAN | Local | Matchmaking | Race / match | Friends | Rankings | DataStore |
-|---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
-| Animal Crossing: New Horizons (ACNH) | nex | untested | untested | untested | untested | untested | - | untested |
-| Link's Awakening (LAS) | none | - | - | - | - | - | - | - |
-| Mario Kart 8 Deluxe (MK8D) | nex | works | broken | works | partial | partial | untested | untested |
-| Super Mario Odyssey (SMO) | nex | - | - | - | - | - | untested | untested |
-
-`-` means the game has no such mode.
-<!-- online:end -->
-
-</details>
 
 ## Contributing
 
@@ -130,11 +112,8 @@ Notable changes are listed in [CHANGELOG.md](CHANGELOG.md).
 - **Your own copy only.** You must own the console and the games and dump your keys, firmware and titles yourself. Napple never downloads game content,
   keys or firmware and does not circumvent anything on its own; it only processes files you supply, on your machine. An app built by Napple contains game-derived
   content and is for your personal use only: do not distribute it. Napple does not support piracy.
-- **Online.** Napple Online is a separate, optional service run by Napple. It never contacts Nintendo's servers and never asks for Nintendo account
-  credentials. Its [terms](docs/legal/terms.md), [privacy policy](docs/legal/privacy.md) and [report policy](docs/legal/report-policy.md) are in
-  [docs/legal/](docs/legal/README.md).
-- **Takedown and copyright requests.** Use the takedown section of the [report and takedown policy](docs/legal/report-policy.md#takedown-requests-content-or-copyright)
-  (`legal@napple.lat`), or contact the maintainer privately through GitHub. Content found to infringe is removed promptly.
+- **Offline.** Napple has no online service of its own. It never contacts Nintendo's servers and never asks for Nintendo account credentials. Its [terms](docs/legal/terms.md) and [privacy notice](docs/legal/privacy.md) are in [docs/legal/](docs/legal/README.md).
+- **Takedown and copyright requests.** Contact the maintainer privately through GitHub. Content found to infringe is removed promptly.
 - **No warranty.** The software is provided "as is", without warranty of any kind (see [LICENSE](LICENSE)).
 
 ## Credits

@@ -56,7 +56,7 @@ struct KeysSettingsTab: View {
                     Text(set.name).fontWeight(.medium)
                     if active {
                         Text("In use").font(.caption2.weight(.semibold)).padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Color.accentColor.opacity(0.18), in: .capsule).foregroundStyle(Color.accentColor)
+                            .background(Theme.brand.opacity(0.18), in: .capsule).foregroundStyle(Theme.brand)
                             .accessibilityIdentifier("settings.keys.inUse.\(set.name)")
                     }
                 }

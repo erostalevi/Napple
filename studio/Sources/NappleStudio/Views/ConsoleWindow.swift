@@ -13,7 +13,7 @@ struct ConsoleWindow: View {
 
     var body: some View {
         if let c = m.consoles.first(where: { $0.id == id }) { content(c) }
-        else { ContentUnavailableView("This console is closed", systemImage: "terminal").frame(width: 680, height: 500) }
+        else { ContentUnavailableView("This console is closed", systemImage: "terminal").frame(minWidth: 520, minHeight: 360) }
     }
 
     private func content(_ c: DebugConsole) -> some View {
@@ -46,7 +46,8 @@ struct ConsoleWindow: View {
                 }
                 .onChange(of: shown.count) { if follow { proxy.scrollTo("end", anchor: .bottom) } }
             }
-            .background(.black.opacity(0.30), in: .rect(cornerRadius: 8, style: .continuous))
+            .background(Theme.well, in: .rect(cornerRadius: 8, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Theme.hairline))
             .overlay { if shown.isEmpty { Text(c.lines.isEmpty ? "Waiting for the game's first line…" : "Nothing matches the filter.").foregroundStyle(.tertiary) } }
             HStack(spacing: 8) {
                 Toggle("Follow live", isOn: $follow).toggleStyle(.checkbox)
@@ -62,8 +63,9 @@ struct ConsoleWindow: View {
             }
         }
         .padding(16)
-        .frame(width: 680, height: 500)
-        .background(WindowMaterial().ignoresSafeArea())
+        .frame(minWidth: 560, idealWidth: 720, minHeight: 360, idealHeight: 520)
+        .background(Backdrop())
+        .tint(Theme.brand)
         .navigationTitle("Console · \(c.name)")
     }
 

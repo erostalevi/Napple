@@ -81,10 +81,15 @@ extension AppModel {
     /// Games whose app exists. Missing ones are not shown.
     var presentLibrary: [LibraryItem] { libraryItems.filter { $0.status == .present } }
 
+    /// What the library shows: present games that match the search, in the chosen order.
     var filteredLibrary: [LibraryItem] {
-        let q = searchText.trimmingCharacters(in: .whitespaces)
-        return q.isEmpty ? presentLibrary : presentLibrary.filter { $0.entry.name.localizedCaseInsensitiveContains(q) || $0.entry.titleId.localizedCaseInsensitiveContains(q) }
+        let byId = Dictionary(uniqueKeysWithValues: presentLibrary.map { ($0.entry.id, $0) })
+        let matching = presentLibrary.map(\.entry).filter { $0.matches(query: searchText) }
+        return sort.sorted(matching).compactMap { byId[$0.id] }
     }
+
+    var isSearching: Bool { !searchText.trimmingCharacters(in: .whitespaces).isEmpty }
+    var selectedItem: LibraryItem? { selectedLibraryItem.flatMap { id in presentLibrary.first { $0.id == id } } }
 
     /// Cover art: the icon the build stored inside the app (from the game's own metadata).
     static func coverImage(for item: LibraryItem) -> NSImage? {

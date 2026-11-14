@@ -1,7 +1,7 @@
 # Titles
 
 Per-title notes for the four reference titles: what each title needs from Napple, what is open, measured numbers, and title-specific findings that the tool pages only describe in general terms.
-Numbers are scripted/measured (headless unless said) on an Apple-silicon Mac, never "played" unless a note says a person did. The generated per-title tables are the [support matrix](../reference/support-matrix.md) and [online support](../reference/online-support.md); the full stage matrix is [COMPATIBILITY.md](../../COMPATIBILITY.md).
+Numbers are scripted/measured (headless unless said) on an Apple-silicon Mac, never "played" unless a note says a person did. The generated per-title tables are the [support matrix](../reference/support-matrix.md); the full stage matrix is [COMPATIBILITY.md](../../COMPATIBILITY.md).
 Symptom lookup: [../symptoms.md](../symptoms.md). Dated history: [change archive](../archive/changes/README.md). How to add a title: [bring up a new title](../guides/add-game-support.md) and [document a title](../guides/contributing-document-a-title.md).
 
 | Title | Id | macOS | iOS Simulator | Note |

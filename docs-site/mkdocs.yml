@@ -74,15 +74,7 @@ nav:
       - Report a graphics bug: guides/contributing-report-a-graphics-bug.md
       - Write a mod or fix: guides/contributing-write-a-mod.md
       - Community: guides/contributing-community.md
-  - Online:
-      - Napple Online: guides/napple-online.md
-      - Account and profiles: guides/napple-account.md
-      - Friends and tiers: guides/napple-social.md
-      - Cloud saves: guides/cloud-saves.md
-      - Client and overlay: guides/napple-online-client.md
-      - Rooms: guides/online-rooms.md
-      - End-to-end run: guides/online-e2e.md
-      - Deploy the servers: guides/deploy-servers.md
+  - Legal:
       - Legal documents: legal/README.md
   - Reference:
       - Subsystem map: reference/subsystems.md
@@ -108,6 +100,5 @@ nav:
       - Animal Crossing: titles/01006F8002326000.md
       - Mario Kart 8 Deluxe: titles/0100152000022000.md
       - Support matrix: reference/support-matrix.md
-      - Online support: reference/online-support.md
       - Catalogue field reference: reference/catalogue-howto.md
   - Change archive: archive/changes/README.md

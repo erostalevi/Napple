@@ -5,7 +5,6 @@ import NappleStudioCore
 /// The files are read: what goes in, and where it goes.
 struct PlanPanel: View {
     @Environment(AppModel.self) private var m
-    @Environment(\.openSettings) private var openSettings
     @AppStorage("playAfterBuild") private var playAfter = false
 
     private var blocked: Bool { m.plan?.base == nil || m.diskWarning != nil || m.destinationBlocker != nil }
@@ -19,6 +18,7 @@ struct PlanPanel: View {
         } content: {
             notices
             include
+            modsSection
             VStack(alignment: .leading, spacing: 8) {
                 SectionLabel("Build for")
                 HStack(spacing: 6) {
@@ -116,6 +116,27 @@ struct PlanPanel: View {
         }
     }
 
+    // MARK: mods
+
+    private var modsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionLabel("Mods")
+            RowGroup {
+                ForEach(m.pickedMods, id: \.self) { mod in
+                    RowLine(label: LocalizedStringKey(mod.deletingPathExtension().lastPathComponent)) {
+                        Button { m.removeMod(mod) } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                            .buttonStyle(.borderless).accessibilityLabel(Text("Remove \(mod.lastPathComponent)"))
+                    }
+                }
+                RowLine(label: m.pickedMods.isEmpty ? "No mods" : "Add more", divider: false) {
+                    Button("Add Mods…") { m.addMods() }.buttonStyle(.glass).controlSize(.small).accessibilityIdentifier("plan.addMods")
+                }
+            }
+            Text("Optional. A mod is a .napmod file or a folder with a mod.json; it is applied while the game is rebuilt.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     // MARK: Mac
 
     private var macOptions: some View {
@@ -153,7 +174,7 @@ struct PlanPanel: View {
                 if !m.target.isSimulator {
                     RowLine(label: "Signing") {
                         Text(signingSummary).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
-                        Button("Change…") { m.settingsTab = "devices"; openSettings() }.buttonStyle(.glass).controlSize(.small)
+                        Button("Change…") { m.openSettings(tab: "devices") }.buttonStyle(.glass).controlSize(.small)
                     }
                 }
                 RowLine(label: "Bundle id") {

@@ -33,22 +33,18 @@ build/test_settings: tests/test_settings.c libnapple_frontend.a
 	$(CC) $(CFLAGS) $(INC) $< libnapple_frontend.a $(FW) $(NORT) -o $@
 # The frontend's own binaries have no runtime: the simulator pages' weak references to it resolve to NULL.
 NORT    := -Wl,-undefined,dynamic_lookup
+build/test_overlay_logic: tests/test_overlay_logic.c libnapple_frontend.a
+	$(CC) $(CFLAGS) $(INC) $< libnapple_frontend.a $(FW) $(NORT) -o $@
 build/test_window: tests/test_window.m libnapple_frontend.a $(SIBLINGS)
 	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
 build/demo_window: tests/demo_window.m libnapple_frontend.a $(SIBLINGS)
 	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
 
-build/test_online_ui: tests/test_online_ui.m libnapple_frontend.a $(SIBLINGS)
-	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
-test-online-ui: build/test_online_ui
-	./build/test_online_ui
-
-test: build/test_settings build/test_window build/test_online_ui build/test_online_social
+test: build/test_settings build/test_overlay_logic build/test_window
 	@cmp src/tinyjson.h ../input/src/tinyjson.h && echo "tinyjson.h copies identical"
 	./build/test_settings
+	./build/test_overlay_logic
 	./build/test_window
-	./build/test_online_ui
-	./build/test_online_social
 # Interactive-free check of the applet sheets (they open real windows for about a second each; NAPPLE_SHEET_SHOT=<dir> keeps their screenshots).
 build/test_sheets: tests/test_sheets.m libnapple_frontend.a $(SIBLINGS)
 	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
@@ -60,9 +56,4 @@ demo: build/demo_window
 
 clean:
 	rm -rf build libnapple_frontend.a
-.PHONY: all test test-online-ui test-online-social test-sheets demo clean
-# Overlay Online social sub-tabs against a canned API (renders PNGs to $NAPPLE_SOCIAL_SHOT or $TMPDIR).
-build/test_online_social: tests/test_online_social.m libnapple_frontend.a $(SIBLINGS)
-	$(CC) $(CFLAGS) -fobjc-arc $(INC) $< libnapple_frontend.a $(SIBLINGS) $(FW) $(SFW) $(NORT) -o $@
-test-online-social: build/test_online_social
-	./build/test_online_social
+.PHONY: all test test-sheets demo clean

@@ -3,101 +3,170 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Napple: the Switch-to-Mac recompiler</title>
-<meta name="description" content="Napple is an ahead-of-time recompilation toolchain that turns Switch software you legitimately own into a native Apple Silicon app. ARM64 rewrite, Horizon HLE runtime, NVN to Metal. No emulator, no JIT.">
-<meta name="theme-color" content="#120c1a">
-<meta name="napple-repo" content="erostalevi/napple"><!-- owner/repo for the download and GitHub links, see app.js -->
+<title>Napple: Switch games, native on your Mac</title>
+<meta name="description" content="Napple recompiles Switch games you own, ahead of time, into native Apple Silicon apps with a Metal renderer. Local play, LAN, controllers, mods, upscaling and FPS unlock. Nothing leaves your Mac. Beta.">
+<meta name="theme-color" content="#110b18" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#fbf8f6" media="(prefers-color-scheme: light)">
 <link rel="icon" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
-<meta property="og:title" content="Napple">
-<meta property="og:description" content="An ahead-of-time recompiler that turns Switch software you own into a native Apple Silicon app. No emulator, no JIT.">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Napple: Switch games, native on your Mac">
+<meta property="og:description" content="Recompile Switch games you own into native Apple Silicon apps. No accounts, no servers: nothing leaves your Mac. Beta.">
 <meta property="og:image" content="https://www.napple.lat/assets/social.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="bg" aria-hidden="true"></div>
+<a class="skip" href="#main">Skip to content</a>
 
 <header class="nav">
-  <a class="brand" href="#top"><img src="assets/favicon.png" alt="" width="28" height="28"> Napple</a>
-  <nav>
+  <a class="brand" href="./"><img src="assets/favicon.png" alt="" width="28" height="28"> Napple</a>
+  <nav aria-label="Main">
     <a href="#how">How it works</a>
-    <a href="#covers">Coverage</a>
-    <a href="#online">Online</a>
-    <a href="#install">Get started</a>
-    <a class="keep" href="compat.html">Compatibility</a>
-    <a href="docs/">Docs</a>
-    <a class="pill" href="#download" data-dl-nav>Download</a>
+    <a href="#features">Features</a>
+    <a href="#privacy">Privacy</a>
+    <a href="compat.html" class="keep">Compatibility</a>
+    <a href="#faq">FAQ</a>
+    <a class="pill" href="#download">Download</a>
   </nav>
 </header>
 
-<main id="top">
-  <section class="hero">
-    <img class="hero-icon" src="assets/icon.png" alt="Napple app icon" width="132" height="132">
-    <p class="eyebrow">Recompilation toolchain · Apple Silicon · macOS 26+ · early &amp; experimental</p>
-    <h1>Recompile Switch software<br><span class="grad">into native Mac apps.</span></h1>
-    <p class="lead">Napple rewrites a program's own ARM64 code ahead of time, answers the console OS with a Horizon runtime and translates the GPU API to Metal.
-      <strong>No emulator. No JIT.</strong> The output is a standalone, locally signed <code>.app</code>.</p>
+<main id="main">
+  <section class="hero" aria-labelledby="h-hero">
+    <div>
+      <span class="badge"><i></i> Public beta</span>
+      <h1 id="h-hero">Your Switch games,<br><span class="grad">native on your Mac.</span></h1>
+      <p class="lead">Napple takes the games you own and recompiles them, ahead of time, into a real macOS app with a Metal renderer.
+        <strong>No emulator, no JIT, no account.</strong> Everything happens on your Mac and stays there.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/erostalevi/napple/releases/latest/download/Napple-Studio.dmg">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3zM5 19h14v2H5z"/></svg>
+          <span><b>Download for macOS</b><small>Napple Studio · Apple Silicon</small></span>
+        </a>
+        <a class="btn" href="#how">See how it works</a>
+      </div>
+      <p class="fine">Apple Silicon Mac, macOS 26 or later. You bring your own dumps and keys; Napple ships no games, no keys and no firmware.</p>
+    </div>
 
-    <div class="cta" id="download">
-      <a class="btn primary" id="dl-dmg" href="#" rel="noopener">
-        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3zM5 19h14v2H5z"/></svg>
-        <span><b>Download for macOS</b><small id="dl-meta">Latest build · .dmg</small></span>
-      </a>
+    <div class="hero-art">
+      <img class="icon" src="assets/icon.png" alt="Napple app icon" width="92" height="92">
+      <div class="win" role="img" aria-label="Illustration of the Napple Studio library window: a grid of game tiles and a build panel with a progress bar.">
+        <div class="bar"><i></i><i></i><i></i><span>Napple Studio</span></div>
+        <div class="studio" aria-hidden="true">
+          <div class="lib"><div class="tile sel"></div><div class="tile"></div><div class="tile"></div><div class="tile"></div><div class="tile"></div><div class="tile add">+</div></div>
+          <div class="side">
+            <h4>Build</h4>
+            <div class="row"><span>Target</span><b>macOS</b></div>
+            <div class="row"><span>Updates</span><b>included</b></div>
+            <div class="prog"><u></u></div>
+            <div class="stages"><em class="d">ingest</em><em class="d">rewrite</em><em class="a">package</em><em>sign</em></div>
+            <div class="go">Play</div>
+          </div>
+        </div>
+      </div>
     </div>
-    <div class="cta social">
-      <a class="btn ghost" href="https://x.com/torytalevi" target="_blank" rel="noopener me">
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M18.2 2.5h3.3l-7.2 8.3 8.5 11.2h-6.7l-5.2-6.8-6 6.8H1.6l7.7-8.8L1.2 2.5H8l4.7 6.2zm-1.2 17.5h1.8L7 4.4H5.1z"/></svg>
-        <span>Follow <b>@torytalevi</b></span></a>
-      <a class="btn ghost" id="gh-hero" href="#" rel="noopener">
-        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 0 0-3.2 19.5c.5.1.7-.2.7-.5v-1.7c-2.8.6-3.4-1.3-3.4-1.3-.5-1.2-1.1-1.5-1.1-1.5-.9-.6.1-.6.1-.6 1 .1 1.5 1 1.5 1 .9 1.6 2.4 1.1 3 .9.1-.7.4-1.1.6-1.4-2.2-.3-4.6-1.1-4.6-5 0-1.1.4-2 1-2.7-.1-.3-.4-1.3.1-2.7 0 0 .8-.3 2.8 1a9.6 9.6 0 0 1 5 0c1.9-1.3 2.8-1 2.8-1 .5 1.4.2 2.4.1 2.7.6.7 1 1.6 1 2.7 0 3.9-2.4 4.7-4.6 5 .4.3.7.9.7 1.9V21c0 .3.2.6.7.5A10 10 0 0 0 12 2z"/></svg>
-        <span>Source</span></a>
-    </div>
-    <p class="fine" id="dl-fine">Requires an Apple Silicon Mac. You bring your own game, keys and firmware; nothing is bundled.</p>
   </section>
-
-  <aside class="notice" aria-label="Legal notice">
-    <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2 3 6v6c0 5 3.8 9.7 9 10 5.2-.3 9-5 9-10V6zm-1 5h2v6h-2zm0 8h2v2h-2z"/></svg>
-    <p><b>Independent project.</b> Napple is not affiliated with, endorsed by or sponsored by Nintendo. It contains no Nintendo code, keys, firmware or games.
-      Use it only with material you legitimately own and dumped yourself. <a href="#legal">Full notice</a></p>
-  </aside>
 
   <section class="strip" aria-label="Key facts">
-    <div><b>AOT</b><span>ARM64 rewrite</span></div>
-    <div><b>Horizon</b><span>HLE kernel &amp; services</span></div>
-    <div><b>NVN → Metal</b><span>GPU translation</span></div>
-    <div><b>0</b><span>emulators, 0 JIT</span></div>
+    <div><b>Ahead of time</b><span>ARM64 rewrite at build</span></div>
+    <div><b>Metal</b><span>native graphics</span></div>
+    <div><b>0 accounts</b><span>0 servers, 0 telemetry</span></div>
+    <div><b>Your files</b><span>saves stay on your disk</span></div>
   </section>
 
-  <section id="how" class="sec">
-    <h2>How it works</h2>
-    <p class="sub">The Switch and Apple Silicon are both ARM64. Napple does not emulate the console: it keeps the program's own machine code and rewrites,
-      ahead of time, only what macOS forbids. Everything happens on your Mac, at build time, from files you provide.</p>
-    <ol class="steps five">
-      <li><span>1</span><h3>Ingest</h3><p>XCI / NSP / NSZ / XCZ containers, NCA decryption with <em>your</em> keys, ExeFS and RomFS, updates and DLC merged in any order.</p></li>
-      <li><span>2</span><h3>Analyze</h3><p>Load the NSO modules, discover functions and scan for every patch site.</p></li>
-      <li><span>3</span><h3>Resolve</h3><p>Look up known functions by signature, from data. Per-program knowledge lives in data, never in per-program code.</p></li>
-      <li><span>4</span><h3>Rewrite</h3><p>The reserved <code>x18</code> register, thread pointer, <code>svc</code> calls, timer counters and 4K pages are rewritten. Everything else runs as is.</p></li>
-      <li><span>5</span><h3>Package</h3><p>A locally signed <code>.app</code>: the patched modules plus the Horizon runtime, NVN → Metal, audio, input and saves.</p></li>
+  <section id="how" class="sec" aria-labelledby="h-how">
+    <p class="kicker">How it works</p>
+    <h2 id="h-how">From a dump to an app in three steps</h2>
+    <p class="sub">The Switch and every Apple Silicon Mac run ARM64. Napple keeps the game's own machine code and rewrites, once, only what macOS does not allow. The runtime then answers the console's system calls and translates its graphics API to Metal.</p>
+    <ol class="steps">
+      <li><h3>Add your game</h3><p>Open Napple Studio, add your own <code>prod.keys</code> once, and drop your dump on the window: XCI, NSP, NSZ or XCZ, with updates and DLC merged in.</p></li>
+      <li><h3>Build</h3><p>Studio decrypts, analyses and recompiles ahead of time, then packages a standalone, locally signed <code>.app</code>. Progress and a live log are right there.</p></li>
+      <li><h3>Play</h3><p>Launch it from the library. Plug in a controller, open the in-game overlay with F1 and tune the picture, speed and controls to taste.</p></li>
     </ol>
-    <p class="fine runtime">At run time the guest code executes directly on the CPU. There is no interpreter and no recompiler in the shipped runtime.</p>
   </section>
 
-  <section id="covers" class="sec">
-    <h2>What it covers</h2>
-    <p class="sub">Napple targets the Switch platform as a whole, not individual titles. A short, honest summary of each layer:</p>
+  <section id="features" class="sec" aria-labelledby="h-feat">
+    <p class="kicker">Features</p>
+    <h2 id="h-feat">Made to be played, not just booted</h2>
+    <p class="sub">Everything below runs locally on your Mac. Per-title results vary while Napple is in beta; see <a href="compat.html">compatibility</a> for what has been tried.</p>
     <div class="cards">
-      <article class="card"><h3>AOT A64 rewrite</h3><p>Every patch site in 64-bit modules is found and rewritten at build time; native execution for the rest. Loader with NSO / NRO, modules and relocations.</p></article>
-      <article class="card"><h3>A32 path</h3><p>32-bit programs are lifted ahead of time from ARM and Thumb-2 (VFP and NEON included) to AArch64. No interpreter ships in the runtime.</p></article>
-      <article class="card"><h3>Kernel &amp; services</h3><p>A Horizon HLE runtime: svcs, threads and scheduling, memory, IPC sessions and a broad set of system services. Command depth is the open tail.</p></article>
-      <article class="card"><h3>NVN → Metal</h3><p>The NVN API surface, texture and vertex formats, pipeline state, MSAA, indirect draws and queries, translated to Metal. nvdrv / host1x devices are the least complete GPU area.</p></article>
-      <article class="card"><h3>Maxwell shaders</h3><p>A translator for the Maxwell shader ISA to Metal shading language, with a pipeline cache on disk.</p></article>
-      <article class="card"><h3>Audio, input &amp; media</h3><p>Audio renderer with effects and Opus over Core Audio; GameController input with rumble, keyboard and mouse; video and media decode.</p></article>
-      <article class="card"><h3>Napple Studio</h3><p>A SwiftUI app around the toolchain: add your keys once, drop a game, watch each stage, launch or install the result.</p></article>
-      <article class="card"><h3>Packaging</h3><p>Base, updates and DLC in one build, saves in <code>~/Library/Application Support/Napple</code>, ad-hoc signing on your Mac, and a <code>napple</code> CLI for every stage.</p></article>
+      <article class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div>
+        <h3>Local play</h3><p>A native app per game, launched from your library. Direct execution of the game's own code, with no interpreter and no JIT at run time.</p></article>
+      <article class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="M8.2 10.8l7.6-3.6M8.2 13.2l7.6 3.6"/></svg></div>
+        <h3>LAN and split-screen</h3><p>Play a game's own local multiplayer on one Mac with several controllers, or over your local network with friends in the same room. No internet needed.</p></article>
+      <article class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 4.5v9L12 21l-8-4.500v-9z"/><path d="M12 12l8-4.500M12 12v9M12 12L4 7.500"/></svg></div>
+        <h3>Metal renderer</h3><p>The console's NVN graphics API and its Maxwell shaders are translated to Metal, with a pipeline cache on disk so the second run is smoother.</p></article>
+      <article class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10M10 20V4M16 20v-8M22 20H2"/></svg></div>
+        <h3>Upscaling and FPS unlock</h3><p>Render scale above native, supersampling and an upscaler choice (MetalFX spatial where available, edge-adaptive or CAS). Unlocked frame rates are done per title so game speed does not change.</p></article>
+      <article class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="7" width="20" height="11" rx="5.500"/><path d="M7 10v5M4.500 12.500h5M16 11.500h.01M18.500 13.500h.01"/></svg></div>
+        <h3>Controllers, amiibo, Mii</h3><p>Game controllers with rumble, plus keyboard and mouse. Virtual amiibo and an IR camera through your webcam, and Mii data, are available where a game uses them.</p></article>
+      <article class="card"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.700 6.300a4 4 0 0 0-5.400 5.400L3 18l3 3 6.300-6.300a4 4 0 0 0 5.400-5.400l-2.500 2.500-2.500-.5-.5-2.500z"/></svg></div>
+        <h3>Mods</h3><p>Install community <code>.napmod</code> files: patches, cheats, replacement files and per-title settings. Mods are never downloaded for you, and code patches stay off until you turn them on.</p></article>
+      <article class="card wide"><div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M8 5v5h7V5M8 19v-6h8v6"/></svg></div>
+        <h3>Saves stay local</h3><p>Saves live in <code>~/Library/Application Support/Napple</code>, in plain folders you can back up, copy or delete yourself. There is no cloud and no sync.</p></article>
     </div>
 
-    <h3 class="cov-h">Platform coverage</h3>
+    <div class="showcase">
+      <div>
+        <h3 style="font-size:1.5rem;letter-spacing:-.02em">The in-game overlay</h3>
+        <p class="sub" style="margin:10px 0 0;font-size:1rem">Press <b>F1</b> (or the controller's Home button) in any running game. Everything is changed live, and per game.</p>
+        <ul>
+          <li><b>Audio / Video:</b> render scale, upscaler, supersampling, volume.</li>
+          <li><b>FPS / Speed:</b> frame-rate limit or unlock, game speed.</li>
+          <li><b>Controls:</b> map controllers and the keyboard.</li>
+          <li><b>Game / System:</b> amiibo, the IR camera and system options.</li>
+        </ul>
+      </div>
+      <div class="win" role="img" aria-label="Illustration of the in-game overlay on top of a game scene, with tabs and sliders for render scale, upscaler and frame rate.">
+        <div class="game" aria-hidden="true">
+          <svg viewBox="0 0 320 200" preserveAspectRatio="xMidYMid slice"><circle cx="70" cy="48" r="22" fill="#fff" opacity=".85"/><path d="M0 130 Q70 80 140 125 T320 110 V200 H0z" fill="var(--game3)"/><path d="M0 160 Q90 125 180 158 T320 150 V200 H0z" fill="var(--game4)"/><rect x="60" y="112" width="14" height="30" rx="6" fill="#fff" opacity=".9"/></svg>
+          <div class="ovl">
+            <div class="tabs"><span class="on">Audio/Video</span><span>FPS/Speed</span><span>Controls</span><span>Game/System</span></div>
+            <div class="ctl"><div class="l"><span>Render scale</span><b>2x</b></div><div class="slider"><u style="width:55%"></u></div></div>
+            <div class="ctl"><div class="l"><span>Upscaler</span></div><div class="seg"><span>Off</span><span class="on">MetalFX</span><span>CAS</span></div></div>
+            <div class="ctl"><div class="l"><span>Frame rate</span><b>Unlocked</b></div><div class="slider"><u style="width:90%"></u></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="privacy" class="sec" aria-labelledby="h-priv">
+    <p class="kicker">Privacy</p>
+    <h2 id="h-priv">Nothing leaves your Mac</h2>
+    <p class="sub">Napple has no accounts, no servers of its own, no cloud saves, no friends list and no telemetry. There is nothing to sign in to and nothing to opt out of.</p>
+    <div class="private">
+      <div>
+        <h3>What stays on your Mac</h3>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.500" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.500l4.500 4.500L19 7.500"/></svg><span><b>Your games and keys.</b> They are read at build time, from your disk.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.500" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.500l4.500 4.500L19 7.500"/></svg><span><b>Your saves and settings.</b> Plain files in your Application Support folder.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.500" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.500l4.500 4.500L19 7.500"/></svg><span><b>Your play.</b> No usage data, crash reports or identifiers are collected.</span></li>
+        </ul>
+      </div>
+      <div class="no">
+        <h3>What Napple does not have</h3>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.500" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>No Napple account, sign-in or profile.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.500" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>No online play service, relay rooms or matchmaking.</span></li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.500" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg><span>No analytics, ads or trackers, here or in the app.</span></li>
+        </ul>
+      </div>
+      <p class="foot">The network is used only when you ask for it: LAN play with people on your own network, downloading a release from GitHub, or fetching the optional public amiibo list. Read the full <a href="privacy.html">privacy notice</a>.</p>
+    </div>
+  </section>
+
+  <section id="compat" class="sec" aria-labelledby="h-compat">
+    <p class="kicker">Compatibility</p>
+    <h2 id="h-compat">Honest status, per game</h2>
+    <p class="sub">Napple targets the Switch platform, not a list of titles, and it is still a beta. These are the games the developers test on their own Macs, per stage. Stages that say partial or untested are exactly that.</p>
+    <div class="mini" id="compat-mini" aria-live="polite"></div>
+    <noscript><p class="fine">Enable JavaScript to see the summary here, or open the full <a href="compat.html">compatibility page</a>.</p></noscript>
+    <p><a class="btn" href="compat.html">Full compatibility list</a></p>
+
+    <details class="cov-det">
+      <summary>Platform coverage by layer (an estimate, not a per-game score)</summary>
 <!-- coverage:begin -->
 <div class="cov" id="cov">
   <div class="row"><span>CPU · AOT A64 rewrite</span><i style="--v:100"></i><b>100%</b></div>
@@ -119,122 +188,82 @@
 </div>
 <p class="fine">%Analysis snapshot 2026-11-02, commit <code>2da952e</code>. An estimate of how much of the Switch platform surface the pipeline and runtime implement, not a per-game compatibility score.</p>
 <!-- coverage:end -->
-    <p class="fine"><b>Coverage is not compatibility.</b> The long tail of command depth, shader corner cases and GPU behaviour is exactly what real
-      programs trip over first. How individual titles behave is tracked separately on the <a href="compat.html">compatibility page</a>.</p>
+      <p class="fine"><b>Coverage is not compatibility.</b> The long tail of service commands, shader corner cases and GPU behaviour is what real games trip over first.</p>
+    </details>
   </section>
 
-  <section id="studio" class="sec">
-    <h2>Napple Studio: drop a game, get an app</h2>
-    <p class="sub">A small SwiftUI app. Give it your keys once, drop a game on the window, watch the pipeline run, launch the result. The first launch sets up the engine and its environment variables for you.</p>
-
-    <div class="shots">
-      <figure class="shot wide">
-        <div class="mock win" role="img" aria-label="Illustration of Napple Studio waiting for a game">
-          <div class="bar"><i></i><i></i><i></i><span>Napple Studio</span></div>
-          <div class="body">
-            <div class="drop"><svg viewBox="0 0 24 24" width="34" height="34" aria-hidden="true"><path fill="currentColor" d="M5 20h14v-2H5zm7-16-5.5 5.500 1.400 1.400L11 7.800V16h2V7.800l3.100 3.100 1.400-1.400z"/></svg><b>Drop a game here</b><small>XCI · NSP · NSZ · folders</small></div>
-            <div class="row"><span>Key set</span><b>Default</b></div>
-            <div class="row"><span>Target</span><b>macOS</b></div>
-            <div class="go">Build</div>
-          </div>
-        </div>
-        <figcaption>Drop a game, pick updates and DLC</figcaption>
-      </figure>
-      <figure class="shot">
-        <div class="mock win" role="img" aria-label="Illustration of Napple Studio building an app">
-          <div class="bar"><i></i><i></i><i></i><span>Napple Studio</span></div>
-          <div class="body">
-            <div class="row"><span>Rewrite</span><b>main · 2170 x18 sites</b></div>
-            <div class="prog"><u style="width:62%"></u></div>
-            <div class="stages"><em class="d">ingest</em><em class="d">plan</em><em class="d">rewrite</em><em class="a">romfs</em><em>bundle</em><em>sign</em></div>
-            <pre>[rewrite] 24% main (1 gates, 5 relocations)
-[romfs]   62% copying 2.4 GB</pre>
-          </div>
-        </div>
-        <figcaption>One progress bar, every stage logged</figcaption>
-      </figure>
-      <figure class="shot">
-        <div class="mock win" role="img" aria-label="Illustration of Napple Studio after a finished build">
-          <div class="bar"><i></i><i></i><i></i><span>Napple Studio</span></div>
-          <div class="body">
-            <div class="ok"><svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.500 14.500-4-4 1.400-1.400 2.600 2.600 5.600-5.600 1.400 1.400z"/></svg><b>App built</b></div>
-            <div class="btns"><span class="go sm">Launch</span><span class="go sm alt">Reveal</span><span class="go sm alt">Install</span></div>
-            <small>Personal use only. Do not share built apps.</small>
-          </div>
-        </div>
-        <figcaption>Launch it, or install to Applications</figcaption>
-      </figure>
+  <section id="download" class="sec" aria-labelledby="h-dl">
+    <p class="kicker">Get started</p>
+    <h2 id="h-dl">Download Napple Studio</h2>
+    <div class="dlbox">
+      <h3>Free, open source, beta</h3>
+      <p>Every build is published on GitHub. Needs an Apple Silicon Mac on macOS 26 or later.</p>
+      <div class="cta">
+        <a class="btn primary" href="https://github.com/erostalevi/napple/releases/latest/download/Napple-Studio.dmg">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M12 3v10.2l3.6-3.6 1.4 1.4-6 6-6-6 1.4-1.4 3.6 3.6V3zM5 19h14v2H5z"/></svg>
+          <span><b>Napple-Studio.dmg</b><small>Latest release on GitHub</small></span></a>
+        <a class="btn" href="https://github.com/erostalevi/napple/releases">All releases</a>
+        <a class="btn" href="https://github.com/erostalevi/napple">Source code</a>
+      </div>
+    </div>
+    <div class="dl">
+      <div>
+        <h3 style="font-size:1.3rem;margin-bottom:12px">Set up in a few minutes</h3>
+        <ol>
+          <li>Open the <b>.dmg</b> and drag <b>Napple Studio</b> to <b>Applications</b>.</li>
+          <li>Open it. On first launch Studio sets up the engine for you.</li>
+          <li>Add your own <code>prod.keys</code> (and firmware for the system fonts) once.</li>
+          <li>Drop a game you dumped yourself, press build, then play.</li>
+        </ol>
+        <p class="fine">Prefer a terminal? The <code>napple</code> CLI does every stage:</p>
+        <pre><code>napple build game.xci update.nsp -k prod.keys --firmware firmware.zip -o ~/Apps</code></pre>
+        <p class="fine">See the <a href="docs/">documentation</a> for the CLI, mods, and the architecture.</p>
+      </div>
+      <div class="panel">
+        <h3>"macOS can't verify this app"?</h3>
+        <p style="color:var(--mute);margin:0 0 8px">Beta builds are signed ad hoc unless the maintainers have notarisation set up. Right-click the app and choose <b>Open</b>, or run once:</p>
+        <pre><code>xattr -dr com.apple.quarantine /Applications/NappleStudio.app</code></pre>
+        <p class="fine" style="margin-bottom:0">Games you build are signed locally on your Mac, for you.</p>
+      </div>
     </div>
   </section>
 
-  <section id="online" class="sec">
-    <h2>Napple Online</h2>
-    <p class="sub">An optional service for Napple players, run by the project at <code>pretend.napple.lat</code>. <b>Napple never contacts Nintendo servers</b>
-      and never handles Nintendo accounts. Signed out, everything works exactly as before.</p>
-    <div class="cards three">
-      <article class="card"><h3>Account</h3><p>Sign up with an email, a password and an emailed 6-digit code. One sign-in is shared by every Napple app on your Mac and by the CLI.</p></article>
-      <article class="card"><h3>Profiles</h3><p>Up to 8 profiles per account, each with a nickname, icon, photo and bio. A signed-in Mac plays as its profile.</p></article>
-      <article class="card"><h3>Visibility tiers</h3><p>Public, Friends (searchable), Friends (hidden), Private and Ghost decide who can find you, add you and see what you play. Blocks hide both ways.</p></article>
-      <article class="card"><h3>Friends</h3><p>Friend codes, requests, a friend list with presence, recent players, blocking and reports.</p></article>
-      <article class="card"><h3>Cloud saves</h3><p>End-to-end encrypted: saves are encrypted on your device and the server only holds ciphertext. A 24-word recovery code is the way back.</p></article>
-      <article class="card"><h3>In-game Online tab</h3><p>Sign-in, profiles, tier, friends, requests, search and stats from the settings overlay while a program runs.</p></article>
+  <section id="faq" class="sec" aria-labelledby="h-faq">
+    <p class="kicker">FAQ</p>
+    <h2 id="h-faq">Questions, answered plainly</h2>
+    <div class="faq">
+      <details><summary>Is this legal? Does it include games?</summary><p>Napple includes no games, no keys, no firmware and no Nintendo code, and it never downloads any. You must own the console and the games and supply your own legitimately dumped files. Do not use it for piracy, and do not share the apps it builds: they contain content derived from your copy. Napple is not affiliated with Nintendo.</p></details>
+      <details><summary>Is it an emulator?</summary><p>No. Napple is a toolchain. The game's own ARM64 code is rewritten ahead of time and runs directly on your CPU, with no interpreter and no JIT. The runtime re-implements the console's system services and translates its graphics to Metal.</p></details>
+      <details><summary>Can I play online?</summary><p>No. Online play and accounts are not part of Napple, and it does not connect to any console service. What works is local: one Mac with several controllers, and LAN play between Macs on the same network, in games that offer those modes.</p></details>
+      <details><summary>Where are my saves?</summary><p>On your disk, in <code>~/Library/Application Support/Napple</code>, one folder per title. Nothing is uploaded and there is no cloud sync, so back them up like any other files.</p></details>
+      <details><summary>Which games work?</summary><p>It varies by game and is changing fast. The <a href="compat.html">compatibility page</a> lists each tested game and its status per stage, including what is partial or not yet tried. It is reported by the developers on their own Macs, not guaranteed.</p></details>
+      <details><summary>What about iPhone and iPad?</summary><p>iOS and iPadOS builds are in development and not part of this beta release. The Mac comes first.</p></details>
+      <details><summary>How do I report a problem?</summary><p>Open an issue on <a href="https://github.com/erostalevi/napple/issues">GitHub</a> (see <a href="report.html">how to report</a>). Never attach game files, keys or firmware.</p></details>
     </div>
-    <p class="fine">Multiplayer between Napple players goes through Napple rooms (LAN Play, local wireless) and napple-online (matchmaking). Per-title online status is on the
-      <a href="compat.html#online">compatibility page</a>. Sign-up email is in the Amazon SES sandbox until production access is granted, so only pre-verified addresses get the code for now.
-      See the <a href="terms.html">Terms</a>, <a href="privacy.html">Privacy Policy</a> and <a href="report.html">Report policy</a>.</p>
-  </section>
 
-  <section id="install" class="sec two">
-    <div>
-      <h2>Get started</h2>
-      <ol class="inst">
-        <li>Download the <b>.dmg</b> and drag <b>Napple Studio</b> onto <b>Applications</b>.</li>
-        <li>Open it. Studio places the engine (<code>napple</code>, runtime, launcher) and sets <code>NAPPLE_HOME</code> / <code>NAPPLE_CLI</code> for you.</li>
-        <li>Add your own <code>prod.keys</code> and firmware once, then drop a game you dumped yourself.</li>
-      </ol>
-      <p class="fine">Prefer the terminal? Unzip the <b>.zip</b>, run <code>./install.sh</code>, then:</p>
-      <pre>napple build base.xci update.nsp -k prod.keys --firmware firmware.zip -o ~/Apps</pre>
-      <p class="fine">The <a href="docs/">documentation</a> covers the CLI, the architecture and how to contribute.</p>
-    </div>
-    <div class="note">
-      <h3>"macOS can't verify this app"?</h3>
-      <p>Builds are ad-hoc signed unless the maintainers have notarization configured. Right-click the app and choose <b>Open</b>, or run once:</p>
-      <pre>xattr -dr com.apple.quarantine /Applications/NappleStudio.app</pre>
-      <p class="fine">Needs Apple Silicon and macOS 26 or later. Every commit to <code>main</code> publishes a new release.</p>
-    </div>
-  </section>
-
-  <section id="legal" class="sec legal-notice">
-    <h2>Legal notice</h2>
-    <ul>
-      <li>Napple is an <b>independent project</b>. It is <b>not affiliated with, endorsed by or sponsored by Nintendo</b>. Nintendo and Nintendo Switch are trademarks of their owners.</li>
-      <li>Napple contains <b>no Nintendo code, keys, firmware or games</b>, and does not download, host or link to any of them.</li>
-      <li>Bring your own <b>legitimately dumped</b> game, <code>prod.keys</code> and firmware from hardware and software you own. They are needed only at build time.</li>
-      <li>Built apps contain content derived from your copy and are <b>for your personal use only</b>. Do not share them.</li>
-      <li>Napple Online is optional and governed by its <a href="terms.html">Terms</a>, <a href="privacy.html">Privacy Policy</a> and <a href="report.html">Report and takedown policy</a>.</li>
-    </ul>
+    <aside class="notice" aria-label="Legal notice">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 2 3 6v6c0 5 3.800 9.700 9 10 5.200-.3 9-5 9-10V6zm-1 5h2v6h-2zm0 8h2v2h-2z"/></svg>
+      <p><b>Independent project.</b> Napple is not affiliated with, endorsed by or sponsored by Nintendo. Nintendo and Nintendo Switch are trademarks of their owners. Use Napple only with material you legitimately own.</p>
+    </aside>
   </section>
 </main>
 
 <footer>
   <div class="f-row">
     <span class="brand"><img src="assets/favicon.png" alt="" width="22" height="22"> Napple</span>
-    <span class="links">
-      <a href="#download" data-dl-nav>Download</a>
+    <nav class="links" aria-label="Footer">
+      <a href="#download">Download</a>
       <a href="compat.html">Compatibility</a>
       <a href="docs/">Documentation</a>
-      <a href="terms.html">Terms</a>
       <a href="privacy.html">Privacy</a>
-      <a href="report.html">Reports</a>
-      <a id="gh-link" href="#" rel="noopener">GitHub</a>
-      <a id="rel-link" href="#" rel="noopener">Releases</a>
-      <a href="https://x.com/torytalevi" target="_blank" rel="noopener me">X / Twitter</a>
-    </span>
+      <a href="terms.html">Terms</a>
+      <a href="report.html">Report a problem</a>
+      <a href="https://github.com/erostalevi/napple">GitHub</a>
+      <a href="https://x.com/torytalevi" rel="noopener me">X / Twitter</a>
+    </nav>
   </div>
-  <p>MIT licensed. Built by <a href="https://x.com/torytalevi" target="_blank" rel="noopener me">@torytalevi</a>; third-party components and their licences are listed in
-    <a id="tp-link" href="https://github.com/erostalevi/napple/blob/main/THIRD_PARTY_NOTICES.md" rel="noopener">THIRD_PARTY_NOTICES</a>.
-    Napple is not affiliated with Nintendo.</p>
+  <p>MIT licensed. Third-party components and their licences are listed in <a href="https://github.com/erostalevi/napple/blob/main/THIRD_PARTY_NOTICES.md">THIRD_PARTY_NOTICES</a>. Napple is an independent project, not affiliated with Nintendo, and distributes no games, keys or firmware.</p>
 </footer>
-<script src="app.js"></script>
+<script src="home.js"></script>
 </body>
 </html>

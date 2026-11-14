@@ -47,8 +47,6 @@ pnpm-lock.yaml
 poetry.lock
 Pipfile.lock
 *.lock
-# OpenTofu provider locks are pinned on purpose (infra/.gitignore)
-!.terraform.lock.hcl
 
 # Local working data and logs
 work/

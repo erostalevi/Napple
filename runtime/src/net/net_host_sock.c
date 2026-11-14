@@ -4,7 +4,6 @@
  * are applied here by waiting in short poll slices. So a Close or ShutdownAllSockets from another guest thread ends a wait (the waiter gets EBADF), and
  * a waiting thread gives its virtual core up. Option levels, option names and flags are FreeBSD's, which Darwin shares except where mapped below. */
 #include "net_host.h"
-#include "net_room.h"
 #include "hz_result.h"
 #include "offline_core.h"
 #include <errno.h>
@@ -181,7 +180,6 @@ int nh_sock_close(void *ctx, int h, int *err) {
     }
     pthread_mutex_unlock(&tab_lock);
     if (!s) return fail(err, HZ_EBADF);
-    nr_sock_closed(h); /* rooms: forget its virtual-LAN port */
     nh_sock_put(s); /* the table's reference: calls still waiting see `closing` and drop theirs */
     *err = 0;
     return 0;
@@ -203,8 +201,7 @@ int nh_sock_bind(void *ctx, int h, const OnlineAddr *a, int *err) {
     struct sockaddr_storage ss;
     socklen_t len;
     int e = 0, r = -1;
-    if (nr_sock_bind(h, s->fd, s->type, a, &r, err)) { /* rooms: a virtual-LAN address */
-    } else if ((e = nh_addr_to_host(a, &ss, &len))) *err = e;
+    if ((e = nh_addr_to_host(a, &ss, &len))) *err = e;
     else if (bind(s->fd, (struct sockaddr *)&ss, len) == 0) r = 0;
     else *err = nh_errno(errno);
     char ab[64];
@@ -216,7 +213,6 @@ int nh_sock_listen(void *ctx, int h, int backlog, int *err) {
     (void)ctx;
     WITH(s, h, err)
     int r = listen(s->fd, backlog) == 0 ? 0 : fail_host(err);
-    if (r == 0) nr_sock_listen(h);
     nh_sock_put(s);
     return r;
 }
@@ -238,7 +234,6 @@ int nh_sock_accept(void *ctx, int h, OnlineAddr *peer, int *err) {
             if (!peer) peer = &tmp;
             nh_addr_from_host((struct sockaddr *)&ss, peer);
             r = insert(fd, s->type, 0, err);
-            if (r >= 0) nr_sock_accepted(h, r, fd, peer); /* rooms: a spliced virtual-LAN connection reports its virtual peer */
             break;
         }
         if (errno == EINTR || errno == ECONNABORTED) continue;
@@ -261,8 +256,7 @@ int nh_sock_connect(void *ctx, int h, const OnlineAddr *a, int *err) {
     struct sockaddr_storage ss;
     socklen_t len;
     int r = -1, e = 0;
-    if (nr_sock_connect(h, s->fd, s->type, a, &r, err)) { /* rooms: a virtual-LAN peer */
-    } else if ((e = nh_addr_to_host(a, &ss, &len))) {
+    if ((e = nh_addr_to_host(a, &ss, &len))) {
         *err = e;
     } else if (connect(s->fd, (struct sockaddr *)&ss, len) == 0) {
         r = 0;
@@ -292,13 +286,6 @@ int64_t nh_sock_send(void *ctx, int h, const void *buf, size_t n, int flags, con
     (void)ctx;
     NhSock *s = nh_sock_get(h);
     if (!s) return fail(err, HZ_EBADF);
-    int64_t vr;
-    if (nr_sock_send(h, s->fd, s->type, buf, n, to, &vr, err)) { /* rooms: a datagram for the virtual LAN */
-        char ab[64];
-        NHLOG("send(%d, %zu bytes, flags %#x, to %s) = %lld errno %d (room)", h, n, flags, addr_str(to, ab, sizeof ab), (long long)vr, vr < 0 ? *err : 0);
-        nh_sock_put(s);
-        return vr;
-    }
     struct sockaddr_storage ss;
     socklen_t len = 0;
     if (to && to->family) {
@@ -349,7 +336,6 @@ int64_t nh_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, OnlineAdd
     int dontwait = s->nb || (flags & BSD_MSG_DONTWAIT);
     int waitall = (flags & BSD_MSG_WAITALL) && s->type == SOCK_STREAM && !dontwait && !(flags & MSG_PEEK);
     int hflags = flags & (MSG_OOB | MSG_PEEK);
-    int vlan = s->type == SOCK_DGRAM && nr_sock_is_vlan(h); /* rooms: datagrams injected from the virtual LAN carry a header */
     size_t done = 0;
     int64_t r = -1;
     if (from) memset(from, 0, sizeof *from);
@@ -357,8 +343,7 @@ int64_t nh_sock_recv(void *ctx, int h, void *buf, size_t n, int flags, OnlineAdd
         struct sockaddr_storage ss;
         ss.ss_family = AF_UNSPEC; /* a connected stream may leave the address untouched */
         socklen_t len = sizeof ss;
-        ssize_t k = vlan ? nr_sock_recvfrom(h, s->fd, (uint8_t *)buf + done, n - done, hflags, from ? (struct sockaddr *)&ss : NULL, from ? &len : NULL)
-                         : recvfrom(s->fd, (uint8_t *)buf + done, n - done, hflags, from ? (struct sockaddr *)&ss : NULL, from ? &len : NULL);
+        ssize_t k = recvfrom(s->fd, (uint8_t *)buf + done, n - done, hflags, from ? (struct sockaddr *)&ss : NULL, from ? &len : NULL);
         if (k >= 0) {
             if (from && len) nh_addr_from_host((struct sockaddr *)&ss, from);
             done += (size_t)k;
@@ -396,11 +381,6 @@ int nh_sock_shutdown(void *ctx, int h, int how, int *err) {
 }
 static int name_common(int h, OnlineAddr *out, int peer, int *err) {
     WITH(s, h, err)
-    int vr;
-    if (nr_sock_name(h, out, peer, &vr, err)) { /* rooms: the virtual address and port */
-        nh_sock_put(s);
-        return vr;
-    }
     struct sockaddr_storage ss;
     socklen_t len = sizeof ss;
     int r = (peer ? getpeername(s->fd, (struct sockaddr *)&ss, &len) : getsockname(s->fd, (struct sockaddr *)&ss, &len)) == 0 ? 0 : fail_host(err);

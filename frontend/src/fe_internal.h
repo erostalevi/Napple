@@ -41,7 +41,8 @@ NSTextField *fe_label(NSString *text, CGFloat size, BOOL bold);
 - (void)resignToGame;   /* give keyboard focus back to the game view */
 - (BOOL)speedKey:(unsigned short)code down:(BOOL)down repeat:(BOOL)repeat;   /* speed / frame generation / statistics hot keys; YES = handled */
 - (void)updateSpeed;                       /* recompute the effective speed and tell the runtime */
-- (void)toast:(NSString *)text;            /* transient message in the corner of the game view */
+- (void)toast:(NSString *)text;            /* transient pill at the top of the game view (symbol picked from the text) */
+- (void)toast:(NSString *)text symbol:(NSString *)sf_symbol; /* same with an explicit SF Symbol name (nil = none) */
 @end
 
 /* overlay.m */
@@ -51,7 +52,25 @@ void fe_nav_start(NappleFE *fe);
 void fe_nav_mode_changed(void);
 void fe_nav_page_changed(void);
 void fe_overlay_refresh(NappleFE *fe);
-void fe_overlay_select_tab(int index);   /* 0 Video, 1 Speed, 2 Audio, 3 Controls, 4 Game, 5 amiibo, 6 Camera */
+void fe_overlay_select_tab(int index);   /* 0 Audio/Video, 1 FPS/Speed, 2 Controls, 3 Game/System, 4 Status */
+void fe_overlay_goto_tab(NappleFE *fe, int index); /* shows the panel if hidden, then selects the tab (menu Cmd+1..5) */
+void fe_overlay_set_visible(NappleFE *fe, BOOL show); /* animated show / hide of the panel view (frontend.m showOverlay) */
+void fe_collect_focusable(NSView *root, NSMutableArray *out); /* the controls the pad / keyboard navigation can reach */
+void fe_overlay_focus_controls(NappleFE *fe);       /* keyboard: move focus into the panel (Cmd+0); Tab / Shift+Tab / Space then work, Esc returns to the game */
+/* overlay_pages.m / overlay_controls.m: one builder per tab (main thread). */
+NSView *fe_page_video(NappleFE *fe);
+NSView *fe_page_speed(NappleFE *fe);
+NSView *fe_page_controls(NappleFE *fe);
+NSView *fe_page_game(NappleFE *fe);
+NSView *fe_page_status(NappleFE *fe);
+/* settings edit helper shared by the pages: copy, mutate, apply + save + notify */
+void fe_overlay_update(NappleFE *fe, void (^mut)(napple_settings *));
+/* A page asks for a periodic refresh of its live labels (cleared whenever the page changes or the panel hides). */
+void fe_overlay_set_tick(NSTimeInterval period, void (^tick)(void));
+/* controls: players snapshot line used by Controls and Status; signature changes when a controller is attached or removed */
+NSString *fe_players_signature(NappleFE *fe);
+NSView *fe_players_card(NappleFE *fe, BOOL selectable);
+
 /* simulators.m: amiibo picker and IR camera pages of the overlay; the webcam IR source is installed on first use */
 NSView *fe_amiibo_page(NappleFE *fe);
 NSView *fe_camera_page(NappleFE *fe);

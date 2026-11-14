@@ -1,7 +1,6 @@
 /* The built-in host provider: the table, its instances, and the helpers every part shares (errno and address conversion, giving the virtual
  * core away while waiting). Registered with online_core.c from a constructor, so NAPPLE_NET=host can select it. */
 #include "net_host.h"
-#include "net_room.h"
 #include "hz_result.h"
 #include "offline_core.h"
 #include <errno.h>
@@ -90,17 +89,8 @@ void nh_addr_from_host(const struct sockaddr *sa, OnlineAddr *out) {
     }
 }
 
-/* Rooms (NAPPLE_ROOM, net_room.h): nifm reports the room's virtual interface instead of the Mac's. */
-static int nh_net_info_any(void *ctx, OnlineNetInfo *out) { return net_room_net_info(out) ? 0 : nh_net_info(ctx, out); }
-static uint32_t nh_net_connect_any(void *ctx) {
-    OnlineNetInfo ni;
-    if (net_room_net_info(&ni)) return ni.connected ? 0 : HZ_R_NIFM_NETWORK_COMMUNICATION_DISABLED;
-    return nh_net_connect(ctx);
-}
-
 static int nh_init(void *ctx) {
     NetHost *h = ctx;
-    net_room_start(); /* NAPPLE_ROOM: join the room (once per process) */
     if (!h->ldn) h->ldn = nh_ldn_new();
     return h->ldn ? 0 : -1;
 }
@@ -117,8 +107,8 @@ static const OnlineProvider nh_template = {
     .caps = ONLINE_CAP_NETWORK | ONLINE_CAP_SOCKETS | ONLINE_CAP_DNS | ONLINE_CAP_TLS | ONLINE_CAP_LDN,
     .init = nh_init,
     .shutdown = nh_shutdown,
-    .net_info = nh_net_info_any,
-    .net_connect = nh_net_connect_any,
+    .net_info = nh_net_info,
+    .net_connect = nh_net_connect,
     .net_release = nh_net_release,
     .sock_open = nh_sock_open,
     .sock_close = nh_sock_close,
@@ -191,8 +181,6 @@ void net_host_instance_free(OnlineProvider *p) {
     free(p);
 }
 
-/* Only when nothing registered first: a wrapper around this provider (net_online.c) may register from its own constructor, and Darwin runs constructors
- * in link order, not by priority. */
 __attribute__((constructor)) static void nh_register(void) {
     if (!online_builtin_host) online_builtin_host = net_host_provider;
 }

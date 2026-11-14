@@ -107,30 +107,16 @@ Mods and per-title fixes are `.napmod` packages (`crates/napple-mods`): code pat
 cheats run by a cheat VM once per frame, and configuration such as render-scale rules. They are checked against the module build ids and applied at build or launch time;
 code patches are off unless enabled. See [mods](../mods/README.md).
 
-## Napple Online (optional)
+## Local and LAN play
 
-Online play is opt-in and never contacts Nintendo's servers. With `NAPPLE_NET=host` the runtime uses real sockets; with a Napple server configured, titles keep their own
-online code and talk to community servers instead (default host `pretend.napple.lat`):
-
-| Server (crate) | Role |
-|---|---|
-| `napple-account` | accounts with e-mail code sign-up, up to 8 profiles per account, devices, tokens, encrypted cloud-save storage (ciphertext only) |
-| `napple-social` | friends, presence, visibility tiers 1-5 (`napple-visibility`) |
-| `napple-online` | Napple-issued game identities and a NEX-compatible game server |
-| `napple-room` | rooms that carry local wireless (LDN) and LAN play over the internet |
-
-The client side is the runtime's network glue (`runtime/src/net/`) and `crates/napple-cloud` (Keychain secrets, end-to-end encryption of saves, sync engine), used by the
-`napple` CLI and linked into the runtime.
-
-The in-game overlay has an Online tab for the account, profiles, friends and cloud-save status. Guides: [Napple Online](../guides/napple-online.md),
-[account](../guides/napple-account.md), [social](../guides/napple-social.md), [cloud saves](../guides/cloud-saves.md), [client](../guides/napple-online-client.md),
-[rooms](../guides/online-rooms.md), [server deployment](../guides/deploy-servers.md).
+Napple ships no online services. Titles run locally; split-screen / local multiplayer and LAN play use the host network provider (`runtime/src/net/`) on the
+same network. The in-game overlay covers audio/video, FPS, controls and game/system settings.
 
 ## Source layout
 
 | Path | Contents |
 |---|---|
-| `crates/` | Rust workspace: build side `napple-core`, `napple-rewrite`, `napple-sigs`, `napple-compat`, `napple-build`, `napple-mods`, `napple-cli`; servers `napple-account`, `napple-social`, `napple-visibility`, `napple-cloud`, `napple-online`, `napple-room` |
+| `crates/` | Rust workspace: build side `napple-core`, `napple-rewrite`, `napple-sigs`, `napple-compat`, `napple-build`, `napple-mods`, `napple-cli` |
 | `runtime/` | C, Objective-C and AArch64 assembly runtime (`make -C runtime`) |
 | `gfx/`, `audio/`, `input/`, `frontend/` | static libraries with plain C headers (`gfx/include/napple_gfx.h` and the `include/` of each) |
 | `studio/` | Napple Studio, a SwiftUI package (`NappleStudioCore` has the testable logic) |

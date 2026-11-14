@@ -29,18 +29,14 @@ private func makeDB(_ names: [String]) -> Data {
     }
     @Test func configRoundTripUsesTheRuntimeKeys() throws {
         let d = sysTmp(); defer { try? FileManager.default.removeItem(at: d) }
-        var c = SystemConfig(); c.amiiboDatabase = "https://example.invalid/amiibo.json"; c.amiiboKey = "/k/key_retail.bin"; c.onlineProvider = "/p/prov.dylib"
+        var c = SystemConfig(); c.amiiboDatabase = "https://example.invalid/amiibo.json"; c.amiiboKey = "/k/key_retail.bin";
         try c.save(support: d)
         let raw = try JSONSerialization.jsonObject(with: Data(contentsOf: SystemConfig.url(support: d))) as? [String: String]
         #expect(raw?["amiibo_database"] == c.amiiboDatabase)
-        #expect(raw?["online_provider"] == "/p/prov.dylib")
+        #expect(raw?["online_provider"] == nil)
         #expect(raw?["amiibo_store"] == nil)          // empty values are not written
         #expect(SystemConfig.load(support: d) == c)
         #expect(SystemConfig.load(support: sysTmp()) == SystemConfig())
-    }
-    @Test func onlineProviderChecksThePath() {
-        var c = SystemConfig(); #expect(c.onlineProviderUsable)
-        c.onlineProvider = "/nonexistent/provider.dylib"; #expect(!c.onlineProviderUsable)
     }
     @Test func miiListDeleteExportRestore() throws {
         let d = sysTmp(); defer { try? FileManager.default.removeItem(at: d) }

@@ -197,7 +197,6 @@ Tests: `make -C input test`.
 
 Rows that stay documented defaults because they need something the host does not provide: BAAS / id tokens without a provider, the save data
 transfer family, game card, rights ids, `GetBleScanFilterParameter` (2), ILogger 11, host add-on content setup, `nvdrv` 13 (no public description).
-Online accounts, friends, rooms and cloud saves are described in the [Napple Online guide](../guides/napple-online.md).
 
 ## Save data
 
@@ -232,8 +231,6 @@ cannot corrupt it.
 - Argument order: commands taking (space, attribute) accept either order (space-first with zero padding, or attribute-first), since SDK versions
   differ.
 - `NAPPLE_FS_TRACE=1` logs CreateFile / DeleteFile / Rename / Commit with the host path.
-
-Online cloud saves build on the committed snapshots: see [cloud saves](../guides/cloud-saves.md).
 
 ## Loader
 

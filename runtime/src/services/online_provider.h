@@ -5,9 +5,7 @@
  * user's library) supplies a different table through the C ABI documented in docs/guides/network-providers.md.
  *
  * This repository contains no Nintendo online service implementation and never contacts Nintendo: no Nintendo endpoints, tokens, certificates or
- * keys. The only online service it knows is Napple's own (runtime/src/net/net_online*.c over NAPPLE_NET=host, server crates/napple-online/): with
- * NAPPLE_ONLINE_SERVER set, a title's game-server name goes to a community-run Napple server and its account token is issued by that server
- * (docs/guides/napple-online.md). This header stays portable, no macOS dependency.
+ * keys. Napple itself ships no online service: the default build is offline (local and LAN play only). This header stays portable, no macOS dependency.
  * Numbering of errors is FreeBSD's (hz_result.h): a provider returns -1 and sets *err to an HZ_E* value, exactly what a guest sees from bsd:u. */
 #pragma once
 #include <stddef.h>

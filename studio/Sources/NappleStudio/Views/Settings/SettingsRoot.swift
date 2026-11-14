@@ -2,25 +2,27 @@ import SwiftUI
 import AppKit
 
 /// Content of the `Settings { }` scene: `Settings { SettingsRoot().environment(model) }`.
-/// Eight icon tabs in the toolbar, a fixed-size translucent window. The selected tab lives in `AppModel.settingsTab`
-/// ("general", "keys", "devices", "mii", "amiibo", "online", "engine", "log"), so other code can open Settings on a given tab.
+/// Eight icon tabs in the toolbar. The selected tab lives in `AppModel.settingsTab`
+/// ("general", "engine", "keys", "devices", "controllers", "amiibo", "mii", "log"), so other code can open Settings on a given tab.
 struct SettingsRoot: View {
     @Environment(AppModel.self) private var m
-    static let size = CGSize(width: 720, height: 600)
+    static let size = CGSize(width: 720, height: 620)
+    static let tabs = ["general", "engine", "keys", "devices", "controllers", "amiibo", "mii", "log"]
 
     var body: some View {
         @Bindable var m = m
         TabView(selection: $m.settingsTab) {
             Tab("General", systemImage: "gearshape", value: "general") { GeneralSettingsTab() }
+            Tab("Engine", systemImage: "cpu", value: "engine") { EngineSettingsTab() }
             Tab("Keys", systemImage: "key", value: "keys") { KeysSettingsTab() }
             Tab("iPhone & iPad", systemImage: "iphone.gen3", value: "devices") { DevicesSettingsTab() }
-            Tab("Mii", systemImage: "person.crop.square", value: "mii") { MiiSettingsTab() }
+            Tab("Controllers", systemImage: "gamecontroller", value: "controllers") { ControllersSettingsTab() }
             Tab("Amiibo", systemImage: "wave.3.right", value: "amiibo") { AmiiboSettingsTab() }
-            Tab("Online", systemImage: "network", value: "online") { OnlineSettingsTab() }
-            Tab("Engine", systemImage: "cpu", value: "engine") { EngineSettingsTab() }
+            Tab("Mii", systemImage: "person.crop.square", value: "mii") { MiiSettingsTab() }
             Tab("Log", systemImage: "text.alignleft", value: "log") { LogSettingsTab() }
         }
         .frame(width: Self.size.width, height: Self.size.height)
+        .tint(Theme.brand)
         .containerBackground(.ultraThinMaterial, for: .window)
         .onAppear { if let t = SettingsDebug.tab { m.settingsTab = t } }
     }

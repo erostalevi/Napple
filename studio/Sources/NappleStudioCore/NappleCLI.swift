@@ -83,9 +83,10 @@ public struct BuildRequest: Sendable {
     public var output: URL
     public var name: String?
     public var ios: IOSOptions?        // only used when target is ios / iphone / ipad
-    public init(files: [URL], keyset: Keyset, updates: [UInt32], dlc: [String], target: String = "macos", output: URL, name: String? = nil, ios: IOSOptions? = nil) {
+    public var mods: [URL]             // .napmod files or mod folders, applied at build time (`napple build --mods`)
+    public init(files: [URL], keyset: Keyset, updates: [UInt32], dlc: [String], target: String = "macos", output: URL, name: String? = nil, ios: IOSOptions? = nil, mods: [URL] = []) {
         self.files = files; self.keyset = keyset; self.updates = updates; self.dlc = dlc
-        self.target = target; self.output = output; self.name = name; self.ios = ios
+        self.target = target; self.output = output; self.name = name; self.ios = ios; self.mods = mods
     }
 }
 
@@ -115,6 +116,9 @@ public struct NappleCLI: Sendable {
         do { return try PlanResult.decode(data) } catch { throw CLIError.badOutput("plan JSON could not be decoded") }
     }
 
+    /// One `--mods <path>` per mod (the option repeats, so a path with a comma is safe).
+    public static func modsArguments(_ mods: [URL]) -> [String] { mods.flatMap { ["--mods", $0.path] } }
+
     /// Runs `napple build`. Emits events as they arrive; returns the produced .app path when announced.
     public func build(_ r: BuildRequest, onEvent: @escaping @Sendable (BuildEvent) -> Void) async throws -> URL? {
         var args = ["build"] + r.files.map(\.path) + ["-k", r.keyset.keysURL.path]
@@ -124,6 +128,7 @@ public struct NappleCLI: Sendable {
         args += ["--dlc", r.dlc.isEmpty ? "none" : r.dlc.joined(separator: ",")]
         args += ["--target", r.target, "-o", r.output.path]
         if let n = r.name, !n.isEmpty { args += ["--name", n] }
+        args += Self.modsArguments(r.mods)
         // Bundled helper binaries sit next to the CLI; pass them explicitly when present.
         let dir = executable.deletingLastPathComponent()
         let target = BuildTarget(rawValue: r.target) ?? .macos
@@ -281,7 +286,7 @@ extension LockedBox where T == [String] {
     func append(_ s: String) { l.lock(); v.append(s); l.unlock() }
 }
 
-// MARK: - System data, hardware simulators, online provider and the per-game run log
+// MARK: - System data, hardware simulators and the per-game run log
 // One contract with the runtime: <support>/system.json (runtime/src/services/sysconfig_core.h) and <support>/system/{mii,amiibo,fonts}.
 // Studio, the in-game overlay, the launcher and the dev scripts all resolve the same support folder, so nothing here is per game.
 
@@ -293,17 +298,16 @@ public enum SystemData {
     }
 }
 
-/// system.json: the settings of the hardware simulators and the online provider, read by the runtime at boot (the environment still wins there).
+/// system.json: the settings of the hardware simulators, read by the runtime at boot (the environment still wins there).
 public struct SystemConfig: Equatable, Sendable {
     public var amiiboDatabase = ""   // NAPPLE_AMIIBO_DB: URL, .json file or folder
     public var amiiboKey = ""        // NAPPLE_AMIIBO_KEY: key_retail.bin
     public var amiiboStore = ""      // NAPPLE_AMIIBO_STORE: folder of the virtual amiibo (empty = <support>/system/amiibo)
-    public var onlineProvider = ""   // NAPPLE_ONLINE_PROVIDER: module path (empty = NullProvider, offline)
     public var miiDir = ""           // NAPPLE_MII_DIR (empty = <support>/system/mii)
     public init() {}
     static var keys: [(String, WritableKeyPath<SystemConfig, String>)] {
         [("amiibo_database", \.amiiboDatabase), ("amiibo_key", \.amiiboKey), ("amiibo_store", \.amiiboStore),
-         ("online_provider", \.onlineProvider), ("mii_dir", \.miiDir)]
+         ("mii_dir", \.miiDir)]
     }
     public static func url(support: URL) -> URL { support.appendingPathComponent("system.json") }
     public static func load(support: URL = SystemData.supportDir()) -> SystemConfig {
@@ -319,8 +323,6 @@ public struct SystemConfig: Equatable, Sendable {
         let d = try JSONSerialization.data(withJSONObject: o, options: [.prettyPrinted, .sortedKeys])
         try d.write(to: Self.url(support: support), options: .atomic)
     }
-    /// The online provider as the user typed it: a module that exists, or nothing (the runtime also falls back to the NullProvider with one log line).
-    public var onlineProviderUsable: Bool { onlineProvider.isEmpty || FileManager.default.isReadableFile(atPath: onlineProvider) }
     public var effectiveMiiFolder: URL { miiDir.isEmpty ? SystemData.supportDir().appendingPathComponent("system/mii") : URL(fileURLWithPath: miiDir) }
 }
 
